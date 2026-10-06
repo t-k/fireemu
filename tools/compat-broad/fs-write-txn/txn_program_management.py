@@ -149,12 +149,18 @@ class MetadataSession(management.MetadataSession):
             raise ValueError("one resolved run-prefixed query database required")
         # Firestore holds deleted database IDs for five minutes before reuse: https://firebase.google.com/docs/firestore/manage-databases#delete_a_database
         # This run never reuses an ID, including after an unknown create or delete.
-        self.named_database = {"database": resource, "closureReady": False, "unknownCreate": False, "unknownDelete": False, "createConfirmed": False, "deleteAttempted": False, "deleteConfirmed": False, "lastRequestEpoch": None, "a2": False}
+        self.named_database = {"database": resource, "closureReady": False, "unknownCreate": False, "createRefused": False, "unknownDelete": False, "createConfirmed": False, "deleteAttempted": False, "deleteConfirmed": False, "deleteAccepted": False, "lastRequestEpoch": None, "a2": False}
         probe = self._named_request("named-database", resource, save)
         if probe.get("complete") is not True or probe.get("status") != 404 or (probe.get("body") or {}).get("error", {}).get("status") != "NOT_FOUND":
             raise ValueError("run database name was not proven absent")
         self.named_database["unknownCreate"] = True
-        response = self._wait_database_operation(self._named_request("create-database", resource, save), save)
+        result = self._named_request("create-database", resource, save)
+        body = result.get("body")
+        if result.get("complete") is True and type(result.get("status")) is int and 400 <= result["status"] < 500 and result["status"] not in (408, 429, 499) and isinstance(body, dict) and isinstance(body.get("error"), dict) and type(body["error"].get("code")) is int and body["error"]["code"] == result["status"] and isinstance(body["error"].get("status"), str) and body["error"]["status"] and body["error"]["status"] not in ("CANCELLED", "UNKNOWN", "DEADLINE_EXCEEDED", "INTERNAL", "UNAVAILABLE", "DATA_LOSS"):
+            self.named_database["createRefused"] = True
+            self.readback_named_database(None, save)
+            raise ValueError("named database create was refused; no resend")
+        response = self._wait_database_operation(result, save)
         if response.get("name") != resource:
             raise ValueError("created database identity differs")
         self.named_database.update(unknownCreate=False, createConfirmed=True)
@@ -169,8 +175,12 @@ class MetadataSession(management.MetadataSession):
         if not state["createConfirmed"] or state["unknownCreate"] or state["deleteAttempted"]:
             raise ValueError("unknown mutations are sticky; deletion cannot be sent or repeated")
         state.update(deleteAttempted=True, unknownDelete=True, a2=False)
-        self._wait_database_operation(self._named_request("delete-database", state["database"], save), save)
-        state.update(unknownDelete=False, deleteConfirmed=True)
+        result = self._named_request("delete-database", state["database"], save)
+        body = result.get("body")
+        response = body.get("response") if isinstance(body, dict) else None
+        if result.get("complete") is not True or result.get("status") != 200 or not isinstance(body, dict) or "error" in body or not isinstance(body.get("metadata"), dict) or body["metadata"].get("@type") != "type.googleapis.com/google.firestore.admin.v1.DeleteDatabaseMetadata" or not isinstance(body.get("name"), str) or not re.fullmatch(re.escape(state["database"]) + r"/operations/[A-Za-z0-9_-]+", body["name"]) or not isinstance(response, dict) or response.get("previousId") != state["database"].rsplit("/", 1)[1] or not isinstance(response.get("deleteTime"), str) or not response["deleteTime"]:
+            raise ValueError("named database delete outcome is unknown")
+        state["deleteAccepted"] = True
         return self.readback_named_database(None, save)
 
     def readback_named_database(self, a2_epoch, save):
@@ -182,8 +192,13 @@ class MetadataSession(management.MetadataSession):
         state["a2"] = a2_epoch is not None
         result = self._named_request("named-database", state["database"], save)
         if state["a2"] and result.get("complete") is True and result.get("status") == 200 and (result.get("body") or {}).get("name") == state["database"]:
-            state.update(createConfirmed=True, unknownCreate=False)
+            state.update(createConfirmed=True, unknownCreate=False, createRefused=False)
         absent = result.get("complete") is True and result.get("status") == 404 and (result.get("body") or {}).get("error", {}).get("status") == "NOT_FOUND"
-        state["closureReady"] = absent and state["createConfirmed"] and not state["unknownCreate"] and (state["deleteConfirmed"] or state["a2"])
+        if absent and state.get("createRefused") and not state["createConfirmed"]:
+            state.update(unknownCreate=False, closureReady=True)
+        elif absent and state["deleteAttempted"] and state["createConfirmed"] and not state["unknownCreate"] and (state.get("deleteAccepted") or state["a2"]):
+            state.update(unknownDelete=False, deleteConfirmed=True, closureReady=True)
+        else:
+            state["closureReady"] = False
         save(copy.deepcopy(state))
         return copy.deepcopy(state)

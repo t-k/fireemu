@@ -11,7 +11,7 @@ from txn_program_support_for_tests import TABLE
 PROJECT = "fireemu-oracle-query"
 BASELINE = {
     "projectNumber": "123456789",
-    "databaseExpected": {"name": f"projects/{PROJECT}/databases/(default)", "type": "FIRESTORE_NATIVE", "databaseEdition": "STANDARD", "locationId": "eur3", "concurrencyMode": "OPTIMISTIC"},
+    "databaseExpected": {"name": f"projects/{PROJECT}/databases/(default)", "type": "FIRESTORE_NATIVE", "databaseEdition": "STANDARD", "locationId": "us-central1", "concurrencyMode": "OPTIMISTIC"},
     "credentialPrincipal": {"clientId": "test-client", "subject": "test-subject", "requiredScopes": ["https://www.googleapis.com/auth/cloud-platform"]},
 }
 
@@ -80,7 +80,12 @@ def answer(body, status=200, complete=True):
     return {"complete": complete, "workerReaped": True, "status": status, "body": body}
 
 
-ABSENT = answer({"error": {"status": "NOT_FOUND", "code": 404}}, 404)
+RECORDED_DATABASE = {key: "synthetic" for key in ("appEngineIntegrationMode", "concurrencyMode", "createTime", "databaseEdition", "deleteProtectionState", "earliestVersionTime", "enhancedTextSearchQueryMode", "etag", "locationId", "pointInTimeRecoveryEnablement", "realtimeUpdatesMode", "type", "uid", "updateTime", "versionRetentionPeriod")}
+RECORDED_DATABASE.update(name=NAMED, freeTier=False)
+CREATE = answer({"done": True, "metadata": {"@type": "type.googleapis.com/google.firestore.admin.v1.CreateDatabaseMetadata"}, "name": OPERATION, "response": {"@type": "type.googleapis.com/google.firestore.admin.v1.Database", **RECORDED_DATABASE}})
+DELETE = answer({"metadata": {"@type": "type.googleapis.com/google.firestore.admin.v1.DeleteDatabaseMetadata"}, "name": NAMED + "/operations/delete-1", "response": {**CREATE["body"]["response"], "name": "projects/fireemu-oracle-query/databases/synthetic-uid", "previousId": NAMED.rsplit("/", 1)[1], "deleteTime": "2030-01-01T00:00:00Z"}})
+RECORDED_QUOTA = answer({"error": {"code": 429, "message": "Synthetic quota", "status": "RESOURCE_EXHAUSTED", "details": [{"@type": "synthetic", "domain": "synthetic", "reason": "synthetic", "metadata": {key: "synthetic" for key in ("consumer", "quota_limit", "quota_limit_value", "quota_location", "quota_metric", "quota_unit", "service", "window_start_time")}}]}}, 429)
+ABSENT = answer({"error": {"status": "NOT_FOUND", "code": 404, "message": "Synthetic missing database"}}, 404)
 
 
 def test_named_database_create_wait_delete_and_readback_are_journaled(monkeypatch):
@@ -88,7 +93,7 @@ def test_named_database_create_wait_delete_and_readback_are_journaled(monkeypatc
     session, calls, saved = named_session([
         ABSENT, answer({"name": OPERATION}), answer({"name": OPERATION, "done": False}),
         answer({"name": OPERATION, "done": True, "response": {"name": NAMED}}), answer({"name": NAMED}),
-        answer({"name": NAMED + "/operations/delete-1", "done": True, "response": {}}), ABSENT,
+        copy.deepcopy(DELETE), ABSENT,
     ])
     session.create_named_database(NAMED, saved.append)
     assert session.named_database["closureReady"] is False
@@ -144,7 +149,7 @@ def test_a2_can_prove_an_unknown_create_exists_before_one_owned_delete(monkeypat
     session, calls, saved = named_session([ABSENT, answer(None, 503, False)])
     with pytest.raises(ValueError): session.create_named_database(NAMED, saved.append)
     monkeypatch.setattr("txn_program_management.time.time", lambda: 1600)
-    answers = [answer({"name": NAMED}), answer({"name": NAMED + "/operations/delete-1", "done": True, "response": {}}), ABSENT]
+    answers = [answer({"name": NAMED}), copy.deepcopy(DELETE), ABSENT]
     session.request = lambda *args: answers.pop(0)
     state = session.readback_named_database(1600, saved.append)
     assert state["createConfirmed"] is True and state["unknownCreate"] is False
@@ -152,13 +157,13 @@ def test_a2_can_prove_an_unknown_create_exists_before_one_owned_delete(monkeypat
     assert session.delete_named_database(saved.append)["closureReady"] is True
 
 
-def test_confirmed_create_then_404_only_closes_on_a2_readback(monkeypatch):
+def test_confirmed_create_without_delete_never_closes_on_a2_absence(monkeypatch):
     monkeypatch.setattr("txn_program_management.time.time", lambda: 1000)
     session, calls, saved = named_session([ABSENT, answer({"name": OPERATION, "done": True, "response": {"name": NAMED}}), ABSENT, ABSENT])
     with pytest.raises(ValueError): session.create_named_database(NAMED, saved.append)
     assert session.named_database["closureReady"] is False
     monkeypatch.setattr("txn_program_management.time.time", lambda: 1600)
-    assert session.readback_named_database(1600, saved.append)["closureReady"] is True
+    assert session.readback_named_database(1600, saved.append)["closureReady"] is False
 
 
 def test_query_refuses_a_valid_baseline_with_different_readback_settings():
@@ -195,3 +200,131 @@ def test_named_requests_charge_before_dispatch_and_refuse_exhausted_budget():
     with pytest.raises(ValueError, match="exhausted"):
         session.readback_named_database(None, saved.append)
     assert len(calls) == before
+
+
+@pytest.mark.parametrize("status", [404, 429])
+def test_recorded_delete_layout_settles_only_with_own_not_found_readback(status):
+    readback = ABSENT if status == 404 else copy.deepcopy(RECORDED_QUOTA)
+    session, calls, saved = named_session([ABSENT, copy.deepcopy(CREATE), answer(copy.deepcopy(RECORDED_DATABASE)), copy.deepcopy(DELETE), readback])
+    session.create_named_database(NAMED, saved.append)
+    state = session.delete_named_database(saved.append)
+    assert state["closureReady"] is (status == 404)
+    assert state["deleteConfirmed"] is (status == 404)
+    assert state["unknownDelete"] is (status != 404)
+    assert [slot for slot, _ in calls] == ["named-database", "create-database", "named-database", "delete-database", "named-database"]
+    with pytest.raises(ValueError): session.delete_named_database(saved.append)
+
+
+@pytest.mark.parametrize("change", ["status", "complete", "metadata", "operation", "previousId", "deleteTime", "error", "response"])
+def test_delete_near_misses_remain_unknown_without_resend(change):
+    deleted = copy.deepcopy(DELETE)
+    if change == "status": deleted["status"] = 201
+    elif change == "complete": deleted["complete"] = False
+    elif change == "metadata": deleted["body"]["metadata"]["@type"] = "other"
+    elif change == "operation": deleted["body"]["name"] = OPERATION.replace(PROJECT, "fireemu-oracle-txn")
+    elif change == "previousId": deleted["body"]["response"]["previousId"] = "other"
+    elif change == "deleteTime": del deleted["body"]["response"]["deleteTime"]
+    elif change == "error": deleted["body"]["error"] = {}
+    else: deleted["body"]["response"] = []
+    session, calls, saved = named_session([ABSENT, copy.deepcopy(CREATE), answer(copy.deepcopy(RECORDED_DATABASE)), deleted, ABSENT])
+    session.create_named_database(NAMED, saved.append)
+    with pytest.raises(ValueError): session.delete_named_database(saved.append)
+    assert session.named_database["unknownDelete"] and not session.named_database["deleteConfirmed"]
+    assert len(calls) == 4
+
+
+@pytest.mark.parametrize("status,complete,absent", [(400, True, True), (409, True, True), (400, True, False), (408, True, True), (429, True, True), (499, True, True), (503, True, True), (400, False, True)])
+def test_create_refusal_needs_complete_error_and_own_absence(status, complete, absent):
+    refusal = answer({"error": {"code": status, "message": "Synthetic refusal", "status": "INVALID_ARGUMENT"}}, status, complete)
+    session, calls, saved = named_session([ABSENT, refusal, ABSENT if absent else answer({"name": NAMED})])
+    with pytest.raises(ValueError): session.create_named_database(NAMED, saved.append)
+    settled = complete and status in (400, 409) and absent
+    assert session.named_database["unknownCreate"] is (not settled)
+    assert session.named_database["closureReady"] is settled
+    assert session.named_database.get("createRefused", False) is (complete and status in (400, 409))
+    assert not session.named_database["createConfirmed"]
+    assert [slot for slot, _ in calls].count("create-database") == 1
+
+
+@pytest.mark.parametrize("change", ["name", "error"])
+def test_create_poll_identity_and_inline_error_cannot_confirm_creation(change, monkeypatch):
+    monkeypatch.setattr("txn_program_management.time.sleep", lambda _: None)
+    body = copy.deepcopy(CREATE["body"])
+    if change == "name": body["name"] = OPERATION + "-different"
+    else: body["error"] = {"code": 9}
+    session, calls, saved = named_session([ABSENT, answer({"name": OPERATION}), answer(body)])
+    with pytest.raises(ValueError): session.create_named_database(NAMED, saved.append)
+    assert session.named_database["unknownCreate"] and not session.named_database["createConfirmed"]
+
+
+def test_delete_does_not_consult_the_recorded_mismatched_operation_poll():
+    session, calls, saved = named_session([ABSENT, copy.deepcopy(CREATE), answer(copy.deepcopy(RECORDED_DATABASE)), copy.deepcopy(DELETE), ABSENT])
+    request = session.request
+    def with_poll(slot, *args):
+        if slot == "database-operation": return answer({"name": NAMED + "/operations/different", "metadata": DELETE["body"]["metadata"], "response": {"@type": "synthetic"}})
+        return request(slot, *args)
+    session.request = with_poll
+    session.create_named_database(NAMED, saved.append)
+    assert session.delete_named_database(saved.append)["closureReady"]
+    assert all(slot != "database-operation" for slot, _ in calls)
+
+
+def test_invalid_delete_layout_cannot_settle_before_a2_even_on_absence(monkeypatch):
+    monkeypatch.setattr("txn_program_management.time.time", lambda: 1000)
+    session, calls, saved = named_session([ABSENT, copy.deepcopy(CREATE), answer(copy.deepcopy(RECORDED_DATABASE)), answer({"name": OPERATION, "done": True, "response": {}}), ABSENT, ABSENT])
+    session.create_named_database(NAMED, saved.append)
+    with pytest.raises(ValueError): session.delete_named_database(saved.append)
+    assert not session.readback_named_database(None, saved.append)["closureReady"]
+    monkeypatch.setattr("txn_program_management.time.time", lambda: 1600)
+    state = session.readback_named_database(1600, saved.append)
+    assert state["closureReady"] and state["deleteConfirmed"] and not state["unknownDelete"]
+
+
+@pytest.mark.parametrize("status", ["CANCELLED", "UNKNOWN", "DEADLINE_EXCEEDED", "INTERNAL", "UNAVAILABLE", "DATA_LOSS"])
+def test_create_error_status_that_means_unknown_is_never_a_refusal(status):
+    session, calls, saved = named_session([ABSENT, answer({"error": {"code": 400, "status": status, "message": "Synthetic unknown"}}, 400), ABSENT])
+    with pytest.raises(ValueError): session.create_named_database(NAMED, saved.append)
+    assert session.named_database["unknownCreate"] and not session.named_database.get("createRefused")
+    assert len(calls) == 2
+
+
+def test_a2_confirming_creation_clears_refusal_and_still_owes_delete(monkeypatch):
+    monkeypatch.setattr("txn_program_management.time.time", lambda: 1000)
+    session, calls, saved = named_session([ABSENT, answer({"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": "Synthetic refusal"}}, 400), answer({"name": NAMED}), answer({"name": NAMED}), ABSENT])
+    with pytest.raises(ValueError): session.create_named_database(NAMED, saved.append)
+    monkeypatch.setattr("txn_program_management.time.time", lambda: 1600)
+    state = session.readback_named_database(1600, saved.append)
+    assert state["createConfirmed"] and not state["createRefused"] and not state["closureReady"]
+    monkeypatch.setattr("txn_program_management.time.time", lambda: 2200)
+    assert not session.readback_named_database(2200, saved.append)["closureReady"]
+
+
+@pytest.mark.parametrize("change", ["code", "status", "error", "body"])
+def test_create_refusal_error_shape_near_misses_stay_unknown(change):
+    refusal = answer({"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": "Synthetic refusal"}}, 400)
+    if change == "code": refusal["body"]["error"]["code"] = 409
+    elif change == "status": del refusal["body"]["error"]["status"]
+    elif change == "error": refusal["body"]["error"] = []
+    else: refusal["body"] = []
+    session, calls, saved = named_session([ABSENT, refusal, ABSENT])
+    with pytest.raises(ValueError): session.create_named_database(NAMED, saved.append)
+    assert session.named_database["unknownCreate"] and not session.named_database.get("createRefused")
+    assert len(calls) == 2
+
+
+def test_a_confirmed_database_cannot_close_as_refused_without_delete(monkeypatch):
+    session, calls, saved = named_session([ABSENT, copy.deepcopy(CREATE), answer(copy.deepcopy(RECORDED_DATABASE)), ABSENT])
+    session.create_named_database(NAMED, saved.append)
+    session.named_database["createRefused"] = True
+    monkeypatch.setattr("txn_program_management.time.time", lambda: session.named_database["lastRequestEpoch"] + 600)
+    assert not session.readback_named_database(session.named_database["lastRequestEpoch"] + 600, saved.append)["closureReady"]
+
+
+def test_a2_absence_keeps_unknown_create_open_even_with_prior_delete_evidence(monkeypatch):
+    session, calls, saved = named_session([ABSENT])
+    session.named_database = {"database": NAMED, "createConfirmed": True, "unknownCreate": True, "createRefused": False, "deleteAttempted": True, "deleteAccepted": True, "unknownDelete": True, "deleteConfirmed": False, "closureReady": False, "lastRequestEpoch": 1000, "a2": False}
+    monkeypatch.setattr("txn_program_management.time.time", lambda: 1600)
+    state = session.readback_named_database(1600, saved.append)
+    assert state["unknownCreate"] and state["unknownDelete"]
+    assert not state["closureReady"] and not state["deleteConfirmed"]
+    assert [slot for slot, _ in calls] == ["named-database"]

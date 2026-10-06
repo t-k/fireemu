@@ -565,7 +565,7 @@ def test_query_management_worker_authorizes_exact_named_database_paths(monkeypat
     assert headers["x-goog-user-project"] == "fireemu-oracle-query"
     if slot == "create-database":
         assert path == "/v1/projects/fireemu-oracle-query/databases?databaseId=txn-" + "a" * 32
-        assert json.loads(body) == {"name": resource, "locationId": "eur3", "type": "FIRESTORE_NATIVE", "databaseEdition": "STANDARD"}
+        assert json.loads(body) == {"locationId": "us-central1", "type": "FIRESTORE_NATIVE"}
         assert headers["Content-Type"] == "application/json"
     else:
         assert path == "/v1/" + resource + suffix
@@ -631,3 +631,22 @@ def test_query_freeze_compares_metadata_without_assuming_an_absent_rules_release
         assert frozen["rules"] == {"project": "a" * 64, "database": "b" * 64, "databaseSettings": {"pointInTimeRecoveryEnablement": None, "versionRetentionPeriod": "3600s"}}
         assert frozen["authorizesProduction"] is False
         assert not lock.exists()
+
+
+@pytest.mark.parametrize("status", [400, 409, 429, 503])
+def test_create_worker_preserves_complete_4xx_json_for_management_judgment(monkeypatch, status):
+    resource = "projects/fireemu-oracle-query/databases/txn-" + "a" * 32
+    body = {"error": {"code": status, "message": "Synthetic refusal", "status": "INVALID_ARGUMENT"}}
+    class Response:
+        def read(self, limit): return json.dumps(body).encode()
+        def getheader(self, name): return "application/json"
+    response = Response(); response.status = status
+    class Connection:
+        def __init__(self, *args, **kwargs): pass
+        def request(self, *args, **kwargs): pass
+        def getresponse(self): return response
+        def close(self): pass
+    monkeypatch.setattr(http_module.http.client, "HTTPSConnection", Connection)
+    result = http_module.worker_call({"slot": "create-database", "secret": "synthetic-token", "resource": resource, "project": "fireemu-oracle-query"})
+    assert result["complete"] is (status < 500)
+    assert result["body"] == (body if status < 500 else None)

@@ -197,3 +197,47 @@ def test_query_is_billed_and_authority_scope_binds_each_declared_database():
         authority.authorize(AUTHORITY + envelope_row(scope={**scope, "project": "fireemu-oracle-query/(default)"}) + APPROVE, pins)
     with pytest.raises(ValueError):
         authority.authorize(DECISIONS, {**PINS, "project": "fireemu-oracle-idp"})
+
+
+@pytest.mark.parametrize("kind", ["secondary-open", "secondary-active", "multi-project-open"])
+def test_initial_gates_check_every_project_in_envelope_scope(kind):
+    pins = {**PINS, "scope": {**SCOPE, "project": "fireemu-oracle-sbx/(default)+fireemu-oracle-txn/(default)"}}
+    decisions = AUTHORITY + envelope_row(scope=pins["scope"]) + approve_row()
+    row = {**LAST, "project": "fireemu-oracle-txn", "taskId": "OTHER"}
+    if kind == "secondary-active": row["ts"] = "2026-09-28T04:59:00Z"
+    else: row.update(outcome="reserved", attemptId="open-secondary")
+    if kind == "multi-project-open": row.update(project="fireemu-oracle-query", projects=["fireemu-oracle-query", "fireemu-oracle-txn"])
+    with pytest.raises(ValueError): authority.verify_initial_gates([LAST, row], NOW, decisions, pins)
+
+
+ACTION = {"command": "recover-database", "packetId": "fs-transaction-p16-recover-unit", "packetSha256": "d" * 64, "packetPath": "docs.local/reviews/recover-unit.json", "originalPacketSha256": PINS["packetSha256"], "envelopeId": "FS-TRANSACTION-p16-recover-unit", "envelopePath": "docs.local/reviews/recover-unit.md", "sourceCommit": PINS["sourceCommit"], "runnerSha256": PINS["runnerSha256"], "maxRequests": 8, "reserveUsd": 0.02, "resources": "projects/fireemu-oracle-query/databases/txn-" + "a" * 32}
+
+
+def action_decisions(action=ACTION):
+    fields = {key: action[key] for key in ("command", "originalPacketSha256", "sourceCommit", "runnerSha256", "envelopeId", "maxRequests", "reserveUsd", "resources")}
+    fields.update(retries="none", onStop="lock-held", writes="none" if action["command"] == "readback-a2" else "one-owned-database-delete")
+    text = "; ".join(f"{key}={value}" for key, value in fields.items())
+    approve = f"- 2026-10-06 | FS-TRANSACTION p16 database action | decision=APPROVE; packetSha256={action['packetSha256']}; {text} | オーナー（直接） | {action['packetPath']}\n"
+    envelope = f"- 2026-10-06 | FS-TRANSACTION p16 database action envelope | {text} | オーナー（直接） | {action['envelopePath']}\n"
+    return approve + envelope
+
+
+@pytest.mark.parametrize("change", [None, "approval", "envelope", "revoked", "resource", "command", "reserve"])
+def test_database_action_requires_its_own_exact_approval_and_envelope(change):
+    text = action_decisions()
+    if change == "approval": text = text.splitlines(keepends=True)[1]
+    elif change == "envelope": text = text.splitlines(keepends=True)[0]
+    elif change == "revoked": text += f"- 2026-10-06 | FS-TRANSACTION p16 database action | REVOKED packetSha256={ACTION['packetSha256']} | オーナー（直接） | unit\n"
+    elif change == "resource": text = text.replace(ACTION["resources"], "foreign")
+    elif change == "command": text = text.replace("recover-database", "readback-a2")
+    elif change == "reserve": text = text.replace("reserveUsd=0.02", "reserveUsd=0")
+    if change is None: assert authority.authorize_database_action(text, ACTION) == (8, 0.02)
+    else:
+        with pytest.raises(ValueError): authority.authorize_database_action(text, ACTION)
+
+
+@pytest.mark.parametrize("identity", ["packetSha256", "envelopeId", "sourceCommit", "runnerSha256"])
+def test_database_action_rejects_revocation_outside_its_approval_topic(identity):
+    text = action_decisions() + f"- 2026-10-06 | Other authority | REVOKED {identity}={ACTION[identity]} | オーナー（直接） | unit\n"
+    with pytest.raises(ValueError, match="revoked"):
+        authority.authorize_database_action(text, ACTION)

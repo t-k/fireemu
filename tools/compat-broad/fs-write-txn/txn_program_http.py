@@ -56,7 +56,7 @@ def worker_call(value):
             if slot == 'create-database':
                 method = 'POST'
                 path = f'/v1/projects/{project}/databases?' + urlencode({'databaseId': resource.rsplit('/', 1)[1]})
-                body = json.dumps({'name': resource, 'locationId': 'eur3', 'type': 'FIRESTORE_NATIVE', 'databaseEdition': 'STANDARD'}, separators=(',', ':')).encode()
+                body = json.dumps({'locationId': 'us-central1', 'type': 'FIRESTORE_NATIVE'}, separators=(',', ':')).encode()
                 headers['Content-Type'] = 'application/json'
             elif slot == 'delete-database':
                 method = 'DELETE'
@@ -72,7 +72,7 @@ def worker_call(value):
         connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
         raw = response.read(65537)
-        if len(raw) > 65536 or (response.status != 200 and not (slot == 'named-database' and response.status == 404)) or (response.getheader('Content-Type') or '').split(';', 1)[0].strip().lower() != 'application/json':
+        if len(raw) > 65536 or (response.status != 200 and not (slot == 'named-database' and response.status == 404) and not (slot == 'create-database' and 400 <= response.status < 500)) or (response.getheader('Content-Type') or '').split(';', 1)[0].strip().lower() != 'application/json':
             return {'complete': False, 'status': response.status, 'body': None}
         decoded = json.loads(raw)
         return {'complete': isinstance(decoded, dict), 'status': response.status, 'body': decoded}

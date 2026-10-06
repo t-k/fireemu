@@ -341,7 +341,7 @@ def test_run_once_passes_resolved_declarations_to_the_real_wire(tmp_path, monkey
 @pytest.mark.parametrize("unknown", [None, "create-database", "delete-database", "document-recovery"])
 def test_p16_real_runner_orders_management_and_keeps_unknown_mutations_open(tmp_path, monkeypatch, unknown):
     table = importlib.import_module("fs_txn_table_p16").TABLE
-    from test_txn_program_management import BASELINE, ABSENT, answer
+    from test_txn_program_management import BASELINE, ABSENT, DELETE, answer
     import txn_program_wire as wire_module
     named = "projects/fireemu-oracle-query/databases/txn-" + "a" * 32
     calls = []
@@ -359,13 +359,13 @@ def test_p16_real_runner_orders_management_and_keeps_unknown_mutations_open(tmp_
         if slot == "create-database": return answer({"name": named + "/operations/create-1", "done": True, "response": {"name": named}})
         assert slot == "delete-database"
         deleted.append(True)
-        return answer({"name": named + "/operations/delete-1", "done": True, "response": {}})
+        return copy.deepcopy(DELETE)
     class Recording:
         def __init__(self, plan, table, budget, wire, *args, **kwargs):
             assert wire.scope["databases"] == plan["databases"]
             assert wire.scope["placements"] == table["placements"]
             calls.append("collector")
-        def run(self): return {"complete": unknown != "document-recovery", "journalFailure": False}
+        def run(self): return {"complete": unknown != "document-recovery", "journalFailure": False, "unrecovered": unknown == "document-recovery"}
     monkeypatch.setattr(runner, "request_once", request)
     monkeypatch.setattr(runner, "refresh", lambda *args, **kwargs: "owner")
     monkeypatch.setattr(runner, "Collector", Recording)
@@ -377,6 +377,7 @@ def test_p16_real_runner_orders_management_and_keeps_unknown_mutations_open(tmp_
     if unknown == "create-database":
         assert "collector" not in calls and "delete-database" not in calls
         assert receipt["namedDatabase"]["unknownCreate"] is True
+        assert receipt["unrecovered"] is False
     elif unknown == "document-recovery":
         assert "collector" in calls and "delete-database" not in calls
         assert receipt["namedDatabase"]["createConfirmed"] is True
@@ -384,3 +385,122 @@ def test_p16_real_runner_orders_management_and_keeps_unknown_mutations_open(tmp_
         assert calls.index("create-database") < calls.index("collector") < calls.index("delete-database")
         assert calls.count("delete-database") == 1
     if unknown == "delete-database": assert receipt["namedDatabase"]["unknownDelete"] is True
+
+
+def test_stopped_graph_with_recovered_documents_still_deletes_named_database(tmp_path, monkeypatch):
+    table = importlib.import_module("fs_txn_table_p16").TABLE
+    deleted = []
+    class Metadata:
+        def __init__(self, *args, **kwargs): self.named_database = {"closureReady": False}
+        def preflight(self): return {}
+        def create_named_database(self, resource, save): self.named_database["database"] = resource
+        def delete_named_database(self, save):
+            deleted.append(self.named_database["database"])
+            self.named_database.update(closureReady=True, deleteConfirmed=True)
+            return self.named_database
+        def postflight(self): return {}
+    class Recording:
+        def __init__(self, *args, **kwargs): pass
+        def run(self): return {"complete": False, "graphComplete": False, "unrecovered": False}
+    monkeypatch.setattr(runner, "MetadataSession", Metadata)
+    monkeypatch.setattr(runner, "Collector", Recording)
+    monkeypatch.setattr(runner, "refresh", lambda *args, **kwargs: "owner")
+    monkeypatch.setattr(runner, "NodeWire", lambda *args, **kwargs: None)
+    receipt = runner.run_once(0, table, "a" * 32, "b" * 32, tmp_path, baseline={}, runtime={}, check=lambda: None)
+    assert deleted == ["projects/fireemu-oracle-query/databases/txn-" + "a" * 32]
+    assert receipt["closureReady"] and receipt["namedDatabase"]["deleteConfirmed"]
+    assert not receipt["complete"]
+
+
+def test_both_envelope_projects_are_locked_ledgered_and_released(tmp_path, monkeypatch):
+    ledger, kwargs = fixture(tmp_path)
+    kwargs["pins"] = {**PINS, "scope": {**PINS["scope"], "project": "fireemu-oracle-sbx/(default)+fireemu-oracle-txn/(default)"}}
+    monkeypatch.setattr(runner, "authorize", lambda *args: None)
+    monkeypatch.setattr(runner, "verify_initial_gates", lambda *args: None)
+    once = kwargs["record_once"]
+    def locked(*args):
+        assert (tmp_path / LOCK).exists()
+        assert (tmp_path / "sandbox-locks/fireemu-oracle-txn.lock").exists()
+        return once(*args)
+    kwargs["record_once"] = locked
+    runner.record_twice(**kwargs)
+    assert not (tmp_path / LOCK).exists()
+    assert not (tmp_path / "sandbox-locks/fireemu-oracle-txn.lock").exists()
+    rows = [json.loads(line) for line in ledger.read_text().splitlines()][1:]
+    assert all(row["projects"] == ["fireemu-oracle-sbx", "fireemu-oracle-txn"] for row in rows)
+
+
+@pytest.mark.parametrize("command,mutation,status,closed", [("readback-a2", "delete", 404, True), ("readback-a2", "create", 404, False), ("readback-a2", "create", 200, False), ("recover-database", "retained", 200, True)])
+def test_database_action_reads_each_journal_nonce_once_and_recovery_deletes_once(tmp_path, monkeypatch, command, mutation, status, closed):
+    from test_txn_program_management import BASELINE, NAMED, ABSENT, DELETE, answer
+    table = importlib.import_module("fs_txn_table_p16").TABLE
+    state = {"database": NAMED, "closureReady": False, "unknownCreate": mutation == "create", "unknownDelete": mutation == "delete", "createConfirmed": mutation != "create", "createRefused": False, "deleteAttempted": mutation == "delete", "deleteConfirmed": False, "lastRequestEpoch": 1000, "a2": False}
+    calls = []
+    def request(slot, token, resource=None, *, project):
+        calls.append(slot)
+        if slot == "oauth-tokeninfo": return answer({"issued_to": "test-client", "user_id": "test-subject", "scope": BASELINE["credentialPrincipal"]["requiredScopes"][0], "expires_in": 3600})
+        if slot == "project": return answer({"projectId": project, "projectNumber": "123456789"})
+        if slot == "database": return answer({**BASELINE["databaseExpected"], "uid": "synthetic-query-uid"})
+        if slot == "delete-database": return copy.deepcopy(DELETE)
+        assert slot == "named-database"
+        return ABSENT if status == 404 or "delete-database" in calls else answer({"name": NAMED})
+    monkeypatch.setattr(runner, "request_once", request)
+    def refresh(_baseline, budget, *, before_send):
+        assert budget.recovery_deadline is not None
+        before_send(); budget.charge("credential")
+        return "owner"
+    monkeypatch.setattr(runner, "refresh", refresh)
+    monkeypatch.setattr(runner.time, "time", lambda: 1600)
+    result = runner.recover_named_databases(command, table, [{"nonce": "a" * 32, "state": state, "receipt": {"unrecovered": False}}], tmp_path / "action", baseline=copy.deepcopy(BASELINE), check=lambda: None)
+    assert result["complete"]
+    assert json.loads((tmp_path / "action/result.json").read_text()) == result
+    final = result["runs"][0]
+    assert final["closureReady"] is closed
+    assert calls.count("named-database") == 1
+    assert calls.count("delete-database") == (1 if command == "recover-database" else 0)
+    assert result["requests"] == (8 if command == "recover-database" else 7)
+    if mutation == "create" and status == 200:
+        assert final["createConfirmed"] and not final["unknownCreate"]
+    with pytest.raises(FileExistsError):
+        runner.recover_named_databases(command, table, [{"nonce": "a" * 32, "state": state, "receipt": {"unrecovered": False}}], tmp_path / "action", baseline=copy.deepcopy(BASELINE), check=lambda: None)
+
+
+@pytest.mark.parametrize("reason", ["early", "unknown-delete", "unknown-create", "unrecovered", "foreign-resource", "unconfirmed"])
+def test_database_action_refuses_before_refresh_when_journal_does_not_authorize_it(tmp_path, monkeypatch, reason):
+    from test_txn_program_management import NAMED
+    table = importlib.import_module("fs_txn_table_p16").TABLE
+    state = {"database": NAMED, "closureReady": False, "unknownCreate": False, "unknownDelete": False, "createConfirmed": True, "deleteAttempted": False, "deleteConfirmed": False, "lastRequestEpoch": 1000}
+    receipt = {"unrecovered": False}
+    command = "recover-database"
+    if reason == "early": command = "readback-a2"
+    elif reason == "unknown-delete": state.update(unknownDelete=True, deleteAttempted=True)
+    elif reason == "unknown-create": state.update(unknownCreate=True, createConfirmed=False)
+    elif reason == "unrecovered": receipt["unrecovered"] = True
+    elif reason == "unconfirmed": state["createConfirmed"] = False
+    else: state["database"] = NAMED.replace("fireemu-oracle-query", "fireemu-oracle-txn")
+    monkeypatch.setattr(runner.time, "time", lambda: 1599 if reason == "early" else 1600)
+    monkeypatch.setattr(runner, "refresh", lambda *args, **kwargs: pytest.fail("refused action reached credentials"))
+    with pytest.raises(ValueError):
+        runner.recover_named_databases(command, table, [{"nonce": "a" * 32, "state": state, "receipt": receipt}], tmp_path / "action", baseline={}, check=lambda: None)
+    assert not (tmp_path / "action").exists()
+
+
+def test_recovery_refuses_unknown_create_even_with_prior_confirmation(tmp_path, monkeypatch):
+    from test_txn_program_management import NAMED
+    table = importlib.import_module("fs_txn_table_p16").TABLE
+    state = {"database": NAMED, "createConfirmed": True, "unknownCreate": True, "deleteAttempted": False, "lastRequestEpoch": 1000}
+    monkeypatch.setattr(runner, "refresh", lambda *args, **kwargs: pytest.fail("unknown create reached credentials"))
+    with pytest.raises(ValueError, match="confirmed database"):
+        runner.recover_named_databases("recover-database", table, [{"nonce": "a" * 32, "state": state, "receipt": {"unrecovered": False}}], tmp_path / "action", baseline={}, check=lambda: None)
+    assert not (tmp_path / "action").exists()
+
+
+def test_database_action_refuses_existing_directory_before_refresh(tmp_path, monkeypatch):
+    from test_txn_program_management import NAMED
+    table = importlib.import_module("fs_txn_table_p16").TABLE
+    state = {"database": NAMED, "createConfirmed": True, "unknownCreate": False, "deleteAttempted": False, "lastRequestEpoch": 1000}
+    directory = tmp_path / "action"; directory.mkdir()
+    monkeypatch.setattr(runner, "refresh", lambda *args, **kwargs: pytest.fail("replayed action reached credentials"))
+    with pytest.raises(FileExistsError):
+        runner.recover_named_databases("recover-database", table, [{"nonce": "a" * 32, "state": state, "receipt": {"unrecovered": False}}], directory, baseline={}, check=lambda: None)
+    assert list(directory.iterdir()) == []

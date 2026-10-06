@@ -1207,3 +1207,68 @@ test("descriptor equality covers generated source runtime head and schema near m
   }
   assert.equal(descriptorMatches(null, {}), false);
 });
+
+test("REST and native stream use newly remaining deadline after credential work", async () => {
+  const { createRest } = await import("./pubsub-production/rest.mjs");
+  const { createGrpc } = await import("./pubsub-production/grpc.mjs");
+  const { EventEmitter } = await import("node:events");
+  const grpcLib = (await import("@grpc/grpc-js")).default;
+  let now = 0;
+  let timeout;
+  let deadline;
+  const getToken = async () => {
+    now += 40;
+    return "synthetic";
+  };
+  const common = {
+    budget: { consume() {} },
+    capture: { record() {}, frame() {} },
+    now: () => now,
+    getToken,
+  };
+  const originalTimeout = AbortSignal.timeout;
+  AbortSignal.timeout = (ms) => {
+    timeout = ms;
+    return originalTimeout(ms);
+  };
+  try {
+    const rest = createRest({
+      ...common,
+      base: "http://127.0.0.1:1",
+      fetchImpl: async () => new Response("{}"),
+    });
+    await createPhaseLimit(100, () => now)
+      .transport(rest)
+      .request({ method: "GET", path: "/v1/projects/demo-v2/topics/own" });
+    assert.equal(timeout, 60);
+  } finally {
+    AbortSignal.timeout = originalTimeout;
+  }
+  now = 0;
+  class Client {
+    close() {}
+    makeBidiStreamRequest(_path, _serialize, _deserialize, _metadata, options) {
+      deadline = options.deadline.getTime();
+      const rpc = new EventEmitter();
+      rpc.write = () => {};
+      rpc.end = () => {};
+      rpc.cancel = () => {};
+      process.nextTick(() => rpc.emit("status", { code: grpcLib.status.OK, details: "" }));
+      return rpc;
+    }
+  }
+  const transport = createGrpc({
+    ...common,
+    target: "127.0.0.1:1",
+    secure: false,
+    grpc: { ...grpcLib, Client },
+  });
+  try {
+    await createPhaseLimit(100, () => now)
+      .transport(transport)
+      .stream({ frames: [{ subscription: resource, streamAckDeadlineSeconds: 10 }] });
+    assert.equal(deadline, 100);
+  } finally {
+    transport.close();
+  }
+});

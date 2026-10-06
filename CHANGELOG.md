@@ -8,6 +8,30 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-07
+
+Scheduled functions (SCHEDULED-FUNCTIONS) and Firestore listeners (FS-LISTEN-SDK) are now `COMPAT_VERIFIED`, with independent closure reviews approved on 2026-10-06. Each comparison ran on its closure-base build: `closure-base-0b6d27a96` for SCHEDULED-FUNCTIONS and `closure-base-aad8cee2a` for FS-LISTEN-SDK. v0.13.0 differs from each by the version bump and the other parent's merged changes; these comparisons are not measurements of the v0.13.0 build. Items that cite a recording with a date come from those runs. Each item names the profiles it affects.
+
+Declared differences for SCHEDULED-FUNCTIONS (3.1 to 3.7): strict omits production's environment headers (`authorization`, `forwarded`, `traceparent`, `x-cloud-trace-context`, `x-forwarded-for`, `x-client-data`), while the compared handler-visible header values match (3.1). Interval phase follows the creation minute but uses whole minutes instead of production's stable per-job sub-second fraction, whose derivation is unknown (3.2). The recordings do not distinguish the Scheduler-attempt boundary from the handler-instance boundary; strict counts a function as in flight until its handler completes (3.3). `functions/{name}:run` is a Fireemu-only control using current logical time, whereas Cloud Scheduler's forced run carries the next schedule time; no Cloud Scheduler run-now or general resource API is claimed (3.4). Production preserves the previous deployment's retry configuration when a redeploy omits retry options; strict rebuilds from the reloaded manifest and resets to defaults. Job resource readbacks, including the Gen2 attempt deadline clamped to 180 to 1800 seconds and Gen1's absent deadline, remain scheduler-side observations (3.5). A forced run re-anchors production's next interval occurrence about 4.5 to 5 minutes later; that observation is unreachable through strict's Fireemu-only run control, and the synchronized window matches (3.6). A user's publish to a Gen1 schedule topic invokes the handler in production; strict stores the message without delivery, an unimplemented improvement outside the frozen cases (3.7).
+
+The SCHEDULED-FUNCTIONS 10:24Z rulings on 2026-10-06 cover the remaining cases: a Gen1 message stays published when its handler fails, as measured locally, while Cloud Scheduler's publish acknowledgement is a declared scheduler-side difference; scheduled-occurrence identity uses run 3's complete natural message/context joins, with run 4's last unpulled publications retained as a recording limitation. A handler continues after timeout and its run is recorded as timed out, as measured locally; Cloud Scheduler's HTTP 504 is a declared scheduler-side difference, with the handler-end in-flight boundary above. The calendar comparison has 47 `MATCH` rows and 1 approved difference; the delivery comparison has 54 `MATCH`, 15 approved differences and 1 `NOT_IMPLEMENTED` row.
+
+Declared differences for FS-LISTEN-SDK: strict sends an existence filter on browser restart (D4), and production's inconsistent `RESET` and document-replay segments are not reproduced (D5). After a resume, production's echo `NO_CHANGE` uses the resume point's read time, while strict uses the new snapshot's (D7(a)); production's `CURRENT` issues a new token, while strict re-issues the resumed bytes when no commit happened because its tokens encode versions (D7(b)). The SDK snapshots, cache flags and errors match for those browser phases. Closure ruling 1 also approves the named native rows: `native/existence-filter/with-expected-count` and `native/resume-token/current` have different replay boundary placement (the existence-filter row also changes the change/removal order), and the latter also has strict's count-only filter; `native/resume-grid-gc/k0` has that filter where production sent none, and `native/resume-grid-tc/k1-expected` and `native/resume-grid-tc/k1-repeat` use strict's diff and filter instead of the recorded replay. The deciding variable and the SDK effects of the native replay boundaries remain unrecorded, and replay of a one-commit modification is not implemented. These differences retain their `DIVERGES` verdicts: nine saved recordings produce 287 `MATCH` and 13 approved `DIVERGES` rows. Response boundary bytes are retained but decoded messages are judged; request bytes are `RECORDED_NOT_JUDGED` under the 13:26Z ruling (normalized retained content matches, and the remaining 27 bytes are unretained client fields). One browser lifecycle recording was approved; terminate-on-tab-close is unobserved and is not claimed.
+
+### Added
+
+- Compatibility evidence: SCHEDULED-FUNCTIONS and FS-LISTEN-SDK closure records now verify their frozen conditions, with the declared differences and closure-base build bindings above.
+
+### Changed
+
+- Emulator profile: a schedule accepted by firebase-tools 15.28.2 that fireemu cannot parse now prints a warning and creates no job instead of refusing startup. The strict profile keeps its schedule refusals.
+
+### Fixed
+
+- Strict profile: a Firestore `CURRENT` carries the snapshot's global resume token, the same bytes as the global `NO_CHANGE` that follows it, so any target of the database can resume from it (FS-LISTEN-SDK 203/203C: all eight recorded pairs across six windows).
+- Strict profile: WebChannel `Listen` answers use production's handshake value and session id width, omit empty `removedTargetIds` and default `NO_CHANGE` members, and serialize members in protobuf field order. Strict resume tokens are 11 bytes, as recorded in production, and a token whose binding check fails is treated as a bad resume token; the bytes remain opaque local version encodings.
+- Strict profile: Cloud Scheduler retry validation also refuses a minimum backoff greater than the maximum with the recorded diagnostic. Calendar validation refuses cron aliases, invalid weekday prefixes and schedules with no reachable occurrence; a step on a single numeric cron value stays at that value. The parser accepts `every minute`, hour intervals beyond 24 hours and day-of-month forms such as `1,15 of jan,jul 09:00`, following the two v6 calendar recordings. The retry-count, fractional retry-window and delivery retry fixes are listed in v0.12.0.
+
 ## [0.12.0] - 2026-10-06
 
 Functions background events (FUNCTIONS-EVENTS) are now `COMPAT_VERIFIED`: all 112 strict rows matched the saved production recording, and an independent review approved the closure on 2026-10-06. The comparison ran on the closure-base build of `8d5f9eb81` (`closure-base-8d5f9eb81`); v0.12.0 differs from it only by the version bump. Items that cite a recording with a date come from those runs. Each item names the profiles it affects.
@@ -526,7 +550,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/t-k/fireemu/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/t-k/fireemu/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/t-k/fireemu/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/t-k/fireemu/compare/v0.9.0...v0.10.0

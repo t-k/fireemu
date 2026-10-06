@@ -39,7 +39,6 @@
   "kind": "functions-events-comparison",
   "localBinary": {
     "dirty": false,
-    "runnerPath": "/Users/tk/work/firebase-emulator/.worktree/fe-promotion-final/tools/runner-node/index.mjs",
     "runnerSha256": "8d7f0f64a4e4db0c67f39c59406d6da7af0d6bac2e39060bc5b2fb2e02e406bf",
     "runnerTree": "9f4a4a97329710fbf6d4154abf42c743dc05196d",
     "sha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",

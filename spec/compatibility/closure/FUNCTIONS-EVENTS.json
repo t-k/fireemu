@@ -1032,13 +1032,13 @@
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
-        "sha256": "38058490c94d14a966947a6ba30976484c2fe98d9eefab1a807498cdca0a060d",
+        "sha256": "f1648517aa8b6cd0e2008b807d7ab54223b9b779ada9f972b1407618561f078a",
         "rows": 112,
         "summary": {
           "MATCH": 112
         },
         "laneComparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
-        "laneComparisonSha256": "38058490c94d14a966947a6ba30976484c2fe98d9eefab1a807498cdca0a060d",
+        "laneComparisonSha256": "f1648517aa8b6cd0e2008b807d7ab54223b9b779ada9f972b1407618561f078a",
         "identicalRows": 112,
         "changedRows": []
       }

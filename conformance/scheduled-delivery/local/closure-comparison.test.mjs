@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import test from "node:test";
 import { buildComparison, generateComparison } from "./closure-comparison.mjs";
 import { compareProfiles } from "./compare.mjs";
@@ -17,13 +17,17 @@ const row = (id, production, local, verdict = "MATCH") => ({
   production,
   strict: { local, verdict },
 });
+const attestation = {
+  binarySha256: sha("binary"),
+  runnerTreeManifest: `tools/runner-node/index.mjs\t${sha("runner")}\n`,
+};
 const build = (table, extra = {}) =>
   buildComparison({
-    report: { run: { id: "run3" }, table },
     recordings,
     artifactSha256: sha("binary"),
     runnerTreeManifest: `tools/runner-node/index.mjs\t${sha("runner")}\n`,
     ...extra,
+    report: { run: { id: "run3" }, table, fireemu: attestation, ...extra.report },
   });
 const find = (result, caseId) => result.rows.find((r) => r.caseId === caseId);
 
@@ -95,7 +99,11 @@ test("wrong binary binding, duplicate ids, unknown verdicts and recordings are r
   assert.throws(
     () =>
       build([], {
-        report: { run: { id: "run3" }, table: [], fireemu: { binarySha256: sha("other") } },
+        report: {
+          run: { id: "run3" },
+          table: [],
+          fireemu: { ...attestation, binarySha256: sha("other") },
+        },
       }),
     /binary/,
   );
@@ -132,7 +140,10 @@ test("implicit observations change with recorded outcomes and identity regressio
     ],
   };
   rs[1].data.forced = [];
-  const table = [row("retry.retryFour", [0, 4, 12], [0, 4, 12])];
+  const table = [
+    row("retry.retryFour", [0, 4, 12], [0, 4, 12]),
+    row("delivery.retry-stable-occurrence-identity", true, true),
+  ];
   const result = build(table, { recordings: rs });
   assert.equal(find(result, "retry-stable-occurrence-identity").status, "MATCH");
   for (const id of [
@@ -263,4 +274,124 @@ test("committed digests cover exactly the nine frozen delivery case sets with co
   assert.equal(unjudged.status, "NOT_COMPARABLE");
   assert.match(unjudged.note, /Missing production measurement.*debugInfo/);
   assert.throws(() => generateComparison({ reportPath: "missing", fireemu: "missing" }), /ENOENT/);
+});
+
+test("unattested tables and runner manifest mismatches are refused", () => {
+  for (const fireemu of [
+    undefined,
+    { binarySha256: sha("binary") },
+    { runnerTreeManifest: "runner" },
+  ])
+    assert.throws(
+      () => build([], { report: { run: { id: "run3" }, table: [], fireemu } }),
+      /unattested-table/,
+    );
+  assert.throws(
+    () =>
+      build([], {
+        report: {
+          run: { id: "run3" },
+          table: [],
+          fireemu: { binarySha256: sha("binary"), runnerTreeManifest: "other" },
+        },
+      }),
+    /runner/,
+  );
+});
+
+test("closure rejects the review's matching offsets without local identity", () => {
+  const rs = recordings.map(({ path }) => ({
+    path,
+    sha256: sha(path),
+    data: JSON.parse(readFileSync(new URL(`../../../${path}`, import.meta.url))),
+  }));
+  const l = {
+    natural: { lines: [] },
+    probe: {
+      lines: [0, 4, 12, 28, 46].map((t) => ({
+        at: new Date(Date.parse("2026-10-05T08:45:00Z") + t * 1000).toISOString(),
+        kind: "PROBE",
+        value: { handler: "retryFour" },
+      })),
+    },
+  };
+  const table = compareProfiles(rs[1].data, l, l);
+  assert.notEqual(
+    find(
+      build(table, { recordings: rs, report: { run: rs[1].data.run, table } }),
+      "retry-stable-occurrence-identity",
+    ).status,
+    "MATCH",
+  );
+});
+
+test("CLI binds cached provenance and refuses unattested or different executed binaries", () => {
+  const root = new URL("../../../", import.meta.url).pathname;
+  const dirRoot = new URL("../../../target/codex-out/", import.meta.url).pathname;
+  mkdirSync(dirRoot, { recursive: true });
+  const dir = mkdtempSync(`${dirRoot}binding-test-`);
+  try {
+    const binarySha256 = sha(readFileSync(process.execPath));
+    const runnerTreeManifest = execFileSync("git", ["ls-files", "tools/runner-node"], {
+      cwd: root,
+      encoding: "utf8",
+    })
+      .trim()
+      .split("\n")
+      .filter((p) => !p.endsWith(".test.mjs"))
+      .toSorted()
+      .map((p) => `${p}\t${sha(readFileSync(`${root}${p}`))}\n`)
+      .join("");
+    const empty = { natural: { exitCode: 0, lines: [] }, probe: { exitCode: 0, lines: [] } };
+    const fireemu = { binarySha256, runnerTreeManifest };
+    const cached = { fireemu, results: { strict: empty, emulator: empty } };
+    const args = [
+      new URL("./run-compare.mjs", import.meta.url).pathname,
+      "--fireemu",
+      process.execPath,
+      "--node",
+      process.execPath,
+      "--deps",
+      dir,
+      "--production",
+      "production-run3.json",
+      "--cache",
+      `${dir}/cache.json`,
+      "--out",
+      `${dir}/table.json`,
+    ];
+    for (const cache of [
+      cached.results,
+      { ...cached, fireemu: { ...fireemu, binarySha256: sha("other") } },
+      { ...cached, fireemu: { ...fireemu, runnerTreeManifest: "other" } },
+    ]) {
+      writeFileSync(`${dir}/cache.json`, JSON.stringify(cache));
+      assert.throws(
+        () => execFileSync(process.execPath, args, { stdio: "pipe" }),
+        (e) => /cache execution provenance mismatch/.test(e.stderr.toString()),
+      );
+    }
+    writeFileSync(`${dir}/cache.json`, JSON.stringify(cached));
+    execFileSync(process.execPath, args, { stdio: "pipe" });
+    const report = JSON.parse(readFileSync(`${dir}/table.json`));
+    assert.deepEqual(report.fireemu, fireemu);
+    assert.equal(
+      generateComparison({ reportPath: `${dir}/table.json`, fireemu: process.execPath })
+        .executionBinding,
+      "report",
+    );
+    writeFileSync(`${dir}/other-binary`, "other");
+    assert.throws(
+      () => generateComparison({ reportPath: `${dir}/table.json`, fireemu: `${dir}/other-binary` }),
+      /binary mismatch/,
+    );
+    delete report.fireemu;
+    writeFileSync(`${dir}/table.json`, JSON.stringify(report));
+    assert.throws(
+      () => generateComparison({ reportPath: `${dir}/table.json`, fireemu: process.execPath }),
+      /unattested-table/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

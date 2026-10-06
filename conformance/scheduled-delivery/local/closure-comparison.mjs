@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadDigest, productionChains, secondsOf } from "./compare.mjs";
+import { loadDigest, productionChains, productionDeliveryFacts } from "./compare.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -36,7 +36,10 @@ const sources = {
     "natural-scheduled-run": ["cadence.every-1-minutes.spacing"],
     "Cloud-Scheduler-run-now": ["forced-run"],
     "success-next-occurrence": ["cadence.every-1-minutes.spacing"],
-    "retry-stable-occurrence-identity": ["retry.retryFour"],
+    "retry-stable-occurrence-identity": [
+      "retry.retryFour",
+      "delivery.retry-stable-occurrence-identity",
+    ],
   },
   "retry-config-validation": {},
   "v2-retry-limits": {
@@ -52,7 +55,7 @@ const sources = {
     "exponential-doubling": ["retry.retryDouble0"],
     "linear-after-doublings": ["retry.retryDouble1", "retry.retryDouble3"],
     "max-backoff-cap": ["retry.retryDuration"],
-    "stable-scheduleTime": ["retry.retryFour"],
+    "stable-scheduleTime": ["retry.retryFour", "delivery.retry-stable-occurrence-identity"],
   },
   "v1-two-stage-retry": {
     "handler-no-retry": ["v1.failure-no-retry"],
@@ -104,12 +107,16 @@ const implicitFields = {
     "frames.event.scheduleTime",
     "retry.retryFour.production",
     "retry.retryFour.strict.local",
+    "delivery.retry-stable-occurrence-identity.strict.local",
   ],
 };
 
 export function buildComparison({ report, recordings, artifactSha256, runnerTreeManifest }) {
-  if (report.fireemu?.binarySha256 && report.fireemu.binarySha256 !== artifactSha256)
-    throw new Error("comparison binary mismatch");
+  if (!report.fireemu?.binarySha256 || !report.fireemu.runnerTreeManifest)
+    throw new Error("unattested-table");
+  if (report.fireemu.binarySha256 !== artifactSha256) throw new Error("comparison binary mismatch");
+  if (report.fireemu.runnerTreeManifest !== runnerTreeManifest)
+    throw new Error("comparison runner mismatch");
   const primary = recordings.find((r) => r.data.run.id === report.run?.id);
   if (!primary) throw new Error("comparison names an unknown recording");
   const table = new Map();
@@ -119,69 +126,7 @@ export function buildComparison({ report, recordings, artifactSha256, runnerTree
       throw new Error(`invalid verdict: ${r.id}`);
     table.set(r.id, r);
   }
-  const frames = primary.data.frames.filter(
-    (f) => f.handler === "schedRetryV2" && f.event?.jobName?.startsWith("firebase-schedule-"),
-  );
-  const groups = new Map();
-  for (const f of frames.toSorted((a, b) => a.at - b.at)) {
-    const key = `${f.headers["x-cloudscheduler-jobname"]}|${f.headers["x-cloudscheduler-scheduletime"]}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(f);
-  }
-  const chains = [...groups.values()];
-  const successful = chains.filter((g) => g.some((f) => f.failing === false));
-  const repeated = chains.filter((g) => g.length > 1);
-  const finished = (handler) =>
-    (primary.data.attempts?.[`firebase-schedule-${handler}-us-central1`] ?? []).filter(
-      (a) => a.kind === "AttemptFinished",
-    );
-  const ok = finished("schedOkV2");
-  const failures = finished("schedRetryV2");
-  const observations = {
-    "handler-success-ack":
-      ok.length && ok.every((a) => Object.hasOwn(a, "status") && typeof a.debugInfo === "string")
-        ? ok.every((a) => a.status === null && (a.debugInfo ?? "").endsWith("code number = 200"))
-        : null,
-    "handler-throw-ack":
-      failures.length &&
-      repeated.length &&
-      failures.every((a) => Object.hasOwn(a, "status") && typeof a.debugInfo === "string") &&
-      repeated.every((g) => typeof g[0].failing === "boolean")
-        ? failures.some(
-            (a) => a.status !== null && (a.debugInfo ?? "").endsWith("code number = 500"),
-          ) && repeated.some((g) => g[0].failing === true)
-        : null,
-    "success-stops-retry":
-      successful.length && chains.every((g) => g.every((f) => typeof f.failing === "boolean"))
-        ? successful.every((g) => g.findIndex((f) => f.failing === false) === g.length - 1)
-        : null,
-    "next-schedule-after-failure":
-      chains.length &&
-      Array.isArray(primary.data.forced) &&
-      chains.every((g) => g.every((f) => typeof f.failing === "boolean" && Number.isFinite(f.at)))
-        ? chains.some(
-            (g) =>
-              g.every((f) => f.failing === true) &&
-              chains.some(
-                (next) =>
-                  next[0].at > g.at(-1).at &&
-                  secondsOf(next[0].event.scheduleTime) > secondsOf(g[0].event.scheduleTime) &&
-                  !(primary.data.forced ?? []).some(
-                    (f) => f.job === next[0].event.jobName && Math.abs(f.atMs - next[0].at) <= 5000,
-                  ),
-              ),
-          )
-        : null,
-    "retry-stable-occurrence-identity": repeated.length
-      ? repeated.every((g) =>
-          g.every(
-            (f) =>
-              f.event.jobName === f.headers["x-cloudscheduler-jobname"] &&
-              f.event.scheduleTime === f.headers["x-cloudscheduler-scheduletime"],
-          ),
-        )
-      : null,
-  };
+  const { observations } = productionDeliveryFacts(primary.data);
   const closure = loadDigest(resolve(root, "spec/compatibility/closure/SCHEDULED-FUNCTIONS.json"));
   const rows = [];
   for (const c of closure.conditions.filter((condition) =>
@@ -263,7 +208,7 @@ export function buildComparison({ report, recordings, artifactSha256, runnerTree
               observation: observations[caseId],
               note:
                 caseId === "retry-stable-occurrence-identity"
-                  ? "Retry offsets are grouped by job and scheduleTime on both timelines; equal chain lengths require repeated identity."
+                  ? "Present, valid occurrence identities and retry offsets are compared on both timelines."
                   : observations[caseId] === null
                     ? `Missing production measurement: ${implicitFields[caseId].join(", ")}.`
                     : (compared[0]?.note ??
@@ -346,7 +291,7 @@ export function buildComparison({ report, recordings, artifactSha256, runnerTree
     recordings: recordings.map(({ path, sha256 }) => ({ path, sha256 })),
     runnerTreeManifestFormat:
       "Tracked tools/runner-node files except *.test.mjs, sorted in ASCII order: UTF-8 path, TAB, lowercase SHA-256 of file bytes, LF; hash the concatenation.",
-    executionBinding: report.fireemu?.binarySha256 ? "report" : "unattested-table",
+    executionBinding: "report",
     summary,
     rows,
   };

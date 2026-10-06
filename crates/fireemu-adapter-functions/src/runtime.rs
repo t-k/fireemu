@@ -284,6 +284,28 @@ pub struct FunctionsConfig {
     pub auth_context: crate::events::AuthContextNaming,
 }
 
+impl FunctionsConfig {
+    #[doc(hidden)]
+    pub fn for_tests(max_catch_up_runs: usize, runner_secret: String) -> Self {
+        Self {
+            project: "demo-app".to_owned(),
+            default_bucket: "demo-app.appspot.com".to_owned(),
+            location: "nam5".to_owned(),
+            session: SessionId::new(7),
+            max_running: 4,
+            debug_mode: false,
+            retry_attempts: 4,
+            max_catch_up_runs,
+            runner_secret,
+            overlap: OverlapPolicy::Allow,
+            catch_up: CatchUpPolicy::All,
+            functions_host: None,
+            subscription_naming: crate::events::SubscriptionNaming::default(),
+            auth_context: crate::events::AuthContextNaming::default(),
+        }
+    }
+}
+
 impl std::fmt::Debug for FunctionsConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FunctionsConfig")
@@ -5459,20 +5481,9 @@ mod task_completion_tests {
         FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
-                session: SessionId::new(7),
-                max_running: 4,
-                debug_mode: false,
                 retry_attempts: 1,
-                max_catch_up_runs: 1,
-                runner_secret: "test-secret".to_owned(),
-                overlap: super::OverlapPolicy::Allow,
-                catch_up: super::CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
-                subscription_naming: crate::events::SubscriptionNaming::default(),
-                auth_context: crate::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1, "test-secret".to_owned())
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -6134,7 +6145,6 @@ mod schedule_capacity_tests {
     use crate::runner::{Runner, SpawnSpec};
     use fireemu_core_session::clock::VirtualClock;
     use fireemu_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
-    use fireemu_core_types::ids::SessionId;
     use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
     use proptest::strategy::Strategy as _;
     use serde_json::json;
@@ -6176,20 +6186,11 @@ mod schedule_capacity_tests {
         let runtime = FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
-                session: SessionId::new(7),
-                max_running: 4,
-                debug_mode: false,
                 retry_attempts: 1,
-                max_catch_up_runs,
-                runner_secret: "test-secret".to_owned(),
                 overlap,
                 catch_up,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
-                subscription_naming: crate::events::SubscriptionNaming::default(),
-                auth_context: crate::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(max_catch_up_runs, "test-secret".to_owned())
             },
             clock.clone(),
             Arc::new(runner),
@@ -8248,7 +8249,6 @@ mod storage_event_instant_tests {
     use fireemu_core_session::clock::VirtualClock;
     use fireemu_core_storage::name::{BucketName, ObjectName};
     use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent, StorageState};
-    use fireemu_core_types::ids::SessionId;
     use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
     use serde_json::Value;
     use std::sync::{Arc, Mutex};
@@ -8293,20 +8293,9 @@ mod storage_event_instant_tests {
         let runtime = FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
-                session: SessionId::new(7),
-                max_running: 4,
-                debug_mode: false,
                 retry_attempts: 1,
-                max_catch_up_runs: 1,
-                runner_secret: "test-secret".to_owned(),
-                overlap: super::OverlapPolicy::Allow,
-                catch_up: super::CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
-                subscription_naming: crate::events::SubscriptionNaming::default(),
-                auth_context: crate::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1, "test-secret".to_owned())
             },
             clock.clone(),
             Arc::new(runner),

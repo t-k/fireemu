@@ -6593,7 +6593,6 @@ mod tests {
         use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
         use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
         use fireemu_core_functions::manifest::Trigger;
-        use fireemu_core_types::ids::SessionId;
         use fireemu_core_types::time::LogicalInstant;
 
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -6627,21 +6626,8 @@ mod tests {
         let runtime = FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
-                session: SessionId::new(7),
-                max_running: 4,
-                debug_mode: false,
                 retry_attempts: 1,
-                max_catch_up_runs: 1,
-                runner_secret: "test-secret".to_owned(),
-                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-                functions_host: None,
-                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
-                ),
-                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1, "test-secret".to_owned())
             },
             clock.clone(),
             Arc::new(runner),
@@ -8137,7 +8123,6 @@ mod tests {
         use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
         use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
         use fireemu_core_functions::manifest::{BlockingAuthSelection, BlockingAuthSelections};
-        use fireemu_core_types::ids::SessionId;
         use fireemu_core_types::time::LogicalInstant;
 
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -8153,21 +8138,9 @@ mod tests {
         let runtime = FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
-                session: SessionId::new(7),
                 max_running: 1,
-                debug_mode: false,
                 retry_attempts: 1,
-                max_catch_up_runs: 1,
-                runner_secret: "test-secret".to_owned(),
-                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-                functions_host: None,
-                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
-                ),
-                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1, "test-secret".to_owned())
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -8216,21 +8189,10 @@ mod tests {
         let runtime = FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
                 session: SessionId::new(8),
                 max_running: 1,
-                debug_mode: false,
                 retry_attempts: 1,
-                max_catch_up_runs: 1,
-                runner_secret: "test-secret".to_owned(),
-                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-                functions_host: None,
-                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
-                ),
-                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1, "test-secret".to_owned())
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -8396,7 +8358,6 @@ mod tests {
         use fireemu_core_functions::manifest::BlockingAuthEvent;
         use fireemu_core_session::clock::VirtualClock;
         use fireemu_core_types::determinism::SplitMix64;
-        use fireemu_core_types::ids::SessionId;
         use fireemu_core_types::time::LogicalInstant;
         use std::sync::Mutex;
 
@@ -8428,21 +8389,9 @@ mod tests {
         let runtime = FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
-                session: SessionId::new(7),
                 max_running: 1,
-                debug_mode: false,
                 retry_attempts: 1,
-                max_catch_up_runs: 1,
-                runner_secret: "test-secret".to_owned(),
-                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-                functions_host: None,
-                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
-                ),
-                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1, "test-secret".to_owned())
             },
             Arc::new(Mutex::new(VirtualClock::new(now))),
             Arc::new(runner),
@@ -10207,7 +10156,6 @@ mod tests {
         use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
         use fireemu_adapter_pubsub::PubSubHandle;
         use fireemu_core_pubsub::{PubsubMessage, SubscriptionConfig};
-        use fireemu_core_types::ids::SessionId;
         use fireemu_core_types::time::LogicalInstant;
         use std::time::Duration;
 
@@ -10226,21 +10174,7 @@ mod tests {
         let runtime = FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
-                session: SessionId::new(7),
-                max_running: 4,
-                debug_mode: false,
-                retry_attempts: 4,
-                max_catch_up_runs: 1000,
-                runner_secret: "test-secret".to_owned(),
-                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-                functions_host: None,
-                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
-                ),
-                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1000, "test-secret".to_owned())
             },
             clock.clone(),
             Arc::new(runner),
@@ -10315,7 +10249,6 @@ mod tests {
         use fireemu_adapter_pubsub::{serve_pubsub, PubSubHandle};
         use fireemu_core_pubsub::subscription::{DeadLetterPolicy, MIN_DEAD_LETTER_ATTEMPTS};
         use fireemu_core_pubsub::{PubsubMessage, SubscriptionConfig};
-        use fireemu_core_types::ids::SessionId;
         use fireemu_core_types::time::LogicalInstant;
         use std::time::Duration;
 
@@ -10334,21 +10267,7 @@ mod tests {
         let runtime = FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
-                session: SessionId::new(7),
-                max_running: 4,
-                debug_mode: false,
-                retry_attempts: 4,
-                max_catch_up_runs: 1000,
-                runner_secret: "test-secret".to_owned(),
-                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-                functions_host: None,
-                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
-                ),
-                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1000, "test-secret".to_owned())
             },
             clock.clone(),
             Arc::new(runner),

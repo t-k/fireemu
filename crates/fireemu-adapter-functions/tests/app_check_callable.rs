@@ -29,7 +29,6 @@ use fireemu_core_auth::store::{AuthStore, NewUser};
 use fireemu_core_rules::runtime::RulesetSlot;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::{DeterministicRng, SplitMix64};
-use fireemu_core_types::ids::SessionId;
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::Value;
 
@@ -701,19 +700,7 @@ async fn start_with_serve_entry(
         manifest,
         FunctionsConfig {
             project: PROJECT.into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "runner-secret".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1000, "runner-secret".into())
         },
         clock.clone(),
         Arc::new(runner),

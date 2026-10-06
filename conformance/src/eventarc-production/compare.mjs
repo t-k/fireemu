@@ -285,6 +285,24 @@ export function sameJson(a, b) {
   );
 }
 
+/** Compare CloudEvent member names as a set while retaining their unmodelled wire order. */
+export function compareCloudEventKeys(recorded, actual) {
+  const recordedSet = new Set(recorded);
+  const actualSet = new Set(actual);
+  return {
+    verdict:
+      recordedSet.size === actualSet.size && [...recordedSet].every((key) => actualSet.has(key))
+        ? "MATCH"
+        : "DIVERGES",
+    order:
+      recorded.length === actual.length && recorded.every((key, index) => key === actual[index])
+        ? "MATCH"
+        : "UNMODELLED",
+    missing: recorded.filter((key) => !actualSet.has(key)),
+    extra: actual.filter((key) => !recordedSet.has(key)),
+  };
+}
+
 /** The paths at which two JSON values differ; the path of an object whose members only changed order ends in `#order`. */
 export function diffPaths(a, b, path = "$") {
   if (sameJson(a, b)) return [];

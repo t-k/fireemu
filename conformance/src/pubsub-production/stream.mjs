@@ -136,6 +136,23 @@ export function createStreamingPull({
           rpc.cancel();
           finish({ code: grpc.status.DEADLINE_EXCEEDED, details: "local watchdog expired" });
         }, timeoutMs + 100);
+        const writeFrame = (bytes) => {
+          if (finished || reason !== undefined) return false;
+          try {
+            if (remainingTime) remainingTime();
+            if (journalDispatch) {
+              const left = dispatchDeadline - now();
+              if (!Number.isFinite(left) || left < 1) throw new TimeLimit();
+            }
+          } catch {
+            reason = "outbound-deadline";
+            finish({ code: grpc.status.DEADLINE_EXCEEDED, details: "outbound deadline expired" });
+            rpc.cancel();
+            return false;
+          }
+          rpc.write(bytes);
+          return true;
+        };
         rpc.on("error", (error) => {
           terminal = { code: error.code ?? grpc.status.UNKNOWN, details: error.details ?? "" };
         });
@@ -204,7 +221,7 @@ export function createStreamingPull({
               rpc.cancel();
               return;
             }
-            rpc.write(wire);
+            if (!writeFrame(wire)) return;
             outboundFrames += 1;
             followUpSent = true;
             capture.frame(
@@ -220,8 +237,8 @@ export function createStreamingPull({
             rpc.end();
           }
         });
-        encoded.forEach((bytes, index) => {
-          rpc.write(bytes);
+        for (const [index, bytes] of encoded.entries()) {
+          if (!writeFrame(bytes)) break;
           outboundFrames += 1;
           capture.frame(
             {
@@ -232,8 +249,8 @@ export function createStreamingPull({
             },
             bytes,
           );
-        });
-        if (afterReceive === undefined) rpc.end();
+        }
+        if (afterReceive === undefined && !finished) rpc.end();
       });
       capture.record({
         ...label,

@@ -1652,12 +1652,97 @@ test("v2 A2 refuses changed or missing original targets before admission or mark
         {},
         { stdout: { write() {} }, stderr: { write: (text) => (error += text) } },
         { now: () => Date.parse("2026-01-01T01:00:00Z"), noWire: true },
-      );
+      ).catch((failure) => assert.fail(`recovery target bypass reached: ${failure.name}`));
       assert.equal(code, 2);
       assert.match(error, /source identity mismatch/);
       assert.equal(existsSync(join(out, `a2-started-${runId}.json`)), false);
     }
   } finally {
     rmSync(out, { recursive: true });
+  }
+});
+
+test("native outbound frames stop when synchronous frame persistence consumes request or phase time", async () => {
+  const { createGrpc } = await import("./pubsub-production/grpc.mjs");
+  const { EventEmitter } = await import("node:events");
+  const grpcLib = (await import("@grpc/grpc-js")).default;
+  const { protos } = await import("@google-cloud/pubsub");
+  const Response = protos.google.pubsub.v1.StreamingPullResponse;
+  for (const path of ["initial", "receive"]) {
+    for (const bound of ["request", "phase"]) {
+      let now = 0;
+      let phaseNow = 0;
+      const sent = [];
+      let cancelled = 0;
+      class Client {
+        close() {}
+        makeBidiStreamRequest() {
+          const rpc = new EventEmitter();
+          rpc.write = () => sent.push(now);
+          rpc.cancel = () => {
+            cancelled += 1;
+            process.nextTick(() => rpc.emit("status", { code: grpcLib.status.CANCELLED }));
+          };
+          rpc.end = () => {};
+          if (path === "receive")
+            process.nextTick(() =>
+              rpc.emit(
+                "data",
+                Buffer.from(
+                  Response.encode(
+                    Response.fromObject({
+                      receivedMessages: [{ ackId: "own-ack", message: { data: "b3du" } }],
+                    }),
+                  ).finish(),
+                ),
+              ),
+            );
+          return rpc;
+        }
+      }
+      const transport = createGrpc({
+        target: "127.0.0.1:1",
+        secure: false,
+        grpc: { ...grpcLib, Client },
+        now: () => now,
+        journalDispatch: true,
+        budget: { consume() {} },
+        capture: {
+          note() {},
+          record() {},
+          frame(row) {
+            if (row.direction === (path === "initial" ? "out" : "in")) {
+              if (bound === "request") now = 101;
+              else phaseNow = 101;
+            }
+          },
+        },
+      });
+      try {
+        const frames = [{ subscription: resource, streamAckDeadlineSeconds: 10 }];
+        if (path === "initial") frames.push({ ackIds: ["opaque-invalid"] });
+        const reply = await transport.stream({
+          frames,
+          timeoutMs: bound === "request" ? 100 : 1000,
+          ...(path === "receive" ? { afterReceive: { modifyDeadlineSeconds: -1 } } : {}),
+          ...(bound === "phase"
+            ? {
+                remainingTime() {
+                  if (phaseNow >= 100) throw new TimeLimit();
+                  return 100 - phaseNow;
+                },
+              }
+            : {}),
+        });
+        assert.deepEqual(sent, [0]);
+        assert.equal(cancelled, 1);
+        assert.equal(reply.unknown, true);
+        assert.equal(reply.code, "DEADLINE_EXCEEDED");
+        assert.equal(reply.reason, "outbound-deadline");
+        assert.equal(reply.followUpSent, false);
+      } finally {
+        transport.close();
+      }
+    }
   }
 });

@@ -512,7 +512,10 @@ export function rows(production, local, alsoRecorded = []) {
       pIds,
       lIds,
       same(pIds, lIds) &&
-        lv1.every((f) => lMsgs.filter((m) => m.fn === f.handler && m.id === f.context?.eventId).length === 1) &&
+        lv1.every(
+          (f) =>
+            lMsgs.filter((m) => m.fn === f.handler && m.id === f.context?.eventId).length === 1,
+        ) &&
         lMsgs.every((m) => lv1.some((f) => f.handler === m.fn && f.context?.eventId === m.id)),
       "the message id is a Pub/Sub message id and is the event id of the handler's context",
     );
@@ -539,6 +542,116 @@ export function rows(production, local, alsoRecorded = []) {
   }
 
   // ---- failure handling ----
+  const delivery = [{}, {}];
+  for (const [index, frames] of [
+    pv2.filter(deployedJob).toSorted((a, b) => a.at - b.at),
+    lv2,
+  ].entries()) {
+    const grouped = new Map();
+    for (const f of frames.filter((f) => f.handler === "schedRetryV2")) {
+      const key = `${f.event.jobName}|${f.event.scheduleTime}`;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(f);
+    }
+    const chains = [...grouped.values()];
+    const successful = chains.filter(
+      (g) => g.some((f) => f.failing === false) && g.some((f) => f.failing === true),
+    );
+    delivery[index]["success-stops-retry"] =
+      successful.length && chains.every((g) => g.every((f) => typeof f.failing === "boolean"))
+        ? successful.every((g) => g.findIndex((f) => f.failing === false) === g.length - 1)
+        : null;
+    delivery[index]["handler-throw-ack"] =
+      chains.length && chains.every((g) => typeof g[0].failing === "boolean")
+        ? chains.some((g) => g.length > 1 && g[0].failing === true)
+        : null;
+    if (index === 0)
+      delivery[0]["next-schedule-after-failure"] =
+        chains.length &&
+        Array.isArray(production.forced) &&
+        chains.every((g) => g.every((f) => typeof f.failing === "boolean" && Number.isFinite(f.at)))
+          ? chains.some(
+              (g) =>
+                g.every((f) => f.failing === true) &&
+                chains.some(
+                  (next) =>
+                    next[0].at > g.at(-1).at &&
+                    secondsOf(next[0].event.scheduleTime) > secondsOf(g[0].event.scheduleTime) &&
+                    !production.forced.some(
+                      (f) =>
+                        f.job === next[0].event.jobName && Math.abs(f.atMs - next[0].at) <= 5000,
+                    ),
+                ),
+            )
+          : null;
+  }
+  for (const [id, handler, code] of [
+    ["handler-success-ack", "schedOkV2", 200],
+    ["handler-throw-ack", "schedRetryV2", 500],
+  ]) {
+    const attempts = (
+      production.attempts?.[`firebase-schedule-${handler}-us-central1`] ?? []
+    ).filter((a) => a.kind === "AttemptFinished");
+    const history = (local.natural.history ?? []).filter((r) => r.function === handler);
+    const measured =
+      attempts.length &&
+      attempts.every((a) => Object.hasOwn(a, "status") && typeof a.debugInfo === "string");
+    delivery[0][id] = measured
+      ? code === 200
+        ? attempts.every((a) => a.status === null && a.debugInfo.endsWith("code number = 200"))
+        : delivery[0][id] &&
+          attempts.some((a) => a.status !== null && a.debugInfo.endsWith("code number = 500"))
+      : null;
+    delivery[1][id] =
+      history.length && history.every((r) => typeof r.outcome === "string")
+        ? code === 200
+          ? history.every((r) => r.outcome === "ok")
+          : delivery[1][id] && history.some((r) => r.outcome.startsWith("failed:"))
+        : null;
+  }
+  const failedOccurrences = new Map();
+  for (const line of local.probe.lines.filter(
+    (l) => l.kind === "PROBE" && l.value.handler === "retryFour",
+  )) {
+    if (!line.value.scheduleTime) continue;
+    if (!failedOccurrences.has(line.value.scheduleTime))
+      failedOccurrences.set(line.value.scheduleTime, []);
+    failedOccurrences.get(line.value.scheduleTime).push(secondsOf(line.at));
+  }
+  const failedChains = [...failedOccurrences.entries()].toSorted((a, b) => a[1][0] - b[1][0]);
+  const failures = (local.probe.history ?? []).filter((r) => r.function === "retryFour");
+  const firstFailures = failures.filter((r) => r.eventId === failures[0]?.eventId);
+  delivery[1]["next-schedule-after-failure"] =
+    failedChains.length &&
+    firstFailures.length === failedChains[0][1].length &&
+    firstFailures.every((r) => r.outcome?.startsWith("failed:"))
+      ? failedChains
+          .slice(1)
+          .some(
+            ([scheduled, times]) =>
+              secondsOf(scheduled) > secondsOf(failedChains[0][0]) &&
+              times[0] > failedChains[0][1].at(-1) &&
+              !(local.probe.manual ?? []).some(
+                (m) => m.name === "retryFour" && Math.abs(secondsOf(m.at) - times[0]) <= 5,
+              ),
+          )
+      : null;
+  for (const [id, p] of Object.entries(delivery[0])) {
+    const l = delivery[1][id];
+    add(
+      `delivery.${id}`,
+      id.startsWith("handler-") ? "v2-http-delivery" : "v2-retry-limits",
+      id,
+      p,
+      l,
+      p === null || l === null ? null : p === l,
+      p === null
+        ? "Missing production measurement in attempts.*.kind/status/debugInfo or frames.failing/at/event.scheduleTime and forced.job/atMs."
+        : l === null
+          ? "Missing local measurement in natural.history/lines or probe.history/lines."
+          : "Recorded attempt outcomes and occurrence chains compared with local completion history and timelines; acknowledgements mean successful or failed completion.",
+    );
+  }
   // An occurrence is told by its message id, which a redelivery keeps: a retry some seconds later is the same one.
   const perOccurrence = (frames, key) => {
     const counts = new Map();

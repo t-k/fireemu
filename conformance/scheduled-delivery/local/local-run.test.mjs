@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { runLocal } from "./local-run.mjs";
+import { parseTimeline, runLocal } from "./local-run.mjs";
 
 function fake(dir, body = "") {
   const path = join(dir, "fake-fireemu.mjs");
@@ -51,6 +51,14 @@ const field = (output, name) =>
     .find((l) => l.startsWith(name + " "))
     ?.slice(name.length + 1);
 
+test("completion history is retained separately from handler frames and absence is explicit", () => {
+  const history = [
+    { eventId: "1", function: "schedRetryV2", attempt: 1, outcome: "failed: HTTP 500" },
+  ];
+  assert.deepEqual(parseTimeline(`HISTORY ${JSON.stringify(history)}\n`).history, history);
+  assert.equal(parseTimeline("").history, null);
+});
+
 test("it copies the fixture, links the dependencies, writes the pinned-clock config and runs the daemon once", async () => {
   const dir = mkdtempSync(join(tmpdir(), "local-run-test-"));
   try {
@@ -84,12 +92,12 @@ test("it copies the fixture, links the dependencies, writes the pinned-clock con
       "eventarc",
       "tasks",
       "pubsub",
-      "ui",
       "hub",
       "logging",
     ])
       assert.equal(args[args.indexOf("--" + name + "-port") + 1], "0", name);
     assert.match(args[args.indexOf("--http-port") + 1], /^[1-9]\d{3,4}$/);
+    assert.match(args[args.indexOf("--ui-port") + 1], /^[1-9]\d{3,4}$/);
     assert.deepEqual(JSON.parse(field(result.output, "CONFIG")), {
       schemaVersion: 1,
       profile: "emulator",
@@ -106,6 +114,7 @@ test("it copies the fixture, links the dependencies, writes the pinned-clock con
     assert.deepEqual(env, {
       PATH: "/usr/local/bin:/usr/bin:/bin",
       LOCAL_START: "2026-10-05T08:40:30Z",
+      LOCAL_UI_URL: `http://127.0.0.1:${args[args.indexOf("--ui-port") + 1]}/ui/api/functions`,
       LOCAL_SECONDS: "7",
       LOCAL_AWAIT_IDLE: "0",
       LOCAL_PAUSE_MS: "150",

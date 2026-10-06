@@ -32,8 +32,13 @@ const pullTopics = [...new Set((production.published ?? []).map((m) => m.functio
   .toSorted()
   .map((fn) => `firebase-schedule-${fn}-us-central1`);
 // The recorded fixture's slow handler sleeps 100 real seconds, which would stall a logical clock; the copy sleeps 100 ms.
-const patch = (source) =>
-  source.replace("setTimeout(resolve, 100_000)", "setTimeout(resolve, 100)");
+const patch = (source, { clockFile }) =>
+  source
+    .replace("setTimeout(resolve, 100_000)", "setTimeout(resolve, 100)")
+    .replace(
+      "Date.now() - Date.parse(event.scheduleTime)",
+      `Number(require("node:fs").readFileSync(${JSON.stringify(clockFile)}, "utf8")) * 1000 - Date.parse(event.scheduleTime)`,
+    );
 const common = {
   fireemu: args.fireemu,
   node: args.node,
@@ -52,6 +57,9 @@ else
         profile,
         fixtureDir: join(here, "..", "fixture"),
         seconds: 700,
+        clockFile: true,
+        awaitIdle: false,
+        pauseMs: 150,
         pullTopics,
         patch,
       }),
@@ -74,6 +82,9 @@ else
       }),
     };
   }
+for (const [profile, scenarios] of Object.entries(results))
+  for (const [scenario, run] of Object.entries(scenarios))
+    if (run.exitCode !== 0) throw new Error(`${profile}/${scenario} exited with ${run.exitCode}`);
 if (args.cache && !existsSync(args.cache)) writeFileSync(args.cache, JSON.stringify(results));
 const also = (args.also ?? "")
   .split(",")

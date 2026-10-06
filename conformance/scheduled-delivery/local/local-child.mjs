@@ -92,3 +92,10 @@ for (const { topic, index, status } of subscribed) {
   console.log("PULLED", JSON.stringify({ topic, status: pulled.status, messages }));
 }
 console.log("STATE", JSON.stringify((await call("sessions/default/functions")).json));
+if (process.env.LOCAL_UI_URL) {
+  const response = await fetch(process.env.LOCAL_UI_URL, {
+    headers: { authorization: "Bearer " + token },
+  });
+  if (!response.ok) throw new Error(`functions history: HTTP ${response.status}`);
+  console.log("HISTORY", JSON.stringify((await response.json()).history));
+}

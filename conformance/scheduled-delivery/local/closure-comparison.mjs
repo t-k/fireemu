@@ -13,6 +13,8 @@ const proposal = "docs.local/proposals/2026-10-06-scheduled-functions-closure-pr
 // Only measurements actually present in run-compare are mapped. Missing measurements stay unjudged.
 const sources = {
   "v2-http-delivery": {
+    "handler-success-ack": ["delivery.handler-success-ack"],
+    "handler-throw-ack": ["delivery.handler-throw-ack"],
     "request-method": ["v2.request.method", "v2.request.url"],
     "jobName-header": ["v2.request.headers", "v2.event.jobName"],
     "scheduleTime-header": ["v2.request.headers", "v2.event.scheduleTime-form"],
@@ -38,6 +40,8 @@ const sources = {
   },
   "retry-config-validation": {},
   "v2-retry-limits": {
+    "success-stops-retry": ["delivery.success-stops-retry"],
+    "next-schedule-after-failure": ["delivery.next-schedule-after-failure"],
     "zero-no-retry": ["retry.retryZero"],
     "finite-retry-count": ["retry.retryFour"],
     "duration-only": ["retry.retryDuration"],
@@ -134,32 +138,40 @@ export function buildComparison({ report, recordings, artifactSha256, runnerTree
   const ok = finished("schedOkV2");
   const failures = finished("schedRetryV2");
   const observations = {
-    "handler-success-ack": ok.length
-      ? ok.every((a) => a.status === null && (a.debugInfo ?? "").endsWith("code number = 200"))
-      : null,
+    "handler-success-ack":
+      ok.length && ok.every((a) => Object.hasOwn(a, "status") && typeof a.debugInfo === "string")
+        ? ok.every((a) => a.status === null && (a.debugInfo ?? "").endsWith("code number = 200"))
+        : null,
     "handler-throw-ack":
-      failures.length && repeated.length
+      failures.length &&
+      repeated.length &&
+      failures.every((a) => Object.hasOwn(a, "status") && typeof a.debugInfo === "string") &&
+      repeated.every((g) => typeof g[0].failing === "boolean")
         ? failures.some(
             (a) => a.status !== null && (a.debugInfo ?? "").endsWith("code number = 500"),
           ) && repeated.some((g) => g[0].failing === true)
         : null,
-    "success-stops-retry": successful.length
-      ? successful.every((g) => g.findIndex((f) => f.failing === false) === g.length - 1)
-      : null,
-    "next-schedule-after-failure": chains.length
-      ? chains.some(
-          (g) =>
-            g.every((f) => f.failing === true) &&
-            chains.some(
-              (next) =>
-                next[0].at > g.at(-1).at &&
-                secondsOf(next[0].event.scheduleTime) > secondsOf(g[0].event.scheduleTime) &&
-                !(primary.data.forced ?? []).some(
-                  (f) => f.job === next[0].event.jobName && Math.abs(f.atMs - next[0].at) <= 5000,
-                ),
-            ),
-        )
-      : null,
+    "success-stops-retry":
+      successful.length && chains.every((g) => g.every((f) => typeof f.failing === "boolean"))
+        ? successful.every((g) => g.findIndex((f) => f.failing === false) === g.length - 1)
+        : null,
+    "next-schedule-after-failure":
+      chains.length &&
+      Array.isArray(primary.data.forced) &&
+      chains.every((g) => g.every((f) => typeof f.failing === "boolean" && Number.isFinite(f.at)))
+        ? chains.some(
+            (g) =>
+              g.every((f) => f.failing === true) &&
+              chains.some(
+                (next) =>
+                  next[0].at > g.at(-1).at &&
+                  secondsOf(next[0].event.scheduleTime) > secondsOf(g[0].event.scheduleTime) &&
+                  !(primary.data.forced ?? []).some(
+                    (f) => f.job === next[0].event.jobName && Math.abs(f.atMs - next[0].at) <= 5000,
+                  ),
+              ),
+          )
+        : null,
     "retry-stable-occurrence-identity": repeated.length
       ? repeated.every((g) =>
           g.every(
@@ -210,7 +222,21 @@ export function buildComparison({ report, recordings, artifactSha256, runnerTree
               : "NOT_COMPARABLE";
       }
       const implicit = Object.hasOwn(implicitFields, caseId);
-      if (implicit && caseId !== "retry-stable-occurrence-identity") status = "NOT_COMPARABLE";
+      if (
+        implicit &&
+        caseId !== "retry-stable-occurrence-identity" &&
+        observations[caseId] !== null &&
+        compared[0] &&
+        compared[0].production !== null &&
+        compared[0].production !== observations[caseId]
+      )
+        throw new Error(`delivery row disagrees with recording: ${caseId}`);
+      if (
+        implicit &&
+        caseId !== "retry-stable-occurrence-identity" &&
+        observations[caseId] === null
+      )
+        status = "NOT_COMPARABLE";
       const section = resourceCases.has(caseId)
         ? "3.5"
         : caseId === "Cloud-Scheduler-run-now"
@@ -238,7 +264,10 @@ export function buildComparison({ report, recordings, artifactSha256, runnerTree
               note:
                 caseId === "retry-stable-occurrence-identity"
                   ? "Retry offsets are grouped by job and scheduleTime on both timelines; equal chain lengths require repeated identity."
-                  : "Production observation only: the table does not retain the corresponding local attempt outcomes or subsequent chains.",
+                  : observations[caseId] === null
+                    ? `Missing production measurement: ${implicitFields[caseId].join(", ")}.`
+                    : (compared[0]?.note ??
+                      `Missing local comparison row: delivery.${caseId}; production observation is recorded.`),
             }
           : {}),
         ...(section
@@ -255,6 +284,9 @@ export function buildComparison({ report, recordings, artifactSha256, runnerTree
               note: "No measurement of this frozen case in the comparison table.",
               recordedFields: ["jobs", "frames", "attempts"],
             }
+          : {}),
+        ...(["declarations-v1-v2", "retry-config-validation"].includes(area)
+          ? { note: "covered outside the delivery comparison" }
           : {}),
       });
     }

@@ -131,6 +131,7 @@ test("implicit observations change with recorded outcomes and identity regressio
       { kind: "AttemptFinished", status: null, debugInfo: "code number = 200" },
     ],
   };
+  rs[1].data.forced = [];
   const table = [row("retry.retryFour", [0, 4, 12], [0, 4, 12])];
   const result = build(table, { recordings: rs });
   assert.equal(find(result, "retry-stable-occurrence-identity").status, "MATCH");
@@ -211,5 +212,55 @@ test("committed digests cover exactly the nine frozen delivery case sets with co
   assert.equal(find(result, "handler-throw-ack").observation, true);
   assert.equal(find(result, "success-stops-retry").observation, true);
   assert.equal(find(result, "next-schedule-after-failure").observation, true);
+  for (const id of [
+    "handler-success-ack",
+    "handler-throw-ack",
+    "success-stops-retry",
+    "next-schedule-after-failure",
+  ]) {
+    const r = table.find((r) => r.id === `delivery.${id}`);
+    assert.equal(find(result, id).status, "NOT_COMPARABLE");
+    assert.match(find(result, id).note, /Missing local/);
+    r.strict = { local: true, verdict: "MATCH" };
+    r.emulator = { local: false, verdict: "DIVERGES" };
+    const judged = find(
+      build(table, { recordings: committed, report: { run: committed[1].data.run, table } }),
+      id,
+    );
+    assert.equal(judged.status, "MATCH");
+    assert.equal(judged.comparedRows[0].emulator.verdict, "DIVERGES");
+    r.production = false;
+    assert.throws(
+      () => build(table, { recordings: committed, report: { run: committed[1].data.run, table } }),
+      /disagrees with recording/,
+    );
+    r.production = true;
+    r.strict.verdict = "DIVERGES";
+    assert.equal(
+      find(
+        build(table, { recordings: committed, report: { run: committed[1].data.run, table } }),
+        id,
+      ).status,
+      "DIVERGES",
+    );
+  }
+  const outside = result.rows.filter((r) =>
+    /\/(declarations-v1-v2|retry-config-validation)$/.test(r.conditionId),
+  );
+  assert.equal(outside.length, 20);
+  for (const r of outside) {
+    assert.equal(r.status, "NOT_COMPARABLE");
+    assert.equal(r.note, "covered outside the delivery comparison");
+  }
+  const missing = structuredClone(committed);
+  delete missing[1].data.attempts["firebase-schedule-schedOkV2-us-central1"].find(
+    (a) => a.kind === "AttemptFinished",
+  ).debugInfo;
+  const unjudged = find(
+    build(table, { recordings: missing, report: { run: committed[1].data.run, table } }),
+    "handler-success-ack",
+  );
+  assert.equal(unjudged.status, "NOT_COMPARABLE");
+  assert.match(unjudged.note, /Missing production measurement.*debugInfo/);
   assert.throws(() => generateComparison({ reportPath: "missing", fireemu: "missing" }), /ENOENT/);
 });

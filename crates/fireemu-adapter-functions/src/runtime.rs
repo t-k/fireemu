@@ -5364,6 +5364,15 @@ mod task_completion_tests {
                 ("service_account", Some("owner")),
                 production("unknown", Some("owner")),
             ),
+            // An actor that carries an identity (an email) keeps it. Only the id is pinned: production
+            // documents the type of a real service account as `service_account` (UNRECORDED, not modelled).
+            (
+                (
+                    "service_account",
+                    Some("ops@demo-project.iam.gserviceaccount.com"),
+                ),
+                production("unknown", Some("ops@demo-project.iam.gserviceaccount.com")),
+            ),
             // Near miss: a principal production was not recorded with keeps its own name.
             (
                 ("unauthenticated", None),

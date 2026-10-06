@@ -32,6 +32,19 @@ impl ApplicationClockPolicy {
         Ok(())
     }
 
+    /// Apply the Date bounds at the shared clock so every adapter's writer is checked.
+    pub fn bind(self, clock: &mut fireemu_core_session::clock::VirtualClock) -> Result<(), String> {
+        if self.date_virtual {
+            clock
+                .restrict_range(
+                    LogicalInstant::from_nanos(-8_640_000_000_000_000_000_000),
+                    LogicalInstant::from_nanos(8_640_000_000_000_000_999_999),
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
     /// Initial runner state, installed before user imports.
     #[must_use]
     pub fn runner_options(self, snapshot: ClockSnapshot) -> Value {
@@ -40,5 +53,20 @@ impl ApplicationClockPolicy {
             "instantNanos": snapshot.instant.as_nanos().to_string(),
             "elapsedNanos": snapshot.elapsed_nanos.to_string(),
             "revision": snapshot.revision.to_string()})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn date_range_validation_matches_whole_millisecond_boundaries(nanos: i128) {
+            let policy = ApplicationClockPolicy {date_virtual:true,..Default::default()};
+            let millis = nanos.div_euclid(1_000_000);
+            prop_assert_eq!(policy.validate(LogicalInstant::from_nanos(nanos)).is_ok(),(-8_640_000_000_000_000..=8_640_000_000_000_000).contains(&millis));
+            prop_assert!(ApplicationClockPolicy::default().validate(LogicalInstant::from_nanos(nanos)).is_ok());
+        }
     }
 }

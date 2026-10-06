@@ -81,6 +81,22 @@ test('real timers run while virtual Date stays frozen', () => check(`
   assert.equal(Date.now(), before);
 `));
 
+test('native Date does not constrain a Tasks-only logical clock', () => check(`
+  clock.update({instantNanos:'9223372036854775807000000000'});
+  assert.equal(Date, NativeDate);
+`, {date:'real',instantNanos:'9223372036854775807000000000'}));
+
+test('an aged virtual clock keeps native waits and timer deadlines deterministic', () => check(`
+  const before=Date.now();
+  await nativeDelay(2);
+  assert.equal(Date.now(),before);
+  let called=false;setTimeout(()=>{called=true},10);
+  clock.update({instantNanos:'4000000000009999999',elapsedNanos:'100000000000009999999'});
+  await clock.runDue();assert.equal(called,false);
+  clock.update({instantNanos:'4000000000010000000',elapsedNanos:'100000000000010000000'});
+  await clock.runDue();assert.equal(called,true);
+`, {timers:'virtual',instantNanos:'4000000000000000000',elapsedNanos:'100000000000000000000'}));
+
 test('virtual callback timers cover globals and named builtin imports', () => check(`
   const {setTimeout: importedTimeout} = await import('node:timers');
   const calls = [];

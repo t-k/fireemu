@@ -493,12 +493,14 @@ impl SnapshotHook for SessionClock {
         Ok(Arc::new(at))
     }
     fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
-        part.downcast_ref::<fireemu_core_types::time::LogicalInstant>()
+        let at = *part
+            .downcast_ref::<fireemu_core_types::time::LogicalInstant>()
             .ok_or_else(|| wrong_shape(self.name()))?;
         self.0
             .lock()
-            .map(|_| ())
-            .map_err(|_| poisoned(self.name(), "the clock"))
+            .map_err(|_| poisoned(self.name(), "the clock"))?
+            .validate_target(at)
+            .map_err(|error| poisoned(self.name(), &error.to_string()))
     }
     fn restore(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
         let at = *part
@@ -508,8 +510,9 @@ impl SnapshotHook for SessionClock {
             .0
             .lock()
             .map_err(|_| poisoned(self.name(), "the clock"))?;
-        clock.set_allow_backwards(at);
-        Ok(())
+        clock
+            .try_set_allow_backwards(at)
+            .map_err(|error| poisoned(self.name(), &error.to_string()))
     }
 }
 

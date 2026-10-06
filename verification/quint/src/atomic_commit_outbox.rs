@@ -675,6 +675,8 @@ fn build_functions_runtime(executor: &tokio::runtime::Runtime) -> Arc<FunctionsR
     FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
+            clock_policy:
+                fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
             project: "quint-connect".to_owned(),
             default_bucket: "quint-connect.appspot.com".to_owned(),
             location: "nam5".to_owned(),

@@ -1439,7 +1439,8 @@ impl Default for RuntimeConfig {
             functions_codebases: Vec::new(),
             functions_loaded: Vec::new(),
             functions_runner: None,
-            functions_clock: Default::default(),
+            functions_clock:
+                fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
             functions_inspect_port: None,
             functions_inspect_dynamic: false,
             functions_manifest: None,
@@ -4026,7 +4027,10 @@ mod tests {
             assert!(RuntimeConfig::from_json(&invalid).is_err());
         }
         let default = RuntimeConfig::default();
-        assert_eq!(default.functions_clock, Default::default());
+        assert_eq!(
+            default.functions_clock,
+            fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default()
+        );
     }
 
     fn parse(auth: &Value) -> Result<RuntimeConfig, ConfigError> {

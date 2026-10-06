@@ -52,7 +52,7 @@ export function createRuntimeClock({date = 'real', timers: timerPolicy = 'real',
   if (!['real','virtual'].includes(date) || !['real','virtual'].includes(timerPolicy) ||
       (timerPolicy === 'virtual' && date !== 'virtual')) throw new TypeError('invalid runtime clock policy');
   let instant = nanos(instantNanos, 'instant');
-  let epochMillis = milliseconds(instant);
+  let epochMillis = date === 'virtual' ? milliseconds(instant) : 0;
   let elapsed = nanos(elapsedNanos, 'elapsed');
   if (elapsed < 0n) throw new RangeError('negative timer elapsed time');
   let installed = false;
@@ -203,7 +203,7 @@ export function createRuntimeClock({date = 'real', timers: timerPolicy = 'real',
     },
     update(value) {
       const next = nanos(value.instantNanos, 'instant');
-      const nextMillis = milliseconds(next);
+      const nextMillis = date === 'virtual' ? milliseconds(next) : 0;
       const nextElapsed = value.elapsedNanos === undefined
         ? elapsed + (next > instant ? next - instant : 0n)
         : nanos(value.elapsedNanos, 'elapsed');

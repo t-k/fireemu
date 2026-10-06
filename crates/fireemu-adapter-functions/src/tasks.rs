@@ -38,8 +38,9 @@ pub struct Task {
     pub headers: BTreeMap<String, String>,
     /// The decoded body -- `{"data": payload}` for anything the Admin SDK enqueued.
     pub body: Value,
-    /// `scheduleTime`, echoed into `X-CloudTasks-TaskETA`. It does **not** delay dispatch:
+    /// `scheduleTime`, echoed into `X-CloudTasks-TaskETA`. Native task mode does not delay dispatch:
     /// nothing in the official `dispatchTasks` or `runTask` consults it either.
+    /// Explicit virtual task mode gates eligibility on this value.
     pub schedule_time: Option<String>,
     /// The abort deadline, in seconds; `dispatchDeadline` without its trailing `s`, else 60.
     pub dispatch_deadline_seconds: u64,

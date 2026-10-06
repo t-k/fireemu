@@ -2487,6 +2487,44 @@ fn default_runner_for_codebase(
     ])
 }
 
+fn launch_codebases(
+    cfg: &RuntimeConfig,
+    codebases: &[crate::config::FunctionsCodebase],
+    hosts: &EmulatorHosts,
+    runner_secret: &str,
+    callable_trusted_protocol: bool,
+    node_probe_cache: &Arc<NodeProbeCache>,
+    clock_snapshot: fireemu_core_session::clock::ClockSnapshot,
+) -> Vec<(
+    String,
+    tokio::task::JoinHandle<Result<fireemu_adapter_functions::runtime::CodebaseSpec, String>>,
+)> {
+    codebases
+        .iter()
+        .map(|codebase| {
+            let label = codebase.codebase.clone();
+            let cfg = (*cfg).clone();
+            let codebase = codebase.clone();
+            let hosts = hosts.clone();
+            let runner_secret = runner_secret.to_owned();
+            let node_probe_cache = node_probe_cache.clone();
+            let start = tokio::spawn(async move {
+                start_codebase(
+                    &cfg,
+                    &codebase,
+                    &hosts,
+                    &runner_secret,
+                    callable_trusted_protocol,
+                    &node_probe_cache,
+                    clock_snapshot,
+                )
+                .await
+            });
+            (label, start)
+        })
+        .collect()
+}
+
 /// Starts one runner process per configured codebase and the runtime that multiplexes them,
 /// and installs it as the backend's synchronous commit observer (Storage events are wired by
 /// the caller through [`storage_sink`]).
@@ -2498,6 +2536,8 @@ pub async fn start(
     runner_secret: &str,
     callable_trusted_protocol: bool,
 ) -> Result<Arc<FunctionsRuntime>, String> {
+    cfg.functions_clock
+        .bind(&mut *clock.lock().map_err(|_| "clock lock poisoned")?)?;
     let codebases = cfg.functions_to_load();
     if codebases.is_empty() {
         return Err("functions.source is not configured".to_owned());
@@ -2525,31 +2565,15 @@ pub async fn start(
     let node_probe_cache = Arc::new(NodeProbeCache::default());
     #[cfg(unix)]
     drop(schedule_orphan_function_snapshot_sweep(std::env::temp_dir()));
-    let starts = codebases
-        .iter()
-        .map(|codebase| {
-            let label = codebase.codebase.clone();
-            let cfg = (*cfg).clone();
-            let codebase = codebase.clone();
-            let hosts = hosts.clone();
-            let runner_secret = runner_secret.to_owned();
-            let node_probe_cache = node_probe_cache.clone();
-            let clock_snapshot = clock.lock().expect("clock lock").snapshot();
-            let start = tokio::spawn(async move {
-                start_codebase(
-                    &cfg,
-                    &codebase,
-                    &hosts,
-                    &runner_secret,
-                    callable_trusted_protocol,
-                    &node_probe_cache,
-                    clock_snapshot,
-                )
-                .await
-            });
-            (label, start)
-        })
-        .collect();
+    let starts = launch_codebases(
+        cfg,
+        &codebases,
+        hosts,
+        runner_secret,
+        callable_trusted_protocol,
+        &node_probe_cache,
+        clock.lock().expect("clock lock").snapshot(),
+    );
     let outcomes = join_codebase_starts(starts).await;
     if let Some(error) = outcomes.iter().find_map(|outcome| outcome.as_ref().err()) {
         for spec in outcomes.iter().filter_map(|outcome| outcome.as_ref().ok()) {
@@ -6248,7 +6272,8 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
-                clock_policy: Default::default(),
+                clock_policy:
+                    fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
             },
             clock.clone(),
             Arc::new(runner),
@@ -7060,7 +7085,8 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
-                clock_policy: Default::default(),
+                clock_policy:
+                    fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -7121,7 +7147,8 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
-                clock_policy: Default::default(),
+                clock_policy:
+                    fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -7331,7 +7358,8 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
-                clock_policy: Default::default(),
+                clock_policy:
+                    fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
             },
             Arc::new(Mutex::new(VirtualClock::new(now))),
             Arc::new(runner),
@@ -8531,7 +8559,8 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
-                clock_policy: Default::default(),
+                clock_policy:
+                    fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
             },
             clock.clone(),
             Arc::new(runner),
@@ -8633,7 +8662,8 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
-                clock_policy: Default::default(),
+                clock_policy:
+                    fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
             },
             clock.clone(),
             Arc::new(runner),

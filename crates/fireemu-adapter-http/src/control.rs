@@ -534,7 +534,8 @@ pub async fn handle_async(
         return response;
     };
     if path.ends_with("/clock:runDue") {
-        let budget = body.get("budget").and_then(Value::as_u64).unwrap_or(1000) as usize;
+        let budget = usize::try_from(body.get("budget").and_then(Value::as_u64).unwrap_or(1000))
+            .unwrap_or(1000);
         return match functions.run_due(budget).await {
             Ok(status) => ok(status),
             Err(error_message) => error(503, &error_message),

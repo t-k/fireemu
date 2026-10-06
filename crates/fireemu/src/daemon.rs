@@ -1082,6 +1082,8 @@ async fn serve_suite(
     ready: ReadySuite,
     exec: Option<ExecPlan>,
     signals: ShutdownSignals,
+    ready_file: Option<PathBuf>,
+    owner_stdin: bool,
 ) -> Result<i32, String> {
     let ShutdownSignals {
         mut interrupt,
@@ -1312,6 +1314,24 @@ async fn serve_suite(
         });
         spawn_server!("UI", fireemu_adapter_ui::server::serve_ui(listener, state));
     }
+    let environment = child_environment(
+        &cfg,
+        &only,
+        &addrs,
+        &control_token,
+        &storage_admin_capability,
+    );
+    let descriptor = serde_json::json!({"schemaVersion":1,"pid":std::process::id(),"projectId":cfg.auth_project,
+        "controlUrl":format!("http://{}",addrs.control),"controlToken":control_token,
+        "environment":environment.iter().cloned().collect::<std::collections::BTreeMap<_,_>>()});
+    let publication = ready_file
+        .as_deref()
+        .map(|path| super::readiness::ReadyFile::publish(path, &descriptor))
+        .transpose();
+    let (ready_guard, publication_error) = match publication {
+        Ok(guard) => (guard, None),
+        Err(error) => (None, Some(error)),
+    };
     // Every listener is now served, so an exec child can safely use all advertised endpoints.
     let mut child = match &exec {
         Some(plan) => {
@@ -1331,30 +1351,37 @@ async fn serve_suite(
     };
     let child_pid = child.as_ref().and_then(super::child_id);
     let mut terminated = false;
-    let outcome = tokio::select! {
-        result = servers.join_next() => match result {
-            Some(Ok((name, result))) => Err(format!("{name} server stopped: {result}")),
-            Some(Err(error)) => Err(format!("server task stopped: {error}")),
-            None => Err("all server tasks stopped".to_owned()),
-        },
-        status = wait_child(child.as_mut()) => match status {
-            Ok(status) => Ok(Some(exit_code(status))),
-            Err(e) => Err(format!("waiting for the command: {e}")),
-        },
-        () = interrupt.recv() => {
-            if !quiet {
-                println!("shutting down");
+    let owner_closed = super::owner_input_closed(owner_stdin);
+    let outcome = if let Some(error) = publication_error {
+        Err(error)
+    } else {
+        tokio::select! {
+            () = owner_closed => Ok(None),
+            result = servers.join_next() => match result {
+                Some(Ok((name, result))) => Err(format!("{name} server stopped: {result}")),
+                Some(Err(error)) => Err(format!("server task stopped: {error}")),
+                None => Err("all server tasks stopped".to_owned()),
+            },
+            status = wait_child(child.as_mut()) => match status {
+                Ok(status) => Ok(Some(exit_code(status))),
+                Err(e) => Err(format!("waiting for the command: {e}")),
+            },
+            () = interrupt.recv() => {
+                if !quiet {
+                    println!("shutting down");
+                }
+                Ok::<Option<i32>, String>(None)
             }
-            Ok::<Option<i32>, String>(None)
-        }
-        () = terminate.recv() => {
-            if !quiet {
-                println!("shutting down (SIGTERM)");
+            () = terminate.recv() => {
+                if !quiet {
+                    println!("shutting down (SIGTERM)");
+                }
+                terminated = true;
+                Ok::<Option<i32>, String>(None)
             }
-            terminated = true;
-            Ok::<Option<i32>, String>(None)
         }
     };
+    drop(ready_guard);
     // Keep services and the Hub locator alive through child cleanup, export, and Functions
     // shutdown. Every remaining server is then aborted and joined before its listener can leave
     // this function.
@@ -1453,6 +1480,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         verbosity,
         import,
         export_on_exit,
+        ready_file,
+        owner_stdin,
     } = options;
     let quiet = verbosity == Verbosity::Quiet;
     let auth_wall_clock = if cfg.clock_start_pinned {
@@ -1831,7 +1860,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 functions_runtime,
             })?;
         let ready = assemble_suite(assembly, exec.is_some())?;
-        serve_suite(ready, exec, signals).await
+        serve_suite(ready, exec, signals, ready_file, owner_stdin).await
     });
     match result {
         Ok(code) => ExitCode::from(reportable_exit_code(code)),

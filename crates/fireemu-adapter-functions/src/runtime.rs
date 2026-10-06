@@ -220,6 +220,7 @@ impl std::fmt::Debug for FunctionsConfig {
             .field("overlap", &self.overlap)
             .field("catch_up", &self.catch_up)
             .field("functions_host", &self.functions_host)
+            .field("clock_policy", &self.clock_policy)
             .finish()
     }
 }
@@ -873,6 +874,23 @@ impl RestartBudget {
 }
 
 impl Codebase {
+    fn from_spec(spec: CodebaseSpec) -> Self {
+        Self {
+            name: spec.name,
+            manifest: spec.manifest,
+            restart_gate: Arc::new(AsyncMutex::new(())),
+            restart_budget: Mutex::new(RestartBudget::default()),
+            restart_wake_scheduled: std::sync::atomic::AtomicBool::new(false),
+            generation: std::sync::RwLock::new(CodebaseGeneration {
+                revision: 0,
+                runner: spec.runner,
+                spawn: spec.spawn,
+                cleanup_dir: CodebaseGeneration::cleanup(spec.cleanup_dir),
+                blocking_restart_ticket: None,
+            }),
+        }
+    }
+
     fn exhaust_restart_budget(&self) {
         if let Ok(mut budget) = self.restart_budget.lock() {
             if budget
@@ -975,7 +993,8 @@ pub struct FunctionsRuntime {
     manifest: FunctionManifest,
     config: FunctionsConfig,
     clock: Arc<Mutex<VirtualClock>>,
-    clock_observer: Arc<fireemu_core_session::clock::ClockObserver>,
+    _clock_observer: Arc<fireemu_core_session::clock::ClockObserver>,
+    task_clock_wake: Notify,
     /// The codebases, in configuration order.
     codebases: Vec<Codebase>,
     /// Function name to its codebase's index in `codebases`.
@@ -1034,11 +1053,12 @@ impl Drop for TaskCompletion {
             return;
         };
         let finished = runtime.inner.lock().is_ok_and(|mut inner| {
-            inner.task_scheduler.finish_with_outcome(
+            inner.task_scheduler.finish_with_outcome_at(
                 &self.queue,
                 self.id,
                 self.generation,
                 self.failed,
+                runtime.task_now(),
             )
         });
         if finished {
@@ -1149,6 +1169,10 @@ impl FunctionsRuntime {
         clock: Arc<Mutex<VirtualClock>>,
         eventarc_registry: crate::eventarc::TriggerRegistry,
     ) -> Arc<Self> {
+        config
+            .clock_policy
+            .bind(&mut clock.lock().expect("clock lock"))
+            .expect("validated clock policy");
         let now = clock
             .lock()
             .map(|c| c.now())
@@ -1177,38 +1201,26 @@ impl FunctionsRuntime {
             )
             .expect("a single attempt is a valid policy")
         });
-        let task_scheduler = crate::task_scheduler::TaskScheduler::from_manifest(
-            &manifest,
-            std::time::Instant::now(),
-        );
         let initial = clock.lock().expect("clock lock").snapshot();
-        let (updates, mut receiver) = tokio::sync::watch::channel(initial);
+        let task_start = if config.clock_policy.tasks_virtual {
+            crate::task_scheduler::TaskTime::Virtual(initial.elapsed_nanos)
+        } else {
+            std::time::Instant::now().into()
+        };
+        let task_scheduler =
+            crate::task_scheduler::TaskScheduler::from_manifest(&manifest, task_start);
+        let (updates, receiver) = tokio::sync::watch::channel(initial);
         let observer: Arc<fireemu_core_session::clock::ClockObserver> = Arc::new(move |snapshot| {
             updates.send_replace(snapshot);
         });
         clock.lock().expect("clock lock").observe(&observer);
         let runtime = Arc::new(Self {
-            clock_observer: observer,
+            _clock_observer: observer,
+            task_clock_wake: Notify::new(),
             manifest,
             config,
             clock,
-            codebases: codebases
-                .into_iter()
-                .map(|c| Codebase {
-                    name: c.name,
-                    manifest: c.manifest,
-                    restart_gate: Arc::new(AsyncMutex::new(())),
-                    restart_budget: Mutex::new(RestartBudget::default()),
-                    restart_wake_scheduled: std::sync::atomic::AtomicBool::new(false),
-                    generation: std::sync::RwLock::new(CodebaseGeneration {
-                        revision: 0,
-                        runner: c.runner,
-                        spawn: c.spawn,
-                        cleanup_dir: CodebaseGeneration::cleanup(c.cleanup_dir),
-                        blocking_restart_ticket: None,
-                    }),
-                })
-                .collect(),
+            codebases: codebases.into_iter().map(Codebase::from_spec).collect(),
             owner,
             eventarc_registry: Mutex::new(eventarc_registry),
             inner: Mutex::new(Inner {
@@ -1249,21 +1261,66 @@ impl FunctionsRuntime {
             shutting_down: std::sync::atomic::AtomicBool::new(false),
             dispatch_stopping: std::sync::atomic::AtomicBool::new(false),
         });
-        let weak = Arc::downgrade(&runtime);
+        runtime.start_clock_observer(receiver);
+        runtime
+    }
+
+    fn start_clock_observer(
+        self: &Arc<Self>,
+        mut receiver: tokio::sync::watch::Receiver<fireemu_core_session::clock::ClockSnapshot>,
+    ) {
+        let weak = Arc::downgrade(self);
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
                 while receiver.changed().await.is_ok() {
                     let Some(runtime) = weak.upgrade() else {
                         break;
                     };
-                    runtime.wake.notify_one();
+                    runtime.on_clock_changed();
                     if let Err(error) = runtime.sync_clock().await {
                         eprintln!("[functions] {error}");
                     }
                 }
             });
         }
-        runtime
+    }
+
+    fn task_now(&self) -> crate::task_scheduler::TaskTime {
+        if self.config.clock_policy.tasks_virtual {
+            crate::task_scheduler::TaskTime::Virtual(self.clock_snapshot().elapsed_nanos)
+        } else {
+            std::time::Instant::now().into()
+        }
+    }
+
+    fn task_epoch_millis(&self) -> u64 {
+        if self.config.clock_policy.tasks_virtual {
+            u64::try_from(
+                self.clock_snapshot()
+                    .instant
+                    .as_nanos()
+                    .div_euclid(1_000_000),
+            )
+            .unwrap_or(0)
+        } else {
+            epoch_millis()
+        }
+    }
+
+    async fn wait_task_until(&self, deadline: crate::task_scheduler::TaskTime) {
+        if let crate::task_scheduler::TaskTime::Real(instant) = deadline {
+            tokio::time::sleep_until(tokio::time::Instant::from_std(instant)).await;
+            return;
+        }
+        loop {
+            let changed = self.task_clock_wake.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if self.task_now() >= deadline {
+                return;
+            }
+            changed.await;
+        }
     }
 
     /// Current state used for initialization and generation-scoped synchronization.
@@ -1286,7 +1343,6 @@ impl FunctionsRuntime {
 
     /// Acknowledge the latest clock in each still-current runner generation.
     pub async fn sync_clock(&self) -> Result<(), String> {
-        let _observer = &self.clock_observer;
         if !self.config.clock_policy.date_virtual {
             return Ok(());
         }
@@ -1442,7 +1498,7 @@ impl FunctionsRuntime {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Ok(mut inner) = self.inner.lock() {
-                inner.task_scheduler.close(std::time::Instant::now());
+                inner.task_scheduler.close(self.task_now());
             }
             std::mem::take(&mut *attempts)
         };
@@ -2369,7 +2425,18 @@ impl FunctionsRuntime {
             inner.next_task += 1;
             inner.next_task
         };
-        let task = crate::tasks::accept(project, location, queue, &default_uri, body, next_id)?;
+        let mut task = crate::tasks::accept(project, location, queue, &default_uri, body, next_id)?;
+        if self.config.clock_policy.tasks_virtual {
+            if let Some(text) = task.schedule_time.as_deref() {
+                LogicalInstant::parse_rfc3339(text)
+                    .map_err(|_| refuse(400, "scheduleTime must be RFC 3339"))?;
+            } else {
+                task.schedule_time =
+                    Some(self.clock_snapshot().instant.to_rfc3339().map_err(|_| {
+                        refuse(400, "clock instant cannot be represented as scheduleTime")
+                    })?);
+            }
+        }
         // A task may name its own URL (`opts.uri`). Only this emulator's own function URLs
         // are accepted: the official emulator will POST a task to any address, and a local
         // emulator that makes an arbitrary outbound request on a caller's say-so is a
@@ -2396,7 +2463,7 @@ impl FunctionsRuntime {
             .lock()
             .map_err(|_| refuse(500, "runtime poisoned"))?
             .task_scheduler
-            .enqueue(queue, task.clone(), retry, retained_bytes);
+            .enqueue_at(queue, task.clone(), retry, retained_bytes, self.task_now());
         match admission {
             Ok(()) => {}
             Err(AdmissionError::Duplicate | AdmissionError::QueueFull) => {
@@ -2434,10 +2501,8 @@ impl FunctionsRuntime {
 
     /// Delivers one task, retrying on the official schedule until it succeeds or runs out.
     ///
-    /// Backoff is real time, as it is upstream: the default unit is 100 ms, so three attempts
-    /// cost 300 ms rather than a clock advance. That is the one place in this runtime where a
-    /// wait is not on the virtual clock, and it is deliberate -- a task queue's retry policy
-    /// is a wall-clock policy in production too.
+    /// Backoff follows the explicit task-clock policy. Request and shutdown deadlines always
+    /// use native time so a pinned test clock cannot strand transport or process cleanup.
     async fn dispatch_task(
         self: &Arc<Self>,
         dispatch: &crate::task_scheduler::Dispatch,
@@ -2455,7 +2520,7 @@ impl FunctionsRuntime {
                 return false;
             }
             if started.is_some_and(|first_delivery| {
-                task_retry_exhausted(first_delivery, dispatch.retry, attempt)
+                task_retry_exhausted(first_delivery, dispatch.retry, attempt, self.task_now())
             }) {
                 eprintln!(
                     "[functions] task {:?} gave up after {} attempt(s)",
@@ -2479,7 +2544,7 @@ impl FunctionsRuntime {
                 attempt,
                 execution_count,
                 previous,
-                epoch_millis(),
+                self.task_epoch_millis(),
             );
             // The runner's HTTP server routes on the public path, and strips it before the
             // handler sees the request, so the dispatch carries the function's own URL path
@@ -2488,7 +2553,7 @@ impl FunctionsRuntime {
                 "/{}/{}/{}",
                 dispatch.project, dispatch.region, dispatch.function
             );
-            let attempt_started = std::time::Instant::now();
+            let attempt_started = self.task_now();
             let outcome = tokio::time::timeout(
                 Duration::from_secs(task.dispatch_deadline_seconds),
                 self.invoke_task_http(&target, &path, &headers, &body),
@@ -2530,7 +2595,7 @@ impl FunctionsRuntime {
                 previous = Some(status);
             }
             attempt += 1;
-            if task_retry_exhausted(first_delivery, dispatch.retry, attempt) {
+            if task_retry_exhausted(first_delivery, dispatch.retry, attempt, self.task_now()) {
                 eprintln!(
                     "[functions] task {:?} gave up after {} attempt(s)",
                     task.name,
@@ -2538,11 +2603,13 @@ impl FunctionsRuntime {
                 );
                 return true;
             }
-            tokio::time::sleep(Duration::from_millis(
-                dispatch.retry.backoff_millis(attempt),
-            ))
-            .await;
+            let backoff = Duration::from_millis(dispatch.retry.backoff_millis(attempt));
             let retry_deadline = task_retry_deadline(first_delivery, dispatch.retry, attempt);
+            let backoff_deadline = self.task_now() + backoff;
+            self.wait_task_until(
+                retry_deadline.map_or(backoff_deadline, |expiry| expiry.min(backoff_deadline)),
+            )
+            .await;
             if !self.wait_for_task_token(dispatch, retry_deadline).await {
                 return true;
             }
@@ -2552,14 +2619,14 @@ impl FunctionsRuntime {
     async fn wait_for_task_token(
         &self,
         dispatch: &crate::task_scheduler::Dispatch,
-        retry_deadline: Option<std::time::Instant>,
+        retry_deadline: Option<crate::task_scheduler::TaskTime>,
     ) -> bool {
         loop {
             let decision = {
                 let Ok(mut inner) = self.inner.lock() else {
                     return false;
                 };
-                let now = std::time::Instant::now();
+                let now = self.task_now();
                 if retry_deadline.is_some_and(|deadline| now > deadline) {
                     return false;
                 }
@@ -2575,7 +2642,12 @@ impl FunctionsRuntime {
                 crate::task_scheduler::RetryToken::Gone => return false,
                 crate::task_scheduler::RetryToken::WaitUntil(deadline) => {
                     let deadline = retry_deadline.map_or(deadline, |expiry| expiry.min(deadline));
-                    tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+                    // Equality remains eligible if a token was available, but an expired
+                    // token wait cannot make progress at a pinned clock.
+                    if self.task_now() >= deadline {
+                        return false;
+                    }
+                    self.wait_task_until(deadline).await;
                 }
             }
         }
@@ -2818,6 +2890,8 @@ impl FunctionsRuntime {
     /// change, carrying a count that is exact up to the cap and "at least" beyond it.
     #[allow(clippy::too_many_lines)]
     pub fn on_clock_changed(&self) {
+        self.task_clock_wake.notify_waiters();
+        self.wake.notify_one();
         let now = self.now();
         let Ok(mut inner) = self.inner.lock() else {
             return;
@@ -3140,7 +3214,7 @@ impl FunctionsRuntime {
                 inner.delayed.clear();
                 inner.catch_up_pending = false;
                 // A task accepted before the reset must not reach the new session's handlers.
-                inner.task_scheduler.reset(std::time::Instant::now());
+                inner.task_scheduler.reset(self.task_now());
                 for job in &mut inner.jobs {
                     job.cursor = now;
                 }
@@ -3301,6 +3375,19 @@ impl FunctionsRuntime {
         }
     }
 
+    fn clock_spawn_spec(&self, spec: &SpawnSpec) -> SpawnSpec {
+        let mut spawn = spec.clone();
+        spawn.env.retain(|(key, _)| key != "FIREEMU_CLOCK_JSON");
+        spawn.env.push((
+            "FIREEMU_CLOCK_JSON".into(),
+            self.config
+                .clock_policy
+                .runner_options(self.clock_snapshot())
+                .to_string(),
+        ));
+        spawn
+    }
+
     async fn recover_dead_runner_locked(
         self: &Arc<Self>,
         index: usize,
@@ -3368,15 +3455,7 @@ impl FunctionsRuntime {
                 return Err("runner recovery was superseded".to_owned());
             }
             let _source_generation = respawn.cleanup_dir.clone();
-            let mut spawn = spawn.clone();
-            spawn.env.retain(|(key, _)| key != "FIREEMU_CLOCK_JSON");
-            spawn.env.push((
-                "FIREEMU_CLOCK_JSON".into(),
-                self.config
-                    .clock_policy
-                    .runner_options(self.clock_snapshot())
-                    .to_string(),
-            ));
+            let spawn = self.clock_spawn_spec(spawn);
             let runner = match Runner::spawn_spec(&spawn).await {
                 Ok(runner) => Arc::new(runner),
                 Err(error) => {
@@ -3743,11 +3822,11 @@ impl FunctionsRuntime {
         let Ok(mut inner) = self.inner.lock() else {
             return json!({});
         };
-        inner
-            .task_scheduler
-            .statistics(&self.config.project, |function| {
-                self.manifest.get(function).map(|spec| spec.region.clone())
-            })
+        inner.task_scheduler.statistics_at(
+            &self.config.project,
+            |function| self.manifest.get(function).map(|spec| spec.region.clone()),
+            self.task_now(),
+        )
     }
 
     /// Waits until the runtime is idle or `timeout` (real time) elapses.
@@ -4490,7 +4569,11 @@ impl FunctionsRuntime {
             match action {
                 FaultAction::Delay { seconds } => {
                     if let Ok(mut clock) = self.clock.lock() {
-                        let _ = clock.advance(LogicalDuration::from_seconds(seconds.max(0)));
+                        if let Err(error) =
+                            clock.advance(LogicalDuration::from_seconds(seconds.max(0)))
+                        {
+                            return Some(Err(error.to_string()));
+                        }
                     }
                     self.on_clock_changed();
                 }
@@ -4542,7 +4625,7 @@ impl FunctionsRuntime {
                 Some(deadline) => {
                     tokio::select! {
                         () = &mut wake => {}
-                        () = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {}
+                        () = self.wait_task_until(deadline) => {}
                     }
                 }
                 None => wake.await,
@@ -4552,7 +4635,7 @@ impl FunctionsRuntime {
 
     /// Moves ready Cloud Tasks from their bounded FIFOs into active dispatch slots. Only an
     /// active slot owns a Tokio task; pending bodies remain plain queue entries.
-    fn dispatch_tasks_ready(self: &Arc<Self>) -> Option<std::time::Instant> {
+    fn dispatch_tasks_ready(self: &Arc<Self>) -> Option<crate::task_scheduler::TaskTime> {
         if self
             .dispatch_stopping
             .load(std::sync::atomic::Ordering::SeqCst)
@@ -4586,8 +4669,12 @@ impl FunctionsRuntime {
             let occupied = inner.running.len().max(inner.task_scheduler.active());
             let room = self.config.max_running.saturating_sub(occupied);
             let epoch = inner.epoch;
-            let (dispatches, next_wake) = inner.task_scheduler.dispatch_ready(
-                std::time::Instant::now(),
+            let (dispatches, next_wake) = inner.task_scheduler.dispatch_ready_at(
+                self.task_now(),
+                self.config
+                    .clock_policy
+                    .tasks_virtual
+                    .then(|| self.clock_snapshot().instant.as_nanos()),
                 &self.config.project,
                 |function| {
                     let spec = self.manifest.get(function)?;
@@ -5009,10 +5096,10 @@ fn log_http_timeout(timeout: u64) {
 }
 
 fn task_retry_deadline(
-    first_delivery: std::time::Instant,
+    first_delivery: crate::task_scheduler::TaskTime,
     retry: fireemu_core_functions::manifest::TaskRetryConfig,
     attempt: u32,
-) -> Option<std::time::Instant> {
+) -> Option<crate::task_scheduler::TaskTime> {
     (attempt > retry.max_attempts)
         .then_some(retry.max_retry_millis)
         .flatten()
@@ -5021,13 +5108,14 @@ fn task_retry_deadline(
 }
 
 fn task_retry_exhausted(
-    first_delivery: std::time::Instant,
+    first_delivery: crate::task_scheduler::TaskTime,
     retry: fireemu_core_functions::manifest::TaskRetryConfig,
     attempt: u32,
+    now: crate::task_scheduler::TaskTime,
 ) -> bool {
     #[allow(clippy::cast_possible_truncation)]
-    let elapsed = first_delivery
-        .elapsed()
+    let elapsed = now
+        .saturating_duration_since(first_delivery)
         .as_millis()
         .min(u128::from(u64::MAX)) as u64;
     retry.exhausted(attempt, elapsed)
@@ -5166,7 +5254,7 @@ mod task_completion_tests {
                 overlap: super::OverlapPolicy::Allow,
                 catch_up: super::CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
-                clock_policy: Default::default(),
+                clock_policy: crate::application_clock::ApplicationClockPolicy::default(),
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -5670,7 +5758,7 @@ mod schedule_capacity_tests {
                 overlap: super::OverlapPolicy::Allow,
                 catch_up,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
-                clock_policy: Default::default(),
+                clock_policy: crate::application_clock::ApplicationClockPolicy::default(),
             },
             clock.clone(),
             Arc::new(runner),

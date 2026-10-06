@@ -326,6 +326,8 @@ impl std::fmt::Debug for SpawnSpec {
 /// A running runner.
 pub struct Runner {
     child: AsyncMutex<Option<RunnerChild>>,
+    #[cfg(unix)]
+    _lifetime_guard: RunnerLifetimeGuard,
     stdin: AsyncMutex<Option<ChildStdin>>,
     hello: Hello,
     waiters: Arc<Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>>,
@@ -526,6 +528,8 @@ impl Runner {
             .map_err(|e| format!("functions runner: cannot start {program}: {e}"))?;
         #[cfg(unix)]
         let mut process_group_guard = ProcessGroupGuard::new(child.id());
+        #[cfg(unix)]
+        let lifetime_guard = RunnerLifetimeGuard::spawn(child.id())?;
         #[cfg(windows)]
         let mut child = {
             let mut wrapped = TokioCommandWrap::from(cmd);
@@ -725,6 +729,8 @@ impl Runner {
         let credential_sandbox = credential_sandbox_guard.into_path();
         Ok(Self {
             child: AsyncMutex::new(Some(child)),
+            #[cfg(unix)]
+            _lifetime_guard: lifetime_guard,
             stdin: AsyncMutex::new(Some(stdin)),
             hello,
             waiters,
@@ -978,6 +984,66 @@ impl Drop for Runner {
     }
 }
 
+/// An independent group member observes daemon lifetime, even during blocked user code.
+/// Its inherited output handles also keep a supervised daemon's close pending until cleanup.
+#[cfg(unix)]
+struct RunnerLifetimeGuard(std::process::Child);
+
+#[cfg(unix)]
+impl RunnerLifetimeGuard {
+    fn spawn(pid: Option<u32>) -> Result<Self, String> {
+        use std::os::unix::process::CommandExt;
+        let group = pid
+            .filter(|value| *value > 1)
+            .ok_or("runner group is unavailable")?;
+        let script = r#"
+trap '' TERM
+own=$(/bin/ps -o pgid= -p $$)
+[ "$own" -eq "$1" ] && [ "$1" -gt 1 ] || exit 1
+IFS= read -r lifetime || :
+/bin/kill -s TERM -- "-$1" 2>/dev/null || :
+/bin/sleep 0.5
+/bin/kill -s KILL -- "-$1" 2>/dev/null || :
+"#;
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .args(["-c", script, "fireemu-runner-lifetime", &group.to_string()])
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .process_group(i32::try_from(group).map_err(|_| "runner group exceeds pid range")?);
+        command
+            .spawn()
+            .map(Self)
+            .map_err(|error| format!("functions lifetime guard: {error}"))
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RunnerLifetimeGuard {
+    fn drop(&mut self) {
+        // Closing the lease triggers the independent guard; reap only the child we own.
+        self.0.stdin.take();
+        let child = &mut self.0;
+        if let Ok(Some(_)) = child.try_wait() {
+            return;
+        }
+        // The guard sends KILL after its bounded native grace period.
+        let pid = child.id();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            if child.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        eprintln!("[functions] lifetime guard {pid} exceeded cleanup grace");
+    }
+}
+
 /// Cancellation guard for discovery and respawn. Dropping a Tokio child kills only the direct
 /// process; user code may already have created descendants in the runner's process group before
 /// sending its hello.
@@ -1028,12 +1094,12 @@ mod tests {
         use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
         let dir = trusted_temp::TrustedTempDir::new("application-clock");
         std::fs::write(dir.join("package.json"), r#"{"main":"index.cjs"}"#).unwrap();
-        std::fs::write(dir.join("index.cjs"), r#"
+        std::fs::write(dir.join("index.cjs"), r"
             const fs=require('node:fs'); const imported=Date.now();
             const fn=async()=>{fs.writeFileSync('observed.json',JSON.stringify([imported,Date.now(),+new Date()])); await new Promise(r=>setTimeout(r,5)); fs.writeFileSync('timer.json',JSON.stringify(Date.now()));};
             fn.run=fn; fn.__endpoint={platform:'gcfv2',scheduleTrigger:{schedule:'every 5 minutes'}};
             module.exports={clock:fn};
-        "#).unwrap();
+        ").unwrap();
         let mut clock = VirtualClock::new(LogicalInstant::from_nanos(1_000_000_000));
         let policy = crate::application_clock::ApplicationClockPolicy {
             date_virtual: true,

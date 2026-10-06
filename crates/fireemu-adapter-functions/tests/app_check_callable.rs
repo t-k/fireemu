@@ -712,7 +712,8 @@ async fn start_with_serve_entry(
             overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
             catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
             functions_host: None,
-            clock_policy: Default::default(),
+            clock_policy:
+                fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
         },
         clock.clone(),
         Arc::new(runner),

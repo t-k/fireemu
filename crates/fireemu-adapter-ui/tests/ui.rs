@@ -729,7 +729,8 @@ async fn state_with_functions() -> (
             overlap: OverlapPolicy::Allow,
             catch_up: CatchUpPolicy::All,
             functions_host: None,
-            clock_policy: Default::default(),
+            clock_policy:
+                fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
         },
         clock,
         Arc::new(runner),
@@ -877,7 +878,8 @@ async fn state_with_http_functions() -> (
             overlap: OverlapPolicy::Allow,
             catch_up: CatchUpPolicy::All,
             functions_host: Some(addr.clone()),
-            clock_policy: Default::default(),
+            clock_policy:
+                fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
         },
         clock,
         Arc::new(runner),

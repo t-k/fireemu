@@ -7932,7 +7932,7 @@ mod tests {
                     functions_runner: Some(if profile == CompatibilityProfile::Emulator {
                         vec![
                             "python3".to_owned(), "-c".to_owned(),
-                            "import json,sys\nframe=json.dumps({'type':'hello','runner':'fake','manifest':json.load(open(sys.argv[1]))})\nsys.stdout.write(str(len(frame))+'\\n'+frame)\nsys.stdout.flush()\nsys.stdin.read()".to_owned(),
+                            "import json,sys\nframe=json.dumps({'type':'hello','runner':'fake','manifest':json.load(open(sys.argv[1],encoding='utf-8'))}).encode()\nsys.stdout.buffer.write(str(len(frame)).encode()+b'\\n'+frame)\nsys.stdout.buffer.flush()\nsys.stdin.read()".to_owned(),
                             manifest_path.display().to_string(),
                         ]
                     } else {

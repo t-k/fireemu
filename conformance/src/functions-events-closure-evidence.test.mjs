@@ -1834,7 +1834,8 @@ test("--integrated-release writes the integrated regression block of the closure
   // Only the integratedRegression key is new; the rest of the closure is what the command wrote without it.
   const without = commandFiles();
   closureEvidenceCommand(writing(), without.io);
-  const { integratedRegression, ...rest } = closureFile;
+  const rest = structuredClone(closureFile);
+  delete rest.integratedRegression;
   assert.deepEqual(rest, JSON.parse(without.written.get("closure.json")));
   assert.equal(JSON.parse(without.written.get("closure.json")).integratedRegression, undefined);
 });

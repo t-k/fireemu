@@ -49,15 +49,20 @@ const recordedConditions = new Map([
   ["FS-TRANSACTION/read-only-snapshot", ["P02", "P02B"]],
   ["FS-TRANSACTION/read-time-snapshot", ["P03"]],
   ["FS-TRANSACTION/read-set-conflict", ["P05"]],
+  ["FS-TRANSACTION/write-set-atomicity", ["P14"]],
+  ["FS-TRANSACTION/query-range-lock", ["P14"]],
   ["FS-TRANSACTION/failed-commit-and-rollback", ["P08", "P09"]],
   ["FS-TRANSACTION/retry-token-lifecycle", ["P09", "P13B"]],
   ["FS-TRANSACTION/idle-expiry", ["P10-A", "P10-B", "P10-C", "P13A"]],
   ["FS-TRANSACTION/total-lifetime-expiry", ["P11", "P12", "P13A"]],
+  ["FS-TRANSACTION/read-time-retention", ["P14"]],
+  ["FS-TRANSACTION/paging-and-cancellation", ["P14"]],
 ]);
 
-test("FS-TRANSACTION published records verify eight conditions and not the parent", () => {
+test("FS-TRANSACTION published records verify twelve conditions and not the parent", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   const root = new URL("../../", import.meta.url);
+  assert.equal(recordedConditions.size, 12);
   for (const condition of closure.conditions) {
     const expected = recordedConditions.get(condition.conditionId);
     if (!expected) {
@@ -171,6 +176,39 @@ test("FS-TRANSACTION recorded REST subset leaves the other frozen conditions ope
       observed.push(...condition.partialEvidence.caseIds);
     } else if (recordedConditions.has(condition.conditionId)) {
       assert.equal(condition.productionObservation, "RECORDED_TWICE_STRICT_COMPARED");
+    } else if (condition.conditionId === "FS-TRANSACTION/token-validation-and-ownership") {
+      assert.equal(condition.status, "PENDING_CORPUS");
+      assert.equal(condition.productionObservation, "PARTIALLY_RECORDED_STRICT_COMPARED");
+      const recorded = condition.recordedPartial;
+      assert.equal(recorded.coverage, "PARTIAL");
+      assert.equal(recorded.profile, "strict");
+      assert.equal(recorded.recordings, 2);
+      assert.equal(recorded.program, "FS-TRANSACTION-P14-STAGE2");
+      assert.equal(
+        recorded.observationsPath,
+        "spec/compatibility/broad-runs/fs-transaction-p14-recorded-observations-v1.json",
+      );
+      assert.equal(
+        recorded.comparisonPath,
+        "spec/compatibility/broad-runs/fs-transaction-p14-recorded-comparison-v1.json",
+      );
+      const comparison = JSON.parse(
+        readFileSync(new URL(`../../${recorded.comparisonPath}`, import.meta.url), "utf8"),
+      );
+      assert.deepEqual(
+        recorded.caseIds,
+        [
+          ...new Set(
+            comparison.recordings.flatMap(({ cases }) => cases.map(({ caseId }) => caseId)),
+          ),
+        ]
+          .filter((caseId) => caseId.includes("/tv/"))
+          .toSorted(),
+      );
+      assert.ok(recorded.caseIds.length);
+      assert.ok(
+        recorded.remainingBoundaries.some((item) => /foreign-project.*foreign-database/.test(item)),
+      );
     } else {
       assert.equal(condition.productionObservation, "UNOBSERVED_BY_RECORDED_CORPUS");
     }

@@ -183,7 +183,8 @@ def test_partial_recordings_do_not_promote_unobserved_conditions_or_official_emu
             assert condition["status"] == "VERIFIED"
         else:
             assert condition["status"] != "VERIFIED"
-            assert condition["productionObservation"] == "UNOBSERVED_BY_RECORDED_CORPUS"
+            # P14 recorded part of the token-validation-and-ownership condition.
+            assert condition["productionObservation"] == ("PARTIALLY_RECORDED_STRICT_COMPARED" if condition["conditionId"] == "FS-TRANSACTION/token-validation-and-ownership" else "UNOBSERVED_BY_RECORDED_CORPUS")
 
 
 def test_public_partial_summary_retains_no_credentials_or_absolute_paths():

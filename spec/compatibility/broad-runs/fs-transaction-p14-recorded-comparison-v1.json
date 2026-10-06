@@ -1,0 +1,2766 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-comparison-v1",
+  "parent": "FS-TRANSACTION",
+  "program": "FS-TRANSACTION-P14-STAGE2",
+  "condition": [
+    "FS-TRANSACTION/write-set-atomicity",
+    "FS-TRANSACTION/query-range-lock",
+    "FS-TRANSACTION/paging-and-cancellation",
+    "FS-TRANSACTION/read-time-retention"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "productionRequests": 0,
+  "profile": "strict",
+  "artifact": {
+    "sourceCommit": "35158bd6b1543a5d62468fe4ada5c9d8b1b9e8c6",
+    "binarySha256": "bdf692eced73f2022b88ceb7a3e5a226d3fd32cfe8e6dc045ea862ed6574bb77"
+  },
+  "comparer": {
+    "sha256": "5a01881103548f344c4ce06d3f34e11071815d125669ba466af061c4bca3e3a5",
+    "replayClock": "frozen",
+    "replay": {
+      "clockStart": "2026-10-04T00:00:00Z",
+      "advanceSeconds": "3700",
+      "advanceAfter": "grpc/tv/rollback-unknown"
+    }
+  },
+  "table": {
+    "path": "tools/compat-broad/fs-write-txn/fs_txn_table_p14.py",
+    "sha256": "2ae94612dcb3e58209305c01fe3491af6646f8e326c34c69069ba9c527647019"
+  },
+  "recordings": [
+    {
+      "recording": 1,
+      "productionFileSha256": "7c0140520950899a7372191b5c332b960e4bf0c7eb21434104e4079292fc7028",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/w/writer-bc",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/w/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/w/writer-ab",
+          "production": {
+            "code": 10,
+            "details": "Too much contention on these documents. Please try again."
+          },
+          "local": {
+            "code": 10,
+            "details": "Too much contention on these documents. Please try again."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/w/plain-a",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/w/plain-b",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/w/writer-bc",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/w/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/w/writer-ab",
+          "production": {
+            "code": 10,
+            "details": "Too much contention on these documents. Please try again."
+          },
+          "local": {
+            "code": 10,
+            "details": "Too much contention on these documents. Please try again."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/w/plain-a",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/w/plain-b",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/q1/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/q1/writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/q2/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/q2/writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/q/post-query-in",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/q/post-read-p",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/q/post-read-o",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/q/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/q/writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/q/post-query-in",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/pg/query-cancelled",
+          "production": {
+            "code": 1,
+            "details": "cancelled by the client after 1 frame(s)"
+          },
+          "local": {
+            "code": 1,
+            "details": "cancelled by the client after 1 frame(s)"
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/pg/read-after-cancel",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/pg/commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/pg/writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/get-malformed",
+          "production": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/batch-malformed",
+          "production": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/commit-malformed",
+          "production": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/rollback-malformed",
+          "production": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/get-unknown",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/batch-unknown",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/commit-unknown",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/rollback-unknown",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/tv/get-unknown",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/tv/commit-unknown",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/tv/rollback-unknown",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/ret/get-59",
+          "production": {
+            "code": 5,
+            "details": "Document \"projects/fireemu-oracle-txn/databases/(default)/documents/oracle/<nonce>/txn-p14/a\" not fo"
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true,
+          "class": {
+            "production": "accepted",
+            "local": "accepted"
+          }
+        },
+        {
+          "caseId": "rest/ret/batch-59",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true,
+          "class": {
+            "production": "accepted",
+            "local": "accepted"
+          }
+        },
+        {
+          "caseId": "rest/ret/get-61",
+          "production": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "local": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        },
+        {
+          "caseId": "rest/ret/batch-61",
+          "production": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "local": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        },
+        {
+          "caseId": "grpc/ret/get-59",
+          "production": {
+            "code": 5,
+            "details": "Document \"projects/fireemu-oracle-txn/databases/(default)/documents/oracle/<nonce>/txn-p14/a\" not fo"
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true,
+          "class": {
+            "production": "accepted",
+            "local": "accepted"
+          }
+        },
+        {
+          "caseId": "grpc/ret/get-61",
+          "production": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "local": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        },
+        {
+          "caseId": "grpc/ret/batch-61",
+          "production": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "local": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        },
+        {
+          "caseId": "rest/ret/begin-59",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true,
+          "class": {
+            "production": "accepted",
+            "local": "accepted"
+          }
+        },
+        {
+          "caseId": "rest/ret/release-59",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/ret/begin-61",
+          "production": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "local": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-b",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-c",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-d",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-h",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-p",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-o",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-p2",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/w/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/w/plain-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/w/plain-b",
+          "production": {
+            "code": 0,
+            "state": "rest-bc",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-bc",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/w/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/w/plain-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/w/plain-b",
+          "production": {
+            "code": 0,
+            "state": "grpc-bc",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-bc",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/q1/query-in",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in"
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "rest/q2/query-in",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in"
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "rest/q/post-query-in",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in",
+              "p": "q-in"
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in",
+              "p": "q-in"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "rest/q/post-read-p",
+          "production": {
+            "code": 0,
+            "state": "q-in",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "q-in",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/q/post-read-o",
+          "production": {
+            "code": 0,
+            "state": "q-out",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "q-out",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/q/query-in",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in",
+              "p": "q-in"
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in",
+              "p": "q-in"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/q/post-query-in",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in",
+              "p": "q-in",
+              "p2": "q-in"
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in",
+              "p": "q-in",
+              "p2": "q-in"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/pg/query-cancelled",
+          "production": {
+            "code": 1,
+            "state": null,
+            "documents": {
+              "a": "created"
+            }
+          },
+          "local": {
+            "code": 1,
+            "state": null,
+            "documents": {
+              "a": "created"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/pg/read-after-cancel",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/pg/post-read-h",
+          "production": {
+            "code": 0,
+            "state": "pg-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "pg-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/tv/read-control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/tv/get-malformed",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/tv/batch-malformed",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/tv/get-unknown",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/tv/batch-unknown",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/tv/get-unknown",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ret/get-59",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true,
+          "class": {
+            "production": "accepted",
+            "local": "accepted"
+          }
+        },
+        {
+          "site": "rest/ret/batch-59",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "a": null
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "a": "created"
+            }
+          },
+          "match": true,
+          "class": {
+            "production": "accepted",
+            "local": "accepted"
+          }
+        },
+        {
+          "site": "rest/ret/get-61",
+          "production": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        },
+        {
+          "site": "rest/ret/batch-61",
+          "production": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        },
+        {
+          "site": "grpc/ret/get-59",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true,
+          "class": {
+            "production": "accepted",
+            "local": "accepted"
+          }
+        },
+        {
+          "site": "grpc/ret/get-61",
+          "production": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        },
+        {
+          "site": "grpc/ret/batch-61",
+          "production": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a-b-h",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/w/writer-bc",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/w/writer-bc",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/q1/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/q2/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/q/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/pg/commit",
+          "production": {
+            "commitTime": true,
+            "relation": "after-writer"
+          },
+          "local": {
+            "commitTime": true,
+            "relation": "after-writer"
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/pg/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        }
+      ],
+      "orders": [
+        {
+          "site": "grpc/pg/writer",
+          "production": "after-anchor",
+          "local": "after-anchor",
+          "match": true
+        },
+        {
+          "site": "grpc/q/writer",
+          "production": "after-anchor",
+          "local": "after-anchor",
+          "match": true
+        },
+        {
+          "site": "grpc/w/writer-ab",
+          "production": "before-anchor",
+          "local": "before-anchor",
+          "match": true
+        },
+        {
+          "site": "rest/q1/writer",
+          "production": "before-anchor",
+          "local": "before-anchor",
+          "match": true
+        },
+        {
+          "site": "rest/q2/writer",
+          "production": "after-anchor",
+          "local": "after-anchor",
+          "match": true
+        },
+        {
+          "site": "rest/w/writer-ab",
+          "production": "before-anchor",
+          "local": "before-anchor",
+          "match": true
+        }
+      ],
+      "clock": [
+        {
+          "site": "grpc/pg/writer",
+          "production": true,
+          "local": true,
+          "match": true
+        },
+        {
+          "site": "grpc/q/writer",
+          "production": true,
+          "local": true,
+          "match": true
+        },
+        {
+          "site": "grpc/w/writer-bc",
+          "production": true,
+          "local": true,
+          "match": true
+        },
+        {
+          "site": "rest/q1/writer",
+          "production": true,
+          "local": true,
+          "match": true
+        },
+        {
+          "site": "rest/q2/writer",
+          "production": true,
+          "local": true,
+          "match": true
+        },
+        {
+          "site": "rest/w/writer-bc",
+          "production": true,
+          "local": true,
+          "match": true
+        },
+        {
+          "site": "setup/create-a-b-h",
+          "production": true,
+          "local": true,
+          "match": true
+        }
+      ]
+    },
+    {
+      "recording": 2,
+      "productionFileSha256": "1406145e09be855cc1ab4915dddce250da06d75a031b97e45f63c79030e995fa",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/w/writer-bc",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/w/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/w/writer-ab",
+          "production": {
+            "code": 10,
+            "details": "Too much contention on these documents. Please try again."
+          },
+          "local": {
+            "code": 10,
+            "details": "Too much contention on these documents. Please try again."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/w/plain-a",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/w/plain-b",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/w/writer-bc",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/w/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/w/writer-ab",
+          "production": {
+            "code": 10,
+            "details": "Too much contention on these documents. Please try again."
+          },
+          "local": {
+            "code": 10,
+            "details": "Too much contention on these documents. Please try again."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/w/plain-a",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/w/plain-b",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/q1/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/q1/writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/q2/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/q2/writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/q/post-query-in",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/q/post-read-p",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/q/post-read-o",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/q/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/q/writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/q/post-query-in",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/pg/query-cancelled",
+          "production": {
+            "code": 1,
+            "details": "cancelled by the client after 1 frame(s)"
+          },
+          "local": {
+            "code": 1,
+            "details": "cancelled by the client after 1 frame(s)"
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/pg/read-after-cancel",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/pg/commit",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/pg/writer",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/get-malformed",
+          "production": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/batch-malformed",
+          "production": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/commit-malformed",
+          "production": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/rollback-malformed",
+          "production": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/get-unknown",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/batch-unknown",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/commit-unknown",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/tv/rollback-unknown",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/tv/get-unknown",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/tv/commit-unknown",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/tv/rollback-unknown",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/ret/get-59",
+          "production": {
+            "code": 5,
+            "details": "Document \"projects/fireemu-oracle-txn/databases/(default)/documents/oracle/<nonce>/txn-p14/a\" not fo"
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true,
+          "class": {
+            "production": "accepted",
+            "local": "accepted"
+          }
+        },
+        {
+          "caseId": "rest/ret/batch-59",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true,
+          "class": {
+            "production": "accepted",
+            "local": "accepted"
+          }
+        },
+        {
+          "caseId": "rest/ret/get-61",
+          "production": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "local": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        },
+        {
+          "caseId": "rest/ret/batch-61",
+          "production": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "local": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        },
+        {
+          "caseId": "grpc/ret/get-59",
+          "production": {
+            "code": 5,
+            "details": "Document \"projects/fireemu-oracle-txn/databases/(default)/documents/oracle/<nonce>/txn-p14/a\" not fo"
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true,
+          "class": {
+            "production": "accepted",
+            "local": "accepted"
+          }
+        },
+        {
+          "caseId": "grpc/ret/get-61",
+          "production": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "local": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        },
+        {
+          "caseId": "grpc/ret/batch-61",
+          "production": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "local": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        },
+        {
+          "caseId": "rest/ret/begin-59",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true,
+          "class": {
+            "production": "accepted",
+            "local": "accepted"
+          }
+        },
+        {
+          "caseId": "rest/ret/release-59",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/ret/begin-61",
+          "production": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "local": {
+            "code": 9,
+            "details": "The requested 'read_time' is too old."
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-b",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-c",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-d",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-h",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-p",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-o",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-p2",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/w/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/w/plain-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/w/plain-b",
+          "production": {
+            "code": 0,
+            "state": "rest-bc",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "rest-bc",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/w/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/w/plain-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/w/plain-b",
+          "production": {
+            "code": 0,
+            "state": "grpc-bc",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "grpc-bc",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/q1/query-in",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in"
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "rest/q2/query-in",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in"
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "rest/q/post-query-in",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in",
+              "p": "q-in"
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in",
+              "p": "q-in"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "rest/q/post-read-p",
+          "production": {
+            "code": 0,
+            "state": "q-in",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "q-in",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/q/post-read-o",
+          "production": {
+            "code": 0,
+            "state": "q-out",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "q-out",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/q/query-in",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in",
+              "p": "q-in"
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in",
+              "p": "q-in"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/q/post-query-in",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in",
+              "p": "q-in",
+              "p2": "q-in"
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "h": "q-in",
+              "p": "q-in",
+              "p2": "q-in"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/pg/query-cancelled",
+          "production": {
+            "code": 1,
+            "state": null,
+            "documents": {
+              "a": "created"
+            }
+          },
+          "local": {
+            "code": 1,
+            "state": null,
+            "documents": {
+              "a": "created"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/pg/read-after-cancel",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/pg/post-read-h",
+          "production": {
+            "code": 0,
+            "state": "pg-writer",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "pg-writer",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/tv/read-control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/tv/get-malformed",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/tv/batch-malformed",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/tv/get-unknown",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/tv/batch-unknown",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/tv/get-unknown",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/ret/get-59",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true,
+          "class": {
+            "production": "accepted",
+            "local": "accepted"
+          }
+        },
+        {
+          "site": "rest/ret/batch-59",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "a": null
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "a": "created"
+            }
+          },
+          "match": true,
+          "class": {
+            "production": "accepted",
+            "local": "accepted"
+          }
+        },
+        {
+          "site": "rest/ret/get-61",
+          "production": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        },
+        {
+          "site": "rest/ret/batch-61",
+          "production": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        },
+        {
+          "site": "grpc/ret/get-59",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true,
+          "class": {
+            "production": "accepted",
+            "local": "accepted"
+          }
+        },
+        {
+          "site": "grpc/ret/get-61",
+          "production": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        },
+        {
+          "site": "grpc/ret/batch-61",
+          "production": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 9,
+            "state": null,
+            "documents": null
+          },
+          "match": true,
+          "class": {
+            "production": "refused",
+            "local": "refused"
+          }
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a-b-h",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/w/writer-bc",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/w/writer-bc",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/q1/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/q2/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/q/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/pg/commit",
+          "production": {
+            "commitTime": true,
+            "relation": "after-writer"
+          },
+          "local": {
+            "commitTime": true,
+            "relation": "after-writer"
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/pg/writer",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        }
+      ],
+      "orders": [
+        {
+          "site": "grpc/pg/writer",
+          "production": "after-anchor",
+          "local": "after-anchor",
+          "match": true
+        },
+        {
+          "site": "grpc/q/writer",
+          "production": "after-anchor",
+          "local": "after-anchor",
+          "match": true
+        },
+        {
+          "site": "grpc/w/writer-ab",
+          "production": "before-anchor",
+          "local": "before-anchor",
+          "match": true
+        },
+        {
+          "site": "rest/q1/writer",
+          "production": "before-anchor",
+          "local": "before-anchor",
+          "match": true
+        },
+        {
+          "site": "rest/q2/writer",
+          "production": "after-anchor",
+          "local": "after-anchor",
+          "match": true
+        },
+        {
+          "site": "rest/w/writer-ab",
+          "production": "before-anchor",
+          "local": "before-anchor",
+          "match": true
+        }
+      ],
+      "clock": [
+        {
+          "site": "grpc/pg/writer",
+          "production": true,
+          "local": true,
+          "match": true
+        },
+        {
+          "site": "grpc/q/writer",
+          "production": true,
+          "local": true,
+          "match": true
+        },
+        {
+          "site": "grpc/w/writer-bc",
+          "production": true,
+          "local": true,
+          "match": true
+        },
+        {
+          "site": "rest/q1/writer",
+          "production": true,
+          "local": true,
+          "match": true
+        },
+        {
+          "site": "rest/q2/writer",
+          "production": true,
+          "local": true,
+          "match": true
+        },
+        {
+          "site": "rest/w/writer-bc",
+          "production": true,
+          "local": true,
+          "match": true
+        },
+        {
+          "site": "setup/create-a-b-h",
+          "production": true,
+          "local": true,
+          "match": true
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "recordings": 2,
+    "rows": 208,
+    "mismatches": 0
+  },
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "The artifact is the strict profile of the commit named; a later source change needs a new replay.",
+    "Held writers: production refused a writer held behind a read lock with ABORTED after about 20.6 s (REST and gRPC, both recordings, measured from dispatch to answer and including the worker's own start-up of about 1 s); strict waits 20 s, so a replay of the writer rows judges that a held writer is refused, not the exact second. The writer order rows record whether a writer answered before or after its anchor was sent.",
+    "Read-time retention: the replay's database is younger than the read time asked for, so the clock is advanced once (3700 s, hidden from the recording) after the other chains, and the 59 and 61 minute reads are judged by accepted/refused class (a read at a time before a document existed answers not-found, which is accepted); production's database was older than the hour and the replay's is not, so a found document is compared only when both sides found one.",
+    "Token validation: only the malformed (REST) and unknown tokens are observed here; the foreign-project and foreign-database tokens are not recorded, so token-validation-and-ownership stays open."
+  ]
+}

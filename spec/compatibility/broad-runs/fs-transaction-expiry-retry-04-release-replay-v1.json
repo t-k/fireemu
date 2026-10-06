@@ -7,8 +7,8 @@
   "productionRequests": 0,
   "authorizesProduction": false,
   "artifact": {
-    "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
-    "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888"
+    "sourceCommit": "35158bd6b1543a5d62468fe4ada5c9d8b1b9e8c6",
+    "binarySha256": "bdf692eced73f2022b88ceb7a3e5a226d3fd32cfe8e6dc045ea862ed6574bb77"
   },
   "replay": {
     "tool": "tools/compat-broad/fs-write-txn/fs_txn_expiry_idle_replay.py",

@@ -113,6 +113,88 @@ test("L3 masks values without changing byte length, precision or member order", 
   assert.throws(() => outgoingTargets("req0___data__=broken"));
 });
 
+test("L3 UTF-16 lengths with non-ASCII JSON fail closed in byte-counted capture", () => {
+  for (const value of ["é", "日本語", "😀"]) {
+    const body = JSON.stringify([[1, [{ documentChange: { value } }]]]);
+    assert.ok(Buffer.byteLength(body) > body.length);
+    const parsed = captureFrames(`${body.length}\n${body}`);
+    assert.equal(parsed.complete, false, value);
+    assert.equal(parsed.decodeError, true, value);
+    assert.deepEqual(parsed.frames, [], value);
+  }
+});
+
+test("L3 frozen production bodies replay by run, mode and event through capture and wire judges", () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL("./fs-listen/data/l3-production-frames.json", import.meta.url), "utf8"),
+  );
+  assert.equal(fixture.run, "nmuw7z5c9");
+  assert.equal(fixture.frames.length, 12);
+  const source = readFileSync(new URL("./fs-listen/browser-driver.mjs", import.meta.url), "utf8");
+  // Exercise the driver's boundary extraction itself, including its sticky error checks.
+  const updateSource = source.slice(
+    source.indexOf("    const update = (held) => {"),
+    source.indexOf("    const append = (held, data) => {"),
+  );
+  const update = runInNewContext(updateSource + "update;", {
+    Buffer,
+    captureFrames,
+    maskWire,
+    label: () => 1,
+    sessions: new Map(),
+    valueMask: (value) => "x".repeat(value.length),
+    token: (value) => (value ? { length: value.length } : null),
+    totalFrames: 0,
+    WIRE_FRAMES,
+  });
+  for (const mode of ["long-polling", "streaming"]) {
+    const frames = fixture.frames.filter((f) => f.mode === mode);
+    assert.equal(frames.length, 6, mode);
+    assert.deepEqual(
+      [...new Set(frames.map((f) => f.phase))],
+      ["warm", "restarted-online", "cold-online"],
+    );
+    assert.deepEqual(
+      fixture.rows.filter((r) => r.mode === mode).map((r) => r.id),
+      ["203", "203C"],
+    );
+    const wire = frames.map((frame) => {
+      const citation = `${fixture.run}/${mode}/event ${frame.event}`;
+      assert.equal(Buffer.byteLength(frame.body), frame.bodyBytes, citation);
+      assert.equal(captureFrames(frame.body).complete, frame.frameComplete, citation);
+      const event = {
+        event: frame.event,
+        phase: frame.phase,
+        status: frame.status,
+        contentLength: frame.contentLength,
+        targets: frame.targets,
+      };
+      update({ event, raw: [Buffer.from(frame.body)], frames: 0 });
+      for (const key of ["bodyBytes", "frameComplete", "boundaryComplete", "boundaries"])
+        assert.deepEqual(JSON.parse(JSON.stringify(event[key])), frame[key], `${citation}: ${key}`);
+      assert.equal(event.boundaryBodyBytes ?? null, frame.boundaryBodyBytes, citation);
+      // The recorded Content-Length is independent of the decoded response body size.
+      if (frame.contentLength !== null)
+        assert.notEqual(Number(frame.contentLength), frame.bodyBytes, citation);
+      return event;
+    });
+    for (const row of fixture.rows.filter((r) => r.mode === mode)) {
+      const evidence = { ...row.evidence, wire: wire.filter((w) => row.events.includes(w.event)) };
+      const citation = `${fixture.run}/${mode}/${row.id}/events ${row.events.join(",")}`;
+      assert.deepEqual(l3Problems(row.id, evidence), [], citation);
+      for (const event of evidence.wire.filter((w) => w.boundaryComplete)) {
+        const broken = structuredClone(evidence);
+        const replacement = broken.wire.find((w) => w.event === event.event);
+        update({ event: replacement, raw: [Buffer.from("invalid\n")], frames: 0 });
+        assert.ok(
+          l3Problems(row.id, broken).includes(`missing wire boundary: ${event.phase}`),
+          `${citation}: corrupt event ${event.event}`,
+        );
+      }
+    }
+  }
+});
+
 test("L3 receipts fail closed on missing, duplicate, malformed and lost phase checkpoints", () => {
   assert.deepEqual(L3_IDS, ["201C", "201", "202", "203", "203C"]);
   const receipt = {

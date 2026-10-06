@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { message } from "../client.mjs";
 import { must, CaseAbort, StopClean } from "./support.mjs";
 import { STREAM_BOUNDS } from "../stream.mjs";
+import { waitAfterLastGrant } from "../iam.mjs";
 
 export const IAM_PREREQUISITE = Object.freeze({
   finiteUpperBoundMs: null,
@@ -149,77 +150,7 @@ export const dlqNoGrant = {
   resources: 4,
   timeoutMs: 720_000,
   transports: ["rest"],
-  async run(ctx) {
-    const c = ctx.client;
-    const topic = ctx.name("topics", "source");
-    const deadTopic = ctx.name("topics", "dead");
-    const source = ctx.name("subscriptions", "source");
-    const sink = ctx.name("subscriptions", "sink");
-    must(await c.createTopic(topic), "create source topic");
-    must(await c.createTopic(deadTopic), "create dead-letter topic");
-    must(
-      await c.createSubscription(sink, {
-        topic: deadTopic,
-        ackDeadlineSeconds: 10,
-        messageRetentionDuration: "600s",
-      }),
-      "create sink subscription",
-    );
-    must(
-      await c.createSubscription(source, {
-        topic,
-        ackDeadlineSeconds: 10,
-        messageRetentionDuration: "600s",
-        deadLetterPolicy: { deadLetterTopic: deadTopic, maxDeliveryAttempts: 5 },
-      }),
-      "create source subscription",
-    );
-    must(await c.getSubscription(source), "read source subscription");
-    const payload = `dlq-${ctx.runId}-identity`;
-    const sentMessage = message({ data: payload, attributes: { recorderRun: ctx.runId } });
-    const expected = { ...sentMessage, sourceSubscription: source };
-    const published = must(await c.publish(topic, [sentMessage]), "publish DLQ identity");
-    ctx.note("dlq-published", {
-      grant: false,
-      messageIds: published.body?.messageIds ?? null,
-      payload,
-      ...expected,
-      dataSha256: createHash("sha256").update(payload).digest("hex"),
-    });
-    // These are observation ceilings. No local count is interpreted as the service's cutoff or reset.
-    for (let poll = 1; poll <= 9; poll += 1) {
-      const reply = await c.pull(source, { maxMessages: 1, returnImmediately: true });
-      ctx.note("dlq-source-poll", {
-        poll,
-        code: reply.code,
-        unknown: reply.unknown,
-        messages: (reply.body?.receivedMessages ?? []).map?.(identity) ?? null,
-      });
-      for (const item of readMessages(reply, "source pull"))
-        must(await c.modifyAckDeadline(source, [item.ackId], 0), "source nack");
-      if (poll < 9) await ctx.sleep(1000);
-    }
-    for (let poll = 1; poll <= 36; poll += 1) {
-      const reply = await c.pull(sink, { maxMessages: 1, returnImmediately: true });
-      ctx.note("dlq-sink-poll", {
-        poll,
-        code: reply.code,
-        unknown: reply.unknown,
-        messages: (reply.body?.receivedMessages ?? []).map?.(identity) ?? null,
-      });
-      for (const item of readMessages(reply, "sink pull")) {
-        ctx.note("dlq-forwarded", { poll, ...observedMessageIdentity(item, expected) });
-        must(await c.acknowledge(sink, [item.ackId]), "ack sink");
-      }
-      if (poll < 36) await ctx.sleep(5000);
-    }
-    const final = await c.pull(source, { maxMessages: 1, returnImmediately: true });
-    ctx.note("dlq-source-final", {
-      code: final.code,
-      unknown: final.unknown,
-      messages: (final.body?.receivedMessages ?? []).map?.(identity) ?? null,
-    });
-  },
+  run: (ctx) => runDlq(ctx, false),
 };
 
 export const dlqGrantPrerequisite = {
@@ -245,4 +176,147 @@ export const STREAM_DLQ_CASES = Object.freeze([
   deletedCursor,
   dlqNoGrant,
   dlqGrantPrerequisite,
+]);
+
+async function runDlq(ctx, grant) {
+  const c = ctx.client;
+  const topic = ctx.name("topics", "source");
+  const deadTopic = ctx.name("topics", "dead");
+  const source = ctx.name("subscriptions", "source");
+  const sink = ctx.name("subscriptions", "sink");
+  must(await c.createTopic(topic), "create source topic");
+  must(await c.createTopic(deadTopic), "create dead-letter topic");
+  must(
+    await c.createSubscription(sink, {
+      topic: deadTopic,
+      ackDeadlineSeconds: 10,
+      messageRetentionDuration: "600s",
+    }),
+    "create sink subscription",
+  );
+  must(
+    await c.createSubscription(source, {
+      topic,
+      ackDeadlineSeconds: 10,
+      messageRetentionDuration: "600s",
+      deadLetterPolicy: { deadLetterTopic: deadTopic, maxDeliveryAttempts: 5 },
+    }),
+    "create source subscription",
+  );
+  must(await c.getSubscription(source), "read source subscription");
+  if (grant) {
+    if (!ctx.serviceAgent || !ctx.iam)
+      throw new StopClean("A requires scoped IAM ownership and service agent");
+    await ctx.iam.grant(c, source, "roles/pubsub.subscriber", ctx.serviceAgent);
+    const last = await ctx.iam.grant(c, deadTopic, "roles/pubsub.publisher", ctx.serviceAgent);
+    ctx.note("iam-window", {
+      waitAfterGrantMs: 900_000,
+      phaseMs: 1_800_000,
+      requestsDuringWait: 0,
+      iamConvergenceClaim: false,
+    });
+    await waitAfterLastGrant({
+      grantedAt: last.grantedAt,
+      now: ctx.monotonicNow,
+      sleep: ctx.sleep,
+    });
+  }
+  const payload = `dlq-${ctx.runId}-identity`;
+  const sentMessage = message({ data: payload, attributes: { recorderRun: ctx.runId } });
+  const expected = { ...sentMessage, sourceSubscription: source };
+  const published = must(await c.publish(topic, [sentMessage]), "publish DLQ identity");
+  ctx.note("dlq-published", {
+    grant,
+    messageIds: published.body?.messageIds ?? null,
+    payload,
+    ...expected,
+    dataSha256: createHash("sha256").update(payload).digest("hex"),
+  });
+  // These are observation ceilings. No local count is interpreted as the service's cutoff or reset.
+  for (let poll = 1; poll <= 9; poll += 1) {
+    const reply = await c.pull(source, { maxMessages: 1, returnImmediately: true });
+    ctx.note("dlq-source-poll", {
+      poll,
+      code: reply.code,
+      unknown: reply.unknown,
+      messages: (reply.body?.receivedMessages ?? []).map?.(identity) ?? null,
+    });
+    for (const item of readMessages(reply, "source pull"))
+      must(await c.modifyAckDeadline(source, [item.ackId], 0), "source nack");
+    if (poll < 9) await ctx.sleep(1000);
+  }
+  for (let poll = 1; poll <= 36; poll += 1) {
+    const reply = await c.pull(sink, { maxMessages: 1, returnImmediately: true });
+    ctx.note("dlq-sink-poll", {
+      poll,
+      code: reply.code,
+      unknown: reply.unknown,
+      messages: (reply.body?.receivedMessages ?? []).map?.(identity) ?? null,
+    });
+    for (const item of readMessages(reply, "sink pull")) {
+      ctx.note("dlq-forwarded", { poll, ...observedMessageIdentity(item, expected) });
+      must(await c.acknowledge(sink, [item.ackId]), "ack sink");
+    }
+    if (poll < 36) await ctx.sleep(5000);
+  }
+  const final = await c.pull(source, { maxMessages: 1, returnImmediately: true });
+  ctx.note("dlq-source-final", {
+    code: final.code,
+    unknown: final.unknown,
+    messages: (final.body?.receivedMessages ?? []).map?.(identity) ?? null,
+  });
+}
+
+export const restLayoutRoutes = {
+  id: "rest-layout-routes",
+  short: "rl",
+  requests: 9,
+  resources: 3,
+  timeoutMs: 180_000,
+  transports: ["rest"],
+  async run(ctx) {
+    const c = ctx.client;
+    const topic = ctx.name("topics", "source");
+    const subscription = ctx.name("subscriptions", "source");
+    const snapshot = ctx.name("snapshots", "own");
+    must(await c.createTopic(topic), "layout topic");
+    must(
+      await c.createSubscription(subscription, { topic, retainAckedMessages: true }),
+      "layout subscription",
+    );
+    must(
+      await c.publish(topic, [message({ data: `layout-${ctx.runId}` })]),
+      "layout own publication",
+    );
+    must(await c.createSnapshot(snapshot, subscription), "layout own snapshot");
+    let ackId;
+    for (let poll = 0; poll < 3 && ackId === undefined; poll += 1) {
+      const received = readMessages(
+        await c.pull(subscription, { maxMessages: 1, returnImmediately: true }),
+        "layout Pull",
+      );
+      if (received.length) ackId = received[0].ackId;
+    }
+    if (!ackId)
+      throw new CaseAbort("layout ACK/Seek unobserved: no actual own ACK from complete Pull");
+    must(await c.acknowledge(subscription, [ackId]), "layout actual own ACK");
+    must(await c.seek(subscription, { snapshot }), "layout own Seek");
+    ctx.note("rest-layout-complete", {
+      routes: ["createSubscription", "pull", "acknowledge", "seek"],
+    });
+  },
+};
+export const dlqGrantWindow = {
+  id: "dlq-grant-window",
+  short: "da",
+  requests: 103,
+  resources: 4,
+  timeoutMs: 1_800_000,
+  transports: ["rest"],
+  run: (ctx) => runDlq(ctx, true),
+};
+export const STREAM_DLQ_V2_CASES = Object.freeze([
+  ...STREAM_DLQ_CASES.filter((item) => item.id !== "dlq-grant-prerequisite"),
+  restLayoutRoutes,
+  dlqGrantWindow,
 ]);

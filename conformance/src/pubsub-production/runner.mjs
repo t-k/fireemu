@@ -9,7 +9,7 @@ import { CaseAbort, StopClean } from "./cases/support.mjs";
 import { cleanup } from "./cleanup.mjs";
 import { createClient } from "./client.mjs";
 import { createLedger } from "./ledger.mjs";
-import { STREAM_DLQ_CASES } from "./cases/stream-dlq.mjs";
+import { STREAM_DLQ_CASES, STREAM_DLQ_V2_CASES } from "./cases/stream-dlq.mjs";
 import { createPhaseLimit } from "./limits.mjs";
 
 const REST_AND_GRPC = ["rest", "grpc"];
@@ -38,8 +38,14 @@ function limited(transport, meter, limit) {
 }
 
 export function selectCases(only, suite = "unary") {
-  if (suite !== "unary" && suite !== "stream-dlq") throw new Error(`unknown suite ${suite}`);
-  const available = suite === "stream-dlq" ? STREAM_DLQ_CASES : CASES;
+  if (suite !== "unary" && suite !== "stream-dlq" && suite !== "stream-dlq-v2")
+    throw new Error(`unknown suite ${suite}`);
+  const available =
+    suite === "stream-dlq-v2"
+      ? STREAM_DLQ_V2_CASES
+      : suite === "stream-dlq"
+        ? STREAM_DLQ_CASES
+        : CASES;
   if (only === undefined) return available;
   const wanted = new Set(only);
   const known = new Set(available.map((item) => item.id));
@@ -86,6 +92,8 @@ function createContext({
     runId: ownership.runId,
     production: options.production,
     serviceAgent: options.serviceAgent ?? null,
+    iam: options.iam ?? null,
+    monotonicNow: options.monotonicNow ?? (() => performance.now()),
     client: clientOf(guarded[transportName], caseId),
     // IAM is only available over REST, whichever transport the case is recording.
     rest: clientOf(guarded.rest, `${caseId}/rest`),

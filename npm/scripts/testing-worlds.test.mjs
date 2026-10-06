@@ -7,7 +7,7 @@ import { createTestWorld, withTestWorld } from '../fireemu/testing.mjs';
 
 const binary = process.env.FIREEMU_TEST_BINARY;
 const native = { skip: !binary, timeout: 30_000 };
-const options = { binaryPath: binary, projectId: 'demo-test-worlds', clockStart: '2026-01-31T23:59:00Z', services: ['auth','firestore'], config: { schemaVersion:1, firestore:{edition:'standard',backend:'native'} } };
+const options = { binaryPath: binary, env:{...process.env,NODE_PATH:''}, projectId: 'demo-test-worlds', clockStart: '2026-01-31T23:59:00Z', services: ['auth','firestore'], config: { schemaVersion:1, firestore:{edition:'standard',backend:'native'} } };
 
 test('startup failure removes private directories and leaves parent environment unchanged', async () => {
   const parent = {...process.env};
@@ -68,7 +68,8 @@ test('a successful command joins its child after the command leader exits', nati
 });
 
 test('real Admin SDK children route identical project and user IDs to independent worlds', {skip:!binary||!process.env.FIREEMU_TEST_SDK_MODULES,timeout:30_000}, async(t)=>{
-  const worlds=await Promise.all([createTestWorld(options),createTestWorld(options)]);
+  const settings={...options,env:{...options.env,FIREBASE_CONFIG:JSON.stringify({projectId:'wrong-inherited-project',storageBucket:'wrong-bucket'})}};
+  const worlds=await Promise.all([createTestWorld(settings),createTestWorld(settings)]);
   t.after(async()=>{await Promise.all(worlds.map(world=>world.dispose()));});
   await worlds[0].clock.advance({seconds:86400});
   const script=`
@@ -77,7 +78,8 @@ test('real Admin SDK children route identical project and user IDs to independen
     const {getFirestore,FieldValue}=load('firebase-admin/firestore');
     const {getAuth}=load('firebase-admin/auth');
     (async()=>{
-      const app=initializeApp({projectId:process.env.GCLOUD_PROJECT},process.env.FIREEMU_TEST_WORLD_ID);
+      const app=initializeApp(undefined,process.env.FIREEMU_TEST_WORLD_ID);
+      if(app.options.projectId!==process.env.GCLOUD_PROJECT)throw Error('SDK app inherited another world configuration');
       const db=getFirestore(app),ref=db.doc('sdk/item');
       await getAuth(app).createUser({uid:'same-sdk-user'});
       await ref.set({marker:process.env.MARKER,at:FieldValue.serverTimestamp()});
@@ -86,7 +88,7 @@ test('real Admin SDK children route identical project and user IDs to independen
       await deleteApp(app);
     })().catch(error=>{console.error(error);process.exitCode=1});
   `;
-  const replies=await Promise.all(worlds.map((world,index)=>world.run(process.execPath,['-e',script],{env:{SDK_MODULES:process.env.FIREEMU_TEST_SDK_MODULES,MARKER:String(index)}})));
+  const replies=await Promise.all(worlds.map((world,index)=>world.run(process.execPath,['-e',script],{env:{SDK_MODULES:process.env.FIREEMU_TEST_SDK_MODULES,MARKER:String(index),FIREBASE_CONFIG:settings.env.FIREBASE_CONFIG}})));
   const values=replies.map(reply=>JSON.parse(reply.stdout.trim()));
   assert.deepEqual(values.map(value=>value.marker),['0','1']);
   assert.equal(values[0].at-values[1].at,86400_000);
@@ -175,6 +177,75 @@ test('Functions snapshots retain ancestor node_modules without caller-owned path
   }finally{await rm(root,{recursive:true,force:true});}
 });
 
+test('NODE_PATH dependencies are private and reset retains their creation bytes', async()=>{
+  const {snapshotInputs,prepareGeneration}=await import('../fireemu/testing-snapshot.mjs');
+  const {mkdir}=await import('node:fs/promises');
+  const {promisify}=await import('node:util');
+  const exec=promisify((await import('node:child_process')).execFile);
+  const root=await mkdtemp(join(tmpdir(),'fireemu-world-node-path-'));
+  try{
+    const source=join(root,'source'),modules=join(root,'global-modules'),dependency=join(modules,'path-only');
+    await mkdir(source);await mkdir(dependency,{recursive:true});
+    await writeFile(join(source,'index.cjs'),"module.exports=require('path-only')");
+    await writeFile(join(dependency,'package.json'),JSON.stringify({main:'index.cjs'}));
+    await writeFile(join(dependency,'index.cjs'),"module.exports='creation dependency'");
+    const worldRoot=join(root,'world');await mkdir(worldRoot);
+    const snapshot=await snapshotInputs({functionsSource:source,env:{NODE_PATH:modules}},worldRoot);
+    await writeFile(join(dependency,'index.cjs'),"module.exports='caller mutation'");
+    for(const name of ['generation','reset']){
+      const prepared=await prepareGeneration(snapshot,join(worldRoot,name));
+      const config=JSON.parse(await readFile(prepared.configPath,'utf8'));
+      const reply=await exec(process.execPath,['-e',`console.log(require(${JSON.stringify(join(config.functions.source,'index.cjs'))}))`],{env:{...process.env,NODE_PATH:prepared.nodePath??modules}});
+      assert.equal(reply.stdout.trim(),'creation dependency');
+    }
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('commands cannot inject emulator routes for unselected services', native, async()=>{
+  await withTestWorld({...options,services:['auth']},async world=>{
+    const result=await world.run(process.execPath,['-e',"if(process.env.FIRESTORE_EMULATOR_HOST)throw Error('unselected route escaped');if(JSON.parse(process.env.FIREBASE_CONFIG).projectId!==process.env.GCLOUD_PROJECT)throw Error('wrong config')"],{env:{FIRESTORE_EMULATOR_HOST:'wrong.invalid:1',FIREBASE_CONFIG:'{"projectId":"wrong"}'}});
+    assert.equal(result.code,0);
+  });
+});
+
+test('a command retirement failure still stops the daemon and permits cleanup retry', {...native,timeout:30_000}, async(t)=>{
+  if(process.platform==='win32')return t.skip('Unix detached-pipe failure fixture');
+  const {execFileSync}=await import('node:child_process');
+  const root=await mkdtemp(join(tmpdir(),'fireemu-world-retirement-'));
+  const world=await createTestWorld(options);
+  const descriptor=JSON.parse(await readFile(join(world.directory,'generation-1','ready.json'),'utf8'));
+  const pidFile=join(root,'pid');
+  let escapedPid;
+  const stopOwned=(pid,marker)=>{
+    try{
+      const identity=execFileSync('/bin/ps',['-o','comm=','-o','args=','-p',String(pid)],{encoding:'utf8'});
+      assert.ok(identity.includes(marker));
+      process.kill(pid,'SIGKILL');
+    }catch(error){if(error.code!=='ESRCH'&&error.status!==1)throw error;}
+  };
+  t.after(async()=>{
+    if(escapedPid)stopOwned(escapedPid,pidFile);
+    try{await world.dispose();}finally{
+      stopOwned(descriptor.pid,world.directory);
+      await rm(root,{recursive:true,force:true});
+    }
+  });
+  const script=`const child=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)',${JSON.stringify(pidFile)}],{detached:true,stdio:['ignore','inherit','inherit']});require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(child.pid));process.exit(0)`;
+  const command=world.run(process.execPath,['-e',script]);
+  const joined=assert.rejects(command,/retired/);
+  for(let count=0;count<100;count++){
+    try{escapedPid=Number(await readFile(pidFile,'utf8'));break;}catch(error){if(error.code!=='ENOENT')throw error;}
+    await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  assert.ok(Number.isSafeInteger(escapedPid)&&escapedPid>1);
+  await assert.rejects(world.dispose(),/close|retirement/);
+  assert.throws(()=>process.kill(descriptor.pid,0),{code:'ESRCH'});
+  stopOwned(escapedPid,pidFile);escapedPid=undefined;
+  await joined;
+  await world.dispose();
+  await assert.rejects(stat(world.directory),{code:'ENOENT'});
+});
+
 test('real Functions imports, trial boundaries, Rules and module globals belong to each world', {...native,timeout:process.env.FIREEMU_TEST_SDK_MODULES?180_000:30_000}, async(t)=>{
   const {mkdir,symlink}=await import('node:fs/promises');
   const root=await mkdtemp(join(tmpdir(),'fireemu-functions-worlds-'));
@@ -206,7 +277,7 @@ test('real Functions imports, trial boundaries, Rules and module globals belong 
   t.after(async()=>{await Promise.all(worlds.map(w=>w.dispose()));});
   for(const marker of ['A','B','C']){
     await writeFile(join(source,'index.cjs'),code(marker));
-    const world=await createTestWorld({...options,clockStart:'2026-01-31T23:59:59.999Z',functionsSource:source,services:['auth','firestore','functions'],clock:{timers:'virtual'},shutdownTimeoutMs:20,env:{...process.env,FIREEMU_RUNNER_NODE:new URL('../../tools/runner-node/index.mjs',import.meta.url).pathname}});
+    const world=await createTestWorld({...options,clockStart:'2026-01-31T23:59:59.999Z',functionsSource:source,services:['auth','firestore','functions'],clock:{timers:'virtual'},shutdownTimeoutMs:20,env:{...options.env,FIREEMU_RUNNER_NODE:new URL('../../tools/runner-node/index.mjs',import.meta.url).pathname}});
     worlds.push(world);
   }
   const [a,b,c]=worlds;

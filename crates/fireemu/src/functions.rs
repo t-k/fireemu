@@ -4633,6 +4633,18 @@ impl BlockingAuthBridge {
             };
         };
         self.require_selected_target(selection, &target)?;
+        let synchronize_date = self.runtime.application_clock_policy().date_virtual;
+        if synchronize_date {
+            let handle = tokio::runtime::Handle::try_current()
+                .map_err(|_| BlockingFunctionFailure::unhandled())?;
+            handle
+                .block_on(tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(admission_deadline),
+                    self.runtime.sync_clock(),
+                ))
+                .map_err(|_| BlockingFunctionFailure::timeout())?
+                .map_err(|_| BlockingFunctionFailure::unhandled())?;
+        }
         let context = narrow_blocking_auth_credentials(
             context,
             self.forward_inbound_credentials,
@@ -4663,7 +4675,7 @@ impl BlockingAuthBridge {
         // The platform's deadline covers a cold start; a recovered runner is fireemu's cold start,
         // so its call waits only for what is left of the deadline. An admitted runner keeps the
         // whole deadline, and a function whose own timeout equals it still times out first.
-        let budget = if recovered {
+        let budget = if recovered || synchronize_date {
             blocking_auth_remaining(admission_deadline)?
         } else {
             self.deadline
@@ -7441,6 +7453,112 @@ mod tests {
 
         let value = result.expect("the first request waits for runner recovery");
         assert!(value.is_object());
+    }
+
+    #[test]
+    fn blocking_auth_synchronizes_a_replacement_loaded_before_the_last_clock_ack() {
+        use fireemu_adapter_functions::application_clock::ApplicationClockPolicy;
+        use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+        use fireemu_adapter_functions::runtime::{CodebaseSpec, FunctionsConfig, FunctionsRuntime};
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::{
+            BlockingAuthEvent, BlockingAuthTokenPolicy, Trigger,
+        };
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::ids::SessionId;
+        use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
+
+        let executor = tokio::runtime::Runtime::new().unwrap();
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let policy = ApplicationClockPolicy {
+            date_virtual: true,
+            ..Default::default()
+        };
+        let spec = SpawnSpec {
+            command: vec![
+                "python3".to_owned(),
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../fireemu-adapter-functions/tests/fake_runner.py")
+                    .display()
+                    .to_string(),
+            ],
+            cwd: None,
+            env: vec![(
+                "FIREEMU_CLOCK_JSON".to_owned(),
+                policy
+                    .runner_options(clock.lock().unwrap().snapshot())
+                    .to_string(),
+            )],
+            hello_timeout: Duration::from_secs(60),
+        };
+        let (initial, replacement) = executor.block_on(async {
+            (
+                Arc::new(Runner::spawn_spec(&spec).await.unwrap()),
+                Arc::new(Runner::spawn_spec(&spec).await.unwrap()),
+            )
+        });
+        let mut manifest = parse_manifest(initial.hello().manifest.as_ref().unwrap()).unwrap();
+        let mut guard = manifest.get("echo").unwrap().clone();
+        guard.name = "clockGuard".to_owned();
+        guard.trigger = Trigger::BlockingAuth {
+            event: BlockingAuthEvent::BeforeCreate,
+            token_policy: BlockingAuthTokenPolicy::default(),
+        };
+        manifest.functions.push(guard);
+        // Construct outside an entered executor so the observer cannot mask admission sync.
+        let runtime = FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: SessionId::new(7),
+                max_running: 4,
+                debug_mode: false,
+                retry_attempts: 1,
+                max_catch_up_runs: 1,
+                runner_secret: "test-secret".to_owned(),
+                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+                functions_host: None,
+                clock_policy: policy,
+            },
+            clock.clone(),
+            initial,
+            Some(spec.clone()),
+        );
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_millis(1))
+            .unwrap();
+        executor.block_on(runtime.sync_clock()).unwrap();
+        runtime
+            .reload_codebase(CodebaseSpec {
+                name: "default".to_owned(),
+                manifest: runtime.manifest().clone(),
+                runner: replacement,
+                spawn: Some(spec),
+                cleanup_dir: None,
+            })
+            .unwrap();
+        let bridge = super::BlockingAuthBridge::new(runtime.clone());
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(NewUser::email("clock@example.test"), runtime.now())
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        let result = executor.block_on(async {
+            tokio::task::spawn_blocking(move || {
+                bridge.invoke(BlockingAuthEvent::BeforeCreate, &user)
+            })
+            .await
+            .unwrap()
+        });
+        executor.block_on(runtime.shutdown());
+        assert_eq!(result.unwrap()["clockNowMillis"], 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

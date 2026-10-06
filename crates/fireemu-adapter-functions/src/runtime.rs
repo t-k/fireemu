@@ -1341,6 +1341,14 @@ impl FunctionsRuntime {
         Ok(())
     }
 
+    /// Application time choices used by synchronous native invocation bridges.
+    #[must_use]
+    pub const fn application_clock_policy(
+        &self,
+    ) -> crate::application_clock::ApplicationClockPolicy {
+        self.config.clock_policy
+    }
+
     /// Acknowledge the latest clock in each still-current runner generation.
     pub async fn sync_clock(&self) -> Result<(), String> {
         if !self.config.clock_policy.date_virtual {

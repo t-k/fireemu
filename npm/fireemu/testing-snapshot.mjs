@@ -1,7 +1,7 @@
 // Snapshot caller-owned input once; each generation gets its own writable copy.
 import { constants } from 'node:fs';
 import { cp, mkdir, readFile, writeFile, realpath, symlink, lstat, stat, unlink, readdir, readlink } from 'node:fs/promises';
-import { basename, dirname, join, resolve, relative, sep, isAbsolute } from 'node:path';
+import { basename, dirname, join, resolve, relative, sep, delimiter, isAbsolute } from 'node:path';
 
 export async function snapshotInputs(options, root) {
   const cwd=resolve(options.cwd??process.cwd());
@@ -99,13 +99,22 @@ export async function snapshotInputs(options, root) {
   }
   if(options.firebaseJson){const path=resolve(cwd,options.firebaseJson);config.firebaseJson=await snapshotFirebase(JSON.parse(await readFile(path,'utf8')),dirname(path));}
   if(options.functionsSource){config.functions??={};config.functions.source=await copySource(options.functionsSource,cwd);}
+  const functionsConfigured=Boolean(graph.size||config.functions?.manifest||config.functions?.runner);
+  const nodePaths=[];
+  for(const entry of (functionsConfigured?options.env?.NODE_PATH??'':'').split(delimiter).filter(Boolean)){
+    let original;
+    try{original=await realpath(resolve(cwd,entry));}catch(error){if(error.code==='ENOENT')continue;throw error;}
+    let destination=graph.get(original);
+    if(!destination){destination=join(baseline,`node-path-${sequence++}`,'node_modules');await captureTree(original,destination);}
+    nodePaths.push(destination);
+  }
   config.daemon={...config.daemon,clockStart:options.clockStart??config.daemon?.clockStart??'2026-01-01T00:00:00Z',seed:options.seed??config.daemon?.seed??1,authProject:options.projectId??config.daemon?.authProject??'demo-test-world'};
   for(const service of ['firestore','http','storage','functions','eventarc','tasks','pubsub','hub','ui','logging'])config.daemon[`${service}Port`]=0;
   config.functions={...config.functions,clock:{date:'virtual',timers:'real',tasks:'virtual',...config.functions?.clock,...options.clock}};
   await writeFile(join(baseline,'fireemu.json'),JSON.stringify(config),{mode:0o600});
   let seed;
   if(options.import){seed=join(baseline,'seed');await cp(resolve(cwd,options.import),seed,{recursive:true,mode:constants.COPYFILE_FICLONE,dereference:true});}
-  return {baseline,config,seed,functionsConfigured:graph.size>0};
+  return {baseline,config,seed,nodePaths,functionsConfigured};
 }
 
 export async function prepareGeneration(snapshot,directory){
@@ -133,5 +142,5 @@ export async function prepareGeneration(snapshot,directory){
   if(config.firebaseJson){const firebase=rewrite(JSON.parse(await readFile(config.firebaseJson,'utf8')));await writeFile(config.firebaseJson,JSON.stringify(firebase),{mode:0o600});}
   await writeFile(join(inputs,'fireemu.json'),JSON.stringify(config),{mode:0o600});
   await mkdir(join(directory,'tmp'),{mode:0o700});
-  return {configPath:join(inputs,'fireemu.json'),cwd:inputs,seed:snapshot.seed?rewrite(snapshot.seed):undefined};
+  return {configPath:join(inputs,'fireemu.json'),cwd:inputs,seed:snapshot.seed?rewrite(snapshot.seed):undefined,nodePath:(snapshot.nodePaths??[]).map(rewrite).join(delimiter)};
 }

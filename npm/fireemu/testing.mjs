@@ -10,7 +10,7 @@ import { resolveBinary, ensureExecutable } from './binary.mjs';
 import { snapshotInputs, prepareGeneration } from './testing-snapshot.mjs';
 
 const endpointVariables = {firestore:'FIRESTORE_EMULATOR_HOST',auth:'FIREBASE_AUTH_EMULATOR_HOST',storage:'FIREBASE_STORAGE_EMULATOR_HOST',functions:'FIREEMU_FUNCTIONS_HOST',eventarc:'CLOUD_EVENTARC_EMULATOR_HOST',tasks:'CLOUD_TASKS_EMULATOR_HOST',pubsub:'PUBSUB_EMULATOR_HOST',hub:'FIREBASE_EMULATOR_HUB',logging:'FIREBASE_LOGGING_EMULATOR_HOST'};
-const emulatorVariables = new Set([...Object.values(endpointVariables),'FIREBASE_FIRESTORE_EMULATOR_ADDRESS','STORAGE_EMULATOR_HOST','FIREEMU_CONTROL_TOKEN','FIREEMU_CONTROL_URL','FIREEMU_APP_CHECK_EMULATOR_HOST','FIREEMU_APP_CHECK_JWKS_URL','FIREEMU_APP_CHECK_DEBUG_TOKEN_URL','FIREBASE_DATABASE_EMULATOR_HOST']);
+const emulatorVariables = new Set([...Object.values(endpointVariables),'FIREBASE_CONFIG','NODE_PATH','FIREBASE_FIRESTORE_EMULATOR_ADDRESS','STORAGE_EMULATOR_HOST','FIREEMU_CONTROL_TOKEN','FIREEMU_CONTROL_URL','FIREEMU_APP_CHECK_EMULATOR_HOST','FIREEMU_APP_CHECK_JWKS_URL','FIREEMU_APP_CHECK_DEBUG_TOKEN_URL','FIREBASE_DATABASE_EMULATOR_HOST']);
 const emptyEnvironment=base=>Object.fromEntries(Object.entries(base).filter(([name])=>!emulatorVariables.has(name)));
 
 function supervise(command,args,options){
@@ -64,14 +64,19 @@ export async function createTestWorld(options={}){
   const directory=await mkdtemp(join(resolve(options.tempRoot??tmpdir()),'fireemu-world-'));
   let snapshot,current,tail=Promise.resolve(),closing=false,disposed=false,generation=0;
   const clients=new Set();
+  const retiring=new Set();
   const enqueue=operation=>{const job=tail.then(operation);tail=job.catch(()=>{});return job;};
   const check=()=>{if(closing||disposed)throw Error('test world is disposed');if(!current?.descriptor||current.process.result())throw Error('test world generation is unavailable');};
   const retire=async()=>{
-    const active=current;current=undefined;
-    await Promise.all([...clients].map(client=>stop(client)));
-    clients.clear();
-    await stop(active?.process,options.shutdownTimeoutMs??5000);
-    if(active)await rm(active.directory,{recursive:true,force:true});
+    if(current)retiring.add(current);
+    current=undefined;
+    const clientResults=await Promise.allSettled([...clients].map(async client=>{await stop(client);clients.delete(client);}));
+    const daemonResults=await Promise.allSettled([...retiring].map(async active=>{
+      await stop(active.process,options.shutdownTimeoutMs??5000);
+      if(!clients.size){await rm(active.directory,{recursive:true,force:true});retiring.delete(active);}
+    }));
+    const failures=[...clientResults,...daemonResults].filter(result=>result.status==='rejected').map(result=>result.reason);
+    if(failures.length)throw new AggregateError(failures,'test world retirement failed; cleanup can be retried');
   };
   const requestFor=async(active,method,path,body,signal)=>{
     const response=await fetch(`${active.descriptor.controlUrl}${path}`,{method,headers:{authorization:`Bearer ${active.descriptor.controlToken}`,...(body===undefined?{}:{'content-type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body),signal:signal??AbortSignal.timeout(options.requestTimeoutMs??10_000)});
@@ -89,7 +94,7 @@ export async function createTestWorld(options={}){
     for(const name of ['firestore','http','storage','functions','eventarc','tasks','pubsub','hub','ui','logging'])args.push(`--${name}-port`,'0');
     if(prepared.seed)args.push('--import',prepared.seed);
     const temporary=join(generationDirectory,'tmp');
-    const environment={...emptyEnvironment(options.env??process.env),TMPDIR:temporary,TEMP:temporary,TMP:temporary,FIREEMU_TEST_WORLD_ID:id,FIREEMU_TEST_WORLD_GENERATION:String(next)};
+    const environment={...emptyEnvironment(options.env??process.env),NODE_PATH:prepared.nodePath,TMPDIR:temporary,TEMP:temporary,TMP:temporary,FIREEMU_TEST_WORLD_ID:id,FIREEMU_TEST_WORLD_GENERATION:String(next)};
     ensureExecutable(binary.path);
     const daemon=supervise(binary.path,args,{cwd:prepared.cwd,env:environment,stdio:['pipe','pipe','pipe']});
     const active={process:daemon,directory:generationDirectory};current=active;
@@ -105,7 +110,7 @@ export async function createTestWorld(options={}){
           await requestFor(active,'GET','/health/ready',undefined,AbortSignal.timeout(Math.min(1000,timeout)));
           if(daemon.result())throw Error('daemon exited during test-world readiness');
           active.endpoints=endpoints(descriptor);
-          active.environment=Object.freeze({...descriptor.environment,TMPDIR:temporary,TEMP:temporary,TMP:temporary,FIREEMU_TEST_WORLD_ID:id,FIREEMU_TEST_WORLD_GENERATION:String(next)});
+          active.environment=Object.freeze({...descriptor.environment,NODE_PATH:prepared.nodePath,TMPDIR:temporary,TEMP:temporary,TMP:temporary,FIREEMU_TEST_WORLD_ID:id,FIREEMU_TEST_WORLD_GENERATION:String(next)});
           generation=next;
           return;
         }catch(error){if(error.code!=='ENOENT'&&!(error instanceof SyntaxError)&&error.name!=='TimeoutError'&&error.name!=='TypeError')throw error;}
@@ -136,7 +141,7 @@ export async function createTestWorld(options={}){
       const windows=process.platform==='win32';
       const stdio=runOptions.stdio==='inherit'?['pipe','inherit','inherit']:['pipe','pipe','pipe'];
       if(!windows)stdio.push('ipc');
-      const client=supervise(windows?binary.path:process.execPath,windows?['__test-world-command',command,...args]:[fileURLToPath(new URL('./testing-process.mjs',import.meta.url)),command,...args],{cwd:runOptions.cwd??options.cwd??process.cwd(),env:{...emptyEnvironment(process.env),...runOptions.env,...active.environment},stdio,commandOwner:!windows});
+      const client=supervise(windows?binary.path:process.execPath,windows?['__test-world-command',command,...args]:[fileURLToPath(new URL('./testing-process.mjs',import.meta.url)),command,...args],{cwd:runOptions.cwd??options.cwd??process.cwd(),env:{...emptyEnvironment(process.env),...emptyEnvironment(runOptions.env??{}),...active.environment},stdio,commandOwner:!windows});
       clients.add(client);
       const aborted=()=>{void stop(client).catch(()=>{});};
       runOptions.signal?.addEventListener('abort',aborted,{once:true});

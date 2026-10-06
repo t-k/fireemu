@@ -2642,8 +2642,10 @@ fn clock_route(
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             if action == "clock:set" && allow_backwards {
-                clock.set_allow_backwards(target);
-                return ok(clock_json(&clock));
+                return match clock.try_set_allow_backwards(target) {
+                    Ok(()) => ok(clock_json(&clock)),
+                    Err(e) => error(400, &format!("INVALID_ARGUMENT : {e}")),
+                };
             }
             match clock.advance_to(target) {
                 Ok(_) => ok(clock_json(&clock)),

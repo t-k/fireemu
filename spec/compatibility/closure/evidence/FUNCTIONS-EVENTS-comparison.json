@@ -1,5 +1,9 @@
 {
   "artifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+  "comparator": {
+    "commit": "85f25ea15e7b738bf8009cf0915e45c2d5598eea",
+    "tree": "0ac584c02790d610e9846e5763c805d56489ea22"
+  },
   "conditions": {
     "FUNCTIONS-EVENTS/auth-created": "MATCH",
     "FUNCTIONS-EVENTS/auth-deleted": "MATCH",
@@ -47,7 +51,8 @@
   "productionRun": {
     "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
     "project": "fireemu-oracle-events",
-    "recordedAt": "2026-10-05T04:15:22.286Z"
+    "recordedAt": "2026-10-05T04:15:22.286Z",
+    "sha256": "07c68c387b6254f382b0e1916211ab42d930180a1d4341b8cac1a1187cec1a13"
   },
   "rows": [
     {

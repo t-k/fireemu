@@ -1027,6 +1027,15 @@
         "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
         "rows": {
           "MATCH": 112
+        },
+        "workspaceRegression": {
+          "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a",
+          "command": "cargo nextest run --workspace --profile pr",
+          "tests": {
+            "passed": 5360,
+            "failed": 0
+          },
+          "source": "ci.yml run 37427941005 on 8d5f9eb8102447be91afe3f8a543288a2944812a, job test (ubuntu-latest): 5360 tests run, 5360 passed, 101 skipped; the macos-latest job of the same run: 5428 of 5428 passed, 101 skipped"
         }
       }
     },
@@ -1053,13 +1062,13 @@
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
-        "sha256": "f1648517aa8b6cd0e2008b807d7ab54223b9b779ada9f972b1407618561f078a",
+        "sha256": "6b6d0b8de46fae1d3dc75f94caf006ec1cef3d5d122841476b5e6ddfbd94a2d2",
         "rows": 112,
         "summary": {
           "MATCH": 112
         },
         "laneComparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
-        "laneComparisonSha256": "f1648517aa8b6cd0e2008b807d7ab54223b9b779ada9f972b1407618561f078a",
+        "laneComparisonSha256": "6b6d0b8de46fae1d3dc75f94caf006ec1cef3d5d122841476b5e6ddfbd94a2d2",
         "identicalRows": 112,
         "changedRows": []
       }

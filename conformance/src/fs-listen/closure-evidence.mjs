@@ -48,6 +48,20 @@ const RUNS = [
   ["l3", "browser", "browser-prod.json", ["listen-l3-browser-20261006T050949Z-r1"]],
 ];
 const RULINGS = "docs.local/runs/fs-listen-l3/coordinator-rulings.md";
+// Closure ruling 1 and its 2026-10-06 13:26Z M3 extension name these run:row pairs.
+const APPROVED_NATIVE_ROWS = new Set([
+  "nmuuicyas:native/resume-token/current",
+  "nmuukwo6n:native/resume-token/current",
+  "nmuuicyas:native/existence-filter/with-expected-count",
+  "nmuukwo6n:native/existence-filter/with-expected-count",
+  ...["nmuv70w0y", "nmuv8dk6e"].flatMap((run) =>
+    [
+      "native/resume-grid-gc/k0",
+      "native/resume-grid-tc/k1-expected",
+      "native/resume-grid-tc/k1-repeat",
+    ].map((row) => `${run}:${row}`),
+  ),
+]);
 const INVESTIGATION = "docs.local/runs/fs-listen-l3/l3-response-structure.md";
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const read = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -298,19 +312,18 @@ export async function closureEvidence(options) {
               source: `conformance/src/fs-listen/data/${basename(divergencePath)}#${id}`,
               reason: divergences[id].reason ?? divergences[id],
               approved:
-                conditionId.endsWith("/raw-resume-token") ||
-                (conditionId.endsWith("/existence-filter-reconnect") &&
-                  /native\/existence-filter\/with-expected-count/.test(id)),
-              ruling: `${RULINGS}, closure ruling 1`,
+                result?.status === "KNOWN_DIVERGENCE" &&
+                APPROVED_NATIVE_ROWS.has(`${production.reference.run}:${id}`),
+              ruling: `${RULINGS}, closure ruling 1 and 2026-10-06 13:26Z M3`,
             };
           if (packet === "l3") {
-            row.recordingNote =
-              "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.";
+            row.recordingNote = conditionId.endsWith("/browser-tab-lifecycle")
+              ? "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed."
+              : "Single production recording approved by owner ledger 921; no independent repeat is claimed.";
             if (result?.bodyBytes) row.bodyBytes = result.bodyBytes;
             row.requestByteCounts = {
               judgement: "RECORDED_NOT_JUDGED",
-              source:
-                "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling",
+              source: `${RULINGS}, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)`,
             };
             if (status === "DIVERGES" && /\/203C?$/.test(id)) {
               row.differences = ["D4", "D5"]
@@ -359,8 +372,139 @@ export async function closureEvidence(options) {
                 row.reason +=
                   " boundary-token-relationship: CURRENT and the following NO_CHANGE have different token equality relationships.";
               }
-              if (!row.differences.length)
+              // Compare the entire canonical residual, including SDK phases, after removing only D4/D5.
+              const residual = [production.recording.rows[id], local.recording.rows[id]].map(
+                (r) => {
+                  let canonical = canonicalRow(r);
+                  for (const event of canonical.observed) {
+                    const aliases = new Map();
+                    for (const window of event.resume ?? []) {
+                      const kept = [];
+                      const frames = window.boundaryContents ?? [];
+                      for (let i = 0; i < frames.length; i += 1) {
+                        const message = frames[i].message;
+                        if (message?.filter) continue;
+                        if (message?.targetChange?.targetChangeType === "RESET") {
+                          const previous = kept.findLast(
+                            (f) => f.message?.targetChange?.targetChangeType === "CURRENT",
+                          );
+                          while (frames[i + 1]?.message?.documentChange) i += 1;
+                          if (
+                            previous &&
+                            frames[i + 1]?.message?.targetChange?.targetChangeType === "CURRENT" &&
+                            frames[i + 2]?.message?.targetChange &&
+                            !frames[i + 2].message.targetChange.targetChangeType
+                          ) {
+                            const replay = frames[i + 1].message.targetChange;
+                            for (const field of ["resumeToken", "readTime"])
+                              if (replay[field] && previous.message.targetChange[field])
+                                aliases.set(replay[field], previous.message.targetChange[field]);
+                            i += 2;
+                          }
+                          continue;
+                        }
+                        kept.push({ message });
+                      }
+                      if (window.boundaryContents) window.boundaryContents = kept;
+                    }
+                    // D5 can issue a replacement resume point in the removed repeated snapshot.
+                    for (const window of event.resume ?? [])
+                      for (const target of window.targets) {
+                        if (target.tokenRelation == null) continue;
+                        const token = `<base64:resume-token:length=${target.tokenLength}:R${target.tokenRelation}>`;
+                        const replacement = aliases.get(token);
+                        if (replacement)
+                          target.tokenRelation = Number(replacement.match(/:R(\d+)>$/)[1]);
+                      }
+                    const timestamps = new Map(),
+                      tokens = new Map();
+                    const normalized = JSON.parse(
+                      JSON.stringify(event, (key, value) => {
+                        if (key === "tokenRelation" && value != null)
+                          return tokens.get(value) ?? value;
+                        if (typeof value !== "string") return value;
+                        value = aliases.get(value) ?? value;
+                        if (/^<timestamp:T\d+>$/.test(value)) {
+                          if (!timestamps.has(value)) timestamps.set(value, timestamps.size + 1);
+                          return `<timestamp:T${timestamps.get(value)}>`;
+                        }
+                        if (/^<base64:resume-token:length=\d+:R\d+>$/.test(value)) {
+                          const relation = Number(value.match(/:R(\d+)>$/)[1]);
+                          if (!tokens.has(relation)) tokens.set(relation, tokens.size + 1);
+                          return value.replace(/:R\d+>$/, `:R${tokens.get(relation)}>`);
+                        }
+                        return value;
+                      }),
+                    );
+                    Object.assign(event, normalized);
+                  }
+                  return canonical;
+                },
+              );
+              for (let e = 0; e < residual[0].observed.length; e += 1) {
+                const pair = residual.map((r) => r.observed[e]);
+                if (!pair[1]) continue;
+                const restart = pair.map((event) =>
+                  event.resume?.find((w) => w.phase === "restarted-online"),
+                );
+                if (restart.some((w) => !w)) continue;
+                const boundaries = restart.map((w) =>
+                  (w.boundaryContents ?? []).map((f) => f.message?.targetChange).filter(Boolean),
+                );
+                const echo = boundaries.map((items) =>
+                  items.find((b) => !b.targetChangeType && b.resumeToken),
+                );
+                const current = boundaries.map((items) =>
+                  items.find((b) => b.targetChangeType === "CURRENT"),
+                );
+                const point = pair.map((event, side) =>
+                  event.resume
+                    .filter((w) => w.phase === "warm")
+                    .flatMap((w) => w.boundaryContents ?? [])
+                    .map((f) => f.message?.targetChange)
+                    .findLast((b) => b?.resumeToken === echo[side]?.resumeToken),
+                );
+                if (echo.some((b) => !b) || current.some((b) => !b) || point.some((b) => !b))
+                  continue;
+                if (
+                  echo[0].readTime === point[0].readTime &&
+                  echo[1].readTime !== point[1].readTime &&
+                  echo[1].readTime === current[1].readTime
+                ) {
+                  row.differences.push({
+                    id: "D7(a)",
+                    approved: true,
+                    ruling: `${RULINGS}, 2026-10-06 13:26Z M1`,
+                    reason:
+                      "Resume echo read time: production echoes the resume point; strict uses the new snapshot's read time.",
+                  });
+                  echo[1].readTime = point[1].readTime;
+                }
+                if (
+                  current[0].resumeToken !== echo[0].resumeToken &&
+                  current[1].resumeToken === echo[1].resumeToken &&
+                  current[0].resumeToken?.replace(/:R\d+>$/, ">") ===
+                    current[1].resumeToken?.replace(/:R\d+>$/, ">")
+                ) {
+                  row.differences.push({
+                    id: "D7(b)",
+                    approved: true,
+                    ruling: `${RULINGS}, 2026-10-06 13:26Z M1`,
+                    reason:
+                      "CURRENT re-issues the resumed bytes in strict; production issues a new token.",
+                  });
+                  const following = boundaries[0][boundaries[0].indexOf(current[0]) + 1];
+                  if (following?.resumeToken === current[0].resumeToken)
+                    following.resumeToken = current[1].resumeToken;
+                  current[0].resumeToken = current[1].resumeToken;
+                }
+              }
+              if (!isDeepStrictEqual(...residual))
                 row.differences.push({ id: "unclassified-canonical-difference", approved: false });
+              row.reason += row.differences
+                .filter((d) => d.id.startsWith("D7"))
+                .map((d) => ` ${d.id}: ${d.reason}`)
+                .join("");
             }
             if (id.endsWith("/202")) {
               row.terminateOnTabClose = (production.recording.rows[id]?.observed ?? []).some(
@@ -421,7 +565,23 @@ export async function closureEvidence(options) {
       (p) =>
         p.buildInputs?.dirty === false &&
         p.binaryBuiltAfterSource === true &&
-        p.sourceCommit === runnerTree.commit,
+        spawnSync(
+          "git",
+          [
+            "diff",
+            "--quiet",
+            p.sourceCommit,
+            "HEAD",
+            "--",
+            "crates",
+            "Cargo.toml",
+            "Cargo.lock",
+            "rust-toolchain.toml",
+            "tools/runner-node",
+            ".cargo",
+          ],
+          { cwd: ROOT, stdio: "ignore" },
+        ).status === 0,
     ),
     runnerTree,
     productionRecordings,
@@ -432,8 +592,8 @@ export async function closureEvidence(options) {
       "Conditions are mapped from each recorded row's conditions, following docs.local/runs/listen-lane/condition-map.md; FS-TRANSACTION rows are excluded.",
       `Condition 10: ${RULINGS}, 2026-10-06 04:38Z permits an empty terminate observation; the clause remains unobserved.`,
       `Response boundary bytes are retained, not judged by exact equality (${RULINGS}, 2026-10-06 06:12Z); decoded contents are compared by the latest compare.mjs.`,
-      "Request bytes are retained, not judged by the latest browser comparer: SDK auth form fields were not retained; this supersedes the earlier proposed project-name-only count normalization.",
-      `L3 D4/D5: ${INVESTIGATION}; task declares their deciding production state undetermined. Observed DIVERGES is not rewritten as MATCH.`,
+      `Request bytes are RECORDED_NOT_JUDGED under ${RULINGS}, 2026-10-06 13:26Z M4: normalized retained content is identical; the remaining 27 bytes are unretained client fields. This supersedes 06:12Z item 1.`,
+      `L3 D4/D5: ${INVESTIGATION}, approved by closure ruling 3. D7(a) resume echo read time and D7(b) CURRENT re-issuing resumed bytes are approved by ${RULINGS}, 2026-10-06 13:26Z M1. Residual differences remain unapproved.`,
       "Release-artifact closure comparison under coordinator closure rulings 1-5. Approved differences remain DIVERGES; additional differences remain blockers. Parent status remains IMPLEMENTING; independent closure review is pending.",
     ],
   };
@@ -444,6 +604,67 @@ export async function closureEvidence(options) {
       );
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  if (relative(ROOT, out) === evidence.evidencePath) {
+    const formatted = spawnSync(join(ROOT, "conformance/node_modules/.bin/oxfmt"), [out], {
+      cwd: ROOT,
+    });
+    if (formatted.status !== 0) throw new Error("comparison formatting failed");
+    const buildRecordPath = "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json";
+    const buildRecordSha256 = hash(readFileSync(join(ROOT, buildRecordPath)));
+    const comparisonSha256 = hash(readFileSync(out));
+    for (const condition of closure.conditions) {
+      const compared = conditions.find((c) => c.conditionId === condition.conditionId);
+      condition.evidence = {
+        ...condition.evidence,
+        comparisonPath: evidence.evidencePath,
+        comparisonSha256,
+        finalArtifactSha256: evidence.artifactSha256,
+        sourceCommit: evidence.sourceCommit,
+        buildRecordPath,
+        buildRecordSha256,
+        runnerTreeSha256: evidence.runnerTree.workingTreeSha256,
+        rows: condition.conditionId.endsWith("/final-artifact-regression")
+          ? evidence.summary
+          : compared.counts,
+      };
+    }
+    closure.profileComparison.productionComparison = "RECORDED_WITH_APPROVED_DIFFERENCES";
+    const cache = closure.conditions.find((c) =>
+      c.conditionId.endsWith("/backend-cache-transitions"),
+    );
+    cache.note =
+      "The decoded residual names D4/D5 under closure ruling 3 and D7(a) resume echo read time and D7(b) CURRENT re-issuing resumed bytes under the 2026-10-06 13:26Z M1 ruling. Additional residual differences remain blockers. One production recording is approved by owner ledger 921.";
+    const final = closure.conditions.find((c) =>
+      c.conditionId.endsWith("/final-artifact-regression"),
+    );
+    final.note =
+      "The final release replay is bound to closure base aad8cee2a. Named differences D4/D5/D7 and the explicit native rows are approved by the coordinator; residual differences remain blockers. Independent closure review remains pending. Runtime build inputs and the runner working tree are bound separately.";
+    closure.note =
+      "Nine saved production recordings were compared offline with the strict release binary from closure base aad8cee2a. Closure rulings 1-5 and the 2026-10-06 13:26Z review rulings cover the named declared differences. Parent remains IMPLEMENTING and closure review remains PENDING_REVIEW; no promotion or production request was made.";
+    Object.assign(closure.integratedRegression, {
+      release: "closure-base-aad8cee2a",
+      integrationCommit: evidence.sourceCommit,
+      releaseBinarySha256: evidence.artifactSha256,
+      buildReceiptPath: buildRecordPath,
+      buildReceiptSha256: buildRecordSha256,
+      comparisons: [
+        {
+          path: evidence.evidencePath,
+          sha256: comparisonSha256,
+          rows: rows.length,
+          summary: evidence.summary,
+        },
+      ],
+      note: "Replay uses the unchanged closure-base-aad8cee2a binary. D4/D5 and D7(a)/(b) remain approved declared differences; residual differences remain blockers. The six production windows contain eight CURRENT/global NO_CHANGE pairs, all sharing token bytes. Binding a future release tag is a follow-up. Parent remains IMPLEMENTING and independent closure review is pending.",
+    });
+    const closurePath = join(ROOT, "spec/compatibility/closure/FS-LISTEN-SDK.json");
+    writeFileSync(closurePath, `${JSON.stringify(closure, null, 2)}\n`);
+    if (
+      spawnSync(join(ROOT, "conformance/node_modules/.bin/oxfmt"), [closurePath], { cwd: ROOT })
+        .status !== 0
+    )
+      throw new Error("closure formatting failed");
+  }
   mkdirSync(dirname(summaryPath), { recursive: true });
   writeFileSync(
     summaryPath,

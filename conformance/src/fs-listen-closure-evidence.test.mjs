@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { closureEvidence } from "./fs-listen/closure-evidence.mjs";
@@ -18,6 +18,7 @@ const runs = [
   ["listen-l3-browser-20261006T050949Z-r1", "browser-prod.json", "browser"],
 ];
 const condition = "FS-LISTEN-SDK/raw-resume-token";
+const real203 = new URL("../../target/codex-out/listen-closure-real-203.json", import.meta.url);
 const row = (n = 1) => ({
   conditions: [condition],
   rows: [{ kind: "documentChange", doc: "a", fields: { n }, targetIds: [1], removedTargetIds: [] }],
@@ -95,6 +96,43 @@ test("evidence binds each condition case to the recording bytes, binary and curr
   assert.ok(!JSON.stringify(evidence).includes(options["production-root"]));
 });
 
+test(
+  "real 203 windows name D7 after removing D4 and D5 and reject any remaining difference",
+  { skip: !existsSync(real203) },
+  async (t) => {
+    const { options, recordings, write } = fixture(t);
+    const real = JSON.parse(readFileSync(real203));
+    const local = JSON.parse(readFileSync(options["local-browser"]));
+    Object.assign(recordings[8].value.rows, real.production);
+    Object.assign(local.rows, real.local);
+    write(recordings[8].path, recordings[8].value);
+    write(options["local-browser"], local);
+    let evidence = await closureEvidence(options);
+    for (const [id, differences] of [
+      ["browser-streaming/sdk/203", ["D4", "D7(a)", "D7(b)"]],
+      ["browser-long-polling/sdk/203", ["D4", "D5", "D7(a)", "D7(b)"]],
+      ["browser-streaming/sdk/203C", ["D5"]],
+    ]) {
+      const compared = evidence.rows.find((r) => r.row === id);
+      assert.deepEqual(
+        compared.differences.map((d) => d.id),
+        differences,
+        id,
+      );
+      assert.ok(compared.differences.every((d) => d.approved));
+      for (const d of compared.differences.filter((d) => d.id.startsWith("D7")))
+        assert.match(d.ruling, /13:26Z.*M1/);
+    }
+    local.rows["browser-streaming/sdk/203"].observed[0].phases[2].errors = ["permission-denied"];
+    write(options["local-browser"], local);
+    evidence = await closureEvidence(options);
+    const compared = evidence.rows.find((r) => r.row === "browser-streaming/sdk/203");
+    assert.ok(
+      compared.differences.some((d) => d.id === "unclassified-canonical-difference" && !d.approved),
+    );
+  },
+);
+
 test("registered differences remain DIVERGES and variable production is judged against both answers", async (t) => {
   const { options, recordings, write } = fixture(t);
   const local = JSON.parse(readFileSync(options["local-native"]));
@@ -103,7 +141,8 @@ test("registered differences remain DIVERGES and variable production is judged a
   let evidence = await closureEvidence(options);
   let rows = evidence.rows.filter((r) => r.production.run === runs[0][0]);
   assert.equal(rows[0].status, "DIVERGES");
-  assert.equal(rows[0].comparatorResult, "KNOWN_DIVERGENCE");
+  assert.equal(rows[0].comparatorResult, "MISMATCH");
+  assert.equal(rows[0].declaredDifference.approved, false);
   assert.match(rows[0].declaredDifference.source, /divergences-strict/);
   recordings[1].value.rows["native/resume-token/current"] = row(3);
   write(recordings[1].path, recordings[1].value);
@@ -192,6 +231,7 @@ test("L3 cache differences retain the latest browser verdict and raw byte counts
   assert.equal(compared.bodyBytes.production[0].request, 100);
   assert.equal(compared.bodyBytes.local[0].request, 999);
   assert.equal(compared.requestByteCounts.judgement, "RECORDED_NOT_JUDGED");
+  assert.match(compared.requestByteCounts.source, /13:26Z M4/);
   local.rows[id].observed[0].phases[0].errors = ["permission-denied"];
   write(options["local-browser"], local);
   evidence = await closureEvidence(options);
@@ -288,7 +328,7 @@ test("the real 203C token relationship difference is named and not covered by D4
   assert.equal(compared.status, "DIVERGES");
   assert.deepEqual(
     compared.differences.map((d) => d.id),
-    ["boundary-token-relationship"],
+    ["boundary-token-relationship", "unclassified-canonical-difference"],
   );
   assert.equal(compared.differences[0].approved, false);
   assert.equal(compared.bodyBytes.production[0].response, 1469);
@@ -354,4 +394,37 @@ test("variable production retains informative existence-filter contents without 
       .filter((r) => r.row === id)
       .every((r) => r.status === "MATCH" && r.matchedProductionRuns.join() === runs[1][0]),
   );
+});
+
+test("an unlisted registered native row stays unapproved even when its strict sequence matches", async (t) => {
+  const { options, recordings, write } = fixture(t);
+  const local = JSON.parse(readFileSync(options["local-native"]));
+  local.rows["native/resume-token/current"] = {
+    ...row(),
+    rows: [
+      { kind: "targetChange", type: "ADD", targetIds: [1], resumeToken: false },
+      { kind: "boundary", resumeToken: true },
+      { kind: "documentChange", doc: "b", fields: {}, targetIds: [1], removedTargetIds: [] },
+      { kind: "targetChange", type: "CURRENT", targetIds: [1], resumeToken: true },
+      { kind: "boundary", resumeToken: true },
+      {
+        kind: "filter",
+        targetId: 1,
+        count: 2,
+        unchangedNames: { hashCount: 0, bitmapBytes: 0, padding: 0 },
+      },
+    ],
+  };
+  write(options["local-native"], local);
+  let evidence = await closureEvidence(options);
+  let compared = evidence.rows.find((r) => r.packet === "native");
+  assert.equal(compared.comparatorResult, "KNOWN_DIVERGENCE");
+  assert.equal(compared.declaredDifference.approved, false);
+  for (const [i, run] of ["nmuuicyas", "nmuukwo6n"].entries()) {
+    recordings[i].value.run = run;
+    write(recordings[i].path, recordings[i].value);
+  }
+  evidence = await closureEvidence(options);
+  compared = evidence.rows.find((r) => r.packet === "native");
+  assert.equal(compared.declaredDifference.approved, true);
 });

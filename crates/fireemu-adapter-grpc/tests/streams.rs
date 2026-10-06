@@ -4487,12 +4487,12 @@ async fn native_resume_token_lengths_follow_the_profile_and_global_tokens_resume
         } else {
             global.clone()
         };
-        tx.send(resume_request(2, "first", resume.clone(), None))
+        tx.send(resume_request(2, "second", resume.clone(), None))
             .await
             .unwrap();
         let (early, echoed) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
         assert_eq!(early, ["ADD[2]", "NO_CHANGE[]"]);
-        assert_eq!(echoed[..8], resume[..8]);
+        assert_eq!(echoed, resume);
         let trace = next_until(&mut listen, "NO_CHANGE[]").await;
         assert!(!trace.iter().any(|line| line.starts_with("RESET")));
         handle.abort();
@@ -4734,7 +4734,8 @@ mod resume_token_properties {
                 let backend = BACKEND.with(|b| b.borrow().as_ref().unwrap().clone());
                 for _ in 0..epoch { backend.reset(); }
                 backend.replace_declared_databases([format!("db{database}"), "other".to_owned()]);
-                let database = format!("projects/demo-app/databases/db{database}");
+                let database_id = format!("db{database}");
+                let database = format!("projects/demo-app/databases/{database_id}");
                 let collection = format!("c{target}");
                 for value in 0..version {
                     client.commit(pb::CommitRequest {
@@ -4766,6 +4767,7 @@ mod resume_token_properties {
                 assert_eq!(echoed, global);
                 next_until(&mut listen, "NO_CHANGE[]").await;
 
+                // The 3-byte checks can collide across databases or epochs (about 2^-24 per case).
                 let mut other_database = add_query_target(3, &collection);
                 other_database.database = "projects/demo-app/databases/other".to_owned();
                 if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut other_database.target_change {
@@ -4778,7 +4780,7 @@ mod resume_token_properties {
                 let rejected = tokio::time::timeout(std::time::Duration::from_secs(5), listen.next()).await.unwrap().unwrap().unwrap();
                 assert_eq!(describe(&rejected), "REMOVE[3] cause=3");
                 backend.reset();
-                backend.replace_declared_databases([format!("db{database}")]);
+                backend.replace_declared_databases([database_id]);
                 let (tx, rx) = mpsc::channel(8);
                 let mut listen = client.listen(ReceiverStream::new(rx)).await.unwrap().into_inner();
                 let mut stale_epoch = add_query_target(4, &collection);

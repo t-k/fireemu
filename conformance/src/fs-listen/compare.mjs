@@ -533,7 +533,11 @@ function withProgramErrors(recording) {
 function divergenceOf(entry) {
   return typeof entry === "string"
     ? { reason: entry, coversLocalTimeout: false }
-    : { reason: entry.reason, coversLocalTimeout: entry.coversLocalTimeout === true };
+    : {
+        reason: entry.reason,
+        fireemu: entry.fireemu,
+        coversLocalTimeout: entry.coversLocalTimeout === true,
+      };
 }
 
 /**
@@ -556,11 +560,13 @@ export function classifyLocal(first, second, local) {
 }
 
 /**
- * Whether a declared divergence may cover this row: the rows differ, or (only for an entry that
+ * Whether the local row equals the registration's quoted sequence and the rows differ, or (only for an entry that
  * says `coversLocalTimeout`) the local wait ran out for an answer that production gave: the
  * production rows are finished, the local stream is a loopback port, and the rows differ.
  */
 function isKnownDivergence(verdict, production, local, entry) {
+  const quoted = entry.fireemu ?? entry.reason.match(/fireemu strict sends: ([^.]+)\./)?.[1];
+  if (quoted == null || describeRow(local) !== quoted) return false;
   if (verdict === "DIFFER") return true;
   return (
     verdict === "INDETERMINATE" &&
@@ -575,7 +581,7 @@ const GOOD = new Set(["MATCH", "KNOWN_DIVERGENCE"]);
 /**
  * `productions` are the two recordings of production, `local` the one of fireemu. A production
  * pair that disagrees is NONDETERMINISTIC (the row proves nothing about local); a divergence is
- * accepted only for a row that differs, and only with a reason.
+ * accepted only for a row that differs, with a reason and the quoted local sequence.
  */
 export function compareRecordings({ productions, local, divergences = {}, settlements = [] }) {
   if (productions.length !== 2) throw new Error("two production recordings are required");
@@ -731,7 +737,7 @@ function main(argv) {
       method:
         "classifyRow: one observed production recording, without an independent production repeat; compareRecordings requires two production recordings and is not invoked with a duplicated run",
       normalization:
-        "Request byte counts are recorded but not judged: the SDK writes auth form fields that the recorder does not retain. Compare decoded messages from the handshake through the complete boundary batch, masking configured project/database names, run/document IDs, owner/rank values, timestamps and token bytes while retaining types, token lengths and recorded token relationships. Resume request tokens remain judged directly.",
+        "Request byte counts are RECORDED_NOT_JUDGED under docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1): normalized retained content is identical; the remaining 27 bytes are unretained client fields. Compare decoded messages from the handshake through the complete boundary batch, masking configured project/database names, run/document IDs, owner/rank values, timestamps and token bytes while retaining types, token lengths and recorded token relationships. Resume request tokens remain judged directly.",
       rows,
       summary,
       productionProblems,

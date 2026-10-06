@@ -106,7 +106,7 @@ test("L3 comparison CLI reports matches, divergences and incomparable browser ro
     assert.equal(report.rows.differs.comparatorResult, "DIFFER");
     assert.equal(report.rows.unfinished.comparatorResult, "INDETERMINATE");
     const md = readFileSync(`${dir}/summary.md`, "utf8");
-    assert.match(report.normalization, /Request byte counts are recorded but not judged/);
+    assert.match(report.normalization, /Request byte counts are RECORDED_NOT_JUDGED.*13:26Z M4/);
     assert.ok(md.includes(report.normalization));
     assert.deepEqual(report.rows.match.bodyBytes, { production: [], local: [] });
     for (const [id, { status, reason }] of Object.entries(report.rows)) {

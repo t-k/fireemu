@@ -11,10 +11,10 @@
   },
   "sourceBound": true,
   "runnerTree": {
-    "commit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+    "commit": "e8bf6d23da40518aeda232dad975ea424c767f50",
     "tree": "b5f372810839256bdb6290313136c3a68f7d6a3d",
-    "workingTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-    "dirty": false
+    "workingTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+    "dirty": true
   },
   "productionRecordings": [
     {
@@ -119,7 +119,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
@@ -144,7 +144,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
@@ -169,12 +169,12 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "declaredDifference": {
         "source": "conformance/src/fs-listen/data/divergences-strict.json#native/existence-filter/with-expected-count",
         "reason": "Wire-level boundary placement during resume replay. Production was consistent across the two runs (r1 nmuuicyas, r2 nmuukwo6n): ADD[1], boundary+token, documentDelete b, boundary+token, change c (removed target ids), boundary+token, CURRENT[1]+token, boundary+token. fireemu strict sends: ADD[1], boundary+token, change c (removed target ids), documentDelete b, CURRENT[1]+token, boundary+token. Native-gRPC client effect: a raw gRPC listener sees the boundary frames production sends between the replayed changes and CURRENT, and fireemu does not send them. SDK effect not measured: from the Web SDK source a reconnect that stays online raises a remote event at every global boundary, so production may give an intermediate fromCache:true snapshot where fireemu gives the document together with CURRENT; an online-reconnect case in packet L2 is the way to measure it. Issue fs-listen-resume-replay-boundaries.",
         "approved": true,
-        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1"
+        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1 and 2026-10-06 13:26Z M3"
       }
     },
     {
@@ -200,7 +200,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -225,7 +225,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -250,7 +250,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -275,7 +275,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -300,12 +300,12 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "declaredDifference": {
         "source": "conformance/src/fs-listen/data/divergences-strict.json#native/resume-token/current",
         "reason": "Wire-level boundary placement during resume replay. Production was consistent across the two runs (r1 nmuuicyas, r2 nmuukwo6n): ADD[1], boundary+token, change b, boundary+token, CURRENT[1]+token, boundary+token. fireemu strict sends: ADD[1], boundary+token, change b, CURRENT[1]+token, boundary+token | filters 1:2:0:0:0. Native-gRPC client effect: a raw gRPC listener sees the boundary frames production sends between the replayed changes and CURRENT, and fireemu does not send them. SDK effect not measured: from the Web SDK source a reconnect that stays online raises a remote event at every global boundary, so production may give an intermediate fromCache:true snapshot where fireemu gives the document together with CURRENT; an online-reconnect case in packet L2 is the way to measure it. Issue fs-listen-resume-replay-boundaries. fireemu also sends the count-only existence filter its rule gives every strict resume of a query target without an expected count (the four rows that carry one: older, other-query, without-expected-count, expired/expired); production sent none here. What decides between production's two answers is not recorded. Accepted by the coordinator's ruling of 2026-10-05 on two conditions. First, the extra filter's count is always correct: it is the number of documents the target matches at that snapshot, so a client that held the target's state at its token holds exactly that many after the replay unless a document it held has left, and then its set exceeds the count by exactly the departed documents (the case where production's own answer to such a resume leaves the removals to the count); the property test the_filter_of_a_resume_leaves_the_client_with_nothing_to_repair_unless_a_held_document_left (crates/fireemu-adapter-grpc/tests/streams.rs) checks this over random histories before and after the token, including limit queries, and the SDKs send an expected count, for which the rule does not fire. Second, the acceptance depends on the next native packet recording more resume variants to find what decides production's answer (design note: L1b resume variants, docs.local/submissions/l1b-resume-variants/design.md); until then rule R stays a fit with this declared counterexample.",
         "approved": true,
-        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1"
+        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1 and 2026-10-06 13:26Z M3"
       }
     },
     {
@@ -331,7 +331,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -356,7 +356,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -381,7 +381,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -406,7 +406,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -431,7 +431,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -456,7 +456,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -481,7 +481,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -506,7 +506,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -531,7 +531,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -556,7 +556,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -581,7 +581,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -606,7 +606,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -631,7 +631,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -656,7 +656,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -681,7 +681,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -706,7 +706,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -731,7 +731,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -756,7 +756,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -781,7 +781,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -806,7 +806,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -831,7 +831,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -856,7 +856,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -881,7 +881,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -906,7 +906,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -931,7 +931,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -956,7 +956,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -981,7 +981,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1006,7 +1006,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1031,7 +1031,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
@@ -1056,7 +1056,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
@@ -1081,7 +1081,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
@@ -1106,12 +1106,12 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "declaredDifference": {
         "source": "conformance/src/fs-listen/data/divergences-strict.json#native/existence-filter/with-expected-count",
         "reason": "Wire-level boundary placement during resume replay. Production was consistent across the two runs (r1 nmuuicyas, r2 nmuukwo6n): ADD[1], boundary+token, documentDelete b, boundary+token, change c (removed target ids), boundary+token, CURRENT[1]+token, boundary+token. fireemu strict sends: ADD[1], boundary+token, change c (removed target ids), documentDelete b, CURRENT[1]+token, boundary+token. Native-gRPC client effect: a raw gRPC listener sees the boundary frames production sends between the replayed changes and CURRENT, and fireemu does not send them. SDK effect not measured: from the Web SDK source a reconnect that stays online raises a remote event at every global boundary, so production may give an intermediate fromCache:true snapshot where fireemu gives the document together with CURRENT; an online-reconnect case in packet L2 is the way to measure it. Issue fs-listen-resume-replay-boundaries.",
         "approved": true,
-        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1"
+        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1 and 2026-10-06 13:26Z M3"
       }
     },
     {
@@ -1137,7 +1137,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -1162,7 +1162,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -1187,7 +1187,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -1212,7 +1212,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -1237,12 +1237,12 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "declaredDifference": {
         "source": "conformance/src/fs-listen/data/divergences-strict.json#native/resume-token/current",
         "reason": "Wire-level boundary placement during resume replay. Production was consistent across the two runs (r1 nmuuicyas, r2 nmuukwo6n): ADD[1], boundary+token, change b, boundary+token, CURRENT[1]+token, boundary+token. fireemu strict sends: ADD[1], boundary+token, change b, CURRENT[1]+token, boundary+token | filters 1:2:0:0:0. Native-gRPC client effect: a raw gRPC listener sees the boundary frames production sends between the replayed changes and CURRENT, and fireemu does not send them. SDK effect not measured: from the Web SDK source a reconnect that stays online raises a remote event at every global boundary, so production may give an intermediate fromCache:true snapshot where fireemu gives the document together with CURRENT; an online-reconnect case in packet L2 is the way to measure it. Issue fs-listen-resume-replay-boundaries. fireemu also sends the count-only existence filter its rule gives every strict resume of a query target without an expected count (the four rows that carry one: older, other-query, without-expected-count, expired/expired); production sent none here. What decides between production's two answers is not recorded. Accepted by the coordinator's ruling of 2026-10-05 on two conditions. First, the extra filter's count is always correct: it is the number of documents the target matches at that snapshot, so a client that held the target's state at its token holds exactly that many after the replay unless a document it held has left, and then its set exceeds the count by exactly the departed documents (the case where production's own answer to such a resume leaves the removals to the count); the property test the_filter_of_a_resume_leaves_the_client_with_nothing_to_repair_unless_a_held_document_left (crates/fireemu-adapter-grpc/tests/streams.rs) checks this over random histories before and after the token, including limit queries, and the SDKs send an expected count, for which the rule does not fire. Second, the acceptance depends on the next native packet recording more resume variants to find what decides production's answer (design note: L1b resume variants, docs.local/submissions/l1b-resume-variants/design.md); until then rule R stays a fit with this declared counterexample.",
         "approved": true,
-        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1"
+        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1 and 2026-10-06 13:26Z M3"
       }
     },
     {
@@ -1268,7 +1268,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -1293,7 +1293,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -1318,7 +1318,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -1343,7 +1343,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -1368,7 +1368,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -1393,7 +1393,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1418,7 +1418,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -1443,7 +1443,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1468,7 +1468,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -1493,7 +1493,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1518,7 +1518,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -1543,7 +1543,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1568,7 +1568,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -1593,7 +1593,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1618,7 +1618,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -1643,7 +1643,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1668,7 +1668,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -1693,7 +1693,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1718,7 +1718,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1743,7 +1743,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1768,7 +1768,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1793,7 +1793,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1818,7 +1818,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1843,7 +1843,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1868,7 +1868,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1893,7 +1893,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1918,7 +1918,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1943,7 +1943,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -1968,7 +1968,7 @@
         "run": "nmuwlhmw8"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/document-event-order",
@@ -1993,7 +1993,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/document-event-order",
@@ -2018,7 +2018,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/pending-writes",
@@ -2043,7 +2043,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/pending-writes",
@@ -2068,7 +2068,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -2093,7 +2093,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -2118,7 +2118,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -2143,7 +2143,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -2168,7 +2168,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/reconnect-resume",
@@ -2193,7 +2193,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/reconnect-resume",
@@ -2218,7 +2218,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/unsubscribe",
@@ -2243,7 +2243,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/unsubscribe",
@@ -2268,7 +2268,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/initial-unauthenticated-refusal",
@@ -2293,7 +2293,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -2318,7 +2318,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -2343,7 +2343,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
@@ -2368,7 +2368,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
@@ -2393,7 +2393,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
@@ -2418,7 +2418,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/document-event-order",
@@ -2443,7 +2443,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/document-event-order",
@@ -2468,7 +2468,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/pending-writes",
@@ -2493,7 +2493,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/pending-writes",
@@ -2518,7 +2518,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -2543,7 +2543,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -2568,7 +2568,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -2593,7 +2593,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -2618,7 +2618,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/reconnect-resume",
@@ -2643,7 +2643,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/reconnect-resume",
@@ -2668,7 +2668,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/unsubscribe",
@@ -2693,7 +2693,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/unsubscribe",
@@ -2718,7 +2718,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/initial-unauthenticated-refusal",
@@ -2743,7 +2743,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -2768,7 +2768,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -2793,7 +2793,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
@@ -2818,7 +2818,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
@@ -2843,7 +2843,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
@@ -2868,7 +2868,7 @@
         "run": "nmuwn08m3"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -2893,7 +2893,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -2918,7 +2918,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -2943,7 +2943,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -2968,7 +2968,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -2993,7 +2993,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3018,7 +3018,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3043,7 +3043,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3068,7 +3068,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3093,7 +3093,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3118,7 +3118,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3143,7 +3143,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3168,7 +3168,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3193,7 +3193,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3218,7 +3218,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3243,12 +3243,12 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "declaredDifference": {
         "source": "conformance/src/fs-listen/data/l1b-divergences-strict.json#native/resume-grid-gc/k0",
         "reason": "Accepted as a declared difference by the coordinator (ruling 2026-10-05 17:15Z, S1): the filter on a resume with nothing to replay is optional in production. Production sent no filter in both runs (nmuv70w0y, nmuv8dk6e) for this row, and sent the count-only filter in grid-g0/k0 (both runs) and grid-tc/k0 (nmuv70w0y), and none in grid-tc/k0 (nmuv8dk6e); L1 `resume-token/unchanged` showed a filter in one run and none in the other. Strict sends the count-only filter (rule R) and keeps that one answer; sending none would equally be an observed answer.",
         "approved": true,
-        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1"
+        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1 and 2026-10-06 13:26Z M3"
       }
     },
     {
@@ -3274,7 +3274,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "productionAnswers": [
         {
           "run": "nmuv70w0y",
@@ -3287,9 +3287,7 @@
           "canonicalMatch": false
         }
       ],
-      "matchedProductionRuns": [
-        "nmuv70w0y"
-      ]
+      "matchedProductionRuns": ["nmuv70w0y"]
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3314,7 +3312,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "productionAnswers": [
         {
           "run": "nmuv70w0y",
@@ -3327,9 +3325,7 @@
           "canonicalMatch": true
         }
       ],
-      "matchedProductionRuns": [
-        "nmuv8dk6e"
-      ]
+      "matchedProductionRuns": ["nmuv8dk6e"]
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3354,7 +3350,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "productionAnswers": [
         {
           "run": "nmuv70w0y",
@@ -3367,9 +3363,7 @@
           "canonicalMatch": true
         }
       ],
-      "matchedProductionRuns": [
-        "nmuv8dk6e"
-      ]
+      "matchedProductionRuns": ["nmuv8dk6e"]
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3394,7 +3388,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3419,7 +3413,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3444,7 +3438,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3469,7 +3463,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3494,7 +3488,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3519,7 +3513,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3544,7 +3538,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "productionAnswers": [
         {
           "run": "nmuv70w0y",
@@ -3557,9 +3551,7 @@
           "canonicalMatch": true
         }
       ],
-      "matchedProductionRuns": [
-        "nmuv8dk6e"
-      ]
+      "matchedProductionRuns": ["nmuv8dk6e"]
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3584,12 +3576,12 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "declaredDifference": {
         "source": "conformance/src/fs-listen/data/l1b-divergences-strict.json#native/resume-grid-tc/k1-expected",
         "reason": "Accepted as a declared difference by the coordinator (ruling 2026-10-05 17:15Z, S1): strict takes the answer production gave to the same variant in other grids. Production answered a replay with no filter in both runs (nmuv70w0y, nmuv8dk6e) to the CURRENT-frame token resumed with an expected count after one commit; strict answers the diff and the bloom filter, which production gave to the same expected-count variant after one commit in grid-g0/k1-expected (both runs) and grid-gc/k1-expected (nmuv8dk6e). No grid-tc row shows the bloom answer. The replay of a one-commit modification is not implemented (ruling: only a one-commit leave or delete is).",
         "approved": true,
-        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1"
+        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1 and 2026-10-06 13:26Z M3"
       }
     },
     {
@@ -3615,12 +3607,12 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "declaredDifference": {
         "source": "conformance/src/fs-listen/data/l1b-divergences-strict.json#native/resume-grid-tc/k1-repeat",
         "reason": "Accepted as a declared difference by the coordinator (ruling 2026-10-05 17:15Z, S1). Production answered a replay (a boundary after the changed document, no filter) in both runs (nmuv70w0y, nmuv8dk6e) when the CURRENT-frame token was resumed a second time after one commit; strict answers the diff and the count-only filter (rule R). The identical request, the same token and the same one commit since it, is native/resume-grid-tc/k1, which production answered with the diff and the count-only filter in nmuv8dk6e (and with a replay in nmuv70w0y), so strict's answer is one production gave to this exact request; the agreement of the two runs on the repeat row is a sample of a choice the reading found nondeterministic (grid-tc replayed 5 of 6 times). The same one-commit modification was answered with the diff in grid-g0/k1-repeat (both runs) and grid-gc/k1-repeat (nmuv8dk6e). What decides between the two answers is not recorded (docs.local/submissions/listen-l1b/reading-l1b-final.md); the replay of a one-commit modification is not implemented (ruling: only a one-commit leave or delete is).",
         "approved": true,
-        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1"
+        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1 and 2026-10-06 13:26Z M3"
       }
     },
     {
@@ -3646,7 +3638,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3671,7 +3663,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3696,7 +3688,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3721,7 +3713,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3746,7 +3738,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3771,7 +3763,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "productionAnswers": [
         {
           "run": "nmuv70w0y",
@@ -3784,9 +3776,7 @@
           "canonicalMatch": true
         }
       ],
-      "matchedProductionRuns": [
-        "nmuv8dk6e"
-      ]
+      "matchedProductionRuns": ["nmuv8dk6e"]
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3811,7 +3801,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3836,7 +3826,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3861,7 +3851,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "productionAnswers": [
         {
           "run": "nmuv70w0y",
@@ -3874,9 +3864,7 @@
           "canonicalMatch": false
         }
       ],
-      "matchedProductionRuns": [
-        "nmuv70w0y"
-      ]
+      "matchedProductionRuns": ["nmuv70w0y"]
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3901,7 +3889,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3926,7 +3914,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3951,7 +3939,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -3976,7 +3964,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4001,7 +3989,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4026,7 +4014,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4051,7 +4039,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4076,7 +4064,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4101,7 +4089,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4126,7 +4114,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4151,7 +4139,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4176,7 +4164,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4201,7 +4189,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4226,7 +4214,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4251,12 +4239,12 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "declaredDifference": {
         "source": "conformance/src/fs-listen/data/l1b-divergences-strict.json#native/resume-grid-gc/k0",
         "reason": "Accepted as a declared difference by the coordinator (ruling 2026-10-05 17:15Z, S1): the filter on a resume with nothing to replay is optional in production. Production sent no filter in both runs (nmuv70w0y, nmuv8dk6e) for this row, and sent the count-only filter in grid-g0/k0 (both runs) and grid-tc/k0 (nmuv70w0y), and none in grid-tc/k0 (nmuv8dk6e); L1 `resume-token/unchanged` showed a filter in one run and none in the other. Strict sends the count-only filter (rule R) and keeps that one answer; sending none would equally be an observed answer.",
         "approved": true,
-        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1"
+        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1 and 2026-10-06 13:26Z M3"
       }
     },
     {
@@ -4282,7 +4270,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "productionAnswers": [
         {
           "run": "nmuv70w0y",
@@ -4295,9 +4283,7 @@
           "canonicalMatch": false
         }
       ],
-      "matchedProductionRuns": [
-        "nmuv70w0y"
-      ]
+      "matchedProductionRuns": ["nmuv70w0y"]
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4322,7 +4308,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "productionAnswers": [
         {
           "run": "nmuv70w0y",
@@ -4335,9 +4321,7 @@
           "canonicalMatch": true
         }
       ],
-      "matchedProductionRuns": [
-        "nmuv8dk6e"
-      ]
+      "matchedProductionRuns": ["nmuv8dk6e"]
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4362,7 +4346,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "productionAnswers": [
         {
           "run": "nmuv70w0y",
@@ -4375,9 +4359,7 @@
           "canonicalMatch": true
         }
       ],
-      "matchedProductionRuns": [
-        "nmuv8dk6e"
-      ]
+      "matchedProductionRuns": ["nmuv8dk6e"]
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4402,7 +4384,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4427,7 +4409,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4452,7 +4434,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4477,7 +4459,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4502,7 +4484,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4527,7 +4509,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4552,7 +4534,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "productionAnswers": [
         {
           "run": "nmuv70w0y",
@@ -4565,9 +4547,7 @@
           "canonicalMatch": true
         }
       ],
-      "matchedProductionRuns": [
-        "nmuv8dk6e"
-      ]
+      "matchedProductionRuns": ["nmuv8dk6e"]
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4592,12 +4572,12 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "declaredDifference": {
         "source": "conformance/src/fs-listen/data/l1b-divergences-strict.json#native/resume-grid-tc/k1-expected",
         "reason": "Accepted as a declared difference by the coordinator (ruling 2026-10-05 17:15Z, S1): strict takes the answer production gave to the same variant in other grids. Production answered a replay with no filter in both runs (nmuv70w0y, nmuv8dk6e) to the CURRENT-frame token resumed with an expected count after one commit; strict answers the diff and the bloom filter, which production gave to the same expected-count variant after one commit in grid-g0/k1-expected (both runs) and grid-gc/k1-expected (nmuv8dk6e). No grid-tc row shows the bloom answer. The replay of a one-commit modification is not implemented (ruling: only a one-commit leave or delete is).",
         "approved": true,
-        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1"
+        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1 and 2026-10-06 13:26Z M3"
       }
     },
     {
@@ -4623,12 +4603,12 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "declaredDifference": {
         "source": "conformance/src/fs-listen/data/l1b-divergences-strict.json#native/resume-grid-tc/k1-repeat",
         "reason": "Accepted as a declared difference by the coordinator (ruling 2026-10-05 17:15Z, S1). Production answered a replay (a boundary after the changed document, no filter) in both runs (nmuv70w0y, nmuv8dk6e) when the CURRENT-frame token was resumed a second time after one commit; strict answers the diff and the count-only filter (rule R). The identical request, the same token and the same one commit since it, is native/resume-grid-tc/k1, which production answered with the diff and the count-only filter in nmuv8dk6e (and with a replay in nmuv70w0y), so strict's answer is one production gave to this exact request; the agreement of the two runs on the repeat row is a sample of a choice the reading found nondeterministic (grid-tc replayed 5 of 6 times). The same one-commit modification was answered with the diff in grid-g0/k1-repeat (both runs) and grid-gc/k1-repeat (nmuv8dk6e). What decides between the two answers is not recorded (docs.local/submissions/listen-l1b/reading-l1b-final.md); the replay of a one-commit modification is not implemented (ruling: only a one-commit leave or delete is).",
         "approved": true,
-        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1"
+        "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 1 and 2026-10-06 13:26Z M3"
       }
     },
     {
@@ -4654,7 +4634,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4679,7 +4659,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4704,7 +4684,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4729,7 +4709,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4754,7 +4734,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4779,7 +4759,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "productionAnswers": [
         {
           "run": "nmuv70w0y",
@@ -4792,9 +4772,7 @@
           "canonicalMatch": true
         }
       ],
-      "matchedProductionRuns": [
-        "nmuv8dk6e"
-      ]
+      "matchedProductionRuns": ["nmuv8dk6e"]
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4819,7 +4797,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4844,7 +4822,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
@@ -4869,7 +4847,7 @@
         "run": "nmuwmshyw"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "productionAnswers": [
         {
           "run": "nmuv70w0y",
@@ -4882,9 +4860,7 @@
           "canonicalMatch": false
         }
       ],
-      "matchedProductionRuns": [
-        "nmuv70w0y"
-      ]
+      "matchedProductionRuns": ["nmuv70w0y"]
     },
     {
       "conditionId": "FS-LISTEN-SDK/document-event-order",
@@ -4909,7 +4885,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/document-event-order",
@@ -4934,7 +4910,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/pending-writes",
@@ -4959,7 +4935,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/pending-writes",
@@ -4984,7 +4960,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -5009,7 +4985,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -5034,7 +5010,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -5059,7 +5035,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -5084,7 +5060,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/reconnect-resume",
@@ -5109,7 +5085,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/reconnect-resume",
@@ -5134,7 +5110,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/unsubscribe",
@@ -5159,7 +5135,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/unsubscribe",
@@ -5184,7 +5160,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/initial-unauthenticated-refusal",
@@ -5209,7 +5185,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -5234,7 +5210,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -5259,7 +5235,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
@@ -5284,7 +5260,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
@@ -5309,7 +5285,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
@@ -5334,7 +5310,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/document-event-order",
@@ -5359,7 +5335,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/document-event-order",
@@ -5384,7 +5360,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/pending-writes",
@@ -5409,7 +5385,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/pending-writes",
@@ -5434,7 +5410,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -5459,7 +5435,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -5484,7 +5460,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -5509,7 +5485,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -5534,7 +5510,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/reconnect-resume",
@@ -5559,7 +5535,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/reconnect-resume",
@@ -5584,7 +5560,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/unsubscribe",
@@ -5609,7 +5585,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/unsubscribe",
@@ -5634,7 +5610,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/initial-unauthenticated-refusal",
@@ -5659,7 +5635,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -5684,7 +5660,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -5709,7 +5685,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
@@ -5734,7 +5710,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
@@ -5759,7 +5735,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
@@ -5784,7 +5760,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/document-event-order",
@@ -5809,7 +5785,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/document-event-order",
@@ -5834,7 +5810,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/pending-writes",
@@ -5859,7 +5835,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/pending-writes",
@@ -5884,7 +5860,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -5909,7 +5885,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -5934,7 +5910,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -5959,7 +5935,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -5984,7 +5960,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/reconnect-resume",
@@ -6009,7 +5985,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/reconnect-resume",
@@ -6034,7 +6010,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/unsubscribe",
@@ -6059,7 +6035,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/unsubscribe",
@@ -6084,7 +6060,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/initial-unauthenticated-refusal",
@@ -6109,7 +6085,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -6134,7 +6110,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -6159,7 +6135,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
@@ -6184,7 +6160,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
@@ -6209,7 +6185,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
@@ -6234,7 +6210,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/document-event-order",
@@ -6259,7 +6235,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/document-event-order",
@@ -6284,7 +6260,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/pending-writes",
@@ -6309,7 +6285,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/pending-writes",
@@ -6334,7 +6310,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -6359,7 +6335,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -6384,7 +6360,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -6409,7 +6385,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -6434,7 +6410,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/reconnect-resume",
@@ -6459,7 +6435,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/reconnect-resume",
@@ -6484,7 +6460,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/unsubscribe",
@@ -6509,7 +6485,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/unsubscribe",
@@ -6534,7 +6510,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/initial-unauthenticated-refusal",
@@ -6559,7 +6535,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -6584,7 +6560,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
@@ -6609,7 +6585,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
@@ -6634,7 +6610,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
@@ -6659,7 +6635,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
@@ -6684,7 +6660,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6"
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002"
     },
     {
       "conditionId": "FS-LISTEN-SDK/document-event-order",
@@ -6709,11 +6685,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -6739,11 +6715,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -6769,11 +6745,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -6799,11 +6775,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -6829,11 +6805,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -6859,11 +6835,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -6889,11 +6865,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -6919,11 +6895,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -6949,11 +6925,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -6979,11 +6955,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7009,11 +6985,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7039,11 +7015,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7069,11 +7045,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7099,11 +7075,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7129,11 +7105,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7159,11 +7135,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7189,11 +7165,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7219,11 +7195,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7249,7 +7225,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
       "bodyBytes": {
         "production": [],
@@ -7257,7 +7233,7 @@
       },
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7283,7 +7259,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
       "bodyBytes": {
         "production": [],
@@ -7291,7 +7267,7 @@
       },
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7317,7 +7293,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
       "bodyBytes": {
         "production": [],
@@ -7325,7 +7301,7 @@
       },
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       },
       "terminateOnTabClose": "UNOBSERVED",
       "terminateRuling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md#2026-10-06-0438z-row-202-terminate-is-an-observation-not-a-requirement"
@@ -7335,7 +7311,7 @@
       "row": "browser-long-polling/sdk/203",
       "packet": "l3",
       "status": "DIVERGES",
-      "reason": "Canonical recorded observations differ under classifyRow. D4: existence-filter presence differs at restart. D5: RESET/replay message count or placement differs. Raw body bytes: {\"production\":[{\"phase\":\"warm\",\"request\":1200,\"response\":2962},{\"phase\":\"restarted-online\",\"request\":1273,\"response\":1720}],\"local\":[{\"phase\":\"warm\",\"request\":1159,\"response\":1016},{\"phase\":\"restarted-online\",\"request\":1232,\"response\":464}]}.",
+      "reason": "Canonical recorded observations differ under classifyRow. D4: existence-filter presence differs at restart. D5: RESET/replay message count or placement differs. Raw body bytes: {\"production\":[{\"phase\":\"warm\",\"request\":1200,\"response\":2962},{\"phase\":\"restarted-online\",\"request\":1273,\"response\":1720}],\"local\":[{\"phase\":\"warm\",\"request\":1159,\"response\":1016},{\"phase\":\"restarted-online\",\"request\":1232,\"response\":464}]}. D7(a): Resume echo read time: production echoes the resume point; strict uses the new snapshot's read time. D7(b): CURRENT re-issues the resumed bytes in strict; production issues a new token.",
       "comparatorResult": "DIFFER",
       "production": {
         "path": "docs.local/runs/listen-l3-browser-20261006T050949Z-r1/browser-prod.json",
@@ -7353,8 +7329,8 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "bodyBytes": {
         "production": [
           {
@@ -7383,7 +7359,7 @@
       },
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       },
       "differences": [
         {
@@ -7397,6 +7373,18 @@
           "approved": true,
           "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 3",
           "source": "docs.local/runs/fs-listen-l3/l3-response-structure.md#d5-production-only-resetreplay-segments-and-message-countorder"
+        },
+        {
+          "id": "D7(a)",
+          "approved": true,
+          "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M1",
+          "reason": "Resume echo read time: production echoes the resume point; strict uses the new snapshot's read time."
+        },
+        {
+          "id": "D7(b)",
+          "approved": true,
+          "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M1",
+          "reason": "CURRENT re-issues the resumed bytes in strict; production issues a new token."
         }
       ]
     },
@@ -7423,8 +7411,8 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "bodyBytes": {
         "production": [
           {
@@ -7443,7 +7431,7 @@
       },
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7469,11 +7457,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7499,11 +7487,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7529,11 +7517,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7559,11 +7547,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7589,11 +7577,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7619,11 +7607,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7649,11 +7637,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7679,11 +7667,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7709,11 +7697,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7739,11 +7727,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7769,11 +7757,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7799,11 +7787,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7829,11 +7817,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7859,11 +7847,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7889,11 +7877,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7919,11 +7907,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7949,11 +7937,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -7979,11 +7967,11 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -8009,7 +7997,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
       "bodyBytes": {
         "production": [],
@@ -8017,7 +8005,7 @@
       },
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -8043,7 +8031,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
       "bodyBytes": {
         "production": [],
@@ -8051,7 +8039,7 @@
       },
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       }
     },
     {
@@ -8077,7 +8065,7 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
       "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
       "bodyBytes": {
         "production": [],
@@ -8085,7 +8073,7 @@
       },
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       },
       "terminateOnTabClose": "UNOBSERVED",
       "terminateRuling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md#2026-10-06-0438z-row-202-terminate-is-an-observation-not-a-requirement"
@@ -8095,7 +8083,7 @@
       "row": "browser-streaming/sdk/203",
       "packet": "l3",
       "status": "DIVERGES",
-      "reason": "Canonical recorded observations differ under classifyRow. D4: existence-filter presence differs at restart. Raw body bytes: {\"production\":[{\"phase\":\"warm\",\"request\":1200,\"response\":1469},{\"phase\":\"restarted-online\",\"request\":1275,\"response\":539}],\"local\":[{\"phase\":\"warm\",\"request\":1161,\"response\":1018},{\"phase\":\"restarted-online\",\"request\":1234,\"response\":464}]}.",
+      "reason": "Canonical recorded observations differ under classifyRow. D4: existence-filter presence differs at restart. Raw body bytes: {\"production\":[{\"phase\":\"warm\",\"request\":1200,\"response\":1469},{\"phase\":\"restarted-online\",\"request\":1275,\"response\":539}],\"local\":[{\"phase\":\"warm\",\"request\":1161,\"response\":1018},{\"phase\":\"restarted-online\",\"request\":1234,\"response\":464}]}. D7(a): Resume echo read time: production echoes the resume point; strict uses the new snapshot's read time. D7(b): CURRENT re-issues the resumed bytes in strict; production issues a new token.",
       "comparatorResult": "DIFFER",
       "production": {
         "path": "docs.local/runs/listen-l3-browser-20261006T050949Z-r1/browser-prod.json",
@@ -8113,8 +8101,8 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "bodyBytes": {
         "production": [
           {
@@ -8143,7 +8131,7 @@
       },
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       },
       "differences": [
         {
@@ -8151,6 +8139,18 @@
           "approved": true,
           "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, closure ruling 3",
           "source": "docs.local/runs/fs-listen-l3/l3-response-structure.md#d4-local-only-filter-before-current-in-both-restarted-online-phases"
+        },
+        {
+          "id": "D7(a)",
+          "approved": true,
+          "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M1",
+          "reason": "Resume echo read time: production echoes the resume point; strict uses the new snapshot's read time."
+        },
+        {
+          "id": "D7(b)",
+          "approved": true,
+          "ruling": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M1",
+          "reason": "CURRENT re-issues the resumed bytes in strict; production issues a new token."
         }
       ]
     },
@@ -8177,8 +8177,8 @@
         "run": "nmuwn2r53"
       },
       "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
-      "runnerTree": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
-      "recordingNote": "Single production recording approved by owner ledger 921 and closure ruling 4; no independent repeat is claimed.",
+      "runnerTree": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+      "recordingNote": "Single production recording approved by owner ledger 921; no independent repeat is claimed.",
       "bodyBytes": {
         "production": [
           {
@@ -8197,7 +8197,7 @@
       },
       "requestByteCounts": {
         "judgement": "RECORDED_NOT_JUDGED",
-        "source": "conformance/src/fs-listen/compare.mjs (latest browser normalization); task's declared request-byte ruling"
+        "source": "docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)"
       },
       "differences": [
         {
@@ -8682,8 +8682,8 @@
     "Conditions are mapped from each recorded row's conditions, following docs.local/runs/listen-lane/condition-map.md; FS-TRANSACTION rows are excluded.",
     "Condition 10: docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 04:38Z permits an empty terminate observation; the clause remains unobserved.",
     "Response boundary bytes are retained, not judged by exact equality (docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 06:12Z); decoded contents are compared by the latest compare.mjs.",
-    "Request bytes are retained, not judged by the latest browser comparer: SDK auth form fields were not retained; this supersedes the earlier proposed project-name-only count normalization.",
-    "L3 D4/D5: docs.local/runs/fs-listen-l3/l3-response-structure.md; task declares their deciding production state undetermined. Observed DIVERGES is not rewritten as MATCH.",
+    "Request bytes are RECORDED_NOT_JUDGED under docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4: normalized retained content is identical; the remaining 27 bytes are unretained client fields. This supersedes 06:12Z item 1.",
+    "L3 D4/D5: docs.local/runs/fs-listen-l3/l3-response-structure.md, approved by closure ruling 3. D7(a) resume echo read time and D7(b) CURRENT re-issuing resumed bytes are approved by docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M1. Residual differences remain unapproved.",
     "Release-artifact closure comparison under coordinator closure rulings 1-5. Approved differences remain DIVERGES; additional differences remain blockers. Parent status remains IMPLEMENTING; independent closure review is pending."
   ]
 }

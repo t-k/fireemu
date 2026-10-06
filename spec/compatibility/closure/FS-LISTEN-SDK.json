@@ -119,10 +119,7 @@
     {
       "conditionId": "FS-LISTEN-SDK/document-event-order",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "FS-LISTEN-SDK-101",
-        "FS-LISTEN-SDK-101C"
-      ],
+      "recipeIds": ["FS-LISTEN-SDK-101", "FS-LISTEN-SDK-101C"],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
       "status": "VERIFIED",
       "observation": {
@@ -156,31 +153,24 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
-        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
-        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
-        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "comparisonSha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
+        "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+        "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+        "runnerTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
         "rows": {
           "MATCH": 16,
           "DIVERGES": 0,
           "NOT_COMPARABLE": 0
         },
-        "productionRuns": [
-          "nmuuj1wmw",
-          "nmuukqlh3",
-          "nmuvbfyog",
-          "nmuvdlnpu",
-          "nmuw7z5c9"
-        ]
+        "productionRuns": ["nmuuj1wmw", "nmuukqlh3", "nmuvbfyog", "nmuvdlnpu", "nmuw7z5c9"],
+        "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+        "buildRecordSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d"
       }
     },
     {
       "conditionId": "FS-LISTEN-SDK/pending-writes",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "FS-LISTEN-SDK-102",
-        "FS-LISTEN-SDK-102C"
-      ],
+      "recipeIds": ["FS-LISTEN-SDK-102", "FS-LISTEN-SDK-102C"],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
       "status": "VERIFIED",
       "observation": {
@@ -214,31 +204,24 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
-        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
-        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
-        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "comparisonSha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
+        "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+        "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+        "runnerTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
         "rows": {
           "MATCH": 16,
           "DIVERGES": 0,
           "NOT_COMPARABLE": 0
         },
-        "productionRuns": [
-          "nmuuj1wmw",
-          "nmuukqlh3",
-          "nmuvbfyog",
-          "nmuvdlnpu",
-          "nmuw7z5c9"
-        ]
+        "productionRuns": ["nmuuj1wmw", "nmuukqlh3", "nmuvbfyog", "nmuvdlnpu", "nmuw7z5c9"],
+        "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+        "buildRecordSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d"
       }
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "FS-LISTEN-SDK-103",
-        "FS-LISTEN-SDK-103C"
-      ],
+      "recipeIds": ["FS-LISTEN-SDK-103", "FS-LISTEN-SDK-103C"],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
       "status": "VERIFIED",
       "observation": {
@@ -272,31 +255,24 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
-        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
-        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
-        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "comparisonSha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
+        "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+        "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+        "runnerTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
         "rows": {
           "MATCH": 32,
           "DIVERGES": 0,
           "NOT_COMPARABLE": 0
         },
-        "productionRuns": [
-          "nmuuj1wmw",
-          "nmuukqlh3",
-          "nmuvbfyog",
-          "nmuvdlnpu",
-          "nmuw7z5c9"
-        ]
+        "productionRuns": ["nmuuj1wmw", "nmuukqlh3", "nmuvbfyog", "nmuvdlnpu", "nmuw7z5c9"],
+        "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+        "buildRecordSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d"
       }
     },
     {
       "conditionId": "FS-LISTEN-SDK/reconnect-resume",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "FS-LISTEN-SDK-104",
-        "FS-LISTEN-SDK-104C"
-      ],
+      "recipeIds": ["FS-LISTEN-SDK-104", "FS-LISTEN-SDK-104C"],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
       "status": "VERIFIED",
       "observation": {
@@ -330,31 +306,24 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
-        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
-        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
-        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "comparisonSha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
+        "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+        "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+        "runnerTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
         "rows": {
           "MATCH": 16,
           "DIVERGES": 0,
           "NOT_COMPARABLE": 0
         },
-        "productionRuns": [
-          "nmuuj1wmw",
-          "nmuukqlh3",
-          "nmuvbfyog",
-          "nmuvdlnpu",
-          "nmuw7z5c9"
-        ]
+        "productionRuns": ["nmuuj1wmw", "nmuukqlh3", "nmuvbfyog", "nmuvdlnpu", "nmuw7z5c9"],
+        "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+        "buildRecordSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d"
       }
     },
     {
       "conditionId": "FS-LISTEN-SDK/unsubscribe",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "FS-LISTEN-SDK-105",
-        "FS-LISTEN-SDK-105C"
-      ],
+      "recipeIds": ["FS-LISTEN-SDK-105", "FS-LISTEN-SDK-105C"],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
       "status": "VERIFIED",
       "observation": {
@@ -388,30 +357,24 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
-        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
-        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
-        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "comparisonSha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
+        "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+        "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+        "runnerTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
         "rows": {
           "MATCH": 16,
           "DIVERGES": 0,
           "NOT_COMPARABLE": 0
         },
-        "productionRuns": [
-          "nmuuj1wmw",
-          "nmuukqlh3",
-          "nmuvbfyog",
-          "nmuvdlnpu",
-          "nmuw7z5c9"
-        ]
+        "productionRuns": ["nmuuj1wmw", "nmuukqlh3", "nmuvbfyog", "nmuvdlnpu", "nmuw7z5c9"],
+        "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+        "buildRecordSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d"
       }
     },
     {
       "conditionId": "FS-LISTEN-SDK/initial-unauthenticated-refusal",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "FS-LISTEN-SDK-106N"
-      ],
+      "recipeIds": ["FS-LISTEN-SDK-106N"],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
       "status": "VERIFIED",
       "observation": {
@@ -446,41 +409,31 @@
       "fixtureEvidence": {
         "fixture": "conformance/auth-fs-cross-stage2-production.json",
         "decisionRef": "L8",
-        "rows": [
-          "n-out/listen-signed-out",
-          "b-out/listen-signed-out"
-        ],
+        "rows": ["n-out/listen-signed-out", "b-out/listen-signed-out"],
         "covers": "A listener started after sign-out ends permission-denied with no server snapshot, over the Node SDK and the browser SDK (default transport).",
         "recordings": 2,
         "status": "RECORDED_NOT_COMPARED"
       },
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
-        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
-        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
-        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "comparisonSha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
+        "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+        "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+        "runnerTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
         "rows": {
           "MATCH": 8,
           "DIVERGES": 0,
           "NOT_COMPARABLE": 0
         },
-        "productionRuns": [
-          "nmuuj1wmw",
-          "nmuukqlh3",
-          "nmuvbfyog",
-          "nmuvdlnpu",
-          "nmuw7z5c9"
-        ]
+        "productionRuns": ["nmuuj1wmw", "nmuukqlh3", "nmuvbfyog", "nmuvdlnpu", "nmuw7z5c9"],
+        "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+        "buildRecordSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d"
       }
     },
     {
       "conditionId": "FS-LISTEN-SDK/default-subscription",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "FS-LISTEN-SDK-107",
-        "FS-LISTEN-SDK-107C"
-      ],
+      "recipeIds": ["FS-LISTEN-SDK-107", "FS-LISTEN-SDK-107C"],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
       "status": "VERIFIED",
       "observation": {
@@ -514,10 +467,10 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
-        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
-        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
-        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "comparisonSha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
+        "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+        "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+        "runnerTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
         "rows": {
           "MATCH": 28,
           "DIVERGES": 0,
@@ -531,16 +484,15 @@
           "nmuvbfyog",
           "nmuvdlnpu",
           "nmuw7z5c9"
-        ]
+        ],
+        "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+        "buildRecordSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d"
       }
     },
     {
       "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "FS-LISTEN-SDK-108",
-        "FS-LISTEN-SDK-108C"
-      ],
+      "recipeIds": ["FS-LISTEN-SDK-108", "FS-LISTEN-SDK-108C"],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
       "status": "VERIFIED",
       "observation": {
@@ -575,55 +527,40 @@
       "fixtureEvidence": {
         "fixture": "conformance/auth-fs-cross-stage2-production.json",
         "decisionRef": "L8",
-        "rows": [
-          "n-ab/as-alice",
-          "n-ab/after-switch",
-          "b-ab/as-alice",
-          "b-ab/after-switch"
-        ],
+        "rows": ["n-ab/as-alice", "n-ab/after-switch", "b-ab/as-alice", "b-ab/after-switch"],
         "covers": "The owner receives the private document; with the other principal's token the listener on it ends permission-denied.",
         "recordings": 2,
         "status": "RECORDED_NOT_COMPARED"
       },
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
-        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
-        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
-        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "comparisonSha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
+        "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+        "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+        "runnerTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
         "rows": {
           "MATCH": 16,
           "DIVERGES": 0,
           "NOT_COMPARABLE": 0
         },
-        "productionRuns": [
-          "nmuuj1wmw",
-          "nmuukqlh3",
-          "nmuvbfyog",
-          "nmuvdlnpu",
-          "nmuw7z5c9"
-        ]
+        "productionRuns": ["nmuuj1wmw", "nmuukqlh3", "nmuvbfyog", "nmuvdlnpu", "nmuw7z5c9"],
+        "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+        "buildRecordSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d"
       }
     },
     {
       "conditionId": "FS-LISTEN-SDK/raw-resume-token",
       "source": "docs/compatibility/fs-listen-sdk-campaign-preparation.md#what-remains-unobserved",
-      "recipeIds": [
-        "fs-listen-sdk/raw-resume-token"
-      ],
+      "recipeIds": ["fs-listen-sdk/raw-resume-token"],
       "recipeStatus": "PROPOSED",
       "status": "VERIFIED",
       "observation": {
         "method": "Direct gRPC Listen with chosen current, stale and invalid resume tokens, RESET/TargetChange and a fresh-target control.",
-        "transports": [
-          "native-grpc"
-        ],
+        "transports": ["native-grpc"],
         "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
       },
       "localEvidence": {
-        "references": [
-          "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
-        ],
+        "references": ["docs/compatibility/fs-listen-sdk-campaign-preparation.md"],
         "productionExecuted": false,
         "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
       },
@@ -639,52 +576,40 @@
       "fixtureEvidence": {
         "fixture": "conformance/auth-fs-cross-stage2-production.json",
         "decisionRef": "L8",
-        "rows": [
-          "resume/open"
-        ],
+        "rows": ["resume/open"],
         "covers": "A native gRPC Listen resumed with the current resume token, by the principal that got it and by another one: the frames that follow.",
         "recordings": 2,
         "status": "RECORDED_NOT_COMPARED"
       },
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
-        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
-        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
-        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "comparisonSha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
+        "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+        "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+        "runnerTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
         "rows": {
           "MATCH": 84,
           "DIVERGES": 8,
           "NOT_COMPARABLE": 0
         },
-        "productionRuns": [
-          "nmuuicyas",
-          "nmuukwo6n",
-          "nmuv70w0y",
-          "nmuv8dk6e"
-        ]
+        "productionRuns": ["nmuuicyas", "nmuukwo6n", "nmuv70w0y", "nmuv8dk6e"],
+        "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+        "buildRecordSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d"
       }
     },
     {
       "conditionId": "FS-LISTEN-SDK/browser-tab-lifecycle",
       "source": "docs/compatibility/fs-listen-sdk-campaign-preparation.md#what-remains-unobserved",
-      "recipeIds": [
-        "fs-listen-sdk/browser-tab-lifecycle"
-      ],
+      "recipeIds": ["fs-listen-sdk/browser-tab-lifecycle"],
       "recipeStatus": "PROPOSED",
       "status": "VERIFIED",
       "observation": {
         "method": "In a real browser, observe backend-visible WebChannel terminate on tab close and the first server snapshot in a new session after reload or a new tab, with a no-reload control and complete process cleanup.",
-        "transports": [
-          "browser-webchannel-long-polling",
-          "browser-webchannel-streaming"
-        ],
+        "transports": ["browser-webchannel-long-polling", "browser-webchannel-streaming"],
         "credentials": "Two throwaway Firebase Auth users for private-owner cases; unauthenticated client for public conf_listen cases."
       },
       "localEvidence": {
-        "references": [
-          "docs/compatibility/fs-listen-sdk-campaign-preparation.md"
-        ],
+        "references": ["docs/compatibility/fs-listen-sdk-campaign-preparation.md"],
         "productionExecuted": false,
         "note": "Existing local shadows bind the historical o6_listen catalog paths; they are not evidence for the conf_* migration or production."
       },
@@ -699,26 +624,24 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer. A single L3 recording is accepted by owner ledger 921 and ruling 4, with a per-row note. Terminate on tab close is UNOBSERVED (the browser sent none) and is not claimed.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
-        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
-        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
-        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "comparisonSha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
+        "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+        "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+        "runnerTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
         "rows": {
           "MATCH": 6,
           "DIVERGES": 0,
           "NOT_COMPARABLE": 0
         },
-        "productionRuns": [
-          "nmuw7z5c9"
-        ]
+        "productionRuns": ["nmuw7z5c9"],
+        "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+        "buildRecordSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d"
       }
     },
     {
       "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
       "source": "docs/compatibility/fs-listen-sdk-campaign-preparation.md#what-remains-unobserved",
-      "recipeIds": [
-        "fs-listen-sdk/existence-filter-reconnect"
-      ],
+      "recipeIds": ["fs-listen-sdk/existence-filter-reconnect"],
       "recipeStatus": "PROPOSED",
       "status": "VERIFIED",
       "observation": {
@@ -746,10 +669,10 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
-        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
-        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
-        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "comparisonSha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
+        "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+        "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+        "runnerTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
         "rows": {
           "MATCH": 14,
           "DIVERGES": 2,
@@ -763,23 +686,20 @@
           "nmuvbfyog",
           "nmuvdlnpu",
           "nmuw7z5c9"
-        ]
+        ],
+        "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+        "buildRecordSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d"
       }
     },
     {
       "conditionId": "FS-LISTEN-SDK/backend-cache-transitions",
       "source": "docs/compatibility/fs-listen-sdk-campaign-preparation.md#what-remains-unobserved",
-      "recipeIds": [
-        "fs-listen-sdk/backend-cache-transitions"
-      ],
+      "recipeIds": ["fs-listen-sdk/backend-cache-transitions"],
       "recipeStatus": "PROPOSED",
       "status": "VERIFIED",
       "observation": {
         "method": "Observe fromCache-to-server snapshot timing and a persistent-cache resume after browser restart: compare backend resume token and read-time response with a cold-cache control. SDK-internal-only cache behavior is excluded.",
-        "transports": [
-          "browser-webchannel-long-polling",
-          "browser-webchannel-streaming"
-        ],
+        "transports": ["browser-webchannel-long-polling", "browser-webchannel-streaming"],
         "credentials": "Unauthenticated public conf_listen target unless the case explicitly needs a Firebase Auth user."
       },
       "localEvidence": {
@@ -794,38 +714,32 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "The four 203/203C rows no longer show a boundary-token-relationship difference: strict CURRENT and the following NO_CHANGE carry the same global token under the 2026-10-06 11:11Z ruling. The three remaining DIVERGES rows name D4/D5 exactly and are approved declared differences under coordinator closure ruling 3.",
+      "note": "The decoded residual names D4/D5 under closure ruling 3 and D7(a) resume echo read time and D7(b) CURRENT re-issuing resumed bytes under the 2026-10-06 13:26Z M1 ruling. Additional residual differences remain blockers. One production recording is approved by owner ledger 921.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
+        "comparisonSha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
         "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
         "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
-        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "runnerTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
         "rows": {
           "MATCH": 1,
           "DIVERGES": 3,
           "NOT_COMPARABLE": 0
         },
-        "productionRuns": [
-          "nmuw7z5c9"
-        ],
+        "productionRuns": ["nmuw7z5c9"],
         "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
-        "buildRecordSha256": "f090807adc7742b6efb8794a64f6e6dd403c40e79b3bfecbae5afd1507d36c38"
+        "buildRecordSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d"
       }
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
       "source": "docs/compatibility/fs-listen-sdk-campaign-preparation.md#what-remains-unobserved",
-      "recipeIds": [
-        "fs-listen-sdk/native-target-protocol"
-      ],
+      "recipeIds": ["fs-listen-sdk/native-target-protocol"],
       "recipeStatus": "PROPOSED",
       "status": "VERIFIED",
       "observation": {
         "method": "On one native gRPC Listen stream, test AddTarget and RemoveTarget, duplicate and invalid target_id, once, read_time, expected_count, missing-index refusal and a collection-group target; include valid controls and exact target lifecycle.",
-        "transports": [
-          "native-grpc"
-        ],
+        "transports": ["native-grpc"],
         "credentials": "Unauthenticated public conf_listen target unless the case explicitly needs a Firebase Auth user."
       },
       "localEvidence": {
@@ -843,27 +757,24 @@
       "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
-        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
-        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
-        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "comparisonSha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
+        "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+        "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+        "runnerTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
         "rows": {
           "MATCH": 34,
           "DIVERGES": 0,
           "NOT_COMPARABLE": 0
         },
-        "productionRuns": [
-          "nmuuicyas",
-          "nmuukwo6n"
-        ]
+        "productionRuns": ["nmuuicyas", "nmuukwo6n"],
+        "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+        "buildRecordSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d"
       }
     },
     {
       "conditionId": "FS-LISTEN-SDK/final-artifact-regression",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "fs-listen-sdk/final-artifact-regression"
-      ],
+      "recipeIds": ["fs-listen-sdk/final-artifact-regression"],
       "recipeStatus": "PROPOSED",
       "status": "PENDING_REVIEW",
       "observation": {
@@ -881,28 +792,26 @@
         ],
         "recordingsRequired": 0
       },
-      "note": "The complete final release replay is source-bound. All observed differences are named and covered by coordinator closure rulings 1-4; independent closure review remains pending. The build record clean status covers runtime inputs only; the runner working tree is bound separately.",
+      "note": "The final release replay is bound to closure base aad8cee2a. Named differences D4/D5/D7 and the explicit native rows are approved by the coordinator; residual differences remain blockers. Independent closure review remains pending. Runtime build inputs and the runner working tree are bound separately.",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "comparisonSha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
+        "comparisonSha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
         "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
         "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
-        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "runnerTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
         "rows": {
           "MATCH": 287,
           "DIVERGES": 13,
           "NOT_COMPARABLE": 0
         },
         "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
-        "buildRecordSha256": "f090807adc7742b6efb8794a64f6e6dd403c40e79b3bfecbae5afd1507d36c38"
+        "buildRecordSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d"
       }
     },
     {
       "conditionId": "FS-LISTEN-SDK/closure-review",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": [
-        "fs-listen-sdk/closure-review"
-      ],
+      "recipeIds": ["fs-listen-sdk/closure-review"],
       "recipeStatus": "PROPOSED",
       "status": "PENDING_REVIEW",
       "observation": {
@@ -920,7 +829,21 @@
         ],
         "recordingsRequired": 0
       },
-      "note": "Independent Opus closure review is pending; no approval or parent promotion is claimed."
+      "note": "Independent Opus closure review is pending; no approval or parent promotion is claimed.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "comparisonSha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
+        "finalArtifactSha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+        "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+        "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+        "buildRecordSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d",
+        "runnerTreeSha256": "2da03bc83b165ec71239b7955ec96a37b33c53af8df6c5a3fd1d671d1647f002",
+        "rows": {
+          "MATCH": 0,
+          "DIVERGES": 0,
+          "NOT_COMPARABLE": 0
+        }
+      }
     }
   ],
   "productionPlan": {
@@ -934,11 +857,7 @@
     "existingAdaptersRejectProduction": true,
     "catalogCases": 18,
     "recordingsPerMode": 2,
-    "modes": [
-      "node-grpc",
-      "browser-webchannel-long-polling",
-      "browser-webchannel-streaming"
-    ],
+    "modes": ["node-grpc", "browser-webchannel-long-polling", "browser-webchannel-streaming"],
     "estimatedExecutions": 6,
     "existingLogicalCapsPerExecution": {
       "reads": 600,
@@ -968,21 +887,18 @@
     "productionExecuted": true,
     "project": "fireemu-oracle-query",
     "changesRules": false,
-    "rulesCollections": [
-      "conf_listen",
-      "conf_rules_owner"
-    ],
+    "rulesCollections": ["conf_listen", "conf_rules_owner"],
     "retainedCatalogCases": 15,
     "movedCatalogCases": 3,
     "nativeProject": "fireemu-oracle-txn",
     "nativeProjectReason": "L7: native gRPC Listen with the owner access token needs no Rules and costs nothing on the unbilled txn project."
   },
-  "note": "Nine saved production recordings were compared offline with the strict release binary built from HEAD aad8cee2a. Coordinator closure rulings 1-5 cover the named declared differences. The boundary-token-relationship difference is resolved; independent closure review is pending. This task made zero production requests. Historical localEvidence and frozen inventory requirements are retained; the evidence and per-condition notes record the approved exceptions.",
+  "note": "Nine saved production recordings were compared offline with the strict release binary from closure base aad8cee2a. Closure rulings 1-5 and the 2026-10-06 13:26Z review rulings cover the named declared differences. Parent remains IMPLEMENTING and closure review remains PENDING_REVIEW; no promotion or production request was made.",
   "profileComparison": {
     "profile": "strict",
     "localOutcome": "Strict revocation and tenant deletion listeners end on refresh; emulator profile listeners continue in focused local checks.",
     "officialEmulatorComparison": "PENDING",
-    "productionComparison": "RECORDED_WITH_DECLARED_AND_UNAPPROVED_DIFFERENCES",
+    "productionComparison": "RECORDED_WITH_APPROVED_DIFFERENCES",
     "note": "A strict-only refusal is not yet a production compatibility claim. AUTH-FS-CROSS owns the state-change observations."
   },
   "movedCatalogCases": [
@@ -1017,15 +933,15 @@
   "amendedOn": "2026-10-05",
   "amendment": "Owner ledger 824 (2026-10-05) and the coordinator: native gRPC Listen recordings run on fireemu-oracle-txn (L7) and the AUTH-FS-CROSS stage-2 fixture serves as Listen evidence for three behaviours (L8). The 15 conditions, the frozen catalog mapping and every other scope decision are unchanged.",
   "integratedRegression": {
-    "release": "v0.13.0",
+    "release": "closure-base-aad8cee2a",
     "integrationCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
     "releaseBinarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
     "buildReceiptPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
-    "buildReceiptSha256": "f090807adc7742b6efb8794a64f6e6dd403c40e79b3bfecbae5afd1507d36c38",
+    "buildReceiptSha256": "a1c0736fe321ca401bb72736572e8ae17bb196f9465e7d5cadbb3ce63fbbff3d",
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
-        "sha256": "9a1eddaed173144ac1d7dfe42ad40f4597f2b02cc6f0dcfaf6bb300b68748429",
+        "sha256": "17f6d9485dcf22471542e8992df3d092341c7ee0f48249037a30c71e9c3427a4",
         "rows": 300,
         "summary": {
           "MATCH": 287,
@@ -1036,6 +952,6 @@
     ],
     "result": "RECORDED_WITH_APPROVED_DIFFERENCES",
     "productionRequests": 0,
-    "note": "Final release replay completed from clean source commit aad8cee2a. The backend-cache-transitions boundary-token-relationship difference is resolved; three exact D4/D5 differences remain approved under coordinator closure ruling 3. Parent remains IMPLEMENTING and independent closure review is pending. This task made zero production requests."
+    "note": "Replay uses the unchanged closure-base-aad8cee2a binary. D4/D5 and D7(a)/(b) remain approved declared differences; residual differences remain blockers. The six production windows contain eight CURRENT/global NO_CHANGE pairs, all sharing token bytes. Binding a future release tag is a follow-up. Parent remains IMPLEMENTING and independent closure review is pending."
   }
 }

@@ -170,7 +170,7 @@ test("implicit observations change with recorded outcomes and identity regressio
   assert.throws(() => build(table, { recordings: rs }), /disagrees with recording/);
 });
 
-test("committed digests cover exactly the nine frozen delivery case sets with correct provenance", () => {
+test("committed digests cover exactly the frozen delivery and default-zone case sets with correct provenance", () => {
   const committed = recordings.map(({ path }) => {
     const bytes = readFileSync(new URL(`../../../${path}`, import.meta.url));
     return { path, sha256: sha(bytes), data: JSON.parse(bytes) };
@@ -192,6 +192,7 @@ test("committed digests cover exactly the nine frozen delivery case sets with co
   const ids = new Set(
     [
       "declarations-v1-v2",
+      "timezone-validation-defaults",
       "v2-http-delivery",
       "v1-pubsub-delivery",
       "forced-and-natural-invocation",
@@ -206,8 +207,8 @@ test("committed digests cover exactly the nine frozen delivery case sets with co
     .filter((c) => ids.has(c.conditionId))
     .flatMap((c) => c.cases.map((id) => `${c.conditionId}/${id}`))
     .toSorted();
-  assert.equal(ids.size, 9);
-  assert.equal(expected.length, 59);
+  assert.equal(ids.size, 10);
+  assert.equal(expected.length, 65);
   assert.deepEqual(
     result.rows
       .filter((r) => r.frozenCase)
@@ -393,5 +394,26 @@ test("CLI binds cached provenance and refuses unattested or different executed b
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("supplemental frozen-case measurements preserve pending and divergent verdicts", () => {
+  for (const [area, caseId] of [
+    ["declarations-v1-v2", "v1-schedule-chain"],
+    ["retry-config-validation", "omitted-options"],
+    ["timezone-validation-defaults", "v1-default"],
+    ["v1-two-stage-retry", "publish-ack-versus-handler-failure"],
+    ["deadline-and-overlap", "bounded-handler-timeout"],
+  ]) {
+    for (const verdict of ["MATCH", "DIVERGES", "NOT_COMPARABLE"]) {
+      const result = build([
+        row(`${area}.${caseId}`, { recorded: true }, { measured: true }, verdict),
+      ]);
+      const actual = result.rows.find(
+        (r) => r.conditionId === `SCHEDULED-FUNCTIONS/${area}` && r.caseId === caseId,
+      );
+      assert.equal(actual.status, verdict);
+      assert.equal(actual.comparedRows.length, 1);
+    }
   }
 });

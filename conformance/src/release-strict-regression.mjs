@@ -358,13 +358,13 @@ export const EXCLUDED_KINDS = [
   {
     kind: "scheduled-functions-calendar-comparison-v1",
     reason:
-      "W1 reads two private calendar journals, builds its own binary and writes a cases report without a comparison kind or release check/export modes; publishing the recordings and adapting it to the installed binary is required before the release job can replay it",
+      "The calendar rows were compared on the v0.13.0 closure-base release binary against two private v6 journals; publishing the recordings and adding installed-binary release check/export modes is required before the release job can replay them",
     issue: "scheduled-functions-calendar-comparison-needs-release-replay.md",
   },
   {
     kind: "scheduled-functions-comparison-v1",
     reason:
-      "W2 exports a saved delivery comparison table with artifact bindings but does not replay that table on the release binary; the table producer needs release check/export modes before this generator can serve the release job",
+      "The delivery table was rerun on the v0.13.0 closure-base release binary and bound to its SHA-256 and runner manifest; the producer still needs installed-binary release check/export modes before the release job can replay it",
     issue: "scheduled-functions-delivery-comparison-needs-release-replay.md",
   },
   {

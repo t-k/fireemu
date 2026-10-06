@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import http from "node:http";
-import { tmpdir } from "node:os";
+
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -42,7 +42,10 @@ async function runChild(env, { clockFile } = {}) {
       response.end(
         JSON.stringify(
           request.url === "/ui/api/functions"
-            ? { history: [{ function: "schedOkV2", outcome: "ok" }] }
+            ? {
+                functions: [{ name: "schedOkV2", nextRun: "2026-10-05T08:41:00Z" }],
+                history: [{ function: "schedOkV2", outcome: "ok" }],
+              }
             : request.method === "GET"
               ? { functions: [] }
               : { ok: true },
@@ -85,6 +88,10 @@ test("completion history is read from the local diagnostics after the final step
     LOCAL_UI_URL: "fake",
   });
   assert.equal(code, 0, output);
+  assert.equal(calls[0].path, "/ui/api/functions");
+  assert.deepEqual(lines(output, "MANIFEST "), [
+    'MANIFEST [{"name":"schedOkV2","nextRun":"2026-10-05T08:41:00Z"}]',
+  ]);
   assert.equal(calls.at(-1).path, "/ui/api/functions");
   assert.equal(calls.at(-1).authorization, "Bearer t0ken");
   assert.deepEqual(lines(output, "HISTORY "), [
@@ -207,7 +214,9 @@ test("a manual run at a step happens after that step and before the next, and is
 });
 
 test("the clock file holds the logical epoch seconds the clock is about to move to, before each advance", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "local-child-test-"));
+  const dir = mkdtempSync(
+    join(new URL("../../../target/codex-out/", import.meta.url).pathname, "local-child-test-"),
+  );
   try {
     const clockFile = join(dir, "clock.txt");
     const start = Date.parse("2026-10-05T08:40:30Z") / 1000;

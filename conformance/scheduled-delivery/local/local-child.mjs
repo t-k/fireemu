@@ -70,6 +70,13 @@ for (const [index, topic] of pullTopics.entries()) {
   console.log("SUBSCRIBED", topic, answer.status);
   subscribed.push({ topic, index, status: answer.status });
 }
+if (process.env.LOCAL_UI_URL) {
+  const response = await fetch(process.env.LOCAL_UI_URL, {
+    headers: { authorization: "Bearer " + token },
+  });
+  if (!response.ok) throw new Error(`functions manifest: HTTP ${response.status}`);
+  console.log("MANIFEST", JSON.stringify((await response.json()).functions));
+}
 writeClock(start);
 for (const name of manual) await runByHand(name, iso(start));
 if (awaitIdle) await call("sessions/default:awaitIdle", { timeoutSeconds: 30 });

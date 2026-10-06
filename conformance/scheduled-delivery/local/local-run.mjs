@@ -12,7 +12,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import net from "node:net";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,7 +26,12 @@ export function parseTimeline(output) {
   const manual = [];
   const pulled = [];
   let history = null;
+  let manifest = null;
   for (const line of String(output).split("\n")) {
+    if (line.startsWith("MANIFEST ")) {
+      manifest = JSON.parse(line.slice(9));
+      continue;
+    }
     if (line.startsWith("HISTORY ")) {
       history = JSON.parse(line.slice(8));
       continue;
@@ -70,7 +74,15 @@ export function parseTimeline(output) {
     }
     if (line.startsWith("STATE ")) state.push(JSON.parse(line.slice(6)));
   }
-  return { lines, unplaced: pending.length, state: state.at(-1) ?? null, manual, pulled, history };
+  return {
+    lines,
+    unplaced: pending.length,
+    state: state.at(-1) ?? null,
+    manual,
+    pulled,
+    history,
+    manifest,
+  };
 }
 
 const freePort = () =>
@@ -115,7 +127,9 @@ export async function runLocal({
   pullTopics = [],
   patch = (source, _context) => source,
 }) {
-  const work = mkdtempSync(join(tmpdir(), "fireemu-local-delivery-"));
+  const target = fileURLToPath(new URL("../../../target/codex-out/", import.meta.url));
+  mkdirSync(target, { recursive: true });
+  const work = mkdtempSync(join(target, "fireemu-local-delivery-"));
   try {
     cpSync(fixtureDir, join(work, "fixture"), { recursive: true });
     const index = join(work, "fixture", "index.js");

@@ -10,7 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+
 import { join } from "node:path";
 import test from "node:test";
 import { parseTimeline, runLocal } from "./local-run.mjs";
@@ -60,7 +60,9 @@ test("completion history is retained separately from handler frames and absence 
 });
 
 test("it copies the fixture, links the dependencies, writes the pinned-clock config and runs the daemon once", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "local-run-test-"));
+  const dir = mkdtempSync(
+    new URL("../../../target/codex-out/local-run-test-", import.meta.url).pathname,
+  );
   try {
     const deps = join(dir, "deps");
     mkdirSync(deps);
@@ -126,6 +128,9 @@ test("it copies the fixture, links the dependencies, writes the pinned-clock con
     assert.deepEqual(result.state, { pending: 0 });
     // the work directory is gone, and the source fixture is untouched
     const work = JSON.parse(field(result.output, "WORK"));
+    assert.ok(
+      work.config.startsWith(new URL("../../../target/codex-out/", import.meta.url).pathname),
+    );
     assert.equal(existsSync(work.config), false);
     assert.equal(existsSync(work.home), false);
     assert.equal(
@@ -138,7 +143,9 @@ test("it copies the fixture, links the dependencies, writes the pinned-clock con
 });
 
 test("the defaults: the source is copied as it is, the runtime is waited for after each step, and the pause is 40 ms", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "local-run-test-"));
+  const dir = mkdtempSync(
+    new URL("../../../target/codex-out/local-run-test-", import.meta.url).pathname,
+  );
   try {
     const deps = join(dir, "deps");
     mkdirSync(deps);
@@ -165,7 +172,9 @@ test("the defaults: the source is copied as it is, the runtime is waited for aft
 });
 
 test("a daemon that exits non-zero is reported with its output, and the work directory is still removed", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "local-run-test-"));
+  const dir = mkdtempSync(
+    new URL("../../../target/codex-out/local-run-test-", import.meta.url).pathname,
+  );
   try {
     const deps = join(dir, "deps");
     mkdirSync(deps);
@@ -187,7 +196,9 @@ test("a daemon that exits non-zero is reported with its output, and the work dir
 });
 
 test("manual runs at a step and a clock file are passed to the child, and the patch is told where the clock file is", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "local-run-test-"));
+  const dir = mkdtempSync(
+    new URL("../../../target/codex-out/local-run-test-", import.meta.url).pathname,
+  );
   try {
     const deps = join(dir, "deps");
     mkdirSync(deps);
@@ -230,7 +241,9 @@ test("manual runs at a step and a clock file are passed to the child, and the pa
 });
 
 test("without manualAt and clockFile the child is given neither, and the patch gets no clock file", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "local-run-test-"));
+  const dir = mkdtempSync(
+    new URL("../../../target/codex-out/local-run-test-", import.meta.url).pathname,
+  );
   try {
     const deps = join(dir, "deps");
     mkdirSync(deps);
@@ -259,7 +272,9 @@ test("without manualAt and clockFile the child is given neither, and the patch g
 });
 
 test("pull topics put the Pub/Sub broker on the daemon and the topics and the project in the child's environment", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "local-run-test-"));
+  const dir = mkdtempSync(
+    new URL("../../../target/codex-out/local-run-test-", import.meta.url).pathname,
+  );
   try {
     const deps = join(dir, "deps");
     mkdirSync(deps);
@@ -317,4 +332,16 @@ test("parseTimeline keeps what the pull subscriptions held, whatever step the li
     { topic: "t2", status: 404, messages: [] },
   ]);
   assert.deepEqual(parseTimeline("").pulled, []);
+});
+
+test("the loaded manifest is retained before delivery and missing diagnostics stay explicit", () => {
+  const manifest = [
+    {
+      name: "schedOkV2",
+      trigger: { kind: "schedule", schedule: "every 1 minutes" },
+      nextRun: "2026-10-05T08:41:00Z",
+    },
+  ];
+  assert.deepEqual(parseTimeline(`MANIFEST ${JSON.stringify(manifest)}\n`).manifest, manifest);
+  assert.equal(parseTimeline("").manifest, null);
 });

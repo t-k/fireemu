@@ -11,7 +11,7 @@ const closure = JSON.parse(
 const ruling =
   "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review";
 
-test("W4 preserves the frozen inventory and leaves final artifact promotion pending", () => {
+test("W4 preserves the frozen inventory and binds final artifact evidence without promoting the parent", () => {
   const frozen = closure.conditions
     .map(({ conditionId, evidenceType, recipeIds, cases }) => [
       conditionId,
@@ -25,14 +25,52 @@ test("W4 preserves the frozen inventory and leaves final artifact promotion pend
     "6e615aa9a88b4fcbeed492ddf9e690562c9661cc1ae3252773ec7c034dd4b68a",
   );
   assert.equal(closure.parentStatus, "IMPLEMENTING");
-  assert.equal(closure.integratedRegression, undefined);
-  assert.equal(closure.conditions.filter(({ status }) => status === "VERIFIED").length, 8);
-  for (const condition of closure.conditions.filter(
-    ({ evidenceType }) => evidenceType === "production-parity",
-  )) {
-    assert.equal(condition.status, "PENDING_CORPUS");
-    assert.equal(condition.evidence, null);
+  assert.equal(closure.closureReview.decision, "PENDING");
+  assert.equal(closure.integratedRegression.release, "v0.13.0");
+  const buildPath = closure.integratedRegression.buildReceiptPath;
+  const buildBytes = readFileSync(new URL(`../../${buildPath}`, import.meta.url));
+  const build = JSON.parse(buildBytes);
+  assert.deepEqual(Object.keys(build).toSorted(), [
+    "binarySha256",
+    "cargoVersion",
+    "gitStatusOutsideBuildOutput",
+    "locked",
+    "sourceCommit",
+  ]);
+  assert.deepEqual(build.gitStatusOutsideBuildOutput, []);
+  assert.equal(build.locked, true);
+  assert.equal(closure.integratedRegression.integrationCommit, build.sourceCommit);
+  assert.equal(closure.integratedRegression.releaseBinarySha256, build.binarySha256);
+  assert.equal(
+    closure.integratedRegression.buildReceiptSha256,
+    createHash("sha256").update(buildBytes).digest("hex"),
+  );
+  assert.equal(
+    closure.conditions.filter(
+      ({ evidenceType, status }) => evidenceType === "fireemu-only" && status === "VERIFIED",
+    ).length,
+    9,
+  );
+  for (const comparison of closure.integratedRegression.comparisons) {
+    const bytes = readFileSync(new URL(`../../${comparison.path}`, import.meta.url));
+    const result = JSON.parse(bytes);
+    assert.equal(comparison.sha256, createHash("sha256").update(bytes).digest("hex"));
+    assert.equal(result.artifactSha256, build.binarySha256);
+    assert.equal(comparison.rows, result.rows.length);
+    assert.equal(result.sourceCommit, build.sourceCommit);
+    assert.equal(
+      result.runnerSha256,
+      createHash("sha256").update(result.runnerTreeManifest).digest("hex"),
+    );
+    assert.doesNotMatch(bytes.toString(), /\/Users\/|\/home\/|Bearer |eyJ[A-Za-z0-9_-]+\./);
   }
+  for (const condition of closure.conditions.filter(({ status }) => status !== "VERIFIED")) {
+    assert.ok(condition.note?.length > 20, condition.conditionId);
+  }
+  assert.equal(
+    closure.conditions.find(({ conditionId }) => conditionId.endsWith("/closure-review")).status,
+    "PENDING_REVIEW",
+  );
 });
 
 test("exactly seven job resource cases cite S4 and the coordinator approval", () => {
@@ -45,13 +83,21 @@ test("exactly seven job resource cases cite S4 and the coordinator approval", ()
     "deadline-and-overlap/attemptDeadline-readback",
     "retry-config-validation/attemptDeadline-boundary",
   ];
+  // The bounded handler timeout is covered by the 2026-10-06 10:24Z ruling (S4, S7 and 3.3), not by 3.5.
+  const timeoutCase = "deadline-and-overlap/bounded-handler-timeout";
   const rows = closure.conditions.flatMap((condition) =>
-    (condition.caseDecisions ?? []).map((row) => {
+    (condition.caseDecisions ?? []).flatMap((row) => {
       assert.ok(condition.cases.includes(row.caseId));
+      const id = `${condition.conditionId.slice("SCHEDULED-FUNCTIONS/".length)}/${row.caseId}`;
+      if (id === timeoutCase) {
+        assert.equal(row.decisionOfRecord, "S4, S7 and 3.3");
+        assert.match(row.decisionRef, /rulings-on-th/);
+        return [];
+      }
       assert.equal(row.status, "DIVERGENCE_APPROVED");
       assert.equal(row.decisionOfRecord, "S4");
       assert.equal(row.decisionRef, `${ruling} (3.5)`);
-      return `${condition.conditionId.slice("SCHEDULED-FUNCTIONS/".length)}/${row.caseId}`;
+      return [id];
     }),
   );
   assert.deepEqual(rows.toSorted(), expected.toSorted());
@@ -73,14 +119,123 @@ test("closure notes distinguish declared differences, undetermined observations 
     }
   }
   assert.equal(closure.closureNotes.jobResourceReadings.decisionRef, `${ruling} (3.5)`);
+  for (const row of closure.closureNotes.undetermined) {
+    assert.equal(row.status, "DIVERGENCE_APPROVED");
+  }
 });
 
-test("overlap policy keeps the frozen cases and drafts the W3 rows without verification", () => {
+test("final-binary measurements bind the frozen cases and keep unavailable acknowledgements pending", () => {
+  for (const area of [
+    "declarations-v1-v2",
+    "retry-config-validation",
+    "timezone-validation-defaults",
+    "v1-two-stage-retry",
+    "deadline-and-overlap",
+  ]) {
+    const condition = closure.conditions.find(({ conditionId }) =>
+      conditionId.endsWith(`/${area}`),
+    );
+    assert.deepEqual(
+      condition.caseEvidence.map(({ caseId }) => caseId).toSorted(),
+      [...condition.cases].toSorted(),
+    );
+    assert.equal(condition.status, "VERIFIED");
+    assert.doesNotMatch(
+      condition.note ?? "",
+      /covered outside|no measurement|approval is pending/i,
+    );
+    for (const binding of condition.caseEvidence) {
+      let sources = binding.sources;
+      if (binding.comparisonPath) {
+        const bytes = readFileSync(new URL(`../../${binding.comparisonPath}`, import.meta.url));
+        assert.equal(binding.comparisonSha256, createHash("sha256").update(bytes).digest("hex"));
+        const row = JSON.parse(bytes).rows.find(
+          (row) => row.conditionId === condition.conditionId && row.caseId === binding.caseId,
+        );
+        assert.equal(row.status, binding.status);
+        sources = row.evidenceSources ?? [];
+      }
+      for (const source of sources) {
+        assert.match(source.sha256, /^[0-9a-f]{64}$/);
+        if (source.path.startsWith("docs.local/")) continue;
+        const bytes = readFileSync(new URL(`../../${source.path}`, import.meta.url));
+        assert.equal(source.sha256, createHash("sha256").update(bytes).digest("hex"));
+        if (source.path.endsWith("-calendar-comparison.json")) {
+          assert.ok(
+            JSON.parse(bytes).rows.some(
+              (row) =>
+                row.conditionId === condition.conditionId &&
+                row.caseId === binding.caseId &&
+                row.status === "MATCH",
+            ),
+          );
+        }
+        if (source.testId?.startsWith("crates/")) {
+          assert.ok(
+            JSON.parse(bytes).localVerificationRows.some(({ tests }) =>
+              tests.some(({ id, result }) => id === source.testId && result === "PASS"),
+            ),
+          );
+        }
+      }
+    }
+  }
+  const groc = closure.conditions.find(({ conditionId }) => conditionId.endsWith("/groc-grammar"));
+  assert.equal(groc.status, "VERIFIED");
+  assert.equal(groc.evidence.approvedDifferences[0].decisionRef, `${ruling} (3.6)`);
+  const deadline = closure.conditions.find(({ conditionId }) =>
+    conditionId.endsWith("/deadline-and-overlap"),
+  );
+  assert.equal(
+    deadline.caseEvidence.find(
+      ({ caseId }) => caseId === "scheduler-attempt-versus-handler-instance",
+    ).decisionRef,
+    `${ruling} (3.3)`,
+  );
+  assert.match(deadline.note, /HTTP 504/);
+  const delivery = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+        import.meta.url,
+      ),
+    ),
+  );
+  for (const [area, caseId] of [
+    ["declarations-v1-v2", "v1-schedule-chain"],
+    ["declarations-v1-v2", "v2-onSchedule-string"],
+    ["declarations-v1-v2", "v2-onSchedule-options"],
+    ["declarations-v1-v2", "omitted-timezone"],
+    ["declarations-v1-v2", "explicit-timezone"],
+    ["declarations-v1-v2", "retry-options-preserved"],
+    ["retry-config-validation", "omitted-options"],
+  ]) {
+    const row = delivery.rows.find(
+      (r) => r.conditionId === `SCHEDULED-FUNCTIONS/${area}` && r.caseId === caseId,
+    );
+    assert.equal(row.status, "MATCH");
+    assert.equal(row.comparedRows.length, 1);
+  }
+  for (const caseId of [
+    "publish-ack-versus-handler-failure",
+    "scheduled-occurrence-identity",
+    "bounded-handler-timeout",
+  ]) {
+    const row = delivery.rows.find((r) => r.caseId === caseId);
+    assert.equal(row.status, "NOT_COMPARABLE");
+    assert.equal(row.comparedRows.length, 1);
+  }
+});
+
+test("overlap policy keeps the frozen cases and verifies the W3 rows on the final inputs", () => {
   const condition = closure.conditions.find(({ conditionId }) =>
     conditionId.endsWith("/overlap-policy"),
   );
-  assert.equal(condition.status, "PENDING_LOCAL_VERIFICATION");
-  assert.equal(condition.evidence, null);
+  assert.equal(condition.status, "VERIFIED");
+  assert.equal(
+    condition.evidence.finalArtifactSha256,
+    closure.integratedRegression.releaseBinarySha256,
+  );
   assert.deepEqual(
     condition.localVerificationRows.map(({ row }) => row),
     [
@@ -95,7 +250,7 @@ test("overlap policy keeps the frozen cases and drafts the W3 rows without verif
     ],
   );
   for (const row of condition.localVerificationRows) {
-    assert.equal(row.status, "PENDING_LOCAL_VERIFICATION");
+    assert.equal(row.status, "PASS");
     for (const reference of row.tests) {
       const [path, name] = reference.split(":");
       assert.ok(

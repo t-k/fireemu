@@ -77,3 +77,25 @@ test("calendar comparison limits attempt deadline and DST claims to recorded evi
   assert.equal(fold.status, "MATCH");
   assert.match(fold.reason, /repeated-hour production delivery is not proven/);
 });
+
+test("calendar comparison reports an ignored emulator schedule as accepted rather than refused", () => {
+  const local = [
+    {
+      accepted: true,
+      callback: {
+        matched: false,
+        reason: "Emulator accepted the manifest but ignored the schedule",
+        evidence: [],
+      },
+    },
+  ];
+  assert.equal(calendarVerdict("cr08", "refused", local).status, "DIVERGES");
+  assert.deepEqual(calendarVerdict("gr08", "accepted", local), {
+    status: "DIVERGES",
+    reason: "Emulator accepted the manifest but ignored the schedule",
+  });
+  assert.match(
+    script,
+    /functions\.includes\("calendarProbe"\) && \$\{JSON\.stringify\(profile\)\} !== "emulator"/,
+  );
+});

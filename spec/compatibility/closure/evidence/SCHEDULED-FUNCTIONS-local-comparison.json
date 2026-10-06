@@ -2,221 +2,18 @@
   "schemaVersion": 1,
   "parent": "SCHEDULED-FUNCTIONS",
   "evidenceType": "fireemu-only",
-  "sourceCommit": "1688ee39aa424d806b47369c84702df4db6efaf2",
-  "artifactSha256": "ebb87bf3c1a01006f44332c09eab34c91c1603c2b52a5ec2d108f612a3500368",
-  "artifactBuiltFrom": "8218affac25038eae2f4b4aafd2cdcacc313d173",
-  "artifactNote": "The release binary fireemu was built at artifactBuiltFrom. sourceCommit differs from it by test code, documentation and closure files only.",
-  "runnerSha256": "56280f3e549ad5f47447f5e96feba2ae64a2af77eadc4b2bfd0e835d33dbe56a",
-  "runnerTreeManifestFormat": "For each file of tools/runner-node that the product bundles (every tracked file except *.test.mjs), sorted by file name in ascending ASCII order: the UTF-8 file name, TAB, the lowercase SHA-256 hex of the file bytes, LF. SHA-256 the concatenated bytes.",
-  "testTool": "cargo nextest run (profile pr), one test id per mapped test: path#name",
+  "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+  "artifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+  "artifactBuiltFrom": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+  "artifactNote": "The release binary and the mapped local tests were built from the same clean source commit. Tests execute test binaries built from those inputs; they do not execute the release binary.",
+  "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+  "runnerTreeManifest": "tools/runner-node/blocking-error.mjs\t5811e02bccabf0a2d5eaac92a28fb41a1e2cba516e5d64672eb10f19bf083d43\ntools/runner-node/blocking-event.mjs\tdf8df99da6a53e828759b29b7aa0c3d9ba3c57f3bca63540d7f0227b2fadd1b2\ntools/runner-node/blocking-response.mjs\t956c1c3d0b1247fb6b0522dcd3855c33bf71d7a6f5170e81a881a38640f6c70d\ntools/runner-node/callable-app-check-loader.mjs\t035bc3759569911f579a7f37c44f100e07facc3e797d727f799f55ed0fed1a94\ntools/runner-node/callable-app-check.mjs\ta14bcf20654a8fd3dbf8e966df2f83ab0c3003a65b2713594253908500ba17ff\ntools/runner-node/diagnostic-output.mjs\tcf941644cebe930938404e81b4dc9a524156ad73030d32806e9faa2532c558fa\ntools/runner-node/discovery.mjs\t152a109ce44cabef99194bc1617d785840cbeeb837b6e516ad1a96f1bd5aa598\ntools/runner-node/http-admission.mjs\td02c219786651808490558bfba4ecbf253742211875ae49f519412e777041511\ntools/runner-node/http-lifecycle.mjs\t44a8d75de6e1b05db5c778930aca18c1f3dbc01c18b29f376053ea78930e112e\ntools/runner-node/index.mjs\t8d7f0f64a4e4db0c67f39c59406d6da7af0d6bac2e39060bc5b2fb2e02e406bf\ntools/runner-node/invocation-error.mjs\t17e78092a2e825c0545b15becc255b0fc0ac9560e3a5d3d3d1df6d3b24db80aa\ntools/runner-node/load-independent-wait.mjs\t134ce8cdbb7bc278abe6dc6f733c953747a92b06c981641de75359467da3ee6e\ntools/runner-node/log-context.mjs\tb44fa853c52851864c5f1ec780c1806c0de583fd43d591e65a385afb1a2148b6\ntools/runner-node/output.mjs\t039c26ddcd98490b000632687866da49e439684d583aad6fb10f1f1ec9412da6\ntools/runner-node/protocol.mjs\t696cec17be758196e4e6f681fda4eb1dbb70bf0ffc9d4b800d5cb1fad7320aa6\ntools/runner-node/schedule-delivery.mjs\tbc23101722c442e81bef135d25188149c170e5b318714a3ed103c2967d8d0d08\n",
+  "runnerTreeManifestFormat": "Tracked tools/runner-node files except *.test.mjs, sorted in ASCII order: UTF-8 path, TAB, lowercase SHA-256 of file bytes, LF; hash the concatenation.",
+  "testTool": "cargo nextest run --locked --profile pr; six named packages, filtered to the mapped tests; no workspace-wide run",
   "claim": "Local tests only. No production behaviour is claimed for these conditions (scope decision S7).",
-  "mutation": {
-    "tool": "cargo-mutants 27.1.0 with nextest, plus 7 hand mutants",
-    "base": "origin/main da9480d78",
-    "note": "Mutation covers the source the nine conditions rest on (the scheduler functions of the runtime, the cron window search, the virtual clock, the scheduler configuration) and the lines this change touched. A caught mutant is one a test failed on or that hung (timeout); unviable mutants do not compile and are not counted as kills.",
-    "runs": [
-      {
-        "name": "runtime",
-        "scope": "on_clock_changed, admit_scheduled_run, run_schedule, FunctionsRuntime::reset, enqueue_schedule_run, is_idle, schedule_event in crates/fireemu-adapter-functions/src/runtime.rs",
-        "total": 58,
-        "caught": 55,
-        "missed": 3,
-        "unviable": 0,
-        "timeouts": 0,
-        "missedAnalysis": [
-          {
-            "mutant": "runtime.rs:2776 replace > with >= (all policy, cursor = now)",
-            "verdict": "equivalent",
-            "reason": "`if now > cursor { cursor = now }`: at equality the assignment stores the same value."
-          },
-          {
-            "mutant": "runtime.rs:2794 replace > with >= (latest and none policy, cursor = now)",
-            "verdict": "equivalent",
-            "reason": "The same assignment of an equal value."
-          },
-          {
-            "mutant": "runtime.rs:2857 replace < with <= (cursor = before)",
-            "verdict": "equivalent",
-            "reason": "`if before < cursor { cursor = before }`: at equality it assigns the same value."
-          }
-        ]
-      },
-      {
-        "name": "cron",
-        "scope": "runs_between_in, runs_between, window_in, next_after_in_counted, last_cron_run, count_cron_runs in crates/fireemu-core-functions/src/cron.rs",
-        "total": 170,
-        "caught": 125,
-        "missed": 4,
-        "unviable": 3,
-        "timeouts": 38,
-        "missedAnalysis": [
-          {
-            "mutant": "cron.rs:280 replace += with *= (interval branch step counter)",
-            "verdict": "equivalent",
-            "reason": "The interval branch of next_after_in_counted is reached only through next_after_in, which discards its step counter; window_in answers interval schedules without it."
-          },
-          {
-            "mutant": "cron.rs:287 replace < with <= (search horizon)",
-            "verdict": "equivalent",
-            "reason": "Differs only for a run exactly at the 8 x 366 day horizon. No cron schedule can place its only run there: a yearly run recurs within 366 days, and the day-of-month and day-of-week fields combine with OR."
-          },
-          {
-            "mutant": "cron.rs:307 replace + with * (c.hour + 1 to c.hour * 1)",
-            "verdict": "equivalent",
-            "reason": "The hour is not in the allowed set at this point, so next_from(hour) and next_from(hour + 1) give the same hour."
-          },
-          {
-            "mutant": "cron.rs:325 replace > with >= (utc > after)",
-            "verdict": "equivalent",
-            "reason": "Equality needs a civil minute after the start that maps to the instant `after` itself; a gap has no instant and a fold maps to its first occurrence, which is earlier."
-          }
-        ]
-      },
-      {
-        "name": "clock",
-        "scope": "VirtualClock::advance, advance_to, set, set_allow_backwards, backwards_sets, new in crates/fireemu-core-session/src/clock.rs",
-        "total": 15,
-        "caught": 15,
-        "missed": 0,
-        "unviable": 0,
-        "timeouts": 0
-      },
-      {
-        "name": "config",
-        "scope": "parse_scheduler selector (the selector also pulled in six unrelated mutants of daemon.rs and import_export.rs)",
-        "total": 22,
-        "caught": 15,
-        "missed": 7,
-        "unviable": 0,
-        "timeouts": 0,
-        "missedAnalysis": [
-          {
-            "mutant": "config.rs:3190 replace match guard mode == \"wall\" with true",
-            "verdict": "killed after a test change",
-            "reason": "The refusal message of a scheduler.clock that is not wall was not asserted. The test now asserts it; the diff-scoped run below kills the mutant."
-          },
-          {
-            "mutant": "six mutants in daemon.rs (HistoryLimits field) and import_export.rs (TenantMetadata and ProviderUserInfo fields)",
-            "verdict": "out of scope",
-            "reason": "Not code this change touches or the conditions rest on; the selector pulled them in."
-          }
-        ]
-      },
-      {
-        "name": "config-diff",
-        "scope": "mutants on the lines this change touched in crates/fireemu/src/config.rs",
-        "total": 9,
-        "caught": 9,
-        "missed": 0,
-        "unviable": 0,
-        "timeouts": 0
-      },
-      {
-        "name": "functions-diff",
-        "scope": "mutants on the lines this change touched in crates/fireemu/src/functions.rs (apply_default_time_zone)",
-        "total": 4,
-        "caught": 3,
-        "missed": 0,
-        "unviable": 1,
-        "timeouts": 0
-      },
-      {
-        "name": "review-round-runtime",
-        "scope": "on_clock_changed (the shutdown check moved under the lock), FunctionsRuntime::reset and the new reset_at in crates/fireemu-adapter-functions/src/runtime.rs; cargo-mutants --in-diff of the review-round commit",
-        "total": 3,
-        "caught": 3,
-        "missed": 0,
-        "unviable": 0,
-        "timeouts": 0,
-        "missedAnalysis": []
-      },
-      {
-        "name": "review-round-snapshots",
-        "scope": "the Functions snapshot hook (capture, restore) in crates/fireemu/src/snapshots.rs; cargo-mutants --in-diff of the review-round commit, test selection --bin fireemu (the integration tests need a git checkout that the mutation copy does not have)",
-        "total": 2,
-        "caught": 1,
-        "missed": 0,
-        "unviable": 1,
-        "timeouts": 0,
-        "missedAnalysis": [],
-        "unviableNote": "capture -> Ok(Default::default()) does not compile (SnapshotPart has no Default); the equivalent hand mutant below is killed."
-      }
-    ],
-    "handMutants": [
-      {
-        "id": "shutdown-run-schedule",
-        "description": "delete the shutdown check in run_schedule",
-        "status": "KILLED",
-        "killedBy": "fireemu-adapter-functions::runtime shutdown_closes_the_manual_and_the_clock_driven_schedule_paths"
-      },
-      {
-        "id": "shutdown-on-clock-changed",
-        "description": "delete the shutdown check in on_clock_changed",
-        "status": "KILLED",
-        "killedBy": "fireemu-adapter-functions::runtime shutdown_closes_the_manual_and_the_clock_driven_schedule_paths"
-      },
-      {
-        "id": "control-notify-always",
-        "description": "notify the functions runtime even when the clock move was refused",
-        "status": "KILLED",
-        "killedBy": "fireemu-adapter-http::control the_clock_routes_notify_functions_on_success_only_and_count_rewinds"
-      },
-      {
-        "id": "control-notify-never",
-        "description": "never notify the functions runtime of a clock move",
-        "status": "KILLED",
-        "killedBy": "fireemu-adapter-http::control the_clock_routes_notify_functions_on_success_only_and_count_rewinds"
-      },
-      {
-        "id": "control-advanceto-honours-opt-in",
-        "description": "let clock:advanceTo take allowBackwards",
-        "status": "KILLED",
-        "killedBy": "fireemu-adapter-http::control the_clock_routes_notify_functions_on_success_only_and_count_rewinds"
-      },
-      {
-        "id": "control-nonbool-opt-in",
-        "description": "treat a missing or non-boolean allowBackwards as an opt-in",
-        "status": "KILLED",
-        "killedBy": "fireemu-adapter-http::control the_clock_routes_notify_functions_on_success_only_and_count_rewinds"
-      },
-      {
-        "id": "config-scheduler-not-object",
-        "description": "ignore a scheduler section that is not an object",
-        "status": "KILLED",
-        "killedBy": "fireemu::bin/fireemu config::tests::scheduler_and_clock_settings_in_the_wrong_place_are_refused"
-      },
-      {
-        "id": "clock-changed-check-before-lock",
-        "description": "check the shutdown flag in on_clock_changed before taking the lock (the form before the review)",
-        "status": "KILLED",
-        "killedBy": "fireemu-adapter-functions runtime::schedule_capacity_tests::a_clock_move_that_waits_for_the_lock_while_shutdown_begins_enqueues_nothing"
-      },
-      {
-        "id": "functions-capture-marker",
-        "description": "the Functions snapshot hook captures () instead of the runtime's instant (so a restore uses the clock at restore time)",
-        "status": "KILLED",
-        "killedBy": "fireemu::bin/fireemu snapshots::tests::a_restore_resets_the_schedule_to_the_restored_clock"
-      }
-    ],
-    "firstPass": [
-      {
-        "name": "runtime",
-        "result": "58 mutants: 54 caught, 4 missed. One was real (`due.len() > chunk`: a cap filled exactly left a spurious backlog) and is now killed by a_cap_filled_exactly_leaves_no_backlog_and_one_more_run_leaves_one."
-      },
-      {
-        "name": "cron",
-        "result": "170 mutants: 105 caught, 30 missed, 32 timeouts. Tests were added for restricted months and leap days, cron-field latest and none, the DST gap and fold, a cap equal to the window, and the deterministic work counter; 26 of the 30 are now killed and four are equivalent (above)."
-      }
-    ],
-    "notRun": "The control crate's route function was not run through cargo-mutants: one mutant costs the whole adapter-http suite (about four minutes of baseline, more than ten minutes with a hang). Four hand mutants on its boundary conditions replace it.",
-    "noopControl": {
-      "description": "A semantic no-op edit (swapping the operands of max in on_clock_changed) run under the same command as the mutants.",
-      "status": "SURVIVED",
-      "summary": "32 tests run: 32 passed",
-      "note": "Every cargo-mutants run above also passes its unmutated baseline under the same command and test order (the first line of each mut-*.log)."
-    },
-    "killingTests": "mutants-killing-tests.json lists, for each caught mutant, the failing test names taken from its own log; timeouts have no test and are listed separately.",
-    "reviewRound": "2026-10-05 review round (M1 timezone-default binding, M2 overlap-policy back to PENDING, M3 README, S1 shutdown race, S2 coverageStatus check, S4 weak rows): the Rust changes are runtime.rs (on_clock_changed lock order, reset_at), snapshots.rs (Functions capture and restore) and tests; the two cargo-mutants runs above cover exactly those lines, base 035eba21e. Round 3 (review approve-with-conditions R1): the no-default half of the time-zone test now uses generation 2 schedules (production's v2 default is UTC); test code only, no Rust mutant applies."
+  "historicalMutation": {
+    "reportSha256": "a9312c829595be2615c698c8d5fd9515cb6ed002f212235b226a029a52ee59ba",
+    "note": "Historical mutation evidence retained privately; mutations were not rerun on this head and are not a final-artifact mutation receipt."
   },
   "rows": [
     {
@@ -1014,6 +811,103 @@
       ]
     },
     {
+      "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+      "caseId": "allow",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#allow_and_queue_admit_overlapping_scheduler_runs",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#queue_runs_one_scheduled_invocation_at_a_time_where_allow_runs_several",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+      "caseId": "skip",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#skip_drops_a_run_that_overlaps_a_queued_one_for_good",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#one_jump_over_several_occurrences_overlaps_itself_under_skip_and_reject",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+      "caseId": "queue",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#allow_and_queue_admit_overlapping_scheduler_runs",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#queue_runs_one_scheduled_invocation_at_a_time_where_allow_runs_several",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+      "caseId": "reject",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#reject_counts_an_overlapping_scheduler_run_as_a_dead_letter",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#one_jump_over_several_occurrences_overlaps_itself_under_skip_and_reject",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+      "caseId": "manual-overlap",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_manual_run_follows_the_overlap_policy_against_a_scheduler_run",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#overlap_policies_skip_queue_or_reject_concurrent_schedule_runs",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+      "caseId": "long-running-handler",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_handler_that_is_still_running_makes_its_function_busy",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
       "conditionId": "SCHEDULED-FUNCTIONS/state-lifecycle",
       "caseId": "snapshot-restore",
       "status": "PASS",
@@ -1099,6 +993,205 @@
         {
           "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_reset_restarts_every_schedule_from_now_and_drops_the_backlog",
           "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    }
+  ],
+  "localVerificationRows": [
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+      "row": "allow-and-queue",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#allow_and_queue_admit_overlapping_scheduler_runs",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+      "row": "skip",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#skip_drops_a_run_that_overlaps_a_queued_one_for_good",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#one_jump_over_several_occurrences_overlaps_itself_under_skip_and_reject",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+      "row": "reject",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#reject_counts_an_overlapping_scheduler_run_as_a_dead_letter",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#one_jump_over_several_occurrences_overlaps_itself_under_skip_and_reject",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+      "row": "manual-run-against-scheduler-run",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_manual_run_follows_the_overlap_policy_against_a_scheduler_run",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#overlap_policies_skip_queue_or_reject_concurrent_schedule_runs",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+      "row": "skip-in-flight-strict-default",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu/src/functions.rs#the_overlap_policy_defaults_by_profile_and_an_explicit_one_wins",
+          "binary": "fireemu::bin/fireemu",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#skip_in_flight_drops_an_occurrence_while_a_handler_is_running",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#skip_in_flight_looks_only_at_the_same_function",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#skip_in_flight_matches_a_reference_of_the_running_handler",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+      "row": "skip-in-flight-manual-never-refused",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#skip_in_flight_never_refuses_a_manual_run",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+      "row": "skip-in-flight-one-sweep-not-counted",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#skip_in_flight_keeps_every_occurrence_of_one_clock_move",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        },
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#skip_in_flight_does_not_count_a_queued_run",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
+      "row": "long-running-handler",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_handler_that_is_still_running_makes_its_function_busy",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "row": "a_first_generation_retry_count_is_one_attempt",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#a_first_generation_retry_count_is_one_attempt",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "row": "a_first_generation_retry_window_without_a_count_is_one_attempt",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#a_first_generation_retry_window_without_a_count_is_one_attempt",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "row": "a_first_generation_schedule_publishes_its_message_at_each_occurrence",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/src/runtime.rs#a_first_generation_schedule_publishes_its_message_at_each_occurrence",
+          "binary": "fireemu-adapter-functions",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "row": "events_are_dispatched_and_retried_in_virtual_time",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/runtime.rs#events_are_dispatched_and_retried_in_virtual_time",
+          "binary": "fireemu-adapter-functions::runtime",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "row": "the_recorded_declaration_is_listed_and_the_accepted_one_is_not",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-adapter-functions/tests/scheduler_fractional_retry.rs#the_recorded_declaration_is_listed_and_the_accepted_one_is_not",
+          "binary": "fireemu-adapter-functions::scheduler_fractional_retry",
+          "result": "PASS"
+        }
+      ]
+    },
+    {
+      "row": "the_recorded_declaration_is_refused_and_the_default_is_not",
+      "status": "PASS",
+      "tests": [
+        {
+          "id": "crates/fireemu-core-functions/tests/scheduler_refusal.rs#the_recorded_declaration_is_refused_and_the_default_is_not",
+          "binary": "fireemu-core-functions::scheduler_refusal",
           "result": "PASS"
         }
       ]

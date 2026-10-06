@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
 
 const readRepo = (path) =>
@@ -100,10 +100,34 @@ function validateInventory(closure) {
     assert.equal(rows.length, condition.cases.length, "every exact case, once");
     assert.deepEqual(rows.map(({ caseId }) => caseId).toSorted(), [...condition.cases].toSorted());
     assert.ok(
-      rows.every(
-        ({ status }) =>
-          status === (condition.evidenceType === "production-parity" ? "MATCH" : "PASS"),
-      ),
+      rows.every(({ caseId, status, decisionRef }) => {
+        if (status === (condition.evidenceType === "production-parity" ? "MATCH" : "PASS"))
+          return true;
+        if (condition.evidenceType !== "production-parity" || status !== "DIVERGENCE_APPROVED")
+          return false;
+        const section = {
+          "SCHEDULED-FUNCTIONS/declarations-v1-v2/attempt-deadline": "3.5",
+          "SCHEDULED-FUNCTIONS/declarations-v1-v2/omitted-versus-null-reset": "3.5",
+          "SCHEDULED-FUNCTIONS/declarations-v1-v2/SDK-attemptDeadline-versus-CLI-timeout": "3.5",
+          "SCHEDULED-FUNCTIONS/declarations-v1-v2/v1-App-Engine-job-location": "3.5",
+          "SCHEDULED-FUNCTIONS/declarations-v1-v2/v2-function-region-job-location": "3.5",
+          "SCHEDULED-FUNCTIONS/retry-config-validation/attemptDeadline-boundary": "3.5",
+          "SCHEDULED-FUNCTIONS/deadline-and-overlap/attemptDeadline-readback": "3.5",
+          "SCHEDULED-FUNCTIONS/deadline-and-overlap/scheduler-attempt-versus-handler-instance":
+            "3.3",
+          "SCHEDULED-FUNCTIONS/forced-and-natural-invocation/Cloud-Scheduler-run-now": "3.4",
+          "SCHEDULED-FUNCTIONS/groc-grammar/synchronized-window": "3.6",
+        }[`${condition.conditionId}/${caseId}`];
+        const difference = evidence.approvedDifferences?.find((row) => row.caseId === caseId);
+        return Boolean(
+          section &&
+          difference?.status === "DIVERGENCE_APPROVED" &&
+          difference.decisionRef ===
+            `docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (${section})` &&
+          decisionRef === difference.decisionRef,
+        );
+      }),
+      `${condition.conditionId}: every row must match or cite its approved difference`,
     );
   }
   if (closure.parentStatus === "COMPAT_VERIFIED") {
@@ -119,6 +143,132 @@ function validateInventory(closure) {
 
 test("SCHEDULED-FUNCTIONS preserves the approved inventory and evidence boundaries", () => {
   validateInventory(readRepo(closurePath));
+});
+
+test("approved run-now and undetermined calendar differences retain their cited rulings", () => {
+  const closure = readRepo(closurePath);
+  for (const [area, caseId, section] of [
+    ["forced-and-natural-invocation", "Cloud-Scheduler-run-now", "3.4"],
+    ["groc-grammar", "synchronized-window", "3.6"],
+  ]) {
+    const condition = closure.conditions.find(({ conditionId }) =>
+      conditionId.endsWith(`/${area}`),
+    );
+    assert.equal(condition.status, "VERIFIED");
+    const difference = condition.evidence.approvedDifferences.find((row) => row.caseId === caseId);
+    assert.equal(difference.status, "DIVERGENCE_APPROVED");
+    assert.ok(difference.decisionRef.endsWith(` (${section})`));
+  }
+  validateInventory(closure);
+});
+
+test("an approved difference cannot excuse another case or an uncited ruling", () => {
+  for (const change of [
+    (difference) => delete difference.decisionRef,
+    (difference) => {
+      difference.decisionRef = "unapproved (3.4)";
+    },
+    (difference) => {
+      difference.decisionRef = difference.decisionRef.replace("(3.4)", "(3.3)");
+    },
+    (difference) => {
+      difference.status = "DIVERGES";
+    },
+    (difference) => {
+      difference.caseId = "natural-scheduled-run";
+    },
+  ]) {
+    const closure = readRepo(closurePath);
+    const condition = closure.conditions.find(({ conditionId }) =>
+      conditionId.endsWith("/forced-and-natural-invocation"),
+    );
+    change(condition.evidence.approvedDifferences[0]);
+    assert.throws(() => validateInventory(closure));
+  }
+});
+
+test("unapproved comparison verdicts and local differences remain refused", (t) => {
+  const path = `target/codex-out/scheduled-validator-${process.pid}.json`;
+  const file = new URL(`../../${path}`, import.meta.url);
+  t.after(() => unlinkSync(file));
+  for (const [area, caseId, status, forgedApproval] of [
+    ["forced-and-natural-invocation", "natural-scheduled-run", "DIVERGES", false],
+    ["forced-and-natural-invocation", "natural-scheduled-run", "NOT_COMPARABLE", false],
+    ["forced-and-natural-invocation", "natural-scheduled-run", "DIVERGENCE_APPROVED", true],
+    ["manual-schedule", "known-schedule", "DIVERGENCE_APPROVED", true],
+  ]) {
+    const closure = readRepo(closurePath);
+    const condition = closure.conditions.find(({ conditionId }) =>
+      conditionId.endsWith(`/${area}`),
+    );
+    const comparison = readRepo(condition.evidence.comparisonPath);
+    const row = comparison.rows.find(
+      (row) =>
+        row.conditionId === condition.conditionId &&
+        (area === "manual-schedule" || row.caseId === caseId),
+    );
+    row.status = status;
+    if (forgedApproval) {
+      const ruling = closure.closureNotes.declaredDifferences.find(
+        ({ section }) => section === "3.4",
+      );
+      row.decisionRef = ruling.decisionRef;
+      condition.evidence.approvedDifferences = [
+        ...(condition.evidence.approvedDifferences ?? []),
+        { ...ruling, caseId: row.caseId },
+      ];
+    }
+    writeFileSync(file, JSON.stringify(comparison));
+    condition.evidence.comparisonPath = path;
+    assert.throws(
+      () => validateInventory(closure),
+      /every row must match or cite its approved difference/,
+    );
+  }
+  for (const decisionRef of [undefined, "unapproved (3.4)"]) {
+    const closure = readRepo(closurePath);
+    const condition = closure.conditions.find(({ conditionId }) =>
+      conditionId.endsWith("/forced-and-natural-invocation"),
+    );
+    const comparison = readRepo(condition.evidence.comparisonPath);
+    comparison.rows.find(({ caseId }) => caseId === "Cloud-Scheduler-run-now").decisionRef =
+      decisionRef;
+    writeFileSync(file, JSON.stringify(comparison));
+    condition.evidence.comparisonPath = path;
+    assert.throws(
+      () => validateInventory(closure),
+      /every row must match or cite its approved difference/,
+    );
+  }
+  for (const [caseId, status, reference] of [
+    ["Cloud-Scheduler-run-now", "NOT_COMPARABLE", "approved"],
+    ["Cloud-Scheduler-run-now", "DIVERGES", "approved"],
+    ["Cloud-Scheduler-run-now", "DIVERGENCE_APPROVED", "unapproved (3.4)"],
+    ["natural-scheduled-run", "DIVERGENCE_APPROVED", "undefined-section"],
+  ]) {
+    const closure = readRepo(closurePath);
+    const condition = closure.conditions.find(({ conditionId }) =>
+      conditionId.endsWith("/forced-and-natural-invocation"),
+    );
+    const comparison = readRepo(condition.evidence.comparisonPath);
+    const row = comparison.rows.find((row) => row.caseId === caseId);
+    const difference = { ...condition.evidence.approvedDifferences[0], caseId };
+    if (reference === "undefined-section")
+      difference.decisionRef = difference.decisionRef.replace("(3.4)", "(undefined)");
+    else if (reference !== "approved") difference.decisionRef = reference;
+    row.status = status;
+    row.decisionRef = difference.decisionRef;
+    condition.evidence.approvedDifferences = [
+      ...condition.evidence.approvedDifferences.filter((entry) => entry.caseId !== caseId),
+      difference,
+    ];
+    writeFileSync(file, JSON.stringify(comparison));
+    condition.evidence.comparisonPath = path;
+    assert.throws(
+      () => validateInventory(closure),
+      /every row must match or cite its approved difference/,
+    );
+  }
 });
 
 test("pending SCHEDULED-FUNCTIONS cannot be promoted", () => {

@@ -6,7 +6,7 @@ root="$(cd -- "$script_dir/../.." && pwd -P)"
 cd -- "$root"
 common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
 repository="$(dirname -- "$common_dir")"
-"$repository/docs.local/tools/heavy-slot" run --lane codex -- cargo build -p fireemu --target-dir target/w1
+RUSTC_WRAPPER= "$repository/docs.local/tools/heavy-slot" run --lane codex -- cargo build -p fireemu --locked --release --target-dir target/sched-final
 
 exec node --input-type=module - "$root" "$repository" <<'W1_NODE'
 import { execFile as execFileCallback } from "node:child_process";
@@ -48,8 +48,8 @@ const { CASES, collect, resources, createAccepted, createRefusedExact, createRef
 const { calendarFixture } = await import(new URL("calendar-local.mjs", calendarUrl));
 const { normalizeString } = await import(pathToFileURL(join(root, "conformance/src/fs-rules/harness.mjs")));
 const execFile = promisify(execFileCallback);
-const target = join(root, "target/w1");
-const binary = join(target, "debug/fireemu");
+const target = join(root, "target/codex-out/calendar");
+const binary = join(root, "target/sched-final/release/fireemu");
 const runner = join(root, "tools/runner-node/index.mjs");
 await mkdir(target, { recursive: true });
 // Remove a stale success artifact before starting a new comparison.
@@ -107,7 +107,12 @@ const result = {
 };
 for (const profile of ["strict", "emulator"]) {
   result.totals[profile] = { MATCH: 0, DIVERGES: 0, NOT_COMPARABLE: 0 };
-  for (const item of CASES) {
+  // CLI readbacks establish the omitted-zone defaults. Replay the native UTC answers with omitted SDK zones;
+  // v1's interval is zone-independent, while v2's cron boundary distinguishes UTC from Los Angeles.
+  for (const item of [...CASES,
+    { ...CASES.find((row) => row.id === "gr01"), conditionId: "SCHEDULED-FUNCTIONS/timezone-validation-defaults", case: "v1-default" },
+    { ...CASES.find((row) => row.id === "cr01"), conditionId: "SCHEDULED-FUNCTIONS/timezone-validation-defaults", case: "v2-default" },
+  ]) {
     const comparisons = [];
     for (const recording of recordings) {
       const id = item.id + "-create";
@@ -125,13 +130,19 @@ for (const profile of ["strict", "emulator"]) {
         await mkdir(fixture);
         await mkdir(join(work, "home"));
         await symlink(join(root, "conformance/node_modules"), join(fixture, "node_modules"));
-        const options = { schedule: item.schedule, timeZone: item.timeZone };
+        const options = item.case === "v2-default" ? { schedule: item.schedule } : { schedule: item.schedule, timeZone: item.timeZone };
         for (const [key, value] of Object.entries(item.retryConfig ?? {})) {
           const field = { minBackoffDuration: "minBackoffSeconds", maxBackoffDuration: "maxBackoffSeconds", maxRetryDuration: "maxRetrySeconds" }[key];
           options[field ?? key] = field ? Number(value.slice(0, -1)) : value;
         }
-        await writeFile(join(fixture, "index.cjs"), calendarFixture(item).replace(
-          JSON.stringify({ schedule: item.schedule, timeZone: item.timeZone }), JSON.stringify(options)));
+        let declaration = calendarFixture(item);
+        if (item.case === "v1-default") declaration = declaration.replace(
+          "onSchedule(" + JSON.stringify({ schedule: item.schedule, timeZone: item.timeZone }) + ",",
+          'require("firebase-functions/v1").pubsub.schedule(' + JSON.stringify(item.schedule) + ").onRun(",
+        ).replace("scheduleTime: event.scheduleTime", "scheduleTime: event.timestamp");
+        else declaration = declaration.replace(
+          JSON.stringify({ schedule: item.schedule, timeZone: item.timeZone }), JSON.stringify(options));
+        await writeFile(join(fixture, "index.cjs"), declaration);
         await writeFile(join(fixture, "package.json"), JSON.stringify({ private: true, main: "index.cjs" }));
         const configPath = join(work, "fireemu.json");
         await writeFile(configPath, JSON.stringify({ schemaVersion: 1, profile, daemon: { clockStart: anchor } }));
@@ -142,8 +153,10 @@ for (const profile of ["strict", "emulator"]) {
           const { localCalendarClient, exerciseCalendarSession } = await import(${JSON.stringify(new URL("calendar-local.mjs", calendarUrl).href)});
           const client = localCalendarClient({ controlUrl: process.env.FIREEMU_CONTROL_URL, functionsHost: process.env.FIREEMU_FUNCTIONS_HOST, token: process.env.FIREEMU_CONTROL_TOKEN });
           const runtime = await client.control("sessions/default/functions");
-          if (runtime.status !== 200 || runtime.json.runnerAlive !== true || !["calendarProbe", "calendarReceipt"].every((name) => runtime.json.functions?.includes(name))) throw new Error("Calendar runner unavailable");
-          const callback = ${JSON.stringify(production)} === "accepted" && ${JSON.stringify(item.id)} !== "rt08"
+          if (runtime.status !== 200 || runtime.json.runnerAlive !== true || !runtime.json.functions?.includes("calendarReceipt") || (!runtime.json.functions.includes("calendarProbe") && ${JSON.stringify(profile)} !== "emulator")) throw new Error("Calendar runner unavailable");
+          const callback = !runtime.json.functions.includes("calendarProbe")
+            ? { matched: false, reason: "Emulator accepted the manifest but ignored the schedule", evidence: [] }
+            : ${JSON.stringify(production)} === "accepted" && ${JSON.stringify(item.id)} !== "rt08"
             ? await exerciseCalendarSession({ input: ${JSON.stringify(input)}, anchor: ${JSON.stringify(anchor)}, ...client }) : null;
           if (callback && (/^local calendar (control request refused|runtime did not become idle|runner is absent or down|exports are missing)/.test(callback.reason ?? "") || callback.evidence.some((row) => row.status !== 200))) throw new Error("Calendar comparison could not run");
           await writeFile(${JSON.stringify(outputPath)}, JSON.stringify({ accepted: true, callback }));

@@ -63,6 +63,7 @@ const sources = {
   },
   "deadline-and-overlap": { "next-occurrence-during-work": ["cadence.in-flight-skip"] },
   "declarations-v1-v2": {},
+  "timezone-validation-defaults": {},
 };
 const resourceCases = new Set([
   "attempt-deadline",
@@ -134,7 +135,8 @@ export function buildComparison({ report, recordings, artifactSha256, runnerTree
   )) {
     const area = c.conditionId.split("/")[1];
     for (const caseId of c.cases) {
-      const ids = sources[area][caseId] ?? [];
+      const supplementalId = `${area}.${caseId}`;
+      const ids = table.has(supplementalId) ? [supplementalId] : (sources[area][caseId] ?? []);
       const compared = ids.map((id) => table.get(id));
       let status = compared.some((r) => r?.strict.verdict === "DIVERGES")
         ? "DIVERGES"
@@ -230,7 +232,7 @@ export function buildComparison({ report, recordings, artifactSha256, runnerTree
               recordedFields: ["jobs", "frames", "attempts"],
             }
           : {}),
-        ...(["declarations-v1-v2", "retry-config-validation"].includes(area)
+        ...(!ids.length && ["declarations-v1-v2", "retry-config-validation"].includes(area)
           ? { note: "covered outside the delivery comparison" }
           : {}),
       });

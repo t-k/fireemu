@@ -1,0 +1,132 @@
+{
+  "kind": "scheduled-functions-gate-receipts-v1",
+  "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+  "artifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+  "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+  "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-final-artifact-regression.json",
+  "rows": [
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/final-artifact-regression",
+      "caseId": "two-production-recordings",
+      "status": "PASS",
+      "sources": [
+        {
+          "path": "conformance/scheduled-functions/calendar-v6-cases.json",
+          "sha256": "a05b1a52fa586dfdf0436c38bbe3533725ce44e2fcd3cd5cec99a8cf122860a6"
+        },
+        {
+          "path": "conformance/scheduled-delivery/local/production-run3.json",
+          "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+          "passes": [
+            1,
+            2
+          ]
+        },
+        {
+          "path": "conformance/scheduled-delivery/local/production-run4.json",
+          "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99",
+          "passes": [
+            1,
+            2
+          ],
+          "scope": "declaration and double-chain cases"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/final-artifact-regression",
+      "caseId": "exact-frozen-case-set",
+      "status": "PASS",
+      "sources": [
+        {
+          "path": "spec/compatibility/closure/SCHEDULED-FUNCTIONS.json",
+          "inventorySha256": "6e615aa9a88b4fcbeed492ddf9e690562c9661cc1ae3252773ec7c034dd4b68a"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/final-artifact-regression",
+      "caseId": "strict-production-comparison",
+      "status": "PASS",
+      "sources": [
+        {
+          "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+          "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689"
+        },
+        {
+          "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "sha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/final-artifact-regression",
+      "caseId": "emulator-no-new-refusals",
+      "status": "PASS",
+      "sources": [
+        {
+          "path": "docs.local/runs/sched-closure-final/no-new-refusals.log",
+          "sha256": "7a593a7bf0c40e8b6996c1e33bc610748d9f8022811b4310d994e40079b8df31",
+          "binarySha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+          "countLine": "firebase-tools 15.28.2 accepts 151 recorded manifests; strict refuses 32; emulator refuses 0"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/final-artifact-regression",
+      "caseId": "local-properties",
+      "status": "PASS",
+      "sources": [
+        {
+          "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+          "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+          "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2"
+        },
+        {
+          "path": "docs.local/runs/sched-closure-final/nextest.log",
+          "sha256": "51012f416f842e0f4b0343524e13875a76a336e77bd5b4c0798585aea90de001"
+        },
+        {
+          "path": "docs.local/runs/sched-closure-final/rulings-rust.txt",
+          "sha256": "69c422106144dd7d26d35571378b45044b43c2b5361394925455d5cae894ae79"
+        },
+        {
+          "path": "docs.local/runs/sched-closure-final/w4-node-round2.txt",
+          "sha256": "6852b8e4e59eee78f4d95d7ff6cb214200790c96510c6f3f734211e374e8b6e8"
+        },
+        {
+          "path": "docs.local/runs/sched-closure-final/node-closure-tests.log",
+          "sha256": "e5a0f6851d0d1f8bfd6bb391a21ad340b207ea8a3eba5c1e641f943fe6c23b9f"
+        },
+        {
+          "path": "docs.local/runs/sched-closure-final/node-closure-only.log",
+          "sha256": "a6ea268eed494f5f7a1502e032e933f4ab4a84ae763c79363da55f94219d00ee"
+        },
+        {
+          "path": "docs.local/runs/sched-closure-final/node-no-new-refusals-skip.log",
+          "sha256": "c874460a04e4d977cc9b92b4bfa00c669a5d001a67cb5cae4e730c8c7d70dbac"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/final-artifact-regression",
+      "caseId": "artifact-runner-binding",
+      "status": "PASS",
+      "sources": [
+        {
+          "binarySha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+          "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+          "buildReceiptPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-build.json",
+          "buildReceiptSha256": "c60dda3a1bba898642e83aa5033c5cddcb7b10397cf930ee1c8fd24a46cb5963",
+          "releaseBuildLog": "docs.local/runs/sched-closure-final/release-build-0b6d27a96.txt",
+          "releaseBuildLogSha256": "5324751c6888cc1cfb39e3ff57d33afe39b93702358106c7d67404157c81c244",
+          "sha256SumsPath": "docs.local/runs/sched-closure-final/SHA256SUMS",
+          "sha256SumsSha256": "00250e5a0a10e280a63d6532f3de7ea0d14343e26214fb754fb32895c56ddfd1"
+        }
+      ]
+    }
+  ],
+  "pending": [
+    "workspace-regression"
+  ]
+}

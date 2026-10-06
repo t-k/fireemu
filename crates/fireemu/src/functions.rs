@@ -3087,8 +3087,9 @@ fn manifest_for_profile(
     let mut manifest = parse_manifest(document)?;
     if profile == CompatibilityProfile::Strict {
         for function in &mut manifest.functions {
-            if let fireemu_core_functions::manifest::Trigger::Eventarc { channel, filters, .. } =
-                &function.trigger
+            if let fireemu_core_functions::manifest::Trigger::Eventarc {
+                channel, filters, ..
+            } = &function.trigger
             {
                 // EVENTARC packet H v4: only the exact source filter on a custom-event channel is recorded as refused.
                 if channel != fireemu_adapter_functions::eventarc::GOOGLE_CHANNEL

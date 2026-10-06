@@ -324,14 +324,14 @@ dependencies = [
 
 [[package]]
 name = "compat-check"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "config-schema-check"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "jsonschema",
  "serde_json",
@@ -580,7 +580,7 @@ checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
 name = "fireemu"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bytes",
  "fireemu-adapter-functions",
@@ -618,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-adapter-functions"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bytes",
  "chrono",
@@ -647,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-adapter-grpc"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bytes",
  "fireemu-adapter-support",
@@ -674,7 +674,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-adapter-http"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "aes",
  "argon2",
@@ -712,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-adapter-logging"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "base64",
  "fireemu-core-session",
@@ -723,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-adapter-pubsub"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "axum",
  "base64",
@@ -742,7 +742,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-adapter-support"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bytes",
  "getrandom 0.3.4",
@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-adapter-ui"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bytes",
  "fireemu-adapter-functions",
@@ -784,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-app-check"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "fireemu-core-auth",
  "fireemu-core-types",
@@ -792,7 +792,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-auth"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "fireemu-core-limits",
  "fireemu-core-types",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-events"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "fireemu-core-types",
  "proptest",
@@ -809,7 +809,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-export"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "fireemu-core-firestore",
  "fireemu-core-types",
@@ -818,7 +818,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-firestore"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "fireemu-core-limits",
  "fireemu-core-types",
@@ -827,7 +827,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-functions"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "fireemu-core-types",
  "proptest",
@@ -835,7 +835,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-limits"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "fireemu-core-types",
  "proptest",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-pubsub"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "fireemu-core-types",
  "proptest",
@@ -851,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-rules"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "fireemu-core-auth",
  "fireemu-core-limits",
@@ -861,7 +861,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-session"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "fireemu-core-types",
  "proptest",
@@ -869,7 +869,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-storage"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "fireemu-core-types",
  "proptest",
@@ -877,14 +877,14 @@ dependencies = [
 
 [[package]]
 name = "fireemu-core-types"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "fireemu-export-publication"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "exacl",
  "nix",
@@ -894,11 +894,11 @@ dependencies = [
 
 [[package]]
 name = "fireemu-fd-acl"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "fireemu-proto-firestore"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "prost",
  "prost-types",
@@ -907,7 +907,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-proto-pubsub"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "prost",
  "prost-types",
@@ -916,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-verification-kani"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "fireemu-core-events",
  "fireemu-core-limits",
@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-verification-loom"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "fireemu-core-auth",
  "fireemu-core-events",
@@ -937,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-verification-property"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "fireemu-core-app-check",
  "fireemu-core-auth",
@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "fireemu-verification-quint"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "fireemu-adapter-functions",
@@ -1640,7 +1640,7 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "limit-catalog-gen"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2135,7 +2135,7 @@ dependencies = [
 
 [[package]]
 name = "proto-gen"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "prost-build",
  "tonic-build",
@@ -2953,7 +2953,7 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
 name = "traceability-check"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "fireemu-verification-quint",
  "serde",

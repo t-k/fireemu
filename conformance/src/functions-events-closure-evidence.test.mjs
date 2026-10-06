@@ -40,6 +40,9 @@ const closureText = `${JSON.stringify(closure(), null, 2)}\n`;
 const ART = "d".repeat(64);
 const COMMIT = "a".repeat(40);
 const RUNNER_TREE = "7".repeat(40);
+const COMPARATOR_COMMIT = "9".repeat(40);
+const COMPARATOR_TREE = "6".repeat(40);
+const COMPARATOR_DIR = "conformance/src/functions-events/compare";
 const RUNNER_BYTES = "runner bytes of the build's source commit";
 const RECORDED_AT = "2026-10-05T09:59:00.000Z";
 const LOCAL = {
@@ -52,6 +55,8 @@ const LOCAL = {
 };
 /** git as the generator asks it: the runner tree and the runner file of the build's source commit. */
 const gitFake = (args) => {
+  if (args[0] === "rev-parse" && args[1] === `${COMPARATOR_COMMIT}:${COMPARATOR_DIR}`)
+    return `${COMPARATOR_TREE}\n`;
   if (args[0] === "rev-parse" && args[1] === `${COMMIT}:tools/runner-node`)
     return `${RUNNER_TREE}\n`;
   if (
@@ -101,7 +106,9 @@ function comparisonOf({
     project: "fireemu-oracle-events",
     recordedAt: RECORDED_AT,
     corpusDigest: sha256(corpusText),
+    sha256: runDigest(),
   },
+  comparator = { commit: COMPARATOR_COMMIT, tree: COMPARATOR_TREE },
   localBinary = LOCAL,
   declaredMasks = USED_MASKS,
 } = {}) {
@@ -156,6 +163,7 @@ function comparisonOf({
     execution,
     corpusSha256: corpus,
     productionRun,
+    comparator,
     localBinary,
     rows,
     summary: {
@@ -167,6 +175,7 @@ function comparisonOf({
     },
   };
 }
+const runDigest = () => sha256(JSON.stringify(runOf()));
 const runOf = (over = {}) => ({
   kind: "functions-events-production-run",
   project: "fireemu-oracle-events",
@@ -205,6 +214,7 @@ const receiptOf = (over = {}) => ({
   command: "cargo nextest run --workspace --profile pr",
   exitCode: 0,
   tests: { passed: 4321, failed: 0 },
+  source: "ci.yml run 1234567890 on the source commit, job test (ubuntu-latest): 4321 passed",
   ...over,
 });
 const asRefusal = (fn, pattern) => assert.throws(fn, pattern);
@@ -981,6 +991,8 @@ test(
     const run = JSON.parse(readFileSync(v4, "utf8"));
     assert.equal(run.passes.length, 0);
     assert.equal(run.frames.length, 0);
+    // the v4 run was recorded against the v4 corpus; bind it to the current one so the pass count is what refuses it
+    run.corpusDigest = sha256(corpusText);
     asRefusal(
       () => recordingsFromRun(run, { corpusSha256: sha256(corpusText) }),
       /the run has 0 passes/,
@@ -1011,8 +1023,12 @@ test("the command line reports, writes with --write, and says what is wrong with
     runnerTree: String(gitOut("rev-parse", "HEAD:tools/runner-node")).trim(),
     runnerSha256: sha256(gitOut("cat-file", "blob", "HEAD:tools/runner-node/index.mjs")),
   };
+  const comparator = {
+    commit: head,
+    tree: String(gitOut("rev-parse", "HEAD:conformance/src/functions-events/compare")).trim(),
+  };
   const files = {
-    comparison: put("comparison.json", comparisonOf({ localBinary })),
+    comparison: put("comparison.json", comparisonOf({ localBinary, comparator })),
     run: put("run/production-run.json", runOf()),
     closure: put("closure.json", closureText),
     corpus: put("corpus.json", corpusText),
@@ -1415,6 +1431,7 @@ test("M1: the comparison must be of the production run and the corpus it is writ
           project: "fireemu-oracle-events",
           recordedAt: RECORDED_AT,
           corpusDigest: other,
+          sha256: runDigest(),
         },
       }),
     },
@@ -1429,6 +1446,7 @@ test("M1: the comparison must be of the production run and the corpus it is writ
           project: "fireemu-oracle-events",
           recordedAt: "2026-10-04T10:00:00.000Z",
           corpusDigest: sha256(corpusText),
+          sha256: runDigest(),
         },
       }),
     },
@@ -1442,6 +1460,7 @@ test("M1: the comparison must be of the production run and the corpus it is writ
           project: "fireemu-other",
           recordedAt: RECORDED_AT,
           corpusDigest: sha256(corpusText),
+          sha256: runDigest(),
         },
       }),
     },
@@ -1529,6 +1548,7 @@ test("M2: the local sessions must have run the artifact, from a clean tree of th
   assert.deepEqual(asked, [
     `rev-parse ${COMMIT}:tools/runner-node`,
     `cat-file blob ${COMMIT}:tools/runner-node/index.mjs`,
+    `rev-parse ${COMPARATOR_COMMIT}:${COMPARATOR_DIR}`,
   ]);
   // report mode needs none of it
   closureEvidenceCommand(options(), {
@@ -1922,4 +1942,112 @@ test("applyClosure writes the block only when it is given one, and refuses a blo
       }),
     /integrated regression.*VERIFIED/,
   );
+});
+
+// ---- no personal path in the published evidence (the publication-hygiene test refused the first evidence commit) --------------
+
+test("the evidence file does not publish the runner's absolute path, and says no more about the binary than its digests, commit and runner identity", () => {
+  const { io, written } = commandFiles();
+  closureEvidenceCommand(writing({ "integrated-release": RELEASE }), io);
+  const text = written.get("evidence.json");
+  const evidence = JSON.parse(text);
+  // The comparison carries the path of the checkout the sessions ran from (the runner's absolute path); the published record keeps
+  // the runner by its file digest and its tree, which is what the generator checks, and never a path of someone's machine.
+  assert.equal(evidence.localBinary.runnerPath, undefined);
+  assert.deepEqual(evidence.localBinary, {
+    sha256: ART,
+    sourceCommit: COMMIT,
+    dirty: false,
+    runnerSha256: sha256(RUNNER_BYTES),
+    runnerTree: RUNNER_TREE,
+  });
+  assert.doesNotMatch(text, /\/(Users|home)\//);
+  // The rest of the comparison is untouched.
+  const input = comparisonOf();
+  assert.equal(evidence.artifactSha256, input.artifactSha256);
+  assert.deepEqual(evidence.productionRun, input.productionRun);
+  assert.equal(evidence.rows.filter((row) => !row.row.includes("gate")).length > 0, true);
+  // The command still judged the sessions by the digests before the path was dropped: a runner of another tree is refused.
+  asRefusal(
+    () =>
+      closureEvidenceCommand(
+        writing(),
+        commandFiles({
+          comparison: comparisonOf({ localBinary: { ...LOCAL, runnerTree: "8".repeat(40) } }),
+        }).io,
+      ),
+    /runner tree/,
+  );
+});
+
+// ---- the published record names the production record, the comparator and the workspace receipt (closure review S5, S6) -------
+
+test("the comparison must carry the sha256 of the production run file it was made from, and --write refuses another file", () => {
+  const bad = comparisonOf({
+    productionRun: {
+      project: "fireemu-oracle-events",
+      recordedAt: RECORDED_AT,
+      corpusDigest: sha256(corpusText),
+      sha256: "f".repeat(64),
+    },
+  });
+  refusedWrite({ comparison: bad }, {}, /another production run file than --production-run/);
+  const none = comparisonOf({
+    productionRun: {
+      project: "fireemu-oracle-events",
+      recordedAt: RECORDED_AT,
+      corpusDigest: sha256(corpusText),
+    },
+  });
+  refusedWrite({ comparison: none }, {}, /does not name the sha256 of its production run/);
+  // The same run, formatted differently, is another file.
+  refusedWrite({ run: { ...runOf(), extra: 1 } }, {}, /another production run file/);
+  // The written evidence keeps the digest.
+  const { io, written } = commandFiles();
+  closureEvidenceCommand(writing(), io);
+  assert.equal(JSON.parse(written.get("evidence.json")).productionRun.sha256, runDigest());
+});
+
+test("the comparison must name its comparator by a commit and the tree of its directory, and --write checks the tree against git", () => {
+  const evidenceOf = (comparison) => {
+    const { io, written } = commandFiles({ comparison });
+    closureEvidenceCommand(writing(), io);
+    return JSON.parse(written.get("evidence.json"));
+  };
+  assert.deepEqual(evidenceOf(comparisonOf()).comparator, {
+    commit: COMPARATOR_COMMIT,
+    tree: COMPARATOR_TREE,
+  });
+  const refuse = (comparator, pattern) =>
+    refusedWrite({ comparison: comparisonOf({ comparator }) }, {}, pattern);
+  refuse(null, /does not name its comparator/);
+  refuse({ commit: COMPARATOR_COMMIT }, /does not name its comparator/);
+  refuse({ commit: "9".repeat(39), tree: COMPARATOR_TREE }, /does not name its comparator/);
+  refuse({ commit: COMPARATOR_COMMIT, tree: "G".repeat(40) }, /does not name its comparator/);
+  // The tree must be the one git has for that commit's comparator directory.
+  refuse({ commit: COMPARATOR_COMMIT, tree: "5".repeat(40) }, /comparator tree/);
+  // The report mode does not need git for it.
+  assert.doesNotThrow(() =>
+    closureEvidenceCommand(options(), commandFiles({ comparison: comparisonOf() }).io),
+  );
+});
+
+test("the workspace receipt names its source, and the published gate evidence cites the receipt", () => {
+  const { io, written } = commandFiles();
+  const { closure: next } = closureEvidenceCommand(writing(), io);
+  const gate = next.conditions.find((c) => c.conditionId.endsWith("/final-artifact-regression"));
+  assert.deepEqual(gate.evidence.workspaceRegression, {
+    sourceCommit: COMMIT,
+    command: "cargo nextest run --workspace --profile pr",
+    tests: { passed: 4321, failed: 0 },
+    source: receiptOf().source,
+  });
+  assert.ok(written.has("closure.json"));
+  for (const source of [undefined, "", "   ", 7]) {
+    asRefusal(
+      () =>
+        checkWorkspaceReceipt(receiptOf({ source }), checkBuildRecord(buildOf(), comparisonOf())),
+      /receipt.*source/,
+    );
+  }
 });

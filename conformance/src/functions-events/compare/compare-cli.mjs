@@ -51,6 +51,10 @@ export async function runCli(argv) {
       corpus: { type: "string", default: repoFile("functions-events/corpus.json") },
       programs: { type: "string", default: repoFile("functions-events/programs.json") },
       fixture: { type: "string", default: repoFile("functions-events/fixtures/index.js") },
+      // The comparator's own identity (the commit it runs from and the tree of its directory), given by the caller that checked its
+      // checkout is clean (run-compare.sh); recorded so the evidence names the code that judged it.
+      "comparator-commit": { type: "string" },
+      "comparator-tree": { type: "string" },
     },
   });
   for (const name of REQUIRED) {
@@ -61,9 +65,19 @@ export async function runCli(argv) {
   if (!/^[0-9a-f]{64}$/.test(values["artifact-sha256"])) {
     throw new Error("--artifact-sha256 must be a lowercase sha256 hex digest");
   }
+  const given = ["comparator-commit", "comparator-tree"].map((name) => values[name]);
+  if (given.some((value) => value !== undefined)) {
+    if (given.some((value) => value === undefined))
+      throw new Error("--comparator-commit and --comparator-tree are given together");
+    if (!/^[0-9a-f]{40}$/.test(given[0]))
+      throw new Error("--comparator-commit must be a 40-digit lowercase hex id");
+    if (!/^[0-9a-f]{40}$/.test(given[1]))
+      throw new Error("--comparator-tree must be a 40-digit lowercase hex id");
+  }
   const corpusBytes = await readFile(values.corpus);
   const readJson = async (path) => JSON.parse(await readFile(path, "utf8"));
-  const productionRun = await readJson(values["production-run"]);
+  const productionRunBytes = await readFile(values["production-run"]);
+  const productionRun = JSON.parse(productionRunBytes.toString("utf8"));
   const corpusSha256 = sha256(corpusBytes);
   if (productionRun?.corpusDigest !== corpusSha256) {
     throw new Error("production run corpusDigest does not match the corpus file");
@@ -92,7 +106,9 @@ export async function runCli(argv) {
       project: productionRun.project,
       recordedAt: productionRun.recordedAt,
       corpusDigest: productionRun.corpusDigest,
+      sha256: sha256(productionRunBytes),
     },
+    ...(given[0] === undefined ? {} : { comparator: { commit: given[0], tree: given[1] } }),
     ...comparison,
   };
   await writeFile(values.out, stableJson(document));

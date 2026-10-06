@@ -21,7 +21,11 @@ import {
   waitReady,
 } from "./functions-events/record/deploy.mjs";
 import { createWorld } from "./functions-events-record-world.mjs";
-import { formalHandlers } from "./functions-events/canary-cli.mjs";
+import {
+  formalHandlers,
+  gen1StorageDeployOrder,
+  mainDeployHandlers,
+} from "./functions-events/canary-cli.mjs";
 import { tempDir } from "./test-tmpdir.mjs";
 
 const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
@@ -47,14 +51,18 @@ test("the CLI plan deploys and deletes the 22 handlers once each, in stdout capt
     path: "/usr/bin",
   };
   const deploy = cliPlan("deploy", options);
-  assert.equal(deploy.args[deploy.args.indexOf("--only") + 1].split(",").length, 22);
+  // v7: the main deploy is the 18 functions that are not Gen1 Storage; the dry run and the delete take all 22
+  assert.equal(deploy.args[deploy.args.indexOf("--only") + 1].split(",").length, 18);
   assert.equal(deploy.env.FE_EVENTS_CAPTURE_MODE, "stdout");
+  const dryRun = cliPlan("dry-run", options);
+  assert.equal(dryRun.args[dryRun.args.indexOf("--only") + 1].split(",").length, 22);
   assert.deepEqual(cliPlan("delete", options).args.slice(1, 23), formalHandlers);
 });
 
 test("each CLI action has its own timeout: the dry run is the shortest, the deploy the longest", () => {
   assert.deepEqual(CLI_TIMEOUT_MS, {
     deploy: 40 * 60_000,
+    "deploy-one": 20 * 60_000,
     "dry-run": 10 * 60_000,
     delete: 20 * 60_000,
   });
@@ -109,7 +117,7 @@ test("the deploy carries --force, the dry run is the same command with --dry-run
   };
   const deploy = cliPlan("deploy", options);
   const dryRun = cliPlan("dry-run", options);
-  const only = formalHandlers.map((name) => `functions:events:${name}`).join(",");
+  const only = mainDeployHandlers.map((name) => `functions:events:${name}`).join(",");
   assert.deepEqual(deploy.args, [
     "deploy",
     "--config",
@@ -122,7 +130,21 @@ test("the deploy carries --force, the dry run is the same command with --dry-run
     "--force",
     "--debug",
   ]);
-  assert.deepEqual(dryRun.args, [...deploy.args, "--dry-run"]);
+  // the dry run validates the whole set of 22 (v6's command), with --dry-run last; the main deploy has the other 18
+  const fullOnly = formalHandlers.map((name) => `functions:events:${name}`).join(",");
+  assert.deepEqual(dryRun.args, [
+    "deploy",
+    "--config",
+    "/tmp/f.json",
+    "--project",
+    "fireemu-oracle-events",
+    "--only",
+    fullOnly,
+    "--non-interactive",
+    "--force",
+    "--debug",
+    "--dry-run",
+  ]);
   assert.deepEqual(dryRun.env, deploy.env);
   assert.equal(dryRun.cwd, deploy.cwd);
   const remove = cliPlan("delete", options);
@@ -295,4 +317,38 @@ test("absence needs the Eventarc list empty, not only free of our names", () => 
     summarize({ v1: { ...empty, complete: false }, v2: empty, run: empty, eventarc: empty }).absent,
     false,
   );
+});
+
+test("v7: a single-function deploy is the same command for one of the four Gen1 Storage functions, with --force, never --dry-run", () => {
+  const options = {
+    configHome: "/tmp/c",
+    configPath: "/tmp/f.json",
+    workDir: "/tmp/w",
+    home: "/tmp/h",
+    path: "/usr/bin",
+  };
+  for (const name of gen1StorageDeployOrder) {
+    const plan = cliPlan("deploy-one", { ...options, name });
+    assert.deepEqual(plan.args, [
+      "deploy",
+      "--config",
+      "/tmp/f.json",
+      "--project",
+      "fireemu-oracle-events",
+      "--only",
+      `functions:events:${name}`,
+      "--non-interactive",
+      "--force",
+      "--debug",
+    ]);
+    assert.equal(plan.env.FE_EVENTS_CAPTURE_MODE, "stdout");
+    assert.equal(plan.cwd, "/tmp/w");
+  }
+  for (const name of [
+    undefined,
+    "fsCreatedV1",
+    "storageFinalizedV2",
+    "storageFinalizedV1,storageDeletedV1",
+  ])
+    assert.throws(() => cliPlan("deploy-one", { ...options, name }), /reviewed/);
 });

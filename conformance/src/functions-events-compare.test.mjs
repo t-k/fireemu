@@ -984,10 +984,10 @@ test("the id behind an auth-context write is masked as present for unknown and c
   // A missing or empty id is not a present string for unknown either.
   assert.equal(compareAuth(["unknown", "operator@example.test"], ["unknown", null]).length, 1);
   assert.equal(compareAuth(["unknown", "operator@example.test"], ["unknown", ""]).length, 1);
-  // The type is still exact.
+  // The type is still exact; a local type E10 does not cover also keeps its id unmasked (the type and the id differ: two).
   assert.equal(
     compareAuth(["unknown", "operator@example.test"], ["service_account", "owner"]).length,
-    1,
+    2,
   );
   // A local type other than api_key is a DIFF of the type, and its id is no longer a uid for the mask: two differences.
   assert.equal(compareAuth(["api_key", UID], ["app_user", UID]).length, 2);
@@ -1163,4 +1163,44 @@ test("the masks of a row are distinct by name and path and ordered by name, then
   assert.deepEqual(distinctMasks([]), []);
   // The same path under two names is two entries.
   assert.equal(distinctMasks([entry(A, "$.a"), entry(B, "$.a")]).length, 2);
+});
+
+// ---- the id mask is E10's: only for authType unknown (closure review S1) -------------------------------------------------------
+
+test("the auth id is masked for authType unknown and api_key only: any other type keeps its id, compared exactly, and records no mask", () => {
+  const row = { generation: 2, recipeId: "functions-events/firestore/auth-context" };
+  const masks = declaredMasksFor(row, { source: "firestore" });
+  const observation = (authType, authId) => flatten({ frame: { event: { authType, authId } } });
+  const AUTH = "$.frame.event.authId";
+  const applied = [];
+  for (const type of ["unauthenticated", "system", "service_account", "app_user", "other"]) {
+    const masked = applyDeclaredMasks(observation(type, "some-id"), masks, applied).get(AUTH).value;
+    assert.equal(masked, "some-id", type);
+  }
+  assert.deepEqual(applied, [], "no mask was applied to a type E10 does not cover");
+  // So a difference of id under such a type is a DIFF, not a MATCH hidden under another type's label.
+  const compareAuth = (production, local) => {
+    const reference = applyDeclaredMasks(observation(...production), masks);
+    const { volatile } = deriveVolatile(reference, reference);
+    return compareObservation(
+      reference,
+      volatile,
+      applyDeclaredMasks(observation(...local), masks),
+      "strict",
+    );
+  };
+  assert.equal(compareAuth(["unauthenticated", "a"], ["unauthenticated", "b"]).length, 1);
+  assert.equal(compareAuth(["system", "a"], ["system", "b"]).length, 1);
+  assert.deepEqual(compareAuth(["system", "a"], ["system", "a"]), []);
+  // The two covered types are unchanged.
+  assert.deepEqual(compareAuth(["unknown", "x@y.z"], ["unknown", "owner"]), []);
+  assert.deepEqual(
+    compareAuth(
+      ["api_key", "Mw39BUiBmgXKwPUHFjsCEJSwPws2"],
+      ["api_key", "bGxurlr9aM4QB709E3Demg1hnXQx"],
+    ),
+    [],
+  );
+  // The old behaviour (every type but api_key is "present") would have matched these two; the near miss above is the test.
+  assert.equal(compareAuth(["unknown", "x@y.z"], ["unauthenticated", "x@y.z"]).length >= 1, true);
 });

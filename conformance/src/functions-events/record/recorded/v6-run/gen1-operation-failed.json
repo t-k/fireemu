@@ -1,0 +1,13 @@
+{
+  "name": "operations/cHJvamVjdHMvZmlyZWVtdS1vcmFjbGUtZXZlbnRzL2xvY2F0aW9ucy91cy1jZW50cmFsMS9vcGVyYXRpb25zL29wZXJhdGlvbi0xNzkxMTU5OTQ2MzQ1LTY1ZDBjZWM1NjdkZWMtMjVkOTkyNTctMWZiNTA0NDQ",
+  "metadata": {
+    "@type": "type.googleapis.com/google.cloud.functions.v1.OperationMetadataV1",
+    "target": "projects/fireemu-oracle-events/locations/us-central1/functions/storageDeletedV1",
+    "type": "CREATE_FUNCTION"
+  },
+  "done": true,
+  "error": {
+    "code": 13,
+    "message": "Gen1 operation for function projects/fireemu-oracle-events/locations/us-central1/functions/storageDeletedV1 failed: Failed to configure trigger providers/cloud.storage/eventTypes/object.change."
+  }
+}

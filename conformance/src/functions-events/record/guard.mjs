@@ -118,13 +118,12 @@ export const RULES = [
       if (params.get("uploadType") !== "media") return "an upload must be uploadType=media";
       if (!OBJECT_NAME.test(params.get("name") ?? ""))
         return "the object name is outside the owned prefixes";
-      if (params.has("ifGenerationMatch") && params.get("ifGenerationMatch") !== "0")
-        return "ifGenerationMatch may only be 0";
+      // 0 creates; 1 is a write production refuses (a real generation is never 1), the failed-upload scenario.
+      if (params.has("ifGenerationMatch") && !["0", "1"].includes(params.get("ifGenerationMatch")))
+        return "ifGenerationMatch may only be 0 or 1";
       if (typeof body !== "string" || body.length > 64)
         return "the upload body is not a short text";
-      return Object.keys(headers ?? {}).every((name) => name.toLowerCase() === "x-goog-hash")
-        ? undefined
-        : "an upload may only add x-goog-hash";
+      return Object.keys(headers ?? {}).length === 0 ? undefined : "an upload may not add a header";
     },
   }),
   rule("storage-object-get", "GET", "storage.googleapis.com", `${storage}/o/${OBJECT}`),
@@ -348,6 +347,24 @@ export const RULES = [
     "GET",
     "cloudfunctions.googleapis.com",
     `/v2${region}/operations/[A-Za-z0-9_-]{1,128}`,
+  ),
+  // v7: the same for a Gen1 function the CLI delete left behind (the Gen1 Storage triggers contend on the bucket's metadata): the
+  // eleven Gen1 names of the run, case-exact, and the operation read the delete's answer names (`operations/<id>`, an id of
+  // base64 characters as the CLI's own debug log recorded, 159 of them; no project or region in the path).
+  rule(
+    "functions-v1-delete",
+    "DELETE",
+    "cloudfunctions.googleapis.com",
+    `/v1${region}/functions/(?:${HANDLERS.filter((h) => h.generation === 1)
+      .map((h) => h.name)
+      .join("|")})`,
+    { mutation: true },
+  ),
+  rule(
+    "functions-v1-operation-get",
+    "GET",
+    "cloudfunctions.googleapis.com",
+    "/v1/operations/[A-Za-z0-9_-]{1,256}",
   ),
   rule("run-services-list", "GET", "run.googleapis.com", `/v2${region}/services`, {
     query: ["pageToken"],

@@ -437,6 +437,7 @@ test("the excluded kinds are exactly the ones the release discloses", () => {
   // Removing an exclusion means adding its run; adding one means a disclosure of its own.
   assert.deepEqual(EXCLUDED_KINDS.map((exclusion) => exclusion.kind).toSorted(), [
     "auth-fs-cross-stage2-comparison-v1",
+    "functions-events-comparison",
     "scheduled-functions-calendar-comparison-v1",
     "scheduled-functions-comparison-v1",
     "storage-object-comparison-v1",

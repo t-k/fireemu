@@ -4,8 +4,17 @@ import test from "node:test";
 import { createTransport } from "./functions-events/record/rest.mjs";
 import { CLEANUP_CEILING, NORMAL_CEILING, record } from "./functions-events/record/run.mjs";
 import { SCENARIO_ORDER, passSummary, buildPass } from "./functions-events/record/script.mjs";
+import { gen1StorageDeployOrder, mainDeployHandlers } from "./functions-events/canary-cli.mjs";
 import { createWorld } from "./functions-events-record-world.mjs";
 import { tempDir } from "./test-tmpdir.mjs";
+
+// v7: the dry run, the main deploy, the four Gen1 Storage functions one at a time, the delete: seven CLI runs
+const FULL_CALLS = [
+  "dry-run",
+  "deploy",
+  ...gen1StorageDeployOrder.map((name) => `deploy-one:${name}`),
+  "delete",
+];
 
 function setup({ ceiling = 1000, world: worldOptions = {} } = {}) {
   const clock = { t: Date.UTC(2026, 9, 4, 0, 0, 0) };
@@ -20,8 +29,8 @@ function setup({ ceiling = 1000, world: worldOptions = {} } = {}) {
     now: () => clock.t,
   });
   const calls = [];
-  const cli = async (action) => {
-    calls.push(action);
+  const cli = async (action, name) => {
+    calls.push(name === undefined ? action : `${action}:${name}`);
     if (action === "deploy") world.deploy();
     else if (action === "delete") world.undeploy();
     return { action, exitCode: 0 };
@@ -44,7 +53,7 @@ test("a full run records two passes of every scenario, captures the deliveries, 
   const { deps, world, calls } = setup();
   const { outcome, run } = await record(deps);
   assert.equal(outcome, "recorded", JSON.stringify([run.stops, run.cleanup?.problems]));
-  assert.deepEqual(calls, ["dry-run", "deploy", "delete"]);
+  assert.deepEqual(calls, FULL_CALLS);
   assert.equal(run.passes.length, 2);
   for (const pass of run.passes)
     assert.deepEqual(
@@ -64,7 +73,7 @@ test("the request count stays inside the ceiling the design gives", async () => 
   assert.ok(run.requestsSent <= CLEANUP_CEILING, `${run.requestsSent}`);
   assert.ok(run.requestsSent >= 250 && run.requestsSent <= 420, `${run.requestsSent}`);
   const writes = passSummary(buildPass({ pass: 1, newId: (r) => r })).mutations * 2;
-  assert.ok(writes === 124);
+  assert.ok(writes === 128);
 });
 
 test("the source results follow what the calls returned, and a refusal is recorded as a refusal", async () => {
@@ -116,14 +125,19 @@ test("a failed preflight stops clean: nothing is created, deployed or deleted", 
 
 test("a deploy that never becomes ready skips the passes and still cleans up with the one delete", async () => {
   const { deps, calls } = setup();
-  deps.cli = async (action) => {
-    calls.push(action);
+  deps.cli = async (action, name) => {
+    calls.push(name === undefined ? action : `${action}:${name}`);
     return { action, exitCode: action === "dry-run" ? 0 : 1 };
   };
   const { outcome, run } = await record(deps);
   assert.equal(outcome, "incomplete-clean");
   assert.equal(run.passes.length, 0);
-  assert.deepEqual(calls, ["dry-run", "deploy", "delete"]);
+  assert.deepEqual(
+    calls,
+    ["dry-run", "deploy", "delete"],
+    "a failed main deploy is not followed by single deploys",
+  );
+  assert.deepEqual(run.deploy.single, []);
   assert.ok(run.stops.some((s) => s.includes("did not become active")));
 });
 
@@ -140,7 +154,7 @@ test("a stop signal ends the passes at the next step, and the cleanup still runs
   const { outcome, run } = await record({ ...deps, signal });
   assert.equal(outcome, "incomplete-clean");
   assert.ok(run.passes[0].operations.length < SCENARIO_ORDER.length);
-  assert.deepEqual(calls, ["dry-run", "deploy", "delete"]);
+  assert.deepEqual(calls, FULL_CALLS);
   assert.ok(run.stops.some((s) => s.includes("stop signal")));
 });
 
@@ -152,15 +166,15 @@ test("the request ceiling stops the passes, and the cleanup still has its own al
   const result = await record(tight.deps);
   assert.equal(result.outcome, "incomplete-clean", JSON.stringify(result.run.stops));
   assert.ok(result.run.stops.some((s) => s.includes("BudgetExhausted")));
-  assert.deepEqual(tight.calls, ["dry-run", "deploy", "delete"]);
+  assert.deepEqual(tight.calls, FULL_CALLS);
   assert.equal(result.run.cleanup.verified, true);
   assert.ok(result.run.requestsSent <= CLEANUP_CEILING);
 });
 
 test("a cleanup that cannot verify the functions gone ends needs-recovery and never sends a second delete", async () => {
   const { deps, calls, world } = setup();
-  deps.cli = async (action) => {
-    calls.push(action);
+  deps.cli = async (action, name) => {
+    calls.push(name === undefined ? action : `${action}:${name}`);
     if (action === "deploy") world.deploy();
     return { action, exitCode: 0 };
   };
@@ -273,14 +287,14 @@ test("the CLI dry run comes after the preflight and before anything is created",
   const { deps, world, calls } = setup();
   const seen = [];
   const cli = deps.cli;
-  deps.cli = async (action) => {
+  deps.cli = async (action, name) => {
     if (action === "dry-run")
       seen.push({ writes: writes(world).length, requests: world.requests.length });
-    return cli(action);
+    return cli(action, name);
   };
   const { outcome, run } = await record(deps);
   assert.equal(outcome, "recorded");
-  assert.deepEqual(calls, ["dry-run", "deploy", "delete"]);
+  assert.deepEqual(calls, FULL_CALLS);
   assert.equal(seen.length, 1);
   assert.equal(seen[0].writes, 0, "nothing was written before the dry run");
   assert.equal(run.deploy.dryRun.exitCode, 0, "the dry run is in the run record");
@@ -295,8 +309,8 @@ for (const [label, answer] of [
 ]) {
   test(`a CLI dry run that ${label} stops clean: nothing is created, deployed or deleted`, async () => {
     const { deps, world, calls } = setup();
-    deps.cli = async (action) => {
-      calls.push(action);
+    deps.cli = async (action, name) => {
+      calls.push(name === undefined ? action : `${action}:${name}`);
       return { action, ...answer };
     };
     const { outcome, run } = await record(deps);
@@ -361,13 +375,14 @@ test("a stop signal while the deploy settles skips the passes and runs the one C
   const { deps, world, calls } = setup();
   const signal = { aborted: false };
   const cli = deps.cli;
-  deps.cli = async (action) => {
+  deps.cli = async (action, name) => {
     if (action === "deploy") signal.aborted = true;
-    return cli(action);
+    return cli(action, name);
   };
   const { outcome, run } = await record({ ...deps, signal });
   assert.equal(outcome, "incomplete-clean");
-  assert.deepEqual(calls, ["dry-run", "deploy", "delete"]);
+  assert.deepEqual(calls, ["dry-run", "deploy", "delete"], "no single deploy after the signal");
+  assert.ok(run.stops.some((s) => s.includes("before the single deploy of storageFinalizedV1")));
   assert.equal(run.passes.length, 0);
   assert.equal(world.deployed, false);
 });
@@ -416,8 +431,8 @@ test("a deploy that exits 0 but says N Functions Errored is a failed CLI: readin
 
 test("a dry run that exits 0 but names errored functions stops clean, nothing created", async () => {
   const { deps, calls, world } = setup();
-  deps.cli = async (action) => {
-    calls.push(action);
+  deps.cli = async (action, name) => {
+    calls.push(name === undefined ? action : `${action}:${name}`);
     return { action, exitCode: 0, errored: 2 };
   };
   const { outcome, run } = await record(deps);
@@ -429,16 +444,121 @@ test("a dry run that exits 0 but names errored functions stops clean, nothing cr
 
 test("the v4 run's cleanup case end to end: the CLI delete leaves storageArchivedV2, the REST delete takes it, the run ends verified", async () => {
   const { deps, world, calls } = setup();
-  deps.cli = async (action) => {
-    calls.push(action);
+  deps.cli = async (action, name) => {
+    calls.push(name === undefined ? action : `${action}:${name}`);
     if (action === "deploy") world.deploy();
     else if (action === "delete") world.undeploy({ stuck: ["storageArchivedV2"] });
     return { action, exitCode: 0, errored: action === "delete" ? 1 : 0 };
   };
   const { outcome, run } = await record(deps);
   assert.equal(outcome, "recorded", JSON.stringify([run.stops, run.cleanup?.problems]));
-  assert.deepEqual(calls, ["dry-run", "deploy", "delete"], "no second CLI delete");
+  assert.deepEqual(calls, FULL_CALLS, "no second CLI delete");
   assert.deepEqual(world.restDeletes, ["storageArchivedV2"]);
   assert.equal(run.cleanup.verified, true);
   assert.equal(run.cleanup.steps.functions.cli.errored, 1);
+});
+
+// ---- v7: the four Gen1 Storage functions deploy one at a time ------------------------------------------------
+
+/** A CLI double over the world: the main deploy deploys the 18, a single deploy one function, the delete all. */
+function stagedCli({ world, calls, onSingle = () => ({ exitCode: 0, errored: 0 }) }) {
+  return async (action, name) => {
+    calls.push(name === undefined ? action : `${action}:${name}`);
+    if (action === "deploy") {
+      world.deploy(mainDeployHandlers);
+      return { action, exitCode: 0, errored: 0 };
+    }
+    if (action === "deploy-one") {
+      const answer = onSingle(name);
+      if (answer.exitCode === 0 && !answer.errored) world.deploy([name]);
+      return { action: `deploy-${name}`, ...answer };
+    }
+    if (action === "delete") world.undeploy();
+    return { action, exitCode: 0, errored: 0 };
+  };
+}
+
+test("v7: the four Gen1 Storage functions deploy one command each, in order, after the main deploy, and the passes follow", async () => {
+  const { deps, world, calls } = setup();
+  const readyWhen = [];
+  const cli = stagedCli({ world, calls });
+  deps.cli = async (action, name) => {
+    if (action === "deploy-one") readyWhen.push([name, [...world.active].length]);
+    return cli(action, name);
+  };
+  const { outcome, run } = await record(deps);
+  assert.equal(outcome, "recorded", JSON.stringify([run.stops, run.cleanup?.problems]));
+  assert.deepEqual(calls, FULL_CALLS);
+  // 18 are deployed when the first single deploy starts, one more at each next
+  assert.deepEqual(readyWhen, [
+    ["storageFinalizedV1", 18],
+    ["storageDeletedV1", 19],
+    ["storageMetadataUpdatedV1", 20],
+    ["storageArchivedV1", 21],
+  ]);
+  assert.deepEqual(
+    run.deploy.single.map((s) => s.name),
+    gen1StorageDeployOrder,
+  );
+  assert.equal(run.passes.length, 2);
+  assert.equal(run.cleanup.verified, true);
+});
+
+test("v7: a single deploy that fails stops the sequence, with no retry and no later single deploy; the cleanup runs", async () => {
+  for (const [label, answer] of [
+    ["a non-zero exit", { exitCode: 1, errored: 0 }],
+    ["a timeout", { exitCode: null, timedOut: true, errored: null }],
+    ["exit 0 with Functions Errored (the v4 shape)", { exitCode: 0, errored: 1 }],
+    ["exit 2 with 3 Functions Errored (the v6 shape)", { exitCode: 2, errored: 3 }],
+  ]) {
+    const { deps, world, calls } = setup();
+    deps.cli = stagedCli({
+      world,
+      calls,
+      onSingle: (name) =>
+        name === "storageMetadataUpdatedV1" ? answer : { exitCode: 0, errored: 0 },
+    });
+    const { outcome, run } = await record(deps);
+    assert.equal(outcome, "incomplete-clean", label);
+    assert.deepEqual(
+      calls,
+      [
+        "dry-run",
+        "deploy",
+        "deploy-one:storageFinalizedV1",
+        "deploy-one:storageDeletedV1",
+        "deploy-one:storageMetadataUpdatedV1",
+        "delete",
+      ],
+      label,
+    );
+    assert.deepEqual(
+      run.deploy.single.map((s) => s.name),
+      ["storageFinalizedV1", "storageDeletedV1", "storageMetadataUpdatedV1"],
+      label,
+    );
+    assert.ok(
+      run.stops.some((s) => s.includes("the single deploy of storageMetadataUpdatedV1 failed")),
+      label,
+    );
+    assert.equal(run.passes.length, 0, "no pass after a failed deploy");
+    assert.equal(run.cleanup.verified, true, label);
+    assert.equal(world.deployed, false, label);
+  }
+});
+
+test("v7: the first single deploy failing leaves the other three unsent", async () => {
+  const { deps, world, calls } = setup();
+  deps.cli = stagedCli({ world, calls, onSingle: () => ({ exitCode: 2, errored: 3 }) });
+  const { outcome, run } = await record(deps);
+  assert.equal(outcome, "incomplete-clean");
+  assert.deepEqual(calls, ["dry-run", "deploy", "deploy-one:storageFinalizedV1", "delete"]);
+  assert.equal(run.deploy.single.length, 1);
+});
+
+test("v7: readiness is read at most twice after a single deploy failed, like after a failed main deploy", async () => {
+  const { deps, world, calls } = setup();
+  deps.cli = stagedCli({ world, calls, onSingle: () => ({ exitCode: 1, errored: 0 }) });
+  const { run } = await record(deps);
+  assert.ok(run.deploy.readiness.polls <= 2, JSON.stringify(run.deploy.readiness.polls));
 });

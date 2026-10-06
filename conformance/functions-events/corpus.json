@@ -230,13 +230,14 @@
     {
       "id": "storage-failed-upload",
       "source": "storage",
-      "mutation": "storage.upload-invalid-checksum",
+      "mutation": "storage.upload-precondition-failed",
       "resource": "bucket-primary",
       "credential": "admin",
       "preconditions": [
         "owned-resource-binding",
         "handler-readiness-readback",
-        "object-absent"
+        "seeded-object-generation-readback",
+        "seed-event-drained"
       ],
       "cleanup": [
         "owned-object-generations-typed-absence"

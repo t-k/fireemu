@@ -423,6 +423,24 @@ fn expiration_policy_from_proto(
 /// Renders a subscription config as a wire `Subscription`, reporting `reported_topic` (which is
 /// `_deleted-topic_` when the topic has been deleted).
 #[must_use]
+pub(crate) fn subscription_to_proto_for_profile(
+    config: &SubscriptionConfig,
+    reported: &str,
+    profile: crate::PubSubProfile,
+) -> pb::Subscription {
+    let mut sub = subscription_to_proto(config, reported);
+    if profile == crate::PubSubProfile::Strict {
+        if let Some(push) = sub
+            .push_config
+            .as_mut()
+            .filter(|push| !push.push_endpoint.is_empty())
+        {
+            push.attributes.insert("x-goog-version".into(), "v1".into());
+        }
+    }
+    sub
+}
+
 pub fn subscription_to_proto(
     config: &SubscriptionConfig,
     reported_topic: &str,

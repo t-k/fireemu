@@ -15,7 +15,8 @@ use pb::subscriber_server::Subscriber;
 
 use crate::convert::{
     from_timestamp, snapshot_to_proto, status, subscription_from_proto,
-    subscription_from_proto_for_profile, subscription_to_proto, validate_push_config_options,
+    subscription_from_proto_for_profile, subscription_to_proto_for_profile,
+    validate_push_config_options,
 };
 use crate::PubSubHandle;
 
@@ -38,17 +39,11 @@ impl SubscriberService {
         let reported = state
             .reported_topic(name)
             .unwrap_or_else(|| config.topic.to_full());
-        let mut sub = subscription_to_proto(config, &reported);
-        if self.handle.profile == crate::PubSubProfile::Strict {
-            if let Some(push) = sub
-                .push_config
-                .as_mut()
-                .filter(|push| !push.push_endpoint.is_empty())
-            {
-                push.attributes.insert("x-goog-version".into(), "v1".into());
-            }
-        }
-        Ok(sub)
+        Ok(subscription_to_proto_for_profile(
+            config,
+            &reported,
+            self.handle.profile,
+        ))
     }
 }
 
@@ -213,7 +208,7 @@ impl Subscriber for SubscriberService {
                 let reported = state
                     .reported_topic(&c.name)
                     .unwrap_or_else(|| c.topic.to_full());
-                subscription_to_proto(c, &reported)
+                subscription_to_proto_for_profile(c, &reported, self.handle.profile)
             })
             .collect();
         Ok(Response::new(pb::ListSubscriptionsResponse {

@@ -273,7 +273,7 @@ fn dispatch_subscription(
         let subscriptions = state
             .list_subscriptions(project)
             .into_iter()
-            .map(|config| subscription_json(&state, &config))
+            .map(|config| subscription_json(&state, &config, handle.profile))
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
@@ -521,7 +521,7 @@ fn create_subscription(
         .subscription_config(&subscription)
         .map_err(RestError::from_core)?
         .clone();
-    let response = subscription_json(&state, &config);
+    let response = subscription_json(&state, &config, handle.profile);
     drop(state);
     handle.retry_pending_dead_letters();
     handle.schedule_push(&topic);
@@ -537,7 +537,10 @@ fn get_subscription(
     let config = state
         .subscription_config(&subscription)
         .map_err(|error| RestError::from_resource_get(error, subscription.subscription()))?;
-    Ok((StatusCode::OK, subscription_json(&state, config)))
+    Ok((
+        StatusCode::OK,
+        subscription_json(&state, config, handle.profile),
+    ))
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -595,7 +598,10 @@ fn update_subscription(
             .subscription_config(&subscription)
             .map_err(RestError::from_core)?
             .clone();
-        (config.topic.clone(), subscription_json(&state, &config))
+        (
+            config.topic.clone(),
+            subscription_json(&state, &config, handle.profile),
+        )
     };
     handle.schedule_push(&topic);
     Ok((StatusCode::OK, response))
@@ -1087,7 +1093,11 @@ fn snake_case_field(field: &str) -> String {
     normalized
 }
 
-fn subscription_json(state: &PubSubState, config: &SubscriptionConfig) -> Value {
+fn subscription_json(
+    state: &PubSubState,
+    config: &SubscriptionConfig,
+    profile: PubSubProfile,
+) -> Value {
     let topic = state
         .reported_topic(&config.name)
         .unwrap_or_else(|| config.topic.to_full());
@@ -1131,6 +1141,9 @@ fn subscription_json(state: &PubSubState, config: &SubscriptionConfig) -> Value 
     }
     if !config.push_config.push_endpoint.is_empty() {
         value["pushConfig"] = json!({"pushEndpoint": config.push_config.push_endpoint});
+        if profile == PubSubProfile::Strict {
+            value["pushConfig"]["attributes"] = json!({"x-goog-version":"v1"});
+        }
     }
     if !config.filter.as_str().is_empty() {
         value["filter"] = json!(config.filter.as_str());

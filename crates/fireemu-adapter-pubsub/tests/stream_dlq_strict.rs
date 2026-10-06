@@ -354,6 +354,28 @@ async fn strict_recorded_push_config_creation_and_stream_gate_preserve_emulator(
             config.attributes.get("x-goog-version").map(String::as_str),
             Some("v1")
         );
+        let listed = client
+            .list_subscriptions(pb::ListSubscriptionsRequest {
+                project: "projects/demo-oracle-masks0".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            listed.subscriptions[0]
+                .push_config
+                .as_ref()
+                .unwrap()
+                .attributes,
+            config.attributes
+        );
+        let (_, bytes) = server.rest("GET", &format!("/v1/{SUB}"), json!({})).await;
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            body["pushConfig"]["attributes"],
+            json!({"x-goog-version":"v1"})
+        );
         let result = client
             .streaming_pull(tokio_stream::iter([pb::StreamingPullRequest {
                 subscription: SUB.into(),
@@ -566,5 +588,50 @@ async fn strict_native_publication_pull_and_loopback_push_share_one_wire_identit
         let message = received.received_messages[0].message.as_ref().unwrap();
         assert_eq!(message.message_id, *id);
         assert_eq!(message.data, b"x");
+        let mut client = SubscriberClient::new(server.channel().await);
+        client
+            .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                subscription: SUB.into(),
+                ack_ids: vec![received.received_messages[0].ack_id.clone()],
+                ack_deadline_seconds: 0,
+            })
+            .await
+            .unwrap();
+        let redelivery = client
+            .pull(pb::PullRequest {
+                subscription: SUB.into(),
+                max_messages: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(redelivery.received_messages.len(), 1);
+        assert_eq!(
+            redelivery.received_messages[0]
+                .message
+                .as_ref()
+                .unwrap()
+                .message_id,
+            *id
+        );
+        client
+            .acknowledge(pb::AcknowledgeRequest {
+                subscription: SUB.into(),
+                ack_ids: vec![redelivery.received_messages[0].ack_id.clone()],
+            })
+            .await
+            .unwrap();
+        assert!(client
+            .pull(pb::PullRequest {
+                subscription: SUB.into(),
+                max_messages: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .received_messages
+            .is_empty());
     }
 }

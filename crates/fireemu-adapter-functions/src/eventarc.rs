@@ -52,6 +52,8 @@ pub struct PublishedEvent {
     pub attributes: BTreeMap<String, String>,
     /// The JSON `CloudEvent` the function receives.
     pub event: Value,
+    /// Validated JSON text retained only for strict custom-event delivery.
+    pub raw_data: Option<String>,
 }
 
 /// Matching would exceed the caller's bounded delivery budget.
@@ -615,6 +617,7 @@ pub fn convert_strict(proto: &Value) -> Result<PublishedEvent, String> {
     convert_with_profile(proto, true)
 }
 
+#[allow(clippy::too_many_lines)] // Keep profile-specific conversion and raw data validation together.
 fn convert_with_profile(proto: &Value, strict: bool) -> Result<PublishedEvent, String> {
     let text = |key: &str| proto.get(key).and_then(Value::as_str);
     for required in ["id", "type", "specVersion", "source"] {
@@ -657,6 +660,8 @@ fn convert_with_profile(proto: &Value, strict: bool) -> Result<PublishedEvent, S
         ),
         other => return Err(format!("Unsupported content type: {other}")),
     };
+    let mut raw_data = (strict && content_type.unwrap_or("application/json") == "application/json")
+        .then(|| proto["textData"].as_str().unwrap_or("").to_owned());
 
     let mut event = Map::new();
     event.insert(
@@ -718,6 +723,9 @@ fn convert_with_profile(proto: &Value, strict: bool) -> Result<PublishedEvent, S
                 .and_then(Value::as_str)
                 .ok_or_else(|| format!("CloudEvent must contain {name} attribute"))?;
             event.insert(name.clone(), Value::String(text.to_owned()));
+            if name == "data" {
+                raw_data = None;
+            }
             attributes.insert(name.clone(), text.to_owned());
         }
     }
@@ -725,6 +733,7 @@ fn convert_with_profile(proto: &Value, strict: bool) -> Result<PublishedEvent, S
         event_type,
         attributes,
         event: Value::Object(event),
+        raw_data,
     })
 }
 
@@ -787,6 +796,7 @@ pub fn accept_verbatim(event: &Value) -> Result<PublishedEvent, String> {
         event_type,
         attributes,
         event: event.clone(),
+        raw_data: None,
     })
 }
 

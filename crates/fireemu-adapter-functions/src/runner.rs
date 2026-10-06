@@ -1,6 +1,6 @@
 //! The runner child process: spawn, handshake, invocations with real-time timeouts, logs.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -752,18 +752,22 @@ impl Runner {
     /// deadline means the runner stopped reading its stdin: the stream is closed and the
     /// runner retired rather than left with a half frame. A timed-out invocation keeps its
     /// waiter: the late result (or the runner's death) arrives on [`Invocation::late`].
-    pub async fn invoke(&self, request: Value, timeout: Duration) -> Invocation {
+    pub async fn invoke(&self, request: impl std::fmt::Display, timeout: Duration) -> Invocation {
         self.invoke_inner(request, Some(timeout)).await
     }
 
     /// Sends an `invoke` without a handler deadline. The debugger uses this path so time
     /// stopped at a breakpoint does not expire the invocation. Shutdown still closes the
     /// runner and resolves the waiter as `RunnerGone`.
-    pub async fn invoke_unbounded(&self, request: Value) -> Invocation {
+    pub async fn invoke_unbounded(&self, request: impl std::fmt::Display) -> Invocation {
         self.invoke_inner(request, None).await
     }
 
-    async fn invoke_inner(&self, request: Value, timeout: Option<Duration>) -> Invocation {
+    async fn invoke_inner(
+        &self,
+        request: impl std::fmt::Display,
+        timeout: Option<Duration>,
+    ) -> Invocation {
         let done = |outcome| Invocation {
             outcome,
             late: None,
@@ -771,11 +775,15 @@ impl Runner {
         if !self.is_alive() {
             return done(InvokeOutcome::RunnerGone("runner exited".into()));
         }
+        let Ok(request) = serde_json::from_str::<BTreeMap<String, Box<serde_json::value::RawValue>>>(
+            &request.to_string(),
+        ) else {
+            return done(InvokeOutcome::RunnerGone("invalid invocation JSON".into()));
+        };
         let id = request
             .get("invocationId")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned();
+            .and_then(|value| serde_json::from_str::<String>(value.get()).ok())
+            .unwrap_or_default();
         let (tx, mut rx) = oneshot::channel();
         if let Ok(mut w) = self.waiters.lock() {
             w.insert(id.clone(), tx);
@@ -804,7 +812,11 @@ impl Runner {
         // 2. The frame: a partial write would desynchronize the protocol, so a stalled or
         //    failed write retires the runner.
         let mut frame = request;
-        frame["type"] = Value::String("invoke".into());
+        frame.insert(
+            "type".to_owned(),
+            serde_json::value::to_raw_value("invoke").expect("JSON string serializes"),
+        );
+        let frame = serde_json::value::to_raw_value(&frame).expect("raw invocation serializes");
         let written = match deadline {
             Some(deadline) => matches!(
                 tokio::time::timeout_at(deadline, write_frame(pipe, &frame)).await,

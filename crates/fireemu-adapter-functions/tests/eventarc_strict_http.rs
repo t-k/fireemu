@@ -263,6 +263,46 @@ fn error_of(body: &str) -> Value {
 }
 
 #[tokio::test]
+async fn custom_json_data_keeps_publisher_member_order_only_in_strict_deliveries() {
+    use fireemu_adapter_functions::ordered_json::parse;
+
+    let data = r#"{"run":"fixture-run","recording":"H1","case":"sdk-metadata","nested":{"z":3,"a":{"last":true,"first":null}},"items":[{"second":2,"first":1}]}"#;
+    let sorted = serde_json::from_str::<Value>(data).unwrap().to_string();
+    for (profile, expected) in [
+        (FunctionsHttpProfile::Emulator, sorted.as_str()),
+        (FunctionsHttpProfile::Strict, data),
+    ] {
+        let server = start(Some(profile)).await;
+        let mut published = event("eu");
+        published["textData"] = json!(data);
+        let body = publish_body(&[published]);
+        let answer = server
+            .send(
+                "POST",
+                &format!("/{CUSTOM}:publishEvents"),
+                true,
+                Some(&body),
+            )
+            .await;
+        let count = server.wait_for_frames(1).await;
+        let frames = std::fs::read_to_string(&server.frames).unwrap_or_default();
+        server.stop().await;
+
+        assert_eq!(answer.0, 200);
+        assert_eq!(count, 1);
+        let frame = frames
+            .lines()
+            .find(|line| line.contains("customEvent"))
+            .unwrap();
+        assert_eq!(
+            parse(frame.as_bytes()).unwrap()["event"]["data"],
+            parse(expected.as_bytes()).unwrap(),
+            "{profile:?} preserves its data member order through the runner"
+        );
+    }
+}
+
+#[tokio::test]
 async fn strict_refuses_a_request_without_a_credential_and_serves_the_production_path_and_the_emulator_one(
 ) {
     let server = start(Some(FunctionsHttpProfile::Strict)).await;

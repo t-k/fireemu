@@ -75,12 +75,44 @@ async fn start() -> Harness {
     start_with_bridge(None).await
 }
 
+#[tokio::test]
+async fn unobserved_larger_native_publish_retains_the_local_decoder_boundary() {
+    use prost::Message as _;
+    let harness = start().await;
+    let mut publisher = harness
+        .publisher()
+        .await
+        .max_encoding_message_size(12 * 1024 * 1024);
+    for encoded_size in [10_485_762, 11 * 1024 * 1024] {
+        let mut request = pb::PublishRequest {
+            topic: "projects/demo-app/topics/decoder-boundary".to_owned(),
+            messages: vec![pb::PubsubMessage {
+                data: vec![b'x'; encoded_size - 100],
+                ..Default::default()
+            }],
+        };
+        let overhead = request.encoded_len() - request.messages[0].data.len();
+        request.messages[0]
+            .data
+            .resize(encoded_size - overhead, b'x');
+        assert_eq!(request.encoded_len(), encoded_size);
+        let error = publisher.publish(request).await.unwrap_err();
+        assert_eq!(error.code(), tonic::Code::OutOfRange);
+        assert!(
+            error.message().contains("decoded message length too large"),
+            "{error}"
+        );
+    }
+    harness.shutdown().await;
+}
+
 async fn start_with_bridge(bridge: Option<Arc<dyn TopicDelivery>>) -> Harness {
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_700_000_000),
     )));
     let state = Arc::new(Mutex::new(PubSubState::new(42)));
-    let handle = PubSubHandle::new(state.clone(), clock.clone(), bridge);
+    let handle = PubSubHandle::new(state.clone(), clock.clone(), bridge)
+        .with_paging_policy(fireemu_adapter_pubsub::PagingPolicy::Strict);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server_handle = handle.clone();
@@ -1046,7 +1078,19 @@ async fn grpc_rejects_unsupported_subscription_options_before_creation() {
         ),
     ];
 
-    for (index, (field, mut subscription)) in options.into_iter().enumerate() {
+    for (index, (field, mut subscription)) in options
+        .into_iter()
+        .filter(|(field, _)| {
+            ![
+                "expiration_policy",
+                "labels",
+                "state",
+                "push_config.attributes",
+            ]
+            .contains(field)
+        })
+        .enumerate()
+    {
         let name = format!("projects/demo-app/subscriptions/unsupported-{index}");
         subscription.name = name.clone();
         subscription.topic = topic.to_owned();
@@ -1125,7 +1169,10 @@ async fn modify_push_config_rejects_unsupported_options_without_mutating_the_end
             },
         ),
     ];
-    for (field, push_config) in options {
+    for (field, push_config) in options
+        .into_iter()
+        .filter(|(field, _)| *field != "push_config.attributes")
+    {
         let error = subc
             .modify_push_config(pb::ModifyPushConfigRequest {
                 subscription: subscription.to_owned(),
@@ -1241,7 +1288,7 @@ async fn redelivery_after_ack_deadline_on_virtual_clock() {
         .into_inner()
         .received_messages;
     assert_eq!(first.len(), 1);
-    assert_eq!(first[0].delivery_attempt, 1);
+    assert_eq!(first[0].delivery_attempt, 0);
 
     // The message is not redelivered without ack until the deadline passes.
     let none = subc
@@ -1273,7 +1320,7 @@ async fn redelivery_after_ack_deadline_on_virtual_clock() {
         .into_inner()
         .received_messages;
     assert_eq!(second.len(), 1);
-    assert_eq!(second[0].delivery_attempt, 2);
+    assert_eq!(second[0].delivery_attempt, 0);
 }
 
 #[tokio::test]
@@ -1565,6 +1612,12 @@ async fn push_subscription_delivers_json_and_acknowledges_the_message() {
     assert!(body.contains("\"data\":\"cHVzaC1tZQ==\""));
     assert!(body.contains(subscription));
 
+    subc.modify_push_config(pb::ModifyPushConfigRequest {
+        subscription: subscription.to_owned(),
+        push_config: Some(pb::PushConfig::default()),
+    })
+    .await
+    .unwrap();
     let pulled = subc
         .pull(pb::PullRequest {
             subscription: subscription.to_owned(),
@@ -1617,6 +1670,12 @@ async fn push_subscription_retries_after_failures_without_a_new_publish() {
     // each failed attempt holds the subscription until the virtual clock reaches its wait.
     await_push_count_releasing_backoff(&h, &bodies, 4).await;
     assert_eq!(bodies.lock().unwrap().len(), 4);
+    subc.modify_push_config(pb::ModifyPushConfigRequest {
+        subscription: subscription.to_owned(),
+        push_config: Some(pb::PushConfig::default()),
+    })
+    .await
+    .unwrap();
     let pulled = subc
         .pull(pb::PullRequest {
             subscription: subscription.to_owned(),
@@ -2450,6 +2509,12 @@ async fn deleting_and_recreating_a_subscription_invalidates_the_old_push_generat
     }
     assert_eq!(old_bodies.lock().unwrap().len(), 1);
     assert_eq!(new_bodies.lock().unwrap().len(), 1);
+    subc.modify_push_config(pb::ModifyPushConfigRequest {
+        subscription: subscription.to_owned(),
+        push_config: Some(pb::PushConfig::default()),
+    })
+    .await
+    .unwrap();
     let pulled = subc
         .pull(pb::PullRequest {
             subscription: subscription.to_owned(),

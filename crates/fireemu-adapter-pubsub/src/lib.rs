@@ -8,7 +8,8 @@
 //! # Security posture
 //!
 //! The daemon binds the listener to loopback (`127.0.0.1`) only, exactly like the official
-//! emulator and the other fireemu services, and no credential is required on loopback. Message
+//! emulator and the other fireemu services. Missing credentials are accepted for SDK emulator
+//! connections; strict rejects every presented credential without a trusted OAuth verifier. Message
 //! sizes are bounded at the gRPC codec (10 MiB decode / encode), and the core state machine
 //! bounds topics, subscriptions and retained messages so a client cannot exhaust memory.
 //!
@@ -18,6 +19,9 @@
 //! redelivery therefore advance only when the control API advances the clock, and message /
 //! ack ids come from the daemon seed, so a run reproduces and `await-idle` stays deterministic.
 
+mod ack_token;
+mod admission;
+mod authentication;
 mod convert;
 mod publisher;
 mod push;
@@ -26,6 +30,8 @@ mod subscriber;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
+
+pub use fireemu_core_pubsub::pagination::PagingPolicy;
 
 use fireemu_core_pubsub::{
     DeadLetterForward, PubSubError, PubSubState, PubsubMessage, ReceivedMessage, StoredMessage,
@@ -397,6 +403,7 @@ pub trait TopicDelivery: Send + Sync {
 /// optional Functions bridge.
 #[derive(Clone)]
 pub struct PubSubHandle {
+    paging_policy: PagingPolicy,
     state: Arc<Mutex<PubSubState>>,
     clock: Arc<Mutex<VirtualClock>>,
     bridge: Option<Arc<dyn TopicDelivery>>,
@@ -420,6 +427,7 @@ impl PubSubHandle {
         bridge: Option<Arc<dyn TopicDelivery>>,
     ) -> Self {
         Self {
+            paging_policy: PagingPolicy::Emulator,
             state,
             clock,
             bridge,
@@ -433,6 +441,13 @@ impl PubSubHandle {
             push_clock_notify: Arc::new(Notify::new()),
             dead_letter_cancel_notify: Arc::new(Notify::new()),
         }
+    }
+
+    /// Selects the list policy. The default follows the official emulator.
+    #[must_use]
+    pub fn with_paging_policy(mut self, policy: PagingPolicy) -> Self {
+        self.paging_policy = policy;
+        self
     }
 
     /// The current virtual-clock instant.
@@ -753,8 +768,10 @@ impl PubSubHandle {
         let subscriptions = self.state().push_subscriptions(topic);
         let now = self.now();
         let mut dispatch = self.push_dispatch.lock().expect("push dispatch lock");
-        for (subscription, _) in subscriptions {
-            dispatch.enqueue(subscription, now);
+        for (subscription, endpoint) in subscriptions {
+            if push::validate_endpoint(&endpoint).is_ok() {
+                dispatch.enqueue(subscription, now);
+            }
         }
         drop(dispatch);
         self.push_ready_notify.notify_one();
@@ -1128,7 +1145,11 @@ pub async fn serve_pubsub(
     handle.start_dead_letter_dispatcher();
     let _dispatcher_cancellation = PushDispatcherCancellationGuard(handle.clone());
     let publisher = PublisherServer::new(PublisherService::new(handle.clone()))
-        .max_decoding_message_size(MAX_MESSAGE_BYTES)
+        .max_decoding_message_size(if handle.paging_policy == PagingPolicy::Strict {
+            MAX_MESSAGE_BYTES + 1
+        } else {
+            MAX_MESSAGE_BYTES
+        })
         .max_encoding_message_size(MAX_MESSAGE_BYTES);
     let subscriber = SubscriberServer::new(SubscriberService::new(handle.clone()))
         .max_decoding_message_size(MAX_MESSAGE_BYTES)
@@ -1142,6 +1163,14 @@ pub async fn serve_pubsub(
         let handle = rest_handle.clone();
         async move { rest::handle(request, handle).await }
     });
+    prepared_router = prepared_router.layer(axum::middleware::from_fn_with_state(
+        handle.paging_policy,
+        authentication::authenticate,
+    ));
+    if handle.paging_policy == PagingPolicy::Strict {
+        prepared_router =
+            prepared_router.layer(axum::middleware::from_fn(recorded_grpc_error_headers));
+    }
     let result = tonic::transport::Server::builder()
         .accept_http1(true)
         .serve_with_incoming(
@@ -1669,6 +1698,8 @@ mod dispatch_tests {
             state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                     retain_acked_messages: false,
                     message_retention_duration: None,
                     name: subscription,
@@ -1679,6 +1710,7 @@ mod dispatch_tests {
                     dead_letter_policy: None,
                     retry_policy: None,
                     push_config: PushConfig {
+                        attributes: std::collections::BTreeMap::new(),
                         push_endpoint: "http://127.0.0.1:1/push".to_owned(),
                     },
                 })
@@ -1749,6 +1781,8 @@ mod dispatch_tests {
             state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                     retain_acked_messages: false,
                     message_retention_duration: None,
                     name: subscription.clone(),
@@ -1762,6 +1796,7 @@ mod dispatch_tests {
                         maximum_backoff: LogicalDuration::from_seconds(10),
                     }),
                     push_config: PushConfig {
+                        attributes: std::collections::BTreeMap::new(),
                         push_endpoint: "http://127.0.0.1:1/push".to_owned(),
                     },
                 })
@@ -1824,6 +1859,8 @@ mod dispatch_tests {
         let topic = TopicName::new("demo-project", "reset-topic").unwrap();
         let subscription = SubscriptionName::new("demo-project", "reset-subscription").unwrap();
         let config = || SubscriptionConfig {
+            labels: std::collections::BTreeMap::new(),
+            expiration_policy: None,
             retain_acked_messages: false,
             message_retention_duration: None,
             name: subscription.clone(),
@@ -1834,6 +1871,7 @@ mod dispatch_tests {
             dead_letter_policy: None,
             retry_policy: None,
             push_config: PushConfig {
+                attributes: std::collections::BTreeMap::new(),
                 push_endpoint: "http://127.0.0.1:1/push".to_owned(),
             },
         };
@@ -1943,6 +1981,8 @@ mod dispatch_tests {
                 .unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                     retain_acked_messages: false,
                     message_retention_duration: None,
                     name: source_subscription.clone(),
@@ -2142,6 +2182,59 @@ mod publication_gate_tests {
         )
     }
 
+    #[tokio::test]
+    async fn accepted_remote_push_configuration_never_queues_network_delivery() {
+        let handle = handle();
+        let topic = fireemu_core_pubsub::TopicName::new("demo-guard", "events").unwrap();
+        let name = fireemu_core_pubsub::SubscriptionName::new("demo-guard", "configured").unwrap();
+        handle
+            .state()
+            .create_topic(topic.clone(), std::collections::BTreeMap::new())
+            .unwrap();
+        let config = crate::convert::subscription_from_proto_with_policy(
+            &fireemu_proto_pubsub::google::pubsub::v1::Subscription {
+                name: name.to_full(),
+                topic: topic.to_full(),
+                push_config: Some(fireemu_proto_pubsub::google::pubsub::v1::PushConfig {
+                    push_endpoint: "https://example.com/probe".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            super::PagingPolicy::Strict,
+        )
+        .unwrap();
+        handle.state().create_subscription(config).unwrap();
+        handle.schedule_push(&topic);
+        handle.start_push_dispatcher();
+        handle
+            .publish(
+                &topic,
+                vec![fireemu_core_pubsub::PubsubMessage {
+                    data: b"guarded".to_vec(),
+                    ..Default::default()
+                }],
+            )
+            .unwrap();
+        tokio::task::yield_now().await;
+        {
+            let dispatch = handle.push_dispatch.lock().unwrap();
+            assert!(dispatch.ready.is_empty());
+            assert!(dispatch.active.is_empty());
+            assert_eq!(dispatch.spawned, 0);
+        }
+        assert_eq!(
+            handle
+                .state()
+                .subscription_config(&name)
+                .unwrap()
+                .push_config
+                .push_endpoint,
+            "https://example.com/probe"
+        );
+        handle.shutdown_push_dispatcher().await;
+    }
+
     /// PUBGATE-1: the publication gate is held across the control-plane transitions that
     /// publish and reset Pub/Sub state, so panicking on a poisoned gate would turn one earlier
     /// failure into a permanent one for every later caller. The refusal is returned instead.
@@ -2168,5 +2261,56 @@ mod publication_gate_tests {
             .expect_err("a poisoned gate must be reported");
         assert!(refusal.contains("publication gate"), "{refusal}");
         assert!(refusal.contains("poisoned"), "{refusal}");
+    }
+}
+
+fn canonical_recorded_grpc_message(message: &str) -> String {
+    message
+        .replace(
+            "pubsub-basics%23resource_names",
+            "pubsub-basics#resource_names",
+        )
+        .replace("subscriber%23create", "subscriber#create")
+}
+
+async fn recorded_grpc_error_headers(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(request).await;
+    if let Some(message) = response
+        .headers()
+        .get("grpc-message")
+        .and_then(|value| value.to_str().ok())
+    {
+        let canonical = canonical_recorded_grpc_message(message);
+        if let Ok(value) = axum::http::HeaderValue::from_str(&canonical) {
+            response.headers_mut().insert("grpc-message", value);
+        }
+    }
+    response
+}
+
+#[cfg(test)]
+mod grpc_error_header_tests {
+    use super::canonical_recorded_grpc_message;
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn recorded_anchors_roundtrip_and_literal_percent_sequences_stay_encoded(text in "[a-z0-9 #?%]{0,100}") {
+            for anchor in ["https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names","https://cloud.google.com/pubsub/subscriber#create"] {
+                let message=format!("{text} {anchor}");
+                let status=tonic::Status::invalid_argument(&message);
+                let mut headers=axum::http::HeaderMap::new();status.add_header(&mut headers).unwrap();
+                let encoded=headers["grpc-message"].to_str().unwrap();
+                let canonical=canonical_recorded_grpc_message(encoded);
+                prop_assert!(canonical.contains(anchor));
+                prop_assert!(!canonical.contains("%23resource_names") && !canonical.contains("%23create"));
+                prop_assert_eq!(canonical_recorded_grpc_message(&canonical),canonical);
+            }
+            let mut encoded=axum::http::HeaderMap::new();tonic::Status::invalid_argument("pubsub-basics%23resource_names").add_header(&mut encoded).unwrap();
+            let value=encoded["grpc-message"].to_str().unwrap();
+            prop_assert_eq!(canonical_recorded_grpc_message(value),value);
+        }
     }
 }

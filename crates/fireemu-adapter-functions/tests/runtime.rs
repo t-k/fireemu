@@ -1100,6 +1100,7 @@ async fn multi_codebase_runtime_exposes_and_stops_every_current_runner() {
             functions_host: None,
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
     )
     .unwrap();
 

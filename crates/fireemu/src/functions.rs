@@ -2524,6 +2524,7 @@ fn default_runner_for_codebase(
 /// Starts one runner process per configured codebase and the runtime that multiplexes them,
 /// and installs it as the backend's synchronous commit observer (Storage events are wired by
 /// the caller through [`storage_sink`]).
+#[allow(clippy::too_many_lines)] // Keep schedule profile selection with runtime startup.
 pub async fn start(
     cfg: &RuntimeConfig,
     clock: &Arc<Mutex<VirtualClock>>,
@@ -2609,7 +2610,19 @@ pub async fn start(
     // A function name two codebases both export is fatal here. The runners it collided
     // between are killed rather than left behind a daemon that refuses to serve them.
     let spawned: Vec<Arc<Runner>> = started.iter().map(|c| c.runner.clone()).collect();
-    let runtime = match FunctionsRuntime::with_codebases(started, config, clock.clone()) {
+    let runtime = match FunctionsRuntime::with_codebases(
+        started,
+        config,
+        clock.clone(),
+        match cfg.profile {
+            CompatibilityProfile::Strict => {
+                fireemu_adapter_functions::http::FunctionsHttpProfile::Strict
+            }
+            CompatibilityProfile::Emulator => {
+                fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator
+            }
+        },
+    ) {
         Ok(runtime) => runtime,
         Err(e) => {
             for runner in &spawned {
@@ -2955,6 +2968,7 @@ async fn start_codebase(
 
 /// The manifest `profile` serves: the parsed manifest, refused when the strict profile finds a schedule production
 /// Cloud Scheduler refuses, with the blocking functions the profile does not serve set aside.
+#[allow(clippy::too_many_lines)] // Keep strict schedule normalization and validation together.
 fn manifest_for_profile(
     profile: CompatibilityProfile,
     manifest_json: &serde_json::Value,
@@ -2964,6 +2978,33 @@ fn manifest_for_profile(
     let document = if uses_production_scheduler_defaults(profile) {
         let mut copy = manifest_json.clone();
         apply_first_generation_default_time_zone(&mut copy);
+        // Calendar v6 gr13: synchronized minutes use wall-clock alignment, in both recordings.
+        if let Some(functions) = copy
+            .get_mut("functions")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for function in functions {
+                let Some(trigger) = function.get_mut("trigger") else {
+                    continue;
+                };
+                if trigger.get("type").and_then(serde_json::Value::as_str) != Some("schedule") {
+                    continue;
+                }
+                if let Some(text) = trigger.get("schedule").and_then(serde_json::Value::as_str) {
+                    let lower = text.to_ascii_lowercase();
+                    let words: Vec<&str> = lower.split_whitespace().collect();
+                    if let ["every", n, "minutes", "synchronized"] = words.as_slice() {
+                        // Only divisors of 60: there `*/n` equals the day-aligned interval; others are unrecorded.
+                        if n.parse::<u32>()
+                            .is_ok_and(|n| (1..=60).contains(&n) && 60 % n == 0)
+                        {
+                            trigger["schedule"] =
+                                serde_json::Value::String(format!("*/{n} * * * *"));
+                        }
+                    }
+                }
+            }
+        }
         defaulted = copy;
         &defaulted
     } else {
@@ -3039,10 +3080,15 @@ fn manifest_for_profile(
             }
             let zone = fireemu_adapter_functions::zone::resolve(time_zone.as_deref())
                 .map_err(|e| format!("manifest: function {:?}: time zone: {e}", function.name))?;
-            // Calendar v6 cr13 and ds01: a declaration with no reachable occurrence is refused.
+            // Calendar v6 cr13 is invalid even without DST; ds01 has no occurrence in its zone.
             if schedule.next_after_in(now, &*zone).is_none() {
+                let reason = if schedule.next_after(now, 0).is_none() {
+                    "The provided schedule or timezone are invalid."
+                } else {
+                    "Cannot find next schedule time."
+                };
                 return Err(format!(
-                    "manifest: function {:?}: schedule: Cannot find next schedule time.",
+                    "manifest: function {:?}: schedule: {reason}",
                     function.name
                 ));
             }
@@ -7192,15 +7238,13 @@ mod tests {
     }
 
     #[test]
-    fn calendar_v6_cr11_cr13_gr11_ds01_rt05_strict_refusals_preserve_emulator_acceptance() {
+    fn calendar_v6_cr11_gr11_rt05_strict_refusals_preserve_emulator_acceptance() {
         use fireemu_core_types::time::LogicalInstant;
 
         let mut failures = Vec::new();
         for (id, schedule, zone, retry, reason) in [
             ("cr11", "@daily", "UTC", json!({}), "schedule:"),
-            ("cr13", "0 0 30 2 *", "UTC", json!({}), "Cannot find next schedule time"),
             ("gr11", "every mond 09:00", "UTC", json!({}), "schedule:"),
-            ("ds01", "2nd sun of mar 2:30", "America/New_York", json!({}), "Cannot find next schedule time"),
             ("rt05", "0 9 * * *", "UTC", json!({"minBackoffSeconds": 100, "maxBackoffSeconds": 50}), "retryConfig.min_backoff_duration must be less than or equal to retryConfig.max_backoff_duration: invalid argument"),
         ] {
             let document = json!({"functions": [{"name": id, "generation": 2, "trigger": {
@@ -7217,6 +7261,82 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn calendar_v6_cr13_returns_the_invalid_schedule_message_in_both_recordings() {
+        use fireemu_core_types::time::LogicalInstant;
+
+        let document = json!({"functions": [{"name": "cr13", "generation": 2, "trigger": {
+            "type": "schedule", "schedule": "0 0 30 2 *", "timeZone": "UTC",
+        }}]});
+        for anchor in ["2026-10-04T23:49:19.120Z", "2026-10-05T00:30:30.960Z"] {
+            let now = LogicalInstant::parse_rfc3339(anchor).unwrap();
+            assert_eq!(super::manifest_for_profile(CompatibilityProfile::Strict, &document, now).unwrap_err(),
+                "manifest: function \"cr13\": schedule: The provided schedule or timezone are invalid.");
+            assert!(
+                super::manifest_for_profile(CompatibilityProfile::Emulator, &document, now).is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn calendar_v6_ds01_returns_the_unreachable_schedule_message_in_both_recordings() {
+        use fireemu_core_types::time::LogicalInstant;
+
+        let document = json!({"functions": [{"name": "ds01", "generation": 2, "trigger": {
+            "type": "schedule", "schedule": "2nd sun of mar 2:30", "timeZone": "America/New_York",
+        }}]});
+        for anchor in ["2026-10-04T23:50:07.764Z", "2026-10-05T00:31:16.289Z"] {
+            let now = LogicalInstant::parse_rfc3339(anchor).unwrap();
+            assert_eq!(
+                super::manifest_for_profile(CompatibilityProfile::Strict, &document, now)
+                    .unwrap_err(),
+                "manifest: function \"ds01\": schedule: Cannot find next schedule time."
+            );
+            assert!(
+                super::manifest_for_profile(CompatibilityProfile::Emulator, &document, now).is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn calendar_v6_gr13_strict_accepts_synchronized_minutes_in_both_recordings() {
+        use fireemu_core_types::time::LogicalInstant;
+
+        let document = json!({"functions": [{"name": "gr13", "generation": 2, "trigger": {
+            "type": "schedule", "schedule": "every 20 minutes synchronized", "timeZone": "UTC",
+        }}]});
+        let zone = fireemu_adapter_functions::zone::resolve(Some("UTC")).unwrap();
+        for (anchor, expected) in [
+            ("2026-10-04T23:49:48.953022Z", "2026-10-05T00:00:00Z"),
+            ("2026-10-05T00:30:59.848634Z", "2026-10-05T00:40:00Z"),
+        ] {
+            let now = LogicalInstant::parse_rfc3339(anchor).unwrap();
+            let manifest =
+                super::manifest_for_profile(CompatibilityProfile::Strict, &document, now)
+                    .expect("gr13: both recordings accept synchronized grammar");
+            let (_, schedule, _) = manifest.scheduled().next().unwrap();
+            assert_eq!(
+                schedule.next_after_in(now, &*zone),
+                Some(LogicalInstant::parse_rfc3339(expected).unwrap())
+            );
+        }
+        assert!(super::manifest_for_profile(
+            CompatibilityProfile::Emulator,
+            &document,
+            crate::config::RuntimeConfig::default().clock_start
+        )
+        .is_err());
+        let unrecorded = json!({"functions": [{"name": "gr13", "generation": 2, "trigger": {
+            "type": "schedule", "schedule": "every 7 minutes synchronized", "timeZone": "UTC",
+        }}]});
+        assert!(super::manifest_for_profile(
+            CompatibilityProfile::Strict,
+            &unrecorded,
+            crate::config::RuntimeConfig::default().clock_start
+        )
+        .is_err());
     }
 
     #[test]
@@ -7278,7 +7398,7 @@ mod tests {
                     ("2026-10-05T00:30:48.352Z", Some("2027-01-01T12:34:00Z")),
                 ],
             ),
-            // gr08: acceptance is recorded; interval phase remains declared in proposal section 3.2.
+            // gr08: creation-minute timing is pinned separately by the runtime tests.
             (
                 "gr08",
                 "every 25 hours",

@@ -60,7 +60,7 @@
     "crates/fireemu-adapter-http/tests/auth_flows.rs": "7448d61ddaa9fd2328ad6a89b298adbd406d807a1f163186bc6079e493d7b4fd",
     "crates/fireemu-core-auth/src/store.rs": "549b44b0593cbc5d0b404f4741245b9c4ed7b0356aa3284b17b8b78c16c02cc9",
     "crates/fireemu-core-auth/tests/store.rs": "03129ba4815f53065cc4cebc061c87211261085b3c2f34f12367efcf3c7f3548",
-    "crates/fireemu/src/functions.rs": "c2b3485dbb1bc118af2ea765009846f87a3404ba66ec8a766f9b17b16fba4c66",
+    "crates/fireemu/src/functions.rs": "7b92f8cc6c0c8f3b5d93f48dd098e6d509262f0a36baddd78bc1def19daaf612",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",
     "verification/quint/bin/install-apalache": "31cdb73b00aa5ee20328f83ccec467f6c9d6b740dc4e5c806269c66347cac150",

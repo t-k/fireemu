@@ -332,6 +332,8 @@ struct ScheduledJob {
     zone: crate::zone::SharedZone,
     /// Runs strictly after this instant are due.
     cursor: LogicalInstant,
+    /// Strict intervals retain the creation minute; cron and emulator schedules keep zero phase.
+    phase: LogicalDuration,
 }
 
 /// What happens when a schedule comes due while a previous run of the same function is
@@ -1198,6 +1200,7 @@ impl FunctionsRuntime {
             }],
             config,
             clock,
+            FunctionsHttpProfile::Emulator,
         )
         .expect("a single codebase cannot collide with itself")
     }
@@ -1208,10 +1211,12 @@ impl FunctionsRuntime {
     /// the emulator serves one function URL per region and name: whichever codebase happened
     /// to load second would otherwise take the name, silently, and the project would find out
     /// from the wrong handler running.
+    /// The strict profile anchors interval schedules at the runtime's creation minute.
     pub fn with_codebases(
         codebases: Vec<CodebaseSpec>,
         config: FunctionsConfig,
         clock: Arc<Mutex<VirtualClock>>,
+        profile: FunctionsHttpProfile,
     ) -> Result<Arc<Self>, String> {
         let mut manifest = FunctionManifest::default();
         let mut owner: BTreeMap<String, usize> = BTreeMap::new();
@@ -1246,9 +1251,11 @@ impl FunctionsRuntime {
             config,
             clock,
             eventarc_registry,
+            profile,
         ))
     }
 
+    #[allow(clippy::too_many_lines)] // Keep schedule phase initialization with runtime construction.
     fn build(
         manifest: FunctionManifest,
         owner: BTreeMap<String, usize>,
@@ -1256,6 +1263,7 @@ impl FunctionsRuntime {
         config: FunctionsConfig,
         clock: Arc<Mutex<VirtualClock>>,
         eventarc_registry: crate::eventarc::TriggerRegistry,
+        profile: FunctionsHttpProfile,
     ) -> Arc<Self> {
         let now = clock
             .lock()
@@ -1270,6 +1278,27 @@ impl FunctionsRuntime {
                 zone: crate::zone::resolve(tz)
                     .unwrap_or_else(|_| Arc::new(fireemu_core_functions::cron::FixedOffset(0))),
                 cursor: now,
+                phase: {
+                    let lower = schedule.as_str().to_ascii_lowercase();
+                    let words: Vec<&str> = lower.split_whitespace().collect();
+                    if profile == FunctionsHttpProfile::Strict
+                        && matches!(
+                            words.as_slice(),
+                            ["every", "minute"]
+                                | ["every", _, "minutes" | "mins" | "minute" | "hours" | "hour"]
+                        )
+                    {
+                        // Calendar v6 gr02/gr03/gr08/gr12: whole intervals from the creation minute.
+                        let interval = schedule
+                            .next_after(LogicalInstant::UNIX_EPOCH, 0)
+                            .expect("a parsed interval has a next occurrence")
+                            .as_nanos();
+                        let minute = now.as_nanos().div_euclid(60_000_000_000) * 60_000_000_000;
+                        LogicalDuration::from_nanos(minute.rem_euclid(interval))
+                    } else {
+                        LogicalDuration::ZERO
+                    }
+                },
             })
             .collect();
         let retry = RetryPolicy::try_new(
@@ -2889,14 +2918,20 @@ impl FunctionsRuntime {
             &mut inner.jobs
         };
         for job in jobs {
+            // Translate only interval schedules into the epoch-based core calculation, then restore their phase.
+            let shift = LogicalDuration::from_nanos(-job.phase.as_nanos());
+            let (Some(from), Some(to)) = (job.cursor.checked_add(shift), now.checked_add(shift))
+            else {
+                continue;
+            };
             match policy {
                 CatchUpPolicy::All => {
-                    let due = job.schedule.runs_between_in(
-                        job.cursor,
-                        now,
-                        &*job.zone,
-                        chunk.saturating_add(1),
-                    );
+                    let due = job
+                        .schedule
+                        .runs_between_in(from, to, &*job.zone, chunk.saturating_add(1))
+                        .into_iter()
+                        .filter_map(|at| at.checked_add(job.phase))
+                        .collect::<Vec<_>>();
                     if due.len() > chunk {
                         // Beyond the cap: enqueue `chunk` runs now and leave the cursor at
                         // the last one so the rest stays due instead of vanishing.
@@ -2922,9 +2957,8 @@ impl FunctionsRuntime {
                     // directly instead of enumerated: a reverse search for the run `latest`
                     // would keep, and a count that stops at the cap. The work no longer grows
                     // with the number of occurrences the clock jumped over.
-                    let window = job
-                        .schedule
-                        .window_in(job.cursor, now, &*job.zone, cap as u64);
+                    let mut window = job.schedule.window_in(from, to, &*job.zone, cap as u64);
+                    window.latest = window.latest.and_then(|at| at.checked_add(job.phase));
                     steps = steps.saturating_add(window.steps);
                     if now.as_nanos() > job.cursor.as_nanos() {
                         job.cursor = now;
@@ -6463,6 +6497,119 @@ mod schedule_capacity_tests {
             vec![run("tick", "2026-08-29T12:10:00Z")]
         );
         finish(&runtime).await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Check both recordings, profiles, and catch-up policies together.
+    async fn calendar_v6_gr02_gr03_gr08_gr12_strict_intervals_keep_the_creation_minute() {
+        use super::{CodebaseSpec, FunctionsHttpProfile};
+        use fireemu_core_types::determinism::Clock as _;
+
+        // Creation userUpdateTime and scheduleTime from both calendar-v6 recordings.
+        for (id, schedule, observations) in [
+            (
+                "gr02",
+                "every 10 minutes",
+                [
+                    ("2026-10-04T23:49:24.063517Z", "2026-10-04T23:59:00Z"),
+                    ("2026-10-05T00:30:36.383276Z", "2026-10-05T00:40:00Z"),
+                ],
+            ),
+            (
+                "gr03",
+                "every 3 hours",
+                [
+                    ("2026-10-04T23:49:26.299545Z", "2026-10-05T02:49:00Z"),
+                    ("2026-10-05T00:30:39.176827Z", "2026-10-05T03:30:00Z"),
+                ],
+            ),
+            (
+                "gr08",
+                "every 25 hours",
+                [
+                    ("2026-10-04T23:49:40.559351Z", "2026-10-06T00:49:00Z"),
+                    ("2026-10-05T00:30:51.271454Z", "2026-10-06T01:30:00Z"),
+                ],
+            ),
+            (
+                "gr12",
+                "every 7 minutes",
+                [
+                    ("2026-10-04T23:49:46.838794Z", "2026-10-04T23:56:00Z"),
+                    ("2026-10-05T00:30:57.090305Z", "2026-10-05T00:37:00Z"),
+                ],
+            ),
+        ] {
+            for (anchor, expected) in observations {
+                let created = LogicalInstant::parse_rfc3339(anchor).unwrap();
+                let expected = LogicalInstant::parse_rfc3339(expected).unwrap();
+                let interval = expected.as_nanos()
+                    - created.as_nanos().div_euclid(60_000_000_000) * 60_000_000_000;
+                for policy in [
+                    CatchUpPolicy::All,
+                    CatchUpPolicy::Latest,
+                    CatchUpPolicy::None,
+                ] {
+                    let (base, _) = runtime(policy).await;
+                    let runner = base.current_runners()[0].1.clone();
+                    for profile in [FunctionsHttpProfile::Strict, FunctionsHttpProfile::Emulator] {
+                        let manifest = parse_manifest(&json!({"functions": [{"name": id, "generation": 2,
+                            "trigger": {"type": "schedule", "schedule": schedule, "timeZone": "UTC"}}]})).unwrap();
+                        let parsed = manifest.scheduled().next().unwrap().1.clone();
+                        let clock = Arc::new(Mutex::new(VirtualClock::new(created)));
+                        let runtime = FunctionsRuntime::with_codebases(
+                            vec![CodebaseSpec {
+                                name: "default".to_owned(),
+                                manifest,
+                                runner: runner.clone(),
+                                spawn: None,
+                                cleanup_dir: None,
+                            }],
+                            base.config.clone(),
+                            clock.clone(),
+                            profile,
+                        )
+                        .unwrap();
+                        let first = match profile {
+                            FunctionsHttpProfile::Strict => expected,
+                            FunctionsHttpProfile::Emulator => {
+                                parsed.next_after(created, 0).unwrap()
+                            }
+                        };
+                        for index in 0..3 {
+                            let next = first
+                                .checked_add(LogicalDuration::from_nanos(interval * index))
+                                .unwrap();
+                            let before = next.checked_add(LogicalDuration::from_nanos(-1)).unwrap();
+                            let delta = before
+                                .checked_duration_since(clock.lock().unwrap().now())
+                                .unwrap();
+                            clock.lock().unwrap().advance(delta).unwrap();
+                            runtime.on_clock_changed();
+                            let count = admitted(&runtime).len();
+                            clock
+                                .lock()
+                                .unwrap()
+                                .advance(LogicalDuration::from_nanos(1))
+                                .unwrap();
+                            runtime.on_clock_changed();
+                            if policy == CatchUpPolicy::None {
+                                assert!(admitted(&runtime).is_empty(), "{id}: {profile:?}");
+                            } else {
+                                let runs = admitted(&runtime);
+                                assert_eq!(runs.len(), count + 1, "{id}: {profile:?}: {policy:?}");
+                                assert_eq!(
+                                    runs.last(),
+                                    Some(&run(id, &next.to_rfc3339().unwrap())),
+                                    "{id}: {profile:?}: {policy:?}"
+                                );
+                            }
+                        }
+                    }
+                    finish(&base).await;
+                }
+            }
+        }
     }
 
     // ----- a rewind ---------------------------------------------------------------------------

@@ -151,7 +151,9 @@ test("the CLI writes the comparison in the record-schema.md shape, byte-identica
     project: PRODUCTION_PROJECT,
     recordedAt: new Date(T0).toISOString(),
     corpusDigest: document.corpusSha256,
+    sha256: sha256(await readFile(files.run)),
   });
+  assert.equal(document.comparator, undefined, "no comparator is named unless the caller gives it");
   assert.equal(document.summary.rows, 109);
   assert.equal(document.summary.match, 6);
   assert.equal(
@@ -234,4 +236,48 @@ test("the CLI runs as a process: exit 0 with the file written, exit 1 with a mes
   });
   assert.equal(bad.status, 1);
   assert.match(bad.stderr, /--production-run/);
+});
+
+test("the CLI pins the comparator when it is given its commit and tree, and refuses half of that or a malformed one", async () => {
+  const { argv } = await inputs();
+  const commit = "a".repeat(40);
+  const tree = "b".repeat(40);
+  const document = await runCli([
+    ...argv,
+    "--comparator-commit",
+    commit,
+    "--comparator-tree",
+    tree,
+  ]);
+  assert.deepEqual(document.comparator, { commit, tree });
+  await assert.rejects(
+    runCli([...argv, "--comparator-commit", commit]),
+    /--comparator-commit and --comparator-tree/,
+  );
+  await assert.rejects(
+    runCli([...argv, "--comparator-tree", tree]),
+    /--comparator-commit and --comparator-tree/,
+  );
+  for (const bad of ["", "A".repeat(40), "a".repeat(39), "a".repeat(41), `${commit} `]) {
+    await assert.rejects(
+      runCli([...argv, "--comparator-commit", bad, "--comparator-tree", tree]),
+      /--comparator-commit/,
+      JSON.stringify(bad),
+    );
+    await assert.rejects(
+      runCli([...argv, "--comparator-commit", commit, "--comparator-tree", bad]),
+      /--comparator-tree/,
+      JSON.stringify(bad),
+    );
+  }
+});
+
+test("the production run digest in the comparison is the digest of the file's bytes, whatever its formatting", async () => {
+  const { files, argv } = await inputs();
+  const before = (await runCli(argv)).productionRun.sha256;
+  const text = await readFile(files.run, "utf8");
+  await writeFile(files.run, `${JSON.stringify(JSON.parse(text), null, 1)}\n`);
+  const after = (await runCli(argv)).productionRun.sha256;
+  assert.notEqual(after, before);
+  assert.equal(after, sha256(await readFile(files.run)));
 });

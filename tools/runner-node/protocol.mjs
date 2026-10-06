@@ -3,7 +3,8 @@
 // This is a trusted local pipe, not an authentication or arbitrary-code sandbox.
 import { TextDecoder } from 'node:util';
 import { performance } from 'node:perf_hooks';
-import { setTimeout, clearTimeout } from 'node:timers';
+import timers from 'node:timers';
+const {setTimeout, clearTimeout} = timers;
 
 export const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 // Local pipe safety policies, not Firebase invocation deadlines or quotas.
@@ -37,6 +38,12 @@ function decodeMessage(payload) {
   }
   if (!object(message)) throw new ProtocolError('message object');
   if (message.type === 'shutdown') return message;
+  const decimal = (value, signed = false) => typeof value === 'string' && value.length <= 40 &&
+    (signed ? /^(?:0|-?[1-9][0-9]*)$/ : /^(?:0|[1-9][0-9]*)$/).test(value);
+  if (message.type === 'clock:set' && text(message.invocationId) &&
+      decimal(message.instantNanos, true) && decimal(message.elapsedNanos) && decimal(message.revision)) return message;
+  if (message.type === 'clock:runDue' && text(message.invocationId) &&
+      (message.budget === undefined || (Number.isSafeInteger(message.budget) && message.budget >= 1 && message.budget <= 10000))) return message;
   if (message.type !== 'invoke' || !text(message.invocationId) ||
       !text(message.function) || !text(message.trigger) || !object(message.event) ||
       (message.entryPoint !== undefined && !text(message.entryPoint))) {

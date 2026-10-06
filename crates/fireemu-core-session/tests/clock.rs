@@ -4,6 +4,32 @@
 use fireemu_core_session::clock::{ClockError, VirtualClock};
 use fireemu_core_types::determinism::Clock;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
+use std::sync::{Arc, Mutex};
+
+#[test]
+fn observer_tracks_every_writer_and_positive_elapsed_time_across_rewinds() {
+    let samples = Arc::new(Mutex::new(Vec::new()));
+    let sink = samples.clone();
+    let observer: Arc<fireemu_core_session::clock::ClockObserver> =
+        Arc::new(move |sample| sink.lock().unwrap().push(sample));
+    let mut clock = VirtualClock::new(LogicalInstant::UNIX_EPOCH);
+    clock.observe(&observer);
+    clock.advance(LogicalDuration::from_nanos(500_000)).unwrap();
+    clock.set_allow_backwards(LogicalInstant::from_nanos(-1_000_000));
+    clock.advance_to(LogicalInstant::from_nanos(-500_000)).unwrap();
+    clock.tick().unwrap();
+    let snapshot = clock.snapshot();
+    assert_eq!(snapshot.instant, LogicalInstant::from_nanos(-499_999));
+    assert_eq!(snapshot.elapsed_nanos, 1_000_001);
+    assert_eq!(snapshot.revision, 4);
+    assert_eq!(samples.lock().unwrap().len(), 5);
+    let before = snapshot;
+    assert!(clock.advance(LogicalDuration::from_nanos(-1)).is_err());
+    assert_eq!(clock.snapshot(), before);
+    let mut independent = clock.clone();
+    independent.tick().unwrap();
+    assert_eq!(samples.lock().unwrap().len(), 5, "clock clones cannot notify another world's observers");
+}
 
 #[test]
 fn starts_at_configured_instant_and_advances() {

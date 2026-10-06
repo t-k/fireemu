@@ -1066,6 +1066,8 @@ test("the divergence registers name rows of the recorded production run, quote w
     JSON.parse(readFileSync(new URL(`../fixtures/fs-listen/${name}`, import.meta.url), "utf8"));
   const strict = read("divergences-strict.json");
   const emulator = read("divergences-emulator.json");
+  delete strict.schemaVersion;
+  delete emulator.schemaVersion;
   const rows = new Set(Object.keys(L1["native-1"].rows));
   for (const register of [strict, emulator])
     for (const [id, entry] of Object.entries(register)) {
@@ -1316,6 +1318,8 @@ test("M2: a strict register entry can never cover a local hang or an empty local
       "utf8",
     ),
   );
+  delete strict.schemaVersion;
+  delete emulator.schemaVersion;
   for (const [id, entry] of Object.entries(strict)) {
     assert.equal(typeof entry === "string" || entry.coversLocalTimeout !== true, true, id);
     for (const rows of [

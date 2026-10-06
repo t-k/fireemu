@@ -412,7 +412,7 @@ writeFileSync(${JSON.stringify(join(dir, "pg.json"))}, JSON.stringify({ pid: pro
 // ---- the command line -----------------------------------------------------------------------------
 
 const COMMIT = "a".repeat(40);
-const ENV = { HOME: "/home/test", PATH: "/usr/bin" };
+const ENV = { HOME: "/tmp/fireemu-test/user", PATH: "/usr/bin" };
 const ARGS = (command, run, extra = []) => [
   command,
   "--run-dir",

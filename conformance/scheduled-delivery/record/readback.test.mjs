@@ -263,7 +263,7 @@ const ARGS = (run, extra = []) => [
   RUN,
   ...extra,
 ];
-const ENV = { HOME: "/home/test", PATH: "/usr/bin" };
+const ENV = { HOME: "/tmp/fireemu-test/user", PATH: "/usr/bin" };
 const io = () => {
   const lines = [];
   return {

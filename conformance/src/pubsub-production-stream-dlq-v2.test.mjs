@@ -459,6 +459,7 @@ test("actual v2 runner restores two policies before cleanup and emits physical l
   assert.equal(summary.iam.restored.length, 2);
   assert.deepEqual(summary.iam.unsettled, []);
   assert.deepEqual(summary.cleanup.errors, []);
+  assert.ok(fixture.sleeps.some((item) => item.ms === 900_000));
   assert.equal(fixture.sleeps.find((item) => item.ms === 900_000).requests, 18);
   const wait = fixture.sleeps.find((item) => item.ms === 900_000);
   assert.equal(fixture.requests.find((call) => call.at > wait.at).at, wait.at + 900_000);
@@ -558,25 +559,27 @@ test("actual A2 v2 capture rejects omitted or wrong suite before a marker, crede
   try {
     for (const extra of [[], ["--suite", "unary"]]) {
       let error = "";
-      const code = await record.main(
-        [
-          "--target",
-          "production",
-          "--project",
-          "demo-v2",
-          "--out",
-          out,
-          "--cleanup-only",
-          "--run-id",
-          runId,
-          "--from-capture",
-          path,
-          ...extra,
-        ],
-        {},
-        { stdout: { write() {} }, stderr: { write: (text) => (error += text) } },
-        { now: Date.now, noWire: true },
-      );
+      const code = await record
+        .main(
+          [
+            "--target",
+            "production",
+            "--project",
+            "demo-v2",
+            "--out",
+            out,
+            "--cleanup-only",
+            "--run-id",
+            runId,
+            "--from-capture",
+            path,
+            ...extra,
+          ],
+          {},
+          { stdout: { write() {} }, stderr: { write: (text) => (error += text) } },
+          { now: Date.now, noWire: true },
+        )
+        .catch((error) => assert.fail(`preflight escaped: ${error.message}`));
       assert.equal(code, 2);
       assert.match(error, /suite|v2/);
       assert.equal(existsSync(join(out, `a2-started-${runId}.json`)), false);
@@ -1271,4 +1274,31 @@ test("REST and native stream use newly remaining deadline after credential work"
   } finally {
     transport.close();
   }
+});
+
+test("v2 A2 binds original input directory so copied bytes cannot reuse the one-use marker", async () => {
+  const { verifyRunOutput } = await import("./pubsub-production/admission.mjs");
+  const { tempDir } = await import("./test-tmpdir.mjs");
+  const { join } = await import("node:path");
+  const source = tempDir("v2-a2-source-");
+  const recovery = tempDir("v2-a2-output-");
+  const copy = tempDir("v2-a2-copy-");
+  const runId = "0123456789ab";
+  const authority = { runOutputs: { [runId]: source }, cleanupRecovery: { out: recovery } };
+  const options = {
+    cleanupOnly: true,
+    runId,
+    out: recovery,
+    fromCapture: join(source, `capture-${runId}.jsonl`),
+  };
+  assert.doesNotThrow(() => verifyRunOutput(authority, options));
+  assert.throws(
+    () =>
+      verifyRunOutput(authority, { ...options, fromCapture: join(copy, `capture-${runId}.jsonl`) }),
+    /input|directory/,
+  );
+  assert.throws(
+    () => verifyRunOutput(authority, { ...options, fromCapture: undefined }),
+    /input|directory/,
+  );
 });

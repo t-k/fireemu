@@ -214,6 +214,12 @@ export function verifyRunOutput(authority, options) {
     resolve(options.out ?? "") !== allowed
   )
     throw new Error("v2 source-bound output mismatch");
+  if (
+    options.cleanupOnly &&
+    resolve(options.fromCapture ?? "") !==
+      resolve(authority.runOutputs[options.runId], `capture-${options.runId}.jsonl`)
+  )
+    throw new Error("v2 recovery original input directory mismatch");
 }
 export function claimSourceRun({ out, runId }) {
   mkdirSync(out, { recursive: true, mode: 0o700 });

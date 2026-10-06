@@ -5055,7 +5055,7 @@ pub(crate) const fn publishes_schedule_messages(
 /// Publishes the message of a first-generation schedule run to its topic in the Pub/Sub broker, as Cloud Scheduler does
 /// in production (strict profile): the message has the attribute `scheduled: "true"` and no data, the id and the publish
 /// time the handler's context reports. The runtime still delivers the schedule event to the handler itself, so the
-/// topic's subscribers are the only other readers; a topic that does not exist (no Pub/Sub listener) publishes nothing.
+/// topic's subscribers are the only other readers; a publication refusal prevents handler invocation.
 pub struct PubSubSchedulePublisher {
     handle: fireemu_adapter_pubsub::PubSubHandle,
     project: String,
@@ -5073,21 +5073,23 @@ impl PubSubSchedulePublisher {
 }
 
 impl fireemu_adapter_functions::runtime::ScheduleTopicPublisher for PubSubSchedulePublisher {
-    fn publish(&self, topic: &str, message_id: &str, at: fireemu_core_types::time::LogicalInstant) {
-        let Ok(topic) = fireemu_core_pubsub::TopicName::new(&self.project, topic) else {
-            return;
-        };
+    fn publish(
+        &self,
+        topic: &str,
+        message_id: &str,
+        at: fireemu_core_types::time::LogicalInstant,
+    ) -> Result<(), String> {
+        let topic = fireemu_core_pubsub::TopicName::new(&self.project, topic)
+            .map_err(|error| error.to_string())?;
         let message = fireemu_core_pubsub::PubsubMessage {
             data: Vec::new(),
             attributes: BTreeMap::from([("scheduled".to_owned(), "true".to_owned())]),
             ordering_key: String::new(),
         };
-        // A refusal (the topic is gone, the broker is full) loses the message and nothing else: the handler still runs.
-        let _ = self.handle.publish_with_message_ids(
-            &topic,
-            vec![(message, message_id.to_owned())],
-            at,
-        );
+        self.handle
+            .publish_with_message_ids(&topic, vec![(message, message_id.to_owned())], at)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -9285,7 +9287,55 @@ mod tests {
             "{status}"
         );
         assert_eq!(status["pending"], 2, "{status}");
+        // A deleted topic refuses both natural and manual publications, without invoking a handler or retaining its id.
+        state
+            .lock()
+            .unwrap()
+            .delete_topic(
+                &TopicName::new("demo-app", "firebase-schedule-tick-us-central1").unwrap(),
+            )
+            .unwrap();
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(300))
+            .unwrap();
+        runtime.on_clock_changed();
+        assert_eq!(runtime.status()["pending"], 2);
+        assert_eq!(runtime.dead_letters().len(), 1);
+        assert!(runtime.run_schedule("tick").is_err());
+        assert_eq!(runtime.status()["pending"], 2);
+        assert_eq!(runtime.dead_letters().len(), 2);
+        assert_eq!(
+            runtime.source_event_accounting().unwrap().published_records,
+            2
+        );
+        let dispatcher = tokio::spawn(runtime.clone().dispatch_loop());
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !runtime.is_idle() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            runtime
+                .history()
+                .iter()
+                .filter(|r| r.outcome == "ok")
+                .count(),
+            2
+        );
+        assert_eq!(
+            runtime
+                .history()
+                .iter()
+                .filter(|r| r.outcome.starts_with("failed:"))
+                .count(),
+            2
+        );
         runtime.shutdown().await;
+        dispatcher.await.unwrap();
     }
 
     #[test]

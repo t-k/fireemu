@@ -178,10 +178,12 @@ pub struct BlockingAuthTarget {
 /// A window with no count (`retryCount` 0, `maxRetrySeconds` positive) retries until the window ends: production
 /// attempted a job with `maxRetryDuration: 30s` and no count four times, at 0, 4.6, 13.2 and 23.7 seconds, the next
 /// attempt being past the window (second delivery recording, run `156715222b86ea44`). With both a count and a window the
-/// chain goes on until both are used up: a job with `retryCount: 3` and a window of 20 s was attempted four times, the
+/// chain goes on until both are used up: run 3's `count` job with `retryCount: 3` and a window of 20 s was attempted four times, the
 /// fourth at about 23.9 s, past the window (third recording, run `f123d4fa2d61c5f5`); that a count used up inside the
-/// window leaves the chain going while the next attempt fits is the documented reading and is not recorded. Neither is
-/// one attempt.
+/// window leaves the chain going while the next attempt fits is documented, not recorded. The Cloud Scheduler REST
+/// reference for `RetryConfig.maxRetryDuration` says: "If specified with `retryCount`, the job will be retried until both limits are reached."
+/// Source: <https://cloud.google.com/scheduler/docs/reference/rest/v1/projects.locations.jobs#RetryConfig>
+/// Neither limit means one attempt.
 ///
 /// A first-generation schedule is one attempt, whatever it declares. Its job targets Pub/Sub, so Cloud Scheduler's
 /// retry covers the publish and never the handler: in the same recording `schedFailV1`'s handler threw at each of its 4
@@ -1053,8 +1055,8 @@ fn epoch_millis() -> u64 {
 /// tells the publisher to publish the message the handler's context names.
 pub trait ScheduleTopicPublisher: Send + Sync {
     /// Publishes the message of one occurrence to `topic` (the topic's id, `firebase-schedule-<name>-<region>`) with the
-    /// identifier `message_id` and the publish time `at`.
-    fn publish(&self, topic: &str, message_id: &str, at: LogicalInstant);
+    /// identifier `message_id` and the publish time `at`. Returns only after publication completes; a refusal prevents handler delivery.
+    fn publish(&self, topic: &str, message_id: &str, at: LogicalInstant) -> Result<(), String>;
 }
 
 /// The Pub/Sub message id of the `ordinal`-th event of a session: 17 digits, the first a 2, the form of the ids the
@@ -1737,42 +1739,60 @@ impl FunctionsRuntime {
     }
 
     /// Enqueues a scheduled or manual run and its duplicate-fault copies, all or none: the
-    /// copies are admitted only if every one fits, so a capacity refusal leaves the run whole
-    /// for a later attempt instead of a partial fan-out. `false` means nothing was enqueued.
+    /// copies are reserved only if every one fits, so a capacity refusal leaves the run whole
+    /// for a later attempt instead of a partial fan-out. The reservation stays invisible until publication completes.
     fn enqueue_schedule_run(
-        &self,
+        self: &Arc<Self>,
         inner: &mut Inner,
         source: EventSource,
         function: &str,
         at: LogicalInstant,
         payload: &Value,
-    ) -> bool {
+    ) -> Result<EventBatchReservation, SourceEventAdmissionError> {
         const EVENT_TYPE: &str = "google.cloud.scheduler.job.v1.executed";
-        let subject = format!("jobs/{function}");
         let copies = self.delivery_copies(function, EVENT_TYPE);
-        let Some(bytes) = Self::retained_event_bytes(function, EVENT_TYPE, &subject, payload)
-            .and_then(|one| one.checked_mul(copies))
-        else {
-            return false;
-        };
-        if !Self::can_admit_events(inner, source, copies, bytes) {
+        if payload["data"]["messageId"].is_null() {
+            let subject = format!("jobs/{function}");
+            let bytes = Self::retained_event_bytes(function, EVENT_TYPE, &subject, payload)
+                .and_then(|one| one.checked_mul(copies))
+                .ok_or(SourceEventAdmissionError::Capacity)?;
+            if !Self::can_admit_events(inner, source, copies, bytes) {
+                *inner.admission_refusals.entry("capacity").or_default() += 1;
+                return Err(SourceEventAdmissionError::Capacity);
+            }
+            for _ in 0..copies {
+                let _ = Self::enqueue(
+                    inner,
+                    self.config.session,
+                    source,
+                    function,
+                    EVENT_TYPE,
+                    &subject,
+                    at,
+                    payload,
+                );
+            }
+            return Ok(self.empty_event_reservation());
+        }
+        let payload = Arc::new(payload.clone());
+        let reservation = self.reserve_drafts(
+            source,
+            (0..copies)
+                .map(|_| DeliveryDraft {
+                    function: function.to_owned(),
+                    event_type: EVENT_TYPE.to_owned(),
+                    subject: format!("jobs/{function}"),
+                    time: at,
+                    payload: payload.clone(),
+                    parent: None,
+                })
+                .collect(),
+            inner,
+        );
+        if matches!(reservation, Err(SourceEventAdmissionError::Capacity)) {
             *inner.admission_refusals.entry("capacity").or_default() += 1;
-            return false;
         }
-        let mut admitted = false;
-        for _ in 0..copies {
-            admitted |= Self::enqueue(
-                inner,
-                self.config.session,
-                source,
-                function,
-                EVENT_TYPE,
-                &subject,
-                at,
-                payload,
-            );
-        }
-        admitted
+        reservation
     }
 
     fn delivery_copies(&self, function: &str, event_type: &str) -> usize {
@@ -2860,7 +2880,7 @@ impl FunctionsRuntime {
     /// of the clock jump. What they drop is recorded as one skipped record per job and clock
     /// change, carrying a count that is exact up to the cap and "at least" beyond it.
     #[allow(clippy::too_many_lines)]
-    pub fn on_clock_changed(&self) {
+    pub fn on_clock_changed(self: &Arc<Self>) {
         let now = self.now();
         let Ok(mut inner) = self.inner.lock() else {
             return;
@@ -2969,8 +2989,7 @@ impl FunctionsRuntime {
         // The handlers executing before this sweep: under `skip-in-flight` only these suppress an occurrence, never a
         // run this same sweep admitted (a jump over several occurrences runs each, as each would have run when it came).
         let executing: BTreeSet<String> = inner.running.values().cloned().collect();
-        // The messages of the first-generation runs this sweep admits: published after the lock is released.
-        let mut messages: Vec<(String, String, LogicalInstant)> = Vec::new();
+        let epoch = inner.epoch;
         for (index, (function, region, at)) in runs.iter().enumerate() {
             if self.config.overlap == OverlapPolicy::SkipInFlight && executing.contains(function) {
                 inner.record_invocation(InvocationRecord {
@@ -2992,7 +3011,7 @@ impl FunctionsRuntime {
                 payload["data"]["messageId"] = Value::String(message_id.clone());
                 (topic, message_id, *at)
             });
-            if self.enqueue_schedule_run(
+            if let Ok(reservation) = self.enqueue_schedule_run(
                 &mut inner,
                 EventSource::Scheduler,
                 function,
@@ -3000,7 +3019,20 @@ impl FunctionsRuntime {
                 &payload,
             ) {
                 enqueued = true;
-                messages.extend(message);
+                if message.is_none() {
+                    continue;
+                }
+                drop(inner);
+                let _ = self.publish_schedule_messages(reservation, message);
+                inner = self
+                    .inner
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if inner.epoch != epoch
+                    || self.shutting_down.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    return;
+                }
                 continue;
             }
             // Refused for capacity: move back the cursor of every job with a run not admitted
@@ -3029,23 +3061,81 @@ impl FunctionsRuntime {
             }
         }
         drop(inner);
-        self.publish_schedule_messages(&messages);
         if enqueued {
             self.wake.notify_one();
         }
     }
 
-    /// Publishes the messages of admitted first-generation schedule runs, outside the runtime's lock (the broker may
-    /// call back into the runtime to deliver to a subscribed function).
-    fn publish_schedule_messages(&self, messages: &[(String, String, LogicalInstant)]) {
-        if messages.is_empty() {
-            return;
-        }
-        let Some(publisher) = self.schedule_topic_publisher() else {
-            return;
-        };
-        for (topic, message_id, at) in messages {
-            publisher.publish(topic, message_id, *at);
+    /// Publishes outside the runtime lock before making the reserved handler dispatchable. A broker refusal follows
+    /// the existing failed-delivery path, with no handler payload or phantom message id retained.
+    fn publish_schedule_messages(
+        self: &Arc<Self>,
+        mut reservation: EventBatchReservation,
+        message: Option<(String, String, LogicalInstant)>,
+    ) -> Result<(), String> {
+        let publication = message.map_or(Ok(()), |(topic, id, at)| {
+            self.schedule_topic_publisher()
+                .ok_or_else(|| "schedule publisher unavailable".to_owned())?
+                .publish(&topic, &id, at)
+        });
+        match publication {
+            Ok(()) => {
+                reservation.publish();
+                Ok(())
+            }
+            Err(error) => {
+                let deliveries = reservation.deliveries.take().unwrap_or_default();
+                let mut inner = self
+                    .inner
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if inner.epoch != reservation.epoch {
+                    return Err(error);
+                }
+                release_event_reservation(&mut inner, deliveries.len(), reservation.retained_bytes);
+                let mut failed = Vec::new();
+                for delivery in deliveries {
+                    let id = delivery.event.event_id;
+                    let function = delivery.payload.function;
+                    inner.causality.register(
+                        CausalEntry {
+                            event_id: id.value(),
+                            epoch: reservation.epoch.value(),
+                            source: delivery.event.source,
+                            event_type: delivery.event.event_type.as_str().to_owned(),
+                            function: function.clone(),
+                            parent: None,
+                            terminal: false,
+                            phases: Vec::new(),
+                            phases_dropped: 0,
+                        },
+                        delivery.event.logical_time,
+                    );
+                    inner
+                        .outbox
+                        .enqueue(delivery.event)
+                        .unwrap_or_else(|_| unreachable!("a reserved event id is unique"));
+                    let _ = inner.outbox.update(id, |record| {
+                        let _ = record.lease();
+                        let _ = record.start();
+                    });
+                    failed.push((id, function));
+                }
+                drop(inner);
+                for (id, function) in failed {
+                    self.complete(
+                        id,
+                        "",
+                        &function,
+                        1,
+                        reservation.epoch,
+                        false,
+                        &InvokeOutcome::Failed(error.clone()),
+                        RunnerGoneDisposition::FailedAttempt,
+                    );
+                }
+                Err(error)
+            }
         }
     }
 
@@ -3151,7 +3241,7 @@ impl FunctionsRuntime {
     }
 
     /// Runs a scheduled function now (manual trigger).
-    pub fn run_schedule(&self, function: &str) -> Result<(), ScheduleRunError> {
+    pub fn run_schedule(self: &Arc<Self>, function: &str) -> Result<(), ScheduleRunError> {
         let f = self
             .manifest
             .get(function)
@@ -3184,13 +3274,16 @@ impl FunctionsRuntime {
             payload["data"]["messageId"] = Value::String(message_id.clone());
             (topic, message_id, now)
         });
-        if !self.enqueue_schedule_run(&mut inner, EventSource::Manual, function, now, &payload) {
-            return Err(ScheduleRunError::Capacity(format!(
+        let reservation = self
+            .enqueue_schedule_run(&mut inner, EventSource::Manual, function, now, &payload)
+            .map_err(|_| {
+                ScheduleRunError::Capacity(format!(
                 "the functions event queue is at capacity; the run of {function:?} was not enqueued"
-            )));
-        }
+            ))
+            })?;
         drop(inner);
-        self.publish_schedule_messages(&message.into_iter().collect::<Vec<_>>());
+        self.publish_schedule_messages(reservation, message)
+            .map_err(ScheduleRunError::Refused)?;
         self.wake.notify_one();
         Ok(())
     }
@@ -3620,6 +3713,7 @@ impl FunctionsRuntime {
             .map(|i| {
                 !i.outbox.has_active()
                     && i.running.is_empty()
+                    && i.reserved_event_bytes == 0
                     && !i.catch_up_pending
                     && i.task_scheduler.outstanding() == 0
             })
@@ -4970,7 +5064,7 @@ impl FunctionsRuntime {
 
     #[allow(clippy::too_many_arguments)]
     fn complete(
-        &self,
+        self: &Arc<Self>,
         id: EventId,
         key: &str,
         function: &str,
@@ -6948,11 +7042,12 @@ mod schedule_capacity_tests {
     struct Recorder(Mutex<Vec<(String, String, LogicalInstant)>>);
 
     impl super::ScheduleTopicPublisher for Recorder {
-        fn publish(&self, topic: &str, message_id: &str, at: LogicalInstant) {
+        fn publish(&self, topic: &str, message_id: &str, at: LogicalInstant) -> Result<(), String> {
             self.0
                 .lock()
                 .unwrap()
                 .push((topic.to_owned(), message_id.to_owned(), at));
+            Ok(())
         }
     }
 
@@ -6976,6 +7071,63 @@ mod schedule_capacity_tests {
 
     fn is_message_id(id: &str) -> bool {
         id.len() == 17 && id.starts_with('2') && id.bytes().all(|b| b.is_ascii_digit())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_schedule_cannot_dispatch_while_its_publication_is_blocked() {
+        struct BlockedPublisher {
+            entered: std::sync::mpsc::Sender<()>,
+            release: Mutex<std::sync::mpsc::Receiver<()>>,
+            recorder: Recorder,
+        }
+        impl super::ScheduleTopicPublisher for BlockedPublisher {
+            fn publish(&self, topic: &str, id: &str, at: LogicalInstant) -> Result<(), String> {
+                self.entered.send(()).unwrap();
+                self.release.lock().unwrap().recv().unwrap();
+                self.recorder.publish(topic, id, at)
+            }
+        }
+        for manual in [false, true] {
+            let (runtime, clock) = runtime(CatchUpPolicy::All).await;
+            let (entered, waiting) = std::sync::mpsc::channel();
+            let (release, blocked) = std::sync::mpsc::channel();
+            let publisher = Arc::new(BlockedPublisher {
+                entered,
+                release: Mutex::new(blocked),
+                recorder: Recorder::default(),
+            });
+            runtime.set_schedule_topic_publisher(publisher.clone());
+            advance(&clock, 300);
+            let producing = runtime.clone();
+            let publication = std::thread::spawn(move || {
+                if manual {
+                    producing.run_schedule("tick").unwrap();
+                } else {
+                    producing.on_clock_changed();
+                }
+            });
+            waiting.recv_timeout(Duration::from_secs(10)).unwrap();
+            assert!(recorded(&publisher.recorder).is_empty());
+            runtime.dispatch_ready();
+            let dispatchable = runtime.inner.lock().unwrap().outbox.dispatchable().count();
+            let running = runtime.inner.lock().unwrap().running.len();
+            let queued_before_publication = queued_message_ids(&runtime);
+            let idle_before_publication = runtime.is_idle();
+            release.send(()).unwrap();
+            publication.join().unwrap();
+            assert!(queued_before_publication.is_empty());
+            assert!(!idle_before_publication);
+            assert_eq!(dispatchable, 0);
+            assert_eq!(
+                running, 0,
+                "an independently awakened dispatcher must wait for publication"
+            );
+            assert_eq!(
+                queued_message_ids(&runtime),
+                vec![Some(recorded(&publisher.recorder)[0].1.clone())]
+            );
+            finish(&runtime).await;
+        }
     }
 
     /// Cloud Scheduler publishes a message to the job's topic for every occurrence of a first-generation schedule (runs

@@ -1894,6 +1894,21 @@ const PUBLISHED_ROWS = [
   "v1.published.publishTime",
 ];
 
+test("v1.published.messageId: every local handler needs exactly one publication", () => {
+  const p = productionWithMessages();
+  const base = localWithMessages();
+  for (const messages of [base.natural.pulled[0].messages.slice(0, 1), [...base.natural.pulled[0].messages, base.natural.pulled[0].messages[0]]]) {
+    const pulled = base.natural.pulled.map((t, i) => i === 0 ? { ...t, messages } : t);
+    assert.equal(verdicts(p, localWithMessages({ pulled }))["v1.published.messageId"], "DIVERGES");
+  }
+});
+
+test("v1.published.messageId: every local publication needs its handler", () => {
+  const base = localWithMessages();
+  const lines = base.natural.lines.filter((l) => l.value?.context?.eventId !== "27440000000000001");
+  assert.equal(verdicts(productionWithMessages(), localWithMessages({ lines }))["v1.published.messageId"], "DIVERGES");
+});
+
 test("the published-message rows exist only for a recording that pulled messages, and match a local run built like it", () => {
   assert.equal(
     Object.keys(verdicts(production(), local())).some((id) => id.startsWith("v1.published.")),
@@ -2068,13 +2083,10 @@ test("the published-message rows compare the recorded values, not only equal one
 test("a recording with a single pulled message still has the rows", () => {
   const p = productionWithMessages();
   const one = { ...p, published: [p.published[0]] };
+  const base = localWithMessages();
   const l = localWithMessages({
-    pulled: [
-      {
-        ...localWithMessages().natural.pulled[0],
-        messages: [localWithMessages().natural.pulled[0].messages[1]],
-      },
-    ],
+    lines: base.natural.lines.filter((l) => l.value?.generation !== 1 || l.value.context.eventId === "27440000000000001"),
+    pulled: [{ ...base.natural.pulled[0], messages: [base.natural.pulled[0].messages[1]] }],
   });
   const v = verdicts(one, l);
   for (const id of PUBLISHED_ROWS) assert.equal(v[id], "MATCH", id);

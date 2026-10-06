@@ -97,10 +97,10 @@ fn a_retry_window_with_no_count_retries_until_the_window_ends() {
     assert_eq!(policy.max_attempts(), 1);
 }
 
-/// Run `f123d4fa2d61c5f5`, the REST job `count`: `retryCount 3`, `maxRetryDuration 20s`, `minBackoff 4s`, `maxBackoff 10s`.
+/// Run 3 (`f123d4fa2d61c5f5`), the REST job `count`: `retryCount 3`, `maxRetryDuration 20s`, `minBackoff 4s`, `maxBackoff 10s`.
 /// Production attempted it four times in both passes, at 0, 4.65, 13.26, 23.88 s and 0, 4.5, 13.02, 23.68 s, so the window
 /// of 20 s did not stop the fourth attempt: the retries went on until the count and the window were both used up (Cloud
-/// Scheduler's documentation says the same: with both set "the job will be retried until both limits are reached"). The
+/// Scheduler REST reference, `RetryConfig.maxRetryDuration`: "If specified with `retryCount`, the job will be retried until both limits are reached."). The
 /// same run's control, the window alone (30 s, same backoff), made four attempts too.
 #[test]
 fn a_count_and_a_window_retry_until_both_are_used_up_as_recorded() {
@@ -111,11 +111,12 @@ fn a_count_and_a_window_retry_until_both_are_used_up_as_recorded() {
     assert_eq!(attempt_offsets(&control), vec![0, 4, 12, 22]);
 }
 
-/// Not recorded, and read from the same documentation: a count that is used up inside the window does not end the
-/// chain while the next attempt still fits the window, and a window that is used up does not end it while the count has
-/// retries left. A count of 1 with a window of 30 s: the second attempt uses the count up, the later ones fit the window.
+/// Documented, not recorded: a count used up while the window still has room keeps the chain going.
+/// Cloud Scheduler REST reference, `RetryConfig.maxRetryDuration`: "If specified with `retryCount`, the job will be retried until both limits are reached."
+/// Source: <https://cloud.google.com/scheduler/docs/reference/rest/v1/projects.locations.jobs#RetryConfig>
+/// The recorded case is run 3's `count` job: four attempts, the fourth past the 20 s window.
 #[test]
-fn each_limit_alone_keeps_the_chain_going_until_the_other_is_used_up() {
+fn documented_limits_keep_the_chain_going_after_the_count_is_used_up_inside_the_window() {
     let count_runs_out_inside_the_window =
         schedule_retry_policy(&config(1, 30, 4, 10, 5), FunctionGeneration::Second);
     assert_eq!(

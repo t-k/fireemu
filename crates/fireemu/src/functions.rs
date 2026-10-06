@@ -30,8 +30,9 @@ use crate::config::{CompatibilityProfile, FunctionsCodebase, RuntimeConfig};
 pub struct FunctionPubSubResource {
     /// The canonical topic name.
     pub topic: fireemu_core_pubsub::TopicName,
-    /// The canonical emulator subscription name.
-    pub subscription: fireemu_core_pubsub::SubscriptionName,
+    /// The canonical emulator subscription name. A first-generation schedule's topic under the strict profile has none:
+    /// production creates a topic and no subscription for it.
+    pub subscription: Option<fireemu_core_pubsub::SubscriptionName>,
 }
 
 /// How the strict and the emulator profile name the subscription of a Pub/Sub function: the strict
@@ -84,50 +85,94 @@ pub fn storage_trigger_buckets(
         .collect()
 }
 
-/// Derives the unique Pub/Sub resources required by Pub/Sub and scheduled functions. Under
-/// `SubscriptionNaming::Eventarc` every 2nd gen Pub/Sub function gets its own subscription, so
-/// two functions on one topic give two resources; otherwise a topic gets one `emulator-sub-<topic>`.
+/// Derives the unique Pub/Sub resources required by Pub/Sub and scheduled functions.
+///
+/// Under `SubscriptionNaming::Eventarc` every 2nd gen Pub/Sub function gets its own subscription, so two functions on one
+/// topic give two resources; otherwise a topic gets one `emulator-sub-<topic>`.
+///
+/// The emulator profile follows the official emulator: every scheduled function has the topic
+/// `firebase-schedule-<name>` and an emulator subscription. The strict profile follows production: only a
+/// first-generation schedule has a topic, `firebase-schedule-<name>-<region>` (the id of its Cloud Scheduler job, runs
+/// `156715222b86ea44` and `f123d4fa2d61c5f5`), and no subscription of the emulator's; a second-generation schedule has
+/// none.
 pub fn function_pubsub_resources(
     project: &str,
     manifest: &fireemu_core_functions::manifest::FunctionManifest,
     naming: fireemu_adapter_functions::events::SubscriptionNaming,
+    profile: CompatibilityProfile,
 ) -> Result<Vec<FunctionPubSubResource>, String> {
     use fireemu_adapter_functions::events::function_subscription_id;
     use fireemu_core_functions::manifest::Trigger;
 
-    // (topic, subscription) -> the function that requires it, for diagnostics.
-    let mut wanted: BTreeMap<(String, String), String> = BTreeMap::new();
+    // (topic, subscription id; `None` for the topic of a schedule that production creates without a subscription) -> the
+    // smallest text of the functions that require it, for diagnostics.
+    let mut wanted: BTreeMap<(String, Option<String>), String> = BTreeMap::new();
+    let mut declare = |topic: String, subscription: Option<String>, owner: String| {
+        let entry = wanted
+            .entry((topic, subscription))
+            .or_insert_with(|| owner.clone());
+        if owner < *entry {
+            *entry = owner;
+        }
+    };
     for function in &manifest.functions {
         match &function.trigger {
             Trigger::PubSub { topic } => {
                 let subscription = function_subscription_id(naming, project, function, topic);
-                wanted
-                    .entry((topic.clone(), subscription))
-                    .or_insert_with(|| format!("function {:?}", function.name));
+                declare(
+                    topic.clone(),
+                    Some(subscription),
+                    format!("function {:?}", function.name),
+                );
+            }
+            Trigger::Schedule { .. } if uses_production_scheduler_defaults(profile) => {
+                if let Some(topic) = function.schedule_topic() {
+                    declare(
+                        topic,
+                        None,
+                        format!("scheduled function {:?}", function.name),
+                    );
+                }
             }
             Trigger::Schedule { .. } => {
                 let topic = format!("firebase-schedule-{}", function.name);
                 let subscription = format!("emulator-sub-{topic}");
-                wanted
-                    .entry((topic, subscription))
-                    .or_insert_with(|| format!("scheduled function {:?}", function.name));
+                declare(
+                    topic,
+                    Some(subscription),
+                    format!("scheduled function {:?}", function.name),
+                );
             }
             _ => {}
         }
     }
 
-    // Resource names, not the diagnostics attached to them, define uniqueness.
+    // A topic that some function subscribes to keeps its subscription; the subscriptionless declaration of the same topic
+    // adds nothing. Resource names, not the diagnostics attached to them, define uniqueness.
+    let subscribed: std::collections::BTreeSet<String> = wanted
+        .keys()
+        .filter(|(_, subscription)| subscription.is_some())
+        .map(|(topic, _)| topic.clone())
+        .collect();
     let mut resources = Vec::new();
     for ((topic_id, subscription_id), owner) in wanted {
+        if subscription_id.is_none() && subscribed.contains(&topic_id) {
+            continue;
+        }
         let topic = fireemu_core_pubsub::TopicName::new(project, &topic_id).map_err(|error| {
             format!("{owner} requires invalid Pub/Sub topic {topic_id:?}: {error}")
         })?;
-        let subscription = fireemu_core_pubsub::SubscriptionName::new(project, &subscription_id)
-            .map_err(|error| {
-                format!(
-                    "{owner} requires invalid Pub/Sub subscription {subscription_id:?}: {error}"
+        let subscription = subscription_id
+            .map(|subscription_id| {
+                fireemu_core_pubsub::SubscriptionName::new(project, &subscription_id).map_err(
+                    |error| {
+                        format!(
+                            "{owner} requires invalid Pub/Sub subscription {subscription_id:?}: {error}"
+                        )
+                    },
                 )
-            })?;
+            })
+            .transpose()?;
         resources.push(FunctionPubSubResource {
             topic,
             subscription,
@@ -147,11 +192,14 @@ pub fn provision_function_pubsub_resources(
     // Check every existing subscription before creating anything. A stale subscription with
     // the expected name but another topic is configuration drift, not an idempotent match.
     for resource in resources {
-        if let Ok(existing) = state.subscription_config(&resource.subscription) {
+        let Some(subscription) = &resource.subscription else {
+            continue;
+        };
+        if let Ok(existing) = state.subscription_config(subscription) {
             if existing.topic != resource.topic {
                 return Err(format!(
                     "Functions requires subscription {} to target {}, but it already targets {}",
-                    resource.subscription.to_full(),
+                    subscription.to_full(),
                     resource.topic.to_full(),
                     existing.topic.to_full()
                 ));
@@ -170,14 +218,17 @@ pub fn provision_function_pubsub_resources(
                     )
                 })?;
         }
-        if state.subscription_config(&resource.subscription).is_err() {
+        let Some(subscription) = &resource.subscription else {
+            continue;
+        };
+        if state.subscription_config(subscription).is_err() {
             state
                 .create_subscription(SubscriptionConfig {
                     labels: std::collections::BTreeMap::new(),
                     expiration_policy: None,
                     retain_acked_messages: false,
                     message_retention_duration: None,
-                    name: resource.subscription.clone(),
+                    name: subscription.clone(),
                     topic: resource.topic.clone(),
                     ack_deadline_seconds: DEFAULT_ACK_DEADLINE_SECONDS,
                     enable_message_ordering: false,
@@ -189,16 +240,16 @@ pub fn provision_function_pubsub_resources(
                 .map_err(|error| {
                     format!(
                         "could not provision subscription {}: {error}",
-                        resource.subscription.to_full()
+                        subscription.to_full()
                     )
                 })?;
         }
         state
-            .mark_function_subscription(&resource.subscription)
+            .mark_function_subscription(subscription)
             .map_err(|error| {
                 format!(
                     "could not provision subscription {}: {error}",
-                    resource.subscription.to_full()
+                    subscription.to_full()
                 )
             })?;
     }
@@ -5068,6 +5119,56 @@ impl FunctionsHook for Hook {
     }
 }
 
+/// Whether a schedule's message is published to its topic: the strict profile does, as Cloud Scheduler does, when a
+/// Pub/Sub broker is served to publish into.
+pub(crate) const fn publishes_schedule_messages(
+    pubsub_served: bool,
+    profile: CompatibilityProfile,
+) -> bool {
+    pubsub_served && uses_production_scheduler_defaults(profile)
+}
+
+/// Publishes the message of a first-generation schedule run to its topic in the Pub/Sub broker, as Cloud Scheduler does
+/// in production (strict profile): the message has the attribute `scheduled: "true"` and no data, the id and the publish
+/// time the handler's context reports. The runtime still delivers the schedule event to the handler itself, so the
+/// topic's subscribers are the only other readers; a publication refusal prevents handler invocation.
+pub struct PubSubSchedulePublisher {
+    handle: fireemu_adapter_pubsub::PubSubHandle,
+    project: String,
+}
+
+impl PubSubSchedulePublisher {
+    /// Publishes through `handle` into `project`'s topics.
+    #[must_use]
+    pub fn new(handle: fireemu_adapter_pubsub::PubSubHandle, project: &str) -> Self {
+        Self {
+            handle,
+            project: project.to_owned(),
+        }
+    }
+}
+
+impl fireemu_adapter_functions::runtime::ScheduleTopicPublisher for PubSubSchedulePublisher {
+    fn publish(
+        &self,
+        topic: &str,
+        message_id: &str,
+        at: fireemu_core_types::time::LogicalInstant,
+    ) -> Result<(), String> {
+        let topic = fireemu_core_pubsub::TopicName::new(&self.project, topic)
+            .map_err(|error| error.to_string())?;
+        let message = fireemu_core_pubsub::PubsubMessage {
+            data: Vec::new(),
+            attributes: BTreeMap::from([("scheduled".to_owned(), "true".to_owned())]),
+            ordering_key: String::new(),
+        };
+        self.handle
+            .publish_with_message_ids(&topic, vec![(message, message_id.to_owned())], at)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
+
 /// Bridges the real Pub/Sub broker to the Functions runtime: a message published through the
 /// `google.pubsub.v1` wire surface is also delivered to any Cloud Function subscribed to that
 /// topic (EVTINFRA-02), through the same `FunctionsRuntime::publish` path the control publish
@@ -5215,8 +5316,8 @@ mod tests {
         warn_reload_once, BlockingAuthBridge, FunctionsSourceByteBudget,
         FunctionsSourceEntryBudget, FunctionsSourceFileVersion, FunctionsSourceScanBudget,
         FunctionsSourceSnapshot, FunctionsSourceStamp, FunctionsSourceTraversal, NodeInstallation,
-        PubSubBridge, UserEnvironment, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
-        MAX_FUNCTIONS_SOURCE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
+        PubSubBridge, PubSubSchedulePublisher, UserEnvironment, BLOCKING_AUTH_DEADLINE,
+        MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
         MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
         SOURCE_IO_BUFFER_BYTES,
     };
@@ -5230,6 +5331,7 @@ mod tests {
         schedule_orphan_function_snapshot_sweep, snapshot_directory_name, snapshot_owned_directory,
         snapshot_owner_pid, sweep_orphan_function_snapshots,
     };
+    use crate::config::CompatibilityProfile;
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
         Filter, PubSubState, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
@@ -9071,11 +9173,17 @@ mod tests {
             "demo-app",
             &manifest,
             fireemu_adapter_functions::events::SubscriptionNaming::EmulatorTopic,
+            CompatibilityProfile::Emulator,
         )
         .unwrap();
         let actual: Vec<(String, String)> = resources
             .iter()
-            .map(|resource| (resource.topic.to_full(), resource.subscription.to_full()))
+            .map(|resource| {
+                (
+                    resource.topic.to_full(),
+                    resource.subscription.as_ref().unwrap().to_full(),
+                )
+            })
             .collect();
         assert_eq!(
             actual,
@@ -9134,11 +9242,21 @@ mod tests {
     fn strict_gives_each_second_generation_pubsub_function_its_own_eventarc_subscription() {
         use fireemu_adapter_functions::events::{function_subscription_id, SubscriptionNaming};
         let manifest = mixed_generation_manifest();
-        let resources =
-            function_pubsub_resources("demo-app", &manifest, SubscriptionNaming::Eventarc).unwrap();
+        let resources = function_pubsub_resources(
+            "demo-app",
+            &manifest,
+            SubscriptionNaming::Eventarc,
+            CompatibilityProfile::Strict,
+        )
+        .unwrap();
         let actual: Vec<(String, String)> = resources
             .iter()
-            .map(|resource| (resource.topic.to_full(), resource.subscription.to_full()))
+            .map(|resource| {
+                (
+                    resource.topic.to_full(),
+                    resource.subscription.as_ref().unwrap().to_full(),
+                )
+            })
             .collect();
         // Every second generation Pub/Sub function has a subscription of its own, derived from
         // the function the way the event names it; the first generation function and the
@@ -9174,11 +9292,16 @@ mod tests {
         assert!(derived("workerOne").contains("/eventarc-us-central1-workerone-"));
         assert!(derived("workerTwo").contains("/eventarc-europe-west1-workertwo-"));
         // A deployment keeps its names across runs, and a second call derives the same ones.
-        let again =
-            function_pubsub_resources("demo-app", &manifest, SubscriptionNaming::Eventarc).unwrap();
+        let again = function_pubsub_resources(
+            "demo-app",
+            &manifest,
+            SubscriptionNaming::Eventarc,
+            CompatibilityProfile::Strict,
+        )
+        .unwrap();
         assert_eq!(resources.len(), again.len());
         for (a, b) in resources.iter().zip(&again) {
-            assert_eq!(a.subscription.to_full(), b.subscription.to_full());
+            assert_eq!(a.subscription, b.subscription);
         }
     }
 
@@ -9189,11 +9312,12 @@ mod tests {
             "demo-app",
             &mixed_generation_manifest(),
             SubscriptionNaming::EmulatorTopic,
+            CompatibilityProfile::Emulator,
         )
         .unwrap();
         let names: Vec<String> = resources
             .iter()
-            .map(|resource| resource.subscription.to_full())
+            .map(|resource| resource.subscription.as_ref().unwrap().to_full())
             .collect();
         assert_eq!(
             names,
@@ -9248,6 +9372,7 @@ mod tests {
             "demo-app",
             &mixed_generation_manifest(),
             SubscriptionNaming::Eventarc,
+            CompatibilityProfile::Strict,
         )
         .unwrap();
         let mut state = PubSubState::new(7);
@@ -9260,7 +9385,7 @@ mod tests {
             .collect();
         for resource in &resources {
             assert!(
-                listed.contains(&resource.subscription.to_full()),
+                listed.contains(&resource.subscription.as_ref().unwrap().to_full()),
                 "{listed:?}"
             );
         }
@@ -9277,17 +9402,23 @@ mod tests {
             .find(|resource| {
                 resource
                     .subscription
+                    .as_ref()
+                    .unwrap()
                     .to_full()
                     .contains("eventarc-europe-west1-workertwo-")
             })
             .unwrap();
-        state.delete_subscription(&victim.subscription).unwrap();
+        state
+            .delete_subscription(victim.subscription.as_ref().unwrap())
+            .unwrap();
         assert_eq!(
             state.list_subscriptions("demo-app").len(),
             resources.len() - 1
         );
         provision_function_pubsub_resources(&mut state, &resources).unwrap();
-        assert!(state.subscription_config(&victim.subscription).is_ok());
+        assert!(state
+            .subscription_config(victim.subscription.as_ref().unwrap())
+            .is_ok());
         assert_eq!(state.list_subscriptions("demo-app").len(), resources.len());
     }
 
@@ -9303,6 +9434,333 @@ mod tests {
             super::auth_context_naming(CompatibilityProfile::Emulator),
             AuthContextNaming::Official
         );
+    }
+
+    /// Strict: only a first-generation schedule has a topic, named like its Cloud Scheduler job, and no emulator
+    /// subscription; a second-generation schedule has none; a topic a function subscribes to keeps its subscription.
+    #[test]
+    fn strict_pubsub_resources_give_a_first_generation_schedule_its_job_topic_and_no_subscription()
+    {
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "workerOne", "trigger": {"type": "pubsub", "topic": "shared-jobs"}},
+            {"name": "dailyReport", "trigger": {"type": "schedule", "schedule": "0 0 * * *"}},
+            {"name": "weeklyV2", "generation": 2, "trigger": {"type": "schedule", "schedule": "0 0 * * 0"}},
+            {"name": "eastReport", "region": "us-east1", "trigger": {"type": "schedule", "schedule": "0 0 * * *"}},
+            {"name": "health", "trigger": {"type": "http"}}
+        ]}))
+        .unwrap();
+        let resources = function_pubsub_resources(
+            "demo-app",
+            &manifest,
+            fireemu_adapter_functions::events::SubscriptionNaming::Eventarc,
+            CompatibilityProfile::Strict,
+        )
+        .unwrap();
+        let actual: Vec<(String, Option<String>)> = resources
+            .iter()
+            .map(|resource| {
+                (
+                    resource.topic.to_full(),
+                    resource
+                        .subscription
+                        .as_ref()
+                        .map(fireemu_core_pubsub::SubscriptionName::to_full),
+                )
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    "projects/demo-app/topics/firebase-schedule-dailyReport-us-central1".to_owned(),
+                    None
+                ),
+                (
+                    "projects/demo-app/topics/firebase-schedule-eastReport-us-east1".to_owned(),
+                    None
+                ),
+                (
+                    "projects/demo-app/topics/shared-jobs".to_owned(),
+                    Some("projects/demo-app/subscriptions/emulator-sub-shared-jobs".to_owned())
+                ),
+            ]
+        );
+        // the emulator profile is unchanged: the official name for every schedule, with its subscription
+        let emulator = function_pubsub_resources(
+            "demo-app",
+            &manifest,
+            fireemu_adapter_functions::events::SubscriptionNaming::EmulatorTopic,
+            CompatibilityProfile::Emulator,
+        )
+        .unwrap();
+        let topics: Vec<String> = emulator.iter().map(|r| r.topic.to_full()).collect();
+        assert_eq!(
+            topics,
+            vec![
+                "projects/demo-app/topics/firebase-schedule-dailyReport",
+                "projects/demo-app/topics/firebase-schedule-eastReport",
+                "projects/demo-app/topics/firebase-schedule-weeklyV2",
+                "projects/demo-app/topics/shared-jobs",
+            ]
+        );
+        assert!(emulator.iter().all(|r| r.subscription.is_some()));
+    }
+
+    /// A topic that two functions declare is one resource: the diagnostics name the smaller owner whichever comes first,
+    /// and the emulator subscribes to it when any declaration is a function's own subscription (a schedule's topic that a
+    /// Pub/Sub function also listens on keeps its subscription).
+    #[test]
+    fn a_topic_declared_twice_keeps_the_smaller_owner_and_a_subscription_if_any_declaration_wants_one(
+    ) {
+        for names in [["a", "b"], ["b", "a"]] {
+            let functions: Vec<_> = names
+                .iter()
+                .map(|n| json!({"name": n, "trigger": {"type": "pubsub", "topic": "bad topic"}}))
+                .collect();
+            let manifest = parse_manifest(&json!({ "functions": functions })).unwrap();
+            let error = function_pubsub_resources(
+                "demo-app",
+                &manifest,
+                fireemu_adapter_functions::events::SubscriptionNaming::EmulatorTopic,
+                CompatibilityProfile::Emulator,
+            )
+            .unwrap_err();
+            assert!(error.starts_with("function \"a\" requires"), "{error}");
+        }
+        for names in [["tick", "listener"], ["listener", "tick"]] {
+            let functions: Vec<_> = names
+                .iter()
+                .map(|n| {
+                    if *n == "tick" {
+                        json!({"name": "tick", "trigger": {"type": "schedule", "schedule": "every 5 minutes"}})
+                    } else {
+                        json!({"name": "listener", "trigger": {"type": "pubsub", "topic": "firebase-schedule-tick-us-central1"}})
+                    }
+                })
+                .collect();
+            let manifest = parse_manifest(&json!({ "functions": functions })).unwrap();
+            let resources = function_pubsub_resources(
+                "demo-app",
+                &manifest,
+                fireemu_adapter_functions::events::SubscriptionNaming::Eventarc,
+                CompatibilityProfile::Strict,
+            )
+            .unwrap();
+            assert_eq!(resources.len(), 1);
+            assert!(resources[0].subscription.is_some(), "{names:?}");
+        }
+    }
+
+    /// The strict profile publishes a schedule's message when a broker is served; the emulator profile never does.
+    #[test]
+    fn schedule_messages_are_published_by_the_strict_profile_with_a_broker_only() {
+        use super::publishes_schedule_messages;
+        assert!(publishes_schedule_messages(
+            true,
+            CompatibilityProfile::Strict
+        ));
+        assert!(!publishes_schedule_messages(
+            false,
+            CompatibilityProfile::Strict
+        ));
+        assert!(!publishes_schedule_messages(
+            true,
+            CompatibilityProfile::Emulator
+        ));
+        assert!(!publishes_schedule_messages(
+            false,
+            CompatibilityProfile::Emulator
+        ));
+    }
+
+    /// Provisioning a strict schedule topic creates the topic and no subscription.
+    #[test]
+    fn strict_provisioning_creates_the_schedule_topic_without_a_subscription() {
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "dailyReport", "trigger": {"type": "schedule", "schedule": "0 0 * * *"}}
+        ]}))
+        .unwrap();
+        let resources = function_pubsub_resources(
+            "demo-app",
+            &manifest,
+            fireemu_adapter_functions::events::SubscriptionNaming::Eventarc,
+            CompatibilityProfile::Strict,
+        )
+        .unwrap();
+        let mut state = PubSubState::new(7);
+        provision_function_pubsub_resources(&mut state, &resources).unwrap();
+        assert_eq!(state.list_topics("demo-app").len(), 1);
+        assert!(state.list_subscriptions("demo-app").is_empty());
+    }
+
+    /// End to end under the strict profile: an occurrence of a first-generation schedule puts a message with the
+    /// recorded shape on the job's topic (attribute `scheduled: "true"`, no data, the id the event names, the time of the
+    /// occurrence), a manual run puts another, the function is not delivered a second time through the topic, and a
+    /// second-generation schedule puts nothing anywhere.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn a_strict_schedule_publishes_its_message_to_the_job_topic_with_the_id_of_its_event() {
+        use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+        use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
+        use fireemu_adapter_pubsub::PubSubHandle;
+        use fireemu_core_pubsub::SubscriptionConfig;
+        use fireemu_core_types::ids::SessionId;
+        use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
+        use std::time::Duration;
+
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let spawn = SpawnSpec {
+            command: vec!["python3".to_owned(), script.display().to_string()],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(60),
+        };
+        let runner = Runner::spawn_spec(&spawn).await.unwrap();
+        let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        let start = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let clock = Arc::new(Mutex::new(VirtualClock::new(start)));
+        let runtime = FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: SessionId::new(7),
+                max_running: 4,
+                debug_mode: false,
+                retry_attempts: 1,
+                max_catch_up_runs: 1000,
+                runner_secret: "test-secret".to_owned(),
+                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+                functions_host: None,
+                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
+                ),
+                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            },
+            clock.clone(),
+            Arc::new(runner),
+            Some(spawn),
+        );
+        let state = Arc::new(Mutex::new(PubSubState::new(42)));
+        let resources = function_pubsub_resources(
+            "demo-app",
+            runtime.manifest(),
+            fireemu_adapter_functions::events::SubscriptionNaming::Eventarc,
+            CompatibilityProfile::Strict,
+        )
+        .unwrap();
+        provision_function_pubsub_resources(&mut state.lock().unwrap(), &resources).unwrap();
+        let topic = TopicName::new("demo-app", "firebase-schedule-tick-us-central1").unwrap();
+        let watch = SubscriptionName::new("demo-app", "watch").unwrap();
+        state
+            .lock()
+            .unwrap()
+            .create_subscription(SubscriptionConfig {
+                labels: std::collections::BTreeMap::new(),
+                expiration_policy: None,
+                retain_acked_messages: false,
+                message_retention_duration: None,
+                name: watch.clone(),
+                topic,
+                ack_deadline_seconds: 10,
+                enable_message_ordering: false,
+                filter: Filter::always(),
+                dead_letter_policy: None,
+                retry_policy: None,
+                push_config: PushConfig::default(),
+            })
+            .unwrap();
+        let handle = PubSubHandle::new(
+            state.clone(),
+            clock.clone(),
+            Some(Arc::new(PubSubBridge::new(runtime.clone()))),
+        );
+        runtime.set_schedule_topic_publisher(Arc::new(PubSubSchedulePublisher::new(
+            handle.clone(),
+            "demo-app",
+        )));
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(300))
+            .unwrap();
+        runtime.on_clock_changed();
+        runtime.run_schedule("tick").unwrap();
+        let pulled = handle.pull(&watch, 10).unwrap();
+        assert_eq!(pulled.len(), 2, "one occurrence and one manual run");
+        for received in &pulled {
+            let message = &received.message;
+            assert!(message.message.data.is_empty());
+            assert_eq!(
+                message.message.attributes,
+                BTreeMap::from([("scheduled".to_owned(), "true".to_owned())])
+            );
+            assert!(
+                message.message_id.len() == 17 && message.message_id.starts_with('2'),
+                "{}",
+                message.message_id
+            );
+        }
+        assert_ne!(pulled[0].message.message_id, pulled[1].message.message_id);
+        // the two runs are the only events: nothing was delivered again through the topic
+        let status = runtime.status();
+        assert_eq!(
+            status["causality"]["events"].as_array().unwrap().len(),
+            2,
+            "{status}"
+        );
+        assert_eq!(status["pending"], 2, "{status}");
+        // A deleted topic refuses both natural and manual publications, without invoking a handler or retaining its id.
+        state
+            .lock()
+            .unwrap()
+            .delete_topic(
+                &TopicName::new("demo-app", "firebase-schedule-tick-us-central1").unwrap(),
+            )
+            .unwrap();
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(300))
+            .unwrap();
+        runtime.on_clock_changed();
+        assert_eq!(runtime.status()["pending"], 2);
+        assert_eq!(runtime.dead_letters().len(), 1);
+        assert!(runtime.run_schedule("tick").is_err());
+        assert_eq!(runtime.status()["pending"], 2);
+        assert_eq!(runtime.dead_letters().len(), 2);
+        assert_eq!(
+            runtime.source_event_accounting().unwrap().published_records,
+            2
+        );
+        let dispatcher = tokio::spawn(runtime.clone().dispatch_loop());
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !runtime.is_idle() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            runtime
+                .history()
+                .iter()
+                .filter(|r| r.outcome == "ok")
+                .count(),
+            2
+        );
+        assert_eq!(
+            runtime
+                .history()
+                .iter()
+                .filter(|r| r.outcome.starts_with("failed:"))
+                .count(),
+            2
+        );
+        runtime.shutdown().await;
+        dispatcher.await.unwrap();
     }
 
     #[test]
@@ -9604,6 +10062,7 @@ mod tests {
             "demo-app",
             &manifest,
             fireemu_adapter_functions::events::SubscriptionNaming::EmulatorTopic,
+            CompatibilityProfile::Emulator,
         )
         .unwrap();
         let mut state = PubSubState::new(7);

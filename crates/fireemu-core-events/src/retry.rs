@@ -2,6 +2,9 @@
 
 use fireemu_core_types::time::LogicalDuration;
 
+/// The growth of the gap per step after the doublings: 2 s (see [`RetryPolicy::backoff_for_attempt`]).
+const LINEAR_STEP_NANOS: i128 = 2_000_000_000;
+
 /// Bounded retry policy. Built through [`RetryPolicy::try_new`] so that `max_attempts >= 1`
 /// and the backoffs are non-negative with `base_backoff <= max_backoff` always hold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,8 +100,11 @@ impl RetryPolicy {
         self.max_backoff
     }
 
-    /// Exponential backoff for the failure of `attempt` (1-based): `base * 2^(attempt-1)`,
-    /// capped at `max_backoff`. Never overflows.
+    /// Backoff for the failure of `attempt` (1-based): `base * 2^(attempt-1)` for the first `max_doublings` steps (every
+    /// step when there is no limit), then 2 s more per step, capped at `max_backoff`. The linear step is the one
+    /// Cloud Scheduler showed: 2 s in every parameter set of run `ecef353d18975246` (minimum 4 s with one doubling: 4, 8,
+    /// 10, 12, 14; minimum 2 s with three: 2, 4, 8, 16, 18; minimum 4 s with two: 4, 8, 16, 18), not `base * 2^doublings`
+    /// as its documentation says. Never overflows.
     #[must_use]
     pub fn backoff_for_attempt(&self, attempt: u32) -> LogicalDuration {
         let base = self.base_backoff.as_nanos();
@@ -110,8 +116,9 @@ impl RetryPolicy {
             .then(|| base.checked_mul(1i128 << doublings))
             .flatten();
         let linear_steps = shift.saturating_sub(doublings);
-        let scaled = exponential
-            .and_then(|unit| unit.checked_mul(i128::from(linear_steps).saturating_add(1)));
+        let scaled = exponential.and_then(|unit| {
+            unit.checked_add(LINEAR_STEP_NANOS.saturating_mul(i128::from(linear_steps)))
+        });
         LogicalDuration::from_nanos(scaled.map_or(cap, |v| v.min(cap)))
     }
 
@@ -121,13 +128,18 @@ impl RetryPolicy {
         attempt < self.max_attempts
     }
 
-    /// Whether the retry after `attempt` fits both the attempt and elapsed-time limits.
+    /// Whether a retry follows the failure of `attempt` (1-based) at `elapsed` after the first attempt. With only an
+    /// attempt limit it is [`Self::allows_retry_after`]; with only a window, the next attempt must fit it. With both
+    /// the chain goes on until **both** are used up: it continues while the attempt limit has retries left, and after
+    /// that while the next attempt still fits the window. Cloud Scheduler retried a job with a count of 3 and a window of
+    /// 20 s four times, the fourth past the window (run `f123d4fa2d61c5f5`), as its documentation says: "the job will be
+    /// retried until both limits are reached".
     #[must_use]
     pub fn allows_retry_after_elapsed(&self, attempt: u32, elapsed: LogicalDuration) -> bool {
-        if !self.allows_retry_after(attempt) {
-            return false;
+        if self.allows_retry_after(attempt) {
+            return true;
         }
-        self.max_retry_duration.is_none_or(|limit| {
+        self.max_retry_duration.is_some_and(|limit| {
             elapsed
                 .checked_add(self.backoff_for_attempt(attempt))
                 .is_some_and(|next| next <= limit)

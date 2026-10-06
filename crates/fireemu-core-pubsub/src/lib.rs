@@ -30,7 +30,7 @@ pub use fireemu_core_types::pubsub_message_id::{
 };
 pub use message::{PubsubMessage, StoredMessage};
 pub use name::{SubscriptionName, TopicName};
-pub use state::{DeadLetterForward, PubSubState, PullResult, Snapshot};
+pub use state::{DeadLetterForward, PreparedPublication, PubSubState, PullResult, Snapshot};
 pub use subscription::{
     DeadLetterPolicy, ExpirationPolicy, PushConfig, ReceivedMessage, RetryPolicy,
     SubscriptionConfig, SubscriptionState, SubscriptionUpdate,

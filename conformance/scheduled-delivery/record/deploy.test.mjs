@@ -233,6 +233,20 @@ const declared = () => ({
     region: ["us-central1"],
     scheduleTrigger: { schedule: "every 5 minutes" },
   },
+  schedRetryV1: {
+    platform: "gcfv1",
+    region: ["us-central1"],
+    scheduleTrigger: {
+      schedule: "every 5 minutes",
+      retryConfig: {
+        retryCount: 1,
+        minBackoffDuration: null,
+        maxBackoffDuration: null,
+        maxDoublings: null,
+        maxRetryDuration: null,
+      },
+    },
+  },
 });
 
 test("the declarations are the ones the packet states, and each departure is named", () => {
@@ -261,6 +275,15 @@ test("the declarations are the ones the packet states, and each departure is nam
     },
     (e) => {
       e.schedSlowV2.timeoutSeconds = 60;
+    },
+    (e) => {
+      e.schedRetryV1.scheduleTrigger.retryConfig.retryCount = 2;
+    },
+    (e) => {
+      delete e.schedRetryV1.scheduleTrigger.retryConfig;
+    },
+    (e) => {
+      e.schedRetryV1.scheduleTrigger.schedule = "every 1 minutes";
     },
   ];
   for (const [index, mutate] of variants.entries()) {
@@ -363,7 +386,13 @@ const service = (id) => ({
 
 test("readiness reads names case-exact for functions and lower-case for Cloud Run", () => {
   const all = summarize({
-    v1: { functions: [fn1("schedOkV1", "ACTIVE"), fn1("schedFailV1", "ACTIVE")] },
+    v1: {
+      functions: [
+        fn1("schedOkV1", "ACTIVE"),
+        fn1("schedFailV1", "ACTIVE"),
+        fn1("schedRetryV1", "ACTIVE"),
+      ],
+    },
     v2: {
       functions: [
         fn2("schedOkV2", "ACTIVE"),
@@ -476,7 +505,7 @@ test("a list of the real recorded shape (other functions in the project) is read
   const real = JSON.parse(readFileSync(join(here, "../fixtures/prepare-recorded.json"), "utf8"))
     .answers.functionsV1List.body;
   const out = summarize({ v1: real, v2: {}, run: {} });
-  assert.equal(nonePresent(out), true, "none of the five is among another project's functions");
-  assert.equal(Object.keys(out).length, 5);
+  assert.equal(nonePresent(out), true, "none of the six is among another project's functions");
+  assert.equal(Object.keys(out).length, 6);
   assert.ok(chmodSync && existsSync(here));
 });

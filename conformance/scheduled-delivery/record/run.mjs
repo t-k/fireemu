@@ -420,6 +420,9 @@ export async function record({
         }
         token = answer.json.nextPageToken ?? "";
         if (!token) break;
+        // The fifth page still has more: the rest of this window is not read. Said so, never left as a short count.
+        if (page === 4)
+          incompleteReads.push({ id: `logs-${label}-${kind}`, class: "more-than-five-pages" });
       }
     }
     if (!final) polledUntil = end;
@@ -599,11 +602,12 @@ export async function record({
   }
 
   /**
-   * Why a function did not become active: for each of this run's functions whose list entry is not ACTIVE and names
-   * a Cloud Build build, one GET of that build (its status, failure info and step statuses) and one Cloud Logging
-   * read of that build's log lines. Reads only; 403 and 404 are data; at most one pair per function. Recorded as
-   * `buildDiagnostics`; it judges nothing and never blocks the close (run e0ec2f41: a Gen1 build failed with "Build
-   * error details not available" and nothing in the packet could say why).
+   * Why a function did not become active: for each build named by this run's functions whose list entry is not ACTIVE,
+   * one GET of that build (its status, failure info and step statuses) and one Cloud Logging read of that build's log
+   * lines. A function is listed by both function lists (the v2 list carries first-generation functions too) and
+   * functions of one deploy share a build, so a build is read once, whoever names it first; each function still has its
+   * own row in `buildDiagnostics`. Reads only; 403 and 404 are data; it judges nothing and never blocks the close (run
+   * e0ec2f41: a Gen1 build failed with "Build error details not available" and nothing in the packet could say why).
    */
   async function diagnoseBuilds(found) {
     const entries = [
@@ -613,8 +617,12 @@ export async function record({
       ({ item, active }) => !active && ALL_FUNCTIONS.some((fn) => functionName(fn) === item.name),
     );
     const diagnostics = [];
+    const read = new Map();
+    const seen = new Set();
     for (const { item } of entries) {
       const fn = String(item.name).split("/").at(-1);
+      if (seen.has(fn)) continue;
+      seen.add(fn);
       const build =
         /\/builds\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(
           String(item.buildName ?? item.buildConfig?.build ?? ""),
@@ -624,19 +632,23 @@ export async function record({
         continue;
       }
       const buildId = build[1];
-      const got = await normal({
-        id: "diagnose-build-" + fn,
-        method: "GET",
-        url: `https://cloudbuild.googleapis.com/v1/projects/${projectNumber}/locations/${REGION}/builds/${buildId}`,
-        observe: true,
-      });
-      const logs = await normal({
-        ...listRequest({
-          id: "diagnose-build-logs-" + fn,
-          filter: `resource.type="build" AND resource.labels.build_id="${buildId}"`,
-        }),
-        observe: true,
-      });
+      if (!read.has(buildId)) {
+        const got = await normal({
+          id: "diagnose-build-" + fn,
+          method: "GET",
+          url: `https://cloudbuild.googleapis.com/v1/projects/${projectNumber}/locations/${REGION}/builds/${buildId}`,
+          observe: true,
+        });
+        const logs = await normal({
+          ...listRequest({
+            id: "diagnose-build-logs-" + fn,
+            filter: `resource.type="build" AND resource.labels.build_id="${buildId}"`,
+          }),
+          observe: true,
+        });
+        read.set(buildId, { got, logs });
+      }
+      const { got, logs } = read.get(buildId);
       const json = got?.status === 200 && readable(got) ? got.json : {};
       diagnostics.push({
         function: fn,

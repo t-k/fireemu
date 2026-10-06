@@ -775,6 +775,17 @@ pub struct FunctionSpec {
 }
 
 impl FunctionSpec {
+    /// The Pub/Sub topic Cloud Scheduler publishes to for this function, when it has one: a first-generation schedule
+    /// (`pubsub.schedule`) has a job `firebase-schedule-<name>-<region>` whose target is a topic of the same id; a
+    /// second-generation schedule has a job that calls its HTTP URL and no topic. Recorded in production (runs
+    /// `156715222b86ea44` and `f123d4fa2d61c5f5`, us-central1).
+    #[must_use]
+    pub fn schedule_topic(&self) -> Option<String> {
+        (matches!(self.trigger, Trigger::Schedule { .. })
+            && self.generation == FunctionGeneration::First)
+            .then(|| format!("firebase-schedule-{}-{}", self.name, self.region))
+    }
+
     fn validate_task_queue_options(&self) -> Result<(), ManifestError> {
         let Trigger::TaskQueue { rate_limits, .. } = self.trigger else {
             return Ok(());

@@ -574,6 +574,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                 runtime.project(),
                 runtime.manifest(),
                 functions::subscription_naming(cfg.profile),
+                cfg.profile,
             )?;
             let mut state = pubsub_state
                 .lock()
@@ -602,6 +603,15 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             fireemu_adapter_pubsub::PagingPolicy::Emulator
         }
     });
+    // Under the strict profile a first-generation schedule's occurrence also puts its message on the job's topic, as Cloud
+    // Scheduler does; without a Pub/Sub listener there is no topic and nothing to publish to.
+    if functions::publishes_schedule_messages(pubsub_listener.is_some(), cfg.profile) {
+        if let Some(runtime) = &functions_runtime {
+            runtime.set_schedule_topic_publisher(Arc::new(
+                functions::PubSubSchedulePublisher::new(pubsub_handle.clone(), runtime.project()),
+            ));
+        }
+    }
     let auth_policy = service_admission(
         app_check_gate.as_ref(),
         "auth",

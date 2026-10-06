@@ -42,7 +42,14 @@ test("a v1 function's origin is the Cloud Functions log with its case-exact name
 
 test("the filters name every origin and the window, and the request passes the guard", () => {
   const filter = frameFilter({ start, end });
-  for (const name of ["schedOkV1", "schedFailV1", "schedokv2", "schedretryv2", "schedslowv2"])
+  for (const name of [
+    "schedOkV1",
+    "schedFailV1",
+    "schedRetryV1",
+    "schedokv2",
+    "schedretryv2",
+    "schedslowv2",
+  ])
     assert.ok(filter.includes('"' + name + '"'), name);
   assert.ok(
     filter.includes('timestamp>="' + start + '"') && filter.includes('timestamp<="' + end + '"'),
@@ -56,7 +63,7 @@ test("the filters name every origin and the window, and the request passes the g
   assert.equal(guard.allow(listRequest({ id: "x", filter, pageToken: "abc" })), true);
   const sched = schedulerFilter({ runId: RUN, start, end });
   assert.ok(sched.startsWith('resource.type="cloud_scheduler_job" AND ('));
-  assert.equal((sched.match(/job_id=/g) ?? []).length, 9);
+  assert.equal((sched.match(/job_id=/g) ?? []).length, 12);
   assert.equal(guard.allow(listRequest({ id: "y", filter: sched })), true);
   assert.throws(() => frameFilter({ start: "yesterday", end }), /RFC 3339/);
   assert.throws(() => schedulerFilter({ runId: RUN, start, end: "x" }), /RFC 3339/);

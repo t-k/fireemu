@@ -31,6 +31,7 @@ const request = (headers) => ({
 const row = (id, answer) => ({
   id,
   state: "response-persisted",
+  status: 200,
   bodyBase64: Buffer.from(JSON.stringify(answer)).toString("base64"),
 });
 
@@ -114,6 +115,25 @@ function runDir(overrides = {}) {
       id: "run-1-schedOkV2-us-central1",
       state: "before-send",
       dispatchAt: "2026-10-05T08:41:05.109Z",
+    },
+    // the creates of the extra REST jobs: the request, and the answer (a job with its effective retryConfig, or a 400)
+    {
+      id: "create-extra-zero",
+      state: "before-send",
+      json: { name: "projects/p/locations/l/jobs/fe-sd-run-zero", retryConfig: { retryCount: 0 } },
+    },
+    row("create-extra-zero", {
+      name: "projects/p/locations/l/jobs/fe-sd-run-zero",
+      retryConfig: { retryCount: 0, minBackoffDuration: "5s", maxBackoffDuration: "3600s" },
+    }),
+    {
+      id: "create-extra-fraction",
+      state: "before-send",
+      json: { name: "x", retryConfig: { maxRetryDuration: "20.5s" } },
+    },
+    {
+      ...row("create-extra-fraction", { error: { code: 400, message: "nanos refused" } }),
+      status: 400,
     },
   ];
   writeFileSync(
@@ -337,4 +357,136 @@ test("a forced run whose request the journal does not hold is an error, not a gu
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("each extra REST job is kept with its answer, the retryConfig it was asked for and the one the answer carries", () => {
+  const dir = runDir();
+  try {
+    const { extraJobs } = extract(dir);
+    assert.deepEqual(Object.keys(extraJobs).toSorted(), ["fraction", "zero"]);
+    assert.deepEqual(extraJobs.zero, {
+      status: 200,
+      message: null,
+      requested: { retryCount: 0 },
+      effective: { retryCount: 0, minBackoffDuration: "5s", maxBackoffDuration: "3600s" },
+    });
+    // a refusal has no job: no effective retryConfig, and the message is kept whole
+    assert.deepEqual(extraJobs.fraction, {
+      status: 400,
+      message: "nanos refused",
+      requested: { maxRetryDuration: "20.5s" },
+      effective: null,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a run with no extra job create has an empty extraJobs, and the recording date is the first frame's day", () => {
+  const dir = runDir();
+  try {
+    const digest = extract(dir);
+    assert.equal(digest.run.recordedOn, "2026-10-05");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the messages pulled from a Gen1 topic are kept once each, without their ack ids, in publish order", () => {
+  const dir = runDir();
+  const message = (messageId, publishTime, extra = {}) => ({
+    ackId: "secret-ack-" + messageId,
+    message: { attributes: { scheduled: "true" }, messageId, publishTime, ...extra },
+  });
+  const pulls = [
+    row("pull-pass1-2-schedOkV1", {
+      receivedMessages: [
+        message("22256340823546561", "2026-10-05T08:41:31.286Z"),
+        message("22257391512846670", "2026-10-05T08:41:10.855Z"),
+      ],
+    }),
+    // a later pull redelivers one of them (an unacknowledged message is delivered again)
+    row("pull-pass2-1-schedOkV1", {
+      receivedMessages: [message("22256340823546561", "2026-10-05T08:41:31.286Z")],
+    }),
+    row("pull-pass1-2-schedRetryV1", {
+      receivedMessages: [
+        message("21339796619509982", "2026-10-05T08:41:38.993Z", { data: "YQ==" }),
+      ],
+    }),
+    // an empty answer, an answer that is not a 200, and an acknowledge are not messages
+    row("pull-pass1-3-schedFailV1", {}),
+    { ...row("pull-pass1-4-schedFailV1", { error: { code: 503 } }), status: 503 },
+    row("ack-pass1-2-schedOkV1", {}),
+  ];
+  const journalFile = join(dir, `journal-${RUN}.jsonl`);
+  writeFileSync(
+    journalFile,
+    readFileSync(journalFile, "utf8") + pulls.map((r) => JSON.stringify(r)).join("\n") + "\n",
+  );
+  const digest = extract(dir);
+  assert.deepEqual(digest.published, [
+    {
+      function: "schedOkV1",
+      messageId: "22257391512846670",
+      publishTime: "2026-10-05T08:41:10.855Z",
+      atMs: 6746,
+      attributes: { scheduled: "true" },
+      hasData: false,
+    },
+    {
+      function: "schedOkV1",
+      messageId: "22256340823546561",
+      publishTime: "2026-10-05T08:41:31.286Z",
+      atMs: 27177,
+      attributes: { scheduled: "true" },
+      hasData: false,
+    },
+    {
+      function: "schedRetryV1",
+      messageId: "21339796619509982",
+      publishTime: "2026-10-05T08:41:38.993Z",
+      atMs: 34884,
+      attributes: { scheduled: "true" },
+      hasData: true,
+    },
+  ]);
+  assert.ok(!JSON.stringify(digest).includes("secret-ack"));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("a run with no pulled message has an empty published list", () => {
+  const dir = runDir();
+  assert.deepEqual(extract(dir).published, []);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("only a persisted 200 answer of a pull counts: another state, another status or another request does not", () => {
+  const dir = runDir();
+  const received = {
+    receivedMessages: [
+      {
+        ackId: "a",
+        message: {
+          messageId: "21111111111111111",
+          publishTime: "2026-10-05T08:41:10.000Z",
+          attributes: {},
+        },
+      },
+    ],
+  };
+  const body = (id, extra) => ({ id, ...row(id, received), ...extra });
+  const journalFile = join(dir, `journal-${RUN}.jsonl`);
+  const extra = [
+    body("pull-pass1-1-schedOkV1", { state: "response-headers" }), // not persisted
+    body("pull-pass1-2-schedOkV1", { status: 503 }), // not a 200
+    body("ack-pass1-3-schedOkV1", {}), // not a pull
+    body("xpull-pass1-4-schedOkV1", {}), // an id that only contains pull-
+  ];
+  writeFileSync(
+    journalFile,
+    readFileSync(journalFile, "utf8") + extra.map((r) => JSON.stringify(r)).join("\n") + "\n",
+  );
+  assert.deepEqual(extract(dir).published, []);
+  rmSync(dir, { recursive: true, force: true });
 });

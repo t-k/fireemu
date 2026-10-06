@@ -23,11 +23,11 @@ const FN = "/projects/" + P + "/locations/us-central1/functions";
 const yes = (r) => assert.equal(guard.allow(r), true, r.method + " " + r.url);
 const no = (r) => assert.equal(guard.allow(r), false, r.method + " " + r.url);
 
-test("the ids the recorder may touch: five deployed jobs, four extra jobs, two pull subscriptions", () => {
-  assert.equal(jobIds(RUN).length, 9);
+test("the ids the recorder may touch: six deployed jobs, six extra jobs, three pull subscriptions", () => {
+  assert.equal(jobIds(RUN).length, 12);
   assert.deepEqual(
     jobIds(RUN)
-      .slice(0, 5)
+      .slice(0, 6)
       .map((id) => id.replace(/-us-central1$/, "")),
     [
       "firebase-schedule-schedOkV2",
@@ -35,15 +35,18 @@ test("the ids the recorder may touch: five deployed jobs, four extra jobs, two p
       "firebase-schedule-schedSlowV2",
       "firebase-schedule-schedOkV1",
       "firebase-schedule-schedFailV1",
+      "firebase-schedule-schedRetryV1",
     ],
   );
   assert.deepEqual(pullIds(RUN), [
     "fe-sd-" + RUN + "-pull-schedokv1",
     "fe-sd-" + RUN + "-pull-schedfailv1",
+    "fe-sd-" + RUN + "-pull-schedretryv1",
   ]);
   assert.deepEqual(v1TopicIds(), [
     "firebase-schedule-schedOkV1-us-central1",
     "firebase-schedule-schedFailV1-us-central1",
+    "firebase-schedule-schedRetryV1-us-central1",
   ]);
   assert.throws(() => jobIds("nope"), /invalid run ID/);
 });
@@ -364,5 +367,5 @@ test("mutations are the writes and the pull; reads are not", () => {
     false,
   );
   assert.equal(m(spec("GET", "https://example.com/")), false);
-  assert.equal(EXTRA_JOBS.length, 4);
+  assert.equal(EXTRA_JOBS.length, 6);
 });

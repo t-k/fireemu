@@ -225,3 +225,139 @@ test("it refuses to start without the control URL, the token or a whole number o
   assert.notEqual(code, 0);
   assert.match(output, /the local child needs the control URL and token/);
 });
+
+/** A fake Pub/Sub REST surface: one subscription per topic that holds the messages it is given. */
+async function fakePubSub(messagesByTopic, missingTopics = []) {
+  const calls = [];
+  const subscriptions = new Map();
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => (body += chunk));
+    request.on("end", () => {
+      const json = body ? JSON.parse(body) : null;
+      calls.push({ method: request.method, path: request.url, body: json });
+      response.setHeader("content-type", "application/json");
+      const put = /^\/v1\/projects\/([^/]+)\/subscriptions\/([^/:]+)$/.exec(request.url);
+      if (request.method === "PUT" && put) {
+        const topic = json.topic.split("/").at(-1);
+        if (missingTopics.includes(topic)) {
+          response.statusCode = 404;
+          return response.end(JSON.stringify({ error: { code: 404, status: "NOT_FOUND" } }));
+        }
+        subscriptions.set(put[2], topic);
+        return response.end(JSON.stringify({ name: json.name ?? put[2], topic: json.topic }));
+      }
+      const pull = /^\/v1\/projects\/([^/]+)\/subscriptions\/([^/:]+):pull$/.exec(request.url);
+      if (request.method === "POST" && pull) {
+        const messages = messagesByTopic[subscriptions.get(pull[2])] ?? [];
+        return response.end(
+          JSON.stringify(
+            messages.length
+              ? { receivedMessages: messages.map((message) => ({ ackId: "a", message })) }
+              : {},
+          ),
+        );
+      }
+      response.statusCode = 404;
+      response.end("{}");
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    host: `127.0.0.1:${server.address().port}`,
+    calls,
+    close: () => {
+      server.close();
+      server.closeAllConnections();
+    },
+  };
+}
+
+test("with pull topics it subscribes before the clock moves and pulls once after the last step, printing what each topic held", async () => {
+  const topicA = "firebase-schedule-schedOkV1-us-central1";
+  const topicB = "firebase-schedule-schedFailV1-us-central1";
+  const message = {
+    messageId: "21339796619509982",
+    publishTime: "2026-10-05T08:40:31.123Z",
+    attributes: { scheduled: "true" },
+  };
+  const pubsub = await fakePubSub({ [topicA]: [message] }, [topicB]);
+  try {
+    const { code, output, calls } = await runChild({
+      LOCAL_START: "2026-10-05T08:40:30Z",
+      LOCAL_SECONDS: "2",
+      LOCAL_AWAIT_IDLE: "0",
+      LOCAL_PAUSE_MS: "1",
+      LOCAL_PROJECT: "demo-sched",
+      LOCAL_PULL_TOPICS: `${topicA},${topicB}`,
+      PUBSUB_EMULATOR_HOST: pubsub.host,
+    });
+    assert.equal(code, 0, output);
+    assert.deepEqual(
+      pubsub.calls.map((c) => `${c.method} ${c.path}`),
+      [
+        "PUT /v1/projects/demo-sched/subscriptions/watch-0",
+        "PUT /v1/projects/demo-sched/subscriptions/watch-1",
+        "POST /v1/projects/demo-sched/subscriptions/watch-0:pull",
+      ],
+      "a topic that could not be subscribed to is not pulled",
+    );
+    assert.deepEqual(pubsub.calls[0].body, {
+      topic: `projects/demo-sched/topics/${topicA}`,
+      ackDeadlineSeconds: 600,
+    });
+    assert.deepEqual(pubsub.calls[2].body, { maxMessages: 1000 });
+    // the subscriptions exist before the first step, and the pull comes after the last
+    const order = calls.map((c) => c.path.split("/").at(-1));
+    assert.deepEqual(order, ["clock:advanceTo", "clock:advanceTo", "functions"]);
+    assert.deepEqual(lines(output, "SUBSCRIBED "), [
+      `SUBSCRIBED ${topicA} 200`,
+      `SUBSCRIBED ${topicB} 404`,
+    ]);
+    const pulled = lines(output, "PULLED ").map((l) => JSON.parse(l.slice("PULLED ".length)));
+    assert.deepEqual(pulled, [
+      { topic: topicA, status: 200, messages: [message] },
+      { topic: topicB, status: 404, messages: [] },
+    ]);
+    // the pull lines come before the STATE line (the last line)
+    const text = output.split("\n").filter(Boolean);
+    assert.ok(
+      text.findIndex((l) => l.startsWith("PULLED ")) <
+        text.findIndex((l) => l.startsWith("STATE ")),
+    );
+  } finally {
+    pubsub.close();
+  }
+});
+
+test("without pull topics it makes no Pub/Sub call and prints no SUBSCRIBED or PULLED line", async () => {
+  const pubsub = await fakePubSub({});
+  try {
+    const { code, output } = await runChild({
+      LOCAL_START: "2026-10-05T08:40:30Z",
+      LOCAL_SECONDS: "1",
+      LOCAL_AWAIT_IDLE: "0",
+      LOCAL_PAUSE_MS: "1",
+      PUBSUB_EMULATOR_HOST: pubsub.host,
+    });
+    assert.equal(code, 0, output);
+    assert.deepEqual(pubsub.calls, []);
+    assert.deepEqual(lines(output, "SUBSCRIBED "), []);
+    assert.deepEqual(lines(output, "PULLED "), []);
+  } finally {
+    pubsub.close();
+  }
+});
+
+test("pull topics need the project and the Pub/Sub host, each of them", async () => {
+  const base = { LOCAL_START: "2026-10-05T08:40:30Z", LOCAL_SECONDS: "1", LOCAL_PULL_TOPICS: "t" };
+  for (const env of [
+    {},
+    { LOCAL_PROJECT: "demo-sched" },
+    { PUBSUB_EMULATOR_HOST: "127.0.0.1:1" },
+  ]) {
+    const { code, output } = await runChild({ ...base, ...env });
+    assert.notEqual(code, 0, JSON.stringify(env));
+    assert.match(output, /pull topics need LOCAL_PROJECT and PUBSUB_EMULATOR_HOST/);
+  }
+});

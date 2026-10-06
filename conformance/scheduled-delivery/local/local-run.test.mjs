@@ -248,3 +248,64 @@ test("without manualAt and clockFile the child is given neither, and the patch g
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("pull topics put the Pub/Sub broker on the daemon and the topics and the project in the child's environment", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "local-run-test-"));
+  try {
+    const deps = join(dir, "deps");
+    mkdirSync(deps);
+    const result = await runLocal({
+      fireemu: fake(dir, 'console.log("STEP 2026-10-05T08:40:31Z");'),
+      node: "/usr/local/bin/node22",
+      depsDir: deps,
+      fixtureDir: fixtureDir(dir),
+      profile: "strict",
+      start: "2026-10-05T08:40:30Z",
+      seconds: 1,
+      pullTopics: ["firebase-schedule-a-us-central1", "firebase-schedule-b-us-central1"],
+    });
+    const args = JSON.parse(field(result.output, "ARGS"));
+    assert.deepEqual(args.slice(0, 5), [
+      "exec",
+      "--project",
+      "demo-sched",
+      "--only",
+      "functions,pubsub",
+    ]);
+    const env = JSON.parse(field(result.output, "ENV"));
+    assert.equal(
+      env.LOCAL_PULL_TOPICS,
+      "firebase-schedule-a-us-central1,firebase-schedule-b-us-central1",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseTimeline keeps what the pull subscriptions held, whatever step the lines follow", async () => {
+  const { parseTimeline } = await import("./local-run.mjs");
+  const output = [
+    "SUBSCRIBED t1 200",
+    "STEP 2026-10-05T08:40:31Z",
+    'PULLED {"topic":"t1","status":200,"messages":[{"messageId":"2111","publishTime":"2026-10-05T08:40:31Z","attributes":{"scheduled":"true"}}]}',
+    'PULLED {"topic":"t2","status":404,"messages":[]}',
+    'PULLED {"topic": cut',
+    'STATE {"pending":0}',
+  ].join("\n");
+  const timeline = parseTimeline(output);
+  assert.deepEqual(timeline.pulled, [
+    {
+      topic: "t1",
+      status: 200,
+      messages: [
+        {
+          messageId: "2111",
+          publishTime: "2026-10-05T08:40:31Z",
+          attributes: { scheduled: "true" },
+        },
+      ],
+    },
+    { topic: "t2", status: 404, messages: [] },
+  ]);
+  assert.deepEqual(parseTimeline("").pulled, []);
+});

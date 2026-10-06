@@ -1,7 +1,7 @@
 // Local-only probes for the retry and timeout behaviours the delivery recording observed (run 156715222b86ea44). Each
 // handler prints one line, `PROBE {json}`, and fails, so that a retry chain can be counted and timed against
 // the virtual clock. The retry declarations are the ones the recording used: `schedRetryV2`'s, the REST jobs
-// `zero`, `duration` and `retry5`, and defaults. Never deployed.
+// `zero`, `duration`, `retry5`, `count` and `zerobackoff`, and defaults. Never deployed.
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { setGlobalOptions } = require("firebase-functions/v2");
 
@@ -38,3 +38,49 @@ exports.retryDuration = onSchedule(
   failing("retryDuration"),
 );
 exports.retryDefault = onSchedule("every 5 minutes", failing("retryDefault"));
+// run f123d4fa2d61c5f5's REST jobs `count` and `zerobackoff`
+exports.retryCountWindow = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    retryCount: 3,
+    maxRetrySeconds: 20,
+    minBackoffSeconds: 4,
+    maxBackoffSeconds: 10,
+  },
+  failing("retryCountWindow"),
+);
+// run ecef353d18975246's REST jobs `double0` (asked for no doublings: stored as 5), `double1` and `double3`
+exports.retryDouble0 = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    retryCount: 5,
+    minBackoffSeconds: 3,
+    maxBackoffSeconds: 100,
+    maxDoublings: 0,
+  },
+  failing("retryDouble0"),
+);
+exports.retryDouble1 = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    retryCount: 5,
+    minBackoffSeconds: 4,
+    maxBackoffSeconds: 100,
+    maxDoublings: 1,
+  },
+  failing("retryDouble1"),
+);
+exports.retryDouble3 = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    retryCount: 5,
+    minBackoffSeconds: 2,
+    maxBackoffSeconds: 100,
+    maxDoublings: 3,
+  },
+  failing("retryDouble3"),
+);
+exports.retryZeroBackoff = onSchedule(
+  { schedule: "every 5 minutes", maxRetrySeconds: 10, minBackoffSeconds: 0, maxBackoffSeconds: 0 },
+  failing("retryZeroBackoff"),
+);

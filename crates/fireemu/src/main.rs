@@ -3658,6 +3658,7 @@ mod reset_pubsub_tests {
             project,
             &manifest,
             fireemu_adapter_functions::events::SubscriptionNaming::default(),
+            crate::config::CompatibilityProfile::Emulator,
         )
         .expect("the resources resolve")
     }

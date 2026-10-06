@@ -1,127 +1,90 @@
 {
-  "runs": [
-    "nmuv70w0y",
-    "nmuv8dk6e"
-  ],
+  "runs": ["nmuv70w0y", "nmuv8dk6e"],
   "rows": {
     "native/resume-grid-g0/k0": {
       "nmuv70w0y": {
         "kind": "filter-only",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       },
       "nmuv8dk6e": {
         "kind": "filter-only",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       }
     },
     "native/resume-grid-g0/k1": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       }
     },
     "native/resume-grid-g0/k1-repeat": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       }
     },
     "native/resume-grid-g0/k1-expected": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:14:12:5"
-        ]
+        "filters": ["1:3:14:12:5"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:14:12:5"
-        ]
+        "filters": ["1:3:14:12:5"]
       }
     },
     "native/resume-grid-g0/k2": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       }
     },
     "native/resume-grid-g0/k2-expected": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:14:12:5"
-        ]
+        "filters": ["1:3:14:12:5"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:14:12:5"
-        ]
+        "filters": ["1:3:14:12:5"]
       }
     },
     "native/resume-grid-g0/k2-wrong": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:14:12:5"
-        ]
+        "filters": ["1:3:14:12:5"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:14:12:5"
-        ]
+        "filters": ["1:3:14:12:5"]
       }
     },
     "native/resume-grid-g0/k3": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:2:0:0:0"
-        ]
+        "filters": ["1:2:0:0:0"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:2:0:0:0"
-        ]
+        "filters": ["1:2:0:0:0"]
       }
     },
     "native/resume-grid-tc/k0": {
       "nmuv70w0y": {
         "kind": "filter-only",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       },
       "nmuv8dk6e": {
         "kind": "empty",
@@ -135,9 +98,7 @@
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       }
     },
     "native/resume-grid-tc/k1-repeat": {
@@ -163,57 +124,41 @@
     "native/resume-grid-tc/k2": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       }
     },
     "native/resume-grid-tc/k2-expected": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:14:12:5"
-        ]
+        "filters": ["1:3:14:12:5"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:14:12:5"
-        ]
+        "filters": ["1:3:14:12:5"]
       }
     },
     "native/resume-grid-tc/k2-wrong": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:14:12:5"
-        ]
+        "filters": ["1:3:14:12:5"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:14:12:5"
-        ]
+        "filters": ["1:3:14:12:5"]
       }
     },
     "native/resume-grid-tc/k3": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:2:0:0:0"
-        ]
+        "filters": ["1:2:0:0:0"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:2:0:0:0"
-        ]
+        "filters": ["1:2:0:0:0"]
       }
     },
     "native/resume-grid-gc/k0": {
@@ -229,9 +174,7 @@
     "native/resume-grid-gc/k1": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       },
       "nmuv8dk6e": {
         "kind": "replay",
@@ -245,9 +188,7 @@
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       }
     },
     "native/resume-grid-gc/k1-expected": {
@@ -257,73 +198,53 @@
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:14:12:5"
-        ]
+        "filters": ["1:3:14:12:5"]
       }
     },
     "native/resume-grid-gc/k2": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       }
     },
     "native/resume-grid-gc/k2-expected": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:14:12:5"
-        ]
+        "filters": ["1:3:14:12:5"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:14:12:5"
-        ]
+        "filters": ["1:3:14:12:5"]
       }
     },
     "native/resume-grid-gc/k2-wrong": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:14:12:5"
-        ]
+        "filters": ["1:3:14:12:5"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:14:12:5"
-        ]
+        "filters": ["1:3:14:12:5"]
       }
     },
     "native/resume-grid-gc/k3": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:2:0:0:0"
-        ]
+        "filters": ["1:2:0:0:0"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:2:0:0:0"
-        ]
+        "filters": ["1:2:0:0:0"]
       }
     },
     "native/resume-kinds/modify": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       },
       "nmuv8dk6e": {
         "kind": "replay",
@@ -337,9 +258,7 @@
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:4:0:0:0"
-        ]
+        "filters": ["1:4:0:0:0"]
       }
     },
     "native/resume-kinds/leave": {
@@ -365,43 +284,31 @@
     "native/resume-age/age-30s-k1": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       }
     },
     "native/resume-age/age-5m-k1": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       }
     },
     "native/resume-age/age-5m-k2": {
       "nmuv70w0y": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       },
       "nmuv8dk6e": {
         "kind": "diff+filter",
-        "filters": [
-          "1:3:0:0:0"
-        ]
+        "filters": ["1:3:0:0:0"]
       }
     }
   }

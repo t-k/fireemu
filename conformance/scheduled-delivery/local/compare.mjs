@@ -512,7 +512,10 @@ export function rows(production, local, alsoRecorded = []) {
       pIds,
       lIds,
       same(pIds, lIds) &&
-        lv1.every((f) => lMsgs.filter((m) => m.fn === f.handler && m.id === f.context?.eventId).length === 1) &&
+        lv1.every(
+          (f) =>
+            lMsgs.filter((m) => m.fn === f.handler && m.id === f.context?.eventId).length === 1,
+        ) &&
         lMsgs.every((m) => lv1.some((f) => f.handler === m.fn && f.context?.eventId === m.id)),
       "the message id is a Pub/Sub message id and is the event id of the handler's context",
     );

@@ -1897,8 +1897,11 @@ const PUBLISHED_ROWS = [
 test("v1.published.messageId: every local handler needs exactly one publication", () => {
   const p = productionWithMessages();
   const base = localWithMessages();
-  for (const messages of [base.natural.pulled[0].messages.slice(0, 1), [...base.natural.pulled[0].messages, base.natural.pulled[0].messages[0]]]) {
-    const pulled = base.natural.pulled.map((t, i) => i === 0 ? { ...t, messages } : t);
+  for (const messages of [
+    base.natural.pulled[0].messages.slice(0, 1),
+    [...base.natural.pulled[0].messages, base.natural.pulled[0].messages[0]],
+  ]) {
+    const pulled = base.natural.pulled.map((t, i) => (i === 0 ? { ...t, messages } : t));
     assert.equal(verdicts(p, localWithMessages({ pulled }))["v1.published.messageId"], "DIVERGES");
   }
 });
@@ -1906,7 +1909,10 @@ test("v1.published.messageId: every local handler needs exactly one publication"
 test("v1.published.messageId: every local publication needs its handler", () => {
   const base = localWithMessages();
   const lines = base.natural.lines.filter((l) => l.value?.context?.eventId !== "27440000000000001");
-  assert.equal(verdicts(productionWithMessages(), localWithMessages({ lines }))["v1.published.messageId"], "DIVERGES");
+  assert.equal(
+    verdicts(productionWithMessages(), localWithMessages({ lines }))["v1.published.messageId"],
+    "DIVERGES",
+  );
 });
 
 test("the published-message rows exist only for a recording that pulled messages, and match a local run built like it", () => {
@@ -2085,7 +2091,9 @@ test("a recording with a single pulled message still has the rows", () => {
   const one = { ...p, published: [p.published[0]] };
   const base = localWithMessages();
   const l = localWithMessages({
-    lines: base.natural.lines.filter((l) => l.value?.generation !== 1 || l.value.context.eventId === "27440000000000001"),
+    lines: base.natural.lines.filter(
+      (l) => l.value?.generation !== 1 || l.value.context.eventId === "27440000000000001",
+    ),
     pulled: [{ ...base.natural.pulled[0], messages: [base.natural.pulled[0].messages[1]] }],
   });
   const v = verdicts(one, l);

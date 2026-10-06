@@ -3003,8 +3003,17 @@ async fn start_codebase(
         // Before anything is served: every export the runner could not serve is either named in a
         // refusal or printed, one line each.
         let policy = UnservedTriggers::parse(&cfg.functions_unserved_triggers).unwrap_or_default();
-        for line in check_ignored(&manifest, policy)? {
-            eprintln!("note: {line}");
+        for (function, line) in manifest
+            .ignored
+            .iter()
+            .zip(check_ignored(&manifest, policy)?)
+        {
+            let level = if function.trigger_type == "schedule" {
+                "warning"
+            } else {
+                "note"
+            };
+            eprintln!("{level}: {line}");
         }
         if cfg.functions_manifest.is_some() {
             // A configured manifest replaces discovery outright. Security-sensitive trigger
@@ -3015,7 +3024,11 @@ async fn start_codebase(
                 .manifest
                 .clone()
                 .ok_or_else(|| "the functions runner did not discover a manifest".to_owned())?;
-            let mut discovered = parse_manifest(&discovered)?;
+            let mut discovered = if cfg.profile == CompatibilityProfile::Emulator {
+                manifest_for_profile(cfg.profile, &discovered, cfg.clock_start)?
+            } else {
+                parse_manifest(&discovered)?
+            };
             serve_blocking_events_for(cfg.profile, &mut discovered);
             check_manifest_agrees_on_blocking_auth(&manifest, &discovered)?;
             if callable_trusted_protocol {
@@ -3042,13 +3055,14 @@ async fn start_codebase(
 }
 
 /// The manifest `profile` serves: the parsed manifest, refused when the strict profile finds a schedule production
-/// Cloud Scheduler refuses, with the blocking functions the profile does not serve set aside.
+/// Cloud Scheduler refuses, with unparseable emulator schedules and unserved blocking functions set aside.
 #[allow(clippy::too_many_lines)] // Keep strict schedule normalization and validation together.
 fn manifest_for_profile(
     profile: CompatibilityProfile,
     manifest_json: &serde_json::Value,
     now: fireemu_core_types::time::LogicalInstant,
 ) -> Result<fireemu_core_functions::manifest::FunctionManifest, String> {
+    let mut unscheduled = BTreeMap::new();
     let defaulted;
     let document = if uses_production_scheduler_defaults(profile) {
         let mut copy = manifest_json.clone();
@@ -3083,9 +3097,65 @@ fn manifest_for_profile(
         defaulted = copy;
         &defaulted
     } else {
-        manifest_json
+        let mut copy = manifest_json.clone();
+        if let Some(functions) = copy
+            .get_mut("functions")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for function in functions {
+                let Some(name) = function
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                else {
+                    continue;
+                };
+                let Some(trigger) = function.get_mut("trigger") else {
+                    continue;
+                };
+                if trigger.get("type").and_then(serde_json::Value::as_str) != Some("schedule") {
+                    continue;
+                }
+                let Some(text) = trigger.get("schedule").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let zone = trigger
+                    .get("timeZone")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|z| !z.is_empty());
+                let parsed = fireemu_core_functions::cron::Schedule::parse(text)
+                    .map_err(|e| format!("schedule: {e}"))
+                    .and_then(|_| {
+                        fireemu_adapter_functions::zone::resolve(zone)
+                            .map_err(|e| format!("time zone: {e}"))
+                    });
+                if let Err(reason) = parsed {
+                    unscheduled.insert(name, reason);
+                    // Validate the remaining metadata before moving this export to the ignored inventory.
+                    // This temporary trigger never reaches the runtime or creates a job.
+                    trigger["schedule"] = serde_json::json!("every 5 minutes");
+                    trigger["timeZone"] = serde_json::Value::Null;
+                }
+            }
+        }
+        defaulted = copy;
+        &defaulted
     };
     let mut manifest = parse_manifest(document)?;
+    let ignored = &mut manifest.ignored;
+    manifest.functions.retain(|function| {
+        let Some(reason) = unscheduled.remove(&function.name) else {
+            return true;
+        };
+        ignored.push(fireemu_core_functions::manifest::IgnoredFunction {
+            name: function.name.clone(),
+            region: function.region.clone(),
+            trigger_type: "schedule".to_owned(),
+            scope: fireemu_core_functions::manifest::IgnoredScope::Unsupported,
+            reason: format!("no scheduled job: {reason}"),
+        });
+        false
+    });
     if profile == CompatibilityProfile::Strict {
         for function in &mut manifest.functions {
             let fireemu_core_functions::manifest::Trigger::Schedule {
@@ -7504,12 +7574,17 @@ mod tests {
                 Some(LogicalInstant::parse_rfc3339(expected).unwrap())
             );
         }
-        assert!(super::manifest_for_profile(
+        let emulator = super::manifest_for_profile(
             CompatibilityProfile::Emulator,
             &document,
-            crate::config::RuntimeConfig::default().clock_start
+            crate::config::RuntimeConfig::default().clock_start,
         )
-        .is_err());
+        .unwrap();
+        assert_eq!(emulator.scheduled().count(), 0);
+        assert_eq!(
+            super::check_ignored(&emulator, super::UnservedTriggers::Refuse).unwrap(),
+            ["functions[us-central1-gr13]: function ignored (schedule): no scheduled job: schedule: unrecognised schedule \"every 20 minutes synchronized\""]
+        );
         let unrecorded = json!({"functions": [{"name": "gr13", "generation": 2, "trigger": {
             "type": "schedule", "schedule": "every 7 minutes synchronized", "timeZone": "UTC",
         }}]});
@@ -7683,6 +7758,227 @@ mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unparseable_emulator_schedules_still_validate_the_remaining_manifest() {
+        let now = crate::config::RuntimeConfig::default().clock_start;
+        let mut document = json!({"functions": [{"name": "job", "trigger": {
+            "type": "schedule", "schedule": "every 0 minutes",
+        }}]});
+        document["functions"][0]["timeoutSeconds"] = json!(0);
+        assert!(
+            super::manifest_for_profile(CompatibilityProfile::Emulator, &document, now)
+                .unwrap_err()
+                .contains("timeoutSeconds")
+        );
+        document["functions"][0]["timeoutSeconds"] = json!(60);
+        document["functions"][0]["trigger"]
+            .as_object_mut()
+            .unwrap()
+            .remove("schedule");
+        assert_eq!(
+            super::manifest_for_profile(CompatibilityProfile::Emulator, &document, now)
+                .unwrap_err(),
+            "manifest: function \"job\": schedule is required"
+        );
+        document["functions"][0]["trigger"]["schedule"] = json!("every 0 minutes");
+        let duplicate = document["functions"][0].clone();
+        document["functions"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        assert!(
+            super::manifest_for_profile(CompatibilityProfile::Emulator, &document, now)
+                .unwrap_err()
+                .contains("declared twice")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)] // Keep the recorded declarations and both profile checks together.
+    async fn recorded_unparseable_schedules_start_with_warnings_and_no_jobs_only_in_emulator() {
+        use fireemu_core_types::time::LogicalInstant;
+
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/codex-out/calendar-startup-{}",
+            std::process::id()
+        ));
+        let source = dir.join("src");
+        std::fs::create_dir_all(&source).unwrap();
+        let manifest_path = dir.join("manifest.json");
+        let codebase = crate::config::FunctionsCodebase {
+            codebase: "default".to_owned(),
+            source: source.display().to_string(),
+            runtime: None,
+            ignore: Vec::new(),
+        };
+        let hosts = super::EmulatorHosts {
+            firestore: None,
+            auth: None,
+            storage: None,
+            functions: None,
+            eventarc: None,
+            tasks: None,
+            logging: None,
+            pubsub: None,
+            hub: None,
+        };
+        let cache = Arc::new(super::NodeProbeCache::default());
+        let mut declarations = vec![
+            (
+                "c07",
+                "0 0 1 4 *",
+                "Invalid/Unknown",
+                "2026-10-05T00:30:00Z",
+                "time zone: unknown time zone \"Invalid/Unknown\"",
+            ),
+            (
+                "c08",
+                "0 0 0 1 4 *",
+                "UTC",
+                "2026-10-05T00:30:00Z",
+                "schedule: unrecognised schedule \"0 0 0 1 4 *\"",
+            ),
+        ];
+        // The seven declarations in each calendar-v6 recording, with their dispatch anchors.
+        for anchors in [
+            [
+                "2026-10-04T23:49:09.759Z",
+                "2026-10-04T23:49:12.680Z",
+                "2026-10-04T23:49:14.058Z",
+                "2026-10-04T23:49:42.509Z",
+                "2026-10-04T23:49:43.888Z",
+                "2026-10-04T23:49:47.812Z",
+                "2026-10-04T23:49:57.990Z",
+            ],
+            [
+                "2026-10-05T00:30:22.138Z",
+                "2026-10-05T00:30:23.568Z",
+                "2026-10-05T00:30:25.004Z",
+                "2026-10-05T00:30:52.982Z",
+                "2026-10-05T00:30:54.319Z",
+                "2026-10-05T00:30:58.776Z",
+                "2026-10-05T00:31:08.658Z",
+            ],
+        ] {
+            for ((name, schedule, zone, reason), anchor) in [
+                (
+                    "cr08",
+                    "0 24 * * *",
+                    "UTC",
+                    "schedule: cron field hour: \"24\" is out of range",
+                ),
+                (
+                    "cr09",
+                    "0 0 1 *",
+                    "UTC",
+                    "schedule: unrecognised schedule \"0 0 1 *\"",
+                ),
+                (
+                    "cr10",
+                    "0 0 L * *",
+                    "UTC",
+                    "schedule: cron field day-of-month: \"L\" is out of range",
+                ),
+                (
+                    "gr09",
+                    "every 0 minutes",
+                    "UTC",
+                    "schedule: unrecognised schedule \"every 0 minutes\"",
+                ),
+                (
+                    "gr10",
+                    "32 of month 09:00",
+                    "UTC",
+                    "schedule: cron field day-of-month: \"32\" is out of range",
+                ),
+                (
+                    "gr13",
+                    "every 20 minutes synchronized",
+                    "UTC",
+                    "schedule: unrecognised schedule \"every 20 minutes synchronized\"",
+                ),
+                (
+                    "tz04",
+                    "0 9 * * *",
+                    "Asia/Tokio",
+                    "time zone: unknown time zone \"Asia/Tokio\"",
+                ),
+            ]
+            .into_iter()
+            .zip(anchors)
+            {
+                declarations.push((name, schedule, zone, anchor, reason));
+            }
+        }
+        assert_eq!(declarations.len(), 16);
+        for (name, schedule, zone, anchor, reason) in declarations {
+            let document = json!({"functions": [
+                {"name": name, "generation": 2, "region": "europe-west1", "trigger": {
+                    "type": "schedule", "schedule": schedule, "timeZone": zone,
+                }},
+                {"name": "parseable", "generation": 2, "trigger": {
+                    "type": "schedule", "schedule": "every 5 minutes", "timeZone": "Asia/Tokyo",
+                }},
+            ]});
+            std::fs::write(&manifest_path, document.to_string()).unwrap();
+            for profile in [CompatibilityProfile::Emulator, CompatibilityProfile::Strict] {
+                let cfg = crate::config::RuntimeConfig {
+                    profile,
+                    clock_start: LogicalInstant::parse_rfc3339(anchor).unwrap(),
+                    functions_runner: Some(if profile == CompatibilityProfile::Emulator {
+                        vec![
+                            "python3".to_owned(), "-c".to_owned(),
+                            "import json,sys\nframe=json.dumps({'type':'hello','runner':'fake','manifest':json.load(open(sys.argv[1]))})\nsys.stdout.write(str(len(frame))+'\\n'+frame)\nsys.stdout.flush()\nsys.stdin.read()".to_owned(),
+                            manifest_path.display().to_string(),
+                        ]
+                    } else {
+                        vec!["python3".to_owned(), script.display().to_string()]
+                    }),
+                    functions_manifest: Some(manifest_path.display().to_string()),
+                    ..crate::config::RuntimeConfig::default()
+                };
+                let started =
+                    super::start_codebase(&cfg, &codebase, &hosts, "test-secret", false, &cache)
+                        .await;
+                if profile == CompatibilityProfile::Strict && name != "gr13" {
+                    assert_eq!(
+                        started.err().unwrap(),
+                        format!("manifest: function {name:?}: {reason}")
+                    );
+                    continue;
+                }
+                let spec =
+                    started.unwrap_or_else(|e| panic!("{name} {profile:?} at {anchor}: {e}"));
+                spec.runner.kill_now();
+                let (_, parsed, time_zone) = spec
+                    .manifest
+                    .scheduled()
+                    .find(|(function, _, _)| function.name == "parseable")
+                    .unwrap();
+                assert_eq!(parsed.as_str(), "every 5 minutes");
+                assert_eq!(time_zone, Some("Asia/Tokyo"));
+                if profile == CompatibilityProfile::Emulator {
+                    assert_eq!(
+                        spec.manifest.scheduled().count(),
+                        1,
+                        "{name}: no job for the ignored function"
+                    );
+                    assert_eq!(spec.manifest.ignored.len(), 1);
+                    assert_eq!(
+                        super::check_ignored(&spec.manifest, super::UnservedTriggers::Refuse).unwrap(),
+                        [format!("functions[europe-west1-{name}]: function ignored (schedule): no scheduled job: {reason}")]
+                    );
+                } else {
+                    assert_eq!(spec.manifest.scheduled().count(), 2);
+                    assert!(spec.manifest.ignored.is_empty());
+                }
+            }
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The time zone of a schedule that names none: the strict profile gives a first-generation one Los Angeles (read

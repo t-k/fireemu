@@ -437,10 +437,47 @@ test("the excluded kinds are exactly the ones the release discloses", () => {
   // Removing an exclusion means adding its run; adding one means a disclosure of its own.
   assert.deepEqual(EXCLUDED_KINDS.map((exclusion) => exclusion.kind).toSorted(), [
     "auth-fs-cross-stage2-comparison-v1",
+    "scheduled-functions-calendar-comparison-v1",
+    "scheduled-functions-comparison-v1",
     "storage-object-comparison-v1",
     "storage-rules-comparison-v2",
     "storage-rules-management-comparison-v1",
   ]);
+});
+
+test("scheduled exclusions are reserved while implementing and used after promotion", () => {
+  const pending = EXCLUDED_KINDS.filter(({ kind }) => kind.startsWith("scheduled-functions-"));
+  assert.equal(pending.length, 2);
+  assert.deepEqual(planComparisons(committedClosures(), readJson).errors, []);
+  const closures = committedClosures();
+  const scheduled = closures.find(({ closure }) => closure.parent === "SCHEDULED-FUNCTIONS");
+  scheduled.closure.parentStatus = "COMPAT_VERIFIED";
+  scheduled.closure.integratedRegression = {
+    comparisons: pending.map(({ kind }) => ({ path: `scheduled/${kind}.json` })),
+  };
+  const plan = planComparisons(closures, (path) =>
+    path.startsWith("scheduled/") ? { kind: path.slice(10, -5) } : readJson(path),
+  );
+  assert.deepEqual(plan.errors, []);
+  assert.deepEqual(
+    plan.excluded
+      .filter(({ parents }) => parents.includes("SCHEDULED-FUNCTIONS"))
+      .map(({ kind }) => kind)
+      .toSorted(),
+    pending.map(({ kind }) => kind).toSorted(),
+  );
+  scheduled.closure.integratedRegression.comparisons.pop();
+  assert.ok(
+    planComparisons(closures, (path) =>
+      path.startsWith("scheduled/") ? { kind: path.slice(10, -5) } : readJson(path),
+    ).errors.some((error) => error.includes("no verified closure names it")),
+  );
+  assert.ok(
+    planComparisons(
+      closures.filter((entry) => entry !== scheduled),
+      readJson,
+    ).errors.some((error) => error.includes("scheduled-functions")),
+  );
 });
 
 test("every kind exclusion names its reason and an issue by file name only", () => {

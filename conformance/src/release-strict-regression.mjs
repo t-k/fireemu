@@ -351,9 +351,22 @@ export const EXCLUDED_PARTS = [
  * Comparison kinds a COMPAT_VERIFIED closure names that no run reproduces yet, with why and where
  * the missing run is tracked (owner decision 2026-09-29: v0.9.0 is released with these disclosed).
  * Every other comparison a verified closure names is rerun. A kind here must not also have a run,
- * and must be named by a verified closure.
+ * and must be named by a verified closure. The two scheduled kinds are reserved while that
+ * parent is implementing; after promotion they must be used like every other exclusion.
  */
 export const EXCLUDED_KINDS = [
+  {
+    kind: "scheduled-functions-calendar-comparison-v1",
+    reason:
+      "W1 reads two private calendar journals, builds its own binary and writes a cases report without a comparison kind or release check/export modes; publishing the recordings and adapting it to the installed binary is required before the release job can replay it",
+    issue: "scheduled-functions-calendar-comparison-needs-release-replay.md",
+  },
+  {
+    kind: "scheduled-functions-comparison-v1",
+    reason:
+      "W2 exports a saved delivery comparison table with artifact bindings but does not replay that table on the release binary; the table producer needs release check/export modes before this generator can serve the release job",
+    issue: "scheduled-functions-delivery-comparison-needs-release-replay.md",
+  },
   {
     kind: "auth-fs-cross-stage2-comparison-v1",
     reason:
@@ -545,7 +558,16 @@ export function planComparisons(
     planned.push({ path, kind, parents: [...parents].toSorted(), runIds: runs.map((r) => r.id) });
   }
   for (const exclusion of excludedKinds) {
-    if (!usedExclusions.has(exclusion.kind)) {
+    const reserved =
+      ["scheduled-functions-calendar-comparison-v1", "scheduled-functions-comparison-v1"].includes(
+        exclusion.kind,
+      ) &&
+      closures.some(
+        (entry) =>
+          parentName(entry) === "SCHEDULED-FUNCTIONS" &&
+          entry.closure.parentStatus === "IMPLEMENTING",
+      );
+    if (!usedExclusions.has(exclusion.kind) && !reserved) {
       errors.push(`excluded kind ${exclusion.kind}: no verified closure names it`);
     }
   }

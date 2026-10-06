@@ -26,7 +26,12 @@ export function parseTimeline(output) {
   const state = [];
   const manual = [];
   const pulled = [];
+  let history = null;
   for (const line of String(output).split("\n")) {
+    if (line.startsWith("HISTORY ")) {
+      history = JSON.parse(line.slice(8));
+      continue;
+    }
     // `PULLED <json>`: what a pull subscription held after the last step (a line the daemon cut is not one)
     const held = /^PULLED (\{.*)$/.exec(line);
     if (held) {
@@ -65,7 +70,7 @@ export function parseTimeline(output) {
     }
     if (line.startsWith("STATE ")) state.push(JSON.parse(line.slice(6)));
   }
-  return { lines, unplaced: pending.length, state: state.at(-1) ?? null, manual, pulled };
+  return { lines, unplaced: pending.length, state: state.at(-1) ?? null, manual, pulled, history };
 }
 
 const freePort = () =>
@@ -123,6 +128,7 @@ export async function runLocal({
     );
     mkdirSync(join(work, "home"));
     const port = await freePort();
+    const uiPort = await freePort();
     const args = [
       "exec",
       "--project",
@@ -135,6 +141,8 @@ export async function runLocal({
       join(work, "fixture"),
       "--http-port",
       String(port),
+      "--ui-port",
+      String(uiPort),
       ...[
         "functions",
         "firestore",
@@ -142,7 +150,6 @@ export async function runLocal({
         "eventarc",
         "tasks",
         "pubsub",
-        "ui",
         "hub",
         "logging",
       ].flatMap((name) => ["--" + name + "-port", "0"]),
@@ -154,6 +161,7 @@ export async function runLocal({
       PATH: dirname(node) + ":/usr/bin:/bin",
       HOME: join(work, "home"),
       LOCAL_START: start,
+      LOCAL_UI_URL: `http://127.0.0.1:${uiPort}/ui/api/functions`,
       LOCAL_SECONDS: String(seconds),
       LOCAL_AWAIT_IDLE: awaitIdle ? "1" : "0",
       LOCAL_PAUSE_MS: String(pauseMs),

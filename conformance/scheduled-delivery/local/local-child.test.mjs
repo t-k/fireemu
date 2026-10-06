@@ -35,7 +35,19 @@ async function runChild(env, { clockFile } = {}) {
         clock: clockFile ? readClock(clockFile) : null,
       });
       response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify(request.method === "GET" ? { functions: [] } : { ok: true }));
+      if (request.url === "/ui/api/functions" && request.headers.authorization !== "Bearer t0ken") {
+        response.statusCode = 403;
+        return response.end("{}");
+      }
+      response.end(
+        JSON.stringify(
+          request.url === "/ui/api/functions"
+            ? { history: [{ function: "schedOkV2", outcome: "ok" }] }
+            : request.method === "GET"
+              ? { functions: [] }
+              : { ok: true },
+        ),
+      );
     });
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -46,6 +58,9 @@ async function runChild(env, { clockFile } = {}) {
       FIREEMU_CONTROL_URL: `http://127.0.0.1:${port}/v1/`,
       FIREEMU_CONTROL_TOKEN: "t0ken",
       ...env,
+      ...(env.LOCAL_UI_URL === "fake"
+        ? { LOCAL_UI_URL: `http://127.0.0.1:${port}/ui/api/functions` }
+        : {}),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -61,6 +76,21 @@ async function runChild(env, { clockFile } = {}) {
   return { code, output, calls };
 }
 const lines = (output, prefix) => output.split("\n").filter((l) => l.startsWith(prefix));
+
+test("completion history is read from the local diagnostics after the final step", async () => {
+  const { code, output, calls } = await runChild({
+    LOCAL_START: "2026-10-05T08:40:30Z",
+    LOCAL_SECONDS: "1",
+    LOCAL_PAUSE_MS: "1",
+    LOCAL_UI_URL: "fake",
+  });
+  assert.equal(code, 0, output);
+  assert.equal(calls.at(-1).path, "/ui/api/functions");
+  assert.equal(calls.at(-1).authorization, "Bearer t0ken");
+  assert.deepEqual(lines(output, "HISTORY "), [
+    'HISTORY [{"function":"schedOkV2","outcome":"ok"}]',
+  ]);
+});
 
 test("it advances the clock one second at a time, waits for idle when asked, and prints one STEP line per step", async () => {
   const { code, output, calls } = await runChild({

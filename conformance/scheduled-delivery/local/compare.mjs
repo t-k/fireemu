@@ -43,6 +43,7 @@ const maskProject = (name) => String(name).replace(/^projects\/[^/]+\//, "projec
 const v1Prod = (digest) => digest.frames.filter((f) => f.generation === 1);
 /** An RFC 3339 instant (with an offset, and a fraction of up to nine digits) as seconds since the epoch. */
 export const secondsOf = (instant) => {
+  if (typeof instant !== "string") return NaN;
   const fraction = /\.(\d+)/.exec(instant)?.[1] ?? "";
   return Date.parse(instant.replace(/\.\d+/, "")) / 1000 + (fraction ? Number("0." + fraction) : 0);
 };
@@ -107,11 +108,98 @@ export function inFlightFacts(frames, forcedAt, cadenceSeconds) {
   };
 }
 
+/** Pure production predicates shared by the comparator and closure generator. */
+export function productionDeliveryFacts(digest) {
+  const frames = digest.frames.filter(
+    (f) =>
+      f.handler === "schedRetryV2" &&
+      !f.headers?.["x-cloudscheduler-jobname"]?.startsWith("fe-sd-"),
+  );
+  const groups = new Map();
+  for (const f of frames.toSorted((a, b) => a.at - b.at)) {
+    const key = `${f.headers?.["x-cloudscheduler-jobname"]}|${f.headers?.["x-cloudscheduler-scheduletime"]}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(f);
+  }
+  const chains = [...groups.values()];
+  const recovery = chains.find((g) => g[0].failing === true && g.some((f) => f.failing === false));
+  const successful = chains.filter((g) => g.some((f) => f.failing === false));
+  const repeated = chains.filter((g) => g.length > 1);
+  const finished = (handler) =>
+    (digest.attempts?.[`firebase-schedule-${handler}-us-central1`] ?? []).filter(
+      (a) => a.kind === "AttemptFinished",
+    );
+  const ok = finished("schedOkV2");
+  const failures = finished("schedRetryV2");
+  const observations = {
+    "handler-success-ack":
+      ok.length && ok.every((a) => Object.hasOwn(a, "status") && typeof a.debugInfo === "string")
+        ? ok.every((a) => a.status === null && (a.debugInfo ?? "").endsWith("code number = 200"))
+        : null,
+    "handler-throw-ack":
+      failures.length &&
+      repeated.length &&
+      failures.every((a) => Object.hasOwn(a, "status") && typeof a.debugInfo === "string") &&
+      chains.every((g) => typeof g[0].failing === "boolean")
+        ? failures.some(
+            (a) => a.status !== null && (a.debugInfo ?? "").endsWith("code number = 500"),
+          ) && repeated.some((g) => g[0].failing === true)
+        : null,
+    "success-stops-retry":
+      recovery && chains.every((g) => g.every((f) => typeof f.failing === "boolean"))
+        ? successful.every((g) => g.findIndex((f) => f.failing === false) === g.length - 1)
+        : null,
+    "next-schedule-after-failure":
+      chains.length &&
+      Array.isArray(digest.forced) &&
+      chains.every((g) => g.every((f) => typeof f.failing === "boolean" && Number.isFinite(f.at)))
+        ? chains.some(
+            (g) =>
+              g.every((f) => f.failing === true) &&
+              chains.some(
+                (next) =>
+                  next[0].at > g.at(-1).at &&
+                  secondsOf(next[0].event.scheduleTime) > secondsOf(g[0].event.scheduleTime) &&
+                  !(digest.forced ?? []).some(
+                    (f) => f.job === next[0].event.jobName && Math.abs(f.atMs - next[0].at) <= 5000,
+                  ),
+              ),
+          )
+        : null,
+    "retry-stable-occurrence-identity":
+      repeated.length &&
+      frames.every(
+        (f) =>
+          typeof f.event?.jobName === "string" &&
+          f.event.jobName.length > 0 &&
+          typeof f.headers?.["x-cloudscheduler-jobname"] === "string" &&
+          typeof f.event?.scheduleTime === "string" &&
+          Number.isFinite(Date.parse(f.event.scheduleTime)) &&
+          typeof f.headers?.["x-cloudscheduler-scheduletime"] === "string" &&
+          Number.isFinite(Date.parse(f.headers["x-cloudscheduler-scheduletime"])),
+      )
+        ? frames.every(
+            (f) =>
+              f.event.jobName === f.headers["x-cloudscheduler-jobname"] &&
+              f.event.scheduleTime === f.headers["x-cloudscheduler-scheduletime"],
+          )
+        : null,
+  };
+  return { observations, successShape: recovery?.map((f) => f.failing) ?? null };
+}
+
 /** The recorded retry chains: the attempt offsets (seconds from the first attempt) of each job's first chain. */
 export function productionChains(digest) {
   const groups = new Map();
   for (const f of digest.frames) {
-    if (f.handler !== "schedRetryV2") continue;
+    if (
+      f.handler !== "schedRetryV2" ||
+      typeof f.headers?.["x-cloudscheduler-jobname"] !== "string" ||
+      !f.headers["x-cloudscheduler-jobname"] ||
+      typeof f.headers?.["x-cloudscheduler-scheduletime"] !== "string" ||
+      !Number.isFinite(Date.parse(f.headers["x-cloudscheduler-scheduletime"]))
+    )
+      continue;
     const key =
       f.headers["x-cloudscheduler-jobname"] + "|" + f.headers["x-cloudscheduler-scheduletime"];
     if (!groups.has(key)) groups.set(key, []);
@@ -143,7 +231,14 @@ export function productionChains(digest) {
 export function localChains(timeline) {
   const occurrences = new Map();
   for (const line of timeline.lines.filter((x) => x.kind === "PROBE")) {
-    const key = line.value.handler + "|" + (line.value.scheduleTime ?? "");
+    if (
+      typeof line.value.handler !== "string" ||
+      !line.value.handler ||
+      typeof line.value.scheduleTime !== "string" ||
+      !Number.isFinite(Date.parse(line.value.scheduleTime))
+    )
+      continue;
+    const key = line.value.handler + "|" + line.value.scheduleTime;
     if (!occurrences.has(key)) occurrences.set(key, { handler: line.value.handler, times: [] });
     occurrences.get(key).times.push(Date.parse(line.at) / 1000);
   }
@@ -542,6 +637,96 @@ export function rows(production, local, alsoRecorded = []) {
   }
 
   // ---- failure handling ----
+  const { observations, successShape } = productionDeliveryFacts(production);
+  const delivery = [{ ...observations }, {}];
+  const grouped = new Map();
+  const retryFrames = handlerLines(local.natural, "schedRetryV2").toSorted(
+    (a, b) => Date.parse(a.at) - Date.parse(b.at),
+  );
+  for (const { value: f } of retryFrames) {
+    const key = `${f.event.jobName}|${f.event.scheduleTime}`;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(f);
+  }
+  const chains = [...grouped.values()];
+  const successful = chains.filter((g) => g.some((f) => f.failing === false));
+  delivery[1]["success-stops-retry"] =
+    successful.length && chains.every((g) => g.every((f) => typeof f.failing === "boolean"))
+      ? successful.every((g) => g.findIndex((f) => f.failing === false) === g.length - 1) &&
+        successful.some(
+          (g) => JSON.stringify(g.map((f) => f.failing)) === JSON.stringify(successShape),
+        )
+      : null;
+  const identity = local.probe.lines.filter(
+    (l) => l.kind === "PROBE" && l.value.handler === "retryFour",
+  );
+  delivery[1]["retry-stable-occurrence-identity"] =
+    identity.length &&
+    identity.every(
+      (l) =>
+        typeof l.value.scheduleTime === "string" &&
+        Number.isFinite(Date.parse(l.value.scheduleTime)),
+    )
+      ? (localChains(local.probe).retryFour?.length ?? 0) > 1
+      : null;
+  for (const [id, handler, code] of [
+    ["handler-success-ack", "schedOkV2", 200],
+    ["handler-throw-ack", "schedRetryV2", 500],
+  ]) {
+    const history = (local.natural.history ?? []).filter((r) => r.function === handler);
+    delivery[1][id] =
+      history.length && history.every((r) => typeof r.outcome === "string")
+        ? code === 200
+          ? history.every((r) => r.outcome === "ok")
+          : chains.every((g) => typeof g[0].failing === "boolean")
+            ? chains.some((g) => g.length > 1 && g[0].failing === true) &&
+              history.some((r) => r.outcome.startsWith("failed:"))
+            : null
+        : null;
+  }
+  const failedOccurrences = new Map();
+  for (const line of local.probe.lines.filter(
+    (l) => l.kind === "PROBE" && l.value.handler === "retryFour",
+  )) {
+    if (!line.value.scheduleTime) continue;
+    if (!failedOccurrences.has(line.value.scheduleTime))
+      failedOccurrences.set(line.value.scheduleTime, []);
+    failedOccurrences.get(line.value.scheduleTime).push(secondsOf(line.at));
+  }
+  const failedChains = [...failedOccurrences.entries()].toSorted((a, b) => a[1][0] - b[1][0]);
+  const failures = (local.probe.history ?? []).filter((r) => r.function === "retryFour");
+  const firstFailures = failures.filter((r) => r.eventId === failures[0]?.eventId);
+  delivery[1]["next-schedule-after-failure"] =
+    failedChains.length &&
+    firstFailures.length === failedChains[0][1].length &&
+    firstFailures.every((r) => r.outcome?.startsWith("failed:"))
+      ? failedChains
+          .slice(1)
+          .some(
+            ([scheduled, times]) =>
+              secondsOf(scheduled) > secondsOf(failedChains[0][0]) &&
+              times[0] > failedChains[0][1].at(-1) &&
+              !(local.probe.manual ?? []).some(
+                (m) => m.name === "retryFour" && Math.abs(secondsOf(m.at) - times[0]) <= 5,
+              ),
+          )
+      : null;
+  for (const [id, p] of Object.entries(delivery[0])) {
+    const l = delivery[1][id];
+    add(
+      `delivery.${id}`,
+      id.startsWith("handler-") ? "v2-http-delivery" : "v2-retry-limits",
+      id,
+      p,
+      l,
+      p === null || l === null ? null : p === l,
+      p === null
+        ? "Missing production measurement in attempts.*.kind/status/debugInfo or frames.failing/at/event.scheduleTime and forced.job/atMs."
+        : l === null
+          ? "Missing local measurement in natural.history/lines or probe.history/lines."
+          : "Recorded attempt outcomes and occurrence chains compared with local completion history and timelines; acknowledgements mean successful or failed completion.",
+    );
+  }
   // An occurrence is told by its message id, which a redelivery keeps: a retry some seconds later is the same one.
   const perOccurrence = (frames, key) => {
     const counts = new Map();
@@ -626,7 +811,7 @@ export function rows(production, local, alsoRecorded = []) {
       .filter(
         (f) =>
           f.handler === "schedRetryV2" &&
-          f.headers["x-cloudscheduler-jobname"].startsWith("firebase-schedule-"),
+          f.headers?.["x-cloudscheduler-jobname"]?.startsWith("firebase-schedule-"),
       )
       .map((f) => f.event.scheduleTime),
   )
@@ -741,7 +926,11 @@ export function rows(production, local, alsoRecorded = []) {
       expected,
       p,
       l,
-      Boolean(within),
+      name === "retryFour" &&
+        (observations["retry-stable-occurrence-identity"] !== true ||
+          delivery[1]["retry-stable-occurrence-identity"] !== true)
+        ? null
+        : Boolean(within),
       `${label}; offsets in seconds from the first attempt`,
     );
   }

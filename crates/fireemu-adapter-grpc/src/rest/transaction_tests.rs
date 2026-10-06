@@ -53,59 +53,132 @@ fn call(state: &RestState, method: &str, path: &str, body: Value) -> (u16, Value
 }
 
 #[test]
-fn transaction_token_cannot_be_replayed_against_another_database_over_rest() {
-    let state = state();
-    let (status, begun) = call(
-        &state,
-        "POST",
-        &format!("{DOCS}:beginTransaction"),
-        json!({"options": {"readWrite": {}}}),
-    );
-    assert_eq!(status, 200, "{begun}");
-    let transaction = begun["transaction"]
-        .as_str()
-        .expect("transaction token")
-        .to_owned();
-
-    let other_docs = "/v1/projects/demo-app/databases/other/documents";
-    let target = "projects/demo-app/databases/other/documents/guard/should-not-write".to_owned();
-    let (status, refused) = call(
-        &state,
-        "POST",
-        &format!("{other_docs}:commit"),
-        json!({
-            "transaction": transaction,
-            "writes": [{"update": {"name": target}}]
-        }),
-    );
-    assert_eq!(status, 400, "{refused}");
-    assert_eq!(refused["error"]["status"], "INVALID_ARGUMENT");
-    assert_eq!(
-        refused["error"]["message"],
-        "transaction token does not belong to this database"
-    );
-
-    let (status, absent) = call(
-        &state,
-        "GET",
-        &format!("{other_docs}/guard/should-not-write"),
-        Value::Null,
-    );
-    assert_eq!(
-        status, 404,
-        "foreign transaction refusal must not write: {absent}"
-    );
-
-    let (status, rolled_back) = call(
-        &state,
-        "POST",
-        &format!("{DOCS}:rollback"),
-        json!({"transaction": transaction}),
-    );
-    assert_eq!(
-        status, 200,
-        "issuing database must retain ownership: {rolled_back}"
-    );
+#[allow(clippy::too_many_lines)]
+fn foreign_transaction_tokens_match_profile_over_rest() {
+    for strict in [true, false] {
+        let mut state = state();
+        if !strict {
+            let mut gateway = (*state.gateway).clone();
+            gateway.ctx.policy = IndexValidationPolicy::Emulator;
+            state.local = Arc::new(LocalBackend::new(
+                gateway.clone(),
+                Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+                7,
+            ));
+            state.gateway = Arc::new(gateway);
+        }
+        for (project, database, tampered) in [
+            ("demo-app", "other", None),
+            ("demo-other", "(default)", None),
+            ("demo-other", "other", None),
+            ("demo-app", "other", Some(8)),
+            ("demo-app", "other", Some(12)),
+            ("demo-app", "(default)", Some(23)),
+        ] {
+            let docs = format!("/v1/projects/{project}/databases/{database}/documents");
+            let parent = crate::decode::parse_parent(&docs[4..]).unwrap();
+            state.local.ensure_database(&parent).unwrap();
+            let (status, seeded) = call(&state, "PATCH", &format!("{docs}/guard/read"), json!({}));
+            assert_eq!(status, 200, "{seeded}");
+            let (status, begun) = call(
+                &state,
+                "POST",
+                &format!("{DOCS}:beginTransaction"),
+                json!({"options": {"readWrite": {}}}),
+            );
+            assert_eq!(status, 200, "{begun}");
+            let original = begun["transaction"].as_str().unwrap();
+            let mut bytes = super::json::base64_decode(original).unwrap();
+            assert_eq!(bytes.len(), 24);
+            if let Some(index) = tampered {
+                bytes[index] ^= 1;
+            }
+            let transaction = super::json::base64_encode(&bytes);
+            let query_transaction = transaction.replace('+', "%2B");
+            let (http, code, message) = if tampered.is_some() {
+                (400, "INVALID_ARGUMENT", "Invalid transaction.")
+            } else if !strict {
+                (
+                    400,
+                    "INVALID_ARGUMENT",
+                    "transaction token does not belong to this database",
+                )
+            } else if project != "demo-app" {
+                (400, "INVALID_ARGUMENT", "Invalid transaction.")
+            } else {
+                (
+                    409,
+                    "ABORTED",
+                    "The referenced transaction has expired or is no longer valid.",
+                )
+            };
+            for method in ["GetDocument", "BatchGetDocuments", "Commit", "Rollback"] {
+                let (status, refused) = match method {
+                    "GetDocument" => call(
+                        &state,
+                        "GET",
+                        &format!("{docs}/guard/read?transaction={query_transaction}"),
+                        Value::Null,
+                    ),
+                    "BatchGetDocuments" => call(
+                        &state,
+                        "POST",
+                        &format!("{docs}:batchGet"),
+                        json!({
+                            "documents": [format!("{}/guard/read", &docs[4..])], "transaction": transaction
+                        }),
+                    ),
+                    "Commit" => call(
+                        &state,
+                        "POST",
+                        &format!("{docs}:commit"),
+                        json!({
+                            "transaction": transaction,
+                            "writes": [{"update": {"name": format!("{}/guard/should-not-write", &docs[4..])}}]
+                        }),
+                    ),
+                    _ => call(
+                        &state,
+                        "POST",
+                        &format!("{docs}:rollback"),
+                        json!({"transaction": transaction}),
+                    ),
+                };
+                assert_eq!(
+                    status, http,
+                    "strict={strict} {project}/{database} {method}: {refused}"
+                );
+                let error = if method == "BatchGetDocuments" {
+                    &refused[0]["error"]
+                } else {
+                    &refused["error"]
+                };
+                assert_eq!(error["code"], http);
+                assert_eq!(error["status"], code);
+                assert_eq!(error["message"], message);
+            }
+            let (status, absent) = call(
+                &state,
+                "GET",
+                &format!("{docs}/guard/should-not-write"),
+                Value::Null,
+            );
+            assert_eq!(
+                status, 404,
+                "foreign transaction refusal must not write: {absent}"
+            );
+            let (status, rolled_back) = call(
+                &state,
+                "POST",
+                &format!("{DOCS}:rollback"),
+                json!({"transaction": original}),
+            );
+            assert_eq!(
+                status, 200,
+                "issuing database must retain ownership: {rolled_back}"
+            );
+        }
+    }
 }
 
 #[test]

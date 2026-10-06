@@ -827,6 +827,133 @@ async fn a_busy_holder_keeps_its_locks_past_the_lease() {
     handle.abort();
 }
 
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn foreign_transaction_tokens_match_profile_over_grpc() {
+    for strict in [true, false] {
+        let (mut client, _clock, backend, server) = start_profile_with_state(strict, None).await;
+        for (project, database, tampered) in [
+            ("demo-app", "other", None),
+            ("demo-other", "(default)", None),
+            ("demo-other", "other", None),
+            ("demo-app", "other", Some(8)),
+            ("demo-app", "other", Some(12)),
+            ("demo-app", "(default)", Some(23)),
+        ] {
+            let target = format!("projects/{project}/databases/{database}");
+            let parent =
+                fireemu_adapter_grpc::decode::parse_parent(&format!("{target}/documents")).unwrap();
+            backend.ensure_database(&parent).unwrap();
+            backend
+                .commit(&history_budget_write(project, database, "read"))
+                .unwrap();
+            let original = client
+                .begin_transaction(pb::BeginTransactionRequest {
+                    database: DB.to_owned(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .transaction;
+            assert_eq!(original.len(), 24);
+            let mut transaction = original.clone();
+            if let Some(index) = tampered {
+                transaction[index] ^= 1;
+            }
+            let (code, message) = if tampered.is_some() {
+                (tonic::Code::InvalidArgument, "Invalid transaction.")
+            } else if !strict {
+                (
+                    tonic::Code::InvalidArgument,
+                    "transaction token does not belong to this database",
+                )
+            } else if project != "demo-app" {
+                (tonic::Code::InvalidArgument, "Invalid transaction.")
+            } else {
+                (
+                    tonic::Code::Aborted,
+                    "The referenced transaction has expired or is no longer valid.",
+                )
+            };
+            for method in ["GetDocument", "BatchGetDocuments", "Commit", "Rollback"] {
+                let refused = match method {
+                    "GetDocument" => client
+                        .get_document(pb::GetDocumentRequest {
+                            name: format!("{target}/documents/items/read"),
+                            consistency_selector: Some(
+                                pb::get_document_request::ConsistencySelector::Transaction(
+                                    transaction.clone(),
+                                ),
+                            ),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap_err(),
+                    "BatchGetDocuments" => client
+                        .batch_get_documents(pb::BatchGetDocumentsRequest {
+                            database: target.clone(),
+                            documents: vec![format!("{target}/documents/items/read")],
+                            consistency_selector: Some(
+                                pb::batch_get_documents_request::ConsistencySelector::Transaction(
+                                    transaction.clone(),
+                                ),
+                            ),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap_err(),
+                    "Commit" => {
+                        let mut request =
+                            history_budget_write(project, database, "should-not-write");
+                        request.transaction = transaction.clone();
+                        client.commit(request).await.unwrap_err()
+                    }
+                    _ => client
+                        .rollback(pb::RollbackRequest {
+                            database: target.clone(),
+                            transaction: transaction.clone(),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap_err(),
+                };
+                assert_eq!(
+                    refused.code(),
+                    code,
+                    "strict={strict} {target} {method}: {refused}"
+                );
+                assert_eq!(
+                    i32::from(refused.code()),
+                    if code == tonic::Code::Aborted { 10 } else { 3 }
+                );
+                assert_eq!(refused.message(), message);
+            }
+            assert_eq!(
+                client
+                    .get_document(pb::GetDocumentRequest {
+                        name: format!("{target}/documents/items/should-not-write"),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::NotFound
+            );
+            client
+                .rollback(pb::RollbackRequest {
+                    database: DB.to_owned(),
+                    transaction: original,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+        }
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+}
+
 /// A transaction token is authenticated: a token with an adjacent id, or one with its
 /// authenticator changed, names no transaction, so a client cannot roll back or commit a
 /// transaction it was never handed.
@@ -3072,7 +3199,11 @@ async fn malformed_wire_shapes_are_rejected_before_any_mutation() {
         })
         .await
         .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert_eq!(err.code(), tonic::Code::Aborted);
+    assert_eq!(
+        err.message(),
+        "The referenced transaction has expired or is no longer valid."
+    );
 
     // BatchWrite rejects duplicate targets as a whole.
     let err = client

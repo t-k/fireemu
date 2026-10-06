@@ -4254,7 +4254,7 @@ impl LocalBackend {
     /// token issued by one database is rejected by another.
     fn token(&self, parent: &Parent, id: &TransactionId) -> Vec<u8> {
         let mut bytes = encode_transaction(id);
-        bytes.extend_from_slice(&database_tag(parent).to_be_bytes());
+        bytes.extend_from_slice(&database_tag(parent));
         let mac = self.token_mac(&bytes);
         bytes.extend_from_slice(&mac);
         bytes
@@ -4281,8 +4281,8 @@ impl LocalBackend {
         if bytes.is_empty() {
             return Ok(None);
         }
-        // [handle][database tag: 8][authenticator: 8]; a token this backend did not issue,
-        // for this database, is invalid whatever else it decodes to.
+        // [handle: 8][project tag: 4][database tag: 4][authenticator: 8].
+        // Authenticate every binding byte before classifying a foreign token.
         let (authenticated, mac) = bytes.split_at(bytes.len().saturating_sub(8));
         let expected = self.token_mac(authenticated);
         let authentic = mac.len() == 8
@@ -4298,7 +4298,15 @@ impl LocalBackend {
         }
         let (handle, tag) = authenticated.split_at(authenticated.len().saturating_sub(8));
         let tag: Option<[u8; 8]> = tag.try_into().ok();
-        if tag.map(u64::from_be_bytes) != Some(database_tag(parent)) {
+        let expected_tag = database_tag(parent);
+        if tag != Some(expected_tag) {
+            if self.gateway.production_refusals() {
+                return Err(if tag.is_some_and(|tag| tag[..4] == expected_tag[..4]) {
+                    Status::aborted("The referenced transaction has expired or is no longer valid.")
+                } else {
+                    Status::invalid_argument("Invalid transaction.")
+                });
+            }
             return Err(Status::invalid_argument(
                 "transaction token does not belong to this database",
             ));
@@ -6464,20 +6472,21 @@ fn auto_id_from(rng: &mut SplitMix64) -> String {
         .collect()
 }
 
-fn database_tag(parent: &Parent) -> u64 {
-    // FNV-1a over "project\0database": stable, dependency-free.
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in parent
-        .project
-        .as_str()
-        .bytes()
-        .chain(core::iter::once(0))
-        .chain(parent.database.as_str().bytes())
+fn database_tag(parent: &Parent) -> [u8; 8] {
+    // Separate FNV-1a hashes distinguish project and database mismatches without growing tokens.
+    let mut tag = [0_u8; 8];
+    for (name, chunk) in [parent.project.as_str(), parent.database.as_str()]
+        .into_iter()
+        .zip(tag.chunks_mut(4))
     {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(0x0100_0000_01b3);
+        let mut h: u32 = 0x811c_9dc5;
+        for b in name.bytes() {
+            h ^= u32::from(b);
+            h = h.wrapping_mul(0x0100_0193);
+        }
+        chunk.copy_from_slice(&h.to_be_bytes());
     }
-    h
+    tag
 }
 
 fn encode_masked(doc: &Document, mask: Option<&[FieldPath]>) -> pb::Document {

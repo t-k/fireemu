@@ -1890,8 +1890,8 @@ where
 }
 
 /// The boundary a resume starts with carries a token for the resume point itself, so a stream
-/// that drops before the diff resumes from there again and skips no change; its read time is
-/// the snapshot's, so a client's snapshot version never goes back.
+/// that drops before the diff resumes from there again and skips no change. In strict, its
+/// read time is the resume point's; the boundary after the diff carries the new snapshot's.
 #[tokio::test]
 async fn a_resume_starts_with_a_boundary_at_its_token() {
     let (mut client, handle) = start(false).await;
@@ -1936,8 +1936,8 @@ async fn a_resume_starts_with_a_boundary_at_its_token() {
     let (later_token, later_time) = next_boundary(&mut listen).await;
     assert_ne!(later_token, token, "the boundary after the diff moves on");
     let (read, early, later) = (read_time.unwrap(), early_time.unwrap(), later_time.unwrap());
-    assert!((early.seconds, early.nanos) >= (read.seconds, read.nanos));
-    assert_eq!(early, later, "both boundaries are the same snapshot's");
+    assert_eq!(early, read, "the echo carries the resume point's read time");
+    assert!((early.seconds, early.nanos) < (later.seconds, later.nanos));
     handle.abort();
 }
 
@@ -4697,12 +4697,285 @@ async fn webchannel_resume_token_lengths_follow_the_profile() {
     }
 }
 
+#[tokio::test]
+async fn grpc_resume_echo_read_time_follows_the_profile_and_resume_kind() {
+    for profile in [Profile::Strict, Profile::Emulator] {
+        let (mut client, handle) = start_profile(profile).await;
+        let committed = client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![set_write("r/a", &[("v", s("before"))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .commit_time
+            .unwrap();
+        let token = snapshot_token(&mut client, 1, "r").await;
+        commit_writes(&mut client, vec![set_write("r/a", &[("v", s("after"))])]).await;
+        for by_read_time in [false, true] {
+            let mut point = committed;
+            if by_read_time {
+                point.nanos += 1;
+            }
+            let mut request = resume_request(2, "r", token.clone(), Some(1));
+            if by_read_time {
+                if let Some(pb::listen_request::TargetChange::AddTarget(t)) =
+                    &mut request.target_change
+                {
+                    t.resume_type = Some(pb::target::ResumeType::ReadTime(point));
+                }
+            }
+            let trace = resumed_trace(&mut client, request).await;
+            let changes: Vec<_> = trace
+                .iter()
+                .filter_map(|r| match &r.response_type {
+                    Some(pb::listen_response::ResponseType::TargetChange(t))
+                        if t.read_time.is_some() =>
+                    {
+                        Some(t)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(changes.len(), 3);
+            let (echo, current, following) = (changes[0], changes[1], changes[2]);
+            assert_eq!(
+                echo.target_change_type,
+                pb::target_change::TargetChangeType::NoChange as i32
+            );
+            assert!(echo.target_ids.is_empty());
+            assert_eq!(
+                current.target_change_type,
+                pb::target_change::TargetChangeType::Current as i32
+            );
+            assert_eq!(
+                following.target_change_type,
+                pb::target_change::TargetChangeType::NoChange as i32
+            );
+            assert_eq!(echo.resume_token, token);
+            assert_eq!(current.read_time, following.read_time);
+            if matches!(profile, Profile::Strict) {
+                assert_eq!(echo.read_time, Some(point));
+                assert_eq!(&current.resume_token[..8], &following.resume_token[..8]);
+                assert_ne!(echo.resume_token, current.resume_token);
+            } else {
+                assert_eq!(echo.read_time, current.read_time);
+            }
+        }
+        handle.abort();
+        handle.await.unwrap_err();
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn webchannel_resume_echo_read_time_follows_the_profile_and_resume_kind() {
+    use fireemu_adapter_grpc::rest::json::{
+        base64_decode, base64_encode, optional_timestamp_to_json,
+    };
+    use fireemu_adapter_grpc::rest::RestState;
+    use fireemu_adapter_grpc::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
+    use serde_json::json;
+    use std::fmt::Write as _;
+
+    for profile in [Profile::Strict, Profile::Emulator] {
+        let (mut client, handle) = start_profile(profile).await;
+        let committed = client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![set_write("r/a", &[("v", s("before"))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .commit_time
+            .unwrap();
+        let token = base64_encode(&snapshot_token(&mut client, 1, "r").await);
+        commit_writes(&mut client, vec![set_write("r/a", &[("v", s("after"))])]).await;
+        let hub = Hub::new(Arc::new(RestState {
+            local: BACKEND.with(|b| b.borrow().as_ref().unwrap().clone()),
+            gateway: Arc::new(Gateway {
+                enforce_limits: true,
+                ctx: PlanningContext {
+                    edition: FirestoreEdition::Standard,
+                    api_mode: FirestoreApiMode::Native,
+                    policy: if matches!(profile, Profile::Strict) {
+                        IndexValidationPolicy::Production
+                    } else {
+                        IndexValidationPolicy::Emulator
+                    },
+                },
+                indexes: IndexSet::default(),
+            }),
+            rules: None,
+            app_check: None,
+            control_token: None,
+        }));
+        for by_read_time in [false, true] {
+            let mut point = committed;
+            if by_read_time {
+                point.nanos += 1;
+            }
+            let point_json = optional_timestamp_to_json(Some(&point));
+            let mut target =
+                json!({"targetId": 2, "documents": {"documents": [format!("{DOCS}/r/a")]}});
+            if by_read_time {
+                target["readTime"] = point_json.clone();
+            } else {
+                target["resumeToken"] = json!(token);
+            }
+            let request = json!({"database": DB, "addTarget": target}).to_string();
+            let encoded = request.bytes().fold(String::new(), |mut encoded, b| {
+                write!(&mut encoded, "%{b:02X}").unwrap();
+                encoded
+            });
+            let ChannelResponse::Full {
+                status, headers, ..
+            } = hub.handle(&ChannelRequest {
+                kind: StreamKind::Listen,
+                method: "POST".to_owned(),
+                params: BTreeMap::from([
+                    ("database".to_owned(), DB.to_owned()),
+                    ("VER".to_owned(), "8".to_owned()),
+                    ("RID".to_owned(), "1".to_owned()),
+                ]),
+                authorization: None,
+                app_check: Vec::new(),
+                origin: None,
+                body: format!("count=1&ofs=0&req0___data__={encoded}"),
+            })
+            else {
+                panic!("expected handshake")
+            };
+            assert_eq!(status, 200);
+            let sid = headers
+                .into_iter()
+                .find(|(key, _)| *key == "x-http-session-id")
+                .unwrap()
+                .1;
+            let mut aid = 0;
+            let mut changes = Vec::new();
+            while changes.len() < 3 {
+                let ChannelResponse::Stream { mut body, .. } = hub.handle(&ChannelRequest {
+                    kind: StreamKind::Listen,
+                    method: "GET".to_owned(),
+                    params: BTreeMap::from([
+                        ("SID".to_owned(), sid.clone()),
+                        ("RID".to_owned(), "rpc".to_owned()),
+                        ("AID".to_owned(), aid.to_string()),
+                        ("CI".to_owned(), "1".to_owned()),
+                        ("TO".to_owned(), "1000".to_owned()),
+                        ("TYPE".to_owned(), "xmlhttp".to_owned()),
+                    ]),
+                    authorization: None,
+                    app_check: Vec::new(),
+                    origin: None,
+                    body: String::new(),
+                }) else {
+                    panic!("expected back channel")
+                };
+                let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), body.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                let (_, payload) = std::str::from_utf8(&chunk)
+                    .unwrap()
+                    .split_once('\n')
+                    .unwrap();
+                let arrays: serde_json::Value = serde_json::from_str(payload).unwrap();
+                for array in arrays.as_array().unwrap() {
+                    aid = array[0].as_u64().unwrap();
+                    let change = &array[1][0]["targetChange"];
+                    if change.get("readTime").is_some() {
+                        changes.push(change.clone());
+                    }
+                }
+            }
+            assert_eq!(changes.len(), 3);
+            let (echo, current, following) = (&changes[0], &changes[1], &changes[2]);
+            assert_eq!(echo["resumeToken"], token);
+            assert_eq!(current["targetChangeType"], "CURRENT");
+            assert_eq!(current["readTime"], following["readTime"]);
+            if matches!(profile, Profile::Strict) {
+                assert_eq!(echo["readTime"], point_json);
+                assert_eq!(
+                    &base64_decode(current["resumeToken"].as_str().unwrap()).unwrap()[..8],
+                    &base64_decode(following["resumeToken"].as_str().unwrap()).unwrap()[..8]
+                );
+                assert_ne!(echo["resumeToken"], current["resumeToken"]);
+            } else {
+                assert_eq!(echo["readTime"], current["readTime"]);
+            }
+            hub.handle(&ChannelRequest {
+                kind: StreamKind::Listen,
+                method: "POST".to_owned(),
+                params: BTreeMap::from([
+                    ("SID".to_owned(), sid),
+                    ("TYPE".to_owned(), "terminate".to_owned()),
+                ]),
+                authorization: None,
+                app_check: Vec::new(),
+                origin: None,
+                body: String::new(),
+            });
+        }
+        handle.abort();
+        handle.await.unwrap_err();
+    }
+}
+
 mod resume_token_properties {
     use super::*;
     use proptest::prelude::*;
 
     proptest! {
         #![proptest_config(ProptestConfig { cases: 32, failure_persistence: None, ..ProptestConfig::default() })]
+
+        #[test]
+        fn strict_resume_echo_equals_the_resume_point_and_never_exceeds_current(
+            before in 1_u8..6,
+            after in 0_u8..6,
+            by_read_time in any::<bool>(),
+            offset in 0_u32..1000,
+        ) {
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                let (mut client, handle) = start(false).await;
+                let mut point = prost_types::Timestamp::default();
+                for value in 0..before {
+                    point = client.commit(pb::CommitRequest {
+                        database: DB.to_owned(),
+                        writes: vec![set_write("r/a", &[("v", s(&value.to_string()))])],
+                        ..Default::default()
+                    }).await.unwrap().into_inner().commit_time.unwrap();
+                }
+                let token = snapshot_token(&mut client, 1, "r").await;
+                if by_read_time && after > 0 { point.nanos += i32::try_from(offset).unwrap(); }
+                let mut request = resume_request(2, "r", token, Some(1));
+                if by_read_time {
+                    if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut request.target_change {
+                        t.resume_type = Some(pb::target::ResumeType::ReadTime(point));
+                    }
+                }
+                for value in 0..after {
+                    commit_writes(&mut client, vec![set_write("r/a", &[("v", s(&format!("after{value}")))])]).await;
+                }
+                let trace = resumed_trace(&mut client, request).await;
+                let times: Vec<_> = trace.iter().filter_map(|r| match &r.response_type {
+                    Some(pb::listen_response::ResponseType::TargetChange(t)) => t.read_time,
+                    _ => None,
+                }).collect();
+                assert_eq!(times.len(), 3);
+                assert_eq!(times[0], point);
+                assert!((times[0].seconds, times[0].nanos) <= (times[1].seconds, times[1].nanos));
+                assert_eq!(times[1], times[2]);
+                handle.abort();
+                handle.await.unwrap_err();
+            });
+        }
 
         #[test]
         fn strict_tokens_round_trip_random_versions_and_bindings_and_refuse_different_checks(

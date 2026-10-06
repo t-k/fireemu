@@ -2726,6 +2726,16 @@ impl FirestoreState {
             .map(|t| t.activity)
     }
 
+    /// The commit time of a retained version, or `None` if it was compacted or never committed.
+    #[must_use]
+    pub fn commit_time_of(&self, version: CommitVersion) -> Option<LogicalInstant> {
+        let index = self.commit_times.partition_point(|(v, _)| *v < version);
+        self.commit_times
+            .get(index)
+            .filter(|(v, _)| *v == version)
+            .map(|(_, time)| *time)
+    }
+
     /// The version visible at `at` (the latest version committed at or before it; the empty
     /// database before the first commit). Times older than the retained history clamp to the
     /// compaction floor, which is the oldest state the store can still describe; use
@@ -6976,6 +6986,35 @@ mod scope_index_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn commit_time_of_returns_only_retained_commit_times() {
+        let mut state = FirestoreState::new();
+        assert_eq!(state.commit_time_of(CommitVersion::default()), None);
+        let first = state
+            .commit(&[set("time/a")], None, LogicalInstant::UNIX_EPOCH)
+            .unwrap();
+        let second = state
+            .commit(&[set("time/b")], None, LogicalInstant::from_unix_seconds(1))
+            .unwrap();
+        assert_eq!(state.commit_time_of(first.version), Some(first.commit_time));
+        assert_eq!(
+            state.commit_time_of(second.version),
+            Some(second.commit_time)
+        );
+        assert_eq!(
+            state.commit_time_of(CommitVersion::from_value(second.version.value() + 1)),
+            None
+        );
+        state.compact(LogicalInstant::from_unix_seconds(
+            READ_TIME_RETENTION_SECONDS + 2,
+        ));
+        assert_eq!(state.commit_time_of(first.version), None);
+        assert_eq!(
+            state.commit_time_of(second.version),
+            Some(second.commit_time)
+        );
     }
 
     #[test]

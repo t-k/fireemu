@@ -1172,9 +1172,10 @@ fn authorize_target(
 ///
 /// A resumed target starts with a global boundary, as production answers a resume
 /// (AUTH-FS-CROSS stage 2, packet v7): its token is `boundary`'s for the resume point, so a
-/// stream that drops before the diff resumes from there again, and its read time is the
-/// snapshot's, so the client's snapshot version never goes back. The client raises its
-/// snapshot from its cache there, not current, until `CURRENT`.
+/// stream that drops before the diff resumes from there again. Strict uses the resume
+/// point's read time (D7(a)); the emulator uses the new snapshot's read time. If the commit
+/// time is unavailable, both keep the snapshot's read time. The client raises its snapshot
+/// from its cache there, not current, until `CURRENT`.
 fn refresh_target_full(
     db: &fireemu_core_firestore::store::FirestoreState,
     id: i32,
@@ -1184,12 +1185,17 @@ fn refresh_target_full(
     snapshot_version: CommitVersion,
 ) -> Result<(), Status> {
     let resumed = resolve_resume(db, id, state)?;
-    if let Some(from) = resumed {
+    if let Some((from, resume_time)) = resumed {
+        let echo_time = if boundary.strict {
+            resume_time.map_or(read_time, encode_instant)
+        } else {
+            read_time
+        };
         state.pending.push(target_change(
             pb::target_change::TargetChangeType::NoChange,
             vec![],
             Some(resume_token(from, boundary)),
-            Some(read_time),
+            Some(echo_time),
         ));
     }
     // How production answers this resume: see `ResumeAnswer`.
@@ -1228,7 +1234,7 @@ fn refresh_target_full(
         && changed == 0
         && departed.len() == 1
         && resumed
-            .is_some_and(|from| from.value().checked_add(1) == Some(snapshot_version.value()));
+            .is_some_and(|(from, _)| from.value().checked_add(1) == Some(snapshot_version.value()));
     match answer {
         ResumeAnswer::CountOnly if one_commit_departure => {
             out_removal(db, departed[0], id, read_time, &mut state.pending);
@@ -1447,7 +1453,7 @@ fn out_removal(
 
 /// Resume: the target's state at the token becomes the known state, so the diff carries
 /// exactly what changed since; a token this daemon cannot honour resets the target.
-/// Returns the version the target resumed from.
+/// Returns the resumed version and its read time, when available.
 ///
 /// "Cannot honour" includes a version the store compacted away: history older than the
 /// retention window is gone, and replaying a target against a version the store can no
@@ -1457,19 +1463,19 @@ fn resolve_resume(
     db: &fireemu_core_firestore::store::FirestoreState,
     id: i32,
     state: &mut TargetState,
-) -> Result<Option<CommitVersion>, Status> {
+) -> Result<Option<(CommitVersion, Option<LogicalInstant>)>, Status> {
     let Some(resume) = state.resume.take() else {
         return Ok(None);
     };
-    let version = match resume {
-        Resume::Version(v) => Some(v),
-        Resume::ReadTime(t) => db.version_at_retained(t),
-        Resume::Invalid => None,
-    }
-    .filter(|v| db.is_retained(*v));
+    let (version, read_time) = match resume {
+        Resume::Version(v) => (Some(v), db.commit_time_of(v)),
+        Resume::ReadTime(t) => (db.version_at_retained(t), Some(t)),
+        Resume::Invalid => (None, None),
+    };
+    let version = version.filter(|v| db.is_retained(*v));
     if let Some(v) = version {
         state.known = known_at(db, &state.kind, v)?;
-        return Ok(Some(v));
+        return Ok(Some((v, read_time)));
     }
     state.pending.push(target_change(
         pb::target_change::TargetChangeType::Reset,
@@ -2055,6 +2061,30 @@ mod refresh_tests {
 
         merge_refresh_event(&mut input, Some(&parent), last, &notification(6, "items/d"));
         assert!(matches!(input, Some(RefreshInput::Full)));
+    }
+
+    #[test]
+    fn resume_echo_without_a_commit_time_keeps_the_snapshot_read_time() {
+        let mut fixture = generation_fixture();
+        let mut target = fixture.targets.remove(&1).unwrap();
+        let database = FirestoreState::new();
+        let version = database.current_version();
+        let read_time = encode_instant(LogicalInstant::from_unix_seconds(10));
+        let binding = TokenBinding {
+            strict: true,
+            epoch: 0,
+            database: 0,
+            target: 0,
+        };
+        target.resume = Some(Resume::Version(version));
+        refresh_target_full(&database, 1, &mut target, read_time, &binding, version).unwrap();
+        let Some(pb::listen_response::ResponseType::TargetChange(echo)) =
+            &target.pending[0].response_type
+        else {
+            panic!("expected resume echo")
+        };
+        assert_eq!(echo.read_time, Some(read_time));
+        assert_eq!(echo.resume_token, resume_token(version, &binding));
     }
 
     #[test]

@@ -66,6 +66,7 @@
     "spec/compatibility/closure/AUTH-CREDENTIAL.json": "4cc8ea55e03ad1825cddd527f910fd597c0f1e7d7696ecb9318d481d6dea0335",
     "spec/compatibility/closure/AUTH-MFA.json": "a1e72883bbb1974cdaa26013013c46487eb99ba11d6625916b9a4e5f33a59da7",
     "spec/compatibility/closure/FS-QUERY-INDEX.json": "8d1b27fa081c77aeedce616a8194c5e85118cc1549a031aeccea35478db38736",
+    "spec/compatibility/closure/FUNCTIONS-EVENTS.json": "de0121e8d886cfef3c0b257fc4cb87aaa05cf6546efbd502d1fbd6e09a7e4b8d",
     "spec/compatibility/closure/FUNCTIONS-HTTP.json": "3f38facca11152463a4b272120681eb630eb4c290737127a156e0c82c6a69e96",
     "spec/compatibility/closure/STORAGE-OBJECT.json": "7884d6e25665550736ca23758b6e7d7875d2a933c8c9cfe70f982cde5bba74d5",
     "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json": "e0488696cb231c64066b43b674364dcac6b9ec3916a3153a7c0ec03d95489747",

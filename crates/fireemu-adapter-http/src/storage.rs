@@ -119,6 +119,10 @@ pub enum StorageRulesSourceError {
 #[derive(Debug)]
 pub struct StorageRulesRegistry {
     mode: std::sync::RwLock<StorageRulesMode>,
+    /// The buckets the deployed Storage triggers name, from the loaded functions manifest. They
+    /// are not rules state (never snapshotted): the strict profile counts them as existing, as
+    /// production does for a bucket a trigger was deployed on.
+    trigger_buckets: std::sync::RwLock<std::collections::BTreeSet<String>>,
 }
 
 #[derive(Clone, Debug)]
@@ -157,6 +161,7 @@ impl StorageRulesRegistry {
     pub fn global(slot: Arc<RulesetSlot>) -> Self {
         Self {
             mode: std::sync::RwLock::new(StorageRulesMode::Global(slot)),
+            trigger_buckets: std::sync::RwLock::default(),
         }
     }
 
@@ -165,7 +170,23 @@ impl StorageRulesRegistry {
     pub fn per_bucket(slots: BTreeMap<String, Arc<RulesetSlot>>) -> Self {
         Self {
             mode: std::sync::RwLock::new(StorageRulesMode::PerBucket(slots)),
+            trigger_buckets: std::sync::RwLock::default(),
         }
+    }
+
+    /// Replaces the set of buckets the deployed Storage triggers name.
+    pub fn set_trigger_buckets(&self, buckets: impl IntoIterator<Item = String>) {
+        if let Ok(mut set) = self.trigger_buckets.write() {
+            *set = buckets.into_iter().collect();
+        }
+    }
+
+    /// Whether a deployed Storage trigger names `bucket`.
+    #[must_use]
+    pub fn names_trigger_bucket(&self, bucket: &str) -> bool {
+        self.trigger_buckets
+            .read()
+            .is_ok_and(|set| set.contains(bucket))
     }
 
     /// Whether `bucket` is named by a target-based configuration (the storage targets of
@@ -2309,6 +2330,10 @@ enum Route {
     /// `GET` and `PATCH /storage/v1/b/{bucket}`: the bucket resource, with `versioning` only. The
     /// official emulator has no such route; this is a production-side extension.
     GcsBucket { bucket: String },
+    /// `GET` and `PATCH /b/{bucket}`, the short spelling the Admin SDK uses against a local
+    /// endpoint. The official emulator has no route for it (a GET falls to the object read, a
+    /// PATCH to the 501 catch-all), so only the strict profile serves it, as [`Route::GcsBucket`].
+    GcsBucketShort { bucket: String },
     /// One object on the JSON API.
     GcsObject { bucket: String, name: String },
     /// `POST /[storage/v1/]b/{b}/o/{n}/(copyTo|rewriteTo)/b/{db}/o/{dn}`.
@@ -2364,6 +2389,7 @@ fn route(method: &str, path: &str) -> Result<Route, String> {
             Ok(Route::GcsList { bucket: d(b)? })
         }
         ("GET" | "PATCH", ["storage", "v1", "b", b]) => Ok(Route::GcsBucket { bucket: d(b)? }),
+        ("GET" | "PATCH", ["b", b]) => Ok(Route::GcsBucketShort { bucket: d(b)? }),
         // PATCH is served on `/storage/v1` as production serves it; the official emulator
         // registers it on the short spelling only. The download spelling is GET only.
         (
@@ -3052,6 +3078,19 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
     let Ok(route) = route(&req.method, &req.path) else {
         return plain_status(400);
     };
+    // The short spelling of the bucket resource is served as the long one under strict and
+    // answered as the official emulator answers it otherwise (see `Route::GcsBucketShort`).
+    let route = match route {
+        Route::GcsBucketShort { bucket } if state.is_strict() => Route::GcsBucket { bucket },
+        Route::GcsBucketShort { .. } => {
+            let segments: Vec<&str> = req.path.trim_matches('/').split('/').collect();
+            match fallthrough(&req.method, &segments) {
+                Ok(route) => route,
+                Err(_) => return plain_status(400),
+            }
+        }
+        other => other,
+    };
     // Admitted for the whole request, before the fault plan is consulted and the token is
     // verified: a reset waits for it, a fault is counted only for a request that runs, and
     // a request cannot verify against the old Auth store and then write into the new
@@ -3093,6 +3132,7 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
         | Route::FbObject { bucket, .. }
         | Route::GcsList { bucket }
         | Route::GcsBucket { bucket }
+        | Route::GcsBucketShort { bucket }
         | Route::GcsObject { bucket, .. }
         | Route::GcsCopy { bucket, .. }
         | Route::GcsAcl { bucket, .. }
@@ -3250,7 +3290,8 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
         Route::GcsUpload { bucket } => gcs_upload(state, &bucket, req, &params, &host, &admitted),
         Route::FormUpload { bucket } => form_upload(state, &bucket, req),
         Route::XmlStyle { bucket, name } => xml_style_get(state, &bucket, &name, &req, &params),
-        Route::NotImplemented => Ok(plain_status(501)),
+        // The short bucket spelling is resolved before dispatch; one that reaches here is the catch-all.
+        Route::NotImplemented | Route::GcsBucketShort { .. } => Ok(plain_status(501)),
     };
     let response = respond(outcome);
     if state.is_strict() {
@@ -4410,7 +4451,9 @@ fn gcs_list_buckets(state: &StorageState, host: &str) -> Outcome {
     ))
 }
 
-/// Whether `bucket` exists: the default buckets of its project always do, a bucket declared in
+/// Whether `bucket` exists: the default buckets of its project always do, under strict a bucket a
+/// deployed Storage trigger names does too (production requires it to exist to deploy the trigger;
+/// the official emulator creates every bucket on first use and so refuses nothing here), a bucket declared in
 /// `firebase.json` (a storage target, which becomes a per-bucket rules entry, or a bucket a
 /// registered session project declared) does though it is empty, and any other bucket exists once
 /// it holds an object or was configured for versioning. The store has no bucket registry, so this
@@ -4428,6 +4471,7 @@ fn bucket_exists(state: &StorageState, store: &ObjectStore, bucket: &BucketName)
             .as_ref()
             .and_then(|tenancy| tenancy.read().ok())
             .is_some_and(|tenancy| tenancy.declared_buckets(&project).iter().any(|b| b == name))
+        || (state.is_strict() && state.rules.names_trigger_bucket(name))
         || store.bucket_known(bucket)
 }
 

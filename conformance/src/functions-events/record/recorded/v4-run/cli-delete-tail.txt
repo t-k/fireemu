@@ -1,0 +1,9 @@
+Deleting trigger failed for projects/fireemu-oracle-events/locations/us-central1/triggers/storagearchivedv2-494903: Failed to update storage bucket metadata. Possible causes include that the bucket "fireemu-oracle-events.firebasestorage.app" was modified concurrently: retry budget exhausted (3 attempts): cloud.bigstore.ResponseCode.ErrorCode::21: expected BucketMetadata.metadata_generation: 19 actual: 20
+[2026-10-04T16:34:49.427Z] Total Function Deployment time: 23161
+[2026-10-04T16:34:49.427Z] 21 Functions Deployed
+[2026-10-04T16:34:49.427Z] 1 Functions Errored
+[2026-10-04T16:34:49.427Z] 0 Function Deployments Aborted
+[2026-10-04T16:34:49.427Z] Average Function Deployment time: 13429.095238095239
+
+Functions deploy had errors with the following functions:
+	events:storageArchivedV2(us-central1)

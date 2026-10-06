@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "source": "fixtures",
+    "codebase": "events",
+    "runtime": "nodejs22"
+  }
+}

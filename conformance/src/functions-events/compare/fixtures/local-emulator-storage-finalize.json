@@ -1,0 +1,387 @@
+{
+  "provenance": "emulator profile of local run 2026-10-01T09-36-58-334Z-9d306663-8dc6-4b2b-b867-1db5dea275da (fireemu, LOCAL_ONLY), storage/finalize program; frame entries reduced to sequence, receivedAt and rawJson as record-schema.md lists them",
+  "schemaVersion": 1,
+  "parent": "FUNCTIONS-EVENTS",
+  "status": "LOCAL_OBSERVATION",
+  "authority": "LOCAL_ONLY",
+  "productionEvidence": null,
+  "programs": [
+    {
+      "recipeId": "functions-events/storage/finalize",
+      "status": "LOCAL_OBSERVATION",
+      "operations": [
+        {
+          "scenarioId": "storage-upload",
+          "role": "subject",
+          "status": "LOCAL_OBSERVATION",
+          "sourceResult": "typed-success",
+          "readback": {
+            "exists": true,
+            "bucket": "demo-conformance-events-primary",
+            "name": "fe-events/e4a8cf3641ca34b53abec09ffdf042e08.txt",
+            "generation": "1",
+            "metageneration": "1",
+            "contentType": "text/plain"
+          },
+          "cleanup": {
+            "checked": true,
+            "objectGenerationsAbsent": true,
+            "versioningRestored": true
+          },
+          "matchKey": {
+            "kind": "storage",
+            "bucket": "demo-conformance-events-primary",
+            "value": "fe-events/e4a8cf3641ca34b53abec09ffdf042e08.txt"
+          },
+          "cursor": 0,
+          "windowMs": 5000,
+          "capture": {
+            "before": {
+              "cursor": 0,
+              "frameCount": 0,
+              "lossCount": 0,
+              "issueCount": 0
+            },
+            "after": {
+              "cursor": 2,
+              "frameCount": 2,
+              "lossCount": 0,
+              "issueCount": 0
+            },
+            "sequences": [
+              2,
+              1
+            ]
+          },
+          "framesByGeneration": {
+            "v1": [
+              {
+                "sequence": 2,
+                "receivedAt": "2026-10-01T09:36:59.515Z",
+                "rawJson": "{\"handler\":\"storageFinalizedV1\",\"generation\":1,\"source\":\"storage\",\"event\":{\"context\":{\"eventId\":\"43358924905190503\",\"timestamp\":\"2026-10-01T09:36:58.356Z\",\"eventType\":\"google.storage.object.finalize\",\"resource\":{\"service\":\"storage.googleapis.com\",\"name\":\"projects/_/buckets/demo-conformance-events-primary/objects/fe-events/e4a8cf3641ca34b53abec09ffdf042e08.txt\",\"type\":\"storage#object\"},\"params\":{},\"authType\":null,\"authId\":null},\"data\":{\"bucket\":\"demo-conformance-events-primary\",\"contentType\":\"text/plain\",\"crc32c\":\"MnnT1Q==\",\"etag\":\"\\\"1-1\\\"\",\"generation\":\"1\",\"id\":\"demo-conformance-events-primary/fe-events/e4a8cf3641ca34b53abec09ffdf042e08.txt/1\",\"kind\":\"storage#object\",\"md5Hash\":\"4vpTiGfDgwqFmlsXqyRkSw==\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fe4a8cf3641ca34b53abec09ffdf042e08.txt?generation=1&alt=media\",\"metageneration\":\"1\",\"name\":\"fe-events/e4a8cf3641ca34b53abec09ffdf042e08.txt\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fe4a8cf3641ca34b53abec09ffdf042e08.txt\",\"size\":\"7\",\"storageClass\":\"STANDARD\",\"timeCreated\":\"2026-10-01T09:36:58.356Z\",\"timeStorageClassUpdated\":\"2026-10-01T09:36:58.356Z\",\"updated\":\"2026-10-01T09:36:58.356Z\"}}}"
+              }
+            ],
+            "v2": [
+              {
+                "sequence": 1,
+                "receivedAt": "2026-10-01T09:36:59.500Z",
+                "rawJson": "{\"handler\":\"storageFinalizedV2\",\"generation\":2,\"source\":\"storage\",\"event\":{\"id\":\"68188927818470329\",\"time\":\"2026-10-01T09:36:58.356651Z\",\"type\":\"google.cloud.storage.object.v1.finalized\",\"source\":\"//storage.googleapis.com/projects/_/buckets/demo-conformance-events-primary\",\"subject\":\"objects/fe-events/e4a8cf3641ca34b53abec09ffdf042e08.txt\",\"specversion\":\"1.0\",\"datacontenttype\":\"application/json\",\"params\":null,\"authType\":null,\"authId\":null,\"data\":{\"bucket\":\"demo-conformance-events-primary\",\"contentType\":\"text/plain\",\"crc32c\":\"MnnT1Q==\",\"etag\":\"\\\"1-1\\\"\",\"generation\":\"1\",\"id\":\"demo-conformance-events-primary/fe-events/e4a8cf3641ca34b53abec09ffdf042e08.txt/1\",\"kind\":\"storage#object\",\"md5Hash\":\"4vpTiGfDgwqFmlsXqyRkSw==\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fe4a8cf3641ca34b53abec09ffdf042e08.txt?generation=1&alt=media\",\"metageneration\":\"1\",\"name\":\"fe-events/e4a8cf3641ca34b53abec09ffdf042e08.txt\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fe4a8cf3641ca34b53abec09ffdf042e08.txt\",\"size\":\"7\",\"storageClass\":\"STANDARD\",\"timeCreated\":\"2026-10-01T09:36:58.356Z\",\"timeStorageClassUpdated\":\"2026-10-01T09:36:58.356Z\",\"updated\":\"2026-10-01T09:36:58.356Z\"}}}"
+              }
+            ]
+          },
+          "error": null
+        },
+        {
+          "scenarioId": "storage-overwrite",
+          "role": "subject",
+          "status": "LOCAL_OBSERVATION",
+          "sourceResult": "typed-success",
+          "readback": {
+            "exists": true,
+            "bucket": "demo-conformance-events-primary",
+            "name": "fe-events/ecaf258d0961946aca782aed0ce3cb190.txt",
+            "generation": "3",
+            "metageneration": "1",
+            "contentType": "text/plain"
+          },
+          "cleanup": {
+            "checked": true,
+            "objectGenerationsAbsent": true,
+            "versioningRestored": true
+          },
+          "matchKey": {
+            "kind": "storage",
+            "bucket": "demo-conformance-events-primary",
+            "value": "fe-events/ecaf258d0961946aca782aed0ce3cb190.txt"
+          },
+          "cursor": 6,
+          "windowMs": 5000,
+          "capture": {
+            "before": {
+              "cursor": 3,
+              "frameCount": 3,
+              "lossCount": 0,
+              "issueCount": 0
+            },
+            "after": {
+              "cursor": 8,
+              "frameCount": 8,
+              "lossCount": 0,
+              "issueCount": 0
+            },
+            "sequences": [
+              8,
+              7
+            ]
+          },
+          "framesByGeneration": {
+            "v1": [
+              {
+                "sequence": 8,
+                "receivedAt": "2026-10-01T09:36:59.591Z",
+                "rawJson": "{\"handler\":\"storageFinalizedV1\",\"generation\":1,\"source\":\"storage\",\"event\":{\"context\":{\"eventId\":\"75156501107949736\",\"timestamp\":\"2026-10-01T09:36:58.356Z\",\"eventType\":\"google.storage.object.finalize\",\"resource\":{\"service\":\"storage.googleapis.com\",\"name\":\"projects/_/buckets/demo-conformance-events-primary/objects/fe-events/ecaf258d0961946aca782aed0ce3cb190.txt\",\"type\":\"storage#object\"},\"params\":{},\"authType\":null,\"authId\":null},\"data\":{\"bucket\":\"demo-conformance-events-primary\",\"contentType\":\"text/plain\",\"crc32c\":\"OFl6XQ==\",\"etag\":\"\\\"3-1\\\"\",\"generation\":\"3\",\"id\":\"demo-conformance-events-primary/fe-events/ecaf258d0961946aca782aed0ce3cb190.txt/3\",\"kind\":\"storage#object\",\"md5Hash\":\"D4HVLgbKqkhgiHSI0YJxxw==\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fecaf258d0961946aca782aed0ce3cb190.txt?generation=3&alt=media\",\"metageneration\":\"1\",\"name\":\"fe-events/ecaf258d0961946aca782aed0ce3cb190.txt\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fecaf258d0961946aca782aed0ce3cb190.txt\",\"size\":\"7\",\"storageClass\":\"STANDARD\",\"timeCreated\":\"2026-10-01T09:36:58.356Z\",\"timeStorageClassUpdated\":\"2026-10-01T09:36:58.356Z\",\"updated\":\"2026-10-01T09:36:58.356Z\"}}}"
+              }
+            ],
+            "v2": [
+              {
+                "sequence": 7,
+                "receivedAt": "2026-10-01T09:36:59.587Z",
+                "rawJson": "{\"handler\":\"storageFinalizedV2\",\"generation\":2,\"source\":\"storage\",\"event\":{\"id\":\"67499390987560513\",\"time\":\"2026-10-01T09:36:58.356651Z\",\"type\":\"google.cloud.storage.object.v1.finalized\",\"source\":\"//storage.googleapis.com/projects/_/buckets/demo-conformance-events-primary\",\"subject\":\"objects/fe-events/ecaf258d0961946aca782aed0ce3cb190.txt\",\"specversion\":\"1.0\",\"datacontenttype\":\"application/json\",\"params\":null,\"authType\":null,\"authId\":null,\"data\":{\"bucket\":\"demo-conformance-events-primary\",\"contentType\":\"text/plain\",\"crc32c\":\"OFl6XQ==\",\"etag\":\"\\\"3-1\\\"\",\"generation\":\"3\",\"id\":\"demo-conformance-events-primary/fe-events/ecaf258d0961946aca782aed0ce3cb190.txt/3\",\"kind\":\"storage#object\",\"md5Hash\":\"D4HVLgbKqkhgiHSI0YJxxw==\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fecaf258d0961946aca782aed0ce3cb190.txt?generation=3&alt=media\",\"metageneration\":\"1\",\"name\":\"fe-events/ecaf258d0961946aca782aed0ce3cb190.txt\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fecaf258d0961946aca782aed0ce3cb190.txt\",\"size\":\"7\",\"storageClass\":\"STANDARD\",\"timeCreated\":\"2026-10-01T09:36:58.356Z\",\"timeStorageClassUpdated\":\"2026-10-01T09:36:58.356Z\",\"updated\":\"2026-10-01T09:36:58.356Z\"}}}"
+              }
+            ]
+          },
+          "error": null
+        },
+        {
+          "scenarioId": "storage-upload",
+          "role": "positive-control-before",
+          "status": "LOCAL_OBSERVATION",
+          "sourceResult": "typed-success",
+          "readback": {
+            "exists": true,
+            "bucket": "demo-conformance-events-primary",
+            "name": "fe-events/e0a99631e335b4396ae78d9b11131f382.txt",
+            "generation": "4",
+            "metageneration": "1",
+            "contentType": "text/plain"
+          },
+          "cleanup": {
+            "checked": true,
+            "objectGenerationsAbsent": true,
+            "versioningRestored": true
+          },
+          "matchKey": {
+            "kind": "storage",
+            "bucket": "demo-conformance-events-primary",
+            "value": "fe-events/e0a99631e335b4396ae78d9b11131f382.txt"
+          },
+          "cursor": 10,
+          "windowMs": 5000,
+          "capture": {
+            "before": {
+              "cursor": 9,
+              "frameCount": 9,
+              "lossCount": 0,
+              "issueCount": 0
+            },
+            "after": {
+              "cursor": 12,
+              "frameCount": 12,
+              "lossCount": 0,
+              "issueCount": 0
+            },
+            "sequences": [
+              11,
+              12
+            ]
+          },
+          "framesByGeneration": {
+            "v1": [
+              {
+                "sequence": 11,
+                "receivedAt": "2026-10-01T09:36:59.612Z",
+                "rawJson": "{\"handler\":\"storageFinalizedV1\",\"generation\":1,\"source\":\"storage\",\"event\":{\"context\":{\"eventId\":\"58334801472177776\",\"timestamp\":\"2026-10-01T09:36:58.356Z\",\"eventType\":\"google.storage.object.finalize\",\"resource\":{\"service\":\"storage.googleapis.com\",\"name\":\"projects/_/buckets/demo-conformance-events-primary/objects/fe-events/e0a99631e335b4396ae78d9b11131f382.txt\",\"type\":\"storage#object\"},\"params\":{},\"authType\":null,\"authId\":null},\"data\":{\"bucket\":\"demo-conformance-events-primary\",\"contentType\":\"text/plain\",\"crc32c\":\"MnnT1Q==\",\"etag\":\"\\\"4-1\\\"\",\"generation\":\"4\",\"id\":\"demo-conformance-events-primary/fe-events/e0a99631e335b4396ae78d9b11131f382.txt/4\",\"kind\":\"storage#object\",\"md5Hash\":\"4vpTiGfDgwqFmlsXqyRkSw==\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fe0a99631e335b4396ae78d9b11131f382.txt?generation=4&alt=media\",\"metageneration\":\"1\",\"name\":\"fe-events/e0a99631e335b4396ae78d9b11131f382.txt\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fe0a99631e335b4396ae78d9b11131f382.txt\",\"size\":\"7\",\"storageClass\":\"STANDARD\",\"timeCreated\":\"2026-10-01T09:36:58.356Z\",\"timeStorageClassUpdated\":\"2026-10-01T09:36:58.356Z\",\"updated\":\"2026-10-01T09:36:58.356Z\"}}}"
+              }
+            ],
+            "v2": [
+              {
+                "sequence": 12,
+                "receivedAt": "2026-10-01T09:36:59.617Z",
+                "rawJson": "{\"handler\":\"storageFinalizedV2\",\"generation\":2,\"source\":\"storage\",\"event\":{\"id\":\"66144978223148369\",\"time\":\"2026-10-01T09:36:58.356651Z\",\"type\":\"google.cloud.storage.object.v1.finalized\",\"source\":\"//storage.googleapis.com/projects/_/buckets/demo-conformance-events-primary\",\"subject\":\"objects/fe-events/e0a99631e335b4396ae78d9b11131f382.txt\",\"specversion\":\"1.0\",\"datacontenttype\":\"application/json\",\"params\":null,\"authType\":null,\"authId\":null,\"data\":{\"bucket\":\"demo-conformance-events-primary\",\"contentType\":\"text/plain\",\"crc32c\":\"MnnT1Q==\",\"etag\":\"\\\"4-1\\\"\",\"generation\":\"4\",\"id\":\"demo-conformance-events-primary/fe-events/e0a99631e335b4396ae78d9b11131f382.txt/4\",\"kind\":\"storage#object\",\"md5Hash\":\"4vpTiGfDgwqFmlsXqyRkSw==\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fe0a99631e335b4396ae78d9b11131f382.txt?generation=4&alt=media\",\"metageneration\":\"1\",\"name\":\"fe-events/e0a99631e335b4396ae78d9b11131f382.txt\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fe0a99631e335b4396ae78d9b11131f382.txt\",\"size\":\"7\",\"storageClass\":\"STANDARD\",\"timeCreated\":\"2026-10-01T09:36:58.356Z\",\"timeStorageClassUpdated\":\"2026-10-01T09:36:58.356Z\",\"updated\":\"2026-10-01T09:36:58.356Z\"}}}"
+              }
+            ]
+          },
+          "error": null
+        },
+        {
+          "scenarioId": "storage-failed-upload",
+          "role": "subject",
+          "status": "LOCAL_OBSERVATION",
+          "sourceResult": "typed-refusal",
+          "readback": {
+            "exists": false,
+            "bucket": "demo-conformance-events-primary",
+            "name": "fe-events/e9a8165b88efd4a11b5c7fa26dfb3c68a.txt"
+          },
+          "cleanup": {
+            "checked": true,
+            "objectGenerationsAbsent": true,
+            "versioningRestored": true
+          },
+          "matchKey": {
+            "kind": "storage",
+            "bucket": "demo-conformance-events-primary",
+            "value": "fe-events/e9a8165b88efd4a11b5c7fa26dfb3c68a.txt"
+          },
+          "cursor": 14,
+          "windowMs": 5000,
+          "capture": {
+            "before": {
+              "cursor": 14,
+              "frameCount": 14,
+              "lossCount": 0,
+              "issueCount": 0
+            },
+            "after": {
+              "cursor": 14,
+              "frameCount": 14,
+              "lossCount": 0,
+              "issueCount": 0
+            },
+            "sequences": []
+          },
+          "framesByGeneration": {
+            "v1": [],
+            "v2": []
+          },
+          "error": null
+        },
+        {
+          "scenarioId": "storage-upload",
+          "role": "positive-control-after",
+          "status": "LOCAL_OBSERVATION",
+          "sourceResult": "typed-success",
+          "readback": {
+            "exists": true,
+            "bucket": "demo-conformance-events-primary",
+            "name": "fe-events/e0af17257a6e34fe9b802d1d1fb934e99.txt",
+            "generation": "5",
+            "metageneration": "1",
+            "contentType": "text/plain"
+          },
+          "cleanup": {
+            "checked": true,
+            "objectGenerationsAbsent": true,
+            "versioningRestored": true
+          },
+          "matchKey": {
+            "kind": "storage",
+            "bucket": "demo-conformance-events-primary",
+            "value": "fe-events/e0af17257a6e34fe9b802d1d1fb934e99.txt"
+          },
+          "cursor": 14,
+          "windowMs": 5000,
+          "capture": {
+            "before": {
+              "cursor": 14,
+              "frameCount": 14,
+              "lossCount": 0,
+              "issueCount": 0
+            },
+            "after": {
+              "cursor": 16,
+              "frameCount": 16,
+              "lossCount": 0,
+              "issueCount": 0
+            },
+            "sequences": [
+              15,
+              16
+            ]
+          },
+          "framesByGeneration": {
+            "v1": [
+              {
+                "sequence": 15,
+                "receivedAt": "2026-10-01T09:37:04.693Z",
+                "rawJson": "{\"handler\":\"storageFinalizedV1\",\"generation\":1,\"source\":\"storage\",\"event\":{\"context\":{\"eventId\":\"81435499339073985\",\"timestamp\":\"2026-10-01T09:36:58.356Z\",\"eventType\":\"google.storage.object.finalize\",\"resource\":{\"service\":\"storage.googleapis.com\",\"name\":\"projects/_/buckets/demo-conformance-events-primary/objects/fe-events/e0af17257a6e34fe9b802d1d1fb934e99.txt\",\"type\":\"storage#object\"},\"params\":{},\"authType\":null,\"authId\":null},\"data\":{\"bucket\":\"demo-conformance-events-primary\",\"contentType\":\"text/plain\",\"crc32c\":\"MnnT1Q==\",\"etag\":\"\\\"5-1\\\"\",\"generation\":\"5\",\"id\":\"demo-conformance-events-primary/fe-events/e0af17257a6e34fe9b802d1d1fb934e99.txt/5\",\"kind\":\"storage#object\",\"md5Hash\":\"4vpTiGfDgwqFmlsXqyRkSw==\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fe0af17257a6e34fe9b802d1d1fb934e99.txt?generation=5&alt=media\",\"metageneration\":\"1\",\"name\":\"fe-events/e0af17257a6e34fe9b802d1d1fb934e99.txt\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fe0af17257a6e34fe9b802d1d1fb934e99.txt\",\"size\":\"7\",\"storageClass\":\"STANDARD\",\"timeCreated\":\"2026-10-01T09:36:58.356Z\",\"timeStorageClassUpdated\":\"2026-10-01T09:36:58.356Z\",\"updated\":\"2026-10-01T09:36:58.356Z\"}}}"
+              }
+            ],
+            "v2": [
+              {
+                "sequence": 16,
+                "receivedAt": "2026-10-01T09:37:04.698Z",
+                "rawJson": "{\"handler\":\"storageFinalizedV2\",\"generation\":2,\"source\":\"storage\",\"event\":{\"id\":\"77846878418494906\",\"time\":\"2026-10-01T09:36:58.356651Z\",\"type\":\"google.cloud.storage.object.v1.finalized\",\"source\":\"//storage.googleapis.com/projects/_/buckets/demo-conformance-events-primary\",\"subject\":\"objects/fe-events/e0af17257a6e34fe9b802d1d1fb934e99.txt\",\"specversion\":\"1.0\",\"datacontenttype\":\"application/json\",\"params\":null,\"authType\":null,\"authId\":null,\"data\":{\"bucket\":\"demo-conformance-events-primary\",\"contentType\":\"text/plain\",\"crc32c\":\"MnnT1Q==\",\"etag\":\"\\\"5-1\\\"\",\"generation\":\"5\",\"id\":\"demo-conformance-events-primary/fe-events/e0af17257a6e34fe9b802d1d1fb934e99.txt/5\",\"kind\":\"storage#object\",\"md5Hash\":\"4vpTiGfDgwqFmlsXqyRkSw==\",\"mediaLink\":\"https://storage.googleapis.com/download/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fe0af17257a6e34fe9b802d1d1fb934e99.txt?generation=5&alt=media\",\"metageneration\":\"1\",\"name\":\"fe-events/e0af17257a6e34fe9b802d1d1fb934e99.txt\",\"selfLink\":\"https://www.googleapis.com/storage/v1/b/demo-conformance-events-primary/o/fe-events%2Fe0af17257a6e34fe9b802d1d1fb934e99.txt\",\"size\":\"7\",\"storageClass\":\"STANDARD\",\"timeCreated\":\"2026-10-01T09:36:58.356Z\",\"timeStorageClassUpdated\":\"2026-10-01T09:36:58.356Z\",\"updated\":\"2026-10-01T09:36:58.356Z\"}}}"
+              }
+            ]
+          },
+          "error": null
+        }
+      ],
+      "cases": [
+        {
+          "caseId": "FUNCTIONS-EVENTS/storage-finalized#new-object#v1",
+          "generation": 1,
+          "scenarioId": "storage-upload",
+          "delivery": "at-least-one",
+          "status": "LOCAL_OBSERVATION",
+          "aspectStatus": "PENDING_LOCAL_COMPARISON",
+          "subjectSequences": [
+            2
+          ],
+          "controlBeforeSequences": [],
+          "controlAfterSequences": []
+        },
+        {
+          "caseId": "FUNCTIONS-EVENTS/storage-finalized#new-object#v2",
+          "generation": 2,
+          "scenarioId": "storage-upload",
+          "delivery": "at-least-one",
+          "status": "LOCAL_OBSERVATION",
+          "aspectStatus": "PENDING_LOCAL_COMPARISON",
+          "subjectSequences": [
+            1
+          ],
+          "controlBeforeSequences": [],
+          "controlAfterSequences": []
+        },
+        {
+          "caseId": "FUNCTIONS-EVENTS/storage-finalized#overwritten-generation#v1",
+          "generation": 1,
+          "scenarioId": "storage-overwrite",
+          "delivery": "at-least-one",
+          "status": "LOCAL_OBSERVATION",
+          "aspectStatus": "PENDING_LOCAL_COMPARISON",
+          "subjectSequences": [
+            8
+          ],
+          "controlBeforeSequences": [],
+          "controlAfterSequences": []
+        },
+        {
+          "caseId": "FUNCTIONS-EVENTS/storage-finalized#overwritten-generation#v2",
+          "generation": 2,
+          "scenarioId": "storage-overwrite",
+          "delivery": "at-least-one",
+          "status": "LOCAL_OBSERVATION",
+          "aspectStatus": "PENDING_LOCAL_COMPARISON",
+          "subjectSequences": [
+            7
+          ],
+          "controlBeforeSequences": [],
+          "controlAfterSequences": []
+        },
+        {
+          "caseId": "FUNCTIONS-EVENTS/storage-finalized#failed-upload-no-event#v1",
+          "generation": 1,
+          "scenarioId": "storage-failed-upload",
+          "delivery": "none-in-window",
+          "status": "LOCAL_OBSERVATION",
+          "aspectStatus": "PENDING_LOCAL_COMPARISON",
+          "subjectSequences": [],
+          "controlBeforeSequences": [
+            11
+          ],
+          "controlAfterSequences": [
+            15
+          ]
+        },
+        {
+          "caseId": "FUNCTIONS-EVENTS/storage-finalized#failed-upload-no-event#v2",
+          "generation": 2,
+          "scenarioId": "storage-failed-upload",
+          "delivery": "none-in-window",
+          "status": "LOCAL_OBSERVATION",
+          "aspectStatus": "PENDING_LOCAL_COMPARISON",
+          "subjectSequences": [],
+          "controlBeforeSequences": [
+            12
+          ],
+          "controlAfterSequences": [
+            16
+          ]
+        }
+      ]
+    }
+  ]
+}

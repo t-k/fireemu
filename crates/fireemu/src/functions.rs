@@ -63,6 +63,27 @@ pub fn auth_context_naming(
     }
 }
 
+/// The buckets the Storage triggers of a manifest name explicitly. A trigger without a bucket
+/// listens on the project's default buckets, which always exist. The strict profile counts these
+/// buckets as existing even when empty: production needs the bucket to deploy the trigger.
+#[must_use]
+pub fn storage_trigger_buckets(
+    manifest: &fireemu_core_functions::manifest::FunctionManifest,
+) -> BTreeSet<String> {
+    use fireemu_core_functions::manifest::Trigger;
+    manifest
+        .functions
+        .iter()
+        .filter_map(|function| match &function.trigger {
+            Trigger::Storage {
+                bucket: Some(bucket),
+                ..
+            } => Some(bucket.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Derives the unique Pub/Sub resources required by Pub/Sub and scheduled functions. Under
 /// `SubscriptionNaming::Eventarc` every 2nd gen Pub/Sub function gets its own subscription, so
 /// two functions on one topic give two resources; otherwise a topic gets one `emulator-sub-<topic>`.
@@ -5189,14 +5210,15 @@ mod tests {
         load_user_environment, node_engine_matches, owned_pubsub_topic, package_node_engine,
         parse_node_version, provision_function_pubsub_resources, select_node_installation,
         snapshot_functions_source, source_scan_pacing_delay, source_scan_retry_delay,
-        stream_source_chunks, update_watch_hash, validate_functions_codebase_budget,
-        wait_for_fixed_inspector_port_release, warn_reload_once, BlockingAuthBridge,
-        FunctionsSourceByteBudget, FunctionsSourceEntryBudget, FunctionsSourceFileVersion,
-        FunctionsSourceScanBudget, FunctionsSourceSnapshot, FunctionsSourceStamp,
-        FunctionsSourceTraversal, NodeInstallation, PubSubBridge, UserEnvironment,
-        BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_BYTES,
-        MAX_FUNCTIONS_SOURCE_ENTRIES, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND,
-        MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND, SOURCE_IO_BUFFER_BYTES,
+        storage_trigger_buckets, stream_source_chunks, update_watch_hash,
+        validate_functions_codebase_budget, wait_for_fixed_inspector_port_release,
+        warn_reload_once, BlockingAuthBridge, FunctionsSourceByteBudget,
+        FunctionsSourceEntryBudget, FunctionsSourceFileVersion, FunctionsSourceScanBudget,
+        FunctionsSourceSnapshot, FunctionsSourceStamp, FunctionsSourceTraversal, NodeInstallation,
+        PubSubBridge, UserEnvironment, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
+        MAX_FUNCTIONS_SOURCE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
+        MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
+        SOURCE_IO_BUFFER_BYTES,
     };
     #[cfg(not(windows))]
     use super::{
@@ -9011,6 +9033,29 @@ mod tests {
             "debugMode": true,
             "authHeaders": auth_headers,
         })
+    }
+
+    #[test]
+    fn storage_trigger_buckets_are_the_explicit_buckets_of_the_storage_triggers_only() {
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "onUp", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.finalized", "bucket": "events-bucket"}},
+            {"name": "onGone", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.deleted", "bucket": "events-bucket"}},
+            {"name": "onDefault", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.finalized"}},
+            {"name": "onOther", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.archived", "bucket": "other-bucket"}},
+            {"name": "worker", "trigger": {"type": "pubsub", "topic": "not-a-bucket"}},
+            {"name": "health", "trigger": {"type": "http"}}
+        ]})).unwrap();
+        assert_eq!(
+            storage_trigger_buckets(&manifest)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["events-bucket".to_owned(), "other-bucket".to_owned()]
+        );
+        let none = parse_manifest(&json!({"functions": [
+            {"name": "health", "trigger": {"type": "http"}}
+        ]}))
+        .unwrap();
+        assert!(storage_trigger_buckets(&none).is_empty());
     }
 
     #[test]

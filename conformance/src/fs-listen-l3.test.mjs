@@ -10,7 +10,8 @@ import { L3_IDS, l3Problems } from "./fs-listen/browser-modes.mjs";
 import { browserRows, browserWritesKnown } from "./fs-listen/browser-record.mjs";
 import { sdkCases } from "./fs-listen/sdk-cases.mjs";
 import { classifyRow, canonicalRow } from "./fs-listen/compare.mjs";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
 import { L3_PHASES, MODE_SETTINGS } from "./fs-listen/browser-modes.mjs";
 
@@ -56,6 +57,224 @@ const evidenceFor = (id) => ({
       boundaryComplete: true,
       status: 200,
     })),
+});
+
+test("L3 comparison CLI reports matches, divergences and incomparable browser rows with reasons", () => {
+  mkdirSync(new URL("../../target", import.meta.url), { recursive: true });
+  const dir = mkdtempSync(new URL("../../target/l3-cli-", import.meta.url));
+  try {
+    const row = { l3: true, observed: [{ phases: [], cacheMode: "persistent" }], failures: [] };
+    const production = {
+      version: 1,
+      kind: "browser",
+      run: "production",
+      cleanup: { complete: true },
+      rows: { match: row, differs: row, unfinished: row, missing: row },
+    };
+    const local = {
+      ...production,
+      run: "local",
+      rows: {
+        match: row,
+        differs: { ...row, observed: [{ phases: [], cacheMode: "memory" }] },
+        unfinished: { ...row, timedOut: true },
+        extra: row,
+      },
+    };
+    for (const [name, recording] of Object.entries({ production, local }))
+      writeFileSync(`${dir}/${name}.json`, JSON.stringify(recording));
+    const args = ["--production", `${dir}/production.json`, "--local", `${dir}/local.json`];
+    const cli = new URL("./fs-listen/compare.mjs", import.meta.url);
+    const result = spawnSync(
+      process.execPath,
+      [cli.pathname, ...args, "--out", `${dir}/report.json`, "--md", `${dir}/summary.md`],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 1, result.stderr);
+    const report = JSON.parse(readFileSync(`${dir}/report.json`, "utf8"));
+    assert.deepEqual(report.summary, { MATCH: 1, DIVERGES: 1, NOT_COMPARABLE: 3 });
+    assert.deepEqual(
+      Object.fromEntries(Object.entries(report.rows).map(([id, r]) => [id, r.status])),
+      {
+        differs: "DIVERGES",
+        extra: "NOT_COMPARABLE",
+        match: "MATCH",
+        missing: "NOT_COMPARABLE",
+        unfinished: "NOT_COMPARABLE",
+      },
+    );
+    assert.equal(report.rows.differs.comparatorResult, "DIFFER");
+    assert.equal(report.rows.unfinished.comparatorResult, "INDETERMINATE");
+    const md = readFileSync(`${dir}/summary.md`, "utf8");
+    assert.match(report.normalization, /Request byte counts are recorded but not judged/);
+    assert.ok(md.includes(report.normalization));
+    assert.deepEqual(report.rows.match.bodyBytes, { production: [], local: [] });
+    for (const [id, { status, reason }] of Object.entries(report.rows)) {
+      assert.ok(reason.length > 0);
+      assert.ok(md.includes(`| ${id} | ${status} | ${reason} |`));
+    }
+    const noOutput = spawnSync(process.execPath, [cli.pathname, ...args], { encoding: "utf8" });
+    assert.equal(noOutput.status, 2);
+    local.rows = production.rows;
+    writeFileSync(`${dir}/local.json`, JSON.stringify(local));
+    const matching = spawnSync(
+      process.execPath,
+      [cli.pathname, ...args, "--out", `${dir}/report.json`],
+      { encoding: "utf8" },
+    );
+    assert.equal(matching.status, 0, matching.stderr);
+    assert.deepEqual(JSON.parse(readFileSync(`${dir}/report.json`, "utf8")).summary, {
+      MATCH: 4,
+      DIVERGES: 0,
+      NOT_COMPARABLE: 0,
+    });
+    const frame = JSON.stringify([
+      [0, ["c", "x".repeat(22), "", 8, 15, 30000]],
+      [1, [{ targetChange: { targetChangeType: "CURRENT", readTime: "2026-10-06T00:00:00Z" } }]],
+    ]);
+    const wire = {
+      phase: "restarted-online",
+      targets: [{ targetId: 1002 }],
+      boundaryComplete: true,
+      body: `${frame.length}\n${frame}`,
+      boundaryBodyBytes: frame.length + String(frame.length).length + 1,
+    };
+    production.rows = { 203: { l3: true, observed: [{ wire: [wire] }] } };
+    local.rows = structuredClone(production.rows);
+    const altered = local.rows["203"].observed[0].wire[0];
+    const entries = JSON.parse(frame);
+    entries.push(
+      [2, [{ filter: { targetId: 1002, count: 2 } }]],
+      [3, [{ targetChange: { targetChangeType: "RESET", targetIds: [1002] } }]],
+    );
+    const changedBody = JSON.stringify(entries);
+    altered.body = `${changedBody.length}\n${changedBody}`;
+    altered.boundaryBodyBytes = Buffer.byteLength(altered.body);
+    writeFileSync(`${dir}/production.json`, JSON.stringify(production));
+    writeFileSync(`${dir}/local.json`, JSON.stringify(local));
+    const structural = spawnSync(
+      process.execPath,
+      [cli.pathname, ...args, "--out", `${dir}/report.json`],
+      { encoding: "utf8" },
+    );
+    assert.equal(structural.status, 1, structural.stderr);
+    const divergence = JSON.parse(readFileSync(`${dir}/report.json`, "utf8")).rows["203"];
+    assert.equal(divergence.status, "DIVERGES");
+    assert.match(divergence.reason, /D4: existence-filter presence differs at restart/);
+    assert.match(divergence.reason, /D5: RESET\/replay message count or placement differs/);
+    production.rows = local.rows = { match: row, differs: row, unfinished: row, missing: row };
+    writeFileSync(`${dir}/production.json`, JSON.stringify(production));
+    local.cleanup.complete = false;
+    writeFileSync(`${dir}/local.json`, JSON.stringify(local));
+    const unclean = spawnSync(
+      process.execPath,
+      [cli.pathname, ...args, "--out", `${dir}/report.json`],
+      { encoding: "utf8" },
+    );
+    assert.equal(unclean.status, 1, unclean.stderr);
+    assert.deepEqual(JSON.parse(readFileSync(`${dir}/report.json`, "utf8")).summary, {
+      MATCH: 0,
+      DIVERGES: 0,
+      NOT_COMPARABLE: 4,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("L3 records request byte counts without judging them and compares decoded boundary contents", () => {
+  for (const [request, response, localRequest, localResponse] of [
+    [1200, 2962, 1161, 1108],
+    [1273, 1720, 1234, 556],
+    [1200, 1469, 1161, 1108],
+    [1200, 1469, 1161, 1108],
+    [1275, 539, 1234, 556],
+    [1200, 2962, 1161, 1108],
+  ]) {
+    const rows = [
+      ["fireemu-oracle-query", request, response],
+      ["demo-fs-listen", localRequest, localResponse],
+    ].map(([project, requestBodyBytes, boundaryBodyBytes]) => {
+      const database = `projects/${project}/databases/(default)`;
+      const addTargetBodies = [
+        JSON.stringify({ database, addTarget: { query: { parent: `${database}/documents` } } }),
+      ];
+      const message = [
+        {
+          targetChange: {
+            targetChangeType: "CURRENT",
+            targetIds: [2],
+            resumeToken:
+              project === "fireemu-oracle-query" ? "AAAAAAAAAAAAAAAA" : "BBBBBBBBBBBBBBBB",
+          },
+        },
+        {
+          documentChange: {
+            document: {
+              name: `${database}/documents/alpha`,
+              fields: { value: { stringValue: "a0" } },
+            },
+            targetIds: [2],
+          },
+        },
+      ];
+      let body = JSON.stringify([[1, message]]);
+      const length = boundaryBodyBytes - String(boundaryBodyBytes).length - 1;
+      body = `${length}\n${body.padEnd(length)}`;
+      return {
+        l3: true,
+        observed: [
+          {
+            wire: [
+              {
+                phase: "warm",
+                targets: [{ targetId: 2 }],
+                addTargetBodies,
+                requestBodyBytes,
+                boundaryBodyBytes,
+                boundaryComplete: true,
+                body,
+              },
+            ],
+          },
+        ],
+      };
+    });
+    const [production, local] = rows.map((r) => canonicalRow(r).observed[0].resume[0]);
+    assert.equal(production.requestBodyBytes, undefined);
+    assert.equal(local.requestBodyBytes, undefined);
+    assert.deepEqual(production.boundaryContents, local.boundaryContents);
+    // Request counts include auth form fields that the recorder does not retain.
+    assert.equal(classifyRow(...rows), "MATCH");
+    rows[0].observed[0].wire[0].requestBodyBytes -= request - localRequest - 12;
+    assert.equal(classifyRow(...rows), "MATCH");
+    const changed = structuredClone(rows[1]);
+    changed.observed[0].wire[0].requestBodyBytes += 1;
+    assert.equal(classifyRow(rows[0], changed), "MATCH");
+    for (const replacement of [
+      (messages) => {
+        messages[0].targetChange.targetChangeType = "RESET";
+      },
+      (messages) => {
+        messages[0].targetChange.resumeToken = "";
+      },
+      (messages) => {
+        delete messages[0].targetChange.resumeToken;
+      },
+      (messages) => {
+        messages[1].documentChange.document.fields.value.stringValue = "b0";
+      },
+    ]) {
+      const different = structuredClone(rows[1]);
+      const wire = different.observed[0].wire[0];
+      const messages = captureFrames(wire.body).frames.map((f) => f.message);
+      replacement(messages);
+      const json = JSON.stringify([[1, messages]]);
+      wire.body = `${Buffer.byteLength(json)}\n${json}`;
+      wire.boundaryBodyBytes = Buffer.byteLength(wire.body);
+      assert.equal(classifyRow(rows[0], different), "DIFFER");
+    }
+  }
 });
 
 test("L3 framed streaming capture keeps complete boundaries and refuses truncated or oversized frames", () => {
@@ -1988,5 +2207,178 @@ test("L3 mode loop stops on refusal and preserves empty error names", async () =
       assert.equal(results["long-polling"].error, "");
       assert.equal(results["long-polling"].refused, scenario === "error-refused");
     }
+  }
+});
+
+test("L3 typed response comparison covers both modes, every complete batch and direct token relations", () => {
+  const fixture = JSON.parse(
+    readFileSync(new URL("./fs-listen/data/l3-production-frames.json", import.meta.url), "utf8"),
+  );
+  for (const mode of ["long-polling", "streaming"]) {
+    const rows = ["production", "local"].map((run, side) => {
+      const database = `projects/${side ? "demo-fs-listen" : "fireemu-oracle-query"}/databases/(default)`;
+      const wire = fixture.frames
+        .filter((f) => f.mode === mode)
+        .map((f) => {
+          let docs = 0;
+          const entries = captureFrames(f.body).frames.map(({ sequence, message }) => {
+            const document = message.documentChange?.document;
+            if (document) {
+              const identity = docs++ % 2 === 0 ? "alpha" : "beta";
+              document.name = `${database}/documents/conf_listen/${run}-${identity}`;
+              document.fields.owner.stringValue = `${run}-${mode}`;
+              document.fields.rank.integerValue = String((identity === "alpha" ? 100 : 200) + side);
+              document.fields.value.stringValue = identity === "alpha" ? "a0" : "b0";
+            }
+            if (Array.isArray(message)) message[1] = (side ? "B" : "a").repeat(22);
+            const masked = JSON.parse(
+              JSON.stringify(message, (key, value) => {
+                if (key === "resumeToken") return (side ? "B" : "a").repeat(value.length);
+                if (
+                  ["createTime", "updateTime", "readTime"].includes(key) &&
+                  typeof value === "string"
+                )
+                  return value.replace("2026-10-06", side ? "2026-10-07" : "2026-10-06");
+                return value;
+              }),
+            );
+            return [sequence, Array.isArray(masked) ? masked : [masked]];
+          });
+          const json = JSON.stringify(entries),
+            body = `${Buffer.byteLength(json)}\n${json}`;
+          return {
+            ...f,
+            body,
+            requestBodyBytes: side ? 11 : 9999,
+            contentLength: side ? "10" : "10000",
+            addTargetBodies: [JSON.stringify({ database })],
+            boundaryBodyBytes: f.boundaryComplete ? Buffer.byteLength(body) : null,
+            boundaries: f.boundaries.map((b) => ({
+              ...b,
+              resumeToken: { ...b.resumeToken, relation: `${run}:${b.readTime ?? "reset"}` },
+            })),
+          };
+        });
+      return { l3: true, observed: [{ wire }] };
+    });
+    assert.equal(classifyRow(...rows), "MATCH", mode);
+    const canonical = canonicalRow(rows[0]).observed[0].resume;
+    for (const phase of canonical) {
+      assert.equal(phase.boundaryContents[0].sequence, 0);
+      const expected = fixture.frames
+        .filter((f) => f.mode === mode && f.phase === phase.phase)
+        .flatMap((f) => captureFrames(f.body).frames);
+      assert.equal(phase.boundaryContents.length, expected.length);
+    }
+    for (const mutation of [
+      "scalar",
+      "width",
+      "removed",
+      "default-type",
+      "default-ids",
+      "rank-type",
+      "owner-type",
+      "value",
+      "timestamp-equality",
+      "token-length",
+      "token-relation",
+      "request-token-relation",
+      "after-boundary-reset",
+      "filter",
+    ]) {
+      const changed = structuredClone(rows[1]);
+      const wire = changed.observed[0].wire;
+      const event = wire.find((w) => w.boundaryComplete);
+      const frames = captureFrames(event.body).frames;
+      const doc = frames.find((f) => f.message.documentChange)?.message.documentChange;
+      const current = frames.find((f) => f.message.targetChange?.targetChangeType === "CURRENT");
+      const noChange = frames.find(
+        (f) => f.message.targetChange && !f.message.targetChange.targetChangeType,
+      );
+      if (mutation === "scalar" || mutation === "width") {
+        const hello = captureFrames(wire[0].body).frames[0].message;
+        if (mutation === "scalar") hello[4] = 12;
+        else hello[1] += "B";
+        const json = JSON.stringify([[0, hello]]);
+        wire[0].body = `${Buffer.byteLength(json)}\n${json}`;
+      } else if (mutation === "removed") doc.removedTargetIds = [];
+      else if (mutation === "default-type")
+        noChange.message.targetChange.targetChangeType = "NO_CHANGE";
+      else if (mutation === "default-ids") noChange.message.targetChange.targetIds = [];
+      else if (mutation === "rank-type") doc.document.fields.rank.integerValue = 101;
+      else if (mutation === "owner-type") doc.document.fields.owner.stringValue = 101;
+      else if (mutation === "value") doc.document.fields.value.stringValue = "b0";
+      else if (mutation === "timestamp-equality") doc.document.updateTime = "2026-10-08T00:00:00Z";
+      else if (mutation === "token-length") current.message.targetChange.resumeToken += "B";
+      else if (mutation === "token-relation")
+        event.boundaries.find((b) => b.sequence === noChange.sequence).resumeToken.relation =
+          "other";
+      else if (mutation === "request-token-relation") {
+        const request = wire.find((w) => w.phase === "restarted-online" && w.targets.length);
+        request.targets[0].resumeToken = { length: 16, relation: "wrong" };
+      } else if (mutation === "after-boundary-reset")
+        frames.push({
+          sequence: 99,
+          message: { targetChange: { targetChangeType: "RESET", targetIds: [1002] } },
+        });
+      else if (mutation === "filter")
+        frames.push({ sequence: 99, message: { filter: { targetId: 1002, count: 2 } } });
+      const json = JSON.stringify(frames.map(({ sequence, message }) => [sequence, [message]]));
+      event.body = `${Buffer.byteLength(json)}\n${json}`;
+      event.boundaryBodyBytes = Buffer.byteLength(event.body);
+      assert.equal(classifyRow(rows[0], changed), "DIFFER", `${mode}: ${mutation}`);
+    }
+    // Boundary offsets select the complete batch; later response events are excluded.
+    const later = structuredClone(rows[1]);
+    later.observed[0].wire.push({ phase: "cold-online", body: "10\n[[99,[]]]" });
+    assert.equal(classifyRow(rows[0], later), "MATCH");
+  }
+});
+
+test("L3 token metadata follows message occurrences within one sequence and malformed boundaries are incomparable", () => {
+  const messages = [
+    {
+      targetChange: {
+        targetChangeType: "CURRENT",
+        resumeToken: "xxx",
+        readTime: "2026-10-06T00:00:00Z",
+      },
+    },
+    { targetChange: { resumeToken: "xxx", readTime: "2026-10-06T00:00:00Z" } },
+    { targetChange: { targetChangeType: "RESET", resumeToken: "xxx" } },
+  ];
+  const json = JSON.stringify([[1, messages]]),
+    body = `${json.length}\n${json}`;
+  const row = {
+    l3: true,
+    observed: [
+      {
+        wire: [
+          {
+            phase: "warm",
+            targets: [{ targetId: 1002 }],
+            body,
+            boundaryComplete: true,
+            boundaryBodyBytes: body.length,
+            boundaries: [
+              { sequence: 1, resumeToken: { relation: 1, length: 3 } },
+              { sequence: 1, resumeToken: { relation: 1, length: 3 } },
+              { sequence: 1, resumeToken: { relation: 2, length: 3 } },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const changed = structuredClone(row);
+  changed.observed[0].wire[0].boundaries[1].resumeToken.relation = 2;
+  changed.observed[0].wire[0].boundaries[2].resumeToken.relation = 1;
+  assert.equal(classifyRow(row, changed), "DIFFER");
+  for (const suffix of ["2\n{}", "10\n[", "x\n[]"]) {
+    const invalid = structuredClone(row);
+    invalid.observed[0].wire[0].body += suffix;
+    invalid.observed[0].wire[0].boundaryBodyBytes += suffix.length;
+    assert.equal(classifyRow(row, invalid), "INDETERMINATE");
+    assert.equal(classifyRow(invalid, invalid), "INDETERMINATE");
   }
 });

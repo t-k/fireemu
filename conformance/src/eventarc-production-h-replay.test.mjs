@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { hProductionAnswer, hProductionEvidence } from "./eventarc-production/h-production.mjs";
 import { hReadList, hReady, hCliFailed } from "./eventarc-production/h-deploy.mjs";
 import { parseHEntries, hCapture, judgeH } from "./eventarc-production/h-capture.mjs";
@@ -25,10 +26,22 @@ const lists = JSON.parse(
     "utf8",
   ),
 );
+const h1 = JSON.parse(
+  readFileSync(
+    new URL("./eventarc-production/fixtures/h-fe/h1-preflight.json", import.meta.url),
+    "utf8",
+  ),
+);
+const readiness = JSON.parse(
+  readFileSync(
+    new URL("./eventarc-production/fixtures/h-fe/h-readiness.json", import.meta.url),
+    "utf8",
+  ),
+);
 const m = hManifest({ project: "fireemu-oracle-events", runId: "cafe60000001" });
 
-// FE/PUBSUB candidates are calibrated by measured counts; only stage C stores native bytes.
-for (const recorded of [...fe, ...stageC, ...lists]) {
+// FE/PUBSUB use measured counts; H1 and channel fixtures retain masked native bytes.
+for (const recorded of [...fe, ...stageC, ...lists, ...h1, ...readiness]) {
   const bytes = Buffer.from(
     `${recorded.url?.includes("serviceusage.googleapis.com") || (!recorded.url && recorded.sequence === 1) ? JSON.stringify(recorded.body, null, 2).replace(/[<>&]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`) : JSON.stringify(recorded.body, null, 2)}\n`,
   );
@@ -40,10 +53,28 @@ for (const recorded of [...fe, ...stageC, ...lists]) {
     );
   recorded.bodyBytes = bytes.length;
   recorded.bodyBase64 ??= bytes.toString("base64");
+  if ([...h1, ...readiness].includes(recorded)) {
+    assert.deepEqual(Buffer.from(recorded.bodyBase64, "base64"), bytes);
+    recorded.bodySha256 = createHash("sha256").update(bytes).digest("hex");
+  }
   recorded.headers = { "content-length": String(bytes.length) };
 }
 
-for (const recorded of [...fe, ...stageC]) {
+test("H v4 recordings mask every long digit run in native and parsed answers", () => {
+  assert.equal(h1.length, 7);
+  for (const recorded of [...h1, ...readiness]) {
+    const native = Buffer.from(recorded.bodyBase64, "base64").toString();
+    for (const text of [native, recorded.url, JSON.stringify(recorded.body)])
+      for (const [digits] of text.matchAll(/\d{9,}/g))
+        assert.equal(
+          digits,
+          "123456789012".repeat(Math.ceil(digits.length / 12)).slice(0, digits.length),
+        );
+    assert.deepEqual(JSON.parse(native), recorded.body);
+  }
+});
+
+for (const recorded of [...fe, ...stageC, ...h1, ...readiness]) {
   test(`H production judges replay ${recorded.run} ${recorded.sequence ?? `${recorded.file}:${recorded.line}`}`, () => {
     const url = new URL(
       recorded.url ?? recorded.path,
@@ -76,6 +107,7 @@ for (const recorded of [...fe, ...stageC]) {
     Object.assign(unexpected, {
       bodyBytes: unexpectedBytes.length,
       bodyBase64: unexpectedBytes.toString("base64"),
+      bodySha256: createHash("sha256").update(unexpectedBytes).digest("hex"),
       headers: { "content-length": String(unexpectedBytes.length) },
     });
     for (const judge of judges) {
@@ -106,6 +138,43 @@ for (const recorded of [...fe, ...stageC]) {
     }
   });
 }
+
+test("H repository judge accepts recorded envelopes with changing values and rejects near misses", () => {
+  const recorded = h1.find((r) => r.sequence === 7);
+  const spec = { host: "artifact", method: "GET", path: new URL(recorded.url).pathname };
+  for (const [body, accepted] of [
+    [{ ...recorded.body, updateTime: "2026-10-06T00:00:00Z" }, true],
+    [{ ...recorded.body, sizeBytes: "123456789" }, false],
+    [{ ...recorded.body, cleanupPolicies: "invalid" }, false],
+    [Object.fromEntries(Object.entries(recorded.body).filter(([key]) => key !== "mode")), false],
+    [Object.fromEntries(Object.entries(recorded.body).toReversed()), false],
+  ]) {
+    const native = Buffer.from(`${JSON.stringify(body, null, 2)}\n`);
+    const reply = {
+      ...recorded,
+      body,
+      bodyBase64: native.toString("base64"),
+      bodyBytes: native.length,
+      bodySha256: createHash("sha256").update(native).digest("hex"),
+      headers: { "content-length": String(native.length) },
+    };
+    for (const judge of [
+      hProductionAnswer,
+      hProductionEvidence.preflight,
+      hProductionEvidence.readiness,
+    ])
+      assert.equal(judge(reply, spec), accepted);
+  }
+  for (const changed of [
+    { host: "run" },
+    { method: "POST" },
+    { path: spec.path.replace("gcf-artifacts", "other") },
+    { path: `${spec.path}?unrecorded=true` },
+  ])
+    assert.equal(hProductionAnswer(recorded, { ...spec, ...changed }), false);
+  assert.equal(hProductionAnswer({ ...recorded, status: 201 }, spec), false);
+  assert.equal(hProductionAnswer({ ...recorded, bodyBytes: recorded.bodyBytes + 1 }, spec), false);
+});
 
 test("H preflight, readiness and cleanup lists replay FE v7 regional and all-region bodies", async () => {
   for (const recorded of fe.filter(

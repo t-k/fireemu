@@ -2,7 +2,13 @@ import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 
-const recordings = ["v7-replay", "stage-c-replay", "h-lists"].flatMap((name) =>
+const recordings = [
+  "v7-replay",
+  "stage-c-replay",
+  "h-lists",
+  "h1-preflight",
+  "h-readiness",
+].flatMap((name) =>
   JSON.parse(readFileSync(new URL(`./fixtures/h-fe/${name}.json`, import.meta.url), "utf8")),
 );
 
@@ -159,6 +165,7 @@ export function hProductionAnswer(reply, spec) {
     }
     const envelope =
       ["usage", "firestore", "logging"].includes(spec.host) ||
+      (spec.host === "artifact" && actual.pathname.endsWith("/repositories/gcf-artifacts")) ||
       /\/(operations|channels)\//.test(actual.pathname) ||
       (spec.host === "functions" && spec.method === "DELETE");
     const shape =

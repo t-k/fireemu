@@ -316,6 +316,11 @@ impl Subscriber for SubscriberService {
             ));
         }
         let report_attempt = config.dead_letter_policy.is_some();
+        let subscription_properties = (self.handle.profile == crate::PubSubProfile::Strict)
+            .then_some(pb::streaming_pull_response::SubscriptionProperties {
+                exactly_once_delivery_enabled: false,
+                message_ordering_enabled: config.enable_message_ordering,
+            });
         let probe_opening = first.stream_ack_deadline_seconds == 10
             && first.max_outstanding_messages == 1
             && first.max_outstanding_bytes == 1024
@@ -367,6 +372,7 @@ impl Subscriber for SubscriberService {
                             Ok(msgs) if !msgs.is_empty() => {
                                 let resp = pb::StreamingPullResponse {
                                     received_messages: msgs.iter().map(|r| handle.wire_received(r, report_attempt)).collect(),
+                                    subscription_properties,
                                     ..pb::StreamingPullResponse::default()
                                 };
                                 if tx.send(Ok(resp)).await.is_err() {

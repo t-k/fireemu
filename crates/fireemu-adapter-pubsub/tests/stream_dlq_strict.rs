@@ -429,6 +429,10 @@ async fn strict_recorded_negative_stream_deadline_has_recorded_status() {
         .unwrap()
         .unwrap()
         .unwrap();
+    assert_eq!(
+        response.subscription_properties,
+        Some(pb::streaming_pull_response::SubscriptionProperties::default())
+    );
     let ack = response.received_messages[0].ack_id.clone();
     assert_eq!(ack.len(), 196);
     tx.send(pb::StreamingPullRequest {
@@ -501,14 +505,11 @@ impl Drop for OwnedPushReceiver {
         self.0.abort();
     }
 }
-#[tokio::test]
-async fn strict_native_publication_pull_and_loopback_push_share_one_wire_identity() {
-    for profile in [PubSubProfile::Strict, PubSubProfile::Emulator] {
-        let server = Server::new(profile).await;
-        resources(&server).await;
+impl OwnedPushReceiver {
+    async fn new() -> (Self, std::net::SocketAddr) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let mut receiver = OwnedPushReceiver(tokio::spawn(async move {
+        let callback = Self(tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut bytes = Vec::new();
             let mut chunk = [0u8; 1024];
@@ -542,6 +543,15 @@ async fn strict_native_publication_pull_and_loopback_push_share_one_wire_identit
                 .unwrap();
             body
         }));
+        (callback, address)
+    }
+}
+#[tokio::test]
+async fn strict_native_publication_pull_and_loopback_push_share_one_wire_identity() {
+    for profile in [PubSubProfile::Strict, PubSubProfile::Emulator] {
+        let server = Server::new(profile).await;
+        resources(&server).await;
+        let (mut callback, address) = OwnedPushReceiver::new().await;
         SubscriberClient::new(server.channel().await)
             .create_subscription(pb::Subscription {
                 name: format!("{SUB}-push"),
@@ -574,7 +584,7 @@ async fn strict_native_publication_pull_and_loopback_push_share_one_wire_identit
                 1
             }
         );
-        let pushed = tokio::time::timeout(Duration::from_secs(2), &mut receiver.0)
+        let pushed = tokio::time::timeout(Duration::from_secs(2), &mut callback.0)
             .await
             .unwrap()
             .unwrap();

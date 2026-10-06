@@ -347,6 +347,7 @@ async function recordedWorld({ emptyLayout = false, ambiguousGrant = false, age 
         assert.equal(typeof body.messages[0].data, "string");
         value = { messageIds: ["demo-published-id"] };
       } else if (path.endsWith(":pull")) {
+        assert.equal(body.returnImmediately, false);
         assert.equal(body.maxMessages, 1);
         value = emptyLayout && path.includes("-rl-r-") ? {} : prototype("pull");
         assert.ok(Array.isArray(value.receivedMessages) || Object.keys(value).length === 0);
@@ -758,22 +759,36 @@ test("v2 recovery validates IAM intent proofs before any authority or marker", a
   }
 });
 
-test("authority checks actual proof hashes and full E/V scope before demanding a live canonical lock", async () => {
-  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+test("authority binds actual E/V proofs to ledger scope and accepts unaudited B with canonical lock", async () => {
+  const fs = await import("node:fs");
+  const { syncBuiltinESMExports } = await import("node:module");
   const { tmpdir } = await import("node:os");
-  const { join } = await import("node:path");
-  const { verifyAuthority, sha256 } = await import("./pubsub-production/admission.mjs");
-  const out = mkdtempSync(join(tmpdir(), "v2-authority-"));
+  const { join, dirname, resolve } = await import("node:path");
+  const { execFileSync } = await import("node:child_process");
+  const { verifyAuthority, sha256, proofScopeDigest } =
+    await import("./pubsub-production/admission.mjs");
+  const out = fs.mkdtempSync(join(tmpdir(), "v2-authority-"));
   const put = (name, value) => {
     const bytes = JSON.stringify(value);
     const path = join(out, `${name}.json`);
-    writeFileSync(path, bytes);
+    fs.writeFileSync(path, bytes);
     return { path, sha256: sha256(bytes) };
   };
   const descriptor = { head: "a".repeat(40) };
   const digest = "b".repeat(64);
   const packet = put("packet", { taskId: "PUBSUB-STREAM-DLQ", suite: "stream-dlq-v2" });
   const options = { project: "demo-v2", runId: "0123456789ab", serviceAgent: principal, out };
+  const common = execFileSync(
+    "git",
+    ["-C", process.cwd(), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+    { encoding: "utf8" },
+  ).trim();
+  const canonical = resolve(
+    dirname(common),
+    "docs.local/runs/sandbox-locks",
+    `${options.project}.lock`,
+  );
+  const ledgerPath = resolve(dirname(common), "docs.local/instructions/owner-decisions.md");
   const authority = {
     schema: 1,
     taskId: "PUBSUB-STREAM-DLQ",
@@ -794,91 +809,90 @@ test("authority checks actual proof hashes and full E/V scope before demanding a
     cleanupRequests: 600,
     a2Requests: 600,
     serviceAgent: principal,
-    lockPath: join(out, "copied-lock.json"),
+    lockPath: canonical,
+    bInheritedGrants: "UNAUDITED",
   };
   const row = (kind) => ({
     kind,
     state: "APPROVED",
     taskId: authority.taskId,
     envelopeId: authority.envelopeId,
-    sourceHead: authority.sourceHead,
+    sourceHead: descriptor.head,
     descriptorSha256: digest,
     packetSha256: packet.sha256,
-    project: authority.project,
+    project: options.project,
     runIds: authority.runIds,
     runOutputs: authority.runOutputs,
     expiresAt: authority.expiresAt,
     maxRequestsPerAttempt: 228,
     cleanupRequests: 600,
     a2Requests: 600,
+    bInheritedGrants: "UNAUDITED",
   });
-  authority.E = put("E", row("E"));
-  authority.V = put("V", row("V"));
-  authority.inheritedGrantAudit = {
-    ...put("audit", {
-      project: options.project,
-      serviceAgent: principal,
-      noEffectiveGrantB: true,
-      envelopeId: authority.envelopeId,
-    }),
-    noEffectiveGrantB: true,
+  const lines = ["# In-memory test ledger"];
+  for (const kind of ["E", "V"]) {
+    const proof = row(kind);
+    const line = `- 2026-10-06 | PUBSUB-STREAM-DLQ ${kind} | decision=APPROVE; envelopeId=${authority.envelopeId}; scopeSha256=${proofScopeDigest(proof)} | Coordinator | test`;
+    lines.push(line);
+    authority[kind] = put(kind, {
+      ...proof,
+      ledgerLine: lines.length,
+      ledgerLineSha256: sha256(line),
+    });
+  }
+  let lock = {
+    pid: process.pid,
+    envelopeId: authority.envelopeId,
+    sourceCommit: descriptor.head,
+    acquiredAt: "1970-01-01T00:00:00Z",
   };
+  const originalRead = fs.default.readFileSync;
+  const readPaths = [];
+  const intercept = mock.method(fs.default, "readFileSync", (path, ...args) => {
+    readPaths.push(path);
+    if (path === canonical) return Buffer.from(JSON.stringify(lock));
+    if (path === ledgerPath) return lines.join("\n") + "\n";
+    return originalRead(path, ...args);
+  });
+  syncBuiltinESMExports();
   try {
+    assert.doesNotThrow(() => verifyAuthority(authority, descriptor, digest, options, 0));
+    assert.equal(verifyAuthority(authority, descriptor, digest, options, 0), authority);
+    assert.equal(readPaths.filter((path) => path === ledgerPath).length, 4);
+    assert.ok(!readPaths.some((path) => String(path).includes("audit")));
+    for (const changes of [
+      { pid: process.pid + 1 },
+      { envelopeId: "OTHER" },
+      { sourceCommit: "c".repeat(40) },
+    ]) {
+      const saved = lock;
+      lock = { ...lock, ...changes };
+      assert.throws(() => verifyAuthority(authority, descriptor, digest, options, 0), /lock/);
+      lock = saved;
+    }
+    const savedE = authority.E;
+    authority.E = put("oversized-E", {
+      ...row("E"),
+      ledgerLine: 2,
+      ledgerLineSha256: sha256(lines[1]),
+      padding: "A".repeat(1_048_576),
+    });
     assert.throws(
       () => verifyAuthority(authority, descriptor, digest, options, 0),
-      /canonical sandbox lock/,
+      /proof byte limit/,
     );
-    // Intercept only the canonical lock read: tests never access production lock files.
-    const fs = await import("node:fs");
-    const { syncBuiltinESMExports } = await import("node:module");
-    const { execFileSync } = await import("node:child_process");
-    const { dirname, resolve } = await import("node:path");
-    const common = execFileSync(
-      "git",
-      ["-C", process.cwd(), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-      { encoding: "utf8" },
-    ).trim();
-    authority.lockPath = resolve(
-      dirname(common),
-      "docs.local/runs/sandbox-locks",
-      `${options.project}.lock`,
+    authority.E = savedE;
+    assert.throws(
+      () =>
+        verifyAuthority(
+          { ...authority, lockPath: join(out, "copy.lock") },
+          descriptor,
+          digest,
+          options,
+          0,
+        ),
+      /canonical/,
     );
-    let lock = {
-      pid: process.pid,
-      envelopeId: authority.envelopeId,
-      sourceCommit: descriptor.head,
-      acquiredAt: "1970-01-01T00:00:00Z",
-    };
-    const originalRead = fs.default.readFileSync;
-    const intercept = mock.method(fs.default, "readFileSync", (path, ...args) =>
-      path === authority.lockPath ? Buffer.from(JSON.stringify(lock)) : originalRead(path, ...args),
-    );
-    syncBuiltinESMExports();
-    try {
-      assert.doesNotThrow(() => verifyAuthority(authority, descriptor, digest, options, 0));
-      assert.equal(verifyAuthority(authority, descriptor, digest, options, 0), authority);
-      const savedE = authority.E;
-      authority.E = put("oversized-E", { ...row("E"), padding: "A".repeat(1_048_576) });
-      assert.throws(
-        () => verifyAuthority(authority, descriptor, digest, options, 0),
-        /proof byte limit/,
-      );
-      authority.E = savedE;
-      for (const changes of [
-        { pid: process.pid + 1 },
-        { envelopeId: "OTHER" },
-        { sourceCommit: "c".repeat(40) },
-      ]) {
-        const originalLock = lock;
-        lock = { ...lock, ...changes };
-        assert.throws(() => verifyAuthority(authority, descriptor, digest, options, 0), /lock/);
-        lock = originalLock;
-      }
-    } finally {
-      intercept.mock.restore();
-      syncBuiltinESMExports();
-    }
-    authority.lockPath = join(out, "copied-lock.json");
     for (const changes of [
       { envelopeId: undefined },
       { expiresAt: "1970-01-01T00:00:00Z" },
@@ -887,15 +901,17 @@ test("authority checks actual proof hashes and full E/V scope before demanding a
       { iamConvergenceClaim: true },
       { sourceHead: "c".repeat(40) },
       { descriptorSha256: "d".repeat(64) },
+      { bInheritedGrants: "AUDITED" },
     ])
       assert.throws(
         () => verifyAuthority({ ...authority, ...changes }, descriptor, digest, options, 0),
         /authority/,
       );
     for (const kind of ["E", "V"]) {
+      const original = JSON.parse(fs.readFileSync(authority[kind].path));
       for (const changes of [
         { project: "demo-other" },
-        { runIds: ["0123456789ad", "0123456789ae"] },
+        { runIds: ["0123456789ad", "0123456789ac"] },
         { expiresAt: "2098-01-01T00:00:00Z" },
         { maxRequestsPerAttempt: 229 },
         { cleanupRequests: 601 },
@@ -905,10 +921,17 @@ test("authority checks actual proof hashes and full E/V scope before demanding a
         { sourceHead: "c".repeat(40) },
         { packetSha256: "f".repeat(64) },
       ]) {
-        const proof = put(`bad-${kind}`, { ...row(kind), ...changes });
+        const proof = put(`bad-${kind}`, { ...original, ...changes });
         assert.throws(
           () => verifyAuthority({ ...authority, [kind]: proof }, descriptor, digest, options, 0),
           new RegExp(`${kind} authority proof`),
+        );
+      }
+      for (const changes of [{ ledgerLine: 1 }, { ledgerLineSha256: "d".repeat(64) }]) {
+        const proof = put(`bad-ledger-${kind}`, { ...original, ...changes });
+        assert.throws(
+          () => verifyAuthority({ ...authority, [kind]: proof }, descriptor, digest, options, 0),
+          /ledger/,
         );
       }
       assert.throws(
@@ -934,28 +957,10 @@ test("authority checks actual proof hashes and full E/V scope before demanding a
         ),
       /packet digest/,
     );
-    const badAudit = {
-      ...put("bad-audit", {
-        project: "demo-other",
-        serviceAgent: principal,
-        noEffectiveGrantB: true,
-        envelopeId: authority.envelopeId,
-      }),
-      noEffectiveGrantB: true,
-    };
-    assert.throws(
-      () =>
-        verifyAuthority(
-          { ...authority, inheritedGrantAudit: badAudit },
-          descriptor,
-          digest,
-          options,
-          0,
-        ),
-      /audit mismatch/,
-    );
   } finally {
-    rmSync(out, { recursive: true });
+    intercept.mock.restore();
+    syncBuiltinESMExports();
+    fs.rmSync(out, { recursive: true });
   }
 });
 
@@ -1793,4 +1798,43 @@ test("native outbound frames stop when synchronous frame persistence consumes re
       }
     }
   }
+});
+
+test("signal during actual A wait restores both owned policies before cleanup without publishing", async () => {
+  const { EventEmitter } = await import("node:events");
+  const { createSignalSleep } = await import("./pubsub-production/record.mjs");
+  const { runCases } = await import("./pubsub-production/runner.mjs");
+  const fixture = await recordedWorld();
+  const signals = new EventEmitter();
+  const stopped = createSignalSleep({
+    signals,
+    wait: (ms) => {
+      if (ms === 900_000) {
+        queueMicrotask(() => signals.emit("SIGTERM"));
+        return new Promise(() => {});
+      }
+      return fixture.sleep(ms);
+    },
+  });
+  try {
+    const summary = await runCases({
+      ...fixture,
+      cases: selectCases(["dlq-grant-window"], "stream-dlq-v2"),
+      sleep: stopped.sleep,
+      cleanupSleep: fixture.sleep,
+      isStopping: stopped.isStopping,
+    });
+    assert.match(summary.stopped, /signal/);
+    assert.deepEqual(summary.iam.unsettled, []);
+    assert.equal(summary.iam.restored.length, 2);
+    assert.equal(fixture.requests.filter((request) => request.path.endsWith(":publish")).length, 0);
+    assert.equal(
+      fixture.requests.filter((request) => request.path.endsWith(":setIamPolicy")).length,
+      4,
+    );
+    assert.deepEqual(summary.cleanup.leftover, []);
+  } finally {
+    stopped.close();
+  }
+  assert.equal(signals.listenerCount("SIGTERM"), 0);
 });

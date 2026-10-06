@@ -225,3 +225,76 @@ for (let offset = 0; offset < rows.length; offset += 3) {
     }
   });
 }
+
+test("IAM production evidence accepts all24 recorded request variants and refuses the four missing forms", async () => {
+  const { assessIamExchange } = await import("./pubsub-production/iam.mjs");
+  assert.equal(typeof assessIamExchange, "function");
+  for (const row of rows) {
+    const result = assessIamExchange(row);
+    assert.equal(result.status, "recorded-shape", `${row.runId}:${row.n}`);
+    assert.ok(result.evidence.some((entry) => entry.runId === row.runId && entry.n === row.n));
+    for (const response of [
+      { ...row.response, status: 503 },
+      { ...row.response, unknown: true },
+      { status: 200, body: null },
+    ])
+      assert.equal(assessIamExchange({ ...row, response }).status, "needs-review");
+  }
+  for (let offset = 0; offset < rows.length; offset += 3) {
+    const [initial, set, readback] = rows.slice(offset, offset + 3);
+    const missing = [
+      {
+        ...initial,
+        request: {
+          ...initial.request,
+          path: initial.request.path + "?options.requestedPolicyVersion=3",
+        },
+      },
+      {
+        ...set,
+        request: { ...set.request, body: { policy: { ...set.request.body.policy, version: 3 } } },
+      },
+      {
+        ...set,
+        iamPhase: "restore",
+        request: { ...set.request, body: { policy: { ...set.request.body.policy, bindings: [] } } },
+      },
+      { ...initial, iamPhase: "restore-readback" },
+      { ...readback, response: { status: 200, body: { ...readback.response.body, version: 3 } } },
+    ];
+    for (const row of missing)
+      assert.deepEqual(assessIamExchange(row), { status: "needs-review", evidence: [] });
+  }
+});
+
+test("actual IAM ownership reports unrecorded evidence without guessing parity or blocking safe restoration", async () => {
+  const evidence = [];
+  const journal = [];
+  const [initial, set, readback] = rows.slice(0, 3);
+  const resource = initial.request.path.slice(4).split(":")[0];
+  const {
+    role,
+    members: [principal],
+  } = set.response.body.bindings[0];
+  const manager = iam.createIamOwnership({
+    journal: { write: (row) => journal.push(row) },
+    assertOwned: ownership.assertOwned,
+    reportEvidence: (row) => evidence.push(row),
+  });
+  const replay = replayClient([initial, set, readback]);
+  await manager.grant(replay.client, resource, role, principal);
+  replay.assertConsumed();
+  assert.equal(evidence.length, 3);
+  assert.ok(evidence.every((row) => row.assessment.status === "needs-review"));
+  const restore = replayClient([initial]);
+  assert.deepEqual(await manager.restore(restore.client), { restored: [resource], unsettled: [] });
+  assert.equal(evidence.length, 4);
+  assert.equal(evidence.at(-1).assessment.status, "needs-review");
+  assert.doesNotThrow(() =>
+    iam.createIamOwnership({
+      journal: { write() {} },
+      assertOwned: ownership.assertOwned,
+      replay: journal,
+    }),
+  );
+});

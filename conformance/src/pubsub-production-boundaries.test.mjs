@@ -129,14 +129,12 @@ test("the budgets and the options have their numbers", () => {
   assert.deepEqual(parseArgs([...base, "--transports", "rest,grpc"]).transports, ["rest", "grpc"]);
   assert.deepEqual(parseArgs([...base, "--transports", "rest"]).transports, ["rest"]);
   assert.throws(() => parseArgs([...base, "--transports", "grpc,x"]), /transports/);
-  const digits = (n) => ["--service-agent-project-number", "1".repeat(n)];
-  assert.ok(parseArgs([...base, ...digits(20)]).serviceAgent);
-  assert.ok(parseArgs([...base, ...digits(1)]).serviceAgent);
-  assert.throws(() => parseArgs([...base, ...digits(21)]), /digits/);
-  assert.throws(
-    () => parseArgs([...base, "--service-agent-project-number", ""]),
-    /needs a value|digits/,
-  );
+  const digits = (n) => ({ PUBSUB_SERVICE_AGENT_PROJECT_NUMBER: "1".repeat(n) });
+  assert.ok(parseArgs(base, digits(20)).serviceAgent);
+  assert.ok(parseArgs(base, digits(1)).serviceAgent);
+  assert.throws(() => parseArgs(base, digits(21)), /digits/);
+  assert.throws(() => parseArgs(base, { PUBSUB_SERVICE_AGENT_PROJECT_NUMBER: "" }), /digits/);
+  assert.throws(() => parseArgs([...base, "--service-agent-project-number", "123"]), /environment/);
 });
 
 /** A service that has nothing, whose lists can be made endless. */

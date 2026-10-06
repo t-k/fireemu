@@ -1,3 +1,60 @@
+import { readFileSync } from "node:fs";
+const recordedIam = JSON.parse(
+  readFileSync(new URL("./fixtures/recorded-v2-iam.json", import.meta.url)),
+);
+// This compares parsed request/response shapes only. It does not infer physical bytes or permission propagation.
+const evidenceShape = (value, key = "") => {
+  if (Array.isArray(value)) return value.map((item) => evidenceShape(item));
+  if (value !== null && typeof value === "object")
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((name) => [name, evidenceShape(value[name], name)]),
+    );
+  if (typeof value !== "string") return value;
+  if (key === "etag" && /^[A-Za-z0-9+/]+={0,2}$/.test(value))
+    return (
+      "A".repeat(value.replace(/=+$/, "").length) +
+      "=".repeat(value.length - value.replace(/=+$/, "").length)
+    );
+  if (/^serviceAccount:service-\d{12}@gcp-sa-pubsub\.iam\.gserviceaccount\.com$/.test(value))
+    return "serviceAccount:service-123456789012@gcp-sa-pubsub.iam.gserviceaccount.com";
+  if (key === "path") {
+    const match =
+      /^\/v1\/projects\/[^/]+\/(topics|subscriptions)\/[^/:?]+:(getIamPolicy|setIamPolicy)$/.exec(
+        value,
+      );
+    if (match) return `${match[1]}:${match[2]}`;
+  }
+  return value;
+};
+export function assessIamExchange(row) {
+  const unknown = { status: "needs-review", evidence: [] };
+  if (
+    row.iamPhase?.startsWith("restore") ||
+    row.response?.status !== 200 ||
+    row.response?.unknown === true ||
+    row.response?.ok === false
+  )
+    return unknown;
+  const shape = JSON.stringify(
+    evidenceShape({
+      request: row.request,
+      response: { status: row.response.status, body: row.response.body },
+    }),
+  );
+  const matching = recordedIam.filter(
+    (item) =>
+      JSON.stringify(evidenceShape({ request: item.request, response: item.response })) === shape,
+  );
+  return matching.length
+    ? {
+        status: "recorded-shape",
+        evidence: matching.map(({ runId, line, n }) => ({ runId, line, n })),
+      }
+    : unknown;
+}
+
 // Resource-local CAS edits. An ambiguous write is never retried or treated as a clean restore.
 export const IAM_WAIT_MS = 900_000;
 export const IAM_CONVERGENCE_CLAIM = false;
@@ -60,8 +117,23 @@ export function createIamOwnership({
   assertOwned,
   now = () => performance.now(),
   replay = [],
+  reportEvidence = () => {},
 }) {
   const entries = [];
+  const callPolicy = async (client, resource, phase, policy) => {
+    const request =
+      policy === undefined
+        ? { method: "GET", path: `/v1/${resource}:getIamPolicy?options.requestedPolicyVersion=3` }
+        : { method: "POST", path: `/v1/${resource}:setIamPolicy`, body: { policy } };
+    const response =
+      policy === undefined
+        ? await client.getIamPolicy(resource, { requestedPolicyVersion: 3 })
+        : await client.setIamPolicy(resource, policy);
+    const assessment = assessIamExchange({ request, response, iamPhase: phase });
+    reportEvidence({ resource, iamPhase: phase, assessment });
+    return response;
+  };
+
   const persist = (row) => journal.write({ ...row, at: new Date().toISOString() });
   const validScope = (resource, role, principal) =>
     ((role === "roles/pubsub.subscriber" && /\/subscriptions\/[^/]+$/.test(resource)) ||
@@ -144,7 +216,7 @@ export function createIamOwnership({
         entries.some((entry) => entry.resource === resource)
       )
         throw new Error("invalid own grant scope");
-      const before = await client.getIamPolicy(resource, { requestedPolicyVersion: 3 });
+      const before = await callPolicy(client, resource, "grant");
       if (!complete(before)) throw new Error("grant policy read needs-review");
       const { policy, added } = addOwnBinding(before.body, role, principal);
       if (!added) throw new Error("grant binding preexists; not owned by this run");
@@ -158,13 +230,13 @@ export function createIamOwnership({
         before: before.body,
         requested: policy,
       });
-      const written = await client.setIamPolicy(resource, policy);
+      const written = await callPolicy(client, resource, "grant", policy);
       if (!confirmed(written, policy)) {
         persist({ phase: "grant-unknown", resource });
         throw new Error("grant answer ambiguous; retain lock for coordinator recovery");
       }
       const grantedAt = now();
-      const check = await client.getIamPolicy(resource, { requestedPolicyVersion: 3 });
+      const check = await callPolicy(client, resource, "grant");
       if (
         !complete(check) ||
         !sameBindings(readPolicy(check.body), policy) ||
@@ -192,7 +264,7 @@ export function createIamOwnership({
           continue;
         }
         try {
-          const before = await client.getIamPolicy(entry.resource, { requestedPolicyVersion: 3 });
+          const before = await callPolicy(client, entry.resource, "restore");
           if (!complete(before)) throw new Error("restore policy read needs-review");
           const current = readPolicy(before.body);
           const next = removeOwnBinding(current, entry.role, entry.principal);
@@ -209,9 +281,9 @@ export function createIamOwnership({
               before: current,
               requested: next,
             });
-            written = await client.setIamPolicy(entry.resource, next);
+            written = await callPolicy(client, entry.resource, "restore", next);
             if (!confirmed(written, next)) throw new Error("restore answer ambiguous");
-            check = await client.getIamPolicy(entry.resource, { requestedPolicyVersion: 3 });
+            check = await callPolicy(client, entry.resource, "restore");
             if (
               !complete(check) ||
               !sameBindings(readPolicy(check.body), next) ||

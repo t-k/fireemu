@@ -21,6 +21,7 @@ const require = createRequire(import.meta.url);
 export const SOURCE_FILES = Object.freeze([
   "conformance/package.json",
   "conformance/pnpm-lock.yaml",
+  "conformance/src/pubsub-production/fixtures/recorded-v2-iam.json",
   ...readdirSync(resolve(sourceRoot, "conformance/src/pubsub-production"))
     .filter((name) => name.endsWith(".mjs"))
     .sort()
@@ -175,7 +176,19 @@ export function verifyDescriptor(descriptor) {
 
 // The coordinator creates the canonical file with O_EXCL immediately before launch.
 // It retains the file for recovery and releases it only after matching-envelope PID absence.
-export function verifyLiveLock({ path, expectedPath }, binding) {
+const pidAlive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") return false;
+    throw error;
+  }
+};
+export function verifyLiveLock(
+  { path, expectedPath, cleanupOnly = false, pidAlive: alive = pidAlive },
+  binding,
+) {
   if (typeof path !== "string" || resolve(path) !== expectedPath)
     throw new Error("canonical sandbox lock required");
   const bytes = readFileSync(path);
@@ -185,7 +198,9 @@ export function verifyLiveLock({ path, expectedPath }, binding) {
     lock === null ||
     typeof lock !== "object" ||
     Array.isArray(lock) ||
-    lock.pid !== process.pid ||
+    !Number.isSafeInteger(lock.pid) ||
+    lock.pid <= 0 ||
+    (lock.pid !== process.pid && (!cleanupOnly || alive(lock.pid))) ||
     lock.envelopeId !== binding.envelopeId ||
     lock.sourceCommit !== binding.sourceCommit ||
     typeof lock.acquiredAt !== "string" ||
@@ -224,6 +239,45 @@ export function claimSourceRun({ out, runId }) {
   }
 }
 
+const proofScopeFields = [
+  "kind",
+  "state",
+  "taskId",
+  "envelopeId",
+  "sourceHead",
+  "descriptorSha256",
+  "packetSha256",
+  "project",
+  "runIds",
+  "runOutputs",
+  "expiresAt",
+  "maxRequestsPerAttempt",
+  "cleanupRequests",
+  "a2Requests",
+  "cleanupRecovery",
+  "bInheritedGrants",
+];
+export const proofScopeDigest = (row) =>
+  sha256(JSON.stringify(Object.fromEntries(proofScopeFields.map((key) => [key, row[key]]))));
+export function verifyLedgerProof(row, ledgerPath) {
+  if (
+    !Number.isSafeInteger(row.ledgerLine) ||
+    row.ledgerLine <= 0 ||
+    !/^[a-f0-9]{64}$/.test(row.ledgerLineSha256 ?? "")
+  )
+    throw new Error("ledger line binding required");
+  const line = readFileSync(ledgerPath, "utf8").split("\n")[row.ledgerLine - 1];
+  if (
+    typeof line !== "string" ||
+    sha256(line) !== row.ledgerLineSha256 ||
+    !line.includes(`| PUBSUB-STREAM-DLQ ${row.kind} |`) ||
+    !line.includes("decision=APPROVE;") ||
+    !line.includes(`envelopeId=${row.envelopeId};`) ||
+    !line.includes(`scopeSha256=${proofScopeDigest(row)} `)
+  )
+    throw new Error("ledger line does not approve the exported scope");
+}
+
 export function verifyAuthority(
   authority,
   descriptor,
@@ -258,7 +312,7 @@ export function verifyAuthority(
       authority.serviceAgent ?? "",
     ) ||
     authority.serviceAgent !== options.serviceAgent ||
-    authority.inheritedGrantAudit?.noEffectiveGrantB !== true
+    authority.bInheritedGrants !== "UNAUDITED"
   )
     throw new Error("source-bound coordinator authority missing or mismatched");
   if (
@@ -271,6 +325,11 @@ export function verifyAuthority(
   verifyRunOutput(authority, options);
   const packet = readJson(authority.packetPath);
   if (packet.digest !== authority.packetSha256) throw new Error("packet digest mismatch");
+  const commonGit = execFileSync(
+    "git",
+    ["-C", sourceRoot, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+    { encoding: "utf8" },
+  ).trim();
   for (const kind of ["E", "V"]) {
     const proof = readJson(authority[kind]?.path);
     const row = proof.value;
@@ -290,31 +349,26 @@ export function verifyAuthority(
       row.cleanupRequests !== 600 ||
       row.a2Requests !== 600 ||
       JSON.stringify(row.runOutputs) !== JSON.stringify(authority.runOutputs) ||
+      row.bInheritedGrants !== authority.bInheritedGrants ||
       JSON.stringify(row.cleanupRecovery) !== JSON.stringify(authority.cleanupRecovery)
     )
       throw new Error(`${kind} authority proof mismatch`);
+    verifyLedgerProof(
+      row,
+      resolve(dirname(commonGit), "docs.local/instructions/owner-decisions.md"),
+    );
   }
-  const audit = readJson(authority.inheritedGrantAudit.path);
-  if (
-    audit.digest !== authority.inheritedGrantAudit.sha256 ||
-    audit.value.project !== options.project ||
-    audit.value.serviceAgent !== options.serviceAgent ||
-    audit.value.noEffectiveGrantB !== true ||
-    audit.value.envelopeId !== authority.envelopeId
-  )
-    throw new Error("B inherited-grant audit mismatch");
-  const commonGit = execFileSync(
-    "git",
-    ["-C", sourceRoot, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-    { encoding: "utf8" },
-  ).trim();
   const canonical = resolve(
     dirname(commonGit),
     "docs.local/runs/sandbox-locks",
     `${options.project}.lock`,
   );
   verifyLiveLock(
-    { path: authority.lockPath, expectedPath: canonical },
+    {
+      path: authority.lockPath,
+      expectedPath: canonical,
+      cleanupOnly: options.cleanupOnly === true,
+    },
     { envelopeId: authority.envelopeId, sourceCommit: descriptor.head },
   );
   if (authority.runIds[1] === options.runId) {

@@ -234,7 +234,7 @@ async function runDlq(ctx, grant) {
   });
   // These are observation ceilings. No local count is interpreted as the service's cutoff or reset.
   for (let poll = 1; poll <= 9; poll += 1) {
-    const reply = await c.pull(source, { maxMessages: 1, returnImmediately: true });
+    const reply = await c.pull(source, { maxMessages: 1, returnImmediately: false });
     ctx.note("dlq-source-poll", {
       poll,
       code: reply.code,
@@ -246,7 +246,7 @@ async function runDlq(ctx, grant) {
     if (poll < 9) await ctx.sleep(1000);
   }
   for (let poll = 1; poll <= 36; poll += 1) {
-    const reply = await c.pull(sink, { maxMessages: 1, returnImmediately: true });
+    const reply = await c.pull(sink, { maxMessages: 1, returnImmediately: false });
     ctx.note("dlq-sink-poll", {
       poll,
       code: reply.code,
@@ -259,7 +259,7 @@ async function runDlq(ctx, grant) {
     }
     if (poll < 36) await ctx.sleep(5000);
   }
-  const final = await c.pull(source, { maxMessages: 1, returnImmediately: true });
+  const final = await c.pull(source, { maxMessages: 1, returnImmediately: false });
   ctx.note("dlq-source-final", {
     code: final.code,
     unknown: final.unknown,
@@ -292,7 +292,7 @@ export const restLayoutRoutes = {
     let ackId;
     for (let poll = 0; poll < 3 && ackId === undefined; poll += 1) {
       const received = readMessages(
-        await c.pull(subscription, { maxMessages: 1, returnImmediately: true }),
+        await c.pull(subscription, { maxMessages: 1, returnImmediately: false }),
         "layout Pull",
       );
       if (received.length) ackId = received[0].ackId;
@@ -316,7 +316,10 @@ export const dlqGrantWindow = {
   run: (ctx) => runDlq(ctx, true),
 };
 export const STREAM_DLQ_V2_CASES = Object.freeze([
-  ...STREAM_DLQ_CASES.filter((item) => item.id !== "dlq-grant-prerequisite"),
+  deletedCursor,
+  ...STREAM_DLQ_CASES.filter(
+    (item) => item.id !== "dlq-grant-prerequisite" && item.id !== "deleted-cursor",
+  ),
   restLayoutRoutes,
   dlqGrantWindow,
 ]);

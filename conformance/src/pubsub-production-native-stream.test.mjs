@@ -277,6 +277,14 @@ test("native raw frames round-trip long ACK bytes and unknown protobuf fields wi
     rawFrame(recorded[2]),
     encode(Request, { modifyDeadlineAckIds: [ackId], modifyDeadlineSeconds: [-1] }),
   );
+  assert.ok(
+    recorded[1].body?.receivedMessages?.[0]?.ackId?.omitted,
+    "inbound ACK metadata must be sanitized",
+  );
+  assert.ok(
+    recorded[2].body?.modifyDeadlineAckIds?.[0]?.omitted,
+    "outbound ACK metadata must be sanitized",
+  );
   assert.equal(recorded[1].body.receivedMessages[0].ackId.omitted.length, ackId.length);
   assert.equal(recorded[2].body.modifyDeadlineAckIds[0].omitted.length, ackId.length);
   for (const line of recorded) {
@@ -296,6 +304,7 @@ test("native unreadable bounded protobuf frame remains replayable and unknown", 
   assert.equal(reply.reason, "unreadable-frame");
   assert.equal(reply.inboundFrames, 1);
   const line = lines.find((entry) => entry.note === "stream-frame" && entry.direction === "in");
+  assert.ok(line, "unreadable raw frame metadata must be retained");
   assert.equal(line.unreadable, true);
   assert.deepEqual(rawFrame(line), malformed);
 });

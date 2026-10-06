@@ -3,7 +3,7 @@
 // 404s read back. It sends nothing to a push endpoint (no publish to a topic with a push subscription).
 //
 //   node record.mjs --target emulator --out <dir>                       (PUBSUB_EMULATOR_HOST)
-//   node record.mjs --target production --project <id> --out <dir> [--service-agent-project-number <n>]
+//   node record.mjs --target production --project <id> --out <dir>
 //   node record.mjs --target production --project <id> --out <dir> --cleanup-only --run-id <12 hex>
 //
 // Exit codes: 0 done, 1 cleanup left something, 2 usage, 3 stopped clean on a missing precondition or a
@@ -29,6 +29,8 @@ import { createTokenProvider } from "./token.mjs";
 import { createPhaseLimit } from "./limits.mjs";
 import { admitV2, sha256, claimSourceRun } from "./admission.mjs";
 import { createIamOwnership, IAM_WAIT_MS } from "./iam.mjs";
+import { setTimeout as sleepTimer } from "node:timers/promises";
+import { StopClean } from "./cases/support.mjs";
 import { IAM_PREREQUISITE } from "./cases/stream-dlq.mjs";
 
 const PRODUCTION = { rest: "https://pubsub.googleapis.com", grpc: "pubsub.googleapis.com:443" };
@@ -76,9 +78,12 @@ export function parseArgs(argv, env = {}) {
     if (options.transports.some((name) => name !== "rest" && name !== "grpc"))
       throw new Error("--transports is rest, grpc or both");
   }
-  const agent = take("service-agent-project-number");
+  if (take("service-agent-project-number") !== undefined)
+    throw new Error("service agent number must come from environment, never argv");
+  const agent = env.PUBSUB_SERVICE_AGENT_PROJECT_NUMBER;
   if (agent !== undefined) {
-    if (!/^\d{1,20}$/.test(agent)) throw new Error("--service-agent-project-number is digits");
+    if (typeof agent !== "string" || !/^\d{1,20}$/.test(agent))
+      throw new Error("service agent environment value must be digits");
     options.serviceAgent = `serviceAccount:service-${agent}@gcp-sa-pubsub.iam.gserviceaccount.com`;
   }
   options.quotaProject = take("quota-project");
@@ -150,7 +155,32 @@ export function summarize({ options, capture, summary }) {
   };
 }
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms, signal) => sleepTimer(ms, undefined, { signal });
+export function createSignalSleep({ wait = sleep, signals = process } = {}) {
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  for (const name of ["SIGINT", "SIGTERM"]) signals.on(name, stop);
+  return {
+    isStopping: () => controller.signal.aborted,
+    async sleep(ms) {
+      if (controller.signal.aborted) throw new StopClean("stopped by a signal");
+      let cancel;
+      const stopped = new Promise((_, reject) => {
+        cancel = () => reject(new StopClean("stopped by a signal"));
+        controller.signal.addEventListener("abort", cancel, { once: true });
+      });
+      try {
+        await Promise.race([wait(ms, controller.signal), stopped]);
+        if (controller.signal.aborted) throw new StopClean("stopped by a signal");
+      } finally {
+        controller.signal.removeEventListener("abort", cancel);
+      }
+    },
+    close() {
+      for (const name of ["SIGINT", "SIGTERM"]) signals.removeListener(name, stop);
+    },
+  };
+}
 
 /** The time of the last line of a capture, which the later run waits from. */
 function lastLineTime(path) {
@@ -356,6 +386,7 @@ export async function main(
       assertOwned: (name) => ownership.assertOwned(name),
       now: deps.monotonicNow,
       replay,
+      reportEvidence: (data) => capture.note("iam-evidence", data),
     });
     options.monotonicNow = deps.monotonicNow;
   }
@@ -367,8 +398,7 @@ export async function main(
     caseId: "cleanup",
     ledger,
   });
-  let stopping = false;
-  for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => (stopping = true));
+  const signalWait = createSignalSleep({ wait, signals: deps.signals ?? process });
   capture.note("run-start", {
     runId: options.runId,
     target: options.target,
@@ -411,12 +441,13 @@ export async function main(
         pushState,
         capture,
         options,
-        sleep: wait,
+        sleep: signalWait.sleep,
         ledger,
-        isStopping: () => stopping,
+        isStopping: signalWait.isStopping,
         cleanupSleep: cleanupPhase === null ? wait : cleanupPhase.sleep(wait),
       });
   } finally {
+    signalWait.close();
     grpc.close();
     iamJournal?.close();
   }

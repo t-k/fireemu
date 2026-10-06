@@ -36,26 +36,27 @@ test("the arguments: an emulator target needs a host, a production target a proj
     /--out is required/,
   );
   assert.throws(() => parseArgs(["--out", "o"]), /--target/);
-  const production = parseArgs([
-    "--target",
-    "production",
-    "--project",
-    "sandbox-project",
-    "--out",
-    "o",
-    "--max-requests",
-    "50",
-    "--only",
-    "lifecycle,names",
-    "--transports",
-    "grpc",
-    "--run-id",
-    RUN,
-    "--service-agent-project-number",
-    "123",
-    "--quota-project",
-    "q-1",
-  ]);
+  const production = parseArgs(
+    [
+      "--target",
+      "production",
+      "--project",
+      "sandbox-project",
+      "--out",
+      "o",
+      "--max-requests",
+      "50",
+      "--only",
+      "lifecycle,names",
+      "--transports",
+      "grpc",
+      "--run-id",
+      RUN,
+      "--quota-project",
+      "q-1",
+    ],
+    { PUBSUB_SERVICE_AGENT_PROJECT_NUMBER: "123" },
+  );
   assert.equal(production.production, true);
   assert.deepEqual(
     [production.maxRequests, production.only, production.transports, production.runId],
@@ -75,7 +76,7 @@ test("bad arguments are refused", () => {
     [["--max-requests", "x"], /positive integer/],
     [["--run-id", "xyz"], /12 hex/],
     [["--transports", "rest,http"], /transports/],
-    [["--service-agent-project-number", "12a"], /digits/],
+    [["--service-agent-project-number", "12a"], /environment/],
     [["--nope", "1"], /unknown option --nope/],
     [["--only"], /needs a value/],
     [["stray"], /unexpected argument/],

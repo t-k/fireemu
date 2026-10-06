@@ -899,7 +899,10 @@ mod tests {
     #[test]
     fn strict_conversion_does_not_add_missing_data_content_type() {
         let mut event = proto();
-        event["attributes"].as_object_mut().unwrap().remove("datacontenttype");
+        event["attributes"]
+            .as_object_mut()
+            .unwrap()
+            .remove("datacontenttype");
         let delivered = super::convert_strict(&event).unwrap();
         assert_eq!(delivered.event.get("datacontenttype"), None);
     }

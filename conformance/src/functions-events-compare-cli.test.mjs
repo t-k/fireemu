@@ -250,23 +250,31 @@ test("the CLI pins the comparator when it is given its commit and tree, and refu
     tree,
   ]);
   assert.deepEqual(document.comparator, { commit, tree });
-  await assert.rejects(
-    runCli([...argv, "--comparator-commit", commit]),
-    /--comparator-commit and --comparator-tree/,
+  // Digits and every hex letter are fine, zero included.
+  const mixed = "0123456789abcdef0123456789abcdef01234567";
+  assert.deepEqual(
+    (await runCli([...argv, "--comparator-commit", mixed, "--comparator-tree", mixed])).comparator,
+    { commit: mixed, tree: mixed },
   );
-  await assert.rejects(
-    runCli([...argv, "--comparator-tree", tree]),
-    /--comparator-commit and --comparator-tree/,
-  );
-  for (const bad of ["", "A".repeat(40), "a".repeat(39), "a".repeat(41), `${commit} `]) {
+  const together = /--comparator-commit and --comparator-tree are given together/;
+  await assert.rejects(runCli([...argv, "--comparator-commit", commit]), together);
+  await assert.rejects(runCli([...argv, "--comparator-tree", tree]), together);
+  for (const bad of [
+    "",
+    "A".repeat(40),
+    "a".repeat(39),
+    "a".repeat(41),
+    `${commit} `,
+    "g".repeat(40),
+  ]) {
     await assert.rejects(
       runCli([...argv, "--comparator-commit", bad, "--comparator-tree", tree]),
-      /--comparator-commit/,
+      /^Error: --comparator-commit must be a 40-digit lowercase hex id$/,
       JSON.stringify(bad),
     );
     await assert.rejects(
       runCli([...argv, "--comparator-commit", commit, "--comparator-tree", bad]),
-      /--comparator-tree/,
+      /^Error: --comparator-tree must be a 40-digit lowercase hex id$/,
       JSON.stringify(bad),
     );
   }

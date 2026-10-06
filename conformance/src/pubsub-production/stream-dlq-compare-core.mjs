@@ -316,13 +316,51 @@ export function completeTrace(id, requests) {
   return poll(source) && index === requests.length;
 }
 
+export function recordedRequestInstant(row) {
+  const end = Date.parse(row.at);
+  if (!Number.isFinite(end) || !Number.isSafeInteger(row.ms) || row.ms < 0)
+    throw new Error("invalid recorded request time or duration");
+  return end - row.ms;
+}
+
+export function recordingTimingDebts(capture) {
+  const debts = [];
+  const starts = capture.filter((row) => row.note === "run-start");
+  const ends = capture.filter((row) => row.note === "run-end");
+  if (
+    starts.length !== 1 ||
+    ends.length !== 1 ||
+    capture[0] !== starts[0] ||
+    capture.at(-1) !== ends[0]
+  )
+    debts.push("run boundary does not enclose recording");
+  let previousAt = -Infinity;
+  let previousRequestEnd = Date.parse(starts[0]?.at);
+  for (const row of capture) {
+    const at = Date.parse(row.at);
+    if (!Number.isFinite(at) || at < previousAt) debts.push("capture timestamp chronology invalid");
+    previousAt = at;
+    if (row.request === undefined || row.response === undefined) continue;
+    try {
+      const start = recordedRequestInstant(row);
+      if (!Number.isFinite(previousRequestEnd) || start < previousRequestEnd)
+        debts.push("recorded request start chronology invalid");
+      previousRequestEnd = at;
+    } catch (error) {
+      debts.push(error.message);
+    }
+  }
+  return [...new Set(debts)];
+}
+
 export async function compareRecording(
   { capture, issued, iam },
   { replay, frameVerified = () => false } = {},
 ) {
   const bindings = createBindings(),
     rows = [],
-    debts = [];
+    debts = recordingTimingDebts(capture);
+  const invalidTiming = debts.length > 0;
   const metadata = capture.find((r) => r.note === "run-start");
   if (metadata?.suite !== "stream-dlq-v2") debts.push("missing stream-dlq-v2 run metadata");
   const sent = new Map();
@@ -372,6 +410,25 @@ export async function compareRecording(
       after = Date.parse(intent.answerAt);
     if (![at, before, after].every(Number.isFinite) || before > at || at > after)
       debts.push("issued/capture ordering invalid");
+    const row = exchanges[0],
+      response = row.response;
+    const success =
+      row.transport === "rest"
+        ? response.status >= 200 && response.status < 300
+        : canonicalStatus(response.code) === "OK";
+    const conflict =
+      row.transport === "rest"
+        ? response.status === 409
+        : canonicalStatus(response.code) === "ALREADY_EXISTS";
+    const expectedKind =
+      row.unknown || response.unknown
+        ? "unknown"
+        : success
+          ? "ok"
+          : conflict
+            ? "conflict"
+            : "error";
+    if (intent.kind !== expectedKind) debts.push("contradictory issued/capture answer");
   }
   let iamStructure = "empty";
   try {
@@ -410,6 +467,8 @@ export async function compareRecording(
     if (dispatch.length !== 1 || capture.indexOf(dispatch[0]) >= capture.indexOf(original))
       debts.push("request dispatch provenance incomplete");
     if (/^(get|set)IamPolicy$/.test(original.op)) judgment = judgeRow(original);
+    else if (invalidTiming)
+      judgment = result("NOT_COMPARABLE", "recording timing provenance invalid");
     else {
       try {
         if (/^create|^delete/.test(original.op)) {

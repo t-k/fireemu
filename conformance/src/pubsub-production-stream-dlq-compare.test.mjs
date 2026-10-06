@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tempDir } from "./test-tmpdir.mjs";
@@ -8,7 +8,7 @@ import { tempDir } from "./test-tmpdir.mjs";
 import * as core from "./pubsub-production/stream-dlq-compare-core.mjs";
 import * as cli from "./pubsub-production/stream-dlq-compare.mjs";
 import { protos } from "@google-cloud/pubsub";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 const exchange = (body, extra = {}) => ({
   n: 1,
@@ -222,13 +222,22 @@ test("IAM recorded get/set routes remain structural needs-review without any loc
   );
   let dispatched = 0;
   const capture = [
-    { note: "run-start", suite: "stream-dlq-v2", project: "demo-v2", runId: "0123456789ab" },
+    {
+      note: "run-start",
+      suite: "stream-dlq-v2",
+      project: "demo-v2",
+      runId: "0123456789ab",
+      at: "2026-10-05T00:00:00Z",
+    },
     ...fixture.map((r, i) => ({
       ...r,
       transport: "rest",
       n: i + 1,
       case: "dlq-grant-window/rest",
+      at: "2026-10-05T00:00:00Z",
+      ms: 0,
     })),
+    { note: "run-end", at: "2026-10-05T00:00:00Z" },
   ];
   const report = await core.compareRecording(
     { capture, issued: [], iam: [] },
@@ -398,6 +407,66 @@ const echoReplay = async (original, request) => {
   return structuredClone(original);
 };
 
+test("closed run boundaries and valid chronology gate replay and MATCH", async () => {
+  for (const alter of [
+    (data) => data.capture.unshift(data.capture.pop()),
+    (data) => data.capture.splice(-2, 0, data.capture.pop()),
+    (data) => data.capture.splice(-1, 0, data.capture.shift()),
+    (data) =>
+      (data.capture.find((r) => r.note === "request-dispatch").at = "2026-10-06T00:00:01.000Z"),
+    (data) =>
+      (data.capture.find((r) => r.op === "seek" && r.response).at = "2020-01-01T00:00:00.000Z"),
+    (data) => (data.capture.find((r) => r.op === "seek" && r.response).ms = -1000),
+    (data) => (data.capture.find((r) => r.op === "seek" && r.response).ms = Infinity),
+    (data) => (data.capture.find((r) => r.op === "seek" && r.response).ms = 1000),
+    (data) => (data.capture.find((r) => r.op === "seek" && r.response).at = "invalid"),
+  ]) {
+    const input = layoutInput();
+    alter(input);
+    let replayed = 0;
+    const report = await core.compareRecording(input, {
+      replay: async (row) => {
+        replayed++;
+        return row;
+      },
+    });
+    assert.equal(
+      report.cases.find((r) => r.case === "rest-layout-routes").verdict,
+      "NOT_COMPARABLE",
+    );
+    assert.equal(replayed, 0, "invalid provenance must be refused before local dispatch");
+  }
+});
+
+test("a delayed request replays its measured start without erasing its duration", async () => {
+  for (let seed = 0; seed < 64; seed++) {
+    const start = Date.UTC(2026, 9, 5) + seed * 3_600_000;
+    const duration = (seed * 37100) % 900_001;
+    assert.equal(
+      core.recordedRequestInstant({ at: new Date(start + duration).toISOString(), ms: duration }),
+      start,
+    );
+  }
+  for (const ms of [-1, Infinity, NaN, 0.5, undefined])
+    assert.throws(
+      () => core.recordedRequestInstant({ at: "2026-10-05T00:00:00Z", ms }),
+      /invalid recorded/,
+    );
+  assert.throws(() => core.recordedRequestInstant({ at: "invalid", ms: 0 }), /invalid recorded/);
+  const input = layoutInput();
+  const dispatch = input.capture.find((r) => r.op === "seek" && r.note === "request-dispatch");
+  const seek = input.capture.find((r) => r.op === "seek" && r.response);
+  dispatch.at = "2026-10-05T00:00:02.001Z";
+  seek.at = "2026-10-05T00:00:04.000Z";
+  seek.ms = 2000;
+  input.capture.slice(-2).forEach((r) => {
+    r.at = seek.at;
+  });
+  assert.equal(core.recordedRequestInstant(seek), Date.parse("2026-10-05T00:00:02.000Z"));
+  const report = await core.compareRecording(input, { replay: echoReplay });
+  assert.equal(report.cases.find((r) => r.case === "rest-layout-routes").verdict, "MATCH");
+});
+
 test("complete layout trace is comparable while reordered boundaries and missing dispatch stay incomplete", async () => {
   const input = layoutInput();
   const baseline = await core.compareRecording(input, { replay: echoReplay });
@@ -532,18 +601,26 @@ test("native unknown terminal status cannot become a frame-layout divergence", a
     step: "stream",
     op: "streamingPull",
     transport: "grpc",
+    ms: 0,
     unknown: true,
     request: { rpc: "Subscriber/StreamingPull", frames: [{}] },
     response: { code: "DEADLINE_EXCEEDED", unknown: true },
   };
   const capture = [
-    { note: "run-start", suite: "stream-dlq-v2", project: "demo-v2", runId: "0123456789ab" },
+    {
+      note: "run-start",
+      suite: "stream-dlq-v2",
+      project: "demo-v2",
+      runId: "0123456789ab",
+      at: source.at,
+    },
     {
       note: "request-dispatch",
       case: source.case,
       step: source.step,
       op: source.op,
       transport: source.transport,
+      at: source.at,
     },
     {
       note: "stream-frame",
@@ -552,8 +629,10 @@ test("native unknown terminal status cannot become a frame-layout divergence", a
       direction: "out",
       body: {},
       bodyBytes: 0,
+      at: source.at,
     },
     source,
+    { note: "run-end", at: source.at },
   ];
   const report = await core.compareRecording(
     { capture, issued: [], iam: [] },
@@ -652,6 +731,95 @@ test(
   },
 );
 
+test(
+  "interrupting the comparison launcher stops its pinned exec and worker",
+  {
+    skip:
+      !process.env.FIREEMU_PUBSUB_COMPARE_BUILD_PIN || !process.env.FIREEMU_PUBSUB_COMPARE_FIXTURE,
+  },
+  async () => {
+    const fixture = process.env.FIREEMU_PUBSUB_COMPARE_FIXTURE;
+    const pins = JSON.parse(readFileSync(join(fixture, "pins.json")));
+    const pin = JSON.parse(readFileSync(process.env.FIREEMU_PUBSUB_COMPARE_BUILD_PIN));
+    const out = join(tempDir("pubsub-compare-interrupt-"), "output");
+    const args = [];
+    for (const kind of ["capture", "issued", "iam"])
+      args.push(`--${kind}`, join(fixture, `${kind}.jsonl`), `--${kind}-sha256`, pins[kind]);
+    args.push("--build-pin", process.env.FIREEMU_PUBSUB_COMPARE_BUILD_PIN, "--out", out);
+    const child = spawn(
+      process.execPath,
+      [
+        fileURLToPath(new URL("./pubsub-production/stream-dlq-compare.mjs", import.meta.url)),
+        ...args,
+      ],
+      { stdio: "ignore" },
+    );
+    const exited = new Promise((resolveExit) => child.once("exit", (code) => resolveExit(code)));
+    const delay = (ms) => new Promise((done) => setTimeout(done, ms));
+    const alive = (pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        if (error.code === "ESRCH") return false;
+        throw error;
+      }
+    };
+    const until = async (predicate, ms) => {
+      const end = Date.now() + ms;
+      while (!predicate() && Date.now() < end) await delay(10);
+      return predicate();
+    };
+    let runtime;
+    try {
+      assert.ok(
+        await until(() => existsSync(join(out, "runtime-start.json")), 5000),
+        "worker startup receipt required",
+      );
+      runtime = JSON.parse(readFileSync(join(out, "runtime-start.json")));
+      const identity = execFileSync(
+        "ps",
+        ["-ww", "-p", String(runtime.serverPid), "-o", "ppid=,comm=,args="],
+        { encoding: "utf8" },
+      );
+      assert.ok(
+        identity.trim().startsWith(String(child.pid)) &&
+          identity.includes(`${pin.path} exec --config`),
+      );
+      assert.ok(alive(runtime.workerPid));
+      child.kill("SIGTERM");
+      assert.ok(
+        await until(() => child.exitCode !== null || child.signalCode !== null, 5000),
+        "launcher must settle after interruption",
+      );
+      assert.equal(
+        await exited,
+        143,
+        "launcher must forward SIGTERM and retain the supervised child status",
+      );
+      assert.ok(
+        await until(() => !alive(runtime.serverPid) && !alive(runtime.workerPid), 1500),
+        "owned exec and worker must both stop",
+      );
+    } finally {
+      if (alive(child.pid)) child.kill("SIGTERM");
+      // A failing regression also cleans only the still-owned, identity-checked exec PID.
+      if (runtime && alive(runtime.serverPid)) {
+        const identity = execFileSync(
+          "ps",
+          ["-ww", "-p", String(runtime.serverPid), "-o", "comm=,args="],
+          { encoding: "utf8" },
+        );
+        if (!identity.includes(`${pin.path} exec --config`))
+          throw new Error("cleanup exec identity changed");
+        process.kill(runtime.serverPid, "SIGTERM");
+        assert.ok(await until(() => !alive(runtime.serverPid) && !alive(runtime.workerPid), 12000));
+      }
+      assert.ok(await until(() => !alive(child.pid), 12000));
+    }
+  },
+);
+
 test("unknown HTTP answers and omitted local responses remain not comparable", () => {
   assert.equal(core.judgeRow(exchange({ raw: "HTML" }), exchange({})).verdict, "NOT_COMPARABLE");
   for (const status of [199, 302, 499, 500, null])
@@ -706,6 +874,37 @@ test("case gaps retain precedence while journal and boundary debt remains visibl
       "NOT_COMPARABLE",
     );
   }
+});
+
+test("a contradictory issued answer also marks the individual exchange not comparable", async () => {
+  const input = layoutInput();
+  input.issued[1].kind = "error";
+  const report = await core.compareRecording(input, { replay: echoReplay });
+  assert.equal(report.rows[0].verdict, "NOT_COMPARABLE");
+  assert.match(report.rows[0].reason, /contradictory/);
+});
+
+test("cleanup journal answers must agree with their captured exchange too", async () => {
+  const input = layoutInput(),
+    at = "2026-10-05T00:00:01.000Z";
+  const name = "projects/demo-v2/topics/fe0123456789ab-rl-r-own";
+  input.capture.splice(-1, 0, {
+    n: 8,
+    at,
+    case: "cleanup",
+    step: "01",
+    op: "deleteTopic",
+    transport: "rest",
+    request: { method: "DELETE", path: `/v1/${name}` },
+    response: { status: 200, body: {}, bodyBytes: 12 },
+  });
+  const entry = { at, name, action: "delete", transport: "rest", requestId: "cleanup#1" };
+  input.issued.push({ ...entry, phase: "sent" }, { ...entry, phase: "answered", kind: "error" });
+  const report = await core.compareRecording(input, { replay: echoReplay });
+  assert.equal(
+    report.cases.find((row) => row.case === "rest-layout-routes").verdict,
+    "NOT_COMPARABLE",
+  );
 });
 
 test("raw frame verification rejects altered bytes and metadata before native replay", () => {

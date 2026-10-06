@@ -11,7 +11,11 @@ import { createGrpc } from "./grpc.mjs";
 import { createStreamingPull } from "./stream.mjs";
 import { createRest } from "./rest.mjs";
 import { createCapture, createBudget } from "./capture.mjs";
-import { compareRecording } from "./stream-dlq-compare-core.mjs";
+import {
+  compareRecording,
+  recordingTimingDebts,
+  recordedRequestInstant,
+} from "./stream-dlq-compare-core.mjs";
 import { createOwnership } from "./names.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { removeTree } from "../remove-tree.mjs";
@@ -152,6 +156,9 @@ function inputs(opts) {
     capture.filter((row) => row.note === "run-end").length !== 1
   )
     throw new Error("closed stream-dlq-v2 input required");
+  const timingDebts = recordingTimingDebts(capture);
+  if (timingDebts.length)
+    throw new Error(`invalid recording chronology: ${timingDebts.join("; ")}`);
   return { capture, issued, iam, metadata: starts[0] };
 }
 export function verifyFrames(capture, capturePath) {
@@ -206,11 +213,11 @@ export async function replayLocal(input, environment, pin) {
   const localCredential = async () => "local-comparison-fixture";
   const rest = createRest({ base: `http://${target}`, budget, capture, getToken: localCredential });
   const grpc = createGrpc({ target, secure: false, budget, capture, getToken: localCredential });
-  let logicalTime = 0;
+  let logicalTime = -Infinity;
   async function advance(row) {
-    const time = Date.parse(row.at) - (Number.isFinite(row.ms) ? row.ms : 0);
-    if (!Number.isFinite(time)) throw new Error("request logical time missing");
-    logicalTime = Math.max(logicalTime, time);
+    const time = recordedRequestInstant(row);
+    if (time < logicalTime) throw new Error("request logical time regressed");
+    logicalTime = time;
     const response = await fetch(
       `${environment.FIREEMU_CONTROL_URL}sessions/default/clock:advanceTo`,
       {
@@ -367,6 +374,11 @@ export async function main(argv = process.argv.slice(2), environment = process.e
     )
       throw new Error("internal strict launch config refused");
     input.verifiedFrames = verifyFrames(input.capture, opts.capture);
+    writeFileSync(
+      join(opts.out, "runtime-start.json"),
+      `${JSON.stringify({ serverPid: launch.serverPid, workerPid: process.pid, strictConfigSha256: launch.configSha256 })}\n`,
+      { flag: "wx", mode: 0o600 },
+    );
     const report = await replayLocal(input, environment, pin);
     report.inputPins = {
       capture: opts["capture-sha256"],
@@ -442,10 +454,19 @@ export async function main(argv = process.argv.slice(2), environment = process.e
         configSha256: digest(readFileSync(config)),
       }),
     );
-    return await new Promise((resolveResult, reject) => {
-      child.once("error", reject);
-      child.once("exit", (code) => resolveResult(code ?? 2));
-    });
+    const stop = () => child.kill("SIGTERM");
+    const interrupt = () => child.kill("SIGINT");
+    process.on("SIGTERM", stop);
+    process.on("SIGINT", interrupt);
+    try {
+      return await new Promise((resolveResult, reject) => {
+        child.once("error", reject);
+        child.once("exit", (code) => resolveResult(code ?? 2));
+      });
+    } finally {
+      process.off("SIGTERM", stop);
+      process.off("SIGINT", interrupt);
+    }
   } finally {
     removeTree(temporary);
   }

@@ -12,7 +12,7 @@ import { NUMBER, START, createWorld, reply } from "./world.mjs";
 
 const RUN = "0123456789abcdef";
 const DIGEST = "d".repeat(64);
-const ENV = { HOME: "/home/test", PATH: "/usr/bin" };
+const ENV = { HOME: "/tmp/test", PATH: "/usr/bin" };
 const notFound = (what) => reply(404, { error: { code: 404, message: what, status: "NOT_FOUND" } });
 
 // Each case: the list holds a name of the run, the direct read of that name answers 404 NOT_FOUND.

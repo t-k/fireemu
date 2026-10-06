@@ -26,7 +26,7 @@ import { record } from "./run.mjs";
 import { NUMBER, createWorld, reply } from "./world.mjs";
 
 const COMMIT = "a".repeat(40);
-const ENV = { HOME: "/home/test", PATH: "/usr/bin" };
+const ENV = { HOME: "/tmp/test", PATH: "/usr/bin" };
 const argv = (command, run, extra = []) => [
   command,
   "--run-dir",
@@ -257,12 +257,12 @@ test("a clean send exits 0, runs the CLI five times with the planned argv (the d
   assert.equal(plans[0].plan.env.PATH, "/node22/bin:/usr/bin");
   assert.equal(
     plans[0].plan.env.HOME,
-    "/home/test",
+    "/tmp/test",
     "the CLI finds the owner's credential under the real HOME",
   );
   assert.notEqual(
     plans[0].plan.env.XDG_CONFIG_HOME,
-    "/home/test/.config",
+    "/tmp/test/.config",
     "no firebase login account is read",
   );
   assert.equal(plans[0].plan.cwd, join(run, "source"));
@@ -438,7 +438,7 @@ test("the local checks need HOME and the application-default credential file, by
     env: ENV,
     deps: { ...deps, adcExists: (home) => (seen.push(home), true) },
   });
-  assert.deepEqual(seen, ["/home/test"]);
+  assert.deepEqual(seen, ["/tmp/test"]);
 });
 
 test("the real credential check looks under the home's gcloud directory and nowhere else (M1)", () => {

@@ -278,7 +278,13 @@ test("v2 default admission rejects duplicate transports and excess source budget
   }
 });
 
-async function recordedWorld({ emptyLayout = false, ambiguousGrant = false, age = 0 } = {}) {
+async function recordedWorld({
+  emptyLayout = false,
+  ambiguousGrant = false,
+  emptySink = false,
+  pullTiming = null,
+  age = 0,
+} = {}) {
   const { readFileSync } = await import("node:fs");
   const { createRest } = await import("./pubsub-production/rest.mjs");
   const { createCapture, createBudget } = await import("./pubsub-production/capture.mjs");
@@ -298,12 +304,17 @@ async function recordedWorld({ emptyLayout = false, ambiguousGrant = false, age 
   const ownership = createOwnership({ project: "demo-v2", runId: "0123456789ab" });
   const ledger = createLedger();
   const pushState = newPushState();
-  const capture = createCapture({ journal: { write: (line) => lines.push(line) } });
+  const capture = createCapture({
+    journal: {
+      write: (line) => lines.push(pullTiming === null ? line : { ...line, fakeAt: now }),
+    },
+  });
   const rest = createRest({
     base: "http://127.0.0.1:1",
     journalDispatch: true,
     budget: createBudget(828),
     capture,
+    ...(pullTiming === null ? {} : { now: () => now }),
     fetchImpl: async (url, options) => {
       const parsed = new URL(url);
       const path = decodeURIComponent(parsed.pathname.slice(4));
@@ -347,9 +358,18 @@ async function recordedWorld({ emptyLayout = false, ambiguousGrant = false, age 
         assert.equal(typeof body.messages[0].data, "string");
         value = { messageIds: ["demo-published-id"] };
       } else if (path.endsWith(":pull")) {
-        assert.equal(body.returnImmediately, false);
+        if (pullTiming === null) assert.equal(body.returnImmediately, path.endsWith("-sink:pull"));
         assert.equal(body.maxMessages, 1);
-        value = emptyLayout && path.includes("-rl-r-") ? {} : prototype("pull");
+        const finalSource =
+          pullTiming !== null &&
+          path.endsWith("-source:pull") &&
+          requests.filter((call) => call.path === path).length === 10;
+        value =
+          (emptyLayout && path.includes("-rl-r-")) ||
+          (emptySink && path.endsWith("-sink:pull")) ||
+          finalSource
+            ? {}
+            : prototype("pull");
         assert.ok(Array.isArray(value.receivedMessages) || Object.keys(value).length === 0);
       } else if (path.endsWith(":acknowledge") || path.endsWith(":modifyAckDeadline")) {
         assert.ok(body.ackIds.length > 0);
@@ -373,6 +393,14 @@ async function recordedWorld({ emptyLayout = false, ambiguousGrant = false, age 
           value = prototype("getTopic");
         }
       }
+      if (pullTiming !== null)
+        now += path.endsWith(":pull")
+          ? (value.receivedMessages ?? []).length > 0
+            ? pullTiming.deliveredMs
+            : body.returnImmediately
+              ? pullTiming.emptyImmediateMs
+              : pullTiming.emptyBlockingMs
+          : 1000;
       const text = `\n ${JSON.stringify(value, null, 2)}\n`;
       return new Response(text, {
         status,
@@ -464,7 +492,7 @@ test("actual v2 runner restores two policies before cleanup and emits physical l
   assert.ok(
     fixture.requests
       .filter((call) => call.path.endsWith(":pull"))
-      .every((call) => call.body.returnImmediately === false),
+      .every((call) => call.body.returnImmediately === call.path.endsWith("-sink:pull")),
   );
   assert.ok(fixture.sleeps.some((item) => item.ms === 900_000));
   assert.equal(fixture.sleeps.find((item) => item.ms === 900_000).requests, 18);
@@ -487,6 +515,88 @@ test("actual v2 runner restores two policies before cleanup and emits physical l
       .filter((call) => call.path.endsWith(":getIamPolicy"))
       .every((call) => call.query.includes("requestedPolicyVersion=3")),
   );
+});
+
+// Rounded above r1 L380/n344 (3463ms), r2 L510/n460 (18393ms), and r1 L520/n470
+// (10707ms). Administrative calls have a synthetic 1000ms allowance, not a service latency bound.
+const recordedPullTiming = Object.freeze({
+  emptyImmediateMs: 3500,
+  emptyBlockingMs: 18400,
+  deliveredMs: 10710,
+});
+
+test("recorded Pull latency envelope completes B and A within their unchanged phase limits", async (t) => {
+  const { runCases } = await import("./pubsub-production/runner.mjs");
+  for (const age of [0, 3_600_000]) {
+    const fixture = await recordedWorld({ age, emptySink: true, pullTiming: recordedPullTiming });
+    const cases = selectCases(
+      ["dlq-no-grant", "rest-layout-routes", "dlq-grant-window"],
+      "stream-dlq-v2",
+    );
+    const summary = await runCases({ ...fixture, cases });
+    const elapsed = cases.map((item) => {
+      const id = `${item.id}/rest`;
+      const start = fixture.lines.find((row) => row.note === "case-start" && row.case === id);
+      const end = fixture.lines.find((row) => row.note === "case-end" && row.case === id);
+      return { id: item.id, elapsedMs: end?.fakeAt - start?.fakeAt, limitMs: item.timeoutMs };
+    });
+    t.diagnostic(JSON.stringify({ age, stopped: summary.stopped, elapsed }));
+    assert.equal(summary.stopped, null);
+    assert.deepEqual(
+      summary.cases.map((entry) => entry.outcome),
+      ["completed", "completed", "completed"],
+    );
+    for (const item of cases) {
+      const id = `${item.id}/rest`;
+      const start = fixture.lines.find((row) => row.note === "case-start" && row.case === id);
+      const end = fixture.lines.find((row) => row.note === "case-end" && row.case === id);
+      assert.ok(end.fakeAt - start.fakeAt < item.timeoutMs);
+    }
+    const pulls = fixture.requests.filter((call) => call.path.endsWith(":pull"));
+    assert.equal(pulls.filter((call) => call.path.endsWith("-sink:pull")).length, 72);
+    assert.ok(
+      pulls.every((call) => call.body.returnImmediately === call.path.endsWith("-sink:pull")),
+    );
+    assert.ok(fixture.lines.filter((row) => row.op === "pull").every((row) => !row.unknown));
+    // The final grant readback already uses 1000ms of the 900-second horizon.
+    assert.equal(fixture.sleeps.filter((row) => row.ms === 899_000).length, 1);
+    assert.equal(summary.iam.restored.length, 2);
+    assert.deepEqual(summary.cleanup.errors, []);
+    assert.equal(fixture.live.size, 0);
+  }
+});
+
+test("blocking empty sink counterexample exhausts B and skips layout and A before cleanup", async () => {
+  const { runCases } = await import("./pubsub-production/runner.mjs");
+  const fixture = await recordedWorld({ emptySink: true, pullTiming: recordedPullTiming });
+  const original = fixture.transports.rest;
+  fixture.transports.rest = {
+    ...original,
+    request: (call) =>
+      original.request(
+        call.path.endsWith("-sink:pull")
+          ? { ...call, body: { ...call.body, returnImmediately: false } }
+          : call,
+      ),
+  };
+  const summary = await runCases({
+    ...fixture,
+    cases: selectCases(["dlq-no-grant", "rest-layout-routes", "dlq-grant-window"], "stream-dlq-v2"),
+  });
+  assert.match(summary.stopped, /phase time budget/);
+  assert.deepEqual(
+    summary.cases.map((entry) => [entry.id, entry.outcome]),
+    [["dlq-no-grant", "budget"]],
+  );
+  assert.ok(
+    !fixture.requests.some((call) => call.path.includes("-da-r-") || call.path.includes("-rl-r-")),
+  );
+  assert.equal(
+    fixture.requests.filter((call) => /:(getIamPolicy|setIamPolicy)$/.test(call.path)).length,
+    0,
+  );
+  assert.deepEqual(summary.cleanup.errors, []);
+  assert.equal(fixture.live.size, 0);
 });
 
 test("layout with no real received ACK records an aborted unmet observation without fabricated ACK or Seek", async () => {

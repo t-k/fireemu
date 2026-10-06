@@ -246,7 +246,7 @@ async function runDlq(ctx, grant) {
     if (poll < 9) await ctx.sleep(1000);
   }
   for (let poll = 1; poll <= 36; poll += 1) {
-    const reply = await c.pull(sink, { maxMessages: 1, returnImmediately: false });
+    const reply = await c.pull(sink, { maxMessages: 1, returnImmediately: true });
     ctx.note("dlq-sink-poll", {
       poll,
       code: reply.code,

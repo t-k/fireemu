@@ -10,8 +10,9 @@ import {
   existsSync,
   lstatSync,
   unlinkSync,
+  realpathSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname, delimiter } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { isDeepStrictEqual } from "node:util";
@@ -84,6 +85,11 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
   try {
     if (argv[0] !== "--config" || !argv[1] || !(argv.length === 2 || a2))
       throw new Error("usage: --config <reviewed input.json> [--a2]");
+    if (
+      process.version !== "v24.14.0" ||
+      env.PATH?.split(delimiter)[0] !== dirname(realpathSync(process.execPath))
+    )
+      throw new Error("H requires a real Node 24.14.0 bin first on PATH (not a Volta shim)");
     config = JSON.parse(readFileSync(argv[1], "utf8"));
     if (
       config.project !== "fireemu-oracle-events" ||
@@ -179,7 +185,9 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
         const signals = deps.signals ?? process;
         for (const signal of ["SIGINT", "SIGTERM"]) signals.on(signal, stop);
         let live = recording;
+        let issuedWrites = 0;
         const note = (kind, value) => {
+          if (["cli-issued", "h-write-issued"].includes(kind)) issuedWrites++;
           if (kind === "h-state") live = value;
           if (live && ["request", "cli-issued", "h-write-issued"].includes(kind))
             issued.write({ at: now(), kind: "h-state", value: live });
@@ -189,7 +197,7 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
         const row = (event, extra = {}) => {
           appendFileSync(
             ledgerFd,
-            `${JSON.stringify({ ts: new Date(now()).toISOString(), taskId: "PUBSUB-EVENTARC", project: m.project, packetId: `EVENTARC-H-${m.runId}`, runId: m.runId, mode: a2 ? "a2" : "h1", event, ...extra })}\n`,
+            `${JSON.stringify({ ts: new Date(now()).toISOString(), taskId: "PUBSUB-EVENTARC", project: m.project, packetId: `EVENTARC-H-${m.runId}`, envelopeId: `EVENTARC-H-${m.runId}`, estimatedUsd: a2 ? 0 : 1, lockRetained: true, runId: m.runId, mode: a2 ? "a2" : "h1", event, ...extra })}\n`,
           );
           fsyncSync(ledgerFd);
         };
@@ -309,7 +317,8 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
                     ...prepared,
                     env: {
                       ...env,
-                      HOME: home,
+                      HOME: env.HOME,
+                      GOOGLE_CLOUD_QUOTA_PROJECT: m.project,
                       XDG_CONFIG_HOME: join(home, ".config"),
                       FIREBASE_TOKEN: undefined,
                       GOOGLE_APPLICATION_CREDENTIALS: config.adcFile,
@@ -339,10 +348,17 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
             `${JSON.stringify(result, null, 2)}\n`,
             { mode: 0o600 },
           );
+          const cleanStop = !a2 && budget.used() === 0 && issuedWrites === 0;
           row("finished", {
-            outcome: result.closureReady ? "recorded" : "needs-recovery",
-            sandboxAtBaseline: result.cleanupReady ?? result.closureReady,
-            requests: capture.count(),
+            outcome: cleanStop
+              ? "stopped-clean"
+              : result.closureReady
+                ? "recorded"
+                : "needs-recovery",
+            sandboxAtBaseline: cleanStop || (result.cleanupReady ?? result.closureReady),
+            requests: budget.used(),
+            estimatedUsd: cleanStop || a2 ? 0 : 1,
+            lockRetained: !cleanStop && !(result.cleanupReady ?? result.closureReady),
           });
           if (result.cleanupReady ?? result.closureReady) lease.confirmClosed();
           io.stdout.write(
@@ -351,7 +367,14 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
           exitCode = result.closureReady ? 0 : controller.signal.aborted ? 3 : 1;
           return exitCode;
         } catch (error) {
-          row("finished", { outcome: "needs-recovery", sandboxAtBaseline: false });
+          const cleanStop = !a2 && budget.used() === 0 && issuedWrites === 0;
+          row("finished", {
+            outcome: cleanStop ? "stopped-clean" : "needs-recovery",
+            sandboxAtBaseline: cleanStop,
+            requests: budget.used(),
+            estimatedUsd: cleanStop || a2 ? 0 : 1,
+            lockRetained: !cleanStop,
+          });
           io.stderr.write(`${error.message}\n`);
           return 1;
         } finally {

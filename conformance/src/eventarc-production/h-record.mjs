@@ -561,6 +561,32 @@ export async function recordH({
             result.cleanup[disposition.unconfirmed ? "unconfirmed" : "unsettled"].push(full);
           continue;
         }
+        // Child admission cannot prevent deletion of a confirmed function.
+        let inventory;
+        if (!result.identities.some((i) => i.function === full))
+          try {
+            inventory = await lists("cleanup");
+          } catch {}
+        if (inventory && current && !result.identities.some((i) => i.function === full)) {
+          const service = inventory.services.find((s) => s.name === current.serviceConfig?.service);
+          const trigger = inventory.triggers.find((t) => t.name === current.eventTrigger?.trigger);
+          const identity = {
+            function: full,
+            handler: name,
+            service: service?.name,
+            trigger: trigger?.name,
+            topic: trigger?.transport?.pubsub?.topic,
+            subscription: trigger?.transport?.pubsub?.subscription,
+          };
+          if (
+            identity.service &&
+            identity.trigger &&
+            inventory.topics.some((t) => t.name === identity.topic) &&
+            inventory.subscriptions.some((s) => s.name === identity.subscription)
+          )
+            result.identities.push(identity);
+          else result.cleanup.unconfirmed.push(`cli:${name}:managed-inventory`);
+        }
         const deletion = {
           name: full,
           host: "functions",
@@ -588,32 +614,6 @@ export async function recordH({
           deletion.state =
             reply.body.done === true ? (reply.body.error ? "failed" : "confirmed") : "pending";
           await settle(deletion, "cleanup");
-        }
-        // Child admission cannot prevent deletion of a confirmed function.
-        let inventory;
-        if (!result.identities.some((i) => i.function === full))
-          try {
-            inventory = await lists("cleanup");
-          } catch {}
-        if (inventory && current && !result.identities.some((i) => i.function === full)) {
-          const service = inventory.services.find((s) => s.name === current.serviceConfig?.service);
-          const trigger = inventory.triggers.find((t) => t.name === current.eventTrigger?.trigger);
-          const identity = {
-            function: full,
-            handler: name,
-            service: service?.name,
-            trigger: trigger?.name,
-            topic: trigger?.transport?.pubsub?.topic,
-            subscription: trigger?.transport?.pubsub?.subscription,
-          };
-          if (
-            identity.service &&
-            identity.trigger &&
-            inventory.topics.some((t) => t.name === identity.topic) &&
-            inventory.subscriptions.some((s) => s.name === identity.subscription)
-          )
-            result.identities.push(identity);
-          else result.cleanup.unconfirmed.push(`cli:${name}:managed-inventory`);
         }
         const after = await lists("cleanup");
         note("h-cleanup-lists-after-delete", after);

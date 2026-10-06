@@ -1,6 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import {
+  readFileSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  existsSync,
+  realpathSync,
+  renameSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname, delimiter } from "node:path";
 import { hManifest, hPublishes } from "./eventarc-production/h-script.mjs";
 import {
   hCliFailed,
@@ -1191,7 +1202,7 @@ test("H entry rehearses with the stage C server, fsynced journal, token refresh 
   const { main, H_A2_RULING, readHJournal } = await import("./eventarc-production/h-run.mjs");
   const { createWorld } = await import("./eventarc-production/testing/world.mjs");
   const { serveWorld } = await import("./eventarc-production/testing/world-server.mjs");
-  const dir = mkdtempSync(new URL("../../target/codex-out/h-entry-", import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), "h-entry-"));
   const manifest = hManifest({ project: "fireemu-oracle-events", runId: "cafe60000001" });
   const world = hWorld({ manifest });
   const channelWorld = createWorld({ project: manifest.project, withState: true });
@@ -1236,6 +1247,11 @@ test("H entry rehearses with the stage C server, fsynced journal, token refresh 
   writeFileSync(join(framework, "package.json"), JSON.stringify({ version: "5.0.5" }));
   const input = join(dir, "input.json");
   writeFileSync(input, JSON.stringify(config));
+  const launchEnv = {
+    HOME: dir,
+    PATH: `${dirname(realpathSync(process.execPath))}${delimiter}${process.env.PATH}`,
+    GOOGLE_CLOUD_QUOTA_PROJECT: manifest.project,
+  };
   const messages = [];
   const io = {
     stdout: { write: (s) => messages.push(s) },
@@ -1257,6 +1273,9 @@ test("H entry rehearses with the stage C server, fsynced journal, token refresh 
     runCli: async ({ plan, save }) => {
       const name = plan.args[plan.args.indexOf("--only") + 1].split(":").at(-1);
       assert.equal(plan.env.FIREBASE_TOKEN, undefined);
+      assert.equal(plan.env.HOME, launchEnv.HOME);
+      assert.equal(plan.env.GOOGLE_CLOUD_QUOTA_PROJECT, manifest.project);
+      assert.equal(plan.env.PATH.split(delimiter)[0], dirname(realpathSync(process.execPath)));
       const result = await world.options.cli(name);
       if (name === manifest.observe)
         await channelWorld.request({
@@ -1307,14 +1326,14 @@ test("H entry rehearses with the stage C server, fsynced journal, token refresh 
   };
   try {
     writeFileSync(ownerLedger, "decision=APPROVE\n");
-    assert.equal(await main(["--config", input], {}, io, deps), 2);
+    assert.equal(await main(["--config", input], launchEnv, io, deps), 2);
     assert.equal(existsSync(config.sandboxLedger), false);
     writeFileSync(ownerLedger, `${H_A2_RULING}\n`);
     const prepareFake = deps.prepare;
     const discoverFake = deps.discover;
     delete deps.prepare;
     delete deps.discover;
-    const code = await main(["--config", input], {}, io, deps);
+    const code = await main(["--config", input], launchEnv, io, deps);
     deps.prepare = prepareFake;
     deps.discover = discoverFake;
     assert.equal(
@@ -1338,7 +1357,7 @@ test("H entry rehearses with the stage C server, fsynced journal, token refresh 
     assert.equal(existsSync(join(config.lockDir, `${manifest.project}.lock`)), false);
     world.setClock(recording.lastRequestAt + 600000);
     a2Mode = true;
-    const a2code = await main(["--config", input, "--a2"], {}, io, deps);
+    const a2code = await main(["--config", input, "--a2"], launchEnv, io, deps);
     assert.equal(
       a2code,
       0,
@@ -1356,12 +1375,22 @@ test("H entry rehearses with the stage C server, fsynced journal, token refresh 
       rows.map((r) => r.event),
       ["started", "finished", "started", "finished"],
     );
-    assert.ok(rows.filter((r) => r.event === "finished").every((r) => r.sandboxAtBaseline));
+    assert.ok(
+      rows.every(
+        (r) =>
+          r.envelopeId === `EVENTARC-H-${manifest.runId}` && typeof r.estimatedUsd === "number",
+      ),
+    );
+    assert.ok(
+      rows
+        .filter((r) => r.event === "finished")
+        .every((r) => r.sandboxAtBaseline && r.lockRetained === false),
+    );
     config.out = join(dir, "signal-out");
     writeFileSync(input, JSON.stringify(config));
     a2Mode = false;
     stopOnPublish = true;
-    assert.equal(await main(["--config", input], {}, io, deps), 3);
+    assert.equal(await main(["--config", input], launchEnv, io, deps), 3);
     const interrupted = readHJournal(join(config.out, `issued-${manifest.runId}.jsonl`));
     assert.equal(interrupted.stopped, "H signal");
     assert.equal(interrupted.publishes.length, 1);
@@ -1376,13 +1405,13 @@ test("H entry rehearses with the stage C server, fsynced journal, token refresh 
     );
     assert.equal(existsSync(join(config.lockDir, `${manifest.project}.lock`)), true);
     world.setClock(interrupted.lastRequestAt + 599999);
-    assert.equal(await main(["--config", input, "--a2"], {}, io, deps), 1);
+    assert.equal(await main(["--config", input, "--a2"], launchEnv, io, deps), 1);
     world.setClock(interrupted.lastRequestAt + 600000);
     deps.checkPid = () => {
       throw Object.assign(new Error("fake reaped recorder"), { code: "ESRCH" });
     };
     a2Mode = true;
-    assert.equal(await main(["--config", input, "--a2"], {}, io, deps), 1);
+    assert.equal(await main(["--config", input, "--a2"], launchEnv, io, deps), 1);
     assert.equal(existsSync(join(config.lockDir, `${manifest.project}.lock`)), false);
     assert.equal(process.listenerCount("SIGTERM"), 0);
     config.out = join(dir, "cli-signal-out");
@@ -1411,7 +1440,7 @@ test("H entry rehearses with the stage C server, fsynced journal, token refresh 
         },
       });
     try {
-      assert.equal(await main(["--config", input], {}, io, deps), 3);
+      assert.equal(await main(["--config", input], launchEnv, io, deps), 3);
       assert.throws(() => process.kill(child.pid, 0), { code: "ESRCH" });
       const killed = readHJournal(join(config.out, `issued-${manifest.runId}.jsonl`));
       assert.equal(killed.writes.find((w) => w.kind === "function").state, "unknown");
@@ -1537,7 +1566,7 @@ test("H journal recovers an incomplete tail but refuses a malformed completed ro
   const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
   const { join } = await import("node:path");
   const { readHJournal } = await import("./eventarc-production/h-run.mjs");
-  const dir = mkdtempSync(new URL("../../target/codex-out/h-tail-", import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), "h-tail-"));
   const path = join(dir, `issued-${m.runId}.jsonl`);
   const prefix = `${JSON.stringify({ kind: "h-state", value: { writes: [], identities: [], marker: "owned", baseline: {}, cleanup: { unconfirmed: [] } } })}\n${JSON.stringify({ kind: "request", at: 123 })}\n`;
   try {
@@ -1555,7 +1584,7 @@ test("H owned CLI journals each write before native send and fsyncs native answe
   const { join } = await import("node:path");
   const { spawn } = await import("node:child_process");
   const { runHCli } = await import("./eventarc-production/h-deploy.mjs");
-  const dir = mkdtempSync(new URL("../../target/codex-out/h-native-", import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), "h-native-"));
   const journal = join(dir, "issued.jsonl");
   const preload = join(dir, "fake-https.mjs");
   writeFileSync(journal, "");
@@ -1617,7 +1646,7 @@ test("H pinned CLI fetch and undici paths journal before MockAgent send and repl
   const { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } = await import("node:fs");
   const { join } = await import("node:path");
   const { runHCli } = await import("./eventarc-production/h-deploy.mjs");
-  const dir = mkdtempSync(new URL("../../target/codex-out/h-fetch-", import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), "h-fetch-"));
   const journal = join(dir, "issued.jsonl");
   const script = join(dir, "cli.cjs");
   const packageDir = new URL("../node_modules/firebase-tools/", import.meta.url).pathname;
@@ -1660,4 +1689,337 @@ await mock.close();console.log('0 Functions Errored');})().catch(e=>{console.err
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("H journal restores interrupted channel ownership and counts native CLI timestamps", async (t) => {
+  const { readHJournal } = await import("./eventarc-production/h-run.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "h-replay-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, `issued-${m.runId}.jsonl`);
+  const recording = {
+    manifest: m,
+    writes: [],
+    baseline: { status: 404 },
+    cleanup: { unconfirmed: [] },
+  };
+  const rows = [
+    { kind: "h-state", value: recording },
+    { kind: "cli-issued", at: 100, value: { name: m.observe } },
+    {
+      kind: "cli-native-issued",
+      at: 200,
+      value: {
+        host: "eventarc.googleapis.com",
+        method: "POST",
+        path: `/v1/projects/${m.project}/locations/us-central1/channels`,
+      },
+    },
+  ];
+  writeFileSync(path, rows.map(JSON.stringify).join("\n") + "\n");
+  let restored = readHJournal(path);
+  assert.equal(restored.lastRequestAt, 200);
+  assert.deepEqual(restored.writes, [
+    { name: m.channel, host: "eventarc", kind: "channel", action: "create", state: "unknown" },
+  ]);
+  assert.deepEqual(restored.cleanup.unconfirmed, [`cli:${m.observe}:interrupted-inventory`]);
+  rows.push({ kind: "cli-native-answer", at: 300, value: { status: 200 } });
+  writeFileSync(path, rows.map(JSON.stringify).join("\n") + "\n");
+  assert.equal(readHJournal(path).lastRequestAt, 300);
+  rows.push({ kind: "h-state", value: { ...recording, writes: restored.writes } });
+  writeFileSync(path, rows.map(JSON.stringify).join("\n") + "\n");
+  assert.deepEqual(readHJournal(path).cleanup.unconfirmed, []);
+});
+
+test("H A2 keeps its own unknown DELETE sticky despite an immediate 404", async () => {
+  const { hA2 } = await import("./eventarc-production/h-record.mjs");
+  for (const host of ["firestore", "eventarc"]) {
+    const name =
+      host === "eventarc"
+        ? m.channel
+        : `projects/${m.project}/databases/(default)/documents/${m.markerCollection}/owned`;
+    const recording = {
+      manifest: m,
+      marker: host === "firestore" ? name : undefined,
+      baseline: { status: 404 },
+      lastRequestAt: 0,
+      cleanup: {},
+      identities: [],
+      writes: [{ name, host, action: "create", state: "confirmed" }],
+    };
+    let deleted = false;
+    let deletes = 0;
+    const result = await hA2({
+      recording,
+      now: () => 600000,
+      note: () => {},
+      evidence: {
+        readiness: () => true,
+        notFound: (r) => r.status === 404,
+        retention: async () => ({ complete: true, atBaseline: true }),
+      },
+      transports: {
+        [host]: {
+          request: async (spec) => {
+            if (spec.method === "DELETE") {
+              deleted = true;
+              deletes++;
+              return { status: 503, unknown: true, body: {} };
+            }
+            if (spec.path.endsWith("/triggers")) return { status: 200, body: { triggers: [] } };
+            return deleted ? { status: 404, body: {} } : { status: 200, body: { name } };
+          },
+        },
+      },
+    });
+    assert.equal(deletes, 1);
+    assert.equal(result.facts[0].read, "absent");
+    assert.equal(result.facts[0].closed, false);
+    assert.equal(result.cleanupReady, false);
+  }
+});
+
+test("H A2 refuses marker and channel DELETE until all earlier facts close and the channel baseline is absent", async () => {
+  const { hA2 } = await import("./eventarc-production/h-record.mjs");
+  for (const scenario of ["function-present", "channel-preexisting", "inventory-unconfirmed"]) {
+    const marker = `projects/${m.project}/databases/(default)/documents/${m.markerCollection}/owned`;
+    const full = `projects/${m.project}/locations/us-central1/functions/${m.observe}`;
+    const recording = {
+      manifest: m,
+      marker,
+      baseline: { status: scenario === "channel-preexisting" ? 200 : 404 },
+      lastRequestAt: 0,
+      cleanup: { unconfirmed: scenario === "inventory-unconfirmed" ? ["opaque-cli-write"] : [] },
+      identities: [],
+      writes: [
+        ...(scenario === "function-present"
+          ? [{ name: full, host: "functions", action: "create", state: "confirmed" }]
+          : []),
+        ...(scenario === "channel-preexisting"
+          ? []
+          : [{ name: marker, host: "firestore", action: "create", state: "confirmed" }]),
+        { name: m.channel, host: "eventarc", action: "create", state: "confirmed" },
+      ],
+    };
+    const deletes = [];
+    const result = await hA2({
+      recording,
+      now: () => 600000,
+      note: () => {},
+      evidence: { a2ListRuling: true, readiness: () => true, notFound: () => false },
+      transports: Object.fromEntries(
+        ["functions", "firestore", "eventarc"].map((host) => [
+          host,
+          {
+            request: async (spec) => {
+              if (spec.method === "DELETE") deletes.push(spec.path);
+              return {
+                status: 200,
+                body: spec.path.endsWith("/functions")
+                  ? { functions: [{ name: full }] }
+                  : spec.path.endsWith("/triggers")
+                    ? { triggers: [] }
+                    : { name: spec.path.slice(4) },
+              };
+            },
+          },
+        ]),
+      ),
+    });
+    assert.deepEqual(deletes, [], scenario);
+    assert.equal(result.cleanupReady, false);
+  }
+});
+
+test("H entry refuses live, foreign and changed recovery locks before adoption", async (t) => {
+  const { main, H_A2_RULING } = await import("./eventarc-production/h-run.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "h-lock-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const manifest = hManifest({ project: "fireemu-oracle-events", runId: m.runId });
+  const config = {
+    ...manifest,
+    sourceCommit: "d9d63ab0433f049badc3726dca932e14cc2e291c",
+    out: join(dir, "out"),
+    sandboxLedger: join(dir, "sandbox.jsonl"),
+    lockDir: join(dir, "locks"),
+    ownerLedger: join(dir, "owner.md"),
+    frozenManifest: "unused",
+    adcFile: "unused",
+    depsDir: "unused",
+    firebaseJs: "unused",
+  };
+  mkdirSync(config.out);
+  mkdirSync(config.lockDir, { mode: 0o700 });
+  writeFileSync(config.ownerLedger, H_A2_RULING + "\n");
+  writeFileSync(
+    join(config.out, `issued-${m.runId}.jsonl`),
+    [
+      {
+        kind: "h-state",
+        value: {
+          manifest: { ...manifest, projectNumber: "123456789012" },
+          writes: [],
+          cleanup: {},
+          identities: [],
+        },
+      },
+      { kind: "request", at: 0 },
+    ]
+      .map(JSON.stringify)
+      .join("\n") + "\n",
+  );
+  const input = join(dir, "input.json");
+  writeFileSync(input, JSON.stringify(config));
+  const path = join(config.lockDir, `${manifest.project}.lock`);
+  const own = {
+    taskId: "PUBSUB-EVENTARC",
+    packetId: `EVENTARC-H-${m.runId}`,
+    sourceCommit: config.sourceCommit,
+    pid: process.pid,
+  };
+  for (const scenario of ["live", "task", "packet", "source", "pid", "body", "inode"]) {
+    const lock = {
+      ...own,
+      ...(scenario === "task"
+        ? { taskId: "OTHER" }
+        : scenario === "packet"
+          ? { packetId: "OTHER" }
+          : scenario === "source"
+            ? { sourceCommit: "0".repeat(40) }
+            : scenario === "pid"
+              ? { pid: -1 }
+              : {}),
+    };
+    writeFileSync(path, JSON.stringify(lock));
+    let message = "";
+    const code = await main(
+      ["--config", input, "--a2"],
+      { HOME: dir, PATH: dirname(realpathSync(process.execPath)) },
+      { stdout: { write: () => {} }, stderr: { write: (s) => (message += s) } },
+      {
+        now: () => 600000,
+        checkPid: () => {
+          if (scenario === "live") return;
+          if (scenario === "body") writeFileSync(path, JSON.stringify({ ...lock, changed: true }));
+          if (scenario === "inode") {
+            renameSync(path, path + ".old");
+            writeFileSync(path, JSON.stringify(lock));
+          }
+          throw Object.assign(new Error("dead test PID"), { code: "ESRCH" });
+        },
+        fetchImpl: () => {
+          throw new Error("unexpected request");
+        },
+        execToken: () => {
+          throw new Error("unexpected credential call");
+        },
+      },
+    );
+    assert.equal(code, 1, scenario);
+    assert.match(
+      message,
+      scenario === "live"
+        ? /recorder process is still alive/
+        : ["body", "inode"].includes(scenario)
+          ? /recovery lock changed/
+          : /foreign recovery lock/,
+      scenario,
+    );
+    assert.equal(existsSync(path), true);
+    assert.equal(existsSync(config.sandboxLedger), false);
+  }
+});
+
+test("H entry refuses discovery drift without requests or writes and releases a stopped-clean lock", async (t) => {
+  const { main, H_A2_RULING } = await import("./eventarc-production/h-run.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "h-discovery-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const manifest = hManifest({ project: "fireemu-oracle-events", runId: m.runId });
+  const config = {
+    ...manifest,
+    sourceCommit: "d9d63ab0433f049badc3726dca932e14cc2e291c",
+    out: join(dir, "out"),
+    sandboxLedger: join(dir, "sandbox.jsonl"),
+    lockDir: join(dir, "locks"),
+    ownerLedger: join(dir, "owner.md"),
+    frozenManifest: join(dir, "frozen.json"),
+    adcFile: "unused",
+    depsDir: "unused",
+    firebaseJs: "unused",
+  };
+  writeFileSync(config.ownerLedger, H_A2_RULING + "\n");
+  const frozen = { endpoints: { frozen: {} }, requiredAPIs: [] };
+  writeFileSync(config.frozenManifest, JSON.stringify(frozen));
+  const input = join(dir, "input.json");
+  writeFileSync(input, JSON.stringify(config));
+  const env = { HOME: dir, PATH: dirname(realpathSync(process.execPath)) };
+  let messages = "";
+  const io = { stdout: { write: () => {} }, stderr: { write: (s) => (messages += s) } };
+  for (const badPath of ["", join(dir, "volta/bin")]) {
+    assert.equal(await main(["--config", input], { ...env, PATH: badPath }, io), 2);
+    assert.match(messages, /real Node 24.14.0 bin first on PATH/);
+    assert.equal(existsSync(config.sandboxLedger), false);
+  }
+  for (const drift of ["endpoints", "metadata", "missing-evidence"]) {
+    config.out = join(dir, drift);
+    writeFileSync(input, JSON.stringify(config));
+    messages = "";
+    const code = await main(["--config", input], env, io, {
+      evidence: {},
+      prepare: () => ({}),
+      discover: ({ directory }) => {
+        mkdirSync(directory, { recursive: true });
+        const discovered =
+          drift === "metadata"
+            ? { ...frozen, requiredAPIs: ["unexpected"] }
+            : drift === "endpoints"
+              ? { ...frozen, endpoints: {} }
+              : frozen;
+        writeFileSync(join(directory, "functions-manifest.json"), JSON.stringify(discovered));
+        return discovered.endpoints;
+      },
+      fetchImpl: () => {
+        throw new Error("unexpected request");
+      },
+      execToken: () => {
+        throw new Error("unexpected credential call");
+      },
+    });
+    assert.equal(code, 1);
+    if (drift === "missing-evidence")
+      assert.match(
+        JSON.parse(readFileSync(join(config.out, "summary.json"), "utf8")).stopped,
+        /shape evidence/,
+      );
+    else assert.match(messages, /discovery differs from frozen/);
+    const rows = readFileSync(config.sandboxLedger, "utf8").trim().split("\n").map(JSON.parse);
+    const finished = rows.at(-1);
+    assert.equal(finished.outcome, "stopped-clean");
+    assert.equal(finished.requests, 0);
+    assert.equal(finished.estimatedUsd, 0);
+    assert.equal(finished.sandboxAtBaseline, true);
+    assert.equal(finished.lockRetained, false);
+    assert.equal(existsSync(join(config.lockDir, `${manifest.project}.lock`)), false);
+  }
+});
+
+test("H partial deploy inventories managed children before their function DELETE cascade", async () => {
+  const world = hWorld({ partial: true });
+  const result = await recordH(world.options);
+  assert.equal(result.identities.length, 1);
+  assert.equal(
+    result.cleanup.unconfirmed.some((n) => n.includes("managed-inventory")),
+    false,
+  );
+  const deletion = world.calls.findIndex((c) => c.host === "functions" && c.method === "DELETE");
+  assert.ok(
+    deletion >
+      world.calls.findIndex(
+        (c) =>
+          c.host === "eventarc" && c.label?.case === "h-cleanup" && c.path.endsWith("/triggers"),
+      ),
+  );
+  assert.equal(world.deleted.includes(m.observe), true);
+  const unreadable = hWorld({ partial: true, badChild: true });
+  await recordH(unreadable.options);
+  assert.equal(unreadable.deleted.includes(m.observe), true);
 });

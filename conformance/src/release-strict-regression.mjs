@@ -396,6 +396,12 @@ export const EXCLUDED_KINDS = [
       "the comparison is made from a rehearsal of the STORAGE-OBJECT recorder (26 recipes, 2,436 exchanges) that lives on its own branch and not in this tree, and it runs under a Rules file kept outside the repository; both must be published and the tool given a check and an export-comparison mode before the release job can rerun it; the rows were compared on the closure-base binary named by the closure",
     issue: "storage-object-comparison-needs-the-recorder-in-the-release-job.md",
   },
+  {
+    kind: "fs-listen-sdk-comparison-v1",
+    reason:
+      "the final release artifact was compared with private native, SDK and browser production recordings that are unavailable to the release job; the native expired-token case also waits 35 minutes and the browser cache and lifecycle cases require Chromium; publish the recordings and provide a long browser-enabled release job before reproducing this comparison",
+    issue: "fs-listen-sdk-comparison-needs-private-recordings-and-a-long-browser-release-job.md",
+  },
 ];
 
 /**

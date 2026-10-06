@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 const read = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));
@@ -89,7 +90,9 @@ test("FS-LISTEN-SDK proposal covers its 18-case catalog and leaves unobserved pa
     assert.ok(condition.verification.requiredEvidence.length);
     assert.equal(
       condition.verification.recordingsRequired,
-      condition.status === "PENDING_REVIEW" ? 0 : 2,
+      ["final-artifact-regression", "closure-review"].includes(condition.conditionId.split("/")[1])
+        ? 0
+        : 2,
     );
     assert.ok(statuses.has(condition.status), `${condition.conditionId}: ${condition.status}`);
     if (condition.status === "VERIFIED")
@@ -162,5 +165,43 @@ test("the ledger 824 amendment names the native project and the fixture rows it 
   assert.match(
     closure.conditions.find(({ conditionId }) => conditionId.endsWith("/raw-resume-token")).note,
     /native\/resume-token-expired/,
+  );
+});
+
+test("every VERIFIED condition cites the comparison's artifact, source and build receipt", () => {
+  const closure = read("../../spec/compatibility/closure/FS-LISTEN-SDK.json");
+  for (const condition of closure.conditions.filter((c) => c.status === "VERIFIED")) {
+    const comparison = read(`../../${condition.evidence.comparisonPath}`);
+    assert.equal(
+      condition.evidence.finalArtifactSha256,
+      comparison.artifactSha256,
+      condition.conditionId,
+    );
+    assert.equal(condition.evidence.sourceCommit, comparison.sourceCommit, condition.conditionId);
+    assert.equal(
+      condition.evidence.comparisonSha256,
+      createHash("sha256")
+        .update(
+          readFileSync(new URL(`../../${condition.evidence.comparisonPath}`, import.meta.url)),
+        )
+        .digest("hex"),
+    );
+    assert.equal(
+      condition.evidence.buildRecordSha256,
+      createHash("sha256")
+        .update(
+          readFileSync(new URL(`../../${condition.evidence.buildRecordPath}`, import.meta.url)),
+        )
+        .digest("hex"),
+    );
+    const build = read(`../../${condition.evidence.buildRecordPath}`);
+    assert.equal(build.binarySha256, comparison.artifactSha256);
+    assert.equal(build.sourceCommit, comparison.sourceCommit);
+  }
+  assert.equal(closure.integratedRegression.release, "closure-base-aad8cee2a");
+  assert.equal(closure.parentStatus, "COMPAT_VERIFIED");
+  assert.equal(
+    closure.conditions.find((c) => c.conditionId.endsWith("/closure-review")).status,
+    "VERIFIED",
   );
 });

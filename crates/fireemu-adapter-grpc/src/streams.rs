@@ -1068,14 +1068,19 @@ fn refresh_all(
                         out.append(&mut state.pending);
                         if !state.current {
                             state.current = true;
-                            let bound = TokenBinding {
-                                target: state.target_hash,
-                                ..binding
+                            let bound = if binding.strict {
+                                binding
+                            } else {
+                                TokenBinding {
+                                    target: state.target_hash,
+                                    ..binding
+                                }
                             };
+                            let target_token = resume_token(version, &bound);
                             out.push(target_change(
                                 pb::target_change::TargetChangeType::Current,
                                 vec![*id],
-                                Some(resume_token(version, &bound)),
+                                Some(target_token),
                                 Some(read_time),
                             ));
                         }
@@ -1106,10 +1111,7 @@ fn refresh_all(
     if targets.is_empty() {
         return Ok(());
     }
-    // One global boundary closes the snapshot. The token it carries applies to every target
-    // (production and the official emulator send no per-target NO_CHANGE after a change:
-    // FS-LISTEN-SDK L1, `native/target-lifecycle/update` and `delete`); a target that became
-    // current in this snapshot got its own token with CURRENT.
+    // One global boundary closes the snapshot. Strict CURRENT uses this same global token.
     out.push(target_change(
         pb::target_change::TargetChangeType::NoChange,
         vec![],

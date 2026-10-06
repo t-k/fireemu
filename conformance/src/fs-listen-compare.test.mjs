@@ -203,7 +203,7 @@ test("compareRecordings: a row only in local is EXTRA, a divergence listed with 
   const out = compareRecordings({
     productions: [recording({ r: row(1) }), recording({ r: row(1) })],
     local: recording({ r: row(0), x: row(1) }),
-    divergences: { r: "owner decision D1: reason" },
+    divergences: { r: { reason: "owner decision D1: reason", fireemu: describeRow(row(0)) } },
   });
   assert.equal(out.rows.r.status, "KNOWN_DIVERGENCE");
   assert.equal(out.rows.r.reason, "owner decision D1: reason");
@@ -437,7 +437,7 @@ test("compareRecordings: known divergences count as good, an unfit local recordi
   const ok = compareRecordings({
     productions: [recording({ r: row(1) }), recording({ r: row(1) })],
     local: recording({ r: row(0) }),
-    divergences: { r: "owner decision D1" },
+    divergences: { r: { reason: "owner decision D1", fireemu: describeRow(row(0)) } },
   });
   assert.equal(ok.ok, true);
   assert.deepEqual(ok.localProblems, []);
@@ -561,15 +561,10 @@ test("the command line prints one line per row and a summary, and exits 0 only w
     f.div,
   ]);
   assert.equal(known.code, 1, "the divergence names r, not s");
-  const named = runCli({ ...files, div: { s: "owner decision D9" } }, (f) => [
-    "--production",
-    f.p1,
-    f.p2,
-    "--local",
-    f.bad,
-    "--divergences",
-    f.div,
-  ]);
+  const named = runCli(
+    { ...files, div: { s: { reason: "owner decision D9", fireemu: describeRow(row(0)) } } },
+    (f) => ["--production", f.p1, f.p2, "--local", f.bad, "--divergences", f.div],
+  );
   assert.equal(named.code, 0);
   assert.match(named.stdout, /KNOWN_DIVERGENCE {3}s {2}\(owner decision D9\)\n/);
 });
@@ -1030,7 +1025,9 @@ test("only an entry that opts in covers a local wait that ran out for an answer 
   // An entry that opts in makes it a known divergence, and the reason is carried.
   const declared = compareRecordings({
     ...recordings(stuck),
-    divergences: { r: { reason: "no index needed", coversLocalTimeout: true } },
+    divergences: {
+      r: { reason: "no index needed", fireemu: describeRow(stuck), coversLocalTimeout: true },
+    },
   });
   assert.equal(declared.rows.r.status, "KNOWN_DIVERGENCE");
   assert.equal(declared.rows.r.reason, "no index needed");
@@ -1886,4 +1883,27 @@ test("two rows that both have a filter in the same place must say the same; one 
   assert.equal(classifyRow(a, fr([current, bnd()])), "MATCH");
   assert.equal(classifyRow(a, fr([current, bnd(), flt(3)])), "MATCH", "another place");
   assert.equal(classifyRow(a, structuredClone(a)), "MATCH");
+});
+
+test("a registered divergence rejects a mutant of its quoted strict sequence", () => {
+  const productions = [recording({ r: row(1) }), recording({ r: row(1) })];
+  const divergences = { r: { reason: "declared sequence", fireemu: describeRow(row(0)) } };
+  assert.equal(
+    compareRecordings({ productions, local: recording({ r: row(0) }), divergences }).rows.r.status,
+    "KNOWN_DIVERGENCE",
+  );
+  const mutant = row(0);
+  mutant.rows.push({ kind: "boundary", resumeToken: true });
+  assert.equal(
+    compareRecordings({ productions, local: recording({ r: mutant }), divergences }).rows.r.status,
+    "MISMATCH",
+  );
+  assert.equal(
+    compareRecordings({
+      productions,
+      local: recording({ r: row(0) }),
+      divergences: { r: "reason without a quoted sequence" },
+    }).rows.r.status,
+    "MISMATCH",
+  );
 });

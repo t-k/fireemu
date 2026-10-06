@@ -2103,7 +2103,7 @@ async fn partition_query_splits_a_collection_group_at_sampled_keys() {
 }
 
 #[tokio::test]
-async fn resume_tokens_are_refused_after_a_reset_and_for_other_targets() {
+async fn resume_tokens_are_refused_after_a_reset_and_strict_current_tokens_resume_other_targets() {
     let (mut client, handle) = start(false).await;
     let commit = |writes| pb::CommitRequest {
         database: DB.to_owned(),
@@ -2121,18 +2121,19 @@ async fn resume_tokens_are_refused_after_a_reset_and_for_other_targets() {
         .unwrap()
         .into_inner();
     ltx.send(add_query_target(1, "rt")).await.unwrap();
-    // CURRENT carries a token bound to the target (the global one is accepted by every
-    // target, as the SDKs apply it to all of them).
+    // Strict CURRENT carries the snapshot's global token, the same bytes as the NO_CHANGE that
+    // follows (FS-LISTEN-SDK L3 203/203C), and a global token is accepted by every target, as
+    // the SDKs apply it to all of them.
     let (_, token) = trace_and_token(&mut listen, "CURRENT[1]").await;
-    let _ = next_until(&mut listen, "NO_CHANGE[]").await;
-    // Production's foreign-token answer is unrecorded; a mismatched strict check gets the junk-byte refusal.
+    let (_, global) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+    assert_eq!(token, global);
     let mut other = add_query_target(2, "other");
     if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut other.target_change {
         t.resume_type = Some(pb::target::ResumeType::ResumeToken(token.clone()));
     }
     ltx.send(other).await.unwrap();
-    let trace = next_until(&mut listen, "REMOVE[2] cause=3").await;
-    assert_eq!(trace, ["REMOVE[2] cause=3"]);
+    let trace = next_until(&mut listen, "NO_CHANGE[]").await;
+    assert_eq!(trace[..2], ["ADD[2]", "NO_CHANGE[]"]);
     drop(ltx);
     // After a reset the same versions come around again: the old token must not line up
     // with the new history.
@@ -2159,7 +2160,7 @@ async fn resume_tokens_are_refused_after_a_reset_and_for_other_targets() {
 
 #[tokio::test]
 async fn current_boundary_tokens_are_bound_to_their_target() {
-    let (mut client, handle) = start(false).await;
+    let (mut client, handle) = start_profile(Profile::Emulator).await;
     let (tx, rx) = mpsc::channel(8);
     let mut listen = client
         .listen(ReceiverStream::new(rx))
@@ -2176,8 +2177,8 @@ async fn current_boundary_tokens_are_bound_to_their_target() {
         target.resume_type = Some(pb::target::ResumeType::ResumeToken(current_token));
     }
     tx.send(other).await.unwrap();
-    let trace = next_until(&mut listen, "REMOVE[2] cause=3").await;
-    assert_eq!(trace, ["REMOVE[2] cause=3"]);
+    let trace = next_until(&mut listen, "NO_CHANGE[]").await;
+    assert!(trace.iter().any(|line| line == "RESET[2]"), "{trace:?}");
     handle.abort();
 }
 
@@ -4476,13 +4477,22 @@ async fn native_resume_token_lengths_follow_the_profile_and_global_tokens_resume
         let (_, global) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
         assert_eq!(current.len(), length);
         assert_eq!(global.len(), length);
-        assert_ne!(current[8..], global[8..]);
-        tx.send(resume_request(2, "second", global.clone(), None))
+        if length == 11 {
+            assert_eq!(current, global);
+        } else {
+            assert_ne!(current[8..], global[8..]);
+        }
+        let resume = if length == 11 {
+            current.clone()
+        } else {
+            global.clone()
+        };
+        tx.send(resume_request(2, "second", resume.clone(), None))
             .await
             .unwrap();
         let (early, echoed) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
         assert_eq!(early, ["ADD[2]", "NO_CHANGE[]"]);
-        assert_eq!(echoed, global);
+        assert_eq!(echoed, resume);
         let trace = next_until(&mut listen, "NO_CHANGE[]").await;
         assert!(!trace.iter().any(|line| line.starts_with("RESET")));
         handle.abort();
@@ -4492,7 +4502,8 @@ async fn native_resume_token_lengths_follow_the_profile_and_global_tokens_resume
 
 #[tokio::test]
 async fn foreign_resume_tokens_are_removed_in_strict_and_reset_in_emulator() {
-    // Production's answer for a foreign token is unrecorded. Strict treats a mismatched check like recorded junk bytes.
+    // Production's answer for a foreign token is unrecorded. Strict treats a mismatched check like recorded junk bytes;
+    // a token from another target of the same database is not foreign in strict (see the target case below).
     for profile in [Profile::Strict, Profile::Emulator] {
         for foreign in ["target", "database", "epoch"] {
             let (mut client, mut handle) = start_profile(profile).await;
@@ -4549,7 +4560,13 @@ async fn foreign_resume_tokens_are_removed_in_strict_and_reset_in_emulator() {
                 }
             }
             tx.send(request).await.unwrap();
-            if matches!(profile, Profile::Strict) {
+            if matches!(profile, Profile::Strict) && foreign == "target" {
+                // A strict CURRENT token is the snapshot's global token (FS-LISTEN-SDK L3 203/203C:
+                // CURRENT and the following global NO_CHANGE carry the same bytes), and a global token
+                // resumes any target of the database, so it is not foreign to another target.
+                let trace = next_until(&mut listen, "NO_CHANGE[]").await;
+                assert_eq!(trace[..2], ["ADD[2]", "NO_CHANGE[]"], "{foreign}");
+            } else if matches!(profile, Profile::Strict) {
                 let first = tokio::time::timeout(std::time::Duration::from_secs(5), listen.next())
                     .await
                     .unwrap()
@@ -4710,17 +4727,16 @@ mod resume_token_properties {
             epoch in 0_u8..4,
             database in any::<u32>(),
             target in any::<u32>(),
-            other_target in any::<u32>(),
         ) {
             let runtime = tokio::runtime::Runtime::new().unwrap();
-            let different_checks = runtime.block_on(async {
+            runtime.block_on(async {
                 let (mut client, handle) = start(false).await;
                 let backend = BACKEND.with(|b| b.borrow().as_ref().unwrap().clone());
                 for _ in 0..epoch { backend.reset(); }
-                backend.replace_declared_databases([format!("db{database}")]);
-                let database = format!("projects/demo-app/databases/db{database}");
+                backend.replace_declared_databases([format!("db{database}"), "other".to_owned()]);
+                let database_id = format!("db{database}");
+                let database = format!("projects/demo-app/databases/{database_id}");
                 let collection = format!("c{target}");
-                let other_collection = format!("c{other_target}");
                 for value in 0..version {
                     client.commit(pb::CommitRequest {
                         database: database.clone(),
@@ -4739,6 +4755,7 @@ mod resume_token_properties {
                 let (_, bound) = trace_and_token(&mut listen, "CURRENT[1]").await;
                 let (_, global) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
                 assert_eq!(bound.len(), 11);
+                assert_eq!(bound, global);
                 assert_eq!(u64::from_be_bytes(bound[..8].try_into().unwrap()), u64::from(version));
                 if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut request.target_change {
                     t.target_id = 2;
@@ -4749,35 +4766,216 @@ mod resume_token_properties {
                 assert_eq!(early, ["ADD[2]", "NO_CHANGE[]"]);
                 assert_eq!(echoed, global);
                 next_until(&mut listen, "NO_CHANGE[]").await;
-                if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut request.target_change {
-                    t.target_id = 3;
-                    t.resume_type = None;
+
+                // The 3-byte checks can collide across databases or epochs (about 2^-24 per case).
+                let mut other_database = add_query_target(3, &collection);
+                other_database.database = "projects/demo-app/databases/other".to_owned();
+                if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut other_database.target_change {
+                    t.resume_type = Some(pb::target::ResumeType::ResumeToken(bound.clone()));
                     if let Some(pb::target::TargetType::Query(q)) = &mut t.target_type {
-                        let Some(pb::target::query_target::QueryType::StructuredQuery(query)) = &mut q.query_type else { panic!("expected a query") };
-                        query.from[0].collection_id = other_collection;
+                        q.parent = "projects/demo-app/databases/other/documents".to_owned();
                     }
                 }
-                tx.send(request.clone()).await.unwrap();
-                let (_, other) = trace_and_token(&mut listen, "CURRENT[3]").await;
-                next_until(&mut listen, "NO_CHANGE[]").await;
-                // Three-byte checks can collide. Draw only bindings whose checks differ from both accepted checks.
-                let different_checks = bound[8..] != other[8..] && bound[8..] != global[8..];
-                if different_checks {
-                    if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut request.target_change {
-                        t.target_id = 4;
-                        t.resume_type = Some(pb::target::ResumeType::ResumeToken(bound));
+                tx.send(other_database).await.unwrap();
+                let rejected = tokio::time::timeout(std::time::Duration::from_secs(5), listen.next()).await.unwrap().unwrap().unwrap();
+                assert_eq!(describe(&rejected), "REMOVE[3] cause=3");
+                backend.reset();
+                backend.replace_declared_databases([database_id]);
+                let (tx, rx) = mpsc::channel(8);
+                let mut listen = client.listen(ReceiverStream::new(rx)).await.unwrap().into_inner();
+                let mut stale_epoch = add_query_target(4, &collection);
+                stale_epoch.database.clone_from(&database);
+                if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut stale_epoch.target_change {
+                    t.resume_type = Some(pb::target::ResumeType::ResumeToken(bound));
+                    if let Some(pb::target::TargetType::Query(q)) = &mut t.target_type { q.parent = format!("{database}/documents"); }
+                }
+                tx.send(stale_epoch).await.unwrap();
+                let rejected = tokio::time::timeout(std::time::Duration::from_secs(5), listen.next()).await.unwrap().unwrap().unwrap();
+                assert_eq!(describe(&rejected), "REMOVE[4] cause=3");
+                handle.abort();
+                handle.await.unwrap_err();
+            });
+        }
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn strict_webchannel_current_and_following_global_boundary_share_a_token() {
+    use std::fmt::Write as _;
+
+    use fireemu_adapter_grpc::rest::json::{base64_decode, base64_encode};
+    use fireemu_adapter_grpc::rest::RestState;
+    use fireemu_adapter_grpc::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
+    use serde_json::json;
+
+    for (profile, length) in [(Profile::Strict, 11)] {
+        let (_, handle) = start_profile(profile).await;
+        let local = BACKEND.with(|b| b.borrow().as_ref().unwrap().clone());
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: if matches!(profile, Profile::Strict) {
+                    IndexValidationPolicy::Production
+                } else {
+                    IndexValidationPolicy::Emulator
+                },
+            },
+            indexes: IndexSet::default(),
+        };
+        let hub = Hub::new(Arc::new(RestState {
+            local,
+            gateway: Arc::new(gateway),
+            rules: None,
+            app_check: None,
+            control_token: None,
+        }));
+        let target = json!({"database": DB, "addTarget": {"targetId": 1, "documents": {"documents": [format!("{DOCS}/open/missing")]}}}).to_string();
+        let encoded = target.bytes().fold(String::new(), |mut encoded, b| {
+            write!(&mut encoded, "%{b:02X}").unwrap();
+            encoded
+        });
+        let ChannelResponse::Full {
+            status, headers, ..
+        } = hub.handle(&ChannelRequest {
+            kind: StreamKind::Listen,
+            method: "POST".to_owned(),
+            params: BTreeMap::from([
+                ("database".to_owned(), DB.to_owned()),
+                ("VER".to_owned(), "8".to_owned()),
+                ("RID".to_owned(), "1".to_owned()),
+            ]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: format!("count=1&ofs=0&req0___data__={encoded}"),
+        })
+        else {
+            panic!("expected handshake")
+        };
+        assert_eq!(status, 200);
+        let sid = headers
+            .into_iter()
+            .find(|(key, _)| *key == "x-http-session-id")
+            .unwrap()
+            .1;
+        let mut aid = 0;
+        let mut tokens = 0;
+        let mut current_token = None;
+        while tokens < 2 {
+            let ChannelResponse::Stream { mut body, .. } = hub.handle(&ChannelRequest {
+                kind: StreamKind::Listen,
+                method: "GET".to_owned(),
+                params: BTreeMap::from([
+                    ("SID".to_owned(), sid.clone()),
+                    ("RID".to_owned(), "rpc".to_owned()),
+                    ("AID".to_owned(), aid.to_string()),
+                    ("CI".to_owned(), "1".to_owned()),
+                    ("TO".to_owned(), "1000".to_owned()),
+                    ("TYPE".to_owned(), "xmlhttp".to_owned()),
+                ]),
+                authorization: None,
+                app_check: Vec::new(),
+                origin: None,
+                body: String::new(),
+            }) else {
+                panic!("expected back channel")
+            };
+            let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), body.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let (_, payload) = std::str::from_utf8(&chunk)
+                .unwrap()
+                .split_once('\n')
+                .unwrap();
+            let arrays: serde_json::Value = serde_json::from_str(payload).unwrap();
+            for array in arrays.as_array().unwrap() {
+                aid = array[0].as_u64().unwrap();
+                if let Some(token) = array[1][0]["targetChange"]["resumeToken"].as_str() {
+                    let decoded = base64_decode(token).unwrap();
+                    assert_eq!(decoded.len(), length);
+                    assert_eq!(token.len(), if length == 11 { 16 } else { 44 });
+                    assert_eq!(base64_encode(&decoded), token);
+                    let change = &array[1][0]["targetChange"];
+                    if change["targetChangeType"] == "CURRENT" {
+                        assert_eq!(change["targetIds"], json!([1]));
+                        current_token = Some(decoded);
+                    } else {
+                        assert!(change["targetIds"].is_null() || change["targetIds"] == json!([]));
+                        assert_eq!(current_token.as_ref().unwrap(), &decoded);
                     }
-                    tx.send(request).await.unwrap();
-                    let first = tokio::time::timeout(std::time::Duration::from_secs(5), listen.next()).await.unwrap().unwrap().unwrap();
-                    assert_eq!(describe(&first), "REMOVE[4] cause=3");
-                    let Some(pb::listen_response::ResponseType::TargetChange(change)) = first.response_type else { panic!("expected a removal") };
-                    assert_eq!(change.cause.unwrap().message, "bad resume token");
+                    tokens += 1;
+                }
+            }
+        }
+        hub.handle(&ChannelRequest {
+            kind: StreamKind::Listen,
+            method: "POST".to_owned(),
+            params: BTreeMap::from([
+                ("SID".to_owned(), sid),
+                ("TYPE".to_owned(), "terminate".to_owned()),
+            ]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: String::new(),
+        });
+        handle.abort();
+        handle.await.unwrap_err();
+    }
+}
+
+mod current_boundary_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 32, failure_persistence: None, ..ProptestConfig::default() })]
+
+        #[test]
+        fn strict_current_boundaries_share_tokens_and_resume_without_replay(
+            history in prop::collection::vec((0_u8..4, prop::option::of(any::<u8>())), 0..16),
+        ) {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.block_on(async {
+                let (mut client, handle) = start(false).await;
+                for step in std::iter::once(None).chain(history.into_iter().map(Some)) {
+                    if let Some((id, value)) = step {
+                        let path = format!("shared/d{id}");
+                        let write = match value {
+                            Some(value) => set_write(&path, &[("v", s(&value.to_string()))]),
+                            None => delete_write(&path),
+                        };
+                        client.commit(pb::CommitRequest {
+                            database: DB.to_owned(),
+                            writes: vec![write],
+                            ..Default::default()
+                        }).await.unwrap();
+                    }
+                    let (tx, rx) = mpsc::channel(8);
+                    let mut listen = client.listen(ReceiverStream::new(rx)).await.unwrap().into_inner();
+                    tx.send(add_query_target(1, "shared")).await.unwrap();
+                    let (_, current) = trace_and_token(&mut listen, "CURRENT[1]").await;
+                    let (following, boundary) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+                    assert_eq!(following, ["NO_CHANGE[]"]);
+                    assert_eq!(current, boundary);
+                    tx.send(resume_request(2, "shared", boundary.clone(), None)).await.unwrap();
+                    let (early, echoed) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+                    assert_eq!(early, ["ADD[2]", "NO_CHANGE[]"]);
+                    assert_eq!(echoed, boundary);
+                    let (replay, resumed_current) = trace_and_token(&mut listen, "CURRENT[2]").await;
+                    assert!(replay.iter().all(|line| line.starts_with("FILTER ") || line == "CURRENT[2]"));
+                    let (following, resumed_boundary) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+                    assert_eq!(following, ["NO_CHANGE[]"]);
+                    assert_eq!(resumed_current, resumed_boundary);
                 }
                 handle.abort();
                 handle.await.unwrap_err();
-                different_checks
             });
-            prop_assume!(different_checks);
         }
     }
 }

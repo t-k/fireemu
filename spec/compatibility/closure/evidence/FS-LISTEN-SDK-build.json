@@ -1,0 +1,11 @@
+{
+  "sourceCommit": "aad8cee2a2a44528962361a474debc2c366d5b9d",
+  "gitStatusOutsideBuildOutput": [],
+  "cargoVersion": "cargo 1.94.0 (85eff7c80 2026-01-15)",
+  "locked": true,
+  "binarySha256": "0a1cebbc61edf1e7ade40ef9d91326d56dc00e7d0e4cafb30622ee694cafde08",
+  "command": "RUSTC_WRAPPER= CARGO_NET_OFFLINE=true heavy-slot run --lane codex -- cargo build -p fireemu --locked --release --target-dir target/listen-final",
+  "profile": "release",
+  "targetDir": "target/listen-final",
+  "RUSTC_WRAPPER": ""
+}

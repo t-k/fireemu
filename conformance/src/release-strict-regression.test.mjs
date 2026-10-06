@@ -437,6 +437,7 @@ test("the excluded kinds are exactly the ones the release discloses", () => {
   // Removing an exclusion means adding its run; adding one means a disclosure of its own.
   assert.deepEqual(EXCLUDED_KINDS.map((exclusion) => exclusion.kind).toSorted(), [
     "auth-fs-cross-stage2-comparison-v1",
+    "fs-listen-sdk-comparison-v1",
     "functions-events-comparison",
     "scheduled-functions-calendar-comparison-v1",
     "scheduled-functions-comparison-v1",
@@ -1793,4 +1794,13 @@ test("the historical FS-DATA-WRITE replay waits for a held writer longer than st
       `${command.mode}: ${timeout} ms is not above ${strictWaitMs} ms`,
     );
   }
+});
+
+test("FS-LISTEN-SDK uses its disclosed exclusion as a verified closure", () => {
+  const closures = committedClosures();
+  const listen = closures.find((entry) => entry.closure.parent === "FS-LISTEN-SDK");
+  assert.equal(listen.closure.parentStatus, "COMPAT_VERIFIED");
+  const reviewed = planComparisons(closures, readJson);
+  assert.deepEqual(reviewed.errors, []);
+  assert.ok(reviewed.excluded.some((entry) => entry.kind === "fs-listen-sdk-comparison-v1"));
 });

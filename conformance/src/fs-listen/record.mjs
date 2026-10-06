@@ -17,6 +17,11 @@
 //   node src/fs-listen/record.mjs readback --journal J --project P --out F
 //        (the coordinator's A2 read-back: reads every name and account the journal lists, read-only)
 //   node src/fs-listen/record.mjs sdk --target local [--profile strict|emulator] --out F
+//   node src/fs-listen/record.mjs browser --target production --project fireemu-oracle-query \
+//        --envelope E --ledger L --api-key-file KEY --origin-port N --out F   (the SDK cases in headless
+//        Chromium at http://localhost:N, once in forced long polling and once in streaming; KEY is a
+//        0600 file with the key, restricted to that origin)
+//   node src/fs-listen/record.mjs browser --target local [--profile strict|emulator] --out F
 //
 // `--target local` starts fireemu itself (`fireemu exec`) and runs the same programs inside it.
 
@@ -40,6 +45,7 @@ import {
   RESUME_VARIANT_REQUEST_CEILING,
 } from "./native-resume-variants.mjs";
 import { runNative } from "./native-run.mjs";
+import { recordBrowser } from "./browser-record.mjs";
 import { loadApiKey, recordSdk } from "./sdk-record.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -49,6 +55,7 @@ const HERE = fileURLToPath(import.meta.url);
 export const ALLOWED_PROJECTS = {
   native: ["fireemu-oracle-txn"],
   sdk: ["fireemu-oracle-query"],
+  browser: ["fireemu-oracle-query"],
 };
 
 export function checkProject(kind, project) {
@@ -188,6 +195,7 @@ const PRODUCTION_DEPS = {
   recordNative,
   loadApiKey,
   recordSdk,
+  recordBrowser,
 };
 
 /**
@@ -332,6 +340,46 @@ export async function sdkProduction(options, deps = {}) {
   }
 }
 
+/** The port the browser page's origin has: the key is restricted to `http://localhost:<port>`. */
+export function originPortOf(options) {
+  const port = Number(options["origin-port"]);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535)
+    throw new Error("--origin-port <1024..65535> is required");
+  return port;
+}
+
+export async function browserProduction(options, deps = {}) {
+  const d = { ...PRODUCTION_DEPS, ...deps };
+  d.checkProject("browser", options.project);
+  await d.admit(options);
+  if (!options["api-key-file"]) throw new Error("--api-key-file <file> is required");
+  const originPort = originPortOf(options);
+  const apiKey = await d.loadApiKey(options["api-key-file"]);
+  const token = await d.accessToken();
+  const run = d.newRunId();
+  const journal = d.openJournal(options, "browser", run);
+  try {
+    return await d.recordBrowser({
+      target: {
+        kind: "production",
+        project: options.project,
+        token,
+        originPort,
+        web: {
+          apiKey,
+          authDomain: `${options.project}.firebaseapp.com`,
+          projectId: options.project,
+        },
+      },
+      run,
+      log: (line) => console.error(line),
+      journal,
+    });
+  } finally {
+    journal.close();
+  }
+}
+
 /** The coordinator's A2 read-back of a journal: read-only, nothing is deleted. */
 export async function readbackProduction(options, deps = {}) {
   const d = { ...PRODUCTION_DEPS, accessToken: () => accessToken(), ...deps };
@@ -348,7 +396,7 @@ export async function readbackProduction(options, deps = {}) {
     token,
   });
   const accountClient =
-    run.kind === "sdk"
+    run.kind === "sdk" || run.kind === "browser"
       ? d.createAccountClient({
           base: "https://identitytoolkit.googleapis.com",
           project: options.project,
@@ -373,6 +421,21 @@ async function sdkInsideFireemu() {
     target: {
       kind: "local",
       project: "demo-fs-listen",
+      firestore: { host, port: Number(port) },
+      auth: `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`,
+    },
+    run: newRunId(),
+  });
+}
+
+/** Inside `fireemu exec`: the emulator's Firestore and Auth addresses come from the environment. */
+async function browserInsideFireemu() {
+  const [host, port] = process.env.FIRESTORE_EMULATOR_HOST.split(":");
+  return recordBrowser({
+    target: {
+      kind: "local",
+      project: "demo-fs-listen",
+      originPort: 47854,
       firestore: { host, port: Number(port) },
       auth: `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`,
     },
@@ -534,7 +597,12 @@ async function inFireemu(options, command, { rules } = {}) {
   ];
   const code =
     options.target === "official"
-      ? await withOfficialEmulator({ script: HERE, args, rules, auth: command.startsWith("sdk") })
+      ? await withOfficialEmulator({
+          script: HERE,
+          args,
+          rules,
+          auth: !command.startsWith("native"),
+        })
       : await withFireemu({ profile: options.profile ?? "strict", script: HERE, args, rules });
   let text;
   try {
@@ -576,8 +644,16 @@ async function main(argv) {
     });
   } else if (options.command === "sdk-in-fireemu") {
     recording = await sdkInsideFireemu();
+  } else if (options.command === "browser" && options.target === "production") {
+    recording = await browserProduction(options);
+  } else if (options.command === "browser" && ["local", "official"].includes(options.target)) {
+    recording = await inFireemu(options, "browser-in-fireemu", {
+      rules: join(dirname(HERE), "../../firestore.rules"),
+    });
+  } else if (options.command === "browser-in-fireemu") {
+    recording = await browserInsideFireemu();
   } else {
-    throw new Error("usage: record.mjs native|sdk --target production|local --out FILE");
+    throw new Error("usage: record.mjs native|sdk|browser --target production|local --out FILE");
   }
   await mkdir(dirname(options.out), { recursive: true });
   await writeFile(options.out, `${JSON.stringify(recording, null, 2)}\n`);

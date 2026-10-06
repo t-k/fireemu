@@ -1,0 +1,697 @@
+{
+  "version": 1,
+  "run": "nmuw7z5c9",
+  "sourceRecording": "listen-l3-browser-20261006T050949Z-r1/browser-prod.json",
+  "sourceSha256": "982deb80322ba8561e6bde9030c3095cfd1e57594cf8b4973b52d5da85509da2",
+  "masking": "ASCII bodies retain framing, whitespace, member order and byte lengths. Document field strings use x, integer strings use 0, project and document identifiers use x with path separators retained, and handshake IDs and resume tokens use x. The run field is the citation, not a body value. contentLength is the recorded HTTP header; bodyBytes is the decoded body size.",
+  "frames": [
+    {
+      "mode": "long-polling",
+      "event": 17,
+      "phase": "warm",
+      "status": 200,
+      "targets": [
+        {
+          "targetId": 1002
+        }
+      ],
+      "contentLength": "71",
+      "bodyBytes": 54,
+      "frameComplete": true,
+      "boundaryComplete": false,
+      "boundaryBodyBytes": null,
+      "boundaries": [],
+      "body": "51\n[[0,[\"c\",\"xxxxxxxxxxxxxxxxxxxxxx\",\"\",8,15,30000]]]\n"
+    },
+    {
+      "mode": "long-polling",
+      "event": 18,
+      "phase": "warm",
+      "status": 200,
+      "targets": [],
+      "contentLength": null,
+      "bodyBytes": 2962,
+      "frameComplete": true,
+      "boundaryComplete": true,
+      "boundaryBodyBytes": 2962,
+      "boundaries": [
+        {
+          "sequence": 4,
+          "endByte": 2962,
+          "targetIds": [1002],
+          "type": "CURRENT",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:12:22.313213Z"
+        },
+        {
+          "sequence": 5,
+          "endByte": 2962,
+          "targetIds": [],
+          "type": "NO_CHANGE",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:12:22.313213Z"
+        },
+        {
+          "sequence": 6,
+          "endByte": 2962,
+          "targetIds": [1002],
+          "type": "RESET",
+          "resumeToken": {
+            "length": 4
+          },
+          "readTime": null
+        },
+        {
+          "sequence": 9,
+          "endByte": 2962,
+          "targetIds": [1002],
+          "type": "CURRENT",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:12:22.361440Z"
+        },
+        {
+          "sequence": 10,
+          "endByte": 2962,
+          "targetIds": [],
+          "type": "NO_CHANGE",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:12:22.361440Z"
+        }
+      ],
+      "body": "2957\n[[1,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"ADD\",\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[2,[{\n  \"documentChange\": {\n    \"document\": {\n      \"name\": \"projects/xxxxxxxxxxxxxxxxxxxx/databases/(default)/documents/conf_listen/xxxxxxxxxxxxxxxx\",\n      \"fields\": {\n        \"value\": {\n          \"stringValue\": \"xx\"\n        },\n        \"owner\": {\n          \"stringValue\": \"xxxxxxxxxx\"\n        },\n        \"rank\": {\n          \"integerValue\": \"00000000\"\n        }\n      },\n      \"createTime\": \"2026-10-06T05:12:18.735181Z\",\n      \"updateTime\": \"2026-10-06T05:12:18.735181Z\"\n    },\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[3,[{\n  \"documentChange\": {\n    \"document\": {\n      \"name\": \"projects/xxxxxxxxxxxxxxxxxxxx/databases/(default)/documents/conf_listen/xxxxxxxxxxxxxxx\",\n      \"fields\": {\n        \"rank\": {\n          \"integerValue\": \"00000000\"\n        },\n        \"value\": {\n          \"stringValue\": \"xx\"\n        },\n        \"owner\": {\n          \"stringValue\": \"xxxxxxxxxx\"\n        }\n      },\n      \"createTime\": \"2026-10-06T05:12:18.933876Z\",\n      \"updateTime\": \"2026-10-06T05:12:18.933876Z\"\n    },\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[4,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"CURRENT\",\n    \"targetIds\": [\n      1002\n    ],\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:12:22.313213Z\"\n  }\n}\n]],[5,[{\n  \"targetChange\": {\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:12:22.313213Z\"\n  }\n}\n]],[6,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"RESET\",\n    \"targetIds\": [\n      1002\n    ],\n    \"resumeToken\": \"xxxx\"\n  }\n}\n]],[7,[{\n  \"documentChange\": {\n    \"document\": {\n      \"name\": \"projects/xxxxxxxxxxxxxxxxxxxx/databases/(default)/documents/conf_listen/xxxxxxxxxxxxxxxx\",\n      \"fields\": {\n        \"value\": {\n          \"stringValue\": \"xx\"\n        },\n        \"rank\": {\n          \"integerValue\": \"00000000\"\n        },\n        \"owner\": {\n          \"stringValue\": \"xxxxxxxxxx\"\n        }\n      },\n      \"createTime\": \"2026-10-06T05:12:18.735181Z\",\n      \"updateTime\": \"2026-10-06T05:12:18.735181Z\"\n    },\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[8,[{\n  \"documentChange\": {\n    \"document\": {\n      \"name\": \"projects/xxxxxxxxxxxxxxxxxxxx/databases/(default)/documents/conf_listen/xxxxxxxxxxxxxxx\",\n      \"fields\": {\n        \"value\": {\n          \"stringValue\": \"xx\"\n        },\n        \"rank\": {\n          \"integerValue\": \"00000000\"\n        },\n        \"owner\": {\n          \"stringValue\": \"xxxxxxxxxx\"\n        }\n      },\n      \"createTime\": \"2026-10-06T05:12:18.933876Z\",\n      \"updateTime\": \"2026-10-06T05:12:18.933876Z\"\n    },\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[9,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"CURRENT\",\n    \"targetIds\": [\n      1002\n    ],\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:12:22.361440Z\"\n  }\n}\n]],[10,[{\n  \"targetChange\": {\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:12:22.361440Z\"\n  }\n}\n]]]"
+    },
+    {
+      "mode": "long-polling",
+      "event": 22,
+      "phase": "restarted-online",
+      "status": 200,
+      "targets": [
+        {
+          "targetId": 1002
+        }
+      ],
+      "contentLength": "71",
+      "bodyBytes": 54,
+      "frameComplete": true,
+      "boundaryComplete": false,
+      "boundaryBodyBytes": null,
+      "boundaries": [],
+      "body": "51\n[[0,[\"c\",\"xxxxxxxxxxxxxxxxxxxxxx\",\"\",8,15,30000]]]\n"
+    },
+    {
+      "mode": "long-polling",
+      "event": 23,
+      "phase": "restarted-online",
+      "status": 200,
+      "targets": [],
+      "contentLength": null,
+      "bodyBytes": 1720,
+      "frameComplete": true,
+      "boundaryComplete": true,
+      "boundaryBodyBytes": 1720,
+      "boundaries": [
+        {
+          "sequence": 2,
+          "endByte": 1720,
+          "targetIds": [],
+          "type": "NO_CHANGE",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:12:22.361440Z"
+        },
+        {
+          "sequence": 3,
+          "endByte": 1720,
+          "targetIds": [1002],
+          "type": "RESET",
+          "resumeToken": {
+            "length": 4
+          },
+          "readTime": null
+        },
+        {
+          "sequence": 6,
+          "endByte": 1720,
+          "targetIds": [1002],
+          "type": "CURRENT",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:12:23.598121Z"
+        },
+        {
+          "sequence": 7,
+          "endByte": 1720,
+          "targetIds": [],
+          "type": "NO_CHANGE",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:12:23.598121Z"
+        }
+      ],
+      "body": "1715\n[[1,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"ADD\",\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[2,[{\n  \"targetChange\": {\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:12:22.361440Z\"\n  }\n}\n]],[3,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"RESET\",\n    \"targetIds\": [\n      1002\n    ],\n    \"resumeToken\": \"xxxx\"\n  }\n}\n]],[4,[{\n  \"documentChange\": {\n    \"document\": {\n      \"name\": \"projects/xxxxxxxxxxxxxxxxxxxx/databases/(default)/documents/conf_listen/xxxxxxxxxxxxxxxx\",\n      \"fields\": {\n        \"owner\": {\n          \"stringValue\": \"xxxxxxxxxx\"\n        },\n        \"rank\": {\n          \"integerValue\": \"00000000\"\n        },\n        \"value\": {\n          \"stringValue\": \"xx\"\n        }\n      },\n      \"createTime\": \"2026-10-06T05:12:18.735181Z\",\n      \"updateTime\": \"2026-10-06T05:12:18.735181Z\"\n    },\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[5,[{\n  \"documentChange\": {\n    \"document\": {\n      \"name\": \"projects/xxxxxxxxxxxxxxxxxxxx/databases/(default)/documents/conf_listen/xxxxxxxxxxxxxxx\",\n      \"fields\": {\n        \"owner\": {\n          \"stringValue\": \"xxxxxxxxxx\"\n        },\n        \"rank\": {\n          \"integerValue\": \"00000000\"\n        },\n        \"value\": {\n          \"stringValue\": \"xx\"\n        }\n      },\n      \"createTime\": \"2026-10-06T05:12:18.933876Z\",\n      \"updateTime\": \"2026-10-06T05:12:18.933876Z\"\n    },\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[6,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"CURRENT\",\n    \"targetIds\": [\n      1002\n    ],\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:12:23.598121Z\"\n  }\n}\n]],[7,[{\n  \"targetChange\": {\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:12:23.598121Z\"\n  }\n}\n]]]"
+    },
+    {
+      "mode": "long-polling",
+      "event": 27,
+      "phase": "cold-online",
+      "status": 200,
+      "targets": [
+        {
+          "targetId": 1002
+        }
+      ],
+      "contentLength": "71",
+      "bodyBytes": 54,
+      "frameComplete": true,
+      "boundaryComplete": false,
+      "boundaryBodyBytes": null,
+      "boundaries": [],
+      "body": "51\n[[0,[\"c\",\"xxxxxxxxxxxxxxxxxxxxxx\",\"\",8,15,30000]]]\n"
+    },
+    {
+      "mode": "long-polling",
+      "event": 28,
+      "phase": "cold-online",
+      "status": 200,
+      "targets": [],
+      "contentLength": null,
+      "bodyBytes": 1469,
+      "frameComplete": true,
+      "boundaryComplete": true,
+      "boundaryBodyBytes": 1469,
+      "boundaries": [
+        {
+          "sequence": 4,
+          "endByte": 1469,
+          "targetIds": [1002],
+          "type": "CURRENT",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:12:24.737425Z"
+        },
+        {
+          "sequence": 5,
+          "endByte": 1469,
+          "targetIds": [],
+          "type": "NO_CHANGE",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:12:24.737425Z"
+        }
+      ],
+      "body": "1464\n[[1,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"ADD\",\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[2,[{\n  \"documentChange\": {\n    \"document\": {\n      \"name\": \"projects/xxxxxxxxxxxxxxxxxxxx/databases/(default)/documents/conf_listen/xxxxxxxxxxxxxxxx\",\n      \"fields\": {\n        \"value\": {\n          \"stringValue\": \"xx\"\n        },\n        \"owner\": {\n          \"stringValue\": \"xxxxxxxxxx\"\n        },\n        \"rank\": {\n          \"integerValue\": \"00000000\"\n        }\n      },\n      \"createTime\": \"2026-10-06T05:12:18.735181Z\",\n      \"updateTime\": \"2026-10-06T05:12:18.735181Z\"\n    },\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[3,[{\n  \"documentChange\": {\n    \"document\": {\n      \"name\": \"projects/xxxxxxxxxxxxxxxxxxxx/databases/(default)/documents/conf_listen/xxxxxxxxxxxxxxx\",\n      \"fields\": {\n        \"owner\": {\n          \"stringValue\": \"xxxxxxxxxx\"\n        },\n        \"rank\": {\n          \"integerValue\": \"00000000\"\n        },\n        \"value\": {\n          \"stringValue\": \"xx\"\n        }\n      },\n      \"createTime\": \"2026-10-06T05:12:18.933876Z\",\n      \"updateTime\": \"2026-10-06T05:12:18.933876Z\"\n    },\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[4,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"CURRENT\",\n    \"targetIds\": [\n      1002\n    ],\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:12:24.737425Z\"\n  }\n}\n]],[5,[{\n  \"targetChange\": {\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:12:24.737425Z\"\n  }\n}\n]]]"
+    },
+    {
+      "mode": "streaming",
+      "event": 13,
+      "phase": "warm",
+      "status": 200,
+      "targets": [
+        {
+          "targetId": 1002
+        }
+      ],
+      "contentLength": "71",
+      "bodyBytes": 54,
+      "frameComplete": true,
+      "boundaryComplete": false,
+      "boundaryBodyBytes": null,
+      "boundaries": [],
+      "body": "51\n[[0,[\"c\",\"xxxxxxxxxxxxxxxxxxxxxx\",\"\",8,15,30000]]]\n"
+    },
+    {
+      "mode": "streaming",
+      "event": 14,
+      "phase": "warm",
+      "status": 200,
+      "targets": [],
+      "contentLength": null,
+      "bodyBytes": 1469,
+      "frameComplete": true,
+      "boundaryComplete": true,
+      "boundaryBodyBytes": 1469,
+      "boundaries": [
+        {
+          "sequence": 4,
+          "endByte": 1469,
+          "targetIds": [1002],
+          "type": "CURRENT",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:14:28.784252Z"
+        },
+        {
+          "sequence": 5,
+          "endByte": 1469,
+          "targetIds": [],
+          "type": "NO_CHANGE",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:14:28.784252Z"
+        }
+      ],
+      "body": "1464\n[[1,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"ADD\",\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[2,[{\n  \"documentChange\": {\n    \"document\": {\n      \"name\": \"projects/xxxxxxxxxxxxxxxxxxxx/databases/(default)/documents/conf_listen/xxxxxxxxxxxxxxxx\",\n      \"fields\": {\n        \"value\": {\n          \"stringValue\": \"xx\"\n        },\n        \"owner\": {\n          \"stringValue\": \"xxxxxxxxxx\"\n        },\n        \"rank\": {\n          \"integerValue\": \"00000000\"\n        }\n      },\n      \"createTime\": \"2026-10-06T05:14:24.518551Z\",\n      \"updateTime\": \"2026-10-06T05:14:24.518551Z\"\n    },\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[3,[{\n  \"documentChange\": {\n    \"document\": {\n      \"name\": \"projects/xxxxxxxxxxxxxxxxxxxx/databases/(default)/documents/conf_listen/xxxxxxxxxxxxxxx\",\n      \"fields\": {\n        \"value\": {\n          \"stringValue\": \"xx\"\n        },\n        \"owner\": {\n          \"stringValue\": \"xxxxxxxxxx\"\n        },\n        \"rank\": {\n          \"integerValue\": \"00000000\"\n        }\n      },\n      \"createTime\": \"2026-10-06T05:14:24.699391Z\",\n      \"updateTime\": \"2026-10-06T05:14:24.699391Z\"\n    },\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[4,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"CURRENT\",\n    \"targetIds\": [\n      1002\n    ],\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:14:28.784252Z\"\n  }\n}\n]],[5,[{\n  \"targetChange\": {\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:14:28.784252Z\"\n  }\n}\n]]]"
+    },
+    {
+      "mode": "streaming",
+      "event": 17,
+      "phase": "restarted-online",
+      "status": 200,
+      "targets": [
+        {
+          "targetId": 1002
+        }
+      ],
+      "contentLength": "71",
+      "bodyBytes": 54,
+      "frameComplete": true,
+      "boundaryComplete": false,
+      "boundaryBodyBytes": null,
+      "boundaries": [],
+      "body": "51\n[[0,[\"c\",\"xxxxxxxxxxxxxxxxxxxxxx\",\"\",8,15,30000]]]\n"
+    },
+    {
+      "mode": "streaming",
+      "event": 18,
+      "phase": "restarted-online",
+      "status": 200,
+      "targets": [],
+      "contentLength": null,
+      "bodyBytes": 539,
+      "frameComplete": true,
+      "boundaryComplete": true,
+      "boundaryBodyBytes": 539,
+      "boundaries": [
+        {
+          "sequence": 2,
+          "endByte": 539,
+          "targetIds": [],
+          "type": "NO_CHANGE",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:14:28.784252Z"
+        },
+        {
+          "sequence": 3,
+          "endByte": 539,
+          "targetIds": [1002],
+          "type": "CURRENT",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:14:30.149864Z"
+        },
+        {
+          "sequence": 4,
+          "endByte": 539,
+          "targetIds": [],
+          "type": "NO_CHANGE",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:14:30.149864Z"
+        }
+      ],
+      "body": "535\n[[1,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"ADD\",\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[2,[{\n  \"targetChange\": {\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:14:28.784252Z\"\n  }\n}\n]],[3,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"CURRENT\",\n    \"targetIds\": [\n      1002\n    ],\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:14:30.149864Z\"\n  }\n}\n]],[4,[{\n  \"targetChange\": {\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:14:30.149864Z\"\n  }\n}\n]]]"
+    },
+    {
+      "mode": "streaming",
+      "event": 21,
+      "phase": "cold-online",
+      "status": 200,
+      "targets": [
+        {
+          "targetId": 1002
+        }
+      ],
+      "contentLength": "71",
+      "bodyBytes": 54,
+      "frameComplete": true,
+      "boundaryComplete": false,
+      "boundaryBodyBytes": null,
+      "boundaries": [],
+      "body": "51\n[[0,[\"c\",\"xxxxxxxxxxxxxxxxxxxxxx\",\"\",8,15,30000]]]\n"
+    },
+    {
+      "mode": "streaming",
+      "event": 22,
+      "phase": "cold-online",
+      "status": 200,
+      "targets": [],
+      "contentLength": null,
+      "bodyBytes": 2962,
+      "frameComplete": true,
+      "boundaryComplete": true,
+      "boundaryBodyBytes": 2962,
+      "boundaries": [
+        {
+          "sequence": 4,
+          "endByte": 2962,
+          "targetIds": [1002],
+          "type": "CURRENT",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:14:31.362739Z"
+        },
+        {
+          "sequence": 5,
+          "endByte": 2962,
+          "targetIds": [],
+          "type": "NO_CHANGE",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:14:31.362739Z"
+        },
+        {
+          "sequence": 6,
+          "endByte": 2962,
+          "targetIds": [1002],
+          "type": "RESET",
+          "resumeToken": {
+            "length": 4
+          },
+          "readTime": null
+        },
+        {
+          "sequence": 9,
+          "endByte": 2962,
+          "targetIds": [1002],
+          "type": "CURRENT",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:14:31.388767Z"
+        },
+        {
+          "sequence": 10,
+          "endByte": 2962,
+          "targetIds": [],
+          "type": "NO_CHANGE",
+          "resumeToken": {
+            "length": 16
+          },
+          "readTime": "2026-10-06T05:14:31.388767Z"
+        }
+      ],
+      "body": "2957\n[[1,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"ADD\",\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[2,[{\n  \"documentChange\": {\n    \"document\": {\n      \"name\": \"projects/xxxxxxxxxxxxxxxxxxxx/databases/(default)/documents/conf_listen/xxxxxxxxxxxxxxxx\",\n      \"fields\": {\n        \"rank\": {\n          \"integerValue\": \"00000000\"\n        },\n        \"owner\": {\n          \"stringValue\": \"xxxxxxxxxx\"\n        },\n        \"value\": {\n          \"stringValue\": \"xx\"\n        }\n      },\n      \"createTime\": \"2026-10-06T05:14:24.518551Z\",\n      \"updateTime\": \"2026-10-06T05:14:24.518551Z\"\n    },\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[3,[{\n  \"documentChange\": {\n    \"document\": {\n      \"name\": \"projects/xxxxxxxxxxxxxxxxxxxx/databases/(default)/documents/conf_listen/xxxxxxxxxxxxxxx\",\n      \"fields\": {\n        \"value\": {\n          \"stringValue\": \"xx\"\n        },\n        \"rank\": {\n          \"integerValue\": \"00000000\"\n        },\n        \"owner\": {\n          \"stringValue\": \"xxxxxxxxxx\"\n        }\n      },\n      \"createTime\": \"2026-10-06T05:14:24.699391Z\",\n      \"updateTime\": \"2026-10-06T05:14:24.699391Z\"\n    },\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[4,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"CURRENT\",\n    \"targetIds\": [\n      1002\n    ],\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:14:31.362739Z\"\n  }\n}\n]],[5,[{\n  \"targetChange\": {\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:14:31.362739Z\"\n  }\n}\n]],[6,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"RESET\",\n    \"targetIds\": [\n      1002\n    ],\n    \"resumeToken\": \"xxxx\"\n  }\n}\n]],[7,[{\n  \"documentChange\": {\n    \"document\": {\n      \"name\": \"projects/xxxxxxxxxxxxxxxxxxxx/databases/(default)/documents/conf_listen/xxxxxxxxxxxxxxxx\",\n      \"fields\": {\n        \"rank\": {\n          \"integerValue\": \"00000000\"\n        },\n        \"owner\": {\n          \"stringValue\": \"xxxxxxxxxx\"\n        },\n        \"value\": {\n          \"stringValue\": \"xx\"\n        }\n      },\n      \"createTime\": \"2026-10-06T05:14:24.518551Z\",\n      \"updateTime\": \"2026-10-06T05:14:24.518551Z\"\n    },\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[8,[{\n  \"documentChange\": {\n    \"document\": {\n      \"name\": \"projects/xxxxxxxxxxxxxxxxxxxx/databases/(default)/documents/conf_listen/xxxxxxxxxxxxxxx\",\n      \"fields\": {\n        \"value\": {\n          \"stringValue\": \"xx\"\n        },\n        \"owner\": {\n          \"stringValue\": \"xxxxxxxxxx\"\n        },\n        \"rank\": {\n          \"integerValue\": \"00000000\"\n        }\n      },\n      \"createTime\": \"2026-10-06T05:14:24.699391Z\",\n      \"updateTime\": \"2026-10-06T05:14:24.699391Z\"\n    },\n    \"targetIds\": [\n      1002\n    ]\n  }\n}\n]],[9,[{\n  \"targetChange\": {\n    \"targetChangeType\": \"CURRENT\",\n    \"targetIds\": [\n      1002\n    ],\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:14:31.388767Z\"\n  }\n}\n]],[10,[{\n  \"targetChange\": {\n    \"resumeToken\": \"xxxxxxxxxxxxxxxx\",\n    \"readTime\": \"2026-10-06T05:14:31.388767Z\"\n  }\n}\n]]]"
+    }
+  ],
+  "rows": [
+    {
+      "id": "203",
+      "mode": "long-polling",
+      "events": [17, 18, 22, 23],
+      "evidence": {
+        "phases": [
+          {
+            "phase": "warm",
+            "snapshots": [
+              {
+                "docs": ["alpha", "beta"],
+                "fromCache": false,
+                "hasPendingWrites": false
+              }
+            ],
+            "errors": [],
+            "failures": [],
+            "cacheRead": {
+              "outcome": "success",
+              "docs": ["alpha", "beta"],
+              "fromCache": true,
+              "hasPendingWrites": false
+            },
+            "networkDisabled": false,
+            "enableCalls": 0,
+            "playwrightOffline": false
+          },
+          {
+            "phase": "restarted-offline",
+            "snapshots": [
+              {
+                "docs": ["alpha", "beta"],
+                "fromCache": true,
+                "hasPendingWrites": false
+              }
+            ],
+            "errors": [],
+            "failures": [],
+            "cacheRead": {
+              "outcome": "success",
+              "docs": ["alpha", "beta"],
+              "fromCache": true,
+              "hasPendingWrites": false
+            },
+            "networkDisabled": true,
+            "enableCalls": 0,
+            "playwrightOffline": true
+          },
+          {
+            "phase": "restarted-online",
+            "snapshots": [
+              {
+                "docs": ["alpha", "beta"],
+                "fromCache": true,
+                "hasPendingWrites": false
+              },
+              {
+                "docs": ["alpha", "beta"],
+                "fromCache": false,
+                "hasPendingWrites": false
+              }
+            ],
+            "errors": [],
+            "failures": [],
+            "cacheRead": {
+              "outcome": "success",
+              "docs": ["alpha", "beta"],
+              "fromCache": true,
+              "hasPendingWrites": false
+            },
+            "networkDisabled": true,
+            "enableCalls": 1,
+            "playwrightOffline": false
+          }
+        ],
+        "cacheMode": "persistent",
+        "sameProfile": true,
+        "processExited": true
+      }
+    },
+    {
+      "id": "203C",
+      "mode": "long-polling",
+      "events": [27, 28],
+      "evidence": {
+        "phases": [
+          {
+            "phase": "cold-offline",
+            "snapshots": [
+              {
+                "docs": [],
+                "fromCache": true,
+                "hasPendingWrites": false
+              }
+            ],
+            "errors": [],
+            "failures": [],
+            "cacheRead": {
+              "outcome": "success",
+              "docs": [],
+              "fromCache": true,
+              "hasPendingWrites": false
+            },
+            "networkDisabled": true,
+            "enableCalls": 0,
+            "playwrightOffline": true
+          },
+          {
+            "phase": "cold-online",
+            "snapshots": [
+              {
+                "docs": [],
+                "fromCache": true,
+                "hasPendingWrites": false
+              },
+              {
+                "docs": ["alpha", "beta"],
+                "fromCache": false,
+                "hasPendingWrites": false
+              }
+            ],
+            "errors": [],
+            "failures": [],
+            "cacheRead": {
+              "outcome": "success",
+              "docs": [],
+              "fromCache": true,
+              "hasPendingWrites": false
+            },
+            "networkDisabled": true,
+            "enableCalls": 1,
+            "playwrightOffline": false
+          }
+        ],
+        "cacheMode": "memory",
+        "sameProfile": true,
+        "processExited": true
+      }
+    },
+    {
+      "id": "203",
+      "mode": "streaming",
+      "events": [13, 14, 17, 18],
+      "evidence": {
+        "phases": [
+          {
+            "phase": "warm",
+            "snapshots": [
+              {
+                "docs": ["alpha", "beta"],
+                "fromCache": false,
+                "hasPendingWrites": false
+              }
+            ],
+            "errors": [],
+            "failures": [],
+            "cacheRead": {
+              "outcome": "success",
+              "docs": ["alpha", "beta"],
+              "fromCache": true,
+              "hasPendingWrites": false
+            },
+            "networkDisabled": false,
+            "enableCalls": 0,
+            "playwrightOffline": false
+          },
+          {
+            "phase": "restarted-offline",
+            "snapshots": [
+              {
+                "docs": ["alpha", "beta"],
+                "fromCache": true,
+                "hasPendingWrites": false
+              }
+            ],
+            "errors": [],
+            "failures": [],
+            "cacheRead": {
+              "outcome": "success",
+              "docs": ["alpha", "beta"],
+              "fromCache": true,
+              "hasPendingWrites": false
+            },
+            "networkDisabled": true,
+            "enableCalls": 0,
+            "playwrightOffline": true
+          },
+          {
+            "phase": "restarted-online",
+            "snapshots": [
+              {
+                "docs": ["alpha", "beta"],
+                "fromCache": true,
+                "hasPendingWrites": false
+              },
+              {
+                "docs": ["alpha", "beta"],
+                "fromCache": false,
+                "hasPendingWrites": false
+              }
+            ],
+            "errors": [],
+            "failures": [],
+            "cacheRead": {
+              "outcome": "success",
+              "docs": ["alpha", "beta"],
+              "fromCache": true,
+              "hasPendingWrites": false
+            },
+            "networkDisabled": true,
+            "enableCalls": 1,
+            "playwrightOffline": false
+          }
+        ],
+        "cacheMode": "persistent",
+        "sameProfile": true,
+        "processExited": true
+      }
+    },
+    {
+      "id": "203C",
+      "mode": "streaming",
+      "events": [21, 22],
+      "evidence": {
+        "phases": [
+          {
+            "phase": "cold-offline",
+            "snapshots": [
+              {
+                "docs": [],
+                "fromCache": true,
+                "hasPendingWrites": false
+              }
+            ],
+            "errors": [],
+            "failures": [],
+            "cacheRead": {
+              "outcome": "success",
+              "docs": [],
+              "fromCache": true,
+              "hasPendingWrites": false
+            },
+            "networkDisabled": true,
+            "enableCalls": 0,
+            "playwrightOffline": true
+          },
+          {
+            "phase": "cold-online",
+            "snapshots": [
+              {
+                "docs": [],
+                "fromCache": true,
+                "hasPendingWrites": false
+              },
+              {
+                "docs": ["alpha", "beta"],
+                "fromCache": false,
+                "hasPendingWrites": false
+              }
+            ],
+            "errors": [],
+            "failures": [],
+            "cacheRead": {
+              "outcome": "success",
+              "docs": [],
+              "fromCache": true,
+              "hasPendingWrites": false
+            },
+            "networkDisabled": true,
+            "enableCalls": 1,
+            "playwrightOffline": false
+          }
+        ],
+        "cacheMode": "memory",
+        "sameProfile": true,
+        "processExited": true
+      }
+    }
+  ]
+}

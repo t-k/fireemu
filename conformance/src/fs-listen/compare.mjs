@@ -180,6 +180,86 @@ function byPlace(row) {
 
 /** What a row says when compared: no conditions, no timings, document runs as sets. */
 export function canonicalRow(row) {
+  if (row.l3)
+    return {
+      l3: true,
+      observed: (row.observed ?? []).map((e) => ({
+        phases: (e.phases ?? []).map((p) => ({
+          phase: p.phase,
+          cacheRead: p.cacheRead
+            ? {
+                outcome: p.cacheRead.outcome,
+                docs: p.cacheRead.docs,
+                code: p.cacheRead.code,
+                fromCache: p.cacheRead.fromCache,
+                hasPendingWrites: p.cacheRead.hasPendingWrites,
+              }
+            : null,
+          snapshots: (p.snapshots ?? [])
+            .map((s) => ({
+              docs: s.docs,
+              changes: s.changes,
+              fromCache: s.fromCache,
+              hasPendingWrites: s.hasPendingWrites,
+            }))
+            .filter((s, i, all) => i === 0 || !isDeepStrictEqual(s, all[i - 1])),
+          errors: p.errors,
+          enableCalls: p.enableCalls,
+        })),
+        markers: e.markers,
+        uninterrupted: e.uninterrupted,
+        cacheMode: e.cacheMode,
+        sameProfile: e.sameProfile,
+        processExited: e.processExited,
+        terminate: e.terminate?.map((t) => ({
+          dispatched: t.dispatched,
+          outcome: t.outcome,
+          status: t.status,
+        })),
+        // Relationships are local to a recording; independent runs never compare token bytes.
+        resume: e.wire
+          ? [...new Set(e.wire.filter((w) => w.targets?.length).map((w) => w.phase))].map(
+              (phase) => {
+                const w = e.wire.find((w) => w.phase === phase && w.targets?.length);
+                const b = e.wire.find((b) => b.phase === phase && b.boundaryComplete);
+                return {
+                  phase,
+                  requestBodyBytes: w.requestBodyBytes,
+                  responseBodyBytes: b?.boundaryBodyBytes,
+                  contentLength: b?.contentLength,
+                  status: b?.status,
+                  targets: w.targets.map((t) => ({
+                    tokenPresent: Boolean(t.resumeToken),
+                    tokenLength: t.resumeToken?.length ?? 0,
+                    readTimeFormat: t.readTime?.replace(/\d/g, "0") ?? null,
+                    reused: Boolean(
+                      t.resumeToken &&
+                      e.wire.some(
+                        (b) =>
+                          b.event < w.event &&
+                          b.boundaries?.some(
+                            (v) => v.resumeToken?.relation === t.resumeToken.relation,
+                          ),
+                      ),
+                    ),
+                  })),
+                  boundaryFields: b?.boundaries
+                    ?.filter((v) => v.readTime)
+                    .slice(0, 1)
+                    .map((v) => ({
+                      type: v.type,
+                      tokenLength: v.resumeToken?.length ?? 0,
+                      readTimeFormat: v.readTime.replace(/\d/g, "0"),
+                    })),
+                  boundary: Boolean(b),
+                };
+              },
+            )
+          : undefined,
+      })),
+      failures: row.failures,
+      end: null,
+    };
   return {
     ...(row.rows ? { rows: sortDocumentRuns(withoutFilters(row.rows)) } : {}),
     ...(row.groups ? { groups: row.groups.map((g) => ({ ...g, docs: g.docs.toSorted() })) } : {}),

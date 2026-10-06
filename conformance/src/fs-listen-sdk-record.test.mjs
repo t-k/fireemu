@@ -260,7 +260,13 @@ test("runDriver sends its input as one line and resolves with the receipt and th
   child.say({ event: "receipt", receipt: { cases: [] } });
   child.end(0);
   const out = await pending;
-  assert.deepEqual(out, { receipt: { cases: [] }, wire: 2, connections: 1, refused: undefined });
+  assert.deepEqual(out, {
+    receipt: { cases: [] },
+    wire: 2,
+    connections: 1,
+    refused: undefined,
+    diagnostics: [],
+  });
   assert.deepEqual(child.written, ['{"run":"r1"}\n']);
 });
 
@@ -1509,4 +1515,99 @@ test("rowsFromReceipt keeps what a record says, skips a record that is not one, 
   });
   assert.deepEqual(rowsFromReceipt({}), {});
   assert.deepEqual(rowsFromReceipt(undefined), {});
+});
+
+test("preflightKey with an origin reads the key as a browser at that origin would and needs its domain in the project's authorized domains", async () => {
+  const origin = "http://localhost:47853";
+  const stub = preflightFetch({
+    toolkit: [200, { projectId: NUMBER, authorizedDomains: ["localhost", "demo.web.app"] }],
+  });
+  assert.deepEqual(await preflight(stub, { origin }), { projectNumber: NUMBER });
+  const toolkit = stub.calls.find((c) =>
+    c.url.startsWith("https://identitytoolkit.googleapis.com/"),
+  );
+  assert.equal(toolkit.headers.referer, `${origin}/`);
+  const crm = stub.calls.find((c) =>
+    c.url.startsWith("https://cloudresourcemanager.googleapis.com/"),
+  );
+  assert.equal("referer" in crm.headers, false, "the owner's read carries no referer");
+  // Without an origin nothing changes: no referer, no domain check.
+  const plain = preflightFetch({ toolkit: [200, { projectId: NUMBER, authorizedDomains: [] }] });
+  await preflight(plain);
+  assert.equal(
+    "referer" in
+      plain.calls.find((c) => c.url.startsWith("https://identitytoolkit.googleapis.com/")).headers,
+    false,
+  );
+});
+
+test("preflightKey with an origin stops, without naming the key, when the origin's domain is not authorized or the list is unreadable", async () => {
+  const origin = "http://localhost:47853";
+  const bad = [
+    { projectId: NUMBER, authorizedDomains: ["demo.firebaseapp.com", "demo.web.app"] },
+    { projectId: NUMBER, authorizedDomains: [] },
+    { projectId: NUMBER, authorizedDomains: ["127.0.0.1"] },
+    { projectId: NUMBER, authorizedDomains: ["xlocalhost", "localhost.evil.test"] },
+    { projectId: NUMBER },
+    { projectId: NUMBER, authorizedDomains: "localhost" },
+    { projectId: NUMBER, authorizedDomains: [null, 7] },
+  ];
+  for (const body of bad) {
+    await assert.rejects(
+      preflight(preflightFetch({ toolkit: [200, body] }), { origin }),
+      (error) =>
+        /authorized domains/.test(error.message) &&
+        !error.message.includes(KEY) &&
+        !error.message.includes(NUMBER),
+      JSON.stringify(body),
+    );
+  }
+  // The recorded answer lists localhost.
+  const recorded = JSON.parse(
+    readFileSync(new URL("./fs-listen/data/preflight-shapes.json", import.meta.url), "utf8"),
+  ).identityToolkitProjectsWithKey.body;
+  assert.ok(recorded.authorizedDomains.includes("localhost"));
+});
+
+test("runDriver keeps what the page reported besides the counts (a failed request, a page error; at most 50), on success and on failure", async () => {
+  const child = fakeChild();
+  const pending = runDriver({ config: {}, input: {}, spawnImpl: () => child });
+  child.say({ event: "request-failed", host: "h", path: "/p", reason: "net::ERR" });
+  child.say({ event: "page-error", message: "m" });
+  child.say({ event: "wire" });
+  for (let i = 0; i < 60; i += 1) child.say({ event: "page-error", message: `e${i}` });
+  child.say({ event: "receipt", receipt: {} });
+  child.end(0);
+  const out = await pending;
+  assert.equal(out.diagnostics.length, 50);
+  assert.deepEqual(out.diagnostics[0], {
+    event: "request-failed",
+    host: "h",
+    path: "/p",
+    reason: "net::ERR",
+  });
+  assert.equal(out.diagnostics[1].event, "page-error");
+  const failing = fakeChild();
+  const rejected = runDriver({ config: {}, input: {}, spawnImpl: () => failing });
+  failing.say({ event: "request-failed", host: "h", path: "/q", reason: "x" });
+  failing.end(1);
+  await assert.rejects(rejected, (error) => error.diagnostics.length === 1);
+});
+
+test("runDriver starts the script it is given", async () => {
+  const child = fakeChild();
+  let started;
+  const pending = runDriver({
+    config: {},
+    input: {},
+    script: "/some/other-driver.mjs",
+    spawnImpl: (cmd, args) => {
+      started = args;
+      return child;
+    },
+  });
+  child.say({ event: "receipt", receipt: {} });
+  child.end(0);
+  await pending;
+  assert.deepEqual(started, ["/some/other-driver.mjs"]);
 });

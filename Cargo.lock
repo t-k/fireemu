@@ -662,6 +662,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "md-5",
  "proptest",
  "prost",
  "prost-types",

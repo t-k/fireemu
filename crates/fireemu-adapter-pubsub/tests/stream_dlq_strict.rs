@@ -1,5 +1,8 @@
 //! Recorded STREAM-DLQ response shapes, with explicit emulator controls and owned teardown.
-use fireemu_adapter_pubsub::{serve_pubsub, PubSubHandle, PubSubProfile};
+use fireemu_adapter_pubsub::{
+    serve_pubsub, BridgeMessage, PubSubHandle, PubSubProfile, TopicDelivery, TopicDeliveryError,
+    TopicDeliveryReservation,
+};
 use fireemu_core_pubsub::PubSubState;
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
@@ -25,13 +28,16 @@ impl Drop for Server {
 }
 impl Server {
     async fn new(profile: PubSubProfile) -> Self {
+        Self::with_bridge(profile, None).await
+    }
+    async fn with_bridge(profile: PubSubProfile, bridge: Option<Arc<dyn TopicDelivery>>) -> Self {
         let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
             1_700_000_000_123_000_000,
         ))));
         let handle = PubSubHandle::new(
             Arc::new(Mutex::new(PubSubState::new(42))),
             Arc::clone(&clock),
-            None,
+            bridge,
         )
         .with_profile(profile);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -94,6 +100,86 @@ async fn resources(server: &Server) {
         })
         .await
         .unwrap();
+}
+
+struct CommittedBridge {
+    committed: Arc<Mutex<Vec<BridgeMessage>>>,
+}
+struct BridgeReservation {
+    committed: Arc<Mutex<Vec<BridgeMessage>>>,
+    messages: Vec<BridgeMessage>,
+}
+impl TopicDeliveryReservation for BridgeReservation {
+    fn commit(self: Box<Self>) {
+        self.committed.lock().unwrap().extend(self.messages);
+    }
+}
+impl TopicDelivery for CommittedBridge {
+    fn reserve(
+        &self,
+        topic: &str,
+        messages: &[BridgeMessage],
+    ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError> {
+        assert_eq!(topic, TOPIC);
+        assert!(self.committed.lock().unwrap().is_empty());
+        Ok(Box::new(BridgeReservation {
+            committed: Arc::clone(&self.committed),
+            messages: messages.to_vec(),
+        }))
+    }
+}
+
+#[tokio::test]
+async fn strict_functions_bridge_matches_published_identity_without_changing_broker_ids() {
+    for profile in [PubSubProfile::Strict, PubSubProfile::Emulator] {
+        let committed = Arc::new(Mutex::new(Vec::new()));
+        let bridge = Arc::new(CommittedBridge {
+            committed: Arc::clone(&committed),
+        });
+        let server = Server::with_bridge(profile, Some(bridge)).await;
+        resources(&server).await;
+        let messages = (0..3)
+            .map(|index| pb::PubsubMessage {
+                data: vec![index],
+                attributes: [("tag".into(), index.to_string())].into(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let published = PublisherClient::new(server.channel().await)
+            .publish(pb::PublishRequest {
+                topic: TOPIC.into(),
+                messages,
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let committed = committed.lock().unwrap();
+        assert_eq!(committed.len(), 3);
+        let internal = server
+            .handle
+            .pull(
+                &fireemu_core_pubsub::SubscriptionName::parse(SUB).unwrap(),
+                3,
+            )
+            .unwrap();
+        assert_eq!(internal.len(), 3);
+        for (index, (event, stored)) in committed.iter().zip(internal.iter()).enumerate() {
+            assert_eq!(event.message.message_id, published.message_ids[index]);
+            assert_eq!(stored.message.message_id, (index + 1).to_string());
+            assert_eq!(event.message.message, stored.message.message);
+            assert_eq!(event.message.publish_time, stored.message.publish_time);
+            assert_eq!(
+                event.message.message.data,
+                vec![u8::try_from(index).unwrap()]
+            );
+            if profile == PubSubProfile::Emulator {
+                assert!(Arc::ptr_eq(&event.message, &stored.message));
+            } else {
+                assert!(!Arc::ptr_eq(&event.message, &stored.message));
+                assert_eq!(event.message.message_id.len(), 17);
+            }
+        }
+    }
 }
 
 #[tokio::test]

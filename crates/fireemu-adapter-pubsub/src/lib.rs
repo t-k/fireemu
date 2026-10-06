@@ -353,7 +353,7 @@ impl PushDispatchState {
 /// A message handed to the functions bridge for topic-trigger delivery.
 #[derive(Debug, Clone)]
 pub struct BridgeMessage {
-    /// The broker record shared with every subscription.
+    /// The event record, with the profile-visible publication ID.
     pub message: Arc<fireemu_core_pubsub::StoredMessage>,
 }
 
@@ -587,7 +587,13 @@ impl PubSubHandle {
                     .published_messages()
                     .iter()
                     .cloned()
-                    .map(|message| BridgeMessage { message })
+                    .map(|mut message| {
+                        if self.profile == PubSubProfile::Strict {
+                            Arc::make_mut(&mut message).message_id =
+                                self.wire_message_id(&message.message_id);
+                        }
+                        BridgeMessage { message }
+                    })
                     .collect::<Vec<_>>();
                 bridge
                     .reserve(&topic.to_full(), &bridge_messages)

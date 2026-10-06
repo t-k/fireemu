@@ -145,10 +145,16 @@ fn official_naming_is_the_two_constants_the_official_emulator_sends_for_every_wr
 }
 
 /// Production prints the credential's own identity: the operator's email for a user credential
-/// (recorded) and, as documented but unrecorded, a service account's email. A principal that
-/// carries such an identity keeps it; the local `owner` bearer has none and keeps `owner`, which
-/// is the declared divergence of the admin-write row (the comparator masks the value of an
-/// `unknown` row's id; see FUNCTIONS-EVENTS scope decision E10).
+/// (recorded, with `authType` `unknown`). This test pins that the mapping keeps whatever id it is
+/// given, so an actor that carried an email would be named by it, and that the local `owner`
+/// bearer, which has none, keeps `owner` (the declared divergence of the admin-write row: the
+/// comparator masks the value of an `unknown` row's id; FUNCTIONS-EVENTS scope decision E10).
+///
+/// It does not say what production names a real service account. That is documented as
+/// `authType` `service_account` with the account's email, not `unknown`, and is UNRECORDED and
+/// not modelled: no local principal is a service account (`Principal::Owner` is the only one
+/// that becomes a `service_account` actor, always with the id `owner`). The email below is a
+/// stand-in identity used to show that the id is kept, not a claim about the type.
 #[test]
 fn a_credential_that_carries_an_identity_is_named_by_it_and_the_owner_bearer_stays_owner() {
     let email = "ops@demo-project.iam.gserviceaccount.com";

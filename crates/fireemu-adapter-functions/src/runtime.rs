@@ -5188,7 +5188,8 @@ mod task_completion_tests {
                 ("service_account", Some("owner")),
                 production("unknown", Some("owner")),
             ),
-            // A credential that carries an identity (an email) is named by it.
+            // An actor that carries an identity (an email) keeps it. Only the id is pinned: production
+            // documents the type of a real service account as `service_account` (UNRECORDED, not modelled).
             (
                 (
                     "service_account",

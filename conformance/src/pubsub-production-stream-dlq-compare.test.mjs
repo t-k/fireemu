@@ -407,6 +407,15 @@ test("complete layout trace is comparable while reordered boundaries and missing
     (data) => data.capture.unshift(data.capture.splice(-2, 1)[0]),
     (data) => (data.issued[1].kind = "unknown"),
     (data) => (data.issued[1].kind = "error"),
+    (data) => {
+      const extra = {
+        ...data.issued[0],
+        name: "projects/demo-v2/topics/fe0123456789ab-unrecorded",
+        requestId: "unrecorded#1",
+      };
+      data.issued.push(extra, { ...extra, phase: "answered", kind: "ok" });
+    },
+    (data) => (data.issued[0].at = "2026-10-05T00:00:02.000Z"),
     (data) => (data.capture = data.capture.filter((r) => r.op !== "acknowledge")),
   ]) {
     const near = structuredClone(input);

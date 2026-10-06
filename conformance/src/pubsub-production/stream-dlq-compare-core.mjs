@@ -341,6 +341,7 @@ export async function compareRecording(
         debts.push("unjoined issued answer");
       else {
         intent.answered = true;
+        intent.answerAt = entry.at;
         intent.kind = entry.kind;
         if (!["ok", "error", "conflict"].includes(entry.kind))
           debts.push("uncertain issued answer");
@@ -348,6 +349,30 @@ export async function compareRecording(
     } else if (entry.phase !== "resolved") debts.push("unknown issued phase");
   }
   if ([...sent.values()].some((e) => !e.answered)) debts.push("issued request unanswered");
+  const resourceOf = (row) =>
+    row.request.body?.name ??
+    row.request.body?.snapshot ??
+    decodeURIComponent(row.request.path?.split("?")[0]?.slice(4) ?? "");
+  for (const intent of sent.values()) {
+    const exchanges = capture.filter(
+      (row) =>
+        row.request &&
+        row.response &&
+        /^(create|delete)/.test(row.op) &&
+        resourceOf(row) === intent.name &&
+        row.transport === intent.transport &&
+        (row.op.startsWith("create") ? "create" : "delete") === intent.action,
+    );
+    if (exchanges.length !== 1) {
+      debts.push("issued intent has no unique captured exchange");
+      continue;
+    }
+    const at = Date.parse(exchanges[0].at),
+      before = Date.parse(intent.at),
+      after = Date.parse(intent.answerAt);
+    if (![at, before, after].every(Number.isFinite) || before > at || at > after)
+      debts.push("issued/capture ordering invalid");
+  }
   let iamStructure = "empty";
   try {
     const ownership = createOwnership({ project: metadata?.project, runId: metadata?.runId });

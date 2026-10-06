@@ -201,6 +201,8 @@ pub struct FunctionsConfig {
     /// `defaultUri` is the function's public URL, so the runtime has to know its own address
     /// to build one and to recognise a task that named it explicitly.
     pub functions_host: Option<String>,
+    /// Explicit application-clock modes.
+    pub clock_policy: crate::application_clock::ApplicationClockPolicy,
 }
 
 impl std::fmt::Debug for FunctionsConfig {
@@ -973,6 +975,7 @@ pub struct FunctionsRuntime {
     manifest: FunctionManifest,
     config: FunctionsConfig,
     clock: Arc<Mutex<VirtualClock>>,
+    clock_observer: Arc<fireemu_core_session::clock::ClockObserver>,
     /// The codebases, in configuration order.
     codebases: Vec<Codebase>,
     /// Function name to its codebase's index in `codebases`.
@@ -1178,7 +1181,14 @@ impl FunctionsRuntime {
             &manifest,
             std::time::Instant::now(),
         );
-        Arc::new(Self {
+        let initial = clock.lock().expect("clock lock").snapshot();
+        let (updates, mut receiver) = tokio::sync::watch::channel(initial);
+        let observer: Arc<fireemu_core_session::clock::ClockObserver> = Arc::new(move |snapshot| {
+            updates.send_replace(snapshot);
+        });
+        clock.lock().expect("clock lock").observe(&observer);
+        let runtime = Arc::new(Self {
+            clock_observer: observer,
             manifest,
             config,
             clock,
@@ -1238,7 +1248,88 @@ impl FunctionsRuntime {
             trigger_generation: std::sync::atomic::AtomicU64::new(0),
             shutting_down: std::sync::atomic::AtomicBool::new(false),
             dispatch_stopping: std::sync::atomic::AtomicBool::new(false),
-        })
+        });
+        let weak = Arc::downgrade(&runtime);
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                while receiver.changed().await.is_ok() {
+                    let Some(runtime) = weak.upgrade() else {
+                        break;
+                    };
+                    runtime.wake.notify_one();
+                    if let Err(error) = runtime.sync_clock().await {
+                        eprintln!("[functions] {error}");
+                    }
+                }
+            });
+        }
+        runtime
+    }
+
+    /// Current state used for initialization and generation-scoped synchronization.
+    #[must_use]
+    pub fn clock_snapshot(&self) -> fireemu_core_session::clock::ClockSnapshot {
+        self.clock.lock().expect("clock lock").snapshot()
+    }
+
+    /// Check Date representability before mutating the daemon clock.
+    pub fn validate_clock(&self, instant: LogicalInstant) -> Result<(), String> {
+        self.config.clock_policy.validate(instant)
+    }
+
+    async fn sync_runner_clock(&self, runner: &Runner) -> Result<(), String> {
+        if self.config.clock_policy.date_virtual {
+            runner.sync_clock(self.clock_snapshot()).await?;
+        }
+        Ok(())
+    }
+
+    /// Acknowledge the latest clock in each still-current runner generation.
+    pub async fn sync_clock(&self) -> Result<(), String> {
+        let _observer = &self.clock_observer;
+        if !self.config.clock_policy.date_virtual {
+            return Ok(());
+        }
+        loop {
+            let snapshot = self.clock_snapshot();
+            let runners: Vec<_> = self
+                .codebases
+                .iter()
+                .map(|c| {
+                    let generation = c.generation();
+                    (generation.revision, generation.runner.clone())
+                })
+                .collect();
+            for (_, runner) in &runners {
+                runner.sync_clock(snapshot).await?;
+            }
+            if self.clock_snapshot().revision == snapshot.revision
+                && self
+                    .codebases
+                    .iter()
+                    .zip(&runners)
+                    .all(|(c, (revision, runner))| {
+                        let generation = c.generation();
+                        generation.revision == *revision && Arc::ptr_eq(&generation.runner, runner)
+                    })
+            {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Drain a bounded timer batch separately from daemon event idleness.
+    pub async fn run_due(&self, budget: usize) -> Result<Value, String> {
+        if !self.config.clock_policy.timers_virtual {
+            return Err("virtual application timers are disabled".into());
+        }
+        self.sync_clock().await?;
+        let mut reports = Vec::new();
+        for codebase in &self.codebases {
+            let runner = codebase.generation().runner.clone();
+            reports.push(json!({"codebase":codebase.name,"timers":runner.run_due(budget).await?}));
+        }
+        Ok(json!({"codebases":reports}))
     }
 
     /// The manifest.
@@ -3277,7 +3368,16 @@ impl FunctionsRuntime {
                 return Err("runner recovery was superseded".to_owned());
             }
             let _source_generation = respawn.cleanup_dir.clone();
-            let runner = match Runner::spawn_spec(spawn).await {
+            let mut spawn = spawn.clone();
+            spawn.env.retain(|(key, _)| key != "FIREEMU_CLOCK_JSON");
+            spawn.env.push((
+                "FIREEMU_CLOCK_JSON".into(),
+                self.config
+                    .clock_policy
+                    .runner_options(self.clock_snapshot())
+                    .to_string(),
+            ));
+            let runner = match Runner::spawn_spec(&spawn).await {
                 Ok(runner) => Arc::new(runner),
                 Err(error) => {
                     eprintln!("[functions] runner restart attempt failed: {error}");
@@ -3317,9 +3417,11 @@ impl FunctionsRuntime {
             .ok_or_else(|| format!("function {} has no codebase owner", target.function))?;
         let current = self.runner_at(index);
         if current.is_alive() && target.origin_runner.ptr_eq(&Arc::downgrade(&current)) {
+            self.sync_runner_clock(&current).await?;
             return Ok(target.addr.clone());
         }
         let runner = self.recover_dead_runner(index).await?;
+        self.sync_runner_clock(&runner).await?;
         let port = runner
             .hello()
             .http_port
@@ -4629,6 +4731,9 @@ impl FunctionsRuntime {
                 self.crash_and_respawn(index, generation);
             }
             tokio::spawn(async move {
+                let clock_error = runtime.sync_runner_clock(&runner).await.err();
+                let fault_outcome = fault_outcome
+                    .or_else(|| clock_error.map(|error| (InvokeOutcome::Failed(error), retry)));
                 let Invocation { outcome, late } = match fault_outcome {
                     Some((outcome, retry_override)) => {
                         runtime.complete(
@@ -5061,6 +5166,7 @@ mod task_completion_tests {
                 overlap: super::OverlapPolicy::Allow,
                 catch_up: super::CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
+                clock_policy: Default::default(),
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -5564,6 +5670,7 @@ mod schedule_capacity_tests {
                 overlap: super::OverlapPolicy::Allow,
                 catch_up,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
+                clock_policy: Default::default(),
             },
             clock.clone(),
             Arc::new(runner),

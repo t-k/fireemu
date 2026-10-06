@@ -16,7 +16,9 @@ fn observer_tracks_every_writer_and_positive_elapsed_time_across_rewinds() {
     clock.observe(&observer);
     clock.advance(LogicalDuration::from_nanos(500_000)).unwrap();
     clock.set_allow_backwards(LogicalInstant::from_nanos(-1_000_000));
-    clock.advance_to(LogicalInstant::from_nanos(-500_000)).unwrap();
+    clock
+        .advance_to(LogicalInstant::from_nanos(-500_000))
+        .unwrap();
     clock.tick().unwrap();
     let snapshot = clock.snapshot();
     assert_eq!(snapshot.instant, LogicalInstant::from_nanos(-499_999));
@@ -28,7 +30,11 @@ fn observer_tracks_every_writer_and_positive_elapsed_time_across_rewinds() {
     assert_eq!(clock.snapshot(), before);
     let mut independent = clock.clone();
     independent.tick().unwrap();
-    assert_eq!(samples.lock().unwrap().len(), 5, "clock clones cannot notify another world's observers");
+    assert_eq!(
+        samples.lock().unwrap().len(),
+        5,
+        "clock clones cannot notify another world's observers"
+    );
 }
 
 #[test]

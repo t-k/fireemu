@@ -1361,6 +1361,7 @@ async fn supervise_codebase_reloads(
             &secret,
             callable_trusted_protocol,
             &resources.node_probe_cache,
+            runtime.clock_snapshot(),
         )
         .await
         {
@@ -2533,6 +2534,7 @@ pub async fn start(
             let hosts = hosts.clone();
             let runner_secret = runner_secret.to_owned();
             let node_probe_cache = node_probe_cache.clone();
+            let clock_snapshot = clock.lock().expect("clock lock").snapshot();
             let start = tokio::spawn(async move {
                 start_codebase(
                     &cfg,
@@ -2541,6 +2543,7 @@ pub async fn start(
                     &runner_secret,
                     callable_trusted_protocol,
                     &node_probe_cache,
+                    clock_snapshot,
                 )
                 .await
             });
@@ -2571,6 +2574,7 @@ pub async fn start(
         catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
             .unwrap_or_default(),
         functions_host: hosts.functions.clone(),
+        clock_policy: cfg.functions_clock,
     };
     // A function name two codebases both export is fatal here. The runners it collided
     // between are killed rather than left behind a daemon that refuses to serve them.
@@ -2672,6 +2676,7 @@ async fn start_codebase(
     runner_secret: &str,
     callable_trusted_protocol: bool,
     node_probe_cache: &Arc<NodeProbeCache>,
+    clock_snapshot: fireemu_core_session::clock::ClockSnapshot,
 ) -> Result<fireemu_adapter_functions::runtime::CodebaseSpec, String> {
     let source = codebase.source.clone();
     let label = &codebase.codebase;
@@ -2823,6 +2828,12 @@ async fn start_codebase(
             debug_features.to_owned(),
         ));
     }
+    env.push((
+        "FIREEMU_CLOCK_JSON".into(),
+        cfg.functions_clock
+            .runner_options(clock_snapshot)
+            .to_string(),
+    ));
     let spec = SpawnSpec {
         command,
         cwd: Some(source),
@@ -2834,6 +2845,22 @@ async fn start_codebase(
             .await
             .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?,
     );
+    if cfg.functions_clock.date_virtual {
+        let capability = runner.hello().clock.as_ref();
+        let supports = capability.is_some_and(|c| {
+            c["version"] == 1
+                && c["date"] == true
+                && (!cfg.functions_clock.timers_virtual || c["timers"] == true)
+        });
+        if !supports {
+            runner.kill_now();
+            return Err(format!("the Functions codebase {label:?}: runner does not support the requested virtual clock"));
+        }
+        if let Err(error) = runner.sync_clock(clock_snapshot).await {
+            runner.kill_now();
+            return Err(error);
+        }
+    }
     if cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some() {
         let actual = runner.hello().inspector_port;
         let port_matches = cfg
@@ -4850,6 +4877,25 @@ fn run_schedule_error(
 pub struct Hook(pub Arc<FunctionsRuntime>);
 
 impl FunctionsHook for Hook {
+    fn validate_clock_target(
+        &self,
+        instant: fireemu_core_types::time::LogicalInstant,
+    ) -> Result<(), String> {
+        self.0.validate_clock(instant)
+    }
+    fn sync_clock(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
+        Box::pin(self.0.sync_clock())
+    }
+    fn run_due(
+        &self,
+        budget: usize,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<serde_json::Value, String>> + Send + '_>,
+    > {
+        Box::pin(self.0.run_due(budget))
+    }
     fn on_clock_changed(&self) {
         self.0.on_clock_changed();
     }
@@ -6202,6 +6248,7 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
+                clock_policy: Default::default(),
             },
             clock.clone(),
             Arc::new(runner),
@@ -7013,6 +7060,7 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
+                clock_policy: Default::default(),
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -7073,6 +7121,7 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
+                clock_policy: Default::default(),
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -7282,6 +7331,7 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
+                clock_policy: Default::default(),
             },
             Arc::new(Mutex::new(VirtualClock::new(now))),
             Arc::new(runner),
@@ -8481,6 +8531,7 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
+                clock_policy: Default::default(),
             },
             clock.clone(),
             Arc::new(runner),
@@ -8582,6 +8633,7 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
+                clock_policy: Default::default(),
             },
             clock.clone(),
             Arc::new(runner),

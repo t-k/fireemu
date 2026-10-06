@@ -162,15 +162,17 @@ impl VirtualClock {
 
     fn publish(&mut self, instant: LogicalInstant) {
         if instant > self.now {
-            self.elapsed_nanos = self.elapsed_nanos.saturating_add(
-                instant.as_nanos().abs_diff(self.now.as_nanos()),
-            );
+            self.elapsed_nanos = self
+                .elapsed_nanos
+                .saturating_add(instant.as_nanos().abs_diff(self.now.as_nanos()));
         }
         self.now = instant;
         self.revision = self.revision.saturating_add(1);
         let snapshot = self.snapshot();
         self.observers.retain(|weak| {
-            let Some(observer) = weak.upgrade() else { return false };
+            let Some(observer) = weak.upgrade() else {
+                return false;
+            };
             observer(snapshot);
             true
         });

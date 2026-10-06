@@ -34,6 +34,8 @@ pub struct Hello {
     /// whether the loader instrumentation could be installed, and whether the debug switches
     /// behave the way the trusted callable protocol relies on (specification section 13.4).
     pub app_check: Option<Value>,
+    /// Clock protocol capabilities advertised by this runner.
+    pub clock: Option<Value>,
 }
 
 /// Outcome of one invocation.
@@ -331,6 +333,9 @@ pub struct Runner {
     label: String,
     alive: Arc<AtomicBool>,
     credential_sandbox: Mutex<Option<PathBuf>>,
+    clock_revision: AsyncMutex<Option<u64>>,
+    clock_sequence: AtomicU64,
+    clock_status: Arc<Mutex<Value>>,
 }
 
 #[cfg(not(windows))]
@@ -589,6 +594,7 @@ impl Runner {
         }
         let waiters: Arc<Mutex<HashMap<String, oneshot::Sender<InvokeOutcome>>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let clock_status = Arc::new(Mutex::new(Value::Null));
         let alive = Arc::new(AtomicBool::new(true));
         let (hello_tx, hello_rx) = oneshot::channel::<Hello>();
         {
@@ -596,6 +602,7 @@ impl Runner {
             let label = label.clone();
             let logs = logs.clone();
             let alive = alive.clone();
+            let clock_status = clock_status.clone();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout);
                 let mut hello_tx = Some(hello_tx);
@@ -626,12 +633,18 @@ impl Runner {
                                     .and_then(|p| u16::try_from(p).ok()),
                                 manifest: frame.get("manifest").cloned(),
                                 app_check: frame.get("appCheck").cloned(),
+                                clock: frame.get("clock").cloned(),
                             };
                             if let Some(tx) = hello_tx.take() {
                                 let _ = tx.send(hello);
                             }
                         }
                         Some("result") => {
+                            if let Some(status) = frame.get("timers") {
+                                if let Ok(mut current) = clock_status.lock() {
+                                    *current = status.clone();
+                                }
+                            }
                             let id = frame
                                 .get("invocationId")
                                 .and_then(Value::as_str)
@@ -719,6 +732,9 @@ impl Runner {
             label,
             alive,
             credential_sandbox: Mutex::new(Some(credential_sandbox)),
+            clock_revision: AsyncMutex::new(None),
+            clock_sequence: AtomicU64::new(0),
+            clock_status,
         })
     }
 
@@ -753,17 +769,22 @@ impl Runner {
     /// runner retired rather than left with a half frame. A timed-out invocation keeps its
     /// waiter: the late result (or the runner's death) arrives on [`Invocation::late`].
     pub async fn invoke(&self, request: Value, timeout: Duration) -> Invocation {
-        self.invoke_inner(request, Some(timeout)).await
+        self.invoke_inner(request, Some(timeout), "invoke").await
     }
 
     /// Sends an `invoke` without a handler deadline. The debugger uses this path so time
     /// stopped at a breakpoint does not expire the invocation. Shutdown still closes the
     /// runner and resolves the waiter as `RunnerGone`.
     pub async fn invoke_unbounded(&self, request: Value) -> Invocation {
-        self.invoke_inner(request, None).await
+        self.invoke_inner(request, None, "invoke").await
     }
 
-    async fn invoke_inner(&self, request: Value, timeout: Option<Duration>) -> Invocation {
+    async fn invoke_inner(
+        &self,
+        request: Value,
+        timeout: Option<Duration>,
+        kind: &str,
+    ) -> Invocation {
         let done = |outcome| Invocation {
             outcome,
             late: None,
@@ -804,7 +825,7 @@ impl Runner {
         // 2. The frame: a partial write would desynchronize the protocol, so a stalled or
         //    failed write retires the runner.
         let mut frame = request;
-        frame["type"] = Value::String("invoke".into());
+        frame["type"] = Value::String(kind.into());
         let written = match deadline {
             Some(deadline) => matches!(
                 tokio::time::timeout_at(deadline, write_frame(pipe, &frame)).await,
@@ -844,6 +865,62 @@ impl Runner {
                 .unwrap_or_else(|_| InvokeOutcome::RunnerGone("runner exited".into()));
             forget(&self.waiters);
             done(outcome)
+        }
+    }
+
+    /// Install a clock revision without waiting for application callbacks.
+    pub async fn sync_clock(
+        &self,
+        snapshot: fireemu_core_session::clock::ClockSnapshot,
+    ) -> Result<(), String> {
+        let mut revision = self.clock_revision.lock().await;
+        if revision.is_some_and(|previous| previous >= snapshot.revision) {
+            return Ok(());
+        }
+        let id = format!(
+            "clock-{}",
+            self.clock_sequence.fetch_add(1, Ordering::Relaxed)
+        );
+        let result = self
+            .invoke_inner(
+                json!({"invocationId":id,
+            "instantNanos":snapshot.instant.as_nanos().to_string(),
+            "elapsedNanos":snapshot.elapsed_nanos.to_string(),
+            "revision":snapshot.revision.to_string()}),
+                Some(Duration::from_secs(5)),
+                "clock:set",
+            )
+            .await;
+        match result.outcome {
+            InvokeOutcome::Ok => {
+                *revision = Some(snapshot.revision);
+                Ok(())
+            }
+            other => Err(format!("runner clock synchronization failed: {other:?}")),
+        }
+    }
+
+    /// Drain one bounded batch of application timers using native protocol deadlines.
+    pub async fn run_due(&self, budget: usize) -> Result<Value, String> {
+        let _revision = self.clock_revision.lock().await;
+        let id = format!(
+            "clock-{}",
+            self.clock_sequence.fetch_add(1, Ordering::Relaxed)
+        );
+        let result = self
+            .invoke_inner(
+                json!({"invocationId":id,"budget":budget}),
+                Some(Duration::from_secs(5)),
+                "clock:runDue",
+            )
+            .await;
+        match result.outcome {
+            InvokeOutcome::Ok => self
+                .clock_status
+                .lock()
+                .map(|s| s.clone())
+                .map_err(|_| "runner clock status poisoned".into()),
+            other => Err(format!("runner timer batch failed: {other:?}")),
         }
     }
 
@@ -943,6 +1020,80 @@ fn kill_process_group(pid: Option<u32>) {
 #[cfg(test)]
 mod tests {
     use super::{child_env, LogBuffer, RunnerLog, LOG_CAPACITY};
+
+    #[tokio::test]
+    async fn bundled_runner_installs_dates_before_import_and_drains_timers() {
+        use super::{InvokeOutcome, Runner};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
+        let dir = trusted_temp::TrustedTempDir::new("application-clock");
+        std::fs::write(dir.join("package.json"), r#"{"main":"index.cjs"}"#).unwrap();
+        std::fs::write(dir.join("index.cjs"), r#"
+            const fs=require('node:fs'); const imported=Date.now();
+            const fn=async()=>{fs.writeFileSync('observed.json',JSON.stringify([imported,Date.now(),+new Date()])); await new Promise(r=>setTimeout(r,5)); fs.writeFileSync('timer.json',JSON.stringify(Date.now()));};
+            fn.run=fn; fn.__endpoint={platform:'gcfv2',scheduleTrigger:{schedule:'every 5 minutes'}};
+            module.exports={clock:fn};
+        "#).unwrap();
+        let mut clock = VirtualClock::new(LogicalInstant::from_nanos(1_000_000_000));
+        let policy = crate::application_clock::ApplicationClockPolicy {
+            date_virtual: true,
+            timers_virtual: true,
+            tasks_virtual: false,
+        };
+        let runner = std::sync::Arc::new(
+            Runner::spawn(
+                &[
+                    "node".into(),
+                    concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../../tools/runner-node/index.mjs"
+                    )
+                    .into(),
+                    "--source".into(),
+                    dir.to_string_lossy().into_owned(),
+                ],
+                Some(&dir.to_string_lossy()),
+                &[
+                    ("GCLOUD_PROJECT".into(), "demo-clock".into()),
+                    (
+                        "FIREEMU_CLOCK_JSON".into(),
+                        policy.runner_options(clock.snapshot()).to_string(),
+                    ),
+                ],
+                std::time::Duration::from_secs(5),
+            )
+            .await
+            .unwrap(),
+        );
+        assert_eq!(runner.hello().clock.as_ref().unwrap()["version"], 1);
+        clock.advance(LogicalDuration::from_millis(1000)).unwrap();
+        runner.sync_clock(clock.snapshot()).await.unwrap();
+        let active = runner.clone();
+        let invocation = tokio::spawn(async move {
+            active.invoke(serde_json::json!({"invocationId":"test-clock","function":"clock","trigger":"schedule","event":{}}), std::time::Duration::from_secs(3)).await
+        });
+        for _ in 0..100 {
+            if dir.join("observed.json").exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.join("observed.json")).unwrap(),
+            "[1000,2000,2000]"
+        );
+        assert!(!dir.join("timer.json").exists());
+        clock.advance(LogicalDuration::from_millis(5)).unwrap();
+        runner.sync_clock(clock.snapshot()).await.unwrap();
+        runner.run_due(1000).await.unwrap();
+        assert_eq!(invocation.await.unwrap().outcome, InvokeOutcome::Ok);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("timer.json")).unwrap(),
+            "2005"
+        );
+        runner.shutdown().await;
+        assert!(!runner.is_alive());
+    }
 
     #[cfg(unix)]
     mod trusted_temp {

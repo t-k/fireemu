@@ -737,6 +737,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "clock": { "type": "object", "additionalProperties": false, "properties": {
+          "date": { "enum": ["real", "virtual"], "default": "real" },
+          "timers": { "enum": ["real", "virtual"], "default": "real" },
+          "tasks": { "enum": ["real", "virtual"], "default": "real" }
+        } },
         "manifest": { "type": "string" },
         "source": { "type": "string", "description": "Functions codebase directory loaded by the runner (discovery)." },
         "runner": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Runner command; default: node tools/runner-node/index.mjs" },

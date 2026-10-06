@@ -61,6 +61,24 @@ pub enum RunScheduleError {
 /// The functions runtime as the control API sees it (spec 10.5 `await-idle`, 11.2 clock
 /// operations, manual schedule runs).
 pub trait FunctionsHook: Send + Sync {
+    /// Reject unsupported Date instants before a clock mutation.
+    fn validate_clock_target(&self, _instant: LogicalInstant) -> Result<(), String> {
+        Ok(())
+    }
+    /// Acknowledge installation in the current runner generations after admission is released.
+    fn sync_clock(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
+    }
+    /// Drain one bounded application timer batch.
+    fn run_due(
+        &self,
+        _budget: usize,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, String>> + Send + '_>>
+    {
+        Box::pin(async { Err("virtual application timers are unavailable".into()) })
+    }
     /// The virtual clock moved: enqueue due schedules and release due retries.
     fn on_clock_changed(&self);
     /// Runs a scheduled function now.
@@ -497,6 +515,37 @@ pub fn is_control_path(path: &str) -> bool {
 #[must_use]
 pub fn handle(state: &ControlState, method: &str, path: &str, body: &Value) -> JsonResponse {
     handle_with(state, method, path, &RequestHeaders::default(), body)
+}
+
+/// Route a request and settle runner clocks without holding the admission barrier.
+pub async fn handle_async(
+    state: &ControlState,
+    method: &str,
+    path: &str,
+    headers: &RequestHeaders,
+    body: &Value,
+) -> JsonResponse {
+    let response = handle_with(state, method, path, headers, body);
+    if response.status != 200 || method != "POST" {
+        return response;
+    }
+    let path = path.split('?').next().unwrap_or(path);
+    let Some(functions) = &state.functions else {
+        return response;
+    };
+    if path.ends_with("/clock:runDue") {
+        let budget = body.get("budget").and_then(Value::as_u64).unwrap_or(1000) as usize;
+        return match functions.run_due(budget).await {
+            Ok(status) => ok(status),
+            Err(error_message) => error(503, &error_message),
+        };
+    }
+    if path.contains("/clock:") || (path.contains("/snapshots/") && path.ends_with(":restore")) {
+        if let Err(error_message) = functions.sync_clock().await {
+            return error(503, &format!("CLOCK_NOT_SETTLED : {error_message}"));
+        }
+    }
+    response
 }
 
 /// Routes one control request with its headers: browser requests from non-loopback origins
@@ -2543,6 +2592,17 @@ fn clock_route(
         ("GET", "") => ok(
             json!({"session": session, "edition": state.edition.as_config_str(), "requireDemoPrefix": state.require_demo_prefix, "clock": clock_json(&clock)}),
         ),
+        ("POST", "clock:runDue") => {
+            if state.functions.is_none() {
+                return error(400, "virtual application timers are unavailable");
+            }
+            if let Some(value) = body.get("budget") {
+                if !value.as_u64().is_some_and(|n| (1..=10_000).contains(&n)) {
+                    return error(400, "INVALID_ARGUMENT : budget must be 1..10000");
+                }
+            }
+            ok(json!({}))
+        }
         ("POST", "clock:advance") => {
             let duration = if let Some(s) = body.get("seconds").and_then(Value::as_i64) {
                 LogicalDuration::from_seconds(s)
@@ -2551,6 +2611,14 @@ fn clock_route(
             } else {
                 return error(400, "INVALID_ARGUMENT : seconds or millis required");
             };
+            let Some(target) = clock.now().checked_add(duration) else {
+                return error(400, "INVALID_ARGUMENT : clock overflow");
+            };
+            if let Some(functions) = &state.functions {
+                if let Err(message) = functions.validate_clock_target(target) {
+                    return error(400, &message);
+                }
+            }
             match clock.advance(duration) {
                 Ok(_) => ok(clock_json(&clock)),
                 Err(e) => error(400, &format!("INVALID_ARGUMENT : {e}")),
@@ -2563,6 +2631,11 @@ fn clock_route(
             let Ok(target) = LogicalInstant::parse_rfc3339(instant) else {
                 return error(400, "INVALID_ARGUMENT : instant must be RFC 3339");
             };
+            if let Some(functions) = &state.functions {
+                if let Err(message) = functions.validate_clock_target(target) {
+                    return error(400, &message);
+                }
+            }
             let allow_backwards = body
                 .get("allowBackwards")
                 .and_then(Value::as_bool)

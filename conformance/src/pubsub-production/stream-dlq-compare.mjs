@@ -15,6 +15,7 @@ import {
   compareRecording,
   recordingTimingDebts,
   recordedRequestInstant,
+  recordedSilenceProbe,
 } from "./stream-dlq-compare-core.mjs";
 import { createOwnership } from "./names.mjs";
 import { isDeepStrictEqual } from "node:util";
@@ -194,6 +195,72 @@ export function verifyFrames(capture, capturePath) {
   }
   return verified;
 }
+// The monotonic observation starts at the second outbound write, independently of reply status.
+export function createNativeSilenceObserver(
+  rpc,
+  { now = () => performance.now(), schedule = setTimeout, clear = clearTimeout } = {},
+) {
+  let started = null,
+    timer = null,
+    completedWindow = false,
+    cancelledByObserver = false;
+  let inboundMessages = 0,
+    outboundWrites = 0,
+    terminalBeforeWindow = false,
+    durationMs = 0;
+  const stopTimer = () => {
+    if (timer !== null) {
+      clear(timer);
+      timer = null;
+    }
+  };
+  const elapsed = () => (started === null ? 0 : Math.max(0, now() - started));
+  const finish = () => {
+    timer = null;
+    const left = 30000 - elapsed();
+    if (left > 0) {
+      timer = schedule(finish, Math.ceil(left));
+      return;
+    }
+    durationMs = elapsed();
+    completedWindow = true;
+    cancelledByObserver = true;
+    rpc.cancel();
+  };
+  rpc.on("data", () => {
+    if (!completedWindow) inboundMessages += 1;
+  });
+  for (const event of ["status", "error", "close"])
+    rpc.on(event, () => {
+      if (!completedWindow) {
+        terminalBeforeWindow = true;
+        durationMs = elapsed();
+        stopTimer();
+      }
+    });
+  const write = rpc.write.bind(rpc);
+  rpc.write = (...args) => {
+    const accepted = write(...args);
+    outboundWrites += 1;
+    if (outboundWrites === 2 && !terminalBeforeWindow) {
+      started = now();
+      timer = schedule(finish, 30000);
+    }
+    return accepted;
+  };
+  return {
+    snapshot: () => ({
+      durationMs: completedWindow || terminalBeforeWindow ? durationMs : elapsed(),
+      inboundMessages,
+      outboundWrites,
+      terminalBeforeWindow,
+      completedWindow,
+      cancelledByObserver,
+    }),
+    close: stopTimer,
+  };
+}
+
 export async function replayLocal(input, environment, pin) {
   validateRuntime(pin, environment);
   const captured = [],
@@ -278,11 +345,16 @@ export async function replayLocal(input, environment, pin) {
           const [service, method] = request.rpc?.split("/") ?? [];
           await grpc.call({ label, op: original.op, service, method, request: request.body });
         } else {
-          let guardFailure;
+          let guardFailure, silenceObserver;
+          const silenceProbe = recordedSilenceProbe(original, frames, (frame) =>
+            input.verifiedFrames.has(frame),
+          );
           const receiveGuard = createReceiveGuard(frames, bindings);
           class GuardedClient extends grpcLib.Client {
             makeBidiStreamRequest(...args) {
+              if (silenceProbe) args[4] = { ...args[4], deadline: new Date(Date.now() + 31000) };
               const rpc = super.makeBidiStreamRequest(...args);
+              if (silenceProbe) silenceObserver = createNativeSilenceObserver(rpc);
               const on = rpc.on.bind(rpc);
               rpc.on = (event, listener) =>
                 on(
@@ -325,14 +397,20 @@ export async function replayLocal(input, environment, pin) {
               ...(request.afterReceive === undefined ? {} : { afterReceive: request.afterReceive }),
             });
           } finally {
+            if (silenceObserver) {
+              silenceObserver.close();
+            }
             stream.close();
           }
+          if (silenceObserver)
+            original = { ...original, localObservation: silenceObserver.snapshot() };
           if (guardFailure) return { notReplayed: true, reason: guardFailure };
         }
         const actual = captured.slice(prior).find((row) => row.response);
         if (!actual) return { notReplayed: true, reason: "local response missing" };
         return {
           ...actual,
+          ...(original.localObservation ? { nativeObservation: original.localObservation } : {}),
           ...(original.op === "streamingPull" ? { frames: wireFrames.slice(frameStart) } : {}),
         };
       },

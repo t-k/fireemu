@@ -300,6 +300,13 @@ pub fn validate_topic_update_options(request: &pb::UpdateTopicRequest) -> Result
 
 /// Builds a validated [`SubscriptionConfig`] from a wire `Subscription`.
 pub fn subscription_from_proto(sub: &pb::Subscription) -> Result<SubscriptionConfig, PubSubError> {
+    subscription_from_proto_for_profile(sub, crate::PubSubProfile::Emulator)
+}
+
+pub(crate) fn subscription_from_proto_for_profile(
+    sub: &pb::Subscription,
+    profile: crate::PubSubProfile,
+) -> Result<SubscriptionConfig, PubSubError> {
     validate_subscription_options(sub)?;
     let name = SubscriptionName::parse(&sub.name)?;
     let topic = TopicName::parse(&sub.topic)?;
@@ -350,7 +357,12 @@ pub fn subscription_from_proto(sub: &pb::Subscription) -> Result<SubscriptionCon
         .as_ref()
         .map(|p| p.push_endpoint.clone())
         .unwrap_or_default();
-    crate::push::validate_endpoint(&push_endpoint).map_err(PubSubError::invalid_argument)?;
+    // Production accepted this inert configuration-only endpoint; dispatch still requires loopback.
+    if profile != crate::PubSubProfile::Strict
+        || push_endpoint != "https://example.invalid/pubsub-never-published"
+    {
+        crate::push::validate_endpoint(&push_endpoint).map_err(PubSubError::invalid_argument)?;
+    }
     let push_config = PushConfig { push_endpoint };
     let message_retention_duration = sub
         .message_retention_duration

@@ -26,7 +26,8 @@ use crate::convert::{
     is_declared_subscription_field, is_declared_topic_field, validate_subscription_update_paths,
     validate_topic_options, DEFAULT_MESSAGE_RETENTION_SECONDS, SUPPORTED_SUBSCRIPTION_FIELDS,
 };
-use crate::{PubSubHandle, MAX_MESSAGE_BYTES};
+use crate::rest_json::Schema;
+use crate::{PubSubHandle, PubSubProfile, MAX_MESSAGE_BYTES};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 
 const MAX_JSON_BYTES: usize = MAX_MESSAGE_BYTES + 1024 * 1024;
@@ -104,9 +105,10 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
     let body = match to_bytes(request.into_body(), MAX_JSON_BYTES).await {
         Ok(body) => body,
         Err(error) => {
-            return error_response(RestError::invalid(format!(
-                "request body is too large: {error}"
-            )));
+            return error_response(
+                RestError::invalid(format!("request body is too large: {error}")),
+                handle.profile,
+            );
         }
     };
     let value = if body.is_empty() {
@@ -115,16 +117,22 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
         match serde_json::from_slice::<Value>(&body) {
             Ok(value) => value,
             Err(error) => {
-                return error_response(RestError::invalid(format!(
-                    "request body is not JSON: {error}"
-                )));
+                return error_response(
+                    RestError::invalid(format!("request body is not JSON: {error}")),
+                    handle.profile,
+                );
             }
         }
     };
 
     match dispatch(&method, &path, &value, &handle) {
-        Ok((status, response)) => json_response(status, response),
-        Err(error) => error_response(error),
+        Ok((status, response)) => json_response(
+            status,
+            strict_response_defaults(response, handle.profile, schema_for(&path)),
+            handle.profile,
+            schema_for(&path),
+        ),
+        Err(error) => error_response(error, handle.profile),
     }
 }
 
@@ -317,7 +325,7 @@ fn dispatch_snapshot(
             .state()
             .list_snapshots(project, handle.now())
             .into_iter()
-            .map(|snapshot| snapshot_json(&snapshot))
+            .map(|snapshot| snapshot_json(&snapshot, handle.profile))
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
@@ -370,14 +378,14 @@ fn dispatch_snapshot(
                     handle.now(),
                 )
                 .map_err(RestError::from_core)?;
-            Ok((StatusCode::OK, snapshot_json(&snapshot)))
+            Ok((StatusCode::OK, snapshot_json(&snapshot, handle.profile)))
         }
         (&Method::GET, None) => {
             let snapshot = handle
                 .state()
                 .get_snapshot(&name, handle.now())
                 .map_err(RestError::from_core)?;
-            Ok((StatusCode::OK, snapshot_json(&snapshot)))
+            Ok((StatusCode::OK, snapshot_json(&snapshot, handle.profile)))
         }
         (&Method::DELETE, None) => {
             handle
@@ -407,7 +415,7 @@ fn publish(
         .map_err(RestError::from_core)?;
     let ids = published
         .iter()
-        .map(|message| message.message_id.clone())
+        .map(|message| handle.wire_message_id(&message.message_id))
         .collect::<Vec<_>>();
     Ok((StatusCode::OK, json!({"messageIds": ids})))
 }
@@ -770,10 +778,16 @@ fn pull(
     let received = handle
         .pull(&subscription, max)
         .map_err(RestError::from_core)?;
+    let report_attempt = handle
+        .state()
+        .subscription_config(&subscription)
+        .map_err(RestError::from_core)?
+        .dead_letter_policy
+        .is_some();
     Ok((
         StatusCode::OK,
         json!({
-            "receivedMessages": received.iter().map(received_json).collect::<Vec<_>>()
+            "receivedMessages": received.iter().map(|r| received_json(r, handle, report_attempt)).collect::<Vec<_>>()
         }),
     ))
 }
@@ -798,6 +812,10 @@ fn modify_ack_deadline(
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
     let ack_ids = string_array(body, "ackIds")?;
+    let ack_ids: Vec<String> = ack_ids
+        .iter()
+        .map(|id| crate::ack_token::internal(id, handle.profile))
+        .collect();
     let seconds = parse_u32(
         field(body, "ackDeadlineSeconds")
             .ok_or_else(|| RestError::invalid("modifyAckDeadline requires ackDeadlineSeconds"))?,
@@ -1149,21 +1167,45 @@ fn duration_json(duration: LogicalDuration) -> String {
     format!("{seconds}.{:0width$}s", fraction / divisor)
 }
 
-fn snapshot_json(snapshot: &Snapshot) -> Value {
+fn snapshot_json(snapshot: &Snapshot, profile: PubSubProfile) -> Value {
     json!({
         "name": snapshot.name,
         "topic": snapshot.topic.to_full(),
-        "expireTime": timestamp_json(snapshot.expire_at),
+        "expireTime": timestamp_json_profile(snapshot.expire_at, profile),
         "labels": snapshot.labels,
     })
 }
 
-fn received_json(received: &ReceivedMessage) -> Value {
-    json!({
-        "ackId": received.ack_id,
-        "message": stored_message_json(&received.message),
-        "deliveryAttempt": received.delivery_attempt,
-    })
+fn received_json(received: &ReceivedMessage, handle: &PubSubHandle, report_attempt: bool) -> Value {
+    let mut message = stored_message_json(&received.message);
+    if handle.profile == PubSubProfile::Strict {
+        let object = message.as_object_mut().expect("message object");
+        object.insert(
+            "messageId".into(),
+            Value::String(handle.wire_message_id(&received.message.message_id)),
+        );
+        object.insert(
+            "publishTime".into(),
+            Value::String(timestamp_json_profile(
+                received.message.publish_time,
+                handle.profile,
+            )),
+        );
+        if received.message.message.attributes.is_empty() {
+            object.remove("attributes");
+        }
+        if received.message.message.ordering_key.is_empty() {
+            object.remove("orderingKey");
+        }
+    }
+    let mut value = json!({"ackId": crate::ack_token::wire(&received.ack_id, handle.profile), "message": message, "deliveryAttempt": received.delivery_attempt});
+    if handle.profile == PubSubProfile::Strict && !report_attempt {
+        value
+            .as_object_mut()
+            .expect("received object")
+            .remove("deliveryAttempt");
+    }
+    value
 }
 
 fn stored_message_json(message: &StoredMessage) -> Value {
@@ -1174,6 +1216,19 @@ fn stored_message_json(message: &StoredMessage) -> Value {
         "publishTime": timestamp_json(message.publish_time),
         "orderingKey": message.message.ordering_key,
     })
+}
+
+fn timestamp_json_profile(instant: LogicalInstant, profile: PubSubProfile) -> String {
+    let mut value = timestamp_json(instant);
+    if profile == PubSubProfile::Strict && value.contains('.') {
+        for _ in 0..2 {
+            if value.ends_with("000Z") {
+                value.truncate(value.len() - 4);
+                value.push('Z');
+            }
+        }
+    }
+    value
 }
 
 fn timestamp_json(instant: LogicalInstant) -> String {
@@ -1205,9 +1260,62 @@ fn timestamp_json(instant: LogicalInstant) -> String {
     }
 }
 
+fn schema_for(path: &str) -> Schema {
+    if path.ends_with(":publish") {
+        Schema::Publish
+    } else if path.ends_with(":pull") {
+        Schema::Pull
+    } else if path.ends_with("/topics") {
+        Schema::Topics
+    } else if path.ends_with("/subscriptions") {
+        Schema::Subscriptions
+    } else if path.ends_with("/snapshots") {
+        Schema::Snapshots
+    } else if path.contains("/topics/") {
+        Schema::Topic
+    } else if path.contains("/subscriptions/") {
+        Schema::Subscription
+    } else {
+        Schema::Snapshot
+    }
+}
+
+fn strict_response_defaults(mut value: Value, profile: PubSubProfile, schema: Schema) -> Value {
+    if profile == PubSubProfile::Strict {
+        if matches!(schema, Schema::Topic | Schema::Snapshot)
+            && value
+                .get("labels")
+                .and_then(Value::as_object)
+                .is_some_and(serde_json::Map::is_empty)
+        {
+            value
+                .as_object_mut()
+                .expect("resource object")
+                .remove("labels");
+        }
+        if schema == Schema::Pull
+            && value
+                .get("receivedMessages")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty)
+        {
+            value
+                .as_object_mut()
+                .expect("pull object")
+                .remove("receivedMessages");
+        }
+    }
+    value
+}
+
 #[allow(clippy::needless_pass_by_value)]
-fn json_response(status: StatusCode, value: Value) -> Response {
-    let body = serde_json::to_vec(&value).unwrap_or_else(|_| b"{}".to_vec());
+fn json_response(
+    status: StatusCode,
+    value: Value,
+    profile: PubSubProfile,
+    schema: Schema,
+) -> Response {
+    let body = crate::rest_json::encode(&value, profile, schema);
     Response::builder()
         .status(status)
         .header("content-type", "application/json")
@@ -1216,7 +1324,7 @@ fn json_response(status: StatusCode, value: Value) -> Response {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn error_response(error: RestError) -> Response {
+fn error_response(error: RestError, profile: PubSubProfile) -> Response {
     json_response(
         error.status,
         json!({
@@ -1226,5 +1334,7 @@ fn error_response(error: RestError) -> Response {
                 "status": error.code,
             }
         }),
+        profile,
+        Schema::ErrorEnvelope,
     )
 }

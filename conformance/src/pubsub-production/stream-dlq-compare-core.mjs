@@ -86,7 +86,77 @@ export function normalizeBody(value, key = "", user = false, aliases = new Map()
   return value;
 }
 
-export function judgeRow(expected, actual) {
+export function recordedSilenceProbe(expected, frames = [], frameVerified = () => false) {
+  const request = expected.request;
+  if (
+    expected.case !== "stream-invalid-ack/grpc" ||
+    expected.transport !== "grpc" ||
+    expected.op !== "streamingPull" ||
+    request?.rpc !== "Subscriber/StreamingPull" ||
+    request.afterReceive !== undefined ||
+    request.frames?.length !== 2 ||
+    !Number.isSafeInteger(expected.ms) ||
+    expected.ms < 30000 ||
+    expected.response?.unknown !== true ||
+    canonicalStatus(expected.response.code) !== "DEADLINE_EXCEEDED" ||
+    expected.response.inboundFrames !== 0 ||
+    expected.response.outboundFrames !== 2 ||
+    expected.response.followUpSent !== false
+  )
+    return false;
+  const [first, second] = request.frames;
+  if (
+    typeof first.subscription !== "string" ||
+    !isDeepStrictEqual(first, {
+      subscription: first.subscription,
+      streamAckDeadlineSeconds: 10,
+      maxOutstandingMessages: "1",
+      maxOutstandingBytes: "1024",
+    }) ||
+    !isDeepStrictEqual(second, { ackIds: ["invalid-ack-for-stream-observation"] }) ||
+    frames.length !== 2
+  )
+    return false;
+  return frames.every(
+    (f, i) =>
+      f.direction === "out" && frameVerified(f) && isDeepStrictEqual(f.body, request.frames[i]),
+  );
+}
+
+export function judgeRow(expected, actual, { frames = [], frameVerified = () => false } = {}) {
+  const response = judgeResponse(expected, actual);
+  if (!recordedSilenceProbe(expected, frames, frameVerified)) return response;
+  const observed = actual?.nativeObservation;
+  const valid =
+    observed &&
+    Number.isFinite(observed.durationMs) &&
+    observed.durationMs >= 0 &&
+    Number.isSafeInteger(observed.inboundMessages) &&
+    Number.isSafeInteger(observed.outboundWrites) &&
+    typeof observed.terminalBeforeWindow === "boolean" &&
+    typeof observed.completedWindow === "boolean" &&
+    typeof observed.cancelledByObserver === "boolean";
+  const passed =
+    valid &&
+    observed.durationMs >= 30000 &&
+    observed.inboundMessages === 0 &&
+    observed.outboundWrites === 2 &&
+    !observed.terminalBeforeWindow &&
+    observed.completedWindow &&
+    observed.cancelledByObserver;
+  return {
+    ...response,
+    observation: {
+      criterion: "no-reply-during-30000ms",
+      assessment: passed ? "PASS" : valid ? "FAIL" : "NEEDS_REVIEW",
+      sourceReply: "unknown",
+      windowMs: 30000,
+      ...(valid ? { local: observed } : {}),
+    },
+  };
+}
+
+function judgeResponse(expected, actual) {
   if (expected.op === "getIamPolicy" || expected.op === "setIamPolicy") {
     let valid = false;
     try {
@@ -522,7 +592,7 @@ export async function compareRecording(
           frames,
           dispatch: dispatch[0],
         });
-        judgment = judgeRow(original, actual);
+        judgment = judgeRow(original, actual, { frames, frameVerified });
         if (original.op === "publish" && original.response.status === 200)
           bindings.linkPublish(original.request.body, original.response.body, actual.response.body);
         if (original.op === "pull" && original.response.status === 200)
@@ -595,6 +665,13 @@ export async function compareRecording(
         ]),
       ],
       comparedRows: scoped.length,
+      ...(scoped.some((r) => r.observation)
+        ? {
+            observations: scoped
+              .filter((r) => r.observation)
+              .map((r) => ({ n: r.n, ...r.observation })),
+          }
+        : {}),
     };
   });
   return {

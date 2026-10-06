@@ -18,10 +18,12 @@
 //! redelivery therefore advance only when the control API advances the clock, and message /
 //! ack ids come from the daemon seed, so a run reproduces and `await-idle` stays deterministic.
 
+mod ack_token;
 mod convert;
 mod publisher;
 mod push;
 mod rest;
+mod rest_json;
 mod subscriber;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
@@ -393,10 +395,21 @@ pub trait TopicDelivery: Send + Sync {
     }
 }
 
+/// Selects adapter wire behavior without changing the shared broker state.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PubSubProfile {
+    /// Preserves the standalone adapter and official emulator compatibility behavior.
+    #[default]
+    Emulator,
+    /// Uses recorded production wire behavior.
+    Strict,
+}
+
 /// The shared state a Pub/Sub adapter serves: the core registry, the virtual clock and the
 /// optional Functions bridge.
 #[derive(Clone)]
 pub struct PubSubHandle {
+    pub(crate) profile: PubSubProfile,
     state: Arc<Mutex<PubSubState>>,
     clock: Arc<Mutex<VirtualClock>>,
     bridge: Option<Arc<dyn TopicDelivery>>,
@@ -420,6 +433,7 @@ impl PubSubHandle {
         bridge: Option<Arc<dyn TopicDelivery>>,
     ) -> Self {
         Self {
+            profile: PubSubProfile::Emulator,
             state,
             clock,
             bridge,
@@ -433,6 +447,43 @@ impl PubSubHandle {
             push_clock_notify: Arc::new(Notify::new()),
             dead_letter_cancel_notify: Arc::new(Notify::new()),
         }
+    }
+
+    /// Selects the adapter profile; the default constructor preserves emulator behavior.
+    #[must_use]
+    pub fn with_profile(mut self, profile: PubSubProfile) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    /// Renders the recorded decimal wire identity without changing broker identity.
+    pub(crate) fn wire_message_id(&self, id: &str) -> String {
+        if self.profile == PubSubProfile::Strict {
+            if let Ok(value) = id.parse::<u64>() {
+                if value < 10_000_000_000_000_000 {
+                    return (10_000_000_000_000_000 + value).to_string();
+                }
+            }
+        }
+        id.to_owned()
+    }
+
+    pub(crate) fn wire_received(
+        &self,
+        received: &fireemu_core_pubsub::ReceivedMessage,
+        report_attempt: bool,
+    ) -> fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage {
+        let mut wire = convert::received_to_proto(received);
+        if self.profile == PubSubProfile::Strict {
+            wire.ack_id = ack_token::wire(&wire.ack_id, self.profile);
+            if let Some(message) = wire.message.as_mut() {
+                message.message_id = self.wire_message_id(&message.message_id);
+            }
+            if !report_attempt {
+                wire.delivery_attempt = 0;
+            }
+        }
+        wire
     }
 
     /// The current virtual-clock instant.
@@ -691,6 +742,11 @@ impl PubSubHandle {
         subscription: &SubscriptionName,
         ack_ids: &[String],
     ) -> Result<usize, PubSubError> {
+        let decoded: Vec<String> = ack_ids
+            .iter()
+            .map(|id| ack_token::internal(id, self.profile))
+            .collect();
+        let ack_ids = decoded.as_slice();
         let result = {
             let mut state = self.state();
             state.acknowledge(subscription, ack_ids)

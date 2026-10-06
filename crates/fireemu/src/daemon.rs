@@ -569,7 +569,15 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         pubsub_state.clone(),
         clock.clone(),
         pubsub_bridge,
-    );
+    )
+    .with_profile(match cfg.profile {
+        crate::config::CompatibilityProfile::Strict => {
+            fireemu_adapter_pubsub::PubSubProfile::Strict
+        }
+        crate::config::CompatibilityProfile::Emulator => {
+            fireemu_adapter_pubsub::PubSubProfile::Emulator
+        }
+    });
     let auth_policy = service_admission(
         app_check_gate.as_ref(),
         "auth",

@@ -1012,3 +1012,241 @@ test("generated binding histories agree with a functional relation model includi
     }
   }
 });
+
+const silenceProbe = () => {
+  const first = {
+    subscription: "projects/demo-v2/subscriptions/fe0123456789ab-sa-g-stream-sub",
+    streamAckDeadlineSeconds: 10,
+    maxOutstandingMessages: "1",
+    maxOutstandingBytes: "1024",
+  };
+  const second = { ackIds: ["invalid-ack-for-stream-observation"] };
+  const expected = {
+    case: "stream-invalid-ack/grpc",
+    op: "streamingPull",
+    transport: "grpc",
+    ms: 30002,
+    request: { rpc: "Subscriber/StreamingPull", frames: [first, second] },
+    response: {
+      code: "DEADLINE_EXCEEDED",
+      unknown: true,
+      inboundFrames: 0,
+      outboundFrames: 2,
+      followUpSent: false,
+    },
+  };
+  return {
+    expected,
+    frames: [first, second].map((body) => ({
+      note: "stream-frame",
+      direction: "out",
+      body,
+      verified: true,
+    })),
+    actual: {
+      response: { code: "CANCELLED", unknown: true, inboundFrames: 0, outboundFrames: 2 },
+      nativeObservation: {
+        durationMs: 30000,
+        inboundMessages: 0,
+        outboundWrites: 2,
+        terminalBeforeWindow: false,
+        completedWindow: true,
+        cancelledByObserver: true,
+      },
+    },
+  };
+};
+test("recorded invalid ACK window has independent observation while its response stays unknown", () => {
+  const { expected, actual, frames } = silenceProbe();
+  const r = core.judgeRow(expected, actual, { frames, frameVerified: (f) => f.verified });
+  assert.equal(r.verdict, "NOT_COMPARABLE");
+  assert.equal(expected.response.unknown, true);
+  assert.equal(r.observation?.criterion, "no-reply-during-30000ms");
+  assert.equal(r.observation?.assessment, "PASS");
+});
+test("early native data or terminal status cannot pass the recorded silence window", () => {
+  for (const change of [
+    (o) => (o.durationMs = 29999),
+    (o) => (o.inboundMessages = 1),
+    (o) => (o.terminalBeforeWindow = true),
+    (o) => (o.completedWindow = false),
+    (o) => (o.outboundWrites = 1),
+    (o) => (o.cancelledByObserver = false),
+  ]) {
+    const { expected, actual, frames } = silenceProbe();
+    change(actual.nativeObservation);
+    const r = core.judgeRow(expected, actual, { frames, frameVerified: (f) => f.verified });
+    assert.equal(r.verdict, "NOT_COMPARABLE");
+    assert.notEqual(r.observation?.assessment, "PASS");
+    assert.ok(r.observation);
+  }
+});
+test("silence observation does not accept other unknown ACK frames or missing raw provenance", () => {
+  for (const change of [
+    (p) => (p.expected.case = "stream-invalid-deadline/grpc"),
+    (p) => p.expected.request.frames[1].ackIds.push("other"),
+    (p) => (p.expected.request.frames[1].modifyDeadlineSeconds = [0]),
+    (p) => (p.expected.response.code = "UNKNOWN"),
+    (p) => (p.expected.ms = 29999),
+    (p) => (p.frames[1].verified = false),
+    (p) => p.frames.push({ direction: "in", body: {}, verified: true }),
+  ]) {
+    const p = silenceProbe();
+    change(p);
+    const r = core.judgeRow(p.expected, p.actual, {
+      frames: p.frames,
+      frameVerified: (f) => f.verified,
+    });
+    assert.equal(r.verdict, "NOT_COMPARABLE");
+    assert.equal(r.observation, undefined);
+  }
+});
+
+test("native silence observer waits a full monotonic window and cancels only its own RPC", () => {
+  assert.equal(typeof cli.createNativeSilenceObserver, "function");
+  for (const age of [0, 3600000]) {
+    let time = age,
+      cancelled = 0;
+    const listeners = new Map(),
+      pending = new Map();
+    let sequence = 0;
+    const rpc = {
+      on: (event, fn) => {
+        listeners.set(event, [...(listeners.get(event) ?? []), fn]);
+        return rpc;
+      },
+      cancel: () => {
+        cancelled += 1;
+      },
+      write: () => true,
+    };
+    const observer = cli.createNativeSilenceObserver(rpc, {
+      now: () => time,
+      schedule: (fn, delay) => {
+        pending.set(++sequence, { fn, at: time + delay });
+        return sequence;
+      },
+      clear: (id) => pending.delete(id),
+    });
+    rpc.write(Buffer.from([1]));
+    rpc.write(Buffer.from([2]));
+    time += 29999;
+    assert.equal(cancelled, 0);
+    assert.equal(observer.snapshot().completedWindow, false);
+    time += 1;
+    for (const [id, job] of pending)
+      if (job.at <= time) {
+        pending.delete(id);
+        job.fn();
+      }
+    const o = observer.snapshot();
+    assert.equal(o.completedWindow, true);
+    assert.equal(o.durationMs, 30000);
+    assert.equal(o.outboundWrites, 2);
+    assert.equal(cancelled, 1);
+    observer.close();
+    assert.equal(pending.size, 0);
+  }
+});
+test("native silence observer preserves early server events and clears pending timers", () => {
+  assert.equal(typeof cli.createNativeSilenceObserver, "function");
+  for (const event of ["data", "status", "error", "close"]) {
+    let time = 0,
+      cancelled = 0;
+    const listeners = new Map(),
+      pending = new Map();
+    const rpc = {
+      on: (e, fn) => {
+        listeners.set(e, [...(listeners.get(e) ?? []), fn]);
+        return rpc;
+      },
+      cancel: () => {
+        cancelled += 1;
+      },
+      write: () => true,
+    };
+    const o = cli.createNativeSilenceObserver(rpc, {
+      now: () => time,
+      schedule: (fn, delay) => {
+        pending.set(1, { fn, delay });
+        return 1;
+      },
+      clear: (id) => pending.delete(id),
+    });
+    time = 25;
+    for (const fn of listeners.get(event) ?? []) fn({});
+    assert.equal(o.snapshot().completedWindow, false);
+    assert.equal(o.snapshot().inboundMessages, event === "data" ? 1 : 0);
+    if (event !== "data") assert.equal(pending.size, 0);
+    o.close();
+    assert.equal(cancelled, 0);
+    assert.equal(pending.size, 0);
+  }
+});
+
+test("seeded silence-window decisions preserve the bounded reference model", () => {
+  let seed = 0x20d10020;
+  for (let i = 0; i < 512; i += 1) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    const p = silenceProbe(),
+      o = p.actual.nativeObservation;
+    o.durationMs = 29000 + (seed % 2001);
+    o.inboundMessages = (seed >>> 12) % 2;
+    o.terminalBeforeWindow = Boolean((seed >>> 15) % 2);
+    o.completedWindow = Boolean((seed >>> 18) % 2);
+    o.cancelledByObserver = Boolean((seed >>> 21) % 2);
+    o.outboundWrites = (seed >>> 24) % 4;
+    const expected =
+      o.durationMs >= 30000 &&
+      o.inboundMessages === 0 &&
+      !o.terminalBeforeWindow &&
+      o.completedWindow &&
+      o.cancelledByObserver &&
+      o.outboundWrites === 2;
+    const r = core.judgeRow(p.expected, p.actual, {
+      frames: p.frames,
+      frameVerified: (f) => f.verified,
+    });
+    assert.equal(r.verdict, "NOT_COMPARABLE");
+    assert.equal(r.observation.assessment === "PASS", expected);
+  }
+});
+test("early timer re-arms the remaining window at an aged monotonic origin", () => {
+  let time = 7200000,
+    cancelled = 0;
+  const pending = new Map();
+  let seq = 0;
+  const rpc = {
+    on: () => rpc,
+    cancel: () => {
+      cancelled += 1;
+    },
+    write: () => true,
+  };
+  const o = cli.createNativeSilenceObserver(rpc, {
+    now: () => time,
+    schedule: (fn, delay) => {
+      pending.set(++seq, { fn, delay });
+      return seq;
+    },
+    clear: (id) => pending.delete(id),
+  });
+  rpc.write(Buffer.from([1]));
+  time += 17;
+  rpc.write(Buffer.from([2]));
+  time += 29999;
+  const first = pending.get(1);
+  pending.delete(1);
+  first.fn();
+  assert.equal(cancelled, 0);
+  assert.equal(o.snapshot().completedWindow, false);
+  assert.equal(pending.get(2).delay, 1);
+  time += 1;
+  const second = pending.get(2);
+  pending.delete(2);
+  second.fn();
+  assert.equal(cancelled, 1);
+  assert.equal(o.snapshot().durationMs, 30000);
+  o.close();
+  assert.equal(pending.size, 0);
+});

@@ -14,8 +14,8 @@ use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 use pb::subscriber_server::Subscriber;
 
 use crate::convert::{
-    from_timestamp, received_to_proto, snapshot_to_proto, status, subscription_from_proto,
-    subscription_to_proto, validate_push_config_options,
+    from_timestamp, snapshot_to_proto, status, subscription_from_proto,
+    subscription_from_proto_for_profile, subscription_to_proto, validate_push_config_options,
 };
 use crate::PubSubHandle;
 
@@ -38,7 +38,17 @@ impl SubscriberService {
         let reported = state
             .reported_topic(name)
             .unwrap_or_else(|| config.topic.to_full());
-        Ok(subscription_to_proto(config, &reported))
+        let mut sub = subscription_to_proto(config, &reported);
+        if self.handle.profile == crate::PubSubProfile::Strict {
+            if let Some(push) = sub
+                .push_config
+                .as_mut()
+                .filter(|push| !push.push_endpoint.is_empty())
+            {
+                push.attributes.insert("x-goog-version".into(), "v1".into());
+            }
+        }
+        Ok(sub)
     }
 }
 
@@ -95,7 +105,16 @@ fn apply_stream_request(
     handle: &PubSubHandle,
     sub: &SubscriptionName,
     req: &pb::StreamingPullRequest,
-) {
+) -> Result<(), Status> {
+    if handle.profile == crate::PubSubProfile::Strict {
+        if let Some(secs) = req
+            .modify_deadline_seconds
+            .iter()
+            .find(|secs| !(0..=600).contains(*secs))
+        {
+            return Err(Status::invalid_argument(format!("Invalid ack deadline given (ack_deadline={secs}). The ack deadline must be between 0 and 600 seconds.")));
+        }
+    }
     if !req.ack_ids.is_empty() {
         let _ = handle.acknowledge(sub, &req.ack_ids);
     }
@@ -107,8 +126,10 @@ fn apply_stream_request(
         .zip(req.modify_deadline_seconds.iter())
     {
         let s = u32::try_from(*secs).unwrap_or(0);
-        let _ = state.modify_ack_deadline(sub, std::slice::from_ref(id), s, now);
+        let internal = crate::ack_token::internal(id, handle.profile);
+        let _ = state.modify_ack_deadline(sub, std::slice::from_ref(&internal), s, now);
     }
+    Ok(())
 }
 
 #[tonic::async_trait]
@@ -118,7 +139,12 @@ impl Subscriber for SubscriberService {
         request: Request<pb::Subscription>,
     ) -> Result<Response<pb::Subscription>, Status> {
         let sub = request.into_inner();
-        let config = subscription_from_proto(&sub).map_err(|e| status(&e))?;
+        let config = if self.handle.profile == crate::PubSubProfile::Strict {
+            subscription_from_proto_for_profile(&sub, self.handle.profile)
+        } else {
+            subscription_from_proto(&sub)
+        }
+        .map_err(|e| status(&e))?;
         let name = config.name.clone();
         let topic = config.topic.clone();
         self.handle
@@ -220,9 +246,14 @@ impl Subscriber for SubscriberService {
         let secs = u32::try_from(req.ack_deadline_seconds)
             .map_err(|_| Status::invalid_argument("ackDeadlineSeconds must be non-negative"))?;
         let now = self.handle.now();
+        let ids = req
+            .ack_ids
+            .iter()
+            .map(|id| crate::ack_token::internal(id, self.handle.profile))
+            .collect::<Vec<_>>();
         self.handle
             .state()
-            .modify_ack_deadline(&name, &req.ack_ids, secs, now)
+            .modify_ack_deadline(&name, &ids, secs, now)
             .map_err(|e| status(&e))?;
         Ok(Response::new(()))
     }
@@ -247,8 +278,18 @@ impl Subscriber for SubscriberService {
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
         let max = usize::try_from(req.max_messages.max(0)).unwrap_or(0);
         let received = self.handle.pull(&name, max).map_err(|e| status(&e))?;
+        let report_attempt = self
+            .handle
+            .state()
+            .subscription_config(&name)
+            .map_err(|e| status(&e))?
+            .dead_letter_policy
+            .is_some();
         Ok(Response::new(pb::PullResponse {
-            received_messages: received.iter().map(received_to_proto).collect(),
+            received_messages: received
+                .iter()
+                .map(|r| self.handle.wire_received(r, report_attempt))
+                .collect(),
         }))
     }
 
@@ -266,29 +307,62 @@ impl Subscriber for SubscriberService {
             .ok_or_else(|| Status::invalid_argument("streaming pull opened with no request"))?;
         let name = SubscriptionName::parse(&first.subscription).map_err(|e| status(&e))?;
         // Fail fast if the subscription does not exist.
-        self.handle
+        let config = self
+            .handle
             .state()
             .subscription_config(&name)
-            .map_err(|e| status(&e))?;
+            .map_err(|e| status(&e))?
+            .clone();
+        if self.handle.profile == crate::PubSubProfile::Strict
+            && !config.push_config.push_endpoint.is_empty()
+        {
+            return Err(Status::failed_precondition(
+                "This method is not supported for this subscription type.",
+            ));
+        }
+        let report_attempt = config.dead_letter_policy.is_some();
+        let probe_opening = first.stream_ack_deadline_seconds == 10
+            && first.max_outstanding_messages == 1
+            && first.max_outstanding_bytes == 1024
+            && first.client_id.is_empty()
+            && first.ack_ids.is_empty()
+            && first.modify_deadline_ack_ids.is_empty()
+            && first.modify_deadline_seconds.is_empty();
 
         let handle = self.handle.clone();
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<pb::StreamingPullResponse, Status>>(16);
         tokio::spawn(async move {
             let mut first = Some(first);
+            let mut inbound_open = true;
+            let mut seen_frames = 0;
+            let mut probe_deadline = None;
             // A short poll delivers messages published after the stream opened. This is a
             // delivery cadence only; ack-deadline and redelivery timing run on the virtual clock.
             let mut interval = tokio::time::interval(Duration::from_millis(25));
             loop {
                 tokio::select! {
                     biased;
+                    () = tx.closed() => break,
+                    () = async { tokio::time::sleep_until(probe_deadline.expect("active probe deadline")).await }, if !inbound_open && probe_deadline.is_some() => break,
                     msg = async {
                         match first.take() {
                             Some(f) => Ok(Some(f)),
                             None => inbound.message().await,
                         }
-                    } => {
+                    }, if inbound_open => {
                         match msg {
-                            Ok(Some(req)) => apply_stream_request(&handle, &name, &req),
+                            Ok(Some(req)) => {
+                                seen_frames += 1;
+                                if seen_frames == 2 && handle.profile == crate::PubSubProfile::Strict && probe_opening && req == (pb::StreamingPullRequest { ack_ids: vec!["invalid-ack-for-stream-observation".into()], ..pb::StreamingPullRequest::default() }) {
+                                    // Only the recorded ACK-only probe retains its half-closed stream for this bounded window.
+                                    probe_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(30));
+                                } else { probe_deadline = None; }
+                                if let Err(error) = apply_stream_request(&handle, &name, &req) {
+                                    let _ = tx.send(Err(error)).await;
+                                    break;
+                                }
+                            }
+                            Ok(None) if probe_deadline.is_some() => inbound_open = false,
                             Ok(None) | Err(_) => break,
                         }
                     }
@@ -297,7 +371,7 @@ impl Subscriber for SubscriberService {
                         match pulled {
                             Ok(msgs) if !msgs.is_empty() => {
                                 let resp = pb::StreamingPullResponse {
-                                    received_messages: msgs.iter().map(received_to_proto).collect(),
+                                    received_messages: msgs.iter().map(|r| handle.wire_received(r, report_attempt)).collect(),
                                     ..pb::StreamingPullResponse::default()
                                 };
                                 if tx.send(Ok(resp)).await.is_err() {

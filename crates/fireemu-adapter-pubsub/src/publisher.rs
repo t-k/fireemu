@@ -84,7 +84,7 @@ impl Publisher for PublisherService {
         let published = published.map_err(|e| status(&e))?;
         let ids: Vec<String> = published
             .iter()
-            .map(|message| message.message_id.clone())
+            .map(|message| self.handle.wire_message_id(&message.message_id))
             .collect();
         Ok(Response::new(pb::PublishResponse { message_ids: ids }))
     }

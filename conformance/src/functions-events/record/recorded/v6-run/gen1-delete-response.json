@@ -1,0 +1,8 @@
+{
+  "name": "operations/cHJvamVjdHMvZmlyZWVtdS1vcmFjbGUtZXZlbnRzL2xvY2F0aW9ucy91cy1jZW50cmFsMS9vcGVyYXRpb25zL29wZXJhdGlvbi0xNzkxMTYwMDUyMjg0LTY1ZDBjZjJhNmZiMTUtODhhZTYyMDQtYzhhOGVkNmE",
+  "metadata": {
+    "@type": "type.googleapis.com/google.cloud.functions.v1.OperationMetadataV1",
+    "target": "projects/fireemu-oracle-events/locations/us-central1/functions/storageMetadataUpdatedV1",
+    "updateTime": "2026-10-05T00:27:32.332925315Z"
+  }
+}

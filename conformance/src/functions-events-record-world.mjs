@@ -104,7 +104,8 @@ export function createWorld({ now, rulesAllow = true }) {
     users: new Map(),
     topics: new Set(),
     entries: [],
-    deployed: false,
+    // the handlers that are deployed (v7: the main deploy and the four Gen1 Storage functions come one by one)
+    active: new Set(),
     notificationConfigs: [],
     leftover: new Set(),
     operations: new Map(),
@@ -119,10 +120,11 @@ export function createWorld({ now, rulesAllow = true }) {
     retryPending: [],
   };
   const next = () => (world.counter += 1);
+  // "deployed" is true while any handler is: the older tests ask it as a flag
+  Object.defineProperty(world, "deployed", { get: () => world.active.size > 0, enumerable: true });
 
   function emit(names, source, data, { delay = 2000 } = {}) {
-    if (!world.deployed) return;
-    for (const handler of handlerNames(names)) {
+    for (const handler of handlerNames(names).filter((h) => world.active.has(h.name))) {
       const id = `ev-${next()}`;
       const when = now() + delay; // when the log line is written; the event itself happened when the source call committed
       const committed = now();
@@ -224,7 +226,11 @@ export function createWorld({ now, rulesAllow = true }) {
       },
     };
     emit(FS[kind], "firestore", data);
-    if (kind === "create" && after?.fixtureKind?.stringValue === "retry" && world.deployed) {
+    if (
+      kind === "create" &&
+      after?.fixtureKind?.stringValue === "retry" &&
+      world.active.has("fsRetryV2")
+    ) {
       const markerId = createHash("sha256").update(`retry-${path}`).digest("hex");
       world.docs.set(`${MARKER_COLLECTION}/${markerId}`, {
         documentPath: { stringValue: path },
@@ -331,13 +337,15 @@ export function createWorld({ now, rulesAllow = true }) {
       if ((m = /^\/upload\/storage\/v1\/b\/([^/]+)\/o$/.exec(path)) && method === "POST") {
         const bucket = m[1];
         const name = u.searchParams.get("name");
-        const hash = init.headers["x-goog-hash"];
-        if (hash && hash !== `md5=${createHash("md5").update(body).digest("base64")}`)
-          return json(400, { error: { code: 400 } });
         const key = `${bucket}/${name}`;
         const list = world.objects.get(key) ?? [];
         const live = list.find((g) => g.live);
-        if (u.searchParams.get("ifGenerationMatch") === "0" && live)
+        // Production: ifGenerationMatch=0 needs the object absent; any other value needs that live generation.
+        const precondition = u.searchParams.get("ifGenerationMatch");
+        if (
+          (precondition === "0" && live) ||
+          (precondition !== null && precondition !== "0" && precondition !== live?.generation)
+        )
           return json(412, { error: { code: 412 } });
         const gen = {
           generation: String(1700000000000000 + next()),
@@ -541,7 +549,7 @@ export function createWorld({ now, rulesAllow = true }) {
     // list also lists the Gen1 functions, Run service and trigger ids are lowercase.
     const present = () => {
       const all = new Set(world.leftover);
-      if (world.deployed) for (const h of names) all.add(h.name);
+      for (const name of world.active) all.add(name);
       return names.filter((h) => all.has(h.name));
     };
     const region = "us-central1";
@@ -586,6 +594,40 @@ export function createWorld({ now, rulesAllow = true }) {
           done: true,
           response: {},
         });
+      }
+      // Gen1: the REST delete of a leftover, and the operation read (`operations/<id>`, as the CLI's debug log recorded)
+      m = /^\/v1\/projects\/[^/]+\/locations\/([a-z0-9-]+)\/functions\/([A-Za-z0-9]+)$/.exec(path);
+      if (m && method === "DELETE") {
+        const handler = names.find((h) => h.name === m[2] && h.generation === 1);
+        if (!handler || m[1] !== region || !present().includes(handler)) return notFound();
+        world.restDeletes.push(m[2]);
+        const id = `gen1op${world.restDeletes.length}`;
+        world.operations.set(id, { handler: handler.name, polls: 0, gen1: true });
+        return json(200, {
+          name: `operations/${id}`,
+          metadata: {
+            "@type": "type.googleapis.com/google.cloud.functions.v1.OperationMetadataV1",
+            target: `projects/${PROJECT}/locations/${region}/functions/${handler.name}`,
+            type: "DELETE_FUNCTION",
+          },
+        });
+      }
+      m = /^\/v1\/operations\/([A-Za-z0-9_-]+)$/.exec(path);
+      if (m && method === "GET") {
+        const op = world.operations.get(m[1]);
+        if (!op?.gen1) return notFound();
+        op.polls += 1;
+        const name = `operations/${m[1]}`;
+        if (op.polls <= world.operationPolls) return json(200, { name });
+        if (world.restDeleteFails)
+          return json(200, {
+            name,
+            done: true,
+            error: { code: 13, message: "Deleting trigger failed" },
+          });
+        world.leftover.delete(op.handler);
+        world.removed.add(op.handler);
+        return json(200, { name, done: true });
       }
       const gen = path.startsWith("/v1/") ? 1 : 2;
       const list = present()
@@ -669,12 +711,13 @@ export function createWorld({ now, rulesAllow = true }) {
     }
     return route(method, url, normalized);
   };
-  world.deploy = () => {
-    world.deployed = true;
+  // `deploy()` deploys every handler; `deploy(names)` those names (the main deploy, then one Gen1 Storage function at a time)
+  world.deploy = (names) => {
+    for (const h of names === undefined ? HANDLERS : handlerNames(names)) world.active.add(h.name);
   };
   // `stuck`: the handlers a partly failed CLI delete leaves behind (the v4 run's storageArchivedV2)
   world.undeploy = ({ stuck = [] } = {}) => {
-    world.deployed = false;
+    world.active = new Set();
     world.leftover = new Set(stuck);
   };
   return world;

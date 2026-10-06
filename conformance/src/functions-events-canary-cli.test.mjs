@@ -5,6 +5,8 @@ import {
   buildCanaryBatchCli,
   buildCanaryCli,
   formalHandlers,
+  gen1StorageDeployOrder,
+  mainDeployHandlers,
   probeCanaries,
 } from "./functions-events/canary-cli.mjs";
 
@@ -343,4 +345,72 @@ test("the batch CLI still refuses a partial, reordered or mixed set", () => {
       /reviewed/,
     );
   }
+});
+
+test("v7: the four Gen1 Storage functions deploy one at a time, storageFinalizedV1 first; the main deploy is the other 18", () => {
+  assert.deepEqual(gen1StorageDeployOrder, [
+    "storageFinalizedV1",
+    "storageDeletedV1",
+    "storageMetadataUpdatedV1",
+    "storageArchivedV1",
+  ]);
+  assert.equal(mainDeployHandlers.length, 18);
+  assert.deepEqual(
+    mainDeployHandlers,
+    formalHandlers.filter((name) => !gen1StorageDeployOrder.includes(name)),
+    "the other 18, in the formal order",
+  );
+  // every function is in exactly one of the two groups
+  assert.deepEqual(
+    [...mainDeployHandlers, ...gen1StorageDeployOrder].toSorted(),
+    formalHandlers.toSorted(),
+  );
+  const options = { ...cliOptions, captureMode: "stdout", force: true };
+  const only = (names) =>
+    buildCanaryBatchCli("deploy", "demo-events-prod", names, options).args[
+      buildCanaryBatchCli("deploy", "demo-events-prod", names, options).args.indexOf("--only") + 1
+    ];
+  assert.equal(
+    only(mainDeployHandlers),
+    mainDeployHandlers.map((n) => `functions:events:${n}`).join(","),
+  );
+  for (const name of gen1StorageDeployOrder) {
+    const plan = buildCanaryBatchCli("deploy", "demo-events-prod", [name], options);
+    assert.equal(plan.args[plan.args.indexOf("--only") + 1], `functions:events:${name}`);
+    assert.ok(plan.args.includes("--force"));
+    assert.ok(plan.args.includes("--non-interactive"));
+    assert.equal(plan.env.FE_EVENTS_CAPTURE_MODE, "stdout");
+  }
+  // the full set still deploys (the dry run) and deletes as before
+  assert.ok(buildCanaryBatchCli("deploy", "demo-events-prod", formalHandlers, options));
+  assert.ok(
+    buildCanaryBatchCli("delete", "demo-events-prod", formalHandlers, {
+      ...cliOptions,
+      captureMode: "stdout",
+    }),
+  );
+});
+
+test("v7: nothing but those reviewed sets deploys, and only the full set deletes", () => {
+  const options = { ...cliOptions, captureMode: "stdout" };
+  const refuse = (action, names) =>
+    assert.throws(
+      () => buildCanaryBatchCli(action, "demo-events-prod", names, options),
+      /reviewed/,
+    );
+  // pairs, triples and the whole group of four are not reviewed: one at a time is the point
+  refuse("deploy", gen1StorageDeployOrder);
+  refuse("deploy", gen1StorageDeployOrder.slice(0, 2));
+  refuse("deploy", [gen1StorageDeployOrder[1], gen1StorageDeployOrder[0]]);
+  // a single function that is not one of the four
+  refuse("deploy", ["fsCreatedV1"]);
+  refuse("deploy", ["storageFinalizedV2"]);
+  // the main set with one of the four added, or with one removed
+  refuse("deploy", [...mainDeployHandlers, "storageFinalizedV1"]);
+  refuse("deploy", mainDeployHandlers.slice(1));
+  refuse("deploy", mainDeployHandlers.toReversed());
+  // a delete of the main set or of one function
+  refuse("delete", mainDeployHandlers);
+  refuse("delete", ["storageFinalizedV1"]);
+  refuse("delete", gen1StorageDeployOrder);
 });

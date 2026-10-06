@@ -71,8 +71,6 @@ pub const MAX_ACTIVE_EVENT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_ACTIVE_EVENTARC_RECORDS: usize = 3072;
 /// Eventarc's byte share, leaving 16 MiB for other trigger sources.
 pub const MAX_ACTIVE_EVENTARC_BYTES: usize = 48 * 1024 * 1024;
-/// Maximum deliveries one Eventarc publication may add after duplicate fault expansion.
-pub const MAX_EVENTARC_DELIVERIES_PER_PUBLISH: usize = 256;
 const RUNNER_RESTART_ATTEMPTS: u32 = 5;
 const RUNNER_RESTART_WINDOW: Duration = Duration::from_secs(30);
 
@@ -1717,7 +1715,8 @@ impl FunctionsRuntime {
                 copies = copies.saturating_add(count as usize);
             }
         }
-        copies.min(MAX_EVENTARC_DELIVERIES_PER_PUBLISH)
+        // The queue bound refuses what does not fit; this only keeps the arithmetic small.
+        copies.min(MAX_ACTIVE_EVENTARC_RECORDS)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2649,12 +2648,14 @@ impl FunctionsRuntime {
             .is_ok_and(|registry| registry.declares_channel(channel))
     }
 
-    /// Whether a loaded function declares any channel of `project` in `location` (`-` is every location).
+    /// The channels a loaded function declares in `project` and `location` (`-` is every location), by
+    /// full resource name.
     #[must_use]
-    pub fn eventarc_channels_declared_in(&self, project: &str, location: &str) -> bool {
+    pub fn eventarc_channels_declared_in(&self, project: &str, location: &str) -> Vec<String> {
         self.eventarc_registry
             .lock()
-            .is_ok_and(|registry| registry.declares_channel_in(project, location))
+            .map(|registry| registry.declared_channels_in(project, location))
+            .unwrap_or_default()
     }
 
     /// Registers one parsed Eventarc trigger against the exact current Functions key.
@@ -2718,12 +2719,20 @@ impl FunctionsRuntime {
         let mut delivery_count = 0usize;
         let mut retained_bytes = 0usize;
         for event in events {
-            EventType::try_new(&event.event_type)
-                .map_err(|_| EventarcPublishError::InvalidEvent)?;
+            // A type the runtime cannot hold (outside `[A-Za-z0-9._-]`, or longer than 256 bytes) cannot name a
+            // function's trigger either. The official emulator looks the trigger up by the type's text and
+            // answers 200 whatever the type is, so such an event is logged and not delivered; it does not
+            // refuse the publication.
+            if EventType::try_new(&event.event_type).is_err() {
+                eprintln!(
+                    "[functions] eventarc: an event on {channel} with a type this emulator cannot deliver was not delivered"
+                );
+                continue;
+            }
             let payload_bytes = serde_json::to_vec(&event.event)
                 .map_err(|_| EventarcPublishError::InvalidEvent)?
                 .len();
-            let remaining = MAX_EVENTARC_DELIVERIES_PER_PUBLISH - delivery_count;
+            let remaining = MAX_ACTIVE_EVENTARC_RECORDS.saturating_sub(delivery_count);
             let functions = registry
                 .matching_functions(channel, &event.event_type, &event.attributes, remaining)
                 .map_err(|_| EventarcPublishError::Capacity)?;
@@ -2739,9 +2748,6 @@ impl FunctionsRuntime {
                 delivery_count = delivery_count
                     .checked_add(copies)
                     .ok_or(EventarcPublishError::Capacity)?;
-                if delivery_count > MAX_EVENTARC_DELIVERIES_PER_PUBLISH {
-                    return Err(EventarcPublishError::Capacity);
-                }
                 let bytes = Self::retained_event_bytes_from_payload_len(
                     &function,
                     &event.event_type,

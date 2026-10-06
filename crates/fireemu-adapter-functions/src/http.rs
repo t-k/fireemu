@@ -865,9 +865,20 @@ fn decode_chunked(mut rest: &[u8]) -> Result<Vec<u8>, String> {
 /// The official emulator refuses a `400` for an event with no `type` and otherwise answers a
 /// bare `200` -- `res.sendStatus(200)`, so `OK` as text -- whether or not anything was
 /// subscribed, because delivery is fire-and-forget from the publisher's point of view
-/// (`eventarcEmulator.js` `publishEventsHandler`). A conversion this emulator cannot make is
-/// reported the same way an unpublishable event is, with the official sentence, rather than
-/// accepted and dropped.
+/// (`eventarcEmulator.js` `publishEventsHandler`). It converts after answering, so a conversion
+/// it cannot make is only logged and that event is not delivered. This emulator does the same
+/// (stage B rows 89 and 102 are events production accepts and the conversion cannot make: no
+/// `time` attribute, an attribute of the kind `ceBytes`); an emulator profile must not refuse
+/// what the official emulator accepts. That includes the number of events in one publication and the number of
+/// deliveries it fans out to: the official handler has no limit (earlier versions answered `429` above 256
+/// events, and above 256 deliveries). What bounds the work is the body limit and the global queue bound of the
+/// runtime (3072 Eventarc records and 48 MiB, declared in `capabilities.json`): a publication that would
+/// overflow it is refused whole, with nothing enqueued.
+///
+/// The loop is the official one: each event is handled in order, and the first one with a falsy `type`
+/// (`!event.type`: a missing one, `null`, `false`, `0`, `""`) ends it with `res.sendStatus(400)`, so the events
+/// before it have been delivered and the ones after it have not. A `type` that is not a string, and a string
+/// the runtime cannot hold, are accepted and not delivered.
 fn publish_events(runtime: &FunctionsRuntime, channel: &str, body: &[u8]) -> Response<OutBody> {
     let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(body) else {
         return simple(StatusCode::BAD_REQUEST, "Bad Request");
@@ -875,15 +886,15 @@ fn publish_events(runtime: &FunctionsRuntime, channel: &str, body: &[u8]) -> Res
     let Some(events) = parsed.get("events").and_then(serde_json::Value::as_array) else {
         return simple(StatusCode::BAD_REQUEST, "Bad Request");
     };
-    if events.len() > crate::eventarc::MAX_EVENTS_PER_PUBLISH {
-        return simple(
-            StatusCode::TOO_MANY_REQUESTS,
-            "Eventarc event count exceeded",
-        );
-    }
     let google = channel == crate::eventarc::GOOGLE_CHANNEL;
     let mut published = Vec::with_capacity(events.len());
+    let mut refused = false;
     for event in events {
+        // The only refusal of the official handler besides an unreadable body.
+        if crate::eventarc::missing_type(event).is_some() {
+            refused = true;
+            break;
+        }
         // The sentinel `google` channel forwards verbatim; a custom channel converts the
         // proto form the Admin SDK publishes. That branch is the official one, and it is why
         // Firebase alerts -- which have no channel and are indexed under `<type>-google` --
@@ -895,7 +906,7 @@ fn publish_events(runtime: &FunctionsRuntime, channel: &str, body: &[u8]) -> Res
         };
         match converted {
             Ok(event) => published.push(event),
-            Err(why) => return simple(StatusCode::BAD_REQUEST, &why),
+            Err(why) => eprintln!("[functions] eventarc: an event on {channel} was not delivered: {why}"),
         }
     }
     match runtime.publish_registered_custom_events(channel, &published) {
@@ -904,7 +915,12 @@ fn publish_events(runtime: &FunctionsRuntime, channel: &str, body: &[u8]) -> Res
                 "[functions] eventarc: {} event(s) on {channel} reached {delivered} function(s)",
                 published.len()
             );
-            simple(StatusCode::OK, "OK")
+            // `res.sendStatus(400)` writes its status text as the body.
+            if refused {
+                simple(StatusCode::BAD_REQUEST, "Bad Request")
+            } else {
+                simple(StatusCode::OK, "OK")
+            }
         }
         Err(crate::runtime::EventarcPublishError::Capacity) => simple(
             StatusCode::TOO_MANY_REQUESTS,
@@ -1226,15 +1242,12 @@ fn deliver_strict(
 ) -> Response<OutBody> {
     let mut published = Vec::with_capacity(events.len());
     for event in events {
+        // The event passed the recorded checks, so production accepted it; what the emulator cannot
+        // convert (no `time`, a `ceBytes` attribute: stage B rows 89 and 102) is not delivered and
+        // is not an error of the publisher.
         match crate::eventarc::convert(event) {
             Ok(event) => published.push(event),
-            Err(why) => {
-                return json_answer(&crate::eventarc_strict::failure(
-                    400,
-                    "INVALID_ARGUMENT",
-                    &why,
-                ));
-            }
+            Err(why) => eprintln!("[functions] eventarc: an event on {channel} was not delivered: {why}"),
         }
     }
     match runtime.publish_registered_custom_events(channel, &published) {
@@ -1265,6 +1278,7 @@ fn deliver_strict(
 /// to an emulator host).
 async fn respond_eventarc_strict(
     runtime: &FunctionsRuntime,
+    channels: &crate::eventarc_channels::ChannelStore,
     req: Request<Incoming>,
     route: crate::eventarc_strict::Route,
     body_limit: usize,
@@ -1281,11 +1295,16 @@ async fn respond_eventarc_strict(
     let declared_channel = |channel: &str| runtime.eventarc_channel_declared(channel);
     let declared_in =
         |project: &str, location: &str| runtime.eventarc_channels_declared_in(project, location);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX));
     let world = World {
         project: runtime.project(),
         request_id: &request_id,
         declared_channel: &declared_channel,
         declared_in: &declared_in,
+        channels,
+        now,
     };
     let input = Input {
         route: &route,
@@ -1301,6 +1320,7 @@ async fn respond_eventarc_strict(
 
 async fn respond_eventarc_surface(
     runtime: &FunctionsRuntime,
+    channels: &crate::eventarc_channels::ChannelStore,
     req: Request<Incoming>,
     body_limit: usize,
     profile: FunctionsHttpProfile,
@@ -1309,7 +1329,7 @@ async fn respond_eventarc_surface(
     if profile == FunctionsHttpProfile::Strict {
         if let Some(route) = crate::eventarc_strict::route(req.method().as_str(), req.uri().path())
         {
-            return respond_eventarc_strict(runtime, req, route, body_limit).await;
+            return respond_eventarc_strict(runtime, channels, req, route, body_limit).await;
         }
     }
     let Some(route) = crate::eventarc::route(req.uri().path()) else {
@@ -1381,6 +1401,7 @@ async fn respond_eventarc_surface(
 
 async fn respond_support_surface(
     runtime: Arc<FunctionsRuntime>,
+    channels: Arc<crate::eventarc_channels::ChannelStore>,
     req: Request<Incoming>,
     body_limit: usize,
     surface: HttpSurface,
@@ -1390,7 +1411,7 @@ async fn respond_support_surface(
     let path = req.uri().path().to_owned();
     match surface {
         HttpSurface::Eventarc => {
-            respond_eventarc_surface(&runtime, req, body_limit, profile, origin).await
+            respond_eventarc_surface(&runtime, &channels, req, body_limit, profile, origin).await
         }
         HttpSurface::Tasks => {
             let Some(route) = crate::tasks::route(&path) else {
@@ -1509,6 +1530,7 @@ async fn invoke_runner(
 /// A request to one of the support listeners (Eventarc, Cloud Tasks): the origin check, then the surface.
 async fn respond_support_request(
     runtime: Arc<FunctionsRuntime>,
+    channels: Arc<crate::eventarc_channels::ChannelStore>,
     req: Request<Incoming>,
     body_limit: usize,
     surface: HttpSurface,
@@ -1526,6 +1548,7 @@ async fn respond_support_request(
     }
     respond_support_surface(
         runtime,
+        channels,
         req,
         body_limit,
         surface,
@@ -1537,6 +1560,7 @@ async fn respond_support_request(
 
 async fn respond(
     runtime: Arc<FunctionsRuntime>,
+    channels: Arc<crate::eventarc_channels::ChannelStore>,
     req: Request<Incoming>,
     body_limit: usize,
     surface: HttpSurface,
@@ -1546,7 +1570,7 @@ async fn respond(
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
     if surface != HttpSurface::Functions {
-        return Ok(respond_support_request(runtime, req, body_limit, surface, profile).await);
+        return Ok(respond_support_request(runtime, channels, req, body_limit, surface, profile).await);
     }
     let (_region, function, target) = match resolve_route(&runtime, &path) {
         Ok(resolved) => resolved,
@@ -1658,7 +1682,9 @@ async fn serve_surface(
     surface: HttpSurface,
     admission: HttpAdmission,
     profile: FunctionsHttpProfile,
+    channels: Arc<crate::eventarc_channels::ChannelStore>,
 ) -> std::io::Result<()> {
+    // The channels created through the strict Eventarc surface live as long as the listener.
     loop {
         let (stream, peer) = listener.accept().await?;
         let connection = admission
@@ -1668,6 +1694,7 @@ async fn serve_surface(
             .await
             .expect("the connection semaphore is never closed");
         let runtime = runtime.clone();
+        let channels = channels.clone();
         let request_admission = admission.requests.clone();
         tokio::spawn(async move {
             let _connection = connection;
@@ -1677,12 +1704,13 @@ async fn serve_surface(
             ));
             let svc = service_fn(move |req| {
                 let runtime = runtime.clone();
+                let channels = channels.clone();
                 let request_admission = request_admission.clone();
                 async move {
                     let body_limit = request_body_limit(surface, req.uri().path());
                     let reservation = request_body_reservation(&req, body_limit);
                     let _request = request_admission.acquire(reservation).await;
-                    respond(runtime, req, body_limit, surface, profile, peer.ip()).await
+                    respond(runtime, channels, req, body_limit, surface, profile, peer.ip()).await
                 }
             });
             let mut builder = http1::Builder::new();
@@ -1719,6 +1747,7 @@ pub async fn serve_functions_with_profile(
         HttpSurface::Functions,
         admission,
         profile,
+        Arc::new(crate::eventarc_channels::ChannelStore::default()),
     )
     .await
 }
@@ -1741,7 +1770,34 @@ pub async fn serve_eventarc_with_profile(
     admission: HttpAdmission,
     profile: FunctionsHttpProfile,
 ) -> std::io::Result<()> {
-    serve_surface(listener, runtime, HttpSurface::Eventarc, admission, profile).await
+    serve_eventarc_with_channels(
+        listener,
+        runtime,
+        admission,
+        profile,
+        Arc::new(crate::eventarc_channels::ChannelStore::default()),
+    )
+    .await
+}
+
+/// Serves the Eventarc listener with the channels of the strict profile held by `channels`: the store
+/// decides how long the operations of a creation and a deletion take, and what identifiers they carry.
+pub async fn serve_eventarc_with_channels(
+    listener: TcpListener,
+    runtime: Arc<FunctionsRuntime>,
+    admission: HttpAdmission,
+    profile: FunctionsHttpProfile,
+    channels: Arc<crate::eventarc_channels::ChannelStore>,
+) -> std::io::Result<()> {
+    serve_surface(
+        listener,
+        runtime,
+        HttpSurface::Eventarc,
+        admission,
+        profile,
+        channels,
+    )
+    .await
 }
 
 /// Serves only the Cloud Tasks queue routes on the official Tasks listener.
@@ -1756,6 +1812,7 @@ pub async fn serve_tasks(
         HttpSurface::Tasks,
         admission,
         FunctionsHttpProfile::Emulator,
+        Arc::new(crate::eventarc_channels::ChannelStore::default()),
     )
     .await
 }

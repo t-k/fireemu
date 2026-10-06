@@ -1180,6 +1180,8 @@ async fn eventarc_cors_is_limited_to_the_two_official_google_routes() {
 
 #[tokio::test]
 async fn eventarc_publish_rejects_amplified_fanout_without_partial_enqueue() {
+    // (The name is the one the EVENTARC-CLAIM-LOCAL-PUBLISH claim cites. A fan-out is refused when it overflows the
+    // global queue bound; there is no per-publication cap on events or deliveries.)
     let h = start(true).await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -1188,8 +1190,11 @@ async fn eventarc_publish_rejects_amplified_fanout_without_partial_enqueue() {
         h.runtime.clone(),
         fireemu_adapter_functions::http::HttpAdmission::new(),
     ));
+    // The official emulator has no limit on the number of events in one publication: a batch that nothing
+    // subscribes to is answered `200 OK` whatever its size (an emulator profile never refuses more than the
+    // official emulator; the old limit of 256 answered 429).
     let unmatched = serde_json::json!({
-        "events": (0..=fireemu_adapter_functions::eventarc::MAX_EVENTS_PER_PUBLISH)
+        "events": (0..=256_usize)
             .map(|id| serde_json::json!({
                 "id": id.to_string(),
                 "type": "com.example.unmatched",
@@ -1209,7 +1214,7 @@ async fn eventarc_publish_rejects_amplified_fanout_without_partial_enqueue() {
         )
         .await
         .status,
-        429
+        200
     );
     assert!(h.runtime.is_idle());
     let trigger_name = "us-central1-customEvent-0-locations/us-central1/channels/custom";
@@ -1224,19 +1229,46 @@ async fn eventarc_publish_rejects_amplified_fanout_without_partial_enqueue() {
         );
     }
     let event = br#"{"events":[{"id":"e-1","type":"com.example.done","specVersion":"1.0","source":"test","attributes":{"time":{"ceTimestamp":"2026-09-05T00:00:00Z"},"datacontenttype":{"ceString":"application/json"},"region":{"ceString":"eu"}},"textData":"{\"ok\":true}"}]}"#;
-    let publish = h
-        .raw_request_to(
-            "POST",
-            addr,
-            "/projects/demo-app/locations/us-central1/channels/custom:publishEvents",
-            event,
-        )
-        .await;
+    let publish_path = "/projects/demo-app/locations/us-central1/channels/custom:publishEvents";
+    // 256 registered triggers and the one the manifest declares, one event: 257 deliveries, all enqueued and run (the old per-publication cap of
+    // 256 deliveries is gone: the official emulator has none).
+    let publish = h.raw_request_to("POST", addr, publish_path, event).await;
+    assert_eq!(publish.status, 200);
+    assert_eq!(recorded_deliveries(&h), 257, "every delivery is enqueued");
+    // More triggers than the whole Eventarc queue holds (3072 records, the manifest's one included): the
+    // publication is refused whole, with nothing enqueued. This global bound is the process bound; it is declared in capabilities.json.
+    for _ in 256..super_queue_bound() {
+        assert_eq!(
+            h.raw_request_to("POST", addr, &trigger_path, trigger)
+                .await
+                .status,
+            200
+        );
+    }
+    let publish = h.raw_request_to("POST", addr, publish_path, event).await;
     assert_eq!(publish.status, 429);
-    assert!(h.runtime.is_idle(), "a rejected batch must enqueue nothing");
+    assert_eq!(
+        recorded_deliveries(&h),
+        257,
+        "a rejected batch must enqueue nothing"
+    );
 
     server.abort();
     h.stop().await;
+}
+
+/// Every delivery the runtime has taken in so far: waiting, running, retrying, succeeded or dead-lettered.
+fn recorded_deliveries(h: &Harness) -> u64 {
+    let status = h.runtime.status();
+    ["pending", "running", "retryWaiting", "succeeded", "deadLettered"]
+        .iter()
+        .map(|key| status[key].as_u64().unwrap_or(0))
+        .sum()
+}
+
+/// The most records the Eventarc share of the active-event queue holds.
+fn super_queue_bound() -> usize {
+    fireemu_adapter_functions::runtime::MAX_ACTIVE_EVENTARC_RECORDS
 }
 
 #[tokio::test]

@@ -8,14 +8,15 @@ use std::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
+use fireemu_core_pubsub::pagination::paginate;
 use fireemu_core_pubsub::subscription::DEFAULT_ACK_DEADLINE_SECONDS;
 use fireemu_core_pubsub::{PushConfig, SubscriptionName};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 use pb::subscriber_server::Subscriber;
 
 use crate::convert::{
-    from_timestamp, received_to_proto, snapshot_to_proto, status, subscription_from_proto,
-    subscription_to_proto, validate_push_config_options,
+    duration_from_proto, from_timestamp, push_config_from_proto, received_to_proto,
+    snapshot_to_proto, status, subscription_to_proto,
 };
 use crate::PubSubHandle;
 
@@ -38,7 +39,11 @@ impl SubscriberService {
         let reported = state
             .reported_topic(name)
             .unwrap_or_else(|| config.topic.to_full());
-        Ok(subscription_to_proto(config, &reported))
+        Ok(subscription_to_proto(
+            config,
+            &reported,
+            self.handle.paging_policy,
+        ))
     }
 }
 
@@ -50,6 +55,8 @@ fn project_of(resource: &str) -> Result<&str, Status> {
 }
 
 fn validate_update_paths(paths: &[String]) -> Result<(), Status> {
+    let empty = [String::new()];
+    let paths = if paths.is_empty() { &empty } else { paths };
     crate::convert::validate_subscription_update_paths(paths).map_err(|error| status(&error))
 }
 
@@ -71,21 +78,13 @@ fn update_ack_deadline(paths: &[String], sub: &pb::Subscription) -> Result<Optio
 fn update_push_config(
     paths: &[String],
     sub: &pb::Subscription,
+    policy: crate::PagingPolicy,
 ) -> Result<Option<PushConfig>, Status> {
     paths
         .iter()
         .any(|path| path == "push_config")
         .then(|| {
-            validate_push_config_options(sub.push_config.as_ref())
-                .map_err(|error| status(&error))?;
-            let endpoint = sub
-                .push_config
-                .as_ref()
-                .map_or_else(String::new, |config| config.push_endpoint.clone());
-            crate::push::validate_endpoint(&endpoint).map_err(Status::invalid_argument)?;
-            Ok(PushConfig {
-                push_endpoint: endpoint,
-            })
+            push_config_from_proto(sub.push_config.as_ref(), policy).map_err(|error| status(&error))
         })
         .transpose()
 }
@@ -97,7 +96,12 @@ fn apply_stream_request(
     req: &pb::StreamingPullRequest,
 ) {
     if !req.ack_ids.is_empty() {
-        let _ = handle.acknowledge(sub, &req.ack_ids);
+        let ids: Vec<_> = req
+            .ack_ids
+            .iter()
+            .map(|id| crate::ack_token::internal(id, handle.paging_policy))
+            .collect();
+        let _ = handle.acknowledge(sub, &ids);
     }
     let now = handle.now();
     let mut state = handle.state();
@@ -107,7 +111,8 @@ fn apply_stream_request(
         .zip(req.modify_deadline_seconds.iter())
     {
         let s = u32::try_from(*secs).unwrap_or(0);
-        let _ = state.modify_ack_deadline(sub, std::slice::from_ref(id), s, now);
+        let id = crate::ack_token::internal(id, handle.paging_policy);
+        let _ = state.modify_ack_deadline(sub, std::slice::from_ref(&id), s, now);
     }
 }
 
@@ -118,7 +123,9 @@ impl Subscriber for SubscriberService {
         request: Request<pb::Subscription>,
     ) -> Result<Response<pb::Subscription>, Status> {
         let sub = request.into_inner();
-        let config = subscription_from_proto(&sub).map_err(|e| status(&e))?;
+        let config =
+            crate::convert::subscription_from_proto_with_policy(&sub, self.handle.paging_policy)
+                .map_err(|e| status(&e))?;
         let name = config.name.clone();
         let topic = config.topic.clone();
         self.handle
@@ -127,7 +134,21 @@ impl Subscriber for SubscriberService {
             .map_err(|e| status(&e))?;
         self.handle.retry_pending_dead_letters();
         self.handle.schedule_push(&topic);
-        Ok(Response::new(self.subscription_proto(&name)?))
+        let mut response = self.subscription_proto(&name)?;
+        if self.handle.paging_policy == crate::PagingPolicy::Strict
+            && !response
+                .push_config
+                .as_ref()
+                .is_none_or(|push| push.push_endpoint.is_empty())
+        {
+            response
+                .push_config
+                .as_mut()
+                .expect("push configuration")
+                .attributes
+                .insert("x-goog-version".into(), "v1".into());
+        }
+        Ok(Response::new(response))
     }
 
     async fn get_subscription(
@@ -152,15 +173,78 @@ impl Subscriber for SubscriberService {
             .update_mask
             .ok_or_else(|| Status::invalid_argument("update_mask is required"))?
             .paths;
-        if paths.is_empty() {
-            return Err(Status::invalid_argument("update_mask must not be empty"));
-        }
         validate_update_paths(&paths)?;
         let ack_deadline_seconds = update_ack_deadline(&paths, &sub)?;
-        let push_config = update_push_config(&paths, &sub)?;
+        let strict = self.handle.paging_policy == crate::PagingPolicy::Strict;
+        if strict && paths.iter().any(|path| path == "ack_deadline_seconds") {
+            crate::convert::validate_strict_ack_deadline(sub.ack_deadline_seconds)
+                .map_err(|error| status(&error))?;
+        }
+        let push_config = update_push_config(&paths, &sub, self.handle.paging_policy)?;
+        let selected = |path: &str| paths.iter().any(|value| value == path);
+        let retention = selected("message_retention_duration")
+            .then(|| {
+                sub.message_retention_duration
+                    .as_ref()
+                    .map(duration_from_proto)
+                    .transpose()
+            })
+            .transpose()
+            .map_err(|error| status(&error))?;
+        let expiration = selected("expiration_policy")
+            .then(|| {
+                sub.expiration_policy
+                    .as_ref()
+                    .map(|policy| {
+                        Ok::<_, fireemu_core_pubsub::PubSubError>(
+                            fireemu_core_pubsub::ExpirationPolicy {
+                                ttl: policy.ttl.as_ref().map(duration_from_proto).transpose()?,
+                            },
+                        )
+                    })
+                    .transpose()
+            })
+            .transpose()
+            .map_err(|error| status(&error))?;
+        // Parse only mask-selected policies; invalid values outside the mask are ignored.
+        let parsed_policies = crate::convert::subscription_from_proto(&pb::Subscription {
+            name: sub.name.clone(),
+            topic: self
+                .handle
+                .state()
+                .subscription_config(&name)
+                .map_err(|error| status(&error))?
+                .topic
+                .to_full(),
+            retry_policy: selected("retry_policy")
+                .then_some(sub.retry_policy)
+                .flatten(),
+            dead_letter_policy: selected("dead_letter_policy")
+                .then(|| sub.dead_letter_policy.clone())
+                .flatten(),
+            ..Default::default()
+        })
+        .map_err(|error| status(&error))?;
+        let update = fireemu_core_pubsub::SubscriptionUpdate {
+            ack_deadline_seconds,
+            push_config,
+            labels: selected("labels").then(|| {
+                sub.labels
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect()
+            }),
+            retain_acked_messages: selected("retain_acked_messages")
+                .then_some(sub.retain_acked_messages),
+            message_retention_duration: retention,
+            expiration_policy: expiration,
+            retry_policy: selected("retry_policy").then_some(parsed_policies.retry_policy),
+            dead_letter_policy: selected("dead_letter_policy")
+                .then_some(parsed_policies.dead_letter_policy),
+        };
         self.handle
             .state()
-            .update_subscription(&name, ack_deadline_seconds, push_config)
+            .update_subscription_configuration(&name, update, strict)
             .map_err(|e| status(&e))?;
         let topic = self
             .handle
@@ -170,7 +254,15 @@ impl Subscriber for SubscriberService {
             .topic
             .clone();
         self.handle.schedule_push(&topic);
-        Ok(Response::new(self.subscription_proto(&name)?))
+        let mut response = self.subscription_proto(&name)?;
+        if strict {
+            response
+                .push_config
+                .get_or_insert_with(Default::default)
+                .attributes
+                .insert("x-goog-version".into(), "v1".into());
+        }
+        Ok(Response::new(response))
     }
 
     async fn list_subscriptions(
@@ -180,19 +272,27 @@ impl Subscriber for SubscriberService {
         let req = request.into_inner();
         let project = project_of(&req.project)?;
         let state = self.handle.state();
-        let subscriptions = state
+        let subscriptions: Vec<_> = state
             .list_subscriptions(project)
             .iter()
             .map(|c| {
                 let reported = state
                     .reported_topic(&c.name)
                     .unwrap_or_else(|| c.topic.to_full());
-                subscription_to_proto(c, &reported)
+                subscription_to_proto(c, &reported, self.handle.paging_policy)
             })
             .collect();
-        Ok(Response::new(pb::ListSubscriptionsResponse {
+        let page = paginate(
             subscriptions,
-            next_page_token: String::new(),
+            req.page_size,
+            &req.page_token,
+            self.handle.paging_policy,
+            |subscription| subscription.name.clone(),
+        )
+        .map_err(|e| status(&e))?;
+        Ok(Response::new(pb::ListSubscriptionsResponse {
+            subscriptions: page.resources,
+            next_page_token: page.next_page_token,
         }))
     }
 
@@ -215,10 +315,17 @@ impl Subscriber for SubscriberService {
         &self,
         request: Request<pb::ModifyAckDeadlineRequest>,
     ) -> Result<Response<()>, Status> {
-        let req = request.into_inner();
+        let mut req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
-        let secs = u32::try_from(req.ack_deadline_seconds)
-            .map_err(|_| Status::invalid_argument("ackDeadlineSeconds must be non-negative"))?;
+        let secs = if self.handle.paging_policy == crate::PagingPolicy::Strict {
+            req.ack_ids =
+                crate::admission::ack_ids(&req.ack_ids).map_err(|error| status(&error))?;
+            crate::admission::ack_deadline(i64::from(req.ack_deadline_seconds))
+                .map_err(|error| status(&error))?
+        } else {
+            u32::try_from(req.ack_deadline_seconds)
+                .map_err(|_| Status::invalid_argument("ackDeadlineSeconds must be non-negative"))?
+        };
         let now = self.handle.now();
         self.handle
             .state()
@@ -231,8 +338,12 @@ impl Subscriber for SubscriberService {
         &self,
         request: Request<pb::AcknowledgeRequest>,
     ) -> Result<Response<()>, Status> {
-        let req = request.into_inner();
+        let mut req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
+        if self.handle.paging_policy == crate::PagingPolicy::Strict {
+            req.ack_ids =
+                crate::admission::ack_ids(&req.ack_ids).map_err(|error| status(&error))?;
+        }
         self.handle
             .acknowledge(&name, &req.ack_ids)
             .map_err(|e| status(&e))?;
@@ -245,10 +356,40 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<pb::PullResponse>, Status> {
         let req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
-        let max = usize::try_from(req.max_messages.max(0)).unwrap_or(0);
+        if self.handle.paging_policy == crate::PagingPolicy::Strict
+            && self
+                .handle
+                .state()
+                .subscription_config(&name)
+                .map_err(|error| status(&error))?
+                .is_push()
+        {
+            return Err(Status::failed_precondition(
+                "This method is not supported for this subscription type.",
+            ));
+        }
+        let max = if self.handle.paging_policy == crate::PagingPolicy::Strict {
+            crate::admission::max_messages(i64::from(req.max_messages))
+                .map_err(|error| status(&error))?
+        } else {
+            usize::try_from(req.max_messages.max(0)).unwrap_or(0)
+        };
+        let report_attempt = self.handle.paging_policy == crate::PagingPolicy::Emulator
+            || self
+                .handle
+                .state()
+                .subscription_config(&name)
+                .map_err(|error| status(&error))?
+                .dead_letter_policy
+                .is_some();
         let received = self.handle.pull(&name, max).map_err(|e| status(&e))?;
         Ok(Response::new(pb::PullResponse {
-            received_messages: received.iter().map(received_to_proto).collect(),
+            received_messages: received
+                .iter()
+                .map(|message| {
+                    received_to_proto(message, report_attempt, self.handle.paging_policy)
+                })
+                .collect(),
         }))
     }
 
@@ -266,10 +407,14 @@ impl Subscriber for SubscriberService {
             .ok_or_else(|| Status::invalid_argument("streaming pull opened with no request"))?;
         let name = SubscriptionName::parse(&first.subscription).map_err(|e| status(&e))?;
         // Fail fast if the subscription does not exist.
-        self.handle
-            .state()
-            .subscription_config(&name)
-            .map_err(|e| status(&e))?;
+        let report_attempt = self.handle.paging_policy == crate::PagingPolicy::Emulator
+            || self
+                .handle
+                .state()
+                .subscription_config(&name)
+                .map_err(|error| status(&error))?
+                .dead_letter_policy
+                .is_some();
 
         let handle = self.handle.clone();
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<pb::StreamingPullResponse, Status>>(16);
@@ -297,7 +442,7 @@ impl Subscriber for SubscriberService {
                         match pulled {
                             Ok(msgs) if !msgs.is_empty() => {
                                 let resp = pb::StreamingPullResponse {
-                                    received_messages: msgs.iter().map(received_to_proto).collect(),
+                                    received_messages: msgs.iter().map(|message|received_to_proto(message,report_attempt,handle.paging_policy)).collect(),
                                     ..pb::StreamingPullResponse::default()
                                 };
                                 if tx.send(Ok(resp)).await.is_err() {
@@ -323,16 +468,12 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
         let name = SubscriptionName::parse(&req.subscription).map_err(|e| status(&e))?;
-        validate_push_config_options(req.push_config.as_ref()).map_err(|e| status(&e))?;
-        let push_endpoint = req
-            .push_config
-            .as_ref()
-            .map_or_else(String::new, |config| config.push_endpoint.clone());
-        crate::push::validate_endpoint(&push_endpoint).map_err(Status::invalid_argument)?;
+        let push = push_config_from_proto(req.push_config.as_ref(), self.handle.paging_policy)
+            .map_err(|error| status(&error))?;
         self.handle
             .state()
-            .update_push_config(&name, PushConfig { push_endpoint })
-            .map_err(|e| status(&e))?;
+            .update_push_config(&name, push)
+            .map_err(|error| status(&error))?;
         let topic = self
             .handle
             .state()
@@ -363,16 +504,24 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<pb::ListSnapshotsResponse>, Status> {
         let req = request.into_inner();
         let project = project_of(&req.project)?;
-        let snapshots = self
+        let snapshots: Vec<_> = self
             .handle
             .state()
             .list_snapshots(project, self.handle.now())
             .iter()
             .map(snapshot_to_proto)
             .collect();
-        Ok(Response::new(pb::ListSnapshotsResponse {
+        let page = paginate(
             snapshots,
-            next_page_token: String::new(),
+            req.page_size,
+            &req.page_token,
+            self.handle.paging_policy,
+            |snapshot| snapshot.name.clone(),
+        )
+        .map_err(|e| status(&e))?;
+        Ok(Response::new(pb::ListSnapshotsResponse {
+            snapshots: page.resources,
+            next_page_token: page.next_page_token,
         }))
     }
 
@@ -391,7 +540,13 @@ impl Subscriber for SubscriberService {
                 req.labels.into_iter().collect::<BTreeMap<_, _>>(),
                 self.handle.now(),
             )
-            .map_err(|e| status(&e))?;
+            .map_err(|e| {
+                status(&crate::admission::snapshot_creation_error(
+                    &req.name,
+                    e,
+                    self.handle.paging_policy,
+                ))
+            })?;
         Ok(Response::new(snapshot_to_proto(&snapshot)))
     }
 
@@ -461,8 +616,76 @@ impl Subscriber for SubscriberService {
                 Ok(Response::new(pb::SeekResponse::default()))
             }
             None => Err(Status::invalid_argument(
-                "seek requires a time or a snapshot",
+                crate::admission::missing_seek_target(self.handle.paging_policy),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod ack_wire_tests {
+    use super::*;
+    use fireemu_core_pubsub::{PubSubState, PubsubMessage, TopicName};
+    use fireemu_core_session::clock::VirtualClock;
+    use fireemu_core_types::time::LogicalInstant;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn streaming_frames_decode_issued_opaque_ids() {
+        let now = LogicalInstant::from_unix_seconds(1_700_000_000);
+        let handle = PubSubHandle::new(
+            Arc::new(Mutex::new(PubSubState::new(99))),
+            Arc::new(Mutex::new(VirtualClock::new(now))),
+            None,
+        )
+        .with_paging_policy(crate::PagingPolicy::Strict);
+        let topic = TopicName::new("demo-app", "stream-ack").unwrap();
+        let config = crate::convert::subscription_from_proto(&pb::Subscription {
+            name: "projects/demo-app/subscriptions/stream-ack".to_owned(),
+            topic: topic.to_full(),
+            ..Default::default()
+        })
+        .unwrap();
+        let sub = config.name.clone();
+        handle
+            .state()
+            .create_topic(topic.clone(), std::collections::BTreeMap::new())
+            .unwrap();
+        handle.state().create_subscription(config).unwrap();
+        handle
+            .state()
+            .publish(
+                &topic,
+                vec![PubsubMessage {
+                    data: vec![1],
+                    ..Default::default()
+                }],
+                now,
+            )
+            .unwrap();
+        let first = handle.pull(&sub, 1).unwrap();
+        let issued = crate::ack_token::wire(&first[0].ack_id, handle.paging_policy);
+        apply_stream_request(
+            &handle,
+            &sub,
+            &pb::StreamingPullRequest {
+                modify_deadline_ack_ids: vec![issued.clone()],
+                modify_deadline_seconds: vec![0],
+                ..Default::default()
+            },
+        );
+        let renewed = handle.pull(&sub, 1).unwrap();
+        assert_eq!(renewed.len(), 1);
+        assert_eq!(renewed[0].message.message_id, first[0].message.message_id);
+        let current = crate::ack_token::wire(&renewed[0].ack_id, handle.paging_policy);
+        apply_stream_request(
+            &handle,
+            &sub,
+            &pb::StreamingPullRequest {
+                ack_ids: vec![issued, current],
+                ..Default::default()
+            },
+        );
+        assert!(handle.pull(&sub, 1).unwrap().is_empty());
     }
 }

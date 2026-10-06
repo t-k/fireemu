@@ -730,6 +730,7 @@ dependencies = [
  "fireemu-core-session",
  "fireemu-core-types",
  "fireemu-proto-pubsub",
+ "proptest",
  "prost",
  "prost-types",
  "serde_json",

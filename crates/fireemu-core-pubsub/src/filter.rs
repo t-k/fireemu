@@ -69,9 +69,11 @@ impl Filter {
         if input.trim().is_empty() {
             return Ok(Self::always());
         }
-        let tokens = lex(input)?;
+        let (tokens, offsets) = lex(input)?;
         let mut parser = Parser {
             tokens: &tokens,
+            offsets: &offsets,
+            input,
             pos: 0,
             depth: 0,
         };
@@ -126,12 +128,16 @@ enum Token {
     Comma,
 }
 
-fn lex(input: &str) -> Result<Vec<Token>> {
+fn lex(input: &str) -> Result<(Vec<Token>, Vec<usize>)> {
     let bytes = input.as_bytes();
     let mut tokens = Vec::new();
+    let mut offsets = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
+        if !matches!(b, b' ' | b'\t' | b'\n' | b'\r') {
+            offsets.push(i);
+        }
         match b {
             b' ' | b'\t' | b'\n' | b'\r' => i += 1,
             b'(' => {
@@ -190,7 +196,7 @@ fn lex(input: &str) -> Result<Vec<Token>> {
             }
         }
     }
-    Ok(tokens)
+    Ok((tokens, offsets))
 }
 
 /// Lexes a double-quoted string starting at `start` (the opening quote). Supports `\"` and
@@ -246,6 +252,8 @@ const fn is_ident_byte(b: u8) -> bool {
 
 struct Parser<'a> {
     tokens: &'a [Token],
+    offsets: &'a [usize],
+    input: &'a str,
     pos: usize,
     depth: usize,
 }
@@ -376,8 +384,21 @@ impl Parser<'_> {
     }
 
     fn parse_string(&mut self) -> Result<String> {
+        let position = self.pos;
         match self.bump() {
             Some(Token::Str(s)) => Ok(s.clone()),
+            Some(Token::Eq) => {
+                let prefix = &self.input[..self.offsets[position]];
+                let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+                let column = prefix
+                    .rsplit('\n')
+                    .next()
+                    .unwrap_or_default()
+                    .chars()
+                    .count()
+                    + 1;
+                Err(PubSubError::invalid_argument(format!("Invalid filter expression: failed to parse (syntax error at line {line}, column {column}, token '=').")))
+            }
             _ => Err(PubSubError::invalid_argument("expected a quoted string")),
         }
     }
@@ -397,6 +418,23 @@ impl Parser<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recorded_invalid_filter_has_token_location() {
+        assert_eq!(Filter::parse("attributes.color ==").unwrap_err().message(),"Invalid filter expression: failed to parse (syntax error at line 1, column 19, token '=').");
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn invalid_equality_filter_preserves_source_location(key in "[a-z]{1,20}",padding in "[ ]{0,8}") {
+            let input=format!("attributes.{key}{padding}==");
+            let column="attributes.".len()+key.len()+padding.len()+2;
+            let error=Filter::parse(&input).unwrap_err();
+            proptest::prop_assert_eq!(error.message(),format!("Invalid filter expression: failed to parse (syntax error at line 1, column {column}, token '=')."));
+            let valid=format!("attributes.{key}{padding}= \"value\"");
+            proptest::prop_assert!(Filter::parse(&valid).is_ok());
+        }
+    }
 
     fn attrs(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs

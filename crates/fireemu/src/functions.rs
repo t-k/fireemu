@@ -152,6 +152,8 @@ pub fn provision_function_pubsub_resources(
         if state.subscription_config(&resource.subscription).is_err() {
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                     retain_acked_messages: false,
                     message_retention_duration: None,
                     name: resource.subscription.clone(),
@@ -9322,6 +9324,8 @@ mod tests {
             state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                     retain_acked_messages: false,
                     message_retention_duration: None,
                     name: subscription.clone(),
@@ -9436,6 +9440,8 @@ mod tests {
                 .unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                     retain_acked_messages: false,
                     message_retention_duration: None,
                     name: source_subscription.clone(),
@@ -9453,6 +9459,8 @@ mod tests {
                 .unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                     retain_acked_messages: false,
                     message_retention_duration: None,
                     name: destination_subscription.clone(),
@@ -9571,6 +9579,8 @@ mod tests {
             .unwrap();
         conflicting
             .create_subscription(SubscriptionConfig {
+                labels: std::collections::BTreeMap::new(),
+                expiration_policy: None,
                 retain_acked_messages: false,
                 message_retention_duration: None,
                 name: SubscriptionName::new("demo-app", "emulator-sub-shared-jobs").unwrap(),

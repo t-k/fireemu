@@ -46,7 +46,7 @@ impl PubsubMessage {
     pub fn validate(&self) -> Result<()> {
         if self.data.is_empty() && self.attributes.is_empty() {
             return Err(PubSubError::invalid_argument(
-                "message must carry non-empty data or at least one attribute",
+                "One or more messages in the publish request is empty. Each message must contain either non-empty data, or at least one attribute.",
             ));
         }
         if self.data.len() > MAX_DATA_BYTES {
@@ -56,7 +56,7 @@ impl PubsubMessage {
         }
         if self.attributes.len() > MAX_ATTRIBUTES {
             return Err(PubSubError::invalid_argument(format!(
-                "message has more than {MAX_ATTRIBUTES} attributes"
+                "There are too many attributes in the request. The request contains {} attributes, but the maximum allowed is {MAX_ATTRIBUTES}. Refer to https://cloud.google.com/pubsub/quotas for more information.", self.attributes.len()
             )));
         }
         let mut total = self.data.len();
@@ -77,21 +77,21 @@ impl PubsubMessage {
 /// Validates one attribute key/value pair.
 fn validate_attribute(key: &str, value: &str) -> Result<()> {
     if key.is_empty() {
-        return Err(PubSubError::invalid_argument("attribute key is empty"));
+        return Err(PubSubError::invalid_argument(format!("The request contains an attribute key that is not valid (key={key}). Attribute keys must be non-empty and must not begin with 'goog' (case-insensitive).")));
     }
     if key.len() > MAX_ATTR_KEY_BYTES {
         return Err(PubSubError::invalid_argument(format!(
-            "attribute key exceeds {MAX_ATTR_KEY_BYTES} bytes"
+            "The attribute {key:?} in the request has a key that is too large. The size is {} bytes, but the maximum allowed is {MAX_ATTR_KEY_BYTES}. Refer to https://cloud.google.com/pubsub/quotas for more information.", key.len()
         )));
     }
     if value.len() > MAX_ATTR_VALUE_BYTES {
         return Err(PubSubError::invalid_argument(format!(
-            "attribute value for {key:?} exceeds {MAX_ATTR_VALUE_BYTES} bytes"
+            "The attribute {key:?} in the request has a value that is too large. The size is {} bytes, but the maximum allowed is {MAX_ATTR_VALUE_BYTES}. Refer to https://cloud.google.com/pubsub/quotas for more information.", value.len()
         )));
     }
     if key.starts_with("goog") {
         return Err(PubSubError::invalid_argument(format!(
-            "attribute key {key:?} must not start with the reserved prefix 'goog'"
+            "The request contains an attribute key that is not valid (key={key}). Attribute keys must be non-empty and must not begin with 'goog' (case-insensitive)."
         )));
     }
     if key.contains('\u{0}') {
@@ -111,7 +111,7 @@ fn validate_attribute(key: &str, value: &str) -> Result<()> {
 fn validate_ordering_key(key: &str) -> Result<()> {
     if key.len() > MAX_ORDERING_KEY_BYTES {
         return Err(PubSubError::invalid_argument(format!(
-            "ordering key exceeds {MAX_ORDERING_KEY_BYTES} bytes"
+            "An ordering key in the request is too long. The length is {} characters, but the maximum allowed is {MAX_ORDERING_KEY_BYTES}. Refer to https://cloud.google.com/pubsub/quotas for more information.", key.len()
         )));
     }
     if key.contains('\u{0}') {
@@ -136,6 +136,33 @@ pub struct StoredMessage {
 
 #[cfg(test)]
 mod tests {
+    proptest::proptest! {
+        #[test]
+        fn attribute_and_ordering_limits_match_reference_bounds(key_len in 0_usize..=257,value_len in 0_usize..=1025,ordering_len in 0_usize..=1025) {
+            let message=PubsubMessage {data:vec![1],attributes:[("k".repeat(key_len),"v".repeat(value_len))].into(),ordering_key:"x".repeat(ordering_len)};
+            proptest::prop_assert_eq!(message.validate().is_ok(),key_len>0 && key_len<=256 && value_len<=1024 && ordering_len<=1024);
+        }
+        #[test]
+        fn attribute_count_matches_reference_bound(count in 0_usize..=101) {
+            let message=PubsubMessage {data:vec![1],attributes:(0..count).map(|index|(format!("key{index}"),"v".to_owned())).collect(),..Default::default()};
+            proptest::prop_assert_eq!(message.validate().is_ok(),count<=100);
+        }
+    }
+
+    #[test]
+    fn recorded_publish_refusal_diagnostics() {
+        let error = PubsubMessage::default().validate().unwrap_err();
+        assert_eq!(error.message(),"One or more messages in the publish request is empty. Each message must contain either non-empty data, or at least one attribute.");
+        for key in ["", "goog_probe"] {
+            let message = PubsubMessage {
+                data: vec![1],
+                attributes: [(key.to_owned(), "v".to_owned())].into(),
+                ..Default::default()
+            };
+            assert_eq!(message.validate().unwrap_err().message(),format!("The request contains an attribute key that is not valid (key={key}). Attribute keys must be non-empty and must not begin with 'goog' (case-insensitive)."));
+        }
+    }
+
     use super::*;
 
     fn msg(data: &[u8]) -> PubsubMessage {

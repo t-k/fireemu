@@ -351,8 +351,7 @@ export const EXCLUDED_PARTS = [
  * Comparison kinds a COMPAT_VERIFIED closure names that no run reproduces yet, with why and where
  * the missing run is tracked (owner decision 2026-09-29: v0.9.0 is released with these disclosed).
  * Every other comparison a verified closure names is rerun. A kind here must not also have a run,
- * and must be named by a verified closure. The two scheduled kinds are reserved while that
- * parent is implementing; after promotion they must be used like every other exclusion.
+ * and must be named by a verified closure.
  */
 export const EXCLUDED_KINDS = [
   {
@@ -564,16 +563,7 @@ export function planComparisons(
     planned.push({ path, kind, parents: [...parents].toSorted(), runIds: runs.map((r) => r.id) });
   }
   for (const exclusion of excludedKinds) {
-    const reserved =
-      ["scheduled-functions-calendar-comparison-v1", "scheduled-functions-comparison-v1"].includes(
-        exclusion.kind,
-      ) &&
-      closures.some(
-        (entry) =>
-          parentName(entry) === "SCHEDULED-FUNCTIONS" &&
-          entry.closure.parentStatus === "IMPLEMENTING",
-      );
-    if (!usedExclusions.has(exclusion.kind) && !reserved) {
+    if (!usedExclusions.has(exclusion.kind)) {
       errors.push(`excluded kind ${exclusion.kind}: no verified closure names it`);
     }
   }

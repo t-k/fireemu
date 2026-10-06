@@ -7202,7 +7202,7 @@
         }
       ],
       "note": "Successful local broker publication and failing single handler attempts are measured independently. Fireemu has no Cloud Scheduler publisher request/acknowledgement endpoint: clock advance HTTP 200 and pull HTTP 200 are not publish acknowledgements. The recorded independent Scheduler acknowledgement cannot be compared on this binary without a product/API change.",
-      "observedStatus": "DIVERGENCE_APPROVED",
+      "observedStatus": "NOT_COMPARABLE",
       "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
     },
     {
@@ -7904,7 +7904,7 @@
         }
       ],
       "note": "The unshortened 100-second scheduled handler, configured for 90 seconds, records timeout and then completes in the same runner. Local scheduled invocation uses the runner protocol and has no HTTP response to acknowledge to Cloud Scheduler; timeout history is not a measured HTTP 504. The 504 comparison remains pending. Approved 3.3 retains the strict handler-end in-flight boundary; it does not approve this missing acknowledgement.",
-      "observedStatus": "DIVERGENCE_APPROVED",
+      "observedStatus": "NOT_COMPARABLE",
       "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
     },
     {

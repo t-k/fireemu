@@ -55,7 +55,7 @@
         },
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "sha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f"
+          "sha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb"
         }
       ]
     },
@@ -110,6 +110,39 @@
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/final-artifact-regression",
+      "caseId": "workspace-regression",
+      "status": "PASS",
+      "sources": [
+        {
+          "ciRun": 37476145315,
+          "headSha": "2732fa9188a8180b4c2497938c52b89c0f767154",
+          "jobs": {
+            "ubuntu": {
+              "job": "test",
+              "jobId": 112311940916,
+              "conclusion": "success",
+              "nextest": "5362 tests run: 5362 passed, 101 skipped"
+            },
+            "macos": {
+              "job": "tests (macos-latest)",
+              "jobId": 112311941692,
+              "conclusion": "success",
+              "nextest": "5430 tests run: 5430 passed, 101 skipped"
+            },
+            "windows": {
+              "job": "tests (windows-latest)",
+              "jobId": 112311941585,
+              "conclusion": "success",
+              "nextest": "1296 tests run: 1296 passed, 1 skipped; 378 tests run: 378 passed, 1 skipped"
+            }
+          },
+          "countsNote": "Per-OS nextest summary lines read by the coordinator from the job logs of ci.yml run 37476145315 on 2732fa918 (all jobs success).",
+          "runtimeInputsDiffFrom0b6d27a96": "workspace version 0.11.0\u21920.12.0 and #[cfg(test)] code in crates/fireemu/src/functions.rs only"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/final-artifact-regression",
       "caseId": "artifact-runner-binding",
       "status": "PASS",
       "sources": [
@@ -124,9 +157,36 @@
           "sha256SumsSha256": "00250e5a0a10e280a63d6532f3de7ea0d14343e26214fb754fb32895c56ddfd1"
         }
       ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/closure-review",
+      "caseId": "independent-Opus-coordinator-review",
+      "status": "PASS",
+      "sources": [
+        {
+          "path": "docs.local/reviews/2026-10-06-sched-closure-review-delta.md",
+          "sha256": "e28cce1c644f700cd315e89ba2ce050f95d47f9ba3c7d215ec3af854f81f7d5d"
+        },
+        {
+          "path": "docs.local/reviews/2026-10-06-sched-closure-review.md",
+          "sha256": "a58390b02c0870253fb1bffd9f4f5c10782d2eb08c92ee29712a5609fb89d799"
+        },
+        {
+          "reviewedCommit": "2732fa9188a8180b4c2497938c52b89c0f767154"
+        }
+      ]
+    },
+    {
+      "conditionId": "SCHEDULED-FUNCTIONS/closure-review",
+      "caseId": "owner-ledger-promotion-decision",
+      "status": "PASS",
+      "sources": [
+        {
+          "path": "docs.local/instructions/owner-decisions.md",
+          "line": 965,
+          "sha256": "373cd695694ec942eabe5c78eff99f190dfb3a5fba4685e88c90e5787b54b993"
+        }
+      ]
     }
-  ],
-  "pending": [
-    "workspace-regression"
   ]
 }

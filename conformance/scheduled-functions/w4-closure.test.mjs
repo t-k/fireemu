@@ -11,7 +11,7 @@ const closure = JSON.parse(
 const ruling =
   "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review";
 
-test("W4 preserves the frozen inventory and binds final artifact evidence without promoting the parent", () => {
+test("W4 preserves the frozen inventory and binds reviewed final artifact evidence to the promoted parent", () => {
   const frozen = closure.conditions
     .map(({ conditionId, evidenceType, recipeIds, cases }) => [
       conditionId,
@@ -24,9 +24,9 @@ test("W4 preserves the frozen inventory and binds final artifact evidence withou
     createHash("sha256").update(JSON.stringify(frozen)).digest("hex"),
     "6e615aa9a88b4fcbeed492ddf9e690562c9661cc1ae3252773ec7c034dd4b68a",
   );
-  assert.equal(closure.parentStatus, "IMPLEMENTING");
-  assert.equal(closure.closureReview.decision, "PENDING");
-  assert.equal(closure.integratedRegression.release, "v0.13.0");
+  assert.equal(closure.parentStatus, "COMPAT_VERIFIED");
+  assert.equal(closure.closureReview.decision, "APPROVED");
+  assert.equal(closure.integratedRegression.release, "closure-base-0b6d27a96");
   const buildPath = closure.integratedRegression.buildReceiptPath;
   const buildBytes = readFileSync(new URL(`../../${buildPath}`, import.meta.url));
   const build = JSON.parse(buildBytes);
@@ -69,7 +69,7 @@ test("W4 preserves the frozen inventory and binds final artifact evidence withou
   }
   assert.equal(
     closure.conditions.find(({ conditionId }) => conditionId.endsWith("/closure-review")).status,
-    "PENDING_REVIEW",
+    "VERIFIED",
   );
   const gate = closure.conditions.find(({ conditionId }) =>
     conditionId.endsWith("/final-artifact-regression"),
@@ -77,16 +77,19 @@ test("W4 preserves the frozen inventory and binds final artifact evidence withou
   const gateEvidence = JSON.parse(
     readFileSync(new URL(`../../${gate.evidence.comparisonPath}`, import.meta.url)),
   );
-  assert.equal(gate.status, "PENDING_REVIEW");
-  assert.equal(gateEvidence.pending[0], "workspace-regression");
+  assert.equal(gate.status, "VERIFIED");
+  assert.equal(gateEvidence.pending, undefined);
   assert.deepEqual(
-    gateEvidence.rows.map(({ caseId }) => caseId),
+    gateEvidence.rows
+      .filter(({ conditionId }) => conditionId === gate.conditionId)
+      .map(({ caseId }) => caseId),
     [
       "two-production-recordings",
       "exact-frozen-case-set",
       "strict-production-comparison",
       "emulator-no-new-refusals",
       "local-properties",
+      "workspace-regression",
       "artifact-runner-binding",
     ],
   );
@@ -141,11 +144,11 @@ test("closure notes distinguish declared differences, undetermined observations 
   }
   assert.equal(closure.closureNotes.jobResourceReadings.decisionRef, `${ruling} (3.5)`);
   for (const row of closure.closureNotes.undetermined) {
-    assert.equal(row.status, "DIVERGENCE_APPROVED");
+    assert.equal(row.status, row.section === "3.6" ? "OBSERVATION" : "DIVERGENCE_APPROVED");
   }
 });
 
-test("final-binary measurements bind the frozen cases and keep unavailable acknowledgements pending", () => {
+test("final-binary measurements bind the frozen cases and preserve declared acknowledgement limits", () => {
   for (const area of [
     "declarations-v1-v2",
     "retry-config-validation",
@@ -161,6 +164,9 @@ test("final-binary measurements bind the frozen cases and keep unavailable ackno
       [...condition.cases].toSorted(),
     );
     assert.equal(condition.status, "VERIFIED");
+    if (["v1-two-stage-retry", "deadline-and-overlap"].includes(area)) {
+      assert.deepEqual(condition.evidence.coverage, condition.evidence.rows);
+    }
     assert.doesNotMatch(
       condition.note ?? "",
       /covered outside|no measurement|approval is pending/i,
@@ -203,6 +209,9 @@ test("final-binary measurements bind the frozen cases and keep unavailable ackno
   }
   const groc = closure.conditions.find(({ conditionId }) => conditionId.endsWith("/groc-grammar"));
   assert.equal(groc.status, "VERIFIED");
+  assert.deepEqual(groc.evidence.rows, { MATCH: 13 });
+  assert.deepEqual(groc.evidence.coverage, { MATCH: 13 });
+  assert.equal(groc.evidence.approvedDifferences, undefined);
   assert.equal(
     JSON.parse(
       readFileSync(new URL(`../../${groc.evidence.comparisonPath}`, import.meta.url)),
@@ -256,6 +265,9 @@ test("final-binary measurements bind the frozen cases and keep unavailable ackno
       caseId === "scheduled-occurrence-identity" ? "MATCH" : "DIVERGENCE_APPROVED",
     );
     assert.equal(row.comparedRows.length, 1);
+    if (caseId !== "scheduled-occurrence-identity") {
+      assert.equal(row.observedStatus, "NOT_COMPARABLE");
+    }
   }
 });
 

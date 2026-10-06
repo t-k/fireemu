@@ -446,32 +446,27 @@ test("the excluded kinds are exactly the ones the release discloses", () => {
   ]);
 });
 
-test("scheduled exclusions are reserved while implementing and used after promotion", () => {
-  const pending = EXCLUDED_KINDS.filter(({ kind }) => kind.startsWith("scheduled-functions-"));
-  assert.equal(pending.length, 2);
-  assert.deepEqual(planComparisons(committedClosures(), readJson).errors, []);
+test("scheduled exclusions are used by a verified closure", () => {
+  const scheduledKinds = EXCLUDED_KINDS.filter(({ kind }) =>
+    kind.startsWith("scheduled-functions-"),
+  );
+  assert.equal(scheduledKinds.length, 2);
   const closures = committedClosures();
   const scheduled = closures.find(({ closure }) => closure.parent === "SCHEDULED-FUNCTIONS");
-  scheduled.closure.parentStatus = "COMPAT_VERIFIED";
-  scheduled.closure.integratedRegression = {
-    comparisons: pending.map(({ kind }) => ({ path: `scheduled/${kind}.json` })),
-  };
-  const plan = planComparisons(closures, (path) =>
-    path.startsWith("scheduled/") ? { kind: path.slice(10, -5) } : readJson(path),
-  );
+  assert.equal(scheduled.closure.parentStatus, "COMPAT_VERIFIED");
+  const plan = planComparisons(closures, readJson);
   assert.deepEqual(plan.errors, []);
+  const excluded = plan.excluded.filter(({ parents }) => parents.includes("SCHEDULED-FUNCTIONS"));
   assert.deepEqual(
-    plan.excluded
-      .filter(({ parents }) => parents.includes("SCHEDULED-FUNCTIONS"))
-      .map(({ kind }) => kind)
-      .toSorted(),
-    pending.map(({ kind }) => kind).toSorted(),
+    excluded.map(({ kind }) => kind).toSorted(),
+    scheduledKinds.map(({ kind }) => kind).toSorted(),
   );
+  assert.ok(excluded.every(({ parents }) => parents.length === 1));
   scheduled.closure.integratedRegression.comparisons.pop();
   assert.ok(
-    planComparisons(closures, (path) =>
-      path.startsWith("scheduled/") ? { kind: path.slice(10, -5) } : readJson(path),
-    ).errors.some((error) => error.includes("no verified closure names it")),
+    planComparisons(closures, readJson).errors.some((error) =>
+      error.includes("no verified closure names it"),
+    ),
   );
   assert.ok(
     planComparisons(

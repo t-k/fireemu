@@ -336,7 +336,11 @@ test("unapproved comparison verdicts and local differences remain refused", (t) 
 
 test("pending SCHEDULED-FUNCTIONS cannot be promoted", () => {
   const closure = readRepo(closurePath);
-  if (closure.conditions.every(({ status }) => status === "VERIFIED")) return;
+  const gate = closure.conditions.find(({ conditionId }) =>
+    conditionId.endsWith("/closure-review"),
+  );
+  gate.status = "PENDING_REVIEW";
+  gate.coverageStatus = "debt";
   closure.parentStatus = "COMPAT_VERIFIED";
   assert.throws(() => validateInventory(closure), /every condition must be verified/);
 });
@@ -346,7 +350,10 @@ test("a mistyped or inconsistent coverageStatus is refused", () => {
   typo.conditions[0].coverageStatus = "coverd";
   assert.throws(() => validateInventory(typo), /coverageStatus/);
   const optimistic = readRepo(closurePath);
-  const pending = optimistic.conditions.find(({ status }) => status !== "VERIFIED");
+  const pending = optimistic.conditions.find(({ conditionId }) =>
+    conditionId.endsWith("/closure-review"),
+  );
+  pending.status = "PENDING_REVIEW";
   pending.coverageStatus = "covered";
   assert.throws(() => validateInventory(optimistic), /covered exactly when verified/);
 });

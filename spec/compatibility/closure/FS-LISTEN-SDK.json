@@ -832,24 +832,29 @@
         "ciRuns": [
           {
             "workflow": "ci.yml",
-            "runId": 37473747856,
-            "expectedHeadSha": "68c8a93fcd6cd2564de9c0c54c9256afb32dc535",
-            "perOsCounts": null
+            "runId": 37477326120,
+            "headSha": "215c42b59a9a",
+            "conclusion": "success",
+            "perOsCounts": {
+              "ubuntu": "test: 5365 tests run: 5365 passed, 101 skipped",
+              "macos": "tests (macos-latest): 5433 tests run: 5433 passed, 101 skipped",
+              "windows": "tests (windows-latest): 1296 tests run: 1296 passed, 1 skipped; 376 tests run: 376 passed, 1 skipped"
+            }
           },
           {
             "workflow": "conformance",
-            "runId": 37473752402,
-            "expectedHeadSha": "68c8a93fcd6cd2564de9c0c54c9256afb32dc535",
-            "perOsCounts": null
+            "runId": 37477330916,
+            "headSha": "215c42b59a9a",
+            "conclusion": "success"
           },
           {
             "workflow": "compatibility-inventory",
-            "runId": 37473756641,
-            "expectedHeadSha": "68c8a93fcd6cd2564de9c0c54c9256afb32dc535",
-            "perOsCounts": null
+            "runId": 37477336544,
+            "headSha": "215c42b59a9a",
+            "conclusion": "success"
           }
         ],
-        "ciVerificationNote": "GitHub CLI is unauthenticated. The coordinator must confirm green runs on the expected head and fill per-OS counts before committing.",
+        "ciVerificationNote": "Read by the coordinator from the job logs of the runs on 215c42b59 (the promotion commit merged with origin/main and the regenerated Txn-04 artifact; runtime inputs differ from aad8cee2a only by the v0.12.0 version bump and test-only code). The earlier runs on 68c8a93fc failed compat-broad only on the stale Txn-04 artifact.",
         "receiptsPath": "docs.local/runs/fs-listen-closure-final/SHA256SUMS",
         "receiptsSha256": "9995245493e61ec5dc63ed0debe9d89048269309d23b11f690736fcb04907cf7"
       }

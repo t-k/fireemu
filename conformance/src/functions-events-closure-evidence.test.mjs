@@ -24,15 +24,19 @@ import {
   recordingsFromRun,
   reportText,
 } from "./functions-events/compare/closure-evidence.mjs";
+import { pendingClosure } from "./functions-events/compare/fixtures/pending-closure.mjs";
 import { tempDir } from "./test-tmpdir.mjs";
 
 const repo = (path) => fileURLToPath(new URL(`../../${path}`, import.meta.url));
 const CLOSURE_PATH = "spec/compatibility/closure/FUNCTIONS-EVENTS.json";
 const CORPUS_PATH = "conformance/functions-events/corpus.json";
-const closureText = readFileSync(repo(CLOSURE_PATH), "utf8");
+// The tests judge the record as it was before its promotion (see pending-closure.mjs): the committed record stops being pending
+// when the closure is promoted, and the generator's inputs and answers must not depend on that.
+const recordText = readFileSync(repo(CLOSURE_PATH), "utf8");
 const corpusText = readFileSync(repo(CORPUS_PATH), "utf8");
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
-const closure = () => JSON.parse(closureText);
+const closure = () => pendingClosure(JSON.parse(recordText));
+const closureText = `${JSON.stringify(closure(), null, 2)}\n`;
 const ART = "d".repeat(64);
 const COMMIT = "a".repeat(40);
 const RUNNER_TREE = "7".repeat(40);

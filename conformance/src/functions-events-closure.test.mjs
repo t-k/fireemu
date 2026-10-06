@@ -1,3 +1,4 @@
+import { pendingClosure } from "./functions-events/compare/fixtures/pending-closure.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -88,7 +89,9 @@ const requiredCases = {
   "closure-review": ["independent-coordinator-approval"],
 };
 
-const readClosure = () => JSON.parse(readFileSync(closurePath, "utf8"));
+// The inventory is judged as it was before the promotion (pending-closure.mjs); the promoted record has its own test below.
+const readRecord = () => JSON.parse(readFileSync(closurePath, "utf8"));
+const readClosure = () => pendingClosure(readRecord());
 const readRepo = (path) =>
   JSON.parse(readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), "utf8"));
 
@@ -304,4 +307,26 @@ test("FUNCTIONS-EVENTS inventory rejects a missing event case and false evidence
       ]),
     /two-production-recordings comparison rows/,
   );
+});
+
+test("a promoted FUNCTIONS-EVENTS record is complete: every condition VERIFIED with evidence, the integrated regression, an approved review", () => {
+  const record = readRecord();
+  if (record.parentStatus !== "COMPAT_VERIFIED") {
+    assert.equal(
+      record.integratedRegression,
+      undefined,
+      "a pending record has no integrated regression",
+    );
+    return;
+  }
+  for (const condition of record.conditions) {
+    assert.equal(condition.status, "VERIFIED", condition.conditionId);
+    assert.ok(condition.evidence, condition.conditionId);
+  }
+  assert.ok(record.integratedRegression?.comparisons?.length > 0, "integratedRegression");
+  assert.equal(record.closureReview.decision, "APPROVED");
+  assert.ok(record.closureReview.reviews?.length > 0, "closureReview.reviews");
+  for (const decision of record.scopeDecisions)
+    if (decision.review !== undefined)
+      assert.doesNotMatch(decision.review, /^PENDING/, decision.id);
 });

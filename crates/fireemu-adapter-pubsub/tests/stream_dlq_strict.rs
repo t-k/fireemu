@@ -2,7 +2,7 @@
 use fireemu_adapter_pubsub::{serve_pubsub, PubSubHandle, PubSubProfile};
 use fireemu_core_pubsub::PubSubState;
 use fireemu_core_session::clock::VirtualClock;
-use fireemu_core_types::time::LogicalInstant;
+use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 use pb::publisher_client::PublisherClient;
 use pb::subscriber_client::SubscriberClient;
@@ -14,6 +14,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 struct Server {
     address: std::net::SocketAddr,
     handle: PubSubHandle,
+    clock: Arc<Mutex<VirtualClock>>,
     task: tokio::task::JoinHandle<()>,
 }
 impl Drop for Server {
@@ -24,11 +25,12 @@ impl Drop for Server {
 }
 impl Server {
     async fn new(profile: PubSubProfile) -> Self {
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
+            1_700_000_000_123_000_000,
+        ))));
         let handle = PubSubHandle::new(
             Arc::new(Mutex::new(PubSubState::new(42))),
-            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
-                1_700_000_000_123_000_000,
-            )))),
+            Arc::clone(&clock),
             None,
         )
         .with_profile(profile);
@@ -41,6 +43,7 @@ impl Server {
         Self {
             address,
             handle,
+            clock,
             task,
         }
     }
@@ -621,6 +624,12 @@ async fn strict_native_publication_pull_and_loopback_push_share_one_wire_identit
                 ack_ids: vec![redelivery.received_messages[0].ack_id.clone()],
             })
             .await
+            .unwrap();
+        server
+            .clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(11))
             .unwrap();
         assert!(client
             .pull(pb::PullRequest {

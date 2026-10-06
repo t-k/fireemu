@@ -2,7 +2,7 @@
 use fireemu_adapter_pubsub::{serve_pubsub, PubSubHandle, PubSubProfile};
 use fireemu_core_pubsub::PubSubState;
 use fireemu_core_session::clock::VirtualClock;
-use fireemu_core_types::time::LogicalInstant;
+use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use proptest::prelude::*;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
@@ -11,6 +11,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 struct OwnedServer {
     address: std::net::SocketAddr,
     handle: PubSubHandle,
+    clock: Arc<Mutex<VirtualClock>>,
     task: tokio::task::JoinHandle<()>,
 }
 impl Drop for OwnedServer {
@@ -21,11 +22,12 @@ impl Drop for OwnedServer {
 }
 impl OwnedServer {
     async fn new(seed: u64, profile: PubSubProfile, nanos: i128) -> Self {
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
+            nanos,
+        ))));
         let handle = PubSubHandle::new(
             Arc::new(Mutex::new(PubSubState::new(seed))),
-            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
-                nanos,
-            )))),
+            Arc::clone(&clock),
             None,
         )
         .with_profile(profile);
@@ -38,6 +40,7 @@ impl OwnedServer {
         Self {
             address,
             handle,
+            clock,
             task,
         }
     }
@@ -81,6 +84,7 @@ proptest! {
                 assert_eq!(server.rest("POST",&format!("/v1/{sub}:modifyAckDeadline"),json!({"ackIds":[first_ack],"ackDeadlineSeconds":0})).await.0,200);
                 let (_,again,_)=server.rest("POST",&format!("/v1/{sub}:pull"),json!({"maxMessages":1})).await;let second=&again["receivedMessages"][0];assert_eq!(second["message"]["messageId"],message["messageId"]);assert_ne!(second["ackId"],received["ackId"]);
                 assert_eq!(server.rest("POST",&format!("/v1/{sub}:acknowledge"),json!({"ackIds":[second["ackId"]]})).await.0,200);
+                server.clock.lock().unwrap().advance(LogicalDuration::from_seconds(11)).unwrap();
                 let (_,empty,bytes)=server.rest("POST",&format!("/v1/{sub}:pull"),json!({"maxMessages":1})).await;
                 assert_eq!(empty,if profile==PubSubProfile::Strict {json!({})}else{json!({"receivedMessages":[]})});if profile==PubSubProfile::Strict {assert_eq!(bytes,b"{}\n");}
             }

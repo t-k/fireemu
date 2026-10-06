@@ -497,9 +497,7 @@ export function applyClosure({
           .map(({ conditionId }) => conditionId)
           .join(", ")}`,
       );
-    const strict = {};
-    for (const row of comparison.rows)
-      strict[row.profiles.strict.status] = (strict[row.profiles.strict.status] ?? 0) + 1;
+    // The final-artifact gate is VERIFIED only when every row is a strict MATCH, so the comparison's rows all are.
     copy.integratedRegression = {
       release: integrated.release,
       integrationCommit: finalArtifact.sourceCommit,
@@ -511,9 +509,7 @@ export function applyClosure({
           path: comparisonPath,
           sha256: integrated.comparisonSha256,
           rows: comparison.rows.length,
-          summary: Object.fromEntries(
-            Object.entries(strict).toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
-          ),
+          summary: { MATCH: comparison.rows.length },
           laneComparisonPath: comparisonPath,
           laneComparisonSha256: integrated.comparisonSha256,
           identicalRows: comparison.rows.length,

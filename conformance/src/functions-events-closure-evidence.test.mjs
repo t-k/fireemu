@@ -1823,6 +1823,8 @@ test("--integrated-release writes the integrated regression block of the closure
       changedRows: [],
     },
   ]);
+  // The evidence file is the 2-space JSON, and the block hashes exactly those bytes.
+  assert.equal(evidenceText, `${JSON.stringify(evidenceFile, null, 2)}\n`);
   assert.equal(block.result, "IDENTICAL_TO_LANE");
   assert.equal(block.productionRequests, 0);
   // Only the integratedRegression key is new; the rest of the closure is what the command wrote without it.
@@ -1855,7 +1857,13 @@ test("the integrated regression is written only for a closure whose 20 condition
     /integrated regression.*VERIFIED/,
   );
   assert.equal(noReceipt.written.size, 0);
-  for (const bad of ["", "v0.12.0 ", "../x", "a/b", "v0.12.0\\n", ".", "x".repeat(65)]) {
+  // The shortest and the longest plain names are accepted.
+  for (const fine of ["v", "x".repeat(64), "release-1.2_3"]) {
+    const files = commandFiles();
+    closureEvidenceCommand(writing({ "integrated-release": fine }), files.io);
+    assert.equal(JSON.parse(files.written.get("closure.json")).integratedRegression.release, fine);
+  }
+  for (const bad of ["", "v0.12.0 ", "../x", "a/b", "v0.12.0\n", ".", "x".repeat(65)]) {
     const files = commandFiles();
     asRefusal(
       () => closureEvidenceCommand(writing({ "integrated-release": bad }), files.io),
@@ -1895,6 +1903,10 @@ test("applyClosure writes the block only when it is given one, and refuses a blo
   assert.equal(next.integratedRegression.buildReceiptSha256, "b".repeat(64));
   assert.equal(next.integratedRegression.comparisons[0].rows, evidence.rows.length);
   asRefusal(() => call({ integrated, workspace: undefined }), /integrated regression.*VERIFIED/);
+  // A row that is not a strict MATCH keeps the final-artifact gate pending, so no block is written for it.
+  const tampered = structuredClone(evidence);
+  tampered.rows[0].profiles.strict.status = "DIFF";
+  asRefusal(() => call({ integrated, comparison: tampered }), /integrated regression.*VERIFIED/);
   asRefusal(
     () =>
       call({

@@ -1781,3 +1781,128 @@ test("the report and the promotion both refuse a comparison that used an undecla
   asRefusal(() => closureEvidenceCommand(writing(), files.io), /undeclared mask/);
   assert.equal(files.written.size, 0, "nothing is written for a refused promotion");
 });
+
+// ---- the integrated regression block (promotion item 4, FS-DATA-WRITE / STORAGE-OBJECT form) ---------------------------------
+
+const RELEASE = "v0.12.0";
+const BUILD_PATH = "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-build.json";
+const EVIDENCE_PATH = "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json";
+
+test("--integrated-release writes the integrated regression block of the closure: the release, the commit and binary, the build receipt and the comparison, identical to the lane's", () => {
+  const { io, written } = commandFiles();
+  closureEvidenceCommand(writing({ "integrated-release": RELEASE }), io);
+  const closureFile = JSON.parse(written.get("closure.json"));
+  const block = closureFile.integratedRegression;
+  const evidenceText = written.get("evidence.json");
+  const evidenceFile = JSON.parse(evidenceText);
+  assert.deepEqual(Object.keys(block), [
+    "release",
+    "integrationCommit",
+    "releaseBinarySha256",
+    "buildReceiptPath",
+    "buildReceiptSha256",
+    "comparisons",
+    "result",
+    "productionRequests",
+  ]);
+  assert.equal(block.release, RELEASE);
+  assert.equal(block.integrationCommit, COMMIT);
+  assert.equal(block.releaseBinarySha256, ART);
+  assert.equal(block.buildReceiptPath, BUILD_PATH);
+  assert.equal(block.buildReceiptSha256, sha256(JSON.stringify(buildOf())));
+  assert.equal(block.buildReceiptSha256, evidenceFile.buildRecordSha256);
+  assert.deepEqual(block.comparisons, [
+    {
+      path: EVIDENCE_PATH,
+      sha256: sha256(evidenceText),
+      rows: evidenceFile.rows.length,
+      summary: { MATCH: evidenceFile.rows.length },
+      laneComparisonPath: EVIDENCE_PATH,
+      laneComparisonSha256: sha256(evidenceText),
+      identicalRows: evidenceFile.rows.length,
+      changedRows: [],
+    },
+  ]);
+  assert.equal(block.result, "IDENTICAL_TO_LANE");
+  assert.equal(block.productionRequests, 0);
+  // Only the integratedRegression key is new; the rest of the closure is what the command wrote without it.
+  const without = commandFiles();
+  closureEvidenceCommand(writing(), without.io);
+  const { integratedRegression, ...rest } = closureFile;
+  assert.deepEqual(rest, JSON.parse(without.written.get("closure.json")));
+  assert.equal(JSON.parse(without.written.get("closure.json")).integratedRegression, undefined);
+});
+
+test("the integrated regression is written only for a closure whose 20 conditions and final-artifact gate are VERIFIED, and its release name is a plain name", () => {
+  // A DIFF row: the conditions are not all VERIFIED.
+  const diffId = "functions-events/firestore/update#changed-field#v1";
+  const differing = commandFiles({
+    comparison: comparisonOf({ over: { [diffId]: { status: "DIFF", reasons: ["a"] } } }),
+  });
+  asRefusal(
+    () => closureEvidenceCommand(writing({ "integrated-release": RELEASE }), differing.io),
+    /integrated regression.*VERIFIED/,
+  );
+  assert.equal(differing.written.size, 0, "nothing is written for a refused promotion");
+  // No workspace receipt: the gate stays pending.
+  const noReceipt = commandFiles();
+  asRefusal(
+    () =>
+      closureEvidenceCommand(
+        writing({ "integrated-release": RELEASE, "workspace-regression": undefined }),
+        noReceipt.io,
+      ),
+    /integrated regression.*VERIFIED/,
+  );
+  assert.equal(noReceipt.written.size, 0);
+  for (const bad of ["", "v0.12.0 ", "../x", "a/b", "v0.12.0\\n", ".", "x".repeat(65)]) {
+    const files = commandFiles();
+    asRefusal(
+      () => closureEvidenceCommand(writing({ "integrated-release": bad }), files.io),
+      /--integrated-release/,
+    );
+    assert.equal(files.written.size, 0, JSON.stringify(bad));
+  }
+  // Without --write the option is refused rather than ignored.
+  asRefusal(
+    () => closureEvidenceCommand(options({ "integrated-release": RELEASE }), commandFiles().io),
+    /--integrated-release needs --write/,
+  );
+});
+
+test("applyClosure writes the block only when it is given one, and refuses a block for a closure that is not fully verified", () => {
+  const integrated = {
+    release: RELEASE,
+    buildReceiptPath: BUILD_PATH,
+    buildReceiptSha256: "b".repeat(64),
+    comparisonSha256: "c".repeat(64),
+  };
+  const { evidence, mapping } = applied();
+  const call = (over) =>
+    applyClosure({
+      closure: closure(),
+      mapping,
+      comparison: evidence,
+      recordings: recordingsFromRun(runOf()),
+      comparisonPath: EVIDENCE_PATH,
+      finalArtifact: checkBuildRecord(buildOf(), comparisonOf()),
+      workspace: receiptOf(),
+      ...over,
+    });
+  assert.equal(call({}).integratedRegression, undefined);
+  const next = call({ integrated });
+  assert.equal(next.integratedRegression.comparisons[0].sha256, "c".repeat(64));
+  assert.equal(next.integratedRegression.buildReceiptSha256, "b".repeat(64));
+  assert.equal(next.integratedRegression.comparisons[0].rows, evidence.rows.length);
+  asRefusal(() => call({ integrated, workspace: undefined }), /integrated regression.*VERIFIED/);
+  asRefusal(
+    () =>
+      call({
+        integrated,
+        mapping: mapping.map((entry, index) =>
+          index === 0 ? { ...entry, status: "MISMATCH" } : entry,
+        ),
+      }),
+    /integrated regression.*VERIFIED/,
+  );
+});

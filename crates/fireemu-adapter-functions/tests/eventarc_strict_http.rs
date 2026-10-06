@@ -963,7 +963,7 @@ async fn the_emulator_profile_still_refuses_what_the_official_emulator_refuses()
 }
 
 #[tokio::test]
-async fn strict_accepts_the_events_production_accepts_and_the_handler_gets_the_others() {
+async fn strict_accepts_missing_time_and_bytes_extensions_and_delivers_them() {
     let server = start(Some(FunctionsHttpProfile::Strict)).await;
     let target = format!("/v1/{CUSTOM}:publishEvents");
     let (status, answer) = server
@@ -986,8 +986,8 @@ async fn strict_accepts_the_events_production_accepts_and_the_handler_gets_the_o
     assert_eq!((status, answer.as_str()), (200, "{}\n"), "{answer}");
     assert_eq!(
         server.frames_so_far().await,
-        2 * one,
-        "only the good event of the batch is delivered"
+        4 * one,
+        "all three accepted events are delivered"
     );
     // Near misses that production refuses stay refused: a missing `id`, and a missing content type.
     let mut no_id = with_id("x");

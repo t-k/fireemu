@@ -1247,7 +1247,7 @@ fn deliver_strict(
         // The event passed the recorded checks, so production accepted it; what the emulator cannot
         // convert (no `time`, a `ceBytes` attribute: stage B rows 89 and 102) is not delivered and
         // is not an error of the publisher.
-        match crate::eventarc::convert(event) {
+        match crate::eventarc::convert_strict(event) {
             Ok(event) => published.push(event),
             Err(why) => {
                 eprintln!("[functions] eventarc: an event on {channel} was not delivered: {why}");

@@ -90,7 +90,9 @@ test("FS-LISTEN-SDK proposal covers its 18-case catalog and leaves unobserved pa
     assert.ok(condition.verification.requiredEvidence.length);
     assert.equal(
       condition.verification.recordingsRequired,
-      condition.status === "PENDING_REVIEW" ? 0 : 2,
+      ["final-artifact-regression", "closure-review"].includes(condition.conditionId.split("/")[1])
+        ? 0
+        : 2,
     );
     assert.ok(statuses.has(condition.status), `${condition.conditionId}: ${condition.status}`);
     if (condition.status === "VERIFIED")
@@ -197,9 +199,9 @@ test("every VERIFIED condition cites the comparison's artifact, source and build
     assert.equal(build.sourceCommit, comparison.sourceCommit);
   }
   assert.equal(closure.integratedRegression.release, "closure-base-aad8cee2a");
-  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  assert.equal(closure.parentStatus, "COMPAT_VERIFIED");
   assert.equal(
     closure.conditions.find((c) => c.conditionId.endsWith("/closure-review")).status,
-    "PENDING_REVIEW",
+    "VERIFIED",
   );
 });

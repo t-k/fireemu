@@ -1763,14 +1763,10 @@ test("the historical FS-DATA-WRITE replay waits for a held writer longer than st
   }
 });
 
-test("FS-LISTEN-SDK reserves its disclosed exclusion while implementing and uses it after review", () => {
+test("FS-LISTEN-SDK uses its disclosed exclusion as a verified closure", () => {
   const closures = committedClosures();
   const listen = closures.find((entry) => entry.closure.parent === "FS-LISTEN-SDK");
-  assert.equal(listen.closure.parentStatus, "IMPLEMENTING");
-  const reserved = planComparisons(closures, readJson);
-  assert.deepEqual(reserved.errors, []);
-  assert.ok(!reserved.excluded.some((entry) => entry.kind === "fs-listen-sdk-comparison-v1"));
-  listen.closure.parentStatus = "COMPAT_VERIFIED";
+  assert.equal(listen.closure.parentStatus, "COMPAT_VERIFIED");
   const reviewed = planComparisons(closures, readJson);
   assert.deepEqual(reviewed.errors, []);
   assert.ok(reviewed.excluded.some((entry) => entry.kind === "fs-listen-sdk-comparison-v1"));

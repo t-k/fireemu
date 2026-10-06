@@ -682,7 +682,9 @@ fn convert_with_profile(proto: &Value, strict: bool) -> Result<PublishedEvent, S
         event.insert("time".to_owned(), Value::String(time.to_owned()));
     }
     event.insert("data".to_owned(), data);
-    if let Some(content_type) = content_type {
+    // Production's custom-event deliveries carry no datacontenttype member, even when the
+    // publisher sent one (EVENTARC H1 v5: 0 of 69 handler frames); the emulator keeps it.
+    if let (Some(content_type), false) = (content_type, strict) {
         event.insert("datacontenttype".to_owned(), Value::from(content_type));
     }
 
@@ -880,6 +882,18 @@ mod tests {
         let delivered = super::convert_strict(&event).unwrap();
         assert_eq!(delivered.event.get("time"), None);
         assert_eq!(delivered.event["convbytes"], "AAE=");
+    }
+
+    #[test]
+    fn strict_conversion_delivers_no_data_content_type_even_when_published() {
+        let event = proto();
+        assert!(event["attributes"].get("datacontenttype").is_some());
+        let delivered = super::convert_strict(&event).unwrap();
+        assert_eq!(delivered.event.get("datacontenttype"), None);
+        assert_eq!(
+            super::convert(&event).unwrap().event["datacontenttype"],
+            "application/json"
+        );
     }
 
     #[test]

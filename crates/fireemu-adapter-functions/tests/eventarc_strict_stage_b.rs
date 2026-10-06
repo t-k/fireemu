@@ -176,14 +176,17 @@ fn instant(text: &str) -> u64 {
 fn server_instant(row: &Ordered, answered_at_ms: u64) -> u64 {
     let op = text(member(row, "op").expect("an op"));
     let response = member(row, "response").expect("a response");
-    if (op == "createChannel" || op == "deleteChannel") && number(member(response, "status")) == 200 {
-        let answer = parse(text(member(response, "rawBody").expect("a body")).as_bytes()).expect("JSON");
+    if (op == "createChannel" || op == "deleteChannel") && number(member(response, "status")) == 200
+    {
+        let answer =
+            parse(text(member(response, "rawBody").expect("a body")).as_bytes()).expect("JSON");
         let metadata = member(&answer, "metadata").expect("metadata");
         let created = chrono::DateTime::parse_from_rfc3339(&text(
             member(metadata, "createTime").expect("createTime"),
         ))
         .expect("a time");
-        return u64::try_from(created.timestamp_nanos_opt().expect("nanoseconds")).expect("positive");
+        return u64::try_from(created.timestamp_nanos_opt().expect("nanoseconds"))
+            .expect("positive");
     }
     // Millisecond precision from the recording; the sub-millisecond digits keep every timestamp at nine
     // fractional digits, as production wrote them.
@@ -276,7 +279,9 @@ fn base64url(text: &str) -> bool {
 
 fn normalize(value: &Ordered, key: Option<&str>) -> Ordered {
     match value {
-        Ordered::Array(items) => Ordered::Array(items.iter().map(|item| normalize(item, key)).collect()),
+        Ordered::Array(items) => {
+            Ordered::Array(items.iter().map(|item| normalize(item, key)).collect())
+        }
         Ordered::Object(members) => Ordered::Object(
             members
                 .iter()
@@ -294,12 +299,10 @@ fn mask(text: &str, key: Option<&str>) -> String {
         Some("uid") if uuid4(text) => "<uid>".to_owned(),
         Some("createTime" | "updateTime" | "endTime") if timestamp9(text) => "<time9>".to_owned(),
         Some("nextPageToken") if base64url(text) => format!("<token:{}>", text.len()),
-        Some("name") if text.contains("/operations/") => {
-            match text.rsplit_once("/operations/") {
-                Some((parent, id)) if operation_id(id) => format!("{parent}/operations/<operation>"),
-                _ => text.to_owned(),
-            }
-        }
+        Some("name") if text.contains("/operations/") => match text.rsplit_once("/operations/") {
+            Some((parent, id)) if operation_id(id) => format!("{parent}/operations/<operation>"),
+            _ => text.to_owned(),
+        },
         Some("pubsubTopic") => match text.rsplit_once('-') {
             Some((head, suffix)) if digits(suffix, 3) && text.starts_with("projects/") => {
                 format!("{head}-<NNN>")
@@ -439,7 +442,8 @@ fn recorded_durations(rows: &[Row]) -> BTreeMap<String, u64> {
             .expect("a time");
             durations.insert(
                 text(member(&answer, "name").expect("a name")),
-                u64::try_from((end - start).num_nanoseconds().expect("nanoseconds")).expect("positive"),
+                u64::try_from((end - start).num_nanoseconds().expect("nanoseconds"))
+                    .expect("positive"),
             );
         }
     }
@@ -457,7 +461,9 @@ fn bearer_of(token: &str) -> Option<&'static str> {
         "none" => None,
         "invalid" => Some("invalid-token-for-the-recording"),
         "ya29-garbage" => Some("ya29.fireemu-recorder-not-a-token-0000000000000000"),
-        "jwt-garbage" | "jwt-expired-unsigned" => Some("eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJ4In0.signature"),
+        "jwt-garbage" | "jwt-expired-unsigned" => {
+            Some("eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJ4In0.signature")
+        }
         "wrong-scope" => Some("ya29.a-token-of-another-scope"),
         _ => Some("ya29.replay-token"),
     }
@@ -477,25 +483,28 @@ fn replay_all(rows: &[Row]) -> Vec<Replayed> {
     for row in rows {
         let request_path = if row.op == "getOperation" {
             let recorded = row.path.trim_start_matches("/v1/");
-            operations.get(recorded).map_or_else(
-                || row.path.clone(),
-                |ours| format!("/v1/{ours}"),
-            )
+            operations
+                .get(recorded)
+                .map_or_else(|| row.path.clone(), |ours| format!("/v1/{ours}"))
         } else {
             row.path.clone()
         };
         let request_path = match request_path.split_once("pageToken=") {
             Some((head, token)) => {
                 let token = token.split('&').next().unwrap_or_default();
-                format!("{head}pageToken={}", tokens.get(token).map_or(token, String::as_str))
+                format!(
+                    "{head}pageToken={}",
+                    tokens.get(token).map_or(token, String::as_str)
+                )
             }
             None => request_path,
         };
         let (path, query) = request_path
             .split_once('?')
-            .map_or((request_path.as_str(), None), |(path, query)| (path, Some(query)));
-        let route =
-            route(&row.method, path).unwrap_or_else(|| panic!("row {} has a route", row.n));
+            .map_or((request_path.as_str(), None), |(path, query)| {
+                (path, Some(query))
+            });
+        let route = route(&row.method, path).unwrap_or_else(|| panic!("row {} has a route", row.n));
         // The operation the recording started takes as long as the recorded one did.
         if (row.op == "createChannel" || row.op == "deleteChannel") && row.status == 200 {
             let answer = parse(row.raw.as_bytes()).expect("JSON");
@@ -532,7 +541,8 @@ fn replay_all(rows: &[Row]) -> Vec<Replayed> {
         };
         replayed.push(match evaluate(&input, &world) {
             Outcome::Answer(answer) => {
-                if (row.op == "createChannel" || row.op == "deleteChannel") && answer.status == 200 {
+                if (row.op == "createChannel" || row.op == "deleteChannel") && answer.status == 200
+                {
                     let recorded = parse(row.raw.as_bytes()).expect("JSON");
                     operations.insert(
                         text(member(&recorded, "name").expect("an operation")),
@@ -553,7 +563,9 @@ fn replay_all(rows: &[Row]) -> Vec<Replayed> {
                     body: answer.body,
                 }
             }
-            Outcome::Deliver { .. } => panic!("row {}: nothing is declared, nothing is delivered", row.n),
+            Outcome::Deliver { .. } => {
+                panic!("row {}: nothing is declared, nothing is delivered", row.n)
+            }
         });
     }
     replayed
@@ -621,14 +633,23 @@ fn the_byte_comparison_masks_formats_only_and_sees_layout() {
     let wrong = a.replace(uid, "not-a-uid");
     assert_ne!(mask_text(&a), mask_text(&wrong));
     // Indentation, line breaks, spacing and the trailing newline are compared.
-    assert_ne!(mask_text(&a), mask_text(&a.replace("  \"state\"", "   \"state\"")));
+    assert_ne!(
+        mask_text(&a),
+        mask_text(&a.replace("  \"state\"", "   \"state\""))
+    );
     assert_ne!(mask_text(&a), mask_text(a.trim_end()));
     assert_ne!(mask_text(&a), mask_text(&a.replace(",\n", ", ")));
-    assert_ne!(mask_text(&a), mask_text(&a.replace("\"uid\": ", "\"uid\":")));
+    assert_ne!(
+        mask_text(&a),
+        mask_text(&a.replace("\"uid\": ", "\"uid\":"))
+    );
     // The members of an ErrorInfo's metadata may come in any order; nothing else may.
     let one = "{\n  \"metadata\": {\n    \"a\": \"1\",\n    \"b\": \"2\"\n  },\n  \"z\": 1\n}\n";
     let two = "{\n  \"metadata\": {\n    \"b\": \"2\",\n    \"a\": \"1\"\n  },\n  \"z\": 1\n}\n";
     assert_eq!(mask_text(one), mask_text(two));
     assert_ne!(mask_text(one), mask_text(&one.replace("\"2\"", "\"3\"")));
-    assert_ne!(mask_text(one), mask_text(&one.replace("\"z\": 1", "\"y\": 1")));
+    assert_ne!(
+        mask_text(one),
+        mask_text(&one.replace("\"z\": 1", "\"y\": 1"))
+    );
 }

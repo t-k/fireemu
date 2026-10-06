@@ -266,7 +266,9 @@ pub struct ChannelStore {
 
 impl std::fmt::Debug for ChannelStore {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("ChannelStore").finish_non_exhaustive()
+        formatter
+            .debug_struct("ChannelStore")
+            .finish_non_exhaustive()
     }
 }
 
@@ -278,7 +280,8 @@ impl Default for ChannelStore {
 
 /// The part of a channel name the operations of its location share: `projects/{p}/locations/{l}`.
 fn parent_of(name: &str) -> &str {
-    name.rsplit_once("/channels/").map_or(name, |(parent, _)| parent)
+    name.rsplit_once("/channels/")
+        .map_or(name, |(parent, _)| parent)
 }
 
 fn id_of(name: &str) -> &str {
@@ -674,10 +677,9 @@ const BASE64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvw
 fn base64url(bytes: &[u8]) -> String {
     let mut out = String::new();
     for chunk in bytes.chunks(3) {
-        let n = chunk
-            .iter()
-            .enumerate()
-            .fold(0u32, |acc, (i, byte)| acc | (u32::from(*byte) << (16 - 8 * i)));
+        let n = chunk.iter().enumerate().fold(0u32, |acc, (i, byte)| {
+            acc | (u32::from(*byte) << (16 - 8 * i))
+        });
         for i in 0..=chunk.len() {
             out.push(char::from(BASE64URL[((n >> (18 - 6 * i)) & 63) as usize]));
         }
@@ -911,7 +913,10 @@ mod tests {
             .operation(&operation.operation, T0 + 5 * SECOND)
             .unwrap();
         assert!(done(&finished));
-        assert_eq!(finished["metadata"]["endTime"], rfc3339(T0 + 5 * SECOND).as_str());
+        assert_eq!(
+            finished["metadata"]["endTime"],
+            rfc3339(T0 + 5 * SECOND).as_str()
+        );
         assert_eq!(
             finished["response"]["@type"],
             "type.googleapis.com/google.cloud.eventarc.v1.Channel"
@@ -933,7 +938,12 @@ mod tests {
             view.pubsub_topic,
             format!(
                 "projects/demo/topics/eventarc-channel-us-central1-c-{:03}",
-                view.pubsub_topic.rsplit('-').next().unwrap().parse::<u16>().unwrap()
+                view.pubsub_topic
+                    .rsplit('-')
+                    .next()
+                    .unwrap()
+                    .parse::<u16>()
+                    .unwrap()
             )
         );
         assert_eq!(view.pubsub_topic.rsplit('-').next().unwrap().len(), 3);
@@ -960,10 +970,14 @@ mod tests {
             other => panic!("not started: {other:?}"),
         };
         assert_eq!(store.lookup(&channel, T0 + 8 * SECOND), Lookup::Busy);
-        let pending = store.operation(&deletion.operation, T0 + 8 * SECOND).unwrap();
+        let pending = store
+            .operation(&deletion.operation, T0 + 8 * SECOND)
+            .unwrap();
         assert!(!done(&pending));
         assert_eq!(pending["metadata"]["verb"], "delete");
-        let finished = store.operation(&deletion.operation, T0 + 11 * SECOND).unwrap();
+        let finished = store
+            .operation(&deletion.operation, T0 + 11 * SECOND)
+            .unwrap();
         assert!(done(&finished));
         assert_eq!(finished["response"]["state"], "INACTIVE");
         assert_eq!(finished["response"]["pubsubTopic"], "");
@@ -1023,7 +1037,8 @@ mod tests {
     }
 
     #[test]
-    fn a_list_shows_the_channels_of_its_scope_in_the_order_of_creation_and_pages_continue_after_a_deleted_one() {
+    fn a_list_shows_the_channels_of_its_scope_in_the_order_of_creation_and_pages_continue_after_a_deleted_one(
+    ) {
         let store = store();
         for (offset, (location, id)) in [
             ("us-central1", "a"),
@@ -1044,18 +1059,33 @@ mod tests {
                 .map(|view| id_of(&view.name).to_owned())
                 .collect()
         };
-        assert_eq!(ids(&page(&store, "us-central1", None, 10, now)), ["a", "c", "d"]);
+        assert_eq!(
+            ids(&page(&store, "us-central1", None, 10, now)),
+            ["a", "c", "d"]
+        );
         assert_eq!(ids(&page(&store, "-", None, 10, now)), ["a", "b", "c", "d"]);
         assert_eq!(ids(&page(&store, "europe-west1", None, 10, now)), ["b"]);
         assert!(page(&store, "asia-east1", None, 10, now).items.is_empty());
         let first = page(&store, "us-central1", None, 1, now);
         assert!(first.more);
-        let second = page(&store, "us-central1", Some(&position_of(&first.items[0])), 1, now);
+        let second = page(
+            &store,
+            "us-central1",
+            Some(&position_of(&first.items[0])),
+            1,
+            now,
+        );
         assert_eq!(ids(&second), ["c"]);
         // The channel the token names is deleted: the page continues after its place all the same.
         let _ = store.delete(&name("us-central1", "c"), now);
         let later = now + 5 * SECOND;
-        let third = page(&store, "us-central1", Some(&position_of(&second.items[0])), 5, later);
+        let third = page(
+            &store,
+            "us-central1",
+            Some(&position_of(&second.items[0])),
+            5,
+            later,
+        );
         assert_eq!(ids(&third), ["d"]);
         assert!(!third.more);
         // A token that names a channel this store never had is refused.
@@ -1096,7 +1126,9 @@ mod tests {
             assert!(entropy.topic_suffix() < 1000);
             let hex = entropy.hex(13);
             assert_eq!(hex.len(), 13);
-            assert!(hex.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+            assert!(hex
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
         }
         assert_eq!(entropy.hex(40).len(), 40);
     }
@@ -1115,9 +1147,7 @@ mod tests {
         assert_eq!(token.len(), 175, "the recorded token for these lengths");
         // The recorded token starts the same way up to the project number: the outer field, the parent
         // with the location and the service, the two constant fields and the start of the number.
-        assert!(token.starts_with(
-            "CoABCjkKC3VzLWNlbnRyYWwxEhdldmVudGFyYy5nb29nbGVhcGlzLmNvbRgBI"
-        ));
+        assert!(token.starts_with("CoABCjkKC3VzLWNlbnRyYWwxEhdldmVudGFyYy5nb29nbGVhcGlzLmNvbRgBI"));
         assert!(token
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
@@ -1231,12 +1261,23 @@ mod tests {
 
     #[test]
     fn the_project_number_stands_for_its_project_in_twelve_digits() {
-        let numbers: Vec<u64> = ["demo", "demo-app", "fireemu-oracle-idp", "a", "b", "c", "other"]
-            .iter()
-            .map(|project| project_number(project))
-            .collect();
+        let numbers: Vec<u64> = [
+            "demo",
+            "demo-app",
+            "fireemu-oracle-idp",
+            "a",
+            "b",
+            "c",
+            "other",
+        ]
+        .iter()
+        .map(|project| project_number(project))
+        .collect();
         for number in &numbers {
-            assert!((100_000_000_000..1_000_000_000_000).contains(number), "{number}");
+            assert!(
+                (100_000_000_000..1_000_000_000_000).contains(number),
+                "{number}"
+            );
         }
         assert_eq!(numbers.iter().collect::<BTreeSet<_>>().len(), numbers.len());
         assert_eq!(project_number("demo"), project_number("demo"));
@@ -1290,7 +1331,11 @@ mod tests {
             push_bytes(&mut inner, 0x12, self.id);
             push_bytes(&mut inner, 0x1a, self.uid);
             inner.extend_from_slice(self.inner_tail);
-            let sum = if self.checksum_ok { checksum(&inner) } else { [7; 8] };
+            let sum = if self.checksum_ok {
+                checksum(&inner)
+            } else {
+                [7; 8]
+            };
             inner.push(self.tail_tag);
             inner.extend_from_slice(&sum);
             let mut message = Vec::new();
@@ -1308,23 +1353,105 @@ mod tests {
         assert_eq!(position.project_number, 123_456_789_012);
         assert_eq!((position.id.as_str(), position.uid.len()), ("c", 36));
         let bad: Vec<(&str, Token)> = vec![
-            ("a checksum that is wrong", Token { checksum_ok: false, ..Token::good() }),
-            ("a tail that is not a checksum field", Token { tail_tag: 0x22, ..Token::good() }),
-            ("bytes after the message", Token { outer_tail: b"\x00", ..Token::good() }),
-            ("a field after the UID", Token { inner_tail: &[0x28, 0x01], ..Token::good() }),
-            ("another service", Token { service: b"pubsub.googleapis.com", ..Token::good() }),
-            ("other constants", Token { constants: &[0x18, 0x02, 0x20], ..Token::good() }),
-            ("other constants (the first)", Token { constants: &[0x19, 0x01, 0x20], ..Token::good() }),
-            ("other constants (the last)", Token { constants: &[0x18, 0x01, 0x21], ..Token::good() }),
-            ("another word", Token { word: b"channelz", ..Token::good() }),
-            ("no word", Token { word: b"", ..Token::good() }),
-            ("an ID that is not UTF-8", Token { id: &[0xff, 0xfe], ..Token::good() }),
-            ("a UID that is not UTF-8", Token { uid: &[0xff, 0xfe], ..Token::good() }),
+            (
+                "a checksum that is wrong",
+                Token {
+                    checksum_ok: false,
+                    ..Token::good()
+                },
+            ),
+            (
+                "a tail that is not a checksum field",
+                Token {
+                    tail_tag: 0x22,
+                    ..Token::good()
+                },
+            ),
+            (
+                "bytes after the message",
+                Token {
+                    outer_tail: b"\x00",
+                    ..Token::good()
+                },
+            ),
+            (
+                "a field after the UID",
+                Token {
+                    inner_tail: &[0x28, 0x01],
+                    ..Token::good()
+                },
+            ),
+            (
+                "another service",
+                Token {
+                    service: b"pubsub.googleapis.com",
+                    ..Token::good()
+                },
+            ),
+            (
+                "other constants",
+                Token {
+                    constants: &[0x18, 0x02, 0x20],
+                    ..Token::good()
+                },
+            ),
+            (
+                "other constants (the first)",
+                Token {
+                    constants: &[0x19, 0x01, 0x20],
+                    ..Token::good()
+                },
+            ),
+            (
+                "other constants (the last)",
+                Token {
+                    constants: &[0x18, 0x01, 0x21],
+                    ..Token::good()
+                },
+            ),
+            (
+                "another word",
+                Token {
+                    word: b"channelz",
+                    ..Token::good()
+                },
+            ),
+            (
+                "no word",
+                Token {
+                    word: b"",
+                    ..Token::good()
+                },
+            ),
+            (
+                "an ID that is not UTF-8",
+                Token {
+                    id: &[0xff, 0xfe],
+                    ..Token::good()
+                },
+            ),
+            (
+                "a UID that is not UTF-8",
+                Token {
+                    uid: &[0xff, 0xfe],
+                    ..Token::good()
+                },
+            ),
         ];
         for (what, token) in bad {
             assert_eq!(Position::parse(&token.text()), None, "{what}");
         }
-        for text in ["", "A", "AA", "AAAA", "CoAB", "CgA", "CgAhAAAAAAAAAAA", "!!!!", "ab cd"] {
+        for text in [
+            "",
+            "A",
+            "AA",
+            "AAAA",
+            "CoAB",
+            "CgA",
+            "CgAhAAAAAAAAAAA",
+            "!!!!",
+            "ab cd",
+        ] {
             assert_eq!(Position::parse(text), None, "{text:?}");
         }
         // A message too short to hold a checksum, and one that is only a checksum.
@@ -1341,13 +1468,19 @@ mod tests {
         let bytes = unbase64url(&token).unwrap();
         // Change one character of the ID, then of the UID, then of the location: the structure holds.
         for needle in [&b"c"[..], &b"00000000-0000-4000"[..], &b"us-central1"[..]] {
-            let at = bytes.windows(needle.len()).position(|w| w == needle).unwrap();
+            let at = bytes
+                .windows(needle.len())
+                .position(|w| w == needle)
+                .unwrap();
             let mut changed = bytes.clone();
             changed[at] = if changed[at] == b'x' { b'y' } else { b'x' };
             assert_eq!(Position::parse(&base64url(&changed)), None, "{needle:?}");
         }
         // And two different positions never share a checksum by accident of the function being constant.
-        let other = Position { id: "d".to_owned(), ..Position::parse(&token).unwrap() };
+        let other = Position {
+            id: "d".to_owned(),
+            ..Position::parse(&token).unwrap()
+        };
         let tail = |text: &str| text[text.len() - 12..].to_owned();
         assert_ne!(tail(&token), tail(&other.token()));
     }

@@ -1260,10 +1260,16 @@ async fn eventarc_publish_rejects_amplified_fanout_without_partial_enqueue() {
 /// Every delivery the runtime has taken in so far: waiting, running, retrying, succeeded or dead-lettered.
 fn recorded_deliveries(h: &Harness) -> u64 {
     let status = h.runtime.status();
-    ["pending", "running", "retryWaiting", "succeeded", "deadLettered"]
-        .iter()
-        .map(|key| status[key].as_u64().unwrap_or(0))
-        .sum()
+    [
+        "pending",
+        "running",
+        "retryWaiting",
+        "succeeded",
+        "deadLettered",
+    ]
+    .iter()
+    .map(|key| status[key].as_u64().unwrap_or(0))
+    .sum()
 }
 
 /// The most records the Eventarc share of the active-event queue holds.

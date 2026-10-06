@@ -210,7 +210,9 @@ impl Listener {
     async fn frames_so_far(&self) -> usize {
         tokio::time::sleep(Duration::from_millis(600)).await;
         std::fs::read_to_string(&self.frames).map_or(0, |text| {
-            text.lines().filter(|line| line.contains("customEvent")).count()
+            text.lines()
+                .filter(|line| line.contains("customEvent"))
+                .count()
         })
     }
 
@@ -220,7 +222,9 @@ impl Listener {
         let mut seen = 0;
         for _ in 0..1200 {
             seen = std::fs::read_to_string(&self.frames).map_or(0, |text| {
-                text.lines().filter(|line| line.contains("customEvent")).count()
+                text.lines()
+                    .filter(|line| line.contains("customEvent"))
+                    .count()
             });
             if seen >= count {
                 break;
@@ -366,7 +370,10 @@ async fn strict_answers_a_channel_nothing_declares_as_production_answers_a_missi
     assert_eq!(status, 200, "{answer}");
     let read: Value = serde_json::from_str(&answer).expect("JSON");
     assert_eq!(read["name"], CUSTOM);
-    assert_eq!(read["uid"], listed["channels"][0]["uid"], "the same channel");
+    assert_eq!(
+        read["uid"], listed["channels"][0]["uid"],
+        "the same channel"
+    );
     let (status, answer) = server
         .send(
             "GET",
@@ -641,8 +648,9 @@ async fn strict_serves_the_channel_api_over_http_and_the_emulator_profile_serves
     let server = start_with(Some(FunctionsHttpProfile::Strict), PROJECT, Some(channels)).await;
     let parent = "/v1/projects/demo-app/locations/us-central1";
     let create = |id: &str| {
-        let body = json!({ "name": format!("projects/demo-app/locations/us-central1/channels/{id}") })
-            .to_string();
+        let body =
+            json!({ "name": format!("projects/demo-app/locations/us-central1/channels/{id}") })
+                .to_string();
         (format!("{parent}/channels?channelId={id}"), body)
     };
     // The quota project a request names is not checked: a project that does not exist is answered 200
@@ -666,13 +674,20 @@ async fn strict_serves_the_channel_api_over_http_and_the_emulator_profile_serves
     let operation: Value = serde_json::from_str(&answer).expect("JSON");
     let operation = operation["name"].as_str().expect("an operation").to_owned();
     // Read at once: not done; read later: done with the channel.
-    let (status, pending) = server.send("GET", &format!("/v1/{operation}"), true, None).await;
+    let (status, pending) = server
+        .send("GET", &format!("/v1/{operation}"), true, None)
+        .await;
     assert_eq!(status, 200);
     assert!(pending.contains("\"done\": false"), "{pending}");
     tokio::time::sleep(Duration::from_millis(250)).await;
-    let (status, finished) = server.send("GET", &format!("/v1/{operation}"), true, None).await;
+    let (status, finished) = server
+        .send("GET", &format!("/v1/{operation}"), true, None)
+        .await;
     assert_eq!(status, 200);
-    assert!(finished.contains("\"done\": true") && finished.contains("\"state\": \"ACTIVE\""), "{finished}");
+    assert!(
+        finished.contains("\"done\": true") && finished.contains("\"state\": \"ACTIVE\""),
+        "{finished}"
+    );
     // A publication to it, with the quota project, is accepted; the same publication after the
     // deletion is not.
     let body = publish_body(&[event("eu")]);
@@ -688,7 +703,10 @@ async fn strict_serves_the_channel_api_over_http_and_the_emulator_profile_serves
     tokio::time::sleep(Duration::from_millis(250)).await;
     let (status, answer) = server.send("POST", &publish, true, Some(&body)).await;
     assert_eq!(status, 404, "{answer}");
-    assert_eq!(error_of(&answer)["message"], "Associated channel does not exist.");
+    assert_eq!(
+        error_of(&answer)["message"],
+        "Associated channel does not exist."
+    );
     server.stop().await;
     // The emulator profile is the official emulator's: the channel API is not there.
     let server = start(Some(FunctionsHttpProfile::Emulator)).await;
@@ -697,10 +715,18 @@ async fn strict_serves_the_channel_api_over_http_and_the_emulator_profile_serves
         ("POST", target.as_str(), Some(body.as_str())),
         ("GET", &format!("{parent}/channels/made"), None),
         ("DELETE", &format!("{parent}/channels/made"), None),
-        ("GET", &format!("{parent}/operations/operation-1-2-3-4"), None),
+        (
+            "GET",
+            &format!("{parent}/operations/operation-1-2-3-4"),
+            None,
+        ),
     ] {
         let (status, answer) = server.send(method, path, true, payload).await;
-        assert_eq!((status, answer.as_str()), (404, "Not Found"), "{method} {path}");
+        assert_eq!(
+            (status, answer.as_str()),
+            (404, "Not Found"),
+            "{method} {path}"
+        );
     }
     server.stop().await;
 }
@@ -745,7 +771,8 @@ fn recorded_body(value: &Value) -> String {
 /// of the recording is not found here, as it is not found in the official emulator, and a recorded
 /// publication that production accepted is not refused.
 #[tokio::test]
-async fn the_emulator_profile_has_no_channel_api_and_accepts_every_recorded_publication_production_accepts() {
+async fn the_emulator_profile_has_no_channel_api_and_accepts_every_recorded_publication_production_accepts(
+) {
     let rows: Vec<Value> = serde_json::from_slice(
         &std::fs::read(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -757,7 +784,8 @@ async fn the_emulator_profile_has_no_channel_api_and_accepts_every_recorded_publ
     let server = start(Some(FunctionsHttpProfile::Emulator)).await;
     let mut accepted_by_production = 0;
     let mut refused: Vec<(u64, u16, String)> = Vec::new();
-    let mut by_pair: std::collections::BTreeMap<(u64, u16), usize> = std::collections::BTreeMap::new();
+    let mut by_pair: std::collections::BTreeMap<(u64, u16), usize> =
+        std::collections::BTreeMap::new();
     for row in &rows {
         let op = row["op"].as_str().expect("an op");
         let path = row["request"]["path"].as_str().expect("a path");
@@ -778,7 +806,10 @@ async fn the_emulator_profile_has_no_channel_api_and_accepts_every_recorded_publ
             // events all have one, is answered `200 OK` here whatever production said.
             let parsed: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
             if let Some(events) = parsed["events"].as_array() {
-                if events.iter().all(|e| e["type"].as_str().is_some_and(|t| !t.is_empty())) {
+                if events
+                    .iter()
+                    .all(|e| e["type"].as_str().is_some_and(|t| !t.is_empty()))
+                {
                     assert_eq!(
                         (status, answer.as_str()),
                         (200, "OK"),
@@ -810,7 +841,10 @@ async fn the_emulator_profile_has_no_channel_api_and_accepts_every_recorded_publ
             );
         }
     }
-    assert!(accepted_by_production > 20, "{accepted_by_production} publications");
+    assert!(
+        accepted_by_production > 20,
+        "{accepted_by_production} publications"
+    );
     // Every publication production accepted is answered `200 OK`, as the official emulator answers it. Two of
     // them (row 89: no `time` attribute; row 102: an attribute of the kind `ceBytes`) cannot be converted: the
     // official emulator converts after answering and only logs, and so does this one.
@@ -825,8 +859,14 @@ async fn the_functions_and_tasks_listeners_serve_with_the_store_they_were_given(
     // the official `404`.
     let dir_server = start(None).await;
     let runtime = dir_server.runtime.clone();
-    for (profile, tasks) in [(FunctionsHttpProfile::Strict, false), (FunctionsHttpProfile::Emulator, false), (FunctionsHttpProfile::Emulator, true)] {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    for (profile, tasks) in [
+        (FunctionsHttpProfile::Strict, false),
+        (FunctionsHttpProfile::Emulator, false),
+        (FunctionsHttpProfile::Emulator, true),
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
         let addr = listener.local_addr().expect("an address");
         let runtime = runtime.clone();
         let server = tokio::spawn(async move {
@@ -834,12 +874,17 @@ async fn the_functions_and_tasks_listeners_serve_with_the_store_they_were_given(
             if tasks {
                 fireemu_adapter_functions::http::serve_tasks(listener, runtime, admission).await
             } else {
-                fireemu_adapter_functions::http::serve_functions_with_profile(listener, runtime, admission, profile).await
+                fireemu_adapter_functions::http::serve_functions_with_profile(
+                    listener, runtime, admission, profile,
+                )
+                .await
             }
         });
         let mut stream = TcpStream::connect(addr).await.expect("connect");
         stream
-            .write_all(b"GET /no/such/thing HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+            .write_all(
+                b"GET /no/such/thing HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n",
+            )
             .await
             .expect("write");
         let mut raw = Vec::new();
@@ -880,16 +925,29 @@ async fn the_emulator_profile_answers_an_event_it_cannot_convert_as_the_official
     let server = start(Some(FunctionsHttpProfile::Emulator)).await;
     let target = format!("/{CUSTOM}:publishEvents");
     let (status, answer) = server
-        .send("POST", &target, false, Some(&publish_body(&[with_id("good-1")])))
+        .send(
+            "POST",
+            &target,
+            false,
+            Some(&publish_body(&[with_id("good-1")])),
+        )
         .await;
     assert_eq!((status, answer.as_str()), (200, "OK"));
     let one = server.frames_so_far().await;
     assert!(one > 0, "the first event is delivered");
     // Two events the conversion cannot make, with a good one after them.
-    let batch = publish_body(&[without_time("no-time"), with_bytes_attribute("bytes"), with_id("good-2")]);
+    let batch = publish_body(&[
+        without_time("no-time"),
+        with_bytes_attribute("bytes"),
+        with_id("good-2"),
+    ]);
     let (status, answer) = server.send("POST", &target, false, Some(&batch)).await;
     assert_eq!((status, answer.as_str()), (200, "OK"), "{answer}");
-    assert_eq!(server.frames_so_far().await, 2 * one, "only the good event of the batch is delivered");
+    assert_eq!(
+        server.frames_so_far().await,
+        2 * one,
+        "only the good event of the batch is delivered"
+    );
     // The two events alone are answered the same way and deliver nothing.
     let batch = publish_body(&[without_time("no-time-2"), with_bytes_attribute("bytes-2")]);
     let (status, answer) = server.send("POST", &target, false, Some(&batch)).await;
@@ -922,15 +980,28 @@ async fn strict_accepts_the_events_production_accepts_and_the_handler_gets_the_o
     let server = start(Some(FunctionsHttpProfile::Strict)).await;
     let target = format!("/v1/{CUSTOM}:publishEvents");
     let (status, answer) = server
-        .send("POST", &target, true, Some(&publish_body(&[with_id("good-1")])))
+        .send(
+            "POST",
+            &target,
+            true,
+            Some(&publish_body(&[with_id("good-1")])),
+        )
         .await;
     assert_eq!((status, answer.as_str()), (200, "{}\n"), "{answer}");
     let one = server.frames_so_far().await;
     assert!(one > 0, "the first event is delivered");
-    let batch = publish_body(&[without_time("no-time"), with_bytes_attribute("bytes"), with_id("good-2")]);
+    let batch = publish_body(&[
+        without_time("no-time"),
+        with_bytes_attribute("bytes"),
+        with_id("good-2"),
+    ]);
     let (status, answer) = server.send("POST", &target, true, Some(&batch)).await;
     assert_eq!((status, answer.as_str()), (200, "{}\n"), "{answer}");
-    assert_eq!(server.frames_so_far().await, 2 * one, "only the good event of the batch is delivered");
+    assert_eq!(
+        server.frames_so_far().await,
+        2 * one,
+        "only the good event of the batch is delivered"
+    );
     // Near misses that production refuses stay refused: a missing `id`, and a missing content type.
     let mut no_id = with_id("x");
     no_id.as_object_mut().unwrap().remove("id");
@@ -954,7 +1025,8 @@ fn unmatched_batch(count: usize) -> String {
 }
 
 #[tokio::test]
-async fn the_emulator_profile_has_no_limit_on_the_number_of_events_as_the_official_emulator_has_none() {
+async fn the_emulator_profile_has_no_limit_on_the_number_of_events_as_the_official_emulator_has_none(
+) {
     // 256 was the limit of an earlier version (a 429 above it); the official emulator accepts any number.
     let server = start(Some(FunctionsHttpProfile::Emulator)).await;
     let target = format!("/{CUSTOM}:publishEvents");
@@ -994,7 +1066,8 @@ async fn the_emulator_profile_has_no_limit_on_the_number_of_events_as_the_offici
 }
 
 #[tokio::test]
-async fn strict_refuses_above_the_recorded_event_count_and_accepts_up_to_it_in_the_same_batch_shapes() {
+async fn strict_refuses_above_the_recorded_event_count_and_accepts_up_to_it_in_the_same_batch_shapes(
+) {
     // The strict profile follows production: 100 events pass, 101 are refused with `OUT_OF_RANGE` (stage B),
     // never the emulator profile's old 429.
     let server = start(Some(FunctionsHttpProfile::Strict)).await;
@@ -1034,7 +1107,12 @@ async fn the_emulator_profile_delivers_every_matched_event_of_a_large_publicatio
         let server = start(Some(FunctionsHttpProfile::Emulator)).await;
         let target = format!("/{CUSTOM}:publishEvents");
         let (status, _) = server
-            .send("POST", &target, false, Some(&publish_body(&[good_event("one")])))
+            .send(
+                "POST",
+                &target,
+                false,
+                Some(&publish_body(&[good_event("one")])),
+            )
             .await;
         assert_eq!(status, 200);
         let one = server.wait_for_frames(1).await;
@@ -1056,7 +1134,8 @@ async fn the_emulator_profile_delivers_every_matched_event_of_a_large_publicatio
 }
 
 #[tokio::test]
-async fn the_emulator_profile_accepts_any_truthy_type_and_refuses_a_falsy_one_with_the_official_text() {
+async fn the_emulator_profile_accepts_any_truthy_type_and_refuses_a_falsy_one_with_the_official_text(
+) {
     let server = start(Some(FunctionsHttpProfile::Emulator)).await;
     let target = format!("/{CUSTOM}:publishEvents");
     // The official handler refuses `!event.type`: a missing type, null, false, 0 and "". Anything else passes.
@@ -1075,7 +1154,11 @@ async fn the_emulator_profile_accepts_any_truthy_type_and_refuses_a_falsy_one_wi
         let body = publish_body(&[matched_event("t-1", value.clone())]);
         let (status, answer) = server.send("POST", &target, false, Some(&body)).await;
         assert_eq!(status, expected, "type {value}: {answer}");
-        assert_eq!(answer, if expected == 200 { "OK" } else { "Bad Request" }, "type {value}");
+        assert_eq!(
+            answer,
+            if expected == 200 { "OK" } else { "Bad Request" },
+            "type {value}"
+        );
     }
     let mut missing = good_event("t-2");
     missing.as_object_mut().unwrap().remove("type");
@@ -1089,7 +1172,8 @@ async fn the_emulator_profile_accepts_any_truthy_type_and_refuses_a_falsy_one_wi
 }
 
 #[tokio::test]
-async fn a_type_the_runtime_cannot_hold_is_not_delivered_and_does_not_refuse_the_publication_in_both_profiles() {
+async fn a_type_the_runtime_cannot_hold_is_not_delivered_and_does_not_refuse_the_publication_in_both_profiles(
+) {
     for profile in [FunctionsHttpProfile::Emulator, FunctionsHttpProfile::Strict] {
         let server = start(Some(profile)).await;
         let (target, bearer) = if profile == FunctionsHttpProfile::Strict {
@@ -1097,31 +1181,50 @@ async fn a_type_the_runtime_cannot_hold_is_not_delivered_and_does_not_refuse_the
         } else {
             (format!("/{CUSTOM}:publishEvents"), false)
         };
-        let ok = if profile == FunctionsHttpProfile::Strict { "{}\n" } else { "OK" };
-        for bad in ["a/b:c".to_owned(), "a b".to_owned(), "x".repeat(300), "é".to_owned()] {
+        let ok = if profile == FunctionsHttpProfile::Strict {
+            "{}\n"
+        } else {
+            "OK"
+        };
+        for bad in [
+            "a/b:c".to_owned(),
+            "a b".to_owned(),
+            "x".repeat(300),
+            "é".to_owned(),
+        ] {
             // Alone: answered, nothing delivered. With a good event after it: the good one is delivered.
             let body = publish_body(&[matched_event("bad-1", json!(bad))]);
             let (status, answer) = server.send("POST", &target, bearer, Some(&body)).await;
             assert_eq!((status, answer.as_str()), (200, ok), "{profile:?} {bad:?}");
         }
-        assert_eq!(server.wait_for_frames(0).await, 0, "{profile:?}: nothing delivered");
-        let body = publish_body(&[
-            matched_event("bad-2", json!("a/b:c")),
-            good_event("good-1"),
-        ]);
+        assert_eq!(
+            server.wait_for_frames(0).await,
+            0,
+            "{profile:?}: nothing delivered"
+        );
+        let body = publish_body(&[matched_event("bad-2", json!("a/b:c")), good_event("good-1")]);
         let (status, answer) = server.send("POST", &target, bearer, Some(&body)).await;
         assert_eq!((status, answer.as_str()), (200, ok), "{profile:?}");
-        assert!(server.wait_for_frames(1).await > 0, "{profile:?}: the good event is delivered");
+        assert!(
+            server.wait_for_frames(1).await > 0,
+            "{profile:?}: the good event is delivered"
+        );
         server.stop().await;
     }
 }
 
 #[tokio::test]
-async fn the_emulator_profile_delivers_the_events_before_a_typeless_one_and_then_answers_400_as_the_official_handler_does() {
+async fn the_emulator_profile_delivers_the_events_before_a_typeless_one_and_then_answers_400_as_the_official_handler_does(
+) {
     let server = start(Some(FunctionsHttpProfile::Emulator)).await;
     let target = format!("/{CUSTOM}:publishEvents");
     let (status, _) = server
-        .send("POST", &target, false, Some(&publish_body(&[good_event("probe")])))
+        .send(
+            "POST",
+            &target,
+            false,
+            Some(&publish_body(&[good_event("probe")])),
+        )
         .await;
     assert_eq!(status, 200);
     let one = server.wait_for_frames(1).await;
@@ -1133,15 +1236,21 @@ async fn the_emulator_profile_delivers_the_events_before_a_typeless_one_and_then
     let (status, answer) = server.send("POST", &target, false, Some(&body)).await;
     assert_eq!((status, answer.as_str()), (400, "Bad Request"));
     // The two events before it are delivered; the one after it is not (the loop stops there).
-    assert_eq!(server.wait_for_frames(before + 2 * one).await, before + 2 * one);
+    assert_eq!(
+        server.wait_for_frames(before + 2 * one).await,
+        before + 2 * one
+    );
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(server.wait_for_frames(0).await, before + 2 * one);
     server.stop().await;
 }
 
 #[test]
-fn the_declared_eventarc_queue_bounds_are_the_numbers_capabilities_json_states_and_it_states_no_per_publication_cap() {
-    use fireemu_adapter_functions::runtime::{MAX_ACTIVE_EVENTARC_BYTES, MAX_ACTIVE_EVENTARC_RECORDS};
+fn the_declared_eventarc_queue_bounds_are_the_numbers_capabilities_json_states_and_it_states_no_per_publication_cap(
+) {
+    use fireemu_adapter_functions::runtime::{
+        MAX_ACTIVE_EVENTARC_BYTES, MAX_ACTIVE_EVENTARC_RECORDS,
+    };
     assert_eq!(MAX_ACTIVE_EVENTARC_RECORDS, 3072);
     assert_eq!(MAX_ACTIVE_EVENTARC_BYTES, 48 * 1024 * 1024);
     let capabilities = include_str!("../../fireemu/src/capabilities.json");

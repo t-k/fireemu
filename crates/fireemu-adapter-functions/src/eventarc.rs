@@ -922,7 +922,9 @@ mod tests {
             registry.declared_channels_in("p", "-"),
             registry.declared_channels_in("p", "us-central1")
         );
-        assert!(registry.declared_channels_in("p", "europe-west1").is_empty());
+        assert!(registry
+            .declared_channels_in("p", "europe-west1")
+            .is_empty());
         assert!(registry.declared_channels_in("p", "us-central").is_empty());
         assert!(registry.declared_channels_in("r", "-").is_empty());
         assert!(TriggerRegistry::default()

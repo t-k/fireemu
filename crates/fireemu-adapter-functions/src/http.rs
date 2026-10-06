@@ -906,7 +906,9 @@ fn publish_events(runtime: &FunctionsRuntime, channel: &str, body: &[u8]) -> Res
         };
         match converted {
             Ok(event) => published.push(event),
-            Err(why) => eprintln!("[functions] eventarc: an event on {channel} was not delivered: {why}"),
+            Err(why) => {
+                eprintln!("[functions] eventarc: an event on {channel} was not delivered: {why}")
+            }
         }
     }
     match runtime.publish_registered_custom_events(channel, &published) {
@@ -1247,7 +1249,9 @@ fn deliver_strict(
         // is not an error of the publisher.
         match crate::eventarc::convert(event) {
             Ok(event) => published.push(event),
-            Err(why) => eprintln!("[functions] eventarc: an event on {channel} was not delivered: {why}"),
+            Err(why) => {
+                eprintln!("[functions] eventarc: an event on {channel} was not delivered: {why}")
+            }
         }
     }
     match runtime.publish_registered_custom_events(channel, &published) {
@@ -1297,7 +1301,9 @@ async fn respond_eventarc_strict(
         |project: &str, location: &str| runtime.eventarc_channels_declared_in(project, location);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX));
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
+        });
     let world = World {
         project: runtime.project(),
         request_id: &request_id,
@@ -1570,7 +1576,9 @@ async fn respond(
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
     if surface != HttpSurface::Functions {
-        return Ok(respond_support_request(runtime, channels, req, body_limit, surface, profile).await);
+        return Ok(
+            respond_support_request(runtime, channels, req, body_limit, surface, profile).await,
+        );
     }
     let (_region, function, target) = match resolve_route(&runtime, &path) {
         Ok(resolved) => resolved,
@@ -1710,7 +1718,16 @@ async fn serve_surface(
                     let body_limit = request_body_limit(surface, req.uri().path());
                     let reservation = request_body_reservation(&req, body_limit);
                     let _request = request_admission.acquire(reservation).await;
-                    respond(runtime, channels, req, body_limit, surface, profile, peer.ip()).await
+                    respond(
+                        runtime,
+                        channels,
+                        req,
+                        body_limit,
+                        surface,
+                        profile,
+                        peer.ip(),
+                    )
+                    .await
                 }
             });
             let mut builder = http1::Builder::new();

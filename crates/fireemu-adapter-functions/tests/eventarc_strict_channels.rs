@@ -24,7 +24,10 @@ struct Sequence(u64);
 impl Entropy for Sequence {
     fn uuid(&mut self) -> String {
         self.0 += 1;
-        fireemu_adapter_functions::eventarc_channels::uuid_from(self.0.wrapping_mul(0x9e37_79b9_7f4a_7c15), self.0)
+        fireemu_adapter_functions::eventarc_channels::uuid_from(
+            self.0.wrapping_mul(0x9e37_79b9_7f4a_7c15),
+            self.0,
+        )
     }
     fn hex(&mut self, digits: usize) -> String {
         self.0 += 1;
@@ -133,7 +136,8 @@ impl Server {
         self.call(
             "POST",
             &format!("/v1/projects/{PROJECT}/locations/{location}/channels?channelId={id}"),
-            &json!({ "name": format!("projects/{PROJECT}/locations/{location}/channels/{id}") }).to_string(),
+            &json!({ "name": format!("projects/{PROJECT}/locations/{location}/channels/{id}") })
+                .to_string(),
         )
     }
 
@@ -161,21 +165,36 @@ fn a_channel_is_created_through_an_operation_read_listed_and_deleted_as_producti
     assert!(operation.starts_with(&format!("{PARENT}/operations/operation-")));
     assert_eq!(created.body["done"], false);
     assert_eq!(created.body["metadata"]["verb"], "create");
-    assert_eq!(created.body["metadata"]["target"], format!("{PARENT}/channels/c1"));
+    assert_eq!(
+        created.body["metadata"]["target"],
+        format!("{PARENT}/channels/c1")
+    );
     assert_eq!(created.body["metadata"]["requestedCancellation"], false);
     assert_eq!(created.body["metadata"]["apiVersion"], "v1");
     // The members of the answer, in the recorded order.
-    let members: Vec<&str> = created.ordered.members().unwrap().iter().map(|(k, _)| k.as_str()).collect();
+    let members: Vec<&str> = created
+        .ordered
+        .members()
+        .unwrap()
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .collect();
     assert_eq!(members, ["name", "metadata", "done"]);
     // Read while it runs: not done, the same operation.
     server.advance(2);
     let pending = server.call("GET", &format!("/v1/{operation}"), "");
-    assert_eq!((pending.status, &pending.body["done"]), (200, &json!(false)));
+    assert_eq!(
+        (pending.status, &pending.body["done"]),
+        (200, &json!(false))
+    );
     // Done after its duration, with the channel in its response.
     server.advance(4);
     let finished = server.call("GET", &format!("/v1/{operation}"), "");
     assert_eq!(finished.body["done"], true);
-    assert_eq!(finished.body["response"]["name"], format!("{PARENT}/channels/c1"));
+    assert_eq!(
+        finished.body["response"]["name"],
+        format!("{PARENT}/channels/c1")
+    );
     assert_eq!(finished.body["response"]["state"], "ACTIVE");
     // The channel, its listing, and the conflict of a second creation.
     let read = server.call("GET", &format!("/v1/{PARENT}/channels/c1"), "");
@@ -219,7 +238,12 @@ fn a_channel_is_created_through_an_operation_read_listed_and_deleted_as_producti
             "type.googleapis.com/google.rpc.ResourceInfo"
         );
     }
-    assert_eq!(server.call("GET", &format!("/v1/{PARENT}/channels"), "").text, "{}\n");
+    assert_eq!(
+        server
+            .call("GET", &format!("/v1/{PARENT}/channels"), "")
+            .text,
+        "{}\n"
+    );
     // The channel can be created again.
     assert_eq!(server.create("us-central1", "c1").status, 200);
 }
@@ -234,32 +258,61 @@ fn the_states_production_was_not_observed_in_answer_501_and_say_which() {
     let event = delivered_event("e1");
     let publish = json!({ "events": [event] }).to_string();
     for (reply, what) in [
-        (server.call("GET", &format!("/v1/{PARENT}/channels/busy"), ""), "read"),
-        (server.call("GET", &format!("/v1/{PARENT}/channels"), ""), "list"),
-        (server.create("us-central1", "busy"), "creation"),
-        (server.call("DELETE", &format!("/v1/{PARENT}/channels/busy"), ""), "deletion"),
         (
-            server.call("POST", &format!("/v1/{PARENT}/channels/busy:publishEvents"), &publish),
+            server.call("GET", &format!("/v1/{PARENT}/channels/busy"), ""),
+            "read",
+        ),
+        (
+            server.call("GET", &format!("/v1/{PARENT}/channels"), ""),
+            "list",
+        ),
+        (server.create("us-central1", "busy"), "creation"),
+        (
+            server.call("DELETE", &format!("/v1/{PARENT}/channels/busy"), ""),
+            "deletion",
+        ),
+        (
+            server.call(
+                "POST",
+                &format!("/v1/{PARENT}/channels/busy:publishEvents"),
+                &publish,
+            ),
             "publication",
         ),
     ] {
         assert_eq!(reply.status, 501, "{what}: {}", reply.text);
         assert_eq!(reply.body["error"]["status"], "UNIMPLEMENTED", "{what}");
-        assert!(message(&reply).contains("not finished") || message(&reply).contains("is being"), "{what}: {}", message(&reply));
+        assert!(
+            message(&reply).contains("not finished") || message(&reply).contains("is being"),
+            "{what}: {}",
+            message(&reply)
+        );
     }
     // A creation whose name is not the path's, and one without a channelId.
     let other = json!({ "name": format!("{PARENT}/channels/other") }).to_string();
     assert_eq!(
-        server.call("POST", &format!("/v1/{PARENT}/channels?channelId=x"), &other).status,
+        server
+            .call(
+                "POST",
+                &format!("/v1/{PARENT}/channels?channelId=x"),
+                &other
+            )
+            .status,
         501
     );
     assert_eq!(
-        server.call("POST", &format!("/v1/{PARENT}/channels"), &other).status,
+        server
+            .call("POST", &format!("/v1/{PARENT}/channels"), &other)
+            .status,
         501
     );
     // An operation this server did not start, a page size that is not a positive number, the deletion of
     // a channel a function declares.
-    let stranger = server.call("GET", &format!("/v1/{PARENT}/operations/operation-1-2-3-4"), "");
+    let stranger = server.call(
+        "GET",
+        &format!("/v1/{PARENT}/operations/operation-1-2-3-4"),
+        "",
+    );
     assert_eq!(stranger.status, 501);
     server.advance(6);
     for size in ["-1", "x", "1.5"] {
@@ -270,8 +323,16 @@ fn the_states_production_was_not_observed_in_answer_501_and_say_which() {
     assert_eq!(declared.status, 501);
     assert!(message(&declared).contains("declares"));
     // Once its operation is done the channel answers as any other.
-    assert_eq!(server.call("GET", &format!("/v1/{operation}"), "").status, 200);
-    assert_eq!(server.call("GET", &format!("/v1/{PARENT}/channels/busy"), "").status, 200);
+    assert_eq!(
+        server.call("GET", &format!("/v1/{operation}"), "").status,
+        200
+    );
+    assert_eq!(
+        server
+            .call("GET", &format!("/v1/{PARENT}/channels/busy"), "")
+            .status,
+        200
+    );
 }
 
 // --- identifiers and locations -----------------------------------------------------------------------
@@ -306,7 +367,10 @@ fn the_recorded_channel_ids_are_accepted_or_refused_as_production_did() {
     ] {
         let reply = server.create("us-central1", id);
         assert_eq!(reply.status, 400, "{id}");
-        assert_eq!(message(&reply), format!("The request was invalid: invalid resource id: {id}"));
+        assert_eq!(
+            message(&reply),
+            format!("The request was invalid: invalid resource id: {id}")
+        );
         // Written twice, with the same request ID, as production wrote it.
         let details = reply.body["error"]["details"].as_array().unwrap();
         assert_eq!(details.len(), 4);
@@ -339,12 +403,26 @@ fn a_location_exists_when_eventarc_serves_it_and_a_list_of_every_location_gather
         assert_eq!(server.create(location, "c").status, 200, "{location}");
     }
     server.advance(6);
-    let all = server.call("GET", &format!("/v1/projects/{PROJECT}/locations/-/channels"), "");
+    let all = server.call(
+        "GET",
+        &format!("/v1/projects/{PROJECT}/locations/-/channels"),
+        "",
+    );
     assert_eq!(all.body["channels"].as_array().unwrap().len(), 3);
-    let one = server.call("GET", &format!("/v1/projects/{PROJECT}/locations/europe-west1/channels"), "");
+    let one = server.call(
+        "GET",
+        &format!("/v1/projects/{PROJECT}/locations/europe-west1/channels"),
+        "",
+    );
     assert_eq!(one.body["channels"].as_array().unwrap().len(), 1);
     assert_eq!(
-        server.call("GET", &format!("/v1/projects/{PROJECT}/locations/us-east1/channels"), "").text,
+        server
+            .call(
+                "GET",
+                &format!("/v1/projects/{PROJECT}/locations/us-east1/channels"),
+                ""
+            )
+            .text,
         "{}\n"
     );
     // Recorded: a region-shaped name that Eventarc does not serve is refused as `no-such-location1` was.
@@ -356,11 +434,17 @@ fn a_location_exists_when_eventarc_serves_it_and_a_list_of_every_location_gather
     ] {
         let reply = server.call(method, path, "");
         assert_eq!(reply.status, 403, "{method} {path}");
-        assert_eq!(message(&reply), "Location us-east99 is not found or access is unauthorized.");
+        assert_eq!(
+            message(&reply),
+            "Location us-east99 is not found or access is unauthorized."
+        );
     }
     let create = server.create("us-east99", "c");
     assert_eq!(create.status, 403);
-    assert_eq!(create.body["error"]["details"][0]["reason"], "LOCATION_POLICY_VIOLATED");
+    assert_eq!(
+        create.body["error"]["details"][0]["reason"],
+        "LOCATION_POLICY_VIOLATED"
+    );
 }
 
 // --- the list ----------------------------------------------------------------------------------------
@@ -383,7 +467,15 @@ fn a_list_pages_through_tokens_and_refuses_a_token_that_is_not_its_own() {
             .as_array()
             .unwrap()
             .iter()
-            .map(|c| c["name"].as_str().unwrap().rsplit('/').next().unwrap().to_owned())
+            .map(|c| {
+                c["name"]
+                    .as_str()
+                    .unwrap()
+                    .rsplit('/')
+                    .next()
+                    .unwrap()
+                    .to_owned()
+            })
             .collect();
         seen.extend(names);
         pages += 1;
@@ -413,10 +505,20 @@ fn a_list_pages_through_tokens_and_refuses_a_token_that_is_not_its_own() {
     ] {
         let reply = server.call("GET", &target, "");
         assert_eq!(reply.status, 400, "{target}");
-        assert_eq!(message(&reply), "The request was invalid: invalid page token");
+        assert_eq!(
+            message(&reply),
+            "The request was invalid: invalid page token"
+        );
     }
-    let everywhere = server.call("GET", &format!("/v1/projects/{PROJECT}/locations/-/channels?pageToken={token}"), "");
-    assert_eq!(everywhere.status, 200, "a token of a location continues an aggregated list");
+    let everywhere = server.call(
+        "GET",
+        &format!("/v1/projects/{PROJECT}/locations/-/channels?pageToken={token}"),
+        "",
+    );
+    assert_eq!(
+        everywhere.status, 200,
+        "a token of a location continues an aggregated list"
+    );
 }
 
 // --- the publication to a channel that exists --------------------------------------------------------
@@ -464,22 +566,45 @@ fn field_violations(reply: &Reply) -> Vec<(String, String)> {
 fn a_valid_publication_to_a_channel_the_api_created_is_accepted_and_goes_nowhere() {
     let server = Server::new();
     let channel = server.ready("c");
-    let reply = publish(&server, &channel, &[delivered_event("a"), delivered_event("b")]);
+    let reply = publish(
+        &server,
+        &channel,
+        &[delivered_event("a"), delivered_event("b")],
+    );
     assert_eq!((reply.status, reply.text.as_str()), (200, "{}\n"));
     // The same id twice in two requests is fine; in one request it is not.
-    assert_eq!(publish(&server, &channel, &[delivered_event("a")]).status, 200);
-    let twice = publish(&server, &channel, &[delivered_event("a"), delivered_event("a")]);
+    assert_eq!(
+        publish(&server, &channel, &[delivered_event("a")]).status,
+        200
+    );
+    let twice = publish(
+        &server,
+        &channel,
+        &[delivered_event("a"), delivered_event("a")],
+    );
     assert_eq!(twice.status, 400);
-    assert_eq!(message(&twice), "The source + id pair needs to be unique in a batch call");
+    assert_eq!(
+        message(&twice),
+        "The source + id pair needs to be unique in a batch call"
+    );
     assert_eq!(
         field_violations(&twice),
-        [("events[1]".to_owned(), "The source + id pair needs to be unique in a batch call".to_owned())]
+        [(
+            "events[1]".to_owned(),
+            "The source + id pair needs to be unique in a batch call".to_owned()
+        )]
     );
     // After the channel is deleted its publications are refused at once.
-    assert_eq!(server.call("DELETE", &format!("/v1/{channel}"), "").status, 200);
+    assert_eq!(
+        server.call("DELETE", &format!("/v1/{channel}"), "").status,
+        200
+    );
     server.advance(5);
     let gone = publish(&server, &channel, &[delivered_event("a")]);
-    assert_eq!((gone.status, message(&gone)), (404, "Associated channel does not exist."));
+    assert_eq!(
+        (gone.status, message(&gone)),
+        (404, "Associated channel does not exist.")
+    );
 }
 
 /// Each case changes the first event of a valid publication and says what production answered.
@@ -561,7 +686,10 @@ fn refusals() -> Vec<Case<'static>> {
         (
             "no content type",
             changed(|e| {
-                e["attributes"].as_object_mut().unwrap().remove("datacontenttype");
+                e["attributes"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("datacontenttype");
             }),
             404,
             content_type,
@@ -601,18 +729,25 @@ fn refusals() -> Vec<Case<'static>> {
             }),
             400,
             MIME,
-            vec![("events[0].datacontenttype", MIME), ("events[0]", NOT_OBJECT)],
+            vec![
+                ("events[0].datacontenttype", MIME),
+                ("events[0]", NOT_OBJECT),
+            ],
         ),
         (
             "octet-stream binary",
             changed(|e| {
-                e["attributes"]["datacontenttype"] = json!({"ceString": "application/octet-stream"});
+                e["attributes"]["datacontenttype"] =
+                    json!({"ceString": "application/octet-stream"});
                 e.as_object_mut().unwrap().remove("textData");
                 e["binaryData"] = json!("AAEC/w==");
             }),
             400,
             MIME,
-            vec![("events[0].datacontenttype", MIME), ("events[0]", TEXT_FORMAT)],
+            vec![
+                ("events[0].datacontenttype", MIME),
+                ("events[0]", TEXT_FORMAT),
+            ],
         ),
         (
             "an empty text",
@@ -622,7 +757,10 @@ fn refusals() -> Vec<Case<'static>> {
             }),
             400,
             MIME,
-            vec![("events[0].datacontenttype", MIME), ("events[0]", NOT_OBJECT)],
+            vec![
+                ("events[0].datacontenttype", MIME),
+                ("events[0]", NOT_OBJECT),
+            ],
         ),
     ]);
     cases
@@ -675,14 +813,19 @@ fn every_refusal_of_an_existing_channel_answers_as_production_did() {
 fn the_limits_of_a_publication_are_the_recorded_ones() {
     let server = Server::new();
     let channel = server.ready("c");
-    let many = |n: usize| -> Vec<Value> { (0..n).map(|i| delivered_event(&format!("e{i}"))).collect() };
+    let many =
+        |n: usize| -> Vec<Value> { (0..n).map(|i| delivered_event(&format!("e{i}"))).collect() };
     // Recorded: 8, 69 and 100 events pass, 101 and 115 and 255 do not.
     for n in [1, 8, 69, 100] {
         assert_eq!(publish(&server, &channel, &many(n)).status, 200, "{n}");
     }
     for n in [101, 115, 255, 256, 1000] {
         let reply = publish(&server, &channel, &many(n));
-        assert_eq!((reply.status, message(&reply)), (400, "Too many events."), "{n}");
+        assert_eq!(
+            (reply.status, message(&reply)),
+            (400, "Too many events."),
+            "{n}"
+        );
         assert_eq!(reply.body["error"]["status"], "OUT_OF_RANGE");
     }
     // The attributes: the four required ones count with the others against 100. Recorded: 102 extra
@@ -694,7 +837,10 @@ fn the_limits_of_a_publication_are_the_recorded_ones() {
             }
         })
     };
-    assert_eq!(publish(&server, &channel, &[with_attributes(94)]).status, 200);
+    assert_eq!(
+        publish(&server, &channel, &[with_attributes(94)]).status,
+        200
+    );
     let too_many = publish(&server, &channel, &[with_attributes(95)]);
     assert_eq!(too_many.status, 400);
     assert_eq!(
@@ -706,7 +852,9 @@ fn the_limits_of_a_publication_are_the_recorded_ones() {
     assert!(message(&hundred_and_six).contains("contains 106 attributes"));
     // The key of an attribute is `ce-` and its name: 259 bytes were refused. INFERRED: the boundary.
     let named = |length: usize| {
-        changed(|e| e["attributes"][format!("n{}", "a".repeat(length - 1))] = json!({"ceString": "v"}))
+        changed(|e| {
+            e["attributes"][format!("n{}", "a".repeat(length - 1))] = json!({"ceString": "v"})
+        })
     };
     assert_eq!(publish(&server, &channel, &[named(253)]).status, 200);
     let long = publish(&server, &channel, &[named(254)]);
@@ -732,12 +880,16 @@ fn the_limits_of_a_publication_are_the_recorded_ones() {
 fn a_channel_a_function_declares_receives_only_the_events_that_pass_every_check() {
     let channel = format!("{PARENT}/channels/custom");
     let server = Server::declaring(&[&channel]);
-    let Sent::Delivered { channel: got, events } = server.send(
+    let Sent::Delivered {
+        channel: got,
+        events,
+    } = server.send(
         "POST",
         &format!("/v1/{channel}:publishEvents"),
         Some("ya29.a-token"),
         &json!({ "events": [delivered_event("a"), delivered_event("b")] }).to_string(),
-    ) else {
+    )
+    else {
         panic!("delivered")
     };
     assert_eq!(got, channel);
@@ -758,8 +910,16 @@ fn a_channel_a_function_declares_receives_only_the_events_that_pass_every_check(
     };
     assert_eq!(reply.status, 404);
     // The declared channel is readable and listed, without a creation.
-    assert_eq!(server.call("GET", &format!("/v1/{channel}"), "").status, 200);
-    assert_eq!(server.call("GET", &format!("/v1/{PARENT}/channels"), "").body["channels"][0]["name"], channel);
+    assert_eq!(
+        server.call("GET", &format!("/v1/{channel}"), "").status,
+        200
+    );
+    assert_eq!(
+        server
+            .call("GET", &format!("/v1/{PARENT}/channels"), "")
+            .body["channels"][0]["name"],
+        channel
+    );
     // It cannot be created over.
     assert_eq!(server.create("us-central1", "custom").status, 409);
 }
@@ -767,7 +927,8 @@ fn a_channel_a_function_declares_receives_only_the_events_that_pass_every_check(
 // --- credentials -------------------------------------------------------------------------------------
 
 #[test]
-fn a_jwt_in_shape_is_refused_like_the_recorded_garbage_and_expired_ones_and_a_header_is_enough_otherwise() {
+fn a_jwt_in_shape_is_refused_like_the_recorded_garbage_and_expired_ones_and_a_header_is_enough_otherwise(
+) {
     let server = Server::new();
     let target = format!("/v1/{PARENT}/channels");
     let jwt = "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJ4In0.signature";
@@ -789,10 +950,19 @@ fn a_jwt_in_shape_is_refused_like_the_recorded_garbage_and_expired_ones_and_a_he
 #[test]
 fn the_operation_of_a_project_the_caller_cannot_use_is_refused_before_it_is_looked_up() {
     let server = Server::new();
-    let reply = server.call("GET", "/v1/projects/other/locations/us-central1/operations/x", "");
+    let reply = server.call(
+        "GET",
+        "/v1/projects/other/locations/us-central1/operations/x",
+        "",
+    );
     assert_eq!(reply.status, 403);
-    assert_eq!(reply.body["error"]["details"][0]["reason"], "CONSUMER_INVALID");
-    let Sent::Answered(unauthenticated) = server.send("DELETE", &format!("/v1/{PARENT}/channels/c"), None, "") else {
+    assert_eq!(
+        reply.body["error"]["details"][0]["reason"],
+        "CONSUMER_INVALID"
+    );
+    let Sent::Answered(unauthenticated) =
+        server.send("DELETE", &format!("/v1/{PARENT}/channels/c"), None, "")
+    else {
         panic!("answered")
     };
     assert_eq!(unauthenticated.status, 401);
@@ -808,16 +978,31 @@ fn the_bytes_of_a_channel_resource_are_the_recorded_layout() {
     server.create("us-central1", "c");
     server.advance(6);
     let read = server.call("GET", &format!("/v1/{PARENT}/channels/c"), "");
-    let members: Vec<&str> = read.ordered.members().unwrap().iter().map(|(k, _)| k.as_str()).collect();
+    let members: Vec<&str> = read
+        .ordered
+        .members()
+        .unwrap()
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .collect();
     assert_eq!(
         members,
-        ["name", "uid", "createTime", "updateTime", "pubsubTopic", "state"]
+        [
+            "name",
+            "uid",
+            "createTime",
+            "updateTime",
+            "pubsubTopic",
+            "state"
+        ]
     );
     // Pretty-printed with two-space indentation and a final newline, six members of one level.
     assert!(read.text.starts_with("{\n  \"name\": "));
     assert!(read.text.ends_with("\n}\n"));
     assert_eq!(read.text.matches('\n').count(), 8);
-    let Ordered::Object(_) = fireemu_adapter_functions::ordered_json::parse(read.text.as_bytes()).unwrap() else {
+    let Ordered::Object(_) =
+        fireemu_adapter_functions::ordered_json::parse(read.text.as_bytes()).unwrap()
+    else {
         panic!("an object")
     };
 }

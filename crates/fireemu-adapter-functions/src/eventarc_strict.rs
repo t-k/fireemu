@@ -180,11 +180,12 @@ pub fn route(method: &str, path: &str) -> Option<Route> {
         location: location.to_owned(),
     };
     if let Some(operation) = rest.strip_prefix("operations/") {
-        return (method == "GET" && !operation.is_empty() && !operation.contains(['/', ':']))
-            .then(|| Route::GetOperation {
+        return (method == "GET" && !operation.is_empty() && !operation.contains(['/', ':'])).then(
+            || Route::GetOperation {
                 place,
                 operation: operation.to_owned(),
-            });
+            },
+        );
     }
     let rest = rest.strip_prefix("channels")?;
     match (method, rest) {
@@ -700,12 +701,7 @@ fn invalid_page_token() -> Outcome {
     )
 }
 
-fn list_channels(
-    route: &Route,
-    place: &Place,
-    query: Option<&str>,
-    world: &World<'_>,
-) -> Outcome {
+fn list_channels(route: &Route, place: &Place, query: Option<&str>, world: &World<'_>) -> Outcome {
     let Place { project, location } = place;
     if location != "-" && !plausible_location(location) {
         return location_not_found(route);
@@ -726,7 +722,9 @@ fn list_channels(
         None => DEFAULT_PAGE_SIZE,
         Some(size) => match size.parse::<i64>() {
             Ok(0) => DEFAULT_PAGE_SIZE,
-            Ok(size) if size > 0 => usize::try_from(size).map_or(MAX_PAGE_SIZE, |size| size.min(MAX_PAGE_SIZE)),
+            Ok(size) if size > 0 => {
+                usize::try_from(size).map_or(MAX_PAGE_SIZE, |size| size.min(MAX_PAGE_SIZE))
+            }
             _ => return unobserved("a page size that is not a positive number"),
         },
     };
@@ -747,16 +745,17 @@ fn list_channels(
     };
     let mut members = vec![(
         "channels".to_owned(),
-        Ordered::Array(listing.items.iter().map(|view| view.to_json(false)).collect()),
+        Ordered::Array(
+            listing
+                .items
+                .iter()
+                .map(|view| view.to_json(false))
+                .collect(),
+        ),
     )];
     if listing.more {
         let position = Position {
-            location: last
-                .name
-                .split('/')
-                .nth(3)
-                .unwrap_or_default()
-                .to_owned(),
+            location: last.name.split('/').nth(3).unwrap_or_default().to_owned(),
             project_number: project_number(project),
             id: last.name.rsplit('/').next().unwrap_or_default().to_owned(),
             uid: last.uid.clone(),
@@ -783,12 +782,7 @@ fn valid_channel_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
 }
 
-fn create_channel(
-    route: &Route,
-    place: &Place,
-    input: &Input<'_>,
-    world: &World<'_>,
-) -> Outcome {
+fn create_channel(route: &Route, place: &Place, input: &Input<'_>, world: &World<'_>) -> Outcome {
     if !plausible_location(&place.location) {
         return location_not_found(route);
     }
@@ -886,7 +880,10 @@ enum Attribute {
     /// A `ceString` with its value (the content type is one).
     String(String),
     Bytes(usize),
-    Timestamp { seconds: i64, nanos: u32 },
+    Timestamp {
+        seconds: i64,
+        nanos: u32,
+    },
 }
 
 impl Attribute {
@@ -1038,7 +1035,9 @@ fn publish(place: &Place, channel: &str, body: &[u8], world: &World<'_>) -> Outc
             );
         }
         Lookup::Busy => {
-            return unobserved("a publication to a channel whose creation or deletion is not finished");
+            return unobserved(
+                "a publication to a channel whose creation or deletion is not finished",
+            );
         }
         Lookup::Ready(_) => {}
     }
@@ -1143,7 +1142,8 @@ fn validate_event(index: usize, fields: &Fields) -> Option<Outcome> {
         ));
     }
     let Some(content_type) = attribute("datacontenttype") else {
-        let message = "The attribute 'datacontenttype' has not been defined in the CloudEvent attributes.";
+        let message =
+            "The attribute 'datacontenttype' has not been defined in the CloudEvent attributes.";
         return Some(error(
             404,
             "NOT_FOUND",
@@ -1616,7 +1616,10 @@ mod tests {
             })
         );
         assert_eq!(
-            route("GET", "/v1/projects/p/locations/l/operations/operation-1-2-3-4"),
+            route(
+                "GET",
+                "/v1/projects/p/locations/l/operations/operation-1-2-3-4"
+            ),
             Some(Route::GetOperation {
                 place: place("p", "l"),
                 operation: "operation-1-2-3-4".to_owned()
@@ -1990,7 +1993,10 @@ mod tests {
                 r#"{"name":"projects/demo/locations/us-central1/channels/c"}"#,
             ),
         ] {
-            assert_eq!(status_and_message(&run("POST", target, true, body, &[])).0, 501);
+            assert_eq!(
+                status_and_message(&run("POST", target, true, body, &[])).0,
+                501
+            );
         }
         for body in ["", "[]", "not json", "5"] {
             let (status, message) = status_and_message(&run("POST", target, true, body, &[]));

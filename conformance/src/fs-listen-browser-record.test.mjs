@@ -16,6 +16,8 @@ import {
   MODE_SETTINGS,
   MODE_SUFFIX,
   modeRun,
+  L3_IDS,
+  L3_PHASES,
 } from "./fs-listen/browser-modes.mjs";
 import { sdkCases } from "./fs-listen/sdk-cases.mjs";
 
@@ -84,7 +86,56 @@ const modeReceipt = (extra = {}) => ({
   cleanupPasses: [],
   budget: {},
   // One record per case of the catalog, as a complete browser receipt carries.
-  cases: sdkCases().map((c) => caseRecord(c.caseId)),
+  cases: [
+    ...sdkCases().map((c) => caseRecord(c.caseId)),
+    ...L3_IDS.map((id) =>
+      caseRecord(`FS-LISTEN-SDK-${id}`, {
+        observed: [
+          {
+            phases: L3_PHASES[id].map((phase) => ({
+              phase,
+              failures: [],
+              errors: [],
+              snapshots: [
+                {
+                  docs: ["alpha", "beta"],
+                  fromCache: phase.endsWith("offline"),
+                  hasPendingWrites: false,
+                },
+              ],
+            })),
+          },
+        ],
+      }),
+    ),
+  ],
+  l3: {
+    seeds: [
+      { name: "alpha", acknowledged: true },
+      { name: "beta", acknowledged: true },
+    ],
+    phases: [
+      "control-start",
+      "before-reload",
+      "after-reload",
+      "before-close",
+      "replacement",
+      "control-end",
+      "warm",
+      "restarted-offline",
+      "restarted-online",
+      "cold-offline",
+      "cold-online",
+    ].map((phase) => ({
+      phase,
+      failures: [],
+      snapshots: [
+        { docs: ["alpha", "beta"], fromCache: phase.endsWith("offline"), hasPendingWrites: false },
+      ],
+      errors: [],
+    })),
+    cleanup: { complete: true },
+  },
   teardown: [
     { client: "primary", closed: true },
     { client: "witness", closed: true },
@@ -92,8 +143,10 @@ const modeReceipt = (extra = {}) => ({
   ...extra,
 });
 /** The row ids a complete receipt gives one mode: one `sdk/<id>` per case of the catalog. */
-const catalogRows = (prefix) =>
-  sdkCases().map((c) => `${prefix}/sdk/${c.caseId.replace("FS-LISTEN-SDK-", "")}`);
+const catalogRows = (prefix) => [
+  ...sdkCases().map((c) => `${prefix}/sdk/${c.caseId.replace("FS-LISTEN-SDK-", "")}`),
+  ...L3_IDS.map((id) => `${prefix}/sdk/${id}`),
+];
 
 const transport = (mode, extra = {}) => ({
   requests: 10,
@@ -132,17 +185,25 @@ test("namesOf lists each mode's five public documents once and the owner documen
   assert.equal(namesOf({ project: "p", run: "r", modes: ["streaming"], accounts }).length, 5 + 2);
 });
 
-const emptyNative = (extra = {}) => ({
-  close() {},
-  async listIds() {
-    return [];
-  },
-  async missing(names) {
-    return names.map((name) => ({ name, exists: false }));
-  },
-  async commit() {},
-  ...extra,
-});
+const emptyNative = (extra = {}) => {
+  const deleted = new Set();
+  return {
+    close() {},
+    async listIds() {
+      return [];
+    },
+    async missing(names) {
+      return names.map((name) => ({
+        name,
+        exists: /-(alpha|beta)$/.test(name) && !deleted.has(name),
+      }));
+    },
+    async commit({ writes }) {
+      for (const write of writes) deleted.add(write.delete);
+    },
+    ...extra,
+  };
+};
 
 /** Runs recordBrowser with the account routes answered by a stub fetch. */
 async function record(target, { driver, native, preflight, journal, modes, log } = {}) {
@@ -210,7 +271,7 @@ test("a clean production recording: rows of both modes, bounded driver, prefligh
   assert.deepEqual(recording.modes, MODES);
   assert.equal(recording.cleanup.complete, true);
   assert.deepEqual(recording.errors, {});
-  assert.equal(Object.keys(recording.rows).length, 2 * sdkCases().length);
+  assert.equal(Object.keys(recording.rows).length, 2 * (sdkCases().length + L3_IDS.length));
   assert.equal(recording.requests, 100);
   assert.equal(recording.connections, 7);
   // preflight 2 + accounts (2 creates, 2 deletes, 2 lookups) 6 + native 11 + wire 100.
@@ -307,7 +368,7 @@ test("a mode that failed, or has no result, is an error and an incomplete cleanu
     );
     assert.equal(
       Object.keys(recording.rows).filter((k) => k.startsWith("browser-long-polling")).length,
-      sdkCases().length,
+      sdkCases().length + L3_IDS.length,
     );
   }
 });
@@ -382,6 +443,7 @@ test("ledger 330: a non-empty conf_listen stops a production recording before an
   const blocked = await record(PROD, {
     native: emptyNative({
       listIds: async () => ["projects/p/databases/(default)/documents/conf_listen/x"],
+      missing: async (names) => names.map((name) => ({ name, exists: false })),
       commit: async (request) => commits.push(request),
     }),
   });
@@ -826,4 +888,37 @@ test("a browser run that stops before its names are journaled journals no closin
     globalThis.fetch = realFetch;
   }
   assert.equal(lines.filter((l) => l.type === "names").length, 0);
+});
+
+test("confirmed L3 seeds that read absent remain unsettled in the recording", async () => {
+  const out = await record(PROD, {
+    native: emptyNative({
+      missing: async (names) => names.map((name) => ({ name, exists: false })),
+    }),
+  });
+  assert.equal(out.recording.cleanup.complete, false);
+  assert.equal(out.recording.cleanup.documents.modes.streaming.unsettled.length, 2);
+  assert.equal(out.recording.cleanup.documents.modes["long-polling"].unsettled.length, 2);
+});
+
+test("only acknowledged alpha and beta seeds become confirmed writes", async () => {
+  for (const seeds of [
+    [{ name: "alpha", acknowledged: false }],
+    [{ name: "other", acknowledged: true }],
+    [null],
+  ]) {
+    const { recording } = await record(LOCAL, {
+      modes: ["streaming"],
+      driver: {
+        receipt: {
+          modes: { streaming: modeResult("streaming", "r1", modeReceipt({ l3: { seeds } })) },
+        },
+      },
+      native: emptyNative({
+        missing: async (names) => names.map((name) => ({ name, exists: false })),
+      }),
+    });
+    assert.equal(recording.cleanup.documents.complete, true);
+    assert.deepEqual(recording.cleanup.documents.modes.streaming.unsettled, []);
+  }
 });

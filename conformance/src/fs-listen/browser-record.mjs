@@ -6,15 +6,16 @@
 
 import { createAccountClient, createAccountSession } from "./accounts.mjs";
 import { originOf } from "./browser-driver.mjs";
-import { EXPECTED_CI, MODES, modeRun } from "./browser-modes.mjs";
+import { EXPECTED_CI, MODES, modeRun, L3_IDS, L3_PHASES, l3Problems } from "./browser-modes.mjs";
+import { sdkCases } from "./sdk-cases.mjs";
 import { NULL_JOURNAL } from "./journal.mjs";
 import { createNativeClient } from "./native-client.mjs";
+import { createLedger, settleNames } from "./native-ledger.mjs";
 import {
   issuedSdkNames,
   preflightKey,
   rowsFromReceipt,
   runDriver,
-  sweepDocuments,
   writesAreKnown,
 } from "./sdk-record.mjs";
 import { PUBLIC_COLLECTION } from "./sdk-deps-core.mjs";
@@ -35,10 +36,133 @@ export function browserRows(modeResults) {
   const rows = {};
   for (const [mode, result] of Object.entries(modeResults)) {
     // A mode with no receipt has no rows (`rowsFromReceipt` of nothing is empty).
-    for (const [id, row] of Object.entries(rowsFromReceipt(result?.receipt)))
+    const receipt = result?.receipt;
+    const nodeIds = sdkCases().map((c) => c.caseId);
+    for (const [id, row] of Object.entries(
+      rowsFromReceipt(
+        receipt
+          ? {
+              ...receipt,
+              cases: Array.isArray(receipt.cases)
+                ? receipt.cases.filter((c) => nodeIds.includes(c?.caseId))
+                : [],
+            }
+          : undefined,
+      ),
+    ))
       rows[`browser-${mode}/${id}`] = row;
+    if (result?.receipt)
+      for (const id of L3_IDS) {
+        const records = Array.isArray(receipt.cases)
+          ? receipt.cases.filter((c) => c?.caseId === `FS-LISTEN-SDK-${id}`)
+          : [];
+        const record = records[0];
+        const evidence = record?.observed?.[0] ?? {};
+        const failures = [
+          ...(Array.isArray(record?.failures) ? record.failures : ["malformed record"]),
+          ...l3Problems(id, evidence),
+        ];
+        if (records.length !== 1 || record?.complete !== true)
+          failures.push("missing or duplicate complete record");
+        rows[`browser-${mode}/sdk/${id}`] = {
+          conditions: [
+            `FS-LISTEN-SDK/${id === "203" || id === "203C" ? "backend-cache-transitions" : "browser-tab-lifecycle"}`,
+          ],
+          observed: [evidence],
+          failures,
+          invariantViolations: [],
+          timedOut: failures.length > 0,
+          end: null,
+          l3: true,
+        };
+      }
   }
   return rows;
+}
+
+/** A browser's known closing line requires all L2 and L3 phase receipts and teardown. */
+export function browserWritesKnown(receipt) {
+  if (
+    !Array.isArray(receipt?.cases) ||
+    receipt.cases.some(
+      (c) =>
+        typeof c?.caseId !== "string" ||
+        !Array.isArray(c.failures) ||
+        c.failures.some((f) => typeof f !== "string"),
+    )
+  )
+    return false;
+  if (
+    !writesAreKnown(receipt, [
+      ...sdkCases().map((c) => c.caseId),
+      ...L3_IDS.map((id) => `FS-LISTEN-SDK-${id}`),
+    ])
+  )
+    return false;
+  for (const id of L3_IDS) {
+    const record = receipt.cases.find((c) => c.caseId === `FS-LISTEN-SDK-${id}`);
+    const phases = record?.observed?.[0]?.phases;
+    if (
+      !Array.isArray(record?.observed) ||
+      record.observed.length !== 1 ||
+      !Array.isArray(phases) ||
+      phases.map((p) => p?.phase).join() !== L3_PHASES[id].join() ||
+      phases.some(
+        (p) =>
+          !Array.isArray(p.failures) ||
+          !Array.isArray(p.errors) ||
+          !Array.isArray(p.snapshots) ||
+          p.snapshots.length === 0,
+      )
+    )
+      return false;
+  }
+  const l3 = receipt.l3;
+  if (
+    !l3 ||
+    l3.thrown != null ||
+    !Array.isArray(l3.seeds) ||
+    l3.seeds.length !== 2 ||
+    !l3.seeds.every((s) => s?.acknowledged === true)
+  )
+    return false;
+  if (
+    l3.seeds
+      .map((s) => s.name)
+      .toSorted()
+      .join() !== "alpha,beta"
+  )
+    return false;
+  const expected = [
+    "control-start",
+    "before-reload",
+    "after-reload",
+    "before-close",
+    "replacement",
+    "control-end",
+    "warm",
+    "restarted-offline",
+    "restarted-online",
+    "cold-offline",
+    "cold-online",
+  ];
+  if (
+    !Array.isArray(l3.phases) ||
+    l3.phases.map((p) => p?.phase).join() !== expected.join() ||
+    l3.phases.some(
+      (p) =>
+        !Array.isArray(p.failures) ||
+        !Array.isArray(p.snapshots) ||
+        p.snapshots.length === 0 ||
+        !Array.isArray(p.errors),
+    )
+  )
+    return false;
+  return (
+    l3.cleanup?.complete === true &&
+    Array.isArray(receipt.teardown) &&
+    receipt.teardown.every((t) => t?.closed === true)
+  );
 }
 
 /**
@@ -157,11 +281,26 @@ export async function recordBrowser({
   const documents = { complete: true, modes: {} };
   try {
     for (const mode of modes) {
-      const swept = await sweepDocuments({
+      const modeId = modeRun(run, mode);
+      const ledger = createLedger();
+      ledger.answered(
+        issuedSdkNames({ project: target.project, run: modeId, accounts }).map((name) => ({
+          update: { name },
+        })),
+        "maybe",
+      );
+      const seeds = modeResults[mode]?.receipt?.l3?.seeds ?? [];
+      for (const seed of Array.isArray(seeds) ? seeds : [])
+        if (["alpha", "beta"].includes(seed?.name) && seed.acknowledged === true)
+          ledger.answered(
+            [{ update: { name: `${root}/${PUBLIC_COLLECTION}/${modeId}-${seed.name}` } }],
+            "ok",
+          );
+      const swept = await settleNames({
         client: native,
-        project: target.project,
-        run: modeRun(run, mode),
-        accounts,
+        issued: ledger.entries(),
+        root,
+        run: modeId,
       });
       documents.modes[mode] = swept;
       if (!swept.complete) documents.complete = false;
@@ -208,8 +347,9 @@ export async function recordBrowser({
     const transportIssues = transportProblems(mode, result.transport);
     if (transportIssues.length > 0)
       errors[`browser/${mode}/transport`] = transportIssues.join("; ");
-    if (!receipt.teardown.every((t) => t.closed)) clientsClosed = false;
-    if (!writesAreKnown(receipt)) writesKnown = false;
+    if (!Array.isArray(receipt.teardown) || !receipt.teardown.every((t) => t?.closed))
+      clientsClosed = false;
+    if (!browserWritesKnown(receipt)) writesKnown = false;
     if (!receipt.cleanup?.complete) sdkCleanupComplete = false;
     perMode[mode] = { run: result.run, transport: result.transport };
   }

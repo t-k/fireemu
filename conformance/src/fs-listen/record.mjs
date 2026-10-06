@@ -435,7 +435,7 @@ async function browserInsideFireemu() {
     target: {
       kind: "local",
       project: "demo-fs-listen",
-      originPort: 47853,
+      originPort: 47854,
       firestore: { host, port: Number(port) },
       auth: `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`,
     },

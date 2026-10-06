@@ -419,6 +419,10 @@ test("closed run boundaries and valid chronology gate replay and MATCH", async (
     (data) => (data.capture.find((r) => r.op === "seek" && r.response).ms = -1000),
     (data) => (data.capture.find((r) => r.op === "seek" && r.response).ms = Infinity),
     (data) => (data.capture.find((r) => r.op === "seek" && r.response).ms = 1000),
+    (data) => {
+      data.capture[0].at = data.capture[1].at = "2026-10-05T00:00:00.000Z";
+      data.capture.find((r) => r.op === "seek" && r.response).ms = 500;
+    },
     (data) => (data.capture.find((r) => r.op === "seek" && r.response).at = "invalid"),
   ]) {
     const input = layoutInput();

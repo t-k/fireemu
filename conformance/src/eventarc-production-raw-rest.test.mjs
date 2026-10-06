@@ -8,6 +8,11 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { createBudget, createCapture } from "./pubsub-production/capture.mjs";
 import { TOKEN_MODES, createRawRest } from "./eventarc-production/rest.mjs";
+import { createLedger } from "./pubsub-production/ledger.mjs";
+import { createClient } from "./eventarc-production/client.mjs";
+import { cleanup, ledgerFacts } from "./eventarc-production/cleanup.mjs";
+import { createOwnership } from "./eventarc-production/names.mjs";
+import { summarize } from "./eventarc-production/record.mjs";
 
 async function server(handler) {
   const seen = [];
@@ -209,7 +214,7 @@ test("the budget is counted before the request is sent and a spent budget sends 
   assert.equal(s.seen.length, 1);
 });
 
-test("status 1xx/3xx/5xx (other than 501) are unknown at their edges too; 501 and 4xx are answers", async (t) => {
+test("status 1xx/3xx/5xx including 501 are unknown at their edges too; 4xx are answers", async (t) => {
   const statuses = [300, 301, 399, 500, 503, 501, 404, 200];
   const s = await server((_, response, n) => {
     response.statusCode = statuses[n - 1];
@@ -219,8 +224,53 @@ test("status 1xx/3xx/5xx (other than 501) are unknown at their edges too; 501 an
   const { rest } = transport(s.base, { max: 10 });
   const unknown = [];
   for (let i = 0; i < statuses.length; i += 1) unknown.push((await get(rest)).unknown);
-  assert.deepEqual(unknown, [true, true, true, true, true, false, false, false]);
+  assert.deepEqual(unknown, [true, true, true, true, true, true, false, false]);
 });
+
+for (const action of ["create", "delete"]) {
+  test(`a ${action.toUpperCase()} answered 501 is unknown and cannot close the run in-run`, async () => {
+    const project = "demo-project";
+    const ownership = createOwnership({ project, runId: "0123456789ab" });
+    const name = ownership.channel("us-central1", "501");
+    const ledger = createLedger();
+    const capture = createCapture({ journal: { write() {} } });
+    const requests = [];
+    const { rest } = transport("http://127.0.0.1", {
+      capture,
+      fetchImpl: async (url, { method }) => {
+        requests.push(method);
+        if (method !== "GET")
+          return new Response('{"error":{"status":"UNIMPLEMENTED"}}', { status: 501 });
+        return url.endsWith("/channels")
+          ? new Response("{}", { status: 200 })
+          : new Response('{"error":{"status":"NOT_FOUND"}}', { status: 404 });
+      },
+    });
+    const client = createClient({
+      transports: { eventarc: rest }, ownership, caseId: "501", usageProject: project, ledger,
+    });
+    if (action === "delete") {
+      ledger.sent({ name, action: "create", transport: "rest" });
+      ledger.answered({ name, action: "create", transport: "rest", kind: "ok" });
+    }
+    const answer = action === "create"
+      ? await client.createChannel(project, "us-central1", name.split("/").at(-1))
+      : await client.deleteChannel(name);
+    const report = await cleanup({ client, ownership, project, ledger, sleep: async () => {} });
+    assert.equal(answer.unknown, true);
+    assert.deepEqual(ledger.state().get(name)[action === "create" ? "creates" : "deletes"], ["unknown"]);
+    assert.equal(ledgerFacts(ledger.state().get(name))[`${action}Pending`], true);
+    assert.deepEqual(report.unsettled, [name]);
+    assert.equal(requests.filter((method) => method !== "GET").length, 1);
+    const summary = summarize({
+      options: { runId: ownership.runId, target: "emulator", project },
+      capture,
+      summary: { stopped: null, cleanup: report },
+    });
+    assert.equal(summary.unknownAnswers, 1);
+    assert.equal(summary.closureReady, false);
+  });
+}
 
 test("a body is sent as JSON with its content type, and a request without a body carries none", async (t) => {
   const s = await server((_, response) => response.end("{}"));

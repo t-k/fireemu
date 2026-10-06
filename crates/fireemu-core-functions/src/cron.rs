@@ -232,7 +232,9 @@ impl Schedule {
             "@weekly" => "0 0 * * 0".to_owned(),
             "@monthly" => "0 0 1 * *".to_owned(),
             "@yearly" | "@annually" => "0 0 1 1 *".to_owned(),
-            t if t.to_ascii_lowercase().starts_with("every ") => app_engine_to_cron(t)?,
+            t if t.to_ascii_lowercase().starts_with("every ") || t.contains(" of ") => {
+                app_engine_to_cron(t)?
+            }
             t => t.to_owned(),
         };
         let fields: Vec<&str> = expanded.split_whitespace().collect();
@@ -672,11 +674,12 @@ fn app_engine_interval(text: &str) -> Result<Option<i64>, ScheduleError> {
     let words: Vec<&str> = lower.split_whitespace().collect();
     let malformed = || ScheduleError::Malformed(text.to_owned());
     match words.as_slice() {
+        ["every", "minute"] => Ok(Some(60)),
         ["every", n, unit] if n.chars().all(|c| c.is_ascii_digit()) => {
             let n: i64 = n.parse().map_err(|_| malformed())?;
             match *unit {
                 "minutes" | "mins" | "minute" if (1..=1440).contains(&n) => Ok(Some(n * 60)),
-                "hours" | "hour" if (1..=24).contains(&n) => Ok(Some(n * 3_600)),
+                "hours" | "hour" if n >= 1 => n.checked_mul(3_600).map(Some).ok_or_else(malformed),
                 _ => Err(malformed()),
             }
         }
@@ -763,12 +766,17 @@ fn groc_ordinal_weekday(text: &str) -> Result<Option<Schedule>, ScheduleError> {
     }))
 }
 
-/// `every day HH:MM`, `every monday HH:MM` → cron.
+/// `every day HH:MM`, `every monday HH:MM`, `1,15 of jan,jul HH:MM` → cron.
 fn app_engine_to_cron(text: &str) -> Result<String, ScheduleError> {
     let lower = text.to_ascii_lowercase();
     let words: Vec<&str> = lower.split_whitespace().collect();
     let malformed = || ScheduleError::Malformed(text.to_owned());
     match words.as_slice() {
+        [days, "of", months, time] => {
+            let (hour, minute) = groc_time(time).ok_or_else(malformed)?;
+            let months = if *months == "month" { "*" } else { months };
+            Ok(format!("{minute} {hour} {days} {months} *"))
+        }
         ["every", day, time] => {
             let (h, m) = time.split_once(':').ok_or_else(malformed)?;
             let h: u32 = h.parse().map_err(|_| malformed())?;

@@ -17,7 +17,7 @@ import {
 } from "./fs-listen/resume-answers.mjs";
 
 const L1 = JSON.parse(
-  readFileSync(new URL("../fixtures/fs-listen/l1-production-rows.json", import.meta.url), "utf8"),
+  readFileSync(new URL("./fs-listen/data/l1-production-rows.json", import.meta.url), "utf8"),
 ).recordings;
 const recorded = (id) => L1["native-1"].rows[id];
 

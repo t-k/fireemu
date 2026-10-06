@@ -935,7 +935,7 @@ test("loadApiKey on a real file: the owner-only file is read as text, a group-re
 
 test("the key preflight accepts the answers production recorded for both reads", async () => {
   const shapes = JSON.parse(
-    readFileSync(new URL("../fixtures/fs-listen/preflight-shapes.json", import.meta.url), "utf8"),
+    readFileSync(new URL("./fs-listen/data/preflight-shapes.json", import.meta.url), "utf8"),
   );
   const toolkit = shapes.identityToolkitProjectsWithKey;
   const crm = shapes.resourceManagerProject;

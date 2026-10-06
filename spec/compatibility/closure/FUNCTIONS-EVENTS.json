@@ -1075,7 +1075,7 @@
   "frozenOn": "2026-09-25",
   "freezeAuthority": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-EVENTS closure)",
   "integratedRegression": {
-    "release": "v0.12.0",
+    "release": "closure-base-8d5f9eb81",
     "integrationCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a",
     "releaseBinarySha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
     "buildReceiptPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-build.json",

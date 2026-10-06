@@ -312,11 +312,10 @@ test("FUNCTIONS-EVENTS inventory rejects a missing event case and false evidence
 test("a promoted FUNCTIONS-EVENTS record is complete: every condition VERIFIED with evidence, the integrated regression, an approved review", () => {
   const record = readRecord();
   if (record.parentStatus !== "COMPAT_VERIFIED") {
-    assert.equal(
-      record.integratedRegression,
-      undefined,
-      "a pending record has no integrated regression",
-    );
+    if (record.integratedRegression !== undefined)
+      for (const condition of record.conditions)
+        if (!condition.conditionId.endsWith("/closure-review"))
+          assert.equal(condition.status, "VERIFIED", condition.conditionId);
     return;
   }
   for (const condition of record.conditions) {

@@ -5,16 +5,15 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
   cpSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { tempDir } from "../../src/test-tmpdir.mjs";
 import {
   allActive,
   cliFailed,
@@ -37,7 +36,7 @@ const here = dirname(new URL(import.meta.url).pathname);
 const sdkRoot =
   process.env.FE_SOURCE_SDK_ROOT ?? join(here, "../../node_modules/firebase-functions");
 const maybe = existsSync(join(sdkRoot, "package.json")) ? test : test.skip;
-const tmp = () => mkdtempSync(join(tmpdir(), "deploy-test-"));
+const tmp = () => tempDir("deploy-test-");
 
 test("the plan of the deploy, the dry run and the delete is exact", () => {
   const options = {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tempDir } from "./test-tmpdir.mjs";
@@ -16,6 +16,58 @@ const exchange = (body, extra = {}) => ({
   op: "pull",
   response: { status: 200, body, bodyBytes: 12 },
   ...extra,
+});
+
+function readRuntimeStart(path) {
+  try {
+    const receipt = JSON.parse(readFileSync(path));
+    if (
+      !receipt ||
+      !Number.isSafeInteger(receipt.serverPid) ||
+      receipt.serverPid <= 0 ||
+      !Number.isSafeInteger(receipt.workerPid) ||
+      receipt.workerPid <= 0 ||
+      receipt.serverPid === receipt.workerPid ||
+      typeof receipt.strictConfigSha256 !== "string" ||
+      !/^[0-9a-f]{64}$/.test(receipt.strictConfigSha256)
+    )
+      return undefined;
+    return receipt;
+  } catch (error) {
+    // The other process can create the receipt before writing its complete JSON.
+    if (error.code === "ENOENT" || error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+}
+
+test("worker readiness waits for complete receipt bytes and valid process identities", () => {
+  const dir = tempDir("pubsub-compare-receipt-");
+  const path = join(dir, "runtime-start.json");
+  const receipt = { serverPid: 123, workerPid: 456, strictConfigSha256: "a".repeat(64) };
+  assert.equal(readRuntimeStart(path), undefined);
+  const text = JSON.stringify(receipt);
+  for (let length = 0; length < text.length; length += 1) {
+    writeFileSync(path, text.slice(0, length));
+    assert.equal(readRuntimeStart(path), undefined, `incomplete prefix ${length}`);
+  }
+  writeFileSync(path, text);
+  assert.deepEqual(readRuntimeStart(path), receipt);
+  for (const malformed of [
+    {},
+    null,
+    [],
+    { ...receipt, serverPid: 0 },
+    { ...receipt, serverPid: 1.5 },
+    { ...receipt, serverPid: Number.MAX_SAFE_INTEGER + 1 },
+    { ...receipt, workerPid: "456" },
+    { ...receipt, workerPid: receipt.serverPid },
+    { ...receipt, strictConfigSha256: "partial" },
+    { ...receipt, strictConfigSha256: [receipt.strictConfigSha256] },
+  ]) {
+    writeFileSync(path, JSON.stringify(malformed));
+    assert.equal(readRuntimeStart(path), undefined);
+  }
+  assert.throws(() => readRuntimeStart(dir), { code: "EISDIR" });
 });
 
 test("comparison preserves exact gRPC status across all generated status pairs", () => {
@@ -823,10 +875,12 @@ test(
     let runtime;
     try {
       assert.ok(
-        await until(() => existsSync(join(out, "runtime-start.json")), 5000),
+        await until(() => {
+          runtime = readRuntimeStart(join(out, "runtime-start.json"));
+          return runtime !== undefined;
+        }, 5000),
         "worker startup receipt required",
       );
-      runtime = JSON.parse(readFileSync(join(out, "runtime-start.json")));
       const identity = execFileSync(
         "ps",
         ["-ww", "-p", String(runtime.serverPid), "-o", "ppid=,comm=,args="],

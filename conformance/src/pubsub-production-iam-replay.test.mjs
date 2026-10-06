@@ -28,7 +28,7 @@ function replayClient(records) {
         const sent = JSON.parse(request.body).policy;
         assert.equal(sent.etag, row.request.body.policy.etag);
         assert.deepEqual(sent.bindings, row.request.body.policy.bindings);
-        assert.equal(sent.version, 3);
+        assert.equal(sent.version, row.request.body.policy.version ?? 3);
       }
       // These are measured fixture serialization bytes, not original production bodyBytes.
       return new Response(JSON.stringify(row.response.body), { status: row.response.status });
@@ -101,6 +101,40 @@ for (let offset = 0; offset < rows.length; offset += 3) {
     restored.assertConsumed();
     assert.deepEqual(recovery.outstanding(), []);
     assert.equal(journal.at(-1).proof, "already-absent");
+    assert.doesNotThrow(() =>
+      iam.createIamOwnership({
+        journal: { write() {} },
+        assertOwned: ownership.assertOwned,
+        replay: structuredClone(journal),
+      }),
+    );
+  });
+  test(`production IAM post-grant GET restores exact own binding ${initial.runId} n${readback.n}`, async () => {
+    const journal = [];
+    const manager = iam.createIamOwnership({
+      journal: { write: (row) => journal.push(row) },
+      assertOwned: ownership.assertOwned,
+    });
+    const grant = replayClient([initial, written, readback]);
+    await manager.grant(grant.client, resource, role, principal);
+    grant.assertConsumed();
+    // The current-policy GET is the exact recorded post-grant body. No empty-binding restore POST was observed; its success response is explicitly constructed here.
+    const policy = iam.removeOwnBinding(readback.response.body, role, principal);
+    const syntheticSet = {
+      ...written,
+      request: { ...written.request, body: { policy } },
+      response: { status: 200, body: { etag: initial.response.body.etag } },
+    };
+    const restore = replayClient([readback, syntheticSet, initial]);
+    assert.deepEqual(await manager.restore(restore.client), {
+      restored: [resource],
+      unsettled: [],
+    });
+    restore.assertConsumed();
+    assert.deepEqual(journal.at(-2).before, readback.response.body);
+    assert.deepEqual(journal.at(-2).requested.bindings, []);
+    assert.equal(journal.at(-2).requested.etag, readback.response.body.etag);
+    assert.deepEqual(manager.outstanding(), []);
     assert.doesNotThrow(() =>
       iam.createIamOwnership({
         journal: { write() {} },

@@ -857,6 +857,13 @@ test("authority checks actual proof hashes and full E/V scope before demanding a
     try {
       assert.doesNotThrow(() => verifyAuthority(authority, descriptor, digest, options, 0));
       assert.equal(verifyAuthority(authority, descriptor, digest, options, 0), authority);
+      const savedE = authority.E;
+      authority.E = put("oversized-E", { ...row("E"), padding: "A".repeat(1_048_576) });
+      assert.throws(
+        () => verifyAuthority(authority, descriptor, digest, options, 0),
+        /proof byte limit/,
+      );
+      authority.E = savedE;
       for (const changes of [
         { pid: process.pid + 1 },
         { envelopeId: "OTHER" },

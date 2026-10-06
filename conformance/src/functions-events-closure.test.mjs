@@ -141,12 +141,24 @@ function validateClosure(closure) {
   }
   assert.deepEqual(
     new Set(closure.scopeDecisions.map(({ id }) => id)),
-    new Set(["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9", "E10", "E11", "E12"]),
+    new Set(["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9", "E10", "E11", "E12", "E13"]),
   );
   for (const decision of closure.scopeDecisions) {
     assert.ok(decision.decision && decision.rationale, decision.id);
     assert.ok(decision.decidedBy && decision.decidedOn && decision.decisionRef, decision.id);
-    if (["E10", "E11", "E12"].includes(decision.id)) {
+    if (decision.id === "E13") {
+      // The declared non-comparison (coordinator ruling 2026-10-06, closure review M1): no comparator mask, so no `masks`.
+      assert.equal(decision.status, "APPROVED", decision.id);
+      assert.equal(decision.decidedBy, "coordinator (delegated)", decision.id);
+      assert.ok(decision.reason && decision.evidence && decision.review, decision.id);
+      assert.equal(decision.masks, undefined, decision.id);
+      for (const word of ["contextKeys", "contextExtras", "eventKeys", "extensionAttributes"])
+        assert.match(decision.decision, new RegExp(word), word);
+      assert.match(decision.decision, /traceparent/);
+      assert.match(decision.decision, /location/);
+      assert.match(decision.evidence, /fe-events-traceparent-missing\.md/);
+      assert.match(decision.evidence, /fe-firestore-event-location-hardcoded\.md/);
+    } else if (["E10", "E11", "E12"].includes(decision.id)) {
       // An accepted difference (E10 the authId, E11 the subscription numbers, E12 the unordered field maps): it states its reason, its evidence and its review,
       // and is limited to the one field it declares.
       assert.equal(decision.status, "APPROVED", decision.id);
@@ -312,11 +324,10 @@ test("FUNCTIONS-EVENTS inventory rejects a missing event case and false evidence
 test("a promoted FUNCTIONS-EVENTS record is complete: every condition VERIFIED with evidence, the integrated regression, an approved review", () => {
   const record = readRecord();
   if (record.parentStatus !== "COMPAT_VERIFIED") {
-    assert.equal(
-      record.integratedRegression,
-      undefined,
-      "a pending record has no integrated regression",
-    );
+    if (record.integratedRegression !== undefined)
+      for (const condition of record.conditions)
+        if (!condition.conditionId.endsWith("/closure-review"))
+          assert.equal(condition.status, "VERIFIED", condition.conditionId);
     return;
   }
   for (const condition of record.conditions) {
@@ -329,4 +340,17 @@ test("a promoted FUNCTIONS-EVENTS record is complete: every condition VERIFIED w
   for (const decision of record.scopeDecisions)
     if (decision.review !== undefined)
       assert.doesNotMatch(decision.review, /^PENDING/, decision.id);
+});
+
+test("every business condition says that the listing members are not compared (E13), and the 2nd gen ones name the two accepted differences", () => {
+  for (const condition of readRecord().conditions) {
+    const name = condition.conditionId.split("/").at(-1);
+    if (name === "final-artifact-regression" || name === "closure-review") continue;
+    assert.match(condition.note ?? "", /scope decision E13/, name);
+    const traceparent = /traceparent/.test(condition.note);
+    const location = /location/.test(condition.note);
+    // Gen1 Auth: only the non-comparison. Storage and Pub/Sub: traceparent. Firestore (and the retry rows on it): both.
+    assert.equal(traceparent, !name.startsWith("auth-"), `${name}: traceparent`);
+    assert.equal(location, !/^(auth|storage|pubsub)-/.test(name), `${name}: location`);
+  }
 });

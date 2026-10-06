@@ -62,9 +62,10 @@ const maskSubscription = (value) =>
 const UID_28 = /^[A-Za-z0-9]{28}$/;
 const AUTH_TYPE_PATH = "$.frame.event.authType";
 export const maskAuthId = (value, observation) => {
-  if (observation.get(AUTH_TYPE_PATH)?.value === "api_key")
-    return UID_28.test(value) ? "<uid>" : value;
-  return value.length > 0 ? "<present>" : value;
+  const authType = observation.get(AUTH_TYPE_PATH)?.value;
+  if (authType === "api_key") return UID_28.test(value) ? "<uid>" : value;
+  if (authType === "unknown") return value.length > 0 ? "<present>" : value;
+  return value; // E10 covers these two types only: any other type keeps its id, compared exactly
 };
 
 /**
@@ -83,9 +84,10 @@ export const DECLARED_MASK_REASONS = Object.freeze({
 const subscriptionMaskId = (value) =>
   SUBSCRIPTION_NUMBERS.test(value) ? "pubsub-subscription-numbers" : null;
 const authIdMaskId = (value, observation) => {
-  if (observation.get(AUTH_TYPE_PATH)?.value === "api_key")
-    return UID_28.test(value) ? "authId-api_key-uid" : null;
-  return value.length > 0 ? "authId-unknown-present" : null;
+  const authType = observation.get(AUTH_TYPE_PATH)?.value;
+  if (authType === "api_key") return UID_28.test(value) ? "authId-api_key-uid" : null;
+  if (authType === "unknown") return value.length > 0 ? "authId-unknown-present" : null;
+  return null;
 };
 
 /** The declared masks of a row: `{ path, mask, id }` entries (see above), or none. */

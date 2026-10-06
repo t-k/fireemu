@@ -1,0 +1,11 @@
+✔  functions[events:storageDeletedV2(us-central1)] Successful create operation. 
+⚠  functions: Deploys failed. Skipping deletes. 
+[2026-10-05T00:26:47.238Z] Total Function Deployment time: 103099
+[2026-10-05T00:26:47.238Z] 22 Functions Deployed
+[2026-10-05T00:26:47.238Z] 3 Functions Errored
+[2026-10-05T00:26:47.238Z] 0 Function Deployments Aborted
+[2026-10-05T00:26:47.238Z] Average Function Deployment time: 84580.95454545454
+Error: There was an error deploying functions:
+- Error Failed to create function storageDeletedV1 in region us-central1
+- Error Failed to create function storageMetadataUpdatedV1 in region us-central1
+- Error Failed to create function storageArchivedV1 in region us-central1

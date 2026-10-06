@@ -662,3 +662,209 @@ test("the update mask is the one parameter that may repeat", () => {
   });
   assert.equal(answer.rule, "firestore-patch");
 });
+
+const uploadAsked = (query, headers) => ({
+  method: "POST",
+  url: `https://storage.googleapis.com/upload/storage/v1/b/${PRIMARY_BUCKET}/o?uploadType=media&name=fe-events%2Fx.txt${query}`,
+  mutation: true,
+  body: "t",
+  ...(headers ? { headers } : {}),
+});
+
+test("an upload may carry ifGenerationMatch 0 (a create) or 1 (a write that production refuses), and nothing else", () => {
+  for (const query of ["", "&ifGenerationMatch=0", "&ifGenerationMatch=1"])
+    assert.equal(destination(uploadAsked(query)).problem, undefined, query);
+  for (const value of ["2", "5", "", "01", "1x", "-1", "1790000000000000", "0%2C1"])
+    assert.match(
+      destination(uploadAsked(`&ifGenerationMatch=${value}`)).problem ?? "",
+      /ifGenerationMatch may only be 0 or 1/,
+      value,
+    );
+});
+
+test("an upload adds no header at all: the x-goog-hash of v5 is gone", () => {
+  assert.equal(destination(uploadAsked("", {})).problem, undefined);
+  for (const headers of [
+    { "x-goog-hash": "md5=x" },
+    { "X-Goog-Hash": "md5=x" },
+    { "x-other": "1" },
+  ])
+    assert.match(
+      destination(uploadAsked("", headers)).problem ?? "",
+      /an upload may not add a header/,
+    );
+});
+
+// ---- the cleanup's REST deletes of leftover functions: Gen2 (v5) and Gen1 (v7) ------------------------------------------
+
+const GCF = "https://cloudfunctions.googleapis.com";
+const REGION_PATH = `projects/${PROJECT}/locations/us-central1`;
+const GEN1_NAMES = [
+  "fsCreatedV1",
+  "fsUpdatedV1",
+  "fsDeletedV1",
+  "fsWrittenV1",
+  "storageFinalizedV1",
+  "storageDeletedV1",
+  "storageMetadataUpdatedV1",
+  "storageArchivedV1",
+  "authCreatedV1",
+  "authDeletedV1",
+  "pubsubPublishedV1",
+];
+const GEN2_NAMES = [
+  "fsCreatedV2",
+  "fsUpdatedV2",
+  "fsDeletedV2",
+  "fsWrittenV2",
+  "fsWrittenWithAuthContextV2",
+  "fsRetryV2",
+  "storageFinalizedV2",
+  "storageDeletedV2",
+  "storageMetadataUpdatedV2",
+  "storageArchivedV2",
+  "pubsubPublishedV2",
+];
+const del = (version, name) => ({
+  method: "DELETE",
+  url: `${GCF}/${version}/${REGION_PATH}/functions/${name}`,
+  mutation: true,
+});
+
+test("v7: a REST delete is allowed for exactly the 11 Gen1 names under /v1 and the 11 Gen2 names under /v2, case-exact", () => {
+  for (const name of GEN1_NAMES)
+    assert.deepEqual(
+      [destination(del("v1", name)).problem, destination(del("v1", name)).rule],
+      [undefined, "functions-v1-delete"],
+      name,
+    );
+  for (const name of GEN2_NAMES)
+    assert.deepEqual(
+      [destination(del("v2", name)).problem, destination(del("v2", name)).rule],
+      [undefined, "functions-v2-delete"],
+      name,
+    );
+});
+
+test("v7: a REST delete of anything else is refused: another generation's name, case, suffix, region, project, query, slash, method", () => {
+  const refused = (request, label) => assert.ok(destination(request).problem, label);
+  // a Gen2 name under /v1 and a Gen1 name under /v2
+  refused(del("v1", "storageDeletedV2"), "gen2 name under v1");
+  refused(del("v2", "storageDeletedV1"), "gen1 name under v2");
+  for (const bad of [
+    "storagedeletedv1",
+    "storageDeletedV1x",
+    "xstorageDeletedV1",
+    "storageDeletedV",
+    "x",
+    "",
+    "fsCreatedV1/extra",
+    "StorageDeletedV1",
+  ])
+    refused(del("v1", bad), `v1 ${bad}`);
+  refused(
+    {
+      method: "DELETE",
+      url: `${GCF}/v1/projects/${PROJECT}/locations/us-east1/functions/storageDeletedV1`,
+      mutation: true,
+    },
+    "another region",
+  );
+  refused(
+    {
+      method: "DELETE",
+      url: `${GCF}/v1/projects/other/locations/us-central1/functions/storageDeletedV1`,
+      mutation: true,
+    },
+    "another project",
+  );
+  refused(
+    { ...del("v1", "storageDeletedV1"), url: `${del("v1", "storageDeletedV1").url}?force=true` },
+    "a query",
+  );
+  refused(
+    { ...del("v1", "storageDeletedV1"), url: `${del("v1", "storageDeletedV1").url}/` },
+    "a trailing slash",
+  );
+  refused({ ...del("v1", "storageDeletedV1"), mutation: false }, "not declared a mutation");
+  refused({ ...del("v1", "storageDeletedV1"), body: {} }, "a body");
+  refused({ ...del("v1", "storageDeletedV1"), method: "PATCH" }, "another method");
+  refused(
+    {
+      ...del("v1", "storageDeletedV1"),
+      method: "GET",
+      mutation: false,
+      url: del("v1", "storageDeletedV1").url,
+    },
+    "a GET of the function itself",
+  );
+  refused(
+    {
+      ...del("v1", "storageDeletedV1"),
+      url: del("v1", "storageDeletedV1").url.replace(
+        "cloudfunctions.googleapis.com",
+        "cloudfunctions.example.com",
+      ),
+    },
+    "another host",
+  );
+  refused(
+    {
+      ...del("v1", "storageDeletedV1"),
+      url: del("v1", "storageDeletedV1").url.replace("/v1/", "/v1beta/"),
+    },
+    "another API version",
+  );
+});
+
+test("v7: a Gen1 operation is read at /v1/operations/<id> only, one path segment of 1 to 256 id characters", () => {
+  const get = (id) => ({ method: "GET", url: `${GCF}/v1/operations/${id}`, mutation: false });
+  const id159 = "A".repeat(159);
+  for (const id of [
+    "a",
+    "cHJvamVjdHMvZmlyZWVtdS1vcmFjbGUtZXZlbnRz",
+    id159,
+    "a_b-c",
+    "A".repeat(256),
+  ])
+    assert.deepEqual(
+      [destination(get(id)).problem, destination(get(id)).rule],
+      [undefined, "functions-v1-operation-get"],
+      id,
+    );
+  for (const bad of ["", "a/b", "a?x=1", "a b", "A".repeat(257), "a=", ".."])
+    assert.ok(destination(get(bad)).problem, JSON.stringify(bad));
+  assert.ok(
+    destination({ ...get("abc"), method: "DELETE", mutation: true }).problem,
+    "no operation delete",
+  );
+  assert.ok(
+    destination({ ...get("abc"), url: `${GCF}/v1/projects/${PROJECT}/operations/abc` }).problem,
+    "no project-scoped v1 path",
+  );
+  assert.ok(destination({ ...get("abc"), mutation: true }).problem, "a read is not a mutation");
+  // the v2 operation read is unchanged: the long path of this project's region
+  assert.equal(
+    destination({
+      method: "GET",
+      url: `${GCF}/v2/${REGION_PATH}/operations/operation-1`,
+      mutation: false,
+    }).rule,
+    "functions-v2-operation-get",
+  );
+});
+
+test("v7: the guard has 47 rules: the 45 of v6 and the two for the Gen1 REST delete", () => {
+  assert.equal(RULES.length, 47);
+  assert.deepEqual(
+    RULES.map(({ name }) => name).filter((name) => name.startsWith("functions-")),
+    [
+      "functions-v1-list",
+      "functions-v2-list",
+      "functions-v2-delete",
+      "functions-v2-operation-get",
+      "functions-v1-delete",
+      "functions-v1-operation-get",
+    ],
+  );
+});

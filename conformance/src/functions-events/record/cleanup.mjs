@@ -54,29 +54,58 @@ export const DELETE_POLL_SECONDS = 30;
 export const SWEEP_LIMIT = 100;
 
 const GEN2 = new Set(HANDLERS.filter((h) => h.generation === 2).map((h) => h.name));
+const GEN1 = new Set(HANDLERS.filter((h) => h.generation === 1).map((h) => h.name));
 const lastSegment = (name) =>
   String(name ?? "")
     .split("/")
     .at(-1);
 
+const functionName = (name) => `projects/${PROJECT}/locations/${REGION}/functions/${name}`;
+// The operation a delete answer names, or null when it is not one this run may poll. Gen2: `projects/<P>/locations/<R>/operations/<id>`
+// under /v2. Gen1 (as the v6 CLI's debug log recorded it): `operations/<id>` under /v1, with the function in `metadata.target`.
+const operationOf = (generation, name, answer) => {
+  const operation = answer?.name;
+  if (typeof operation !== "string") return null;
+  if (generation === 2)
+    return operation.startsWith(`projects/${PROJECT}/locations/${REGION}/operations/`)
+      ? { url: `https://cloudfunctions.googleapis.com/v2/${operation}` }
+      : null;
+  return /^operations\/[A-Za-z0-9_-]{1,256}$/.test(operation) &&
+    answer.metadata?.target === functionName(name)
+    ? { url: `https://cloudfunctions.googleapis.com/v1/${operation}` }
+    : null;
+};
+
 /**
- * One REST delete for each Gen2 function of the run a fresh complete v2 list still shows, one at a time; each
- * operation is polled to done before the next function. A function whose delete has no usable answer stops the
- * rest (never re-sent). Gen1 leftovers and anything outside the 11 names are left for the recovery.
+ * One REST delete for each function of the run a fresh complete list still shows, one at a time: the Gen2 functions from the
+ * v2 list first, then the Gen1 functions from the v1 list (v7: the Gen1 Storage functions have the same contention on the
+ * bucket's metadata that v4 recorded for storageArchivedV2). Each operation is polled to done before the next function. A
+ * function whose delete has no usable answer stops the rest (never re-sent). Each list gates its own generation (an incomplete
+ * list sends nothing for it); anything outside the 22 names, and a Gen1 name in the v2 list, is left for the recovery.
  */
 export async function restDeleteLeftovers({ request, sleep, lists }) {
   const done = [];
-  if (!lists?.v2?.complete) return done;
-  const names = lists.v2.items
-    .map((item) => lastSegment(item.name))
-    .filter((name) => GEN2.has(name));
-  for (const name of names) {
-    const entry = { name };
+  const targets = [
+    ...(lists?.v2?.complete
+      ? lists.v2.items
+          .map((item) => lastSegment(item.name))
+          .filter((name) => GEN2.has(name))
+          .map((name) => ({ name, generation: 2 }))
+      : []),
+    ...(lists?.v1?.complete
+      ? lists.v1.items
+          .map((item) => lastSegment(item.name))
+          .filter((name) => GEN1.has(name))
+          .map((name) => ({ name, generation: 1 }))
+      : []),
+  ];
+  for (const { name, generation } of targets) {
+    const entry = { name, generation };
     done.push(entry);
     const deleted = await request(
       write(`function-delete-${name}`, {
         method: "DELETE",
-        url: `https://cloudfunctions.googleapis.com/v2/projects/${PROJECT}/locations/${REGION}/functions/${name}`,
+        url: `https://cloudfunctions.googleapis.com/v${generation}/${functionName(name)}`,
         expect: [200, 404],
       }),
     );
@@ -85,20 +114,11 @@ export async function restDeleteLeftovers({ request, sleep, lists }) {
       entry.stopped = true;
       break;
     }
-    const operation = deleted.json?.name;
-    if (
-      deleted.kind !== "success" ||
-      typeof operation !== "string" ||
-      !operation.startsWith(`projects/${PROJECT}/locations/${REGION}/operations/`)
-    )
-      continue;
+    const operation =
+      deleted.kind === "success" ? operationOf(generation, name, deleted.json) : null;
+    if (operation === null) continue;
     for (let poll = 1; poll <= OPERATION_POLLS; poll += 1) {
-      const answer = await request(
-        read(
-          `function-operation-${name}-${poll}`,
-          `https://cloudfunctions.googleapis.com/v2/${operation}`,
-        ),
-      );
+      const answer = await request(read(`function-operation-${name}-${poll}`, operation.url));
       entry.polls = poll;
       if (answer.kind === "success" && answer.json?.done === true) {
         entry.error = answer.json.error ?? null;
@@ -284,7 +304,7 @@ export async function runCleanup({
     return { ok: after.complete && after.uids.length === 0, removed, left: after.uids.length };
   });
 
-  // 5. The one CLI delete of the functions, then the lists until they are empty. A Gen2 function a fresh complete
+  // 5. The one CLI delete of the functions, then the lists until they are empty. A Gen2 or Gen1 function a fresh complete
   // list still shows after that (the v4 run's storageArchivedV2: the CLI's operation lost a race on the bucket's
   // metadata, printed "1 Functions Errored" and exited 0) gets one REST delete of its own, one function at a time,
   // each operation polled to done before the next; then the lists again. Nothing is deleted that no fresh list shows.

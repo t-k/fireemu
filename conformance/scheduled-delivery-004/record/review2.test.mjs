@@ -177,7 +177,7 @@ import { SETTLE_MS, readbackRun } from "./readback.mjs";
 import { createTokenSource } from "./token.mjs";
 
 const DIGEST = "d".repeat(64);
-const ENV = { HOME: "/home/test", PATH: "/usr/bin" };
+const ENV = { HOME: "/tmp/test", PATH: "/usr/bin" };
 const argv = (run, extra = [], project = NUMBER) => [
   "readback",
   "--run-dir",

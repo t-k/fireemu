@@ -144,12 +144,20 @@ test("IAM wait uses aged monotonic time and zero requests until900seconds after 
 
 test("IAM replay of unanswered intent never resends a grant or restoration", async () => {
   for (const phase of ["grant-intent", "restore-intent"]) {
+    const before = { etag: "before", bindings: [] };
+    const requested = iam.addOwnBinding(before, role, principal).policy;
+    const proof = complete({ ...requested, etag: "after" });
     const replay = [
-      { phase: "grant-intent", resource, role, principal },
+      { phase: "grant-intent", resource, role, principal, before, requested },
       ...(phase === "restore-intent"
         ? [
-            { phase: "grant-confirmed", resource },
-            { phase, resource },
+            { phase: "grant-confirmed", resource, setAnswer: proof, readback: proof },
+            {
+              phase,
+              resource,
+              before: proof.body,
+              requested: iam.removeOwnBinding(proof.body, role, principal),
+            },
           ]
         : []),
     ];
@@ -188,4 +196,764 @@ test("IAM restore unknown answer stays sticky after a later clean policy read", 
   assert.equal((await manager.restore(client)).unsettled.length, 1);
   assert.equal((await manager.restore(client)).unsettled.length, 1);
   assert.equal(sets, 2);
+});
+
+test("actual v2 prepare defaults to228source22resources and never constructs a credential provider", async () => {
+  const record = await import("./pubsub-production/record.mjs");
+  let output = "";
+  let error = "";
+  const code = await record.main(
+    [
+      "--target",
+      "production",
+      "--project",
+      "demo-v2",
+      "--out",
+      "/unused",
+      "--suite",
+      "stream-dlq-v2",
+      "--prepare",
+    ],
+    {},
+    { stdout: { write: (text) => (output += text) }, stderr: { write: (text) => (error += text) } },
+    { now: Date.now, noWire: true },
+  );
+  assert.equal(code, 0, error);
+  const value = JSON.parse(output);
+  assert.equal(value.requests, 228);
+  assert.equal(value.resources, 22);
+  assert.equal(value.noWire, true);
+  assert.equal(value.iamWaitAfterGrantMs, 900_000);
+  assert.equal(value.iamConvergenceClaim, false);
+});
+
+test("actual default v2 production path rejects absent source-bound authority before no-wire guard", async () => {
+  const record = await import("./pubsub-production/record.mjs");
+  let error = "";
+  const code = await record.main(
+    [
+      "--target",
+      "production",
+      "--project",
+      "demo-v2",
+      "--out",
+      "/unused",
+      "--suite",
+      "stream-dlq-v2",
+    ],
+    {},
+    { stdout: { write() {} }, stderr: { write: (text) => (error += text) } },
+    { now: Date.now, noWire: true },
+  );
+  assert.equal(code, 2);
+  assert.match(error, /descriptor|authority/);
+});
+
+test("v2 default admission rejects duplicate transports and excess source budget", async () => {
+  const record = await import("./pubsub-production/record.mjs");
+  for (const extra of [
+    ["--transports", "rest,rest,grpc"],
+    ["--max-requests", "1026"],
+  ]) {
+    let error = "";
+    const code = await record.main(
+      [
+        "--target",
+        "production",
+        "--project",
+        "demo-v2",
+        "--out",
+        "/unused",
+        "--suite",
+        "stream-dlq-v2",
+        "--prepare",
+        ...extra,
+      ],
+      {},
+      { stdout: { write() {} }, stderr: { write: (text) => (error += text) } },
+      { now: Date.now, noWire: true },
+    );
+    assert.equal(code, 2);
+    assert.match(error, /transport|228/);
+  }
+});
+
+async function recordedWorld({ emptyLayout = false, ambiguousGrant = false, age = 0 } = {}) {
+  const { readFileSync } = await import("node:fs");
+  const { createRest } = await import("./pubsub-production/rest.mjs");
+  const { createCapture, createBudget } = await import("./pubsub-production/capture.mjs");
+  const { createClient, newPushState } = await import("./pubsub-production/client.mjs");
+  const { createOwnership } = await import("./pubsub-production/names.mjs");
+  const { createLedger } = await import("./pubsub-production/ledger.mjs");
+  const fixtures = JSON.parse(
+    readFileSync(new URL("./pubsub-production/fixtures/recorded-v2-routes.json", import.meta.url)),
+  );
+  const prototype = (op) => structuredClone(fixtures.find((item) => item.op === op).response.body);
+  const live = new Map();
+  const policies = new Map();
+  const requests = [];
+  const lines = [];
+  const sleeps = [];
+  let now = age;
+  const ownership = createOwnership({ project: "demo-v2", runId: "0123456789ab" });
+  const ledger = createLedger();
+  const pushState = newPushState();
+  const capture = createCapture({ journal: { write: (line) => lines.push(line) } });
+  const rest = createRest({
+    base: "http://127.0.0.1:1",
+    budget: createBudget(828),
+    capture,
+    fetchImpl: async (url, options) => {
+      const parsed = new URL(url);
+      const path = decodeURIComponent(parsed.pathname.slice(4));
+      const body = options.body === undefined ? undefined : JSON.parse(options.body);
+      requests.push({ path, method: options.method, body, at: now, query: parsed.search });
+      let value = {};
+      let status = 200;
+      if (path.endsWith(":getIamPolicy")) {
+        assert.equal(parsed.searchParams.get("options.requestedPolicyVersion"), "3");
+        value = structuredClone(
+          policies.get(path.split(":")[0]) ?? { etag: "empty-policy-etag", bindings: [] },
+        );
+      } else if (path.endsWith(":setIamPolicy")) {
+        const key = path.split(":")[0];
+        assert.equal(body.policy.etag, (policies.get(key) ?? { etag: "empty-policy-etag" }).etag);
+        value = { ...body.policy, etag: `${body.policy.etag}-new` };
+        policies.set(key, structuredClone(value));
+        if (ambiguousGrant) {
+          status = 503;
+          value = { error: { status: "UNAVAILABLE" } };
+        }
+      } else if (options.method === "PUT") {
+        const op = path.includes("/subscriptions/")
+          ? "createSubscription"
+          : path.includes("/snapshots/")
+            ? "createSnapshot"
+            : "createTopic";
+        if (op === "createSubscription") assert.equal(typeof body.topic, "string");
+        if (op === "createSnapshot") assert.equal(typeof body.subscription, "string");
+        value = { ...prototype(op), name: path, ...body };
+        live.set(path, value);
+      } else if (options.method === "DELETE") {
+        assert.equal(
+          (policies.get(path)?.bindings ?? []).some((b) => b.members.includes(principal)),
+          false,
+          "IAM must restore before DELETE",
+        );
+        live.delete(path);
+      } else if (path.endsWith(":publish")) {
+        assert.equal(body.messages.length, 1);
+        assert.equal(typeof body.messages[0].data, "string");
+        value = { messageIds: ["demo-published-id"] };
+      } else if (path.endsWith(":pull")) {
+        assert.equal(body.maxMessages, 1);
+        value = emptyLayout && path.includes("-rl-r-") ? {} : prototype("pull");
+        assert.ok(Array.isArray(value.receivedMessages) || Object.keys(value).length === 0);
+      } else if (path.endsWith(":acknowledge") || path.endsWith(":modifyAckDeadline")) {
+        assert.ok(body.ackIds.length > 0);
+        assert.ok(body.ackIds.every((id) => typeof id === "string" && id.length));
+      } else if (path.endsWith(":seek")) {
+        assert.equal(typeof body.snapshot, "string");
+        assert.equal(body.time, undefined);
+      } else if (/\/(topics|subscriptions|snapshots)$/.test(path)) {
+        const kind = path.split("/").at(-1);
+        const values = [...live.values()].filter((item) => item.name.includes(`/${kind}/`));
+        value =
+          kind === "snapshots" && values.length === 0
+            ? prototype("listSnapshots")
+            : { [kind]: values };
+        if (parsed.searchParams.get("pageSize") === "1")
+          value = { topics: values.slice(0, 1), nextPageToken: "safe-own-cursor" };
+      } else {
+        value = live.get(path);
+        if (!value) {
+          status = 404;
+          value = prototype("getTopic");
+        }
+      }
+      const text = `\n ${JSON.stringify(value, null, 2)}\n`;
+      return new Response(text, {
+        status,
+        headers: { "content-length": String(Buffer.byteLength(text)) },
+      });
+    },
+  });
+  const grpc = {
+    name: "grpc",
+    async call({ label, op, service, method, request }) {
+      const body = { ...request };
+      if (request.name) live.set(request.name, body);
+      capture.record({
+        ...label,
+        transport: "grpc",
+        op,
+        request: { rpc: `${service}/${method}`, body: request },
+        response: { code: "OK", body },
+      });
+      return { code: "OK", body, unknown: false };
+    },
+    async stream({ label, frames, afterReceive }) {
+      capture.record({
+        ...label,
+        transport: "grpc",
+        op: "streamingPull",
+        response: { code: "INVALID_ARGUMENT" },
+      });
+      return {
+        code: "INVALID_ARGUMENT",
+        unknown: false,
+        outboundFrames: frames.length,
+        followUpSent: afterReceive !== undefined,
+      };
+    },
+  };
+  const manager = iam.createIamOwnership({
+    journal: { write: (row) => lines.push({ iam: row }) },
+    assertOwned: (name) => ownership.assertOwned(name),
+    now: () => now,
+  });
+  const cleanupRest = createClient({
+    transport: rest,
+    ownership,
+    pushState,
+    ledger,
+    caseId: "cleanup",
+  });
+  return {
+    requests,
+    lines,
+    sleeps,
+    live,
+    policies,
+    ownership,
+    ledger,
+    capture,
+    pushState,
+    cleanupRest,
+    transports: { rest, grpc },
+    options: {
+      suite: "stream-dlq-v2",
+      production: true,
+      serviceAgent: principal,
+      iam: manager,
+      monotonicNow: () => now,
+    },
+    sleep: async (ms) => {
+      sleeps.push({ ms, at: now, requests: requests.length });
+      now += ms;
+    },
+  };
+}
+
+test("actual v2 runner restores two policies before cleanup and emits physical layout on four routes", async () => {
+  const { runCases } = await import("./pubsub-production/runner.mjs");
+  const fixture = await recordedWorld({ age: 3_600_000 });
+  const summary = await runCases({
+    ...fixture,
+    cases: selectCases(["rest-layout-routes", "dlq-grant-window"], "stream-dlq-v2"),
+  });
+  assert.deepEqual(
+    summary.cases.map((entry) => entry.outcome),
+    ["completed", "completed"],
+  );
+  assert.equal(summary.iam.restored.length, 2);
+  assert.deepEqual(summary.iam.unsettled, []);
+  assert.deepEqual(summary.cleanup.errors, []);
+  assert.equal(fixture.sleeps.find((item) => item.ms === 900_000).requests, 18);
+  const wait = fixture.sleeps.find((item) => item.ms === 900_000);
+  assert.equal(fixture.requests.find((call) => call.at > wait.at).at, wait.at + 900_000);
+  const rows = fixture.lines.filter(
+    (line) => line.case === "rest-layout-routes/rest" && line.transport === "rest",
+  );
+  for (const op of ["createSubscription", "pull", "acknowledge", "seek"]) {
+    const row = rows.find((item) => item.op === op);
+    assert.ok(row);
+    assert.equal(Number(row.response.contentLength), row.response.bodyBytes);
+    assert.ok(row.response.bodyBytes > Buffer.byteLength(JSON.stringify(row.response.body)));
+  }
+  assert.ok(
+    fixture.requests
+      .filter((call) => call.path.endsWith(":getIamPolicy"))
+      .every((call) => call.query.includes("requestedPolicyVersion=3")),
+  );
+});
+
+test("layout with no real received ACK records an aborted unmet observation without fabricated ACK or Seek", async () => {
+  const { runCases } = await import("./pubsub-production/runner.mjs");
+  const fixture = await recordedWorld({ emptyLayout: true });
+  const summary = await runCases({
+    ...fixture,
+    cases: selectCases(["rest-layout-routes"], "stream-dlq-v2"),
+  });
+  assert.equal(summary.cases[0].outcome, "aborted");
+  assert.equal(fixture.requests.filter((call) => call.path.endsWith(":pull")).length, 3);
+  assert.equal(fixture.requests.filter((call) => /:(acknowledge|seek)$/.test(call.path)).length, 0);
+});
+
+test("actual ambiguous IAM write blocks its resource DELETE and run closure without resend", async () => {
+  const { runCases } = await import("./pubsub-production/runner.mjs");
+  const fixture = await recordedWorld({ ambiguousGrant: true });
+  const summary = await runCases({
+    ...fixture,
+    cases: selectCases(["dlq-grant-window"], "stream-dlq-v2"),
+  });
+  assert.equal(summary.iam.unsettled.length, 1);
+  assert.equal(fixture.requests.filter((call) => call.path.endsWith(":setIamPolicy")).length, 1);
+  assert.ok(summary.cleanup.errors.some((error) => error.includes("IAM")));
+  assert.ok(summary.cleanup.leftover.includes(summary.iam.unsettled[0].resource));
+  assert.equal(
+    fixture.requests.filter(
+      (call) => call.method === "DELETE" && call.path === summary.iam.unsettled[0].resource,
+    ).length,
+    0,
+  );
+});
+
+test("IAM replay refuses invented confirmation, reordered phases and altered ownership", () => {
+  const before = { etag: "before", bindings: [] };
+  const requested = iam.addOwnBinding(before, role, principal).policy;
+  const intent = { phase: "grant-intent", resource, role, principal, before, requested };
+  for (const replay of [
+    [intent, { phase: "restore-confirmed", resource }],
+    [intent, { phase: "grant-confirmed", resource }],
+    [{ ...intent, role: "roles/owner" }],
+    [{ ...intent, principal: "user:other@example.com" }],
+    [{ ...intent, before: requested }],
+    [intent, intent],
+  ])
+    assert.throws(
+      () => iam.createIamOwnership({ journal: { write() {} }, assertOwned() {}, replay }),
+      /IAM|grant|proof|transition|intent|scope/,
+    );
+});
+
+test("IAM wait rejects nonfinite clock before considering the wait complete", async () => {
+  for (const value of [NaN, Infinity, -Infinity])
+    await assert.rejects(
+      iam.waitAfterLastGrant({ grantedAt: 0, now: () => value, sleep: async () => {} }),
+      /clock/,
+    );
+});
+
+test("actual A2 v2 capture rejects omitted or wrong suite before a marker, credentials or transport", async () => {
+  const { mkdtempSync, writeFileSync, existsSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const record = await import("./pubsub-production/record.mjs");
+  const out = mkdtempSync(join(tmpdir(), "v2-recovery-"));
+  const runId = "0123456789ab";
+  const path = join(out, `capture-${runId}.jsonl`);
+  writeFileSync(
+    path,
+    JSON.stringify({
+      at: "2026-01-01T00:00:00Z",
+      note: "run-start",
+      suite: "stream-dlq-v2",
+      project: "demo-v2",
+      runId,
+    }) + "\n",
+  );
+  writeFileSync(join(out, `issued-${runId}.jsonl`), "");
+  writeFileSync(join(out, `iam-${runId}.jsonl`), "");
+  try {
+    for (const extra of [[], ["--suite", "unary"]]) {
+      let error = "";
+      const code = await record.main(
+        [
+          "--target",
+          "production",
+          "--project",
+          "demo-v2",
+          "--out",
+          out,
+          "--cleanup-only",
+          "--run-id",
+          runId,
+          "--from-capture",
+          path,
+          ...extra,
+        ],
+        {},
+        { stdout: { write() {} }, stderr: { write: (text) => (error += text) } },
+        { now: Date.now, noWire: true },
+      );
+      assert.equal(code, 2);
+      assert.match(error, /suite|v2/);
+      assert.equal(existsSync(join(out, `a2-started-${runId}.json`)), false);
+    }
+  } finally {
+    rmSync(out, { recursive: true });
+  }
+});
+
+test("actual runtime identity binds installed dependency trees and refuses preload execution", async () => {
+  const { execFileSync, spawnSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const path = fileURLToPath(
+    new URL("./pubsub-production/fixtures/v2-runtime-probe.mjs", import.meta.url),
+  );
+  const env = { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" };
+  const identity = JSON.parse(execFileSync(process.execPath, [path], { env, timeout: 15_000 }));
+  assert.ok(Array.isArray(identity.dependencies));
+  assert.ok(identity.dependencies.length > 20);
+  assert.ok(identity.dependencies.every((pin) => /^[a-f0-9]{64}$/.test(pin.treeSha256)));
+  const bad = spawnSync(process.execPath, [path, "preload"], {
+    env,
+    timeout: 15_000,
+    encoding: "utf8",
+  });
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /preload|runtime/);
+});
+
+test("IAM durable prefixes agree with bounded reference states and reject corrupted proofs", async () => {
+  for (let seed = 0; seed < 24; seed += 1) {
+    let policy = {
+      etag: `e-${seed}`,
+      bindings: [{ role: "roles/viewer", members: [`user:s${seed}@example.com`] }],
+    };
+    const rows = [];
+    const journal = { write: (row) => rows.push(structuredClone(row)) };
+    const manager = iam.createIamOwnership({ journal, assertOwned() {} });
+    const client = {
+      async getIamPolicy() {
+        return complete(structuredClone(policy));
+      },
+      async setIamPolicy(_name, next) {
+        policy = { ...next, etag: `${policy.etag}-next` };
+        return complete(structuredClone(policy));
+      },
+    };
+    await manager.grant(client, resource, role, principal);
+    await manager.restore(client);
+    assert.deepEqual(
+      rows.map((row) => row.phase),
+      ["grant-intent", "grant-confirmed", "restore-intent", "restore-confirmed"],
+    );
+    const expected = ["grant-unknown", "granted", "restore-unknown", null];
+    for (let length = 1; length <= rows.length; length += 1) {
+      const loaded = iam.createIamOwnership({
+        journal: { write() {} },
+        assertOwned() {},
+        replay: rows.slice(0, length),
+      });
+      assert.equal(loaded.outstanding()[0]?.state ?? null, expected[length - 1]);
+    }
+    for (const index of [1, 3]) {
+      const corrupted = structuredClone(rows);
+      delete corrupted[index].readback;
+      assert.throws(
+        () =>
+          iam.createIamOwnership({ journal: { write() {} }, assertOwned() {}, replay: corrupted }),
+        /proof|transition/,
+      );
+    }
+    const restarted = [rows[0], { phase: "grant-unknown", resource }, rows[1]];
+    assert.throws(
+      () =>
+        iam.createIamOwnership({ journal: { write() {} }, assertOwned() {}, replay: restarted }),
+      /transition/,
+    );
+  }
+});
+
+test("IAM rejects a success label without a complete REST200 policy", async () => {
+  for (const status of [undefined, null, "200", 201, 204, 302]) {
+    let writes = 0;
+    const manager = iam.createIamOwnership({ journal: { write() {} }, assertOwned() {} });
+    const client = {
+      async getIamPolicy() {
+        return { ...complete({ etag: "e", bindings: [] }), status };
+      },
+      async setIamPolicy() {
+        writes += 1;
+      },
+    };
+    await assert.rejects(manager.grant(client, resource, role, principal), /read/);
+    assert.equal(writes, 0);
+  }
+});
+
+test("v2 full packet rejects partial case and transport selection", async () => {
+  const { parseArgs } = await import("./pubsub-production/record.mjs");
+  const base = [
+    "--target",
+    "production",
+    "--project",
+    "demo-v2",
+    "--out",
+    "/unused",
+    "--suite",
+    "stream-dlq-v2",
+  ];
+  for (const extra of [
+    ["--only", "rest-layout-routes"],
+    ["--transports", "rest"],
+    ["--transports", ""],
+  ])
+    assert.throws(() => parseArgs([...base, ...extra]), /v2|packet|transports/);
+});
+
+test("v2 recovery validates IAM intent proofs before any authority or marker", async () => {
+  const { mkdtempSync, writeFileSync, existsSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { main } = await import("./pubsub-production/record.mjs");
+  const out = mkdtempSync(join(tmpdir(), "v2-proof-"));
+  const runId = "0123456789ab";
+  const capture = join(out, `capture-${runId}.jsonl`);
+  writeFileSync(
+    capture,
+    JSON.stringify({
+      at: "2026-01-01T00:00:00Z",
+      note: "run-start",
+      suite: "stream-dlq-v2",
+      project: "demo-v2",
+      runId,
+    }) + "\n",
+  );
+  writeFileSync(join(out, `issued-${runId}.jsonl`), "");
+  writeFileSync(
+    join(out, `iam-${runId}.jsonl`),
+    JSON.stringify({ phase: "restore-confirmed", resource }) + "\n",
+  );
+  try {
+    let error = "";
+    assert.equal(
+      await main(
+        [
+          "--target",
+          "production",
+          "--project",
+          "demo-v2",
+          "--out",
+          out,
+          "--suite",
+          "stream-dlq-v2",
+          "--cleanup-only",
+          "--run-id",
+          runId,
+          "--from-capture",
+          capture,
+        ],
+        {},
+        { stdout: { write() {} }, stderr: { write: (text) => (error += text) } },
+        { now: Date.now, noWire: true },
+      ),
+      2,
+    );
+    assert.match(error, /IAM answer without owned intent/);
+    assert.equal(existsSync(join(out, `a2-started-${runId}.json`)), false);
+  } finally {
+    rmSync(out, { recursive: true });
+  }
+});
+
+test("authority checks actual proof hashes and full E/V scope before demanding a live canonical lock", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { verifyAuthority, sha256 } = await import("./pubsub-production/admission.mjs");
+  const out = mkdtempSync(join(tmpdir(), "v2-authority-"));
+  const put = (name, value) => {
+    const bytes = JSON.stringify(value);
+    const path = join(out, `${name}.json`);
+    writeFileSync(path, bytes);
+    return { path, sha256: sha256(bytes) };
+  };
+  const descriptor = { head: "a".repeat(40) };
+  const digest = "b".repeat(64);
+  const packet = put("packet", { taskId: "PUBSUB-STREAM-DLQ", suite: "stream-dlq-v2" });
+  const options = { project: "demo-v2", runId: "0123456789ab", serviceAgent: principal };
+  const authority = {
+    schema: 1,
+    taskId: "PUBSUB-STREAM-DLQ",
+    suite: "stream-dlq-v2",
+    envelopeId: "PUBSUB-STREAM-DLQ-V2",
+    sourceHead: descriptor.head,
+    descriptorSha256: digest,
+    packetPath: packet.path,
+    packetSha256: packet.sha256,
+    project: options.project,
+    runIds: [options.runId, "0123456789ac"],
+    expiresAt: "2099-01-01T00:00:00Z",
+    iamWaitAfterGrantMs: 900_000,
+    iamPhaseMs: 1_800_000,
+    iamConvergenceClaim: false,
+    maxRequestsPerAttempt: 228,
+    cleanupRequests: 600,
+    a2Requests: 600,
+    serviceAgent: principal,
+    lockPath: join(out, "copied-lock.json"),
+    lockFd: 17,
+  };
+  const row = (kind) => ({
+    kind,
+    state: "APPROVED",
+    taskId: authority.taskId,
+    envelopeId: authority.envelopeId,
+    sourceHead: authority.sourceHead,
+    descriptorSha256: digest,
+    packetSha256: packet.sha256,
+    project: authority.project,
+    runIds: authority.runIds,
+    expiresAt: authority.expiresAt,
+    maxRequestsPerAttempt: 228,
+    cleanupRequests: 600,
+    a2Requests: 600,
+  });
+  authority.E = put("E", row("E"));
+  authority.V = put("V", row("V"));
+  authority.inheritedGrantAudit = {
+    ...put("audit", {
+      project: options.project,
+      serviceAgent: principal,
+      noEffectiveGrantB: true,
+      envelopeId: authority.envelopeId,
+    }),
+    noEffectiveGrantB: true,
+  };
+  try {
+    assert.throws(
+      () => verifyAuthority(authority, descriptor, digest, options, 0),
+      /canonical live lock FD/,
+    );
+    for (const changes of [
+      { envelopeId: undefined },
+      { expiresAt: "1970-01-01T00:00:00Z" },
+      { runIds: [options.runId, options.runId] },
+      { maxRequestsPerAttempt: 229 },
+      { iamConvergenceClaim: true },
+      { sourceHead: "c".repeat(40) },
+      { descriptorSha256: "d".repeat(64) },
+    ])
+      assert.throws(
+        () => verifyAuthority({ ...authority, ...changes }, descriptor, digest, options, 0),
+        /authority/,
+      );
+    for (const kind of ["E", "V"]) {
+      for (const changes of [
+        { project: "demo-other" },
+        { runIds: ["0123456789ad", "0123456789ae"] },
+        { expiresAt: "2098-01-01T00:00:00Z" },
+        { maxRequestsPerAttempt: 229 },
+        { cleanupRequests: 601 },
+        { a2Requests: 601 },
+        { state: "DRAFT" },
+        { envelopeId: "OTHER-ENVELOPE" },
+        { sourceHead: "c".repeat(40) },
+        { packetSha256: "f".repeat(64) },
+      ]) {
+        const proof = put(`bad-${kind}`, { ...row(kind), ...changes });
+        assert.throws(
+          () => verifyAuthority({ ...authority, [kind]: proof }, descriptor, digest, options, 0),
+          new RegExp(`${kind} authority proof`),
+        );
+      }
+      assert.throws(
+        () =>
+          verifyAuthority(
+            { ...authority, [kind]: { ...authority[kind], sha256: "0".repeat(64) } },
+            descriptor,
+            digest,
+            options,
+            0,
+          ),
+        /proof mismatch/,
+      );
+    }
+    assert.throws(
+      () =>
+        verifyAuthority(
+          { ...authority, packetSha256: "f".repeat(64) },
+          descriptor,
+          digest,
+          options,
+          0,
+        ),
+      /packet digest/,
+    );
+    const badAudit = {
+      ...put("bad-audit", {
+        project: "demo-other",
+        serviceAgent: principal,
+        noEffectiveGrantB: true,
+        envelopeId: authority.envelopeId,
+      }),
+      noEffectiveGrantB: true,
+    };
+    assert.throws(
+      () =>
+        verifyAuthority(
+          { ...authority, inheritedGrantAudit: badAudit },
+          descriptor,
+          digest,
+          options,
+          0,
+        ),
+      /audit mismatch/,
+    );
+  } finally {
+    rmSync(out, { recursive: true });
+  }
+});
+
+test("IAM wait refuses a clock that becomes nonfinite after the initial sample", async () => {
+  let calls = 0;
+  await assert.rejects(
+    iam.waitAfterLastGrant({
+      grantedAt: 0,
+      now: () => (calls++ === 0 ? 0 : NaN),
+      sleep: async () => {},
+    }),
+    /clock/,
+  );
+});
+
+test("live lock proof reads the held inode and rejects copies symlinks and wrong envelopes", async () => {
+  const { mkdtempSync, writeFileSync, openSync, closeSync, rmSync, symlinkSync } =
+    await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { verifyLiveLock } = await import("./pubsub-production/admission.mjs");
+  const out = mkdtempSync(join(tmpdir(), "v2-held-inode-"));
+  const binding = {
+    project: "demo-v2",
+    taskId: "PUBSUB-STREAM-DLQ",
+    envelopeId: "PUBSUB-STREAM-DLQ-V2",
+  };
+  const path = join(out, "test-lock.json");
+  const copy = join(out, "copy.json");
+  const link = join(out, "link.json");
+  writeFileSync(path, JSON.stringify(binding), { flag: "wx" });
+  writeFileSync(copy, JSON.stringify(binding));
+  symlinkSync(path, link);
+  const fd = openSync(path, "r");
+  const other = openSync(copy, "r");
+  try {
+    for (let repeat = 0; repeat < 3; repeat += 1)
+      assert.deepEqual(verifyLiveLock({ path, fd, expectedPath: path }, binding), binding);
+    assert.throws(() => verifyLiveLock({ path, fd: other, expectedPath: path }, binding), /inode/);
+    assert.throws(
+      () => verifyLiveLock({ path: copy, fd: other, expectedPath: path }, binding),
+      /canonical/,
+    );
+    assert.throws(
+      () => verifyLiveLock({ path: link, fd, expectedPath: link }, binding),
+      /inode|symlink/,
+    );
+    assert.throws(
+      () =>
+        verifyLiveLock(
+          { path, fd, expectedPath: path },
+          { ...binding, envelopeId: "OTHER-ENVELOPE" },
+        ),
+      /authority/,
+    );
+    assert.throws(() => verifyLiveLock({ path, fd: 2, expectedPath: path }, binding), /canonical/);
+  } finally {
+    closeSync(fd);
+    closeSync(other);
+    rmSync(out, { recursive: true });
+  }
 });

@@ -180,8 +180,11 @@ const OPERATIONS = {
     ledger: { action: "delete", name },
   }),
   // The IAM methods are REST only: the google.iam protos are not part of the Pub/Sub package.
-  getIamPolicy: (resource) => ({
-    rest: ["GET", `/v1/${encodeName(resource)}:getIamPolicy`],
+  getIamPolicy: (resource, options = {}) => ({
+    rest: [
+      "GET",
+      `/v1/${encodeName(resource)}:getIamPolicy${options.requestedPolicyVersion === undefined ? "" : `?options.requestedPolicyVersion=${options.requestedPolicyVersion}`}`,
+    ],
     grpc: null,
   }),
   setIamPolicy: (resource, policy) => ({

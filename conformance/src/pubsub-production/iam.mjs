@@ -3,13 +3,11 @@ export const IAM_WAIT_MS = 900_000;
 export const IAM_CONVERGENCE_CLAIM = false;
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const complete = (reply) =>
-  reply?.ok === true &&
-  reply.unknown !== true &&
-  (reply.status === undefined || (reply.status >= 200 && reply.status < 300)) &&
-  object(reply.body);
+  reply?.ok === true && reply.unknown !== true && reply.status === 200 && object(reply.body);
 
 export function readPolicy(policy) {
   if (
+    Buffer.byteLength(JSON.stringify(policy) ?? "") > 65_536 ||
     !object(policy) ||
     typeof policy.etag !== "string" ||
     !policy.etag ||
@@ -65,40 +63,88 @@ export function createIamOwnership({
 }) {
   const entries = [];
   const persist = (row) => journal.write({ ...row, at: new Date().toISOString() });
-  // Replay durable intents, including writes whose process died before recording the answer.
+  const validScope = (resource, role, principal) =>
+    ((role === "roles/pubsub.subscriber" && /\/subscriptions\/[^/]+$/.test(resource)) ||
+      (role === "roles/pubsub.publisher" && /\/topics\/[^/]+$/.test(resource))) &&
+    /^serviceAccount:service-\d{1,20}@gcp-sa-pubsub\.iam\.gserviceaccount\.com$/.test(
+      principal ?? "",
+    );
+  const confirmed = (reply, requested) => {
+    try {
+      return complete(reply) && sameBindings(readPolicy(reply.body), requested);
+    } catch {
+      return false;
+    }
+  };
+  // Confirmation labels are insufficient: replay re-evaluates the exact owned delta and raw proofs.
   for (const row of replay) {
     assertOwned(row.resource);
     if (row.phase === "grant-intent") {
-      if (entries.some((item) => item.resource === row.resource))
-        throw new Error("duplicate IAM grant intent");
+      if (
+        !validScope(row.resource, row.role, row.principal) ||
+        entries.some((item) => item.resource === row.resource)
+      )
+        throw new Error("invalid IAM grant intent scope");
+      const expected = addOwnBinding(row.before, row.role, row.principal);
+      if (!expected.added || JSON.stringify(expected.policy) !== JSON.stringify(row.requested))
+        throw new Error("invalid IAM grant ownership proof");
       entries.push({
         resource: row.resource,
         role: row.role,
         principal: row.principal,
         state: "grant-unknown",
+        stage: "grant-pending",
+        requested: row.requested,
       });
-    } else {
-      const entry = entries.find((item) => item.resource === row.resource);
-      if (!entry) throw new Error("IAM answer without owned intent");
-      if (row.phase === "grant-confirmed") entry.state = "granted";
-      else if (row.phase === "restore-intent") entry.state = "restore-unknown";
-      else if (row.phase === "restore-confirmed") entry.state = "restored";
-      else if (!["grant-unknown", "restore-unknown"].includes(row.phase))
-        throw new Error("unreadable IAM journal phase");
+      continue;
     }
+    const entry = entries.find((item) => item.resource === row.resource);
+    if (!entry) throw new Error("IAM answer without owned intent");
+    if (
+      row.phase === "grant-confirmed" &&
+      entry.stage === "grant-pending" &&
+      confirmed(row.setAnswer, entry.requested) &&
+      confirmed(row.readback, entry.requested)
+    ) {
+      entry.state = "granted";
+      entry.stage = "granted";
+    } else if (row.phase === "grant-unknown" && entry.stage === "grant-pending") {
+      entry.stage = "grant-terminal";
+    } else if (
+      row.phase === "restore-intent" &&
+      entry.stage === "granted" &&
+      JSON.stringify(removeOwnBinding(row.before, entry.role, entry.principal)) ===
+        JSON.stringify(row.requested)
+    ) {
+      entry.state = "restore-unknown";
+      entry.stage = "restore-pending";
+      entry.requested = row.requested;
+    } else if (row.phase === "restore-unknown" && entry.stage === "restore-pending") {
+      entry.stage = "restore-terminal";
+    } else if (
+      row.phase === "restore-confirmed" &&
+      ((entry.stage === "restore-pending" &&
+        confirmed(row.setAnswer, entry.requested) &&
+        confirmed(row.readback, entry.requested) &&
+        !hasOwn(row.readback.body, entry.role, entry.principal)) ||
+        (entry.stage === "granted" &&
+          row.proof === "already-absent" &&
+          complete(row.readback) &&
+          !hasOwn(readPolicy(row.readback.body), entry.role, entry.principal)))
+    ) {
+      entry.state = "restored";
+      entry.stage = "restored";
+    } else throw new Error("invalid IAM replay transition or confirmation proof");
   }
   return Object.freeze({
     async grant(client, resource, role, principal) {
       assertOwned(resource);
       if (
-        !["roles/pubsub.subscriber", "roles/pubsub.publisher"].includes(role) ||
-        !/^serviceAccount:service-\d{1,20}@gcp-sa-pubsub\.iam\.gserviceaccount\.com$/.test(
-          principal,
-        ) ||
+        !validScope(resource, role, principal) ||
         entries.some((entry) => entry.resource === resource)
       )
         throw new Error("invalid own grant scope");
-      const before = await client.getIamPolicy(resource);
+      const before = await client.getIamPolicy(resource, { requestedPolicyVersion: 3 });
       if (!complete(before)) throw new Error("grant policy read needs-review");
       const { policy, added } = addOwnBinding(before.body, role, principal);
       if (!added) throw new Error("grant binding preexists; not owned by this run");
@@ -113,12 +159,12 @@ export function createIamOwnership({
         requested: policy,
       });
       const written = await client.setIamPolicy(resource, policy);
-      if (!complete(written)) {
+      if (!confirmed(written, policy)) {
         persist({ phase: "grant-unknown", resource });
         throw new Error("grant answer ambiguous; retain lock for coordinator recovery");
       }
       const grantedAt = now();
-      const check = await client.getIamPolicy(resource);
+      const check = await client.getIamPolicy(resource, { requestedPolicyVersion: 3 });
       if (
         !complete(check) ||
         !sameBindings(readPolicy(check.body), policy) ||
@@ -126,7 +172,14 @@ export function createIamOwnership({
       )
         throw new Error("grant readback needs-review; owned intent remains open");
       entry.state = "granted";
-      persist({ phase: "grant-confirmed", resource, role, principal });
+      persist({
+        phase: "grant-confirmed",
+        resource,
+        role,
+        principal,
+        setAnswer: written,
+        readback: check,
+      });
       return { grantedAt, resource };
     },
     async restore(client) {
@@ -139,22 +192,26 @@ export function createIamOwnership({
           continue;
         }
         try {
-          const before = await client.getIamPolicy(entry.resource);
+          const before = await client.getIamPolicy(entry.resource, { requestedPolicyVersion: 3 });
           if (!complete(before)) throw new Error("restore policy read needs-review");
           const current = readPolicy(before.body);
           const next = removeOwnBinding(current, entry.role, entry.principal);
-          if (hasOwn(current, entry.role, entry.principal)) {
+          let written;
+          let check = before;
+          const absent = !hasOwn(current, entry.role, entry.principal);
+          if (!absent) {
             entry.state = "restore-unknown";
             persist({
               phase: "restore-intent",
               resource: entry.resource,
               role: entry.role,
               principal: entry.principal,
+              before: current,
               requested: next,
             });
-            const written = await client.setIamPolicy(entry.resource, next);
-            if (!complete(written)) throw new Error("restore answer ambiguous");
-            const check = await client.getIamPolicy(entry.resource);
+            written = await client.setIamPolicy(entry.resource, next);
+            if (!confirmed(written, next)) throw new Error("restore answer ambiguous");
+            check = await client.getIamPolicy(entry.resource, { requestedPolicyVersion: 3 });
             if (
               !complete(check) ||
               !sameBindings(readPolicy(check.body), next) ||
@@ -163,7 +220,12 @@ export function createIamOwnership({
               throw new Error("restore readback needs-review");
           }
           entry.state = "restored";
-          persist({ phase: "restore-confirmed", resource: entry.resource });
+          persist({
+            phase: "restore-confirmed",
+            resource: entry.resource,
+            ...(absent ? { proof: "already-absent" } : { setAnswer: written }),
+            readback: check,
+          });
           restored.push(entry.resource);
         } catch {
           unsettled.push({ ...entry });
@@ -178,9 +240,12 @@ export function createIamOwnership({
 
 export async function waitAfterLastGrant({ grantedAt, now = () => performance.now(), sleep }) {
   if (!Number.isFinite(grantedAt)) throw new Error("missing last confirmed grant time");
-  while (now() - grantedAt < IAM_WAIT_MS) {
+  const initial = now() - grantedAt;
+  if (!Number.isFinite(initial) || initial < 0) throw new Error("invalid IAM monotonic clock");
+  while (true) {
     const elapsed = now() - grantedAt;
     if (!Number.isFinite(elapsed) || elapsed < 0) throw new Error("invalid IAM monotonic clock");
+    if (elapsed >= IAM_WAIT_MS) return;
     await sleep(IAM_WAIT_MS - elapsed);
   }
 }

@@ -62,6 +62,7 @@ export async function cleanup({
   sleep,
   readBackAttempts = 3,
   a2ElapsedMs,
+  protectedNames = new Set(),
 }) {
   const report = {
     deleted: [],
@@ -94,6 +95,10 @@ export async function cleanup({
       for (const name of found) everything.add(name);
       for (const name of targets) if (name.split("/")[2] === kind) names.add(name);
       for (const name of names) {
+        if (protectedNames.has(name)) {
+          report.leftover.push(name);
+          continue;
+        }
         // The own read also confirms unknown creation requests, if and only if the body names this resource.
         if (!found.has(name) || ledger.unconfirmed(name) || ledger.deleting(name)) {
           const read = await client[get](name);

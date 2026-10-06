@@ -27,6 +27,8 @@ import { createRest } from "./rest.mjs";
 import { assertBudgetCovers, exitCodeOf, runCases, selectCases } from "./runner.mjs";
 import { createTokenProvider } from "./token.mjs";
 import { createPhaseLimit } from "./limits.mjs";
+import { admitV2, sha256 } from "./admission.mjs";
+import { createIamOwnership, IAM_WAIT_MS } from "./iam.mjs";
 import { IAM_PREREQUISITE } from "./cases/stream-dlq.mjs";
 
 const PRODUCTION = { rest: "https://pubsub.googleapis.com", grpc: "pubsub.googleapis.com:443" };
@@ -81,8 +83,15 @@ export function parseArgs(argv, env = {}) {
   }
   options.quotaProject = take("quota-project");
   options.suite = take("suite") ?? "unary";
-  if (options.suite !== "unary" && options.suite !== "stream-dlq")
-    throw new Error("--suite must be unary or stream-dlq");
+  options.descriptor = take("descriptor");
+  options.authority = take("authority");
+  if (options.suite === "stream-dlq-v2" && max === undefined) options.maxRequests = 228;
+  if (
+    options.suite !== "unary" &&
+    options.suite !== "stream-dlq" &&
+    options.suite !== "stream-dlq-v2"
+  )
+    throw new Error("--suite must be unary, stream-dlq or stream-dlq-v2");
   if (options.prepare && options.cleanupOnly)
     throw new Error("--prepare does not perform A2 recovery");
   options.fromCapture = take("from-capture");
@@ -101,6 +110,17 @@ export function parseArgs(argv, env = {}) {
   options.host = take("emulator-host") ?? env.PUBSUB_EMULATOR_HOST;
   if (!options.production && !/^[^/\s]+:\d+$/.test(options.host ?? ""))
     throw new Error("an emulator target needs --emulator-host or PUBSUB_EMULATOR_HOST (host:port)");
+  if (
+    options.suite === "stream-dlq-v2" &&
+    (options.maxRequests !== 228 || new Set(options.transports).size !== options.transports.length)
+  )
+    throw new Error("v2 needs228source requests and distinct transports");
+  if (
+    options.suite === "stream-dlq-v2" &&
+    (options.only !== undefined ||
+      JSON.stringify(options.transports) !== JSON.stringify(["rest", "grpc"]))
+  )
+    throw new Error("v2 requires the full fixed packet and both transports");
   if (flags.size > 0) throw new Error(`unknown option --${[...flags.keys()][0]}`);
   return options;
 }
@@ -111,6 +131,9 @@ export function summarize({ options, capture, summary }) {
     runId: options.runId,
     target: options.target,
     project: options.project,
+    ...(options.suite === "stream-dlq-v2"
+      ? { sourceHead: options.admitted?.sourceHead, envelopeId: options.admitted?.envelopeId }
+      : {}),
     requests: capture.count(),
     unknownAnswers: capture.unknownCount(),
     unknowns: capture.unknowns(),
@@ -153,24 +176,43 @@ export async function main(
   let issued = null;
   let suffix = "";
   let a2ElapsedMs;
+  let originalDir;
+  let originalStart;
+  let iamReplay = [];
   try {
     options = parseArgs(argv, env);
     if (!options.cleanupOnly) {
       cases = selectCases(options.only, options.suite);
       createOwnership({ project: options.project, runId: options.runId });
       if (
-        options.suite === "stream-dlq" &&
+        options.suite.startsWith("stream-dlq") &&
         cases.some((item) => item.transports.some((name) => !options.transports.includes(name)))
       )
         throw new Error("the selected stream-dlq cases need every required transport");
       assertBudgetCovers(cases, options.transports, options.maxRequests);
       if (options.prepare) {
         io.stdout.write(
-          `${JSON.stringify({ noWire: true, suite: options.suite, cases: cases.map(({ id, requests, transports, resources, timeoutMs }) => ({ id, requests, transports, resources, timeoutMs })), requests: cases.reduce((sum, item) => sum + item.requests * options.transports.filter((name) => item.transports === undefined || item.transports.includes(name)).length, 0), cleanupRequests: CLEANUP_BUDGET, a2Requests: CLEANUP_BUDGET, iamFiniteUpperBoundMs: IAM_PREREQUISITE.finiteUpperBoundMs })}\n`,
+          `${JSON.stringify({ noWire: true, suite: options.suite, cases: cases.map(({ id, requests, transports, resources, timeoutMs }) => ({ id, requests, transports, resources, timeoutMs })), requests: cases.reduce((sum, item) => sum + item.requests * options.transports.filter((name) => item.transports === undefined || item.transports.includes(name)).length, 0), cleanupRequests: CLEANUP_BUDGET, a2Requests: CLEANUP_BUDGET, resources: cases.reduce((sum, item) => sum + (item.resources ?? 0), 0), iamWaitAfterGrantMs: options.suite === "stream-dlq-v2" ? IAM_WAIT_MS : null, iamConvergenceClaim: false, iamFiniteUpperBoundMs: IAM_PREREQUISITE.finiteUpperBoundMs })}\n`,
         );
         return 0;
       }
     } else {
+      // A recovery cannot select unary to bypass the recorded v2 source/IAM admission.
+      const original = readFileSync(options.fromCapture, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+      const start = original.find((row) => row.note === "run-start");
+      originalStart = start;
+      if (start?.suite === "stream-dlq-v2" && options.suite !== "stream-dlq-v2")
+        throw new Error("v2 recovery requires --suite stream-dlq-v2");
+      if (
+        options.suite === "stream-dlq-v2" &&
+        (start?.suite !== options.suite ||
+          start.project !== options.project ||
+          start.runId !== options.runId)
+      )
+        throw new Error("v2 recovery source identity mismatch");
       // The later run reads the names the recording issued, and waits for the service to settle.
       issued = readLedger(options.ledgerPath, {});
       const waited = deps.now() - lastLineTime(options.fromCapture);
@@ -178,7 +220,24 @@ export async function main(
         throw new Error(
           `--cleanup-only runs at least ${MIN_A2_WAIT_MS / 60000} minutes after the recording (${Math.ceil(waited / 1000)} s so far)`,
         );
-      const originalDir = dirname(options.fromCapture);
+      originalDir = dirname(options.fromCapture);
+      if (options.suite === "stream-dlq-v2") {
+        options.iamPath = join(originalDir, `iam-${options.runId}.jsonl`);
+        iamReplay = readFileSync(options.iamPath, "utf8")
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line));
+        const own = createOwnership({ project: options.project, runId: options.runId });
+        createIamOwnership({
+          journal: {
+            write() {
+              throw new Error("preflight must not append IAM intent");
+            },
+          },
+          assertOwned: (name) => own.assertOwned(name),
+          replay: iamReplay,
+        });
+      }
       const priorA2 = readdirSync(originalDir).some(
         (file) =>
           file.startsWith(`capture-${options.runId}-a2-`) ||
@@ -189,29 +248,50 @@ export async function main(
         throw new Error(
           "A2 has already started; use a new recovery packet with the full issued history",
         );
-      // Keep the atomic one-use marker beside the original input even if output is written elsewhere.
-      try {
-        writeFileSync(
-          join(originalDir, `a2-started-${options.runId}.json`),
-          `${JSON.stringify({ runId: options.runId, startedAt: new Date(deps.now()).toISOString() })}\n`,
-          { flag: "wx", mode: 0o600 },
-        );
-      } catch (error) {
-        if (error.code === "EEXIST")
-          throw new Error(
-            "A2 has already started; use a new recovery packet with the full issued history",
-            { cause: error },
-          );
-        throw error;
-      }
       a2ElapsedMs = waited;
       suffix = `-a2-${stamp(deps.now())}`;
+    }
+    if (options.production && options.suite === "stream-dlq-v2") {
+      options.admitted = admitV2(options, deps.now());
+      if (options.cleanupOnly) {
+        if (
+          originalStart.sourceHead !== options.admitted.sourceHead ||
+          originalStart.envelopeId !== options.admitted.envelopeId
+        )
+          throw new Error("v2 recovery original source/envelope mismatch");
+        for (const [key, path] of [
+          ["captureSha256", options.fromCapture],
+          ["issuedSha256", options.ledgerPath],
+          ["iamSha256", options.iamPath],
+        ])
+          if (options.admitted.cleanupRecovery?.[key] !== sha256(readFileSync(path)))
+            throw new Error("v2 recovery input digest mismatch");
+      }
     }
   } catch (error) {
     io.stderr.write(`${error.message}\n`);
     return 2;
   }
   if (deps.noWire === true) throw new Error("no-wire test guard refused the actual recorder path");
+  if (options.cleanupOnly) {
+    // Keep the atomic one-use marker beside the original input even if output is written elsewhere.
+    try {
+      writeFileSync(
+        join(originalDir, `a2-started-${options.runId}.json`),
+        `${JSON.stringify({ runId: options.runId, startedAt: new Date(deps.now()).toISOString() })}\n`,
+        { flag: "wx", mode: 0o600 },
+      );
+    } catch (error) {
+      if (error.code === "EEXIST") {
+        io.stderr.write(
+          "A2 has already started; use a new recovery packet with the full issued history\n",
+        );
+        return 2;
+      }
+      io.stderr.write(`${error.message}\n`);
+      return 2;
+    }
+  }
   mkdirSync(options.out, { recursive: true, mode: 0o700 });
   const journal = createFileJournal(join(options.out, `capture-${options.runId}${suffix}.jsonl`));
   const capture = createCapture({ journal });
@@ -232,8 +312,9 @@ export async function main(
   const rest = options.production ? PRODUCTION.rest : `http://${options.host}`;
   const grpcTarget = options.production ? PRODUCTION.grpc : options.host;
   const transports = { rest: createRest({ base: rest, budget, ...common }) };
-  const cleanupPhase =
-    options.suite === "stream-dlq" ? createPhaseLimit(600_000, deps.monotonicNow) : null;
+  const cleanupPhase = options.suite.startsWith("stream-dlq")
+    ? createPhaseLimit(600_000, deps.monotonicNow)
+    : null;
   const cleanupRawTransport = createRest({ base: rest, budget: cleanupBudget, ...common });
   const cleanupRestTransport =
     cleanupPhase === null ? cleanupRawTransport : cleanupPhase.transport(cleanupRawTransport);
@@ -246,6 +327,20 @@ export async function main(
     for (const [name, item] of issued.state())
       if (!ownership.isOwned(name) && (maybeCreated(item) || maybeDeleting(item)))
         ownership.registerProbe(name);
+  const iamJournal =
+    options.suite === "stream-dlq-v2"
+      ? createFileJournal(join(options.out, `iam-${options.runId}${suffix}.jsonl`))
+      : null;
+  if (iamJournal) {
+    const replay = iamReplay;
+    options.iam = createIamOwnership({
+      journal: iamJournal,
+      assertOwned: (name) => ownership.assertOwned(name),
+      now: deps.monotonicNow,
+      replay,
+    });
+    options.monotonicNow = deps.monotonicNow;
+  }
   const pushState = newPushState();
   const cleanupRest = createClient({
     transport: cleanupRestTransport,
@@ -261,11 +356,16 @@ export async function main(
     target: options.target,
     project: options.project,
     maxRequests: options.maxRequests,
+    suite: options.suite,
+    ...(options.suite === "stream-dlq-v2"
+      ? { sourceHead: options.admitted?.sourceHead, envelopeId: options.admitted?.envelopeId }
+      : {}),
     cleanupOnly: options.cleanupOnly === true,
   });
   let summary;
   try {
-    if (options.cleanupOnly)
+    if (options.cleanupOnly) {
+      const iamReport = options.iam ? await options.iam.restore(cleanupRest) : { unsettled: [] };
       summary = {
         cases: [],
         stopped: null,
@@ -277,9 +377,13 @@ export async function main(
           ledger,
           sleep: cleanupPhase === null ? wait : cleanupPhase.sleep(wait),
           a2ElapsedMs,
+          protectedNames: new Set(iamReport.unsettled.map((entry) => entry.resource)),
         }),
       };
-    else
+      summary.iam = iamReport;
+      if (iamReport.unsettled.length)
+        summary.cleanup.errors.push("IAM restoration unresolved; retain lock");
+    } else
       summary = await runCases({
         cases,
         transportNames: options.transports,
@@ -296,6 +400,7 @@ export async function main(
       });
   } finally {
     grpc.close();
+    iamJournal?.close();
   }
   const result = summarize({ options, capture, summary });
   capture.note("run-end", { requests: result.requests, stopped: result.stopped });

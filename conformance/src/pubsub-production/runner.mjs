@@ -79,10 +79,15 @@ function createContext({
   const clientOf = (transport, id) =>
     createClient({ transport, ownership, pushState, caseId: id, ledger });
   const allocated = new Set();
+  const runAllocated = options.runAllocated ?? new Set();
   const name = (kind, key) => {
     const value = `${kind}/${key}`;
     if (item.resources !== undefined && !allocated.has(value) && allocated.size >= item.resources)
       throw new CaseLimit(item.resources);
+    const full = ownership.resource(kind, `${tag}${key}`);
+    if (options.suite === "stream-dlq-v2" && !runAllocated.has(full) && runAllocated.size >= 22)
+      throw new CaseLimit(22);
+    runAllocated.add(full);
     allocated.add(value);
     return ownership.resource(kind, `${tag}${key}`);
   };
@@ -139,6 +144,7 @@ export async function runCases({
   cleanupSleep = sleep,
 }) {
   const summary = { cases: [], stopped: null, limited: [], cleanup: null };
+  options.runAllocated = new Set();
   const stoppable = async (ms) => {
     if (isStopping()) throw new StopClean("stopped by a signal");
     await sleep(ms);
@@ -193,13 +199,19 @@ export async function runCases({
       if (summary.stopped !== null && entry.outcome !== "aborted") break outer;
     }
   }
+  summary.iam = options.iam
+    ? await options.iam.restore(cleanupRest)
+    : { restored: [], unsettled: [] };
   summary.cleanup = await cleanup({
     client: cleanupRest,
     ownership,
     project: ownership.project,
     ledger,
     sleep: cleanupSleep,
+    protectedNames: new Set(summary.iam.unsettled.map((entry) => entry.resource)),
   });
+  if (summary.iam.unsettled.length)
+    summary.cleanup.errors.push("IAM restoration unresolved; retain lock");
   return summary;
 }
 

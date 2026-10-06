@@ -4640,7 +4640,7 @@ impl BlockingAuthBridge {
             handle
                 .block_on(tokio::time::timeout_at(
                     tokio::time::Instant::from_std(admission_deadline),
-                    self.runtime.sync_clock(),
+                    self.runtime.sync_blocking_auth_clock(&target),
                 ))
                 .map_err(|_| BlockingFunctionFailure::timeout())?
                 .map_err(|_| BlockingFunctionFailure::unhandled())?;
@@ -4672,9 +4672,9 @@ impl BlockingAuthBridge {
         // The token the function's firebase-functions decodes into its event, as Identity
         // Platform and the official Auth emulator deliver it.
         let body = serde_json::json!({"data": {"jwt": unsigned_jwt(&claims)}}).to_string();
-        // The platform's deadline covers a cold start; a recovered runner is fireemu's cold start,
-        // so its call waits only for what is left of the deadline. An admitted runner keeps the
-        // whole deadline, and a function whose own timeout equals it still times out first.
+        // Recovery and virtual-clock acknowledgement share the platform's native deadline.
+        // A warm native-clock runner keeps its full budget; a function with an equal own
+        // timeout still times out before the platform envelope.
         let budget = if recovered || synchronize_date {
             blocking_auth_remaining(admission_deadline)?
         } else {
@@ -7455,10 +7455,36 @@ mod tests {
         assert!(value.is_object());
     }
 
+    fn virtual_date_fake_runner_spec(
+        snapshot: fireemu_core_session::clock::ClockSnapshot,
+    ) -> fireemu_adapter_functions::runner::SpawnSpec {
+        use fireemu_adapter_functions::application_clock::ApplicationClockPolicy;
+        use fireemu_adapter_functions::runner::SpawnSpec;
+        let policy = ApplicationClockPolicy {
+            date_virtual: true,
+            ..Default::default()
+        };
+        SpawnSpec {
+            command: vec![
+                "python3".to_owned(),
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../fireemu-adapter-functions/tests/fake_runner.py")
+                    .display()
+                    .to_string(),
+            ],
+            cwd: None,
+            env: vec![(
+                "FIREEMU_CLOCK_JSON".to_owned(),
+                policy.runner_options(snapshot).to_string(),
+            )],
+            hello_timeout: Duration::from_secs(60),
+        }
+    }
+
     #[test]
     fn blocking_auth_synchronizes_a_replacement_loaded_before_the_last_clock_ack() {
         use fireemu_adapter_functions::application_clock::ApplicationClockPolicy;
-        use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+        use fireemu_adapter_functions::runner::Runner;
         use fireemu_adapter_functions::runtime::{CodebaseSpec, FunctionsConfig, FunctionsRuntime};
         use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
         use fireemu_core_auth::mfa::TotpPolicy;
@@ -7476,25 +7502,10 @@ mod tests {
             date_virtual: true,
             ..Default::default()
         };
-        let spec = SpawnSpec {
-            command: vec![
-                "python3".to_owned(),
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../fireemu-adapter-functions/tests/fake_runner.py")
-                    .display()
-                    .to_string(),
-            ],
-            cwd: None,
-            env: vec![(
-                "FIREEMU_CLOCK_JSON".to_owned(),
-                policy
-                    .runner_options(clock.lock().unwrap().snapshot())
-                    .to_string(),
-            )],
-            hello_timeout: Duration::from_secs(60),
-        };
-        let (initial, replacement) = executor.block_on(async {
+        let spec = virtual_date_fake_runner_spec(clock.lock().unwrap().snapshot());
+        let (initial, replacement, unrelated) = executor.block_on(async {
             (
+                Arc::new(Runner::spawn_spec(&spec).await.unwrap()),
                 Arc::new(Runner::spawn_spec(&spec).await.unwrap()),
                 Arc::new(Runner::spawn_spec(&spec).await.unwrap()),
             )
@@ -7508,8 +7519,23 @@ mod tests {
         };
         manifest.functions.push(guard);
         // Construct outside an entered executor so the observer cannot mask admission sync.
-        let runtime = FunctionsRuntime::new(
-            manifest,
+        let runtime = FunctionsRuntime::with_codebases(
+            vec![
+                CodebaseSpec {
+                    name: "default".to_owned(),
+                    manifest,
+                    runner: initial,
+                    spawn: Some(spec.clone()),
+                    cleanup_dir: None,
+                },
+                CodebaseSpec {
+                    name: "unrelated".to_owned(),
+                    manifest: fireemu_core_functions::manifest::FunctionManifest::default(),
+                    runner: unrelated.clone(),
+                    spawn: None,
+                    cleanup_dir: None,
+                },
+            ],
             FunctionsConfig {
                 project: "demo-app".to_owned(),
                 default_bucket: "demo-app.appspot.com".to_owned(),
@@ -7526,15 +7552,14 @@ mod tests {
                 clock_policy: policy,
             },
             clock.clone(),
-            initial,
-            Some(spec.clone()),
-        );
-        clock
-            .lock()
-            .unwrap()
-            .advance(LogicalDuration::from_millis(1))
+        )
+        .unwrap();
+        let delta = LogicalDuration::from_millis(1);
+        clock.lock().unwrap().advance(delta).unwrap();
+        let snapshot = clock.lock().unwrap().snapshot();
+        executor
+            .block_on(runtime.runner().sync_clock(snapshot))
             .unwrap();
-        executor.block_on(runtime.sync_clock()).unwrap();
         runtime
             .reload_codebase(CodebaseSpec {
                 name: "default".to_owned(),
@@ -7544,6 +7569,8 @@ mod tests {
                 cleanup_dir: None,
             })
             .unwrap();
+        // A dead sibling with an old clock must not affect this admitted handler.
+        unrelated.kill_now();
         let bridge = super::BlockingAuthBridge::new(runtime.clone());
         let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
         let uid = store

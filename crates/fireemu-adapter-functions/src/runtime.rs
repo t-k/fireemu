@@ -1341,6 +1341,14 @@ impl FunctionsRuntime {
         Ok(())
     }
 
+    /// Synchronize only the exact runner generation reserved by Blocking Auth admission.
+    pub async fn sync_blocking_auth_clock(
+        &self,
+        target: &BlockingAuthTarget,
+    ) -> Result<(), String> {
+        self.sync_runner_clock(&target.runner).await
+    }
+
     /// Application time choices used by synchronous native invocation bridges.
     #[must_use]
     pub const fn application_clock_policy(

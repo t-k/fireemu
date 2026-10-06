@@ -1062,7 +1062,7 @@ async fn chunks_count_utf16_units_and_maps_are_delivered_in_id_order() {
         .find(|(k, _)| *k == "x-http-session-id")
         .map(|(_, v)| v.clone())
         .unwrap();
-    assert_eq!(sid.len(), 32, "128-bit session id");
+    assert_eq!(sid.len(), 22, "base64url-encoded 128-bit session id");
     // Another origin cannot use the session; a non-loopback origin is refused outright.
     let (status, _, body) = full(hub.handle(&ChannelRequest {
         kind: StreamKind::Listen,
@@ -1494,4 +1494,255 @@ async fn a_webchannel_listen_is_not_closed_at_the_hour() {
             .as_str()
             .is_some_and(|name| name.ends_with("/held/b"))
     }));
+}
+
+#[tokio::test]
+async fn listen_handshake_matches_production_width_and_scalar_only_in_strict() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../conformance/src/fs-listen/data/l3-production-frames.json"
+    ))
+    .unwrap();
+    for strict in [true, false] {
+        let (hub, _) = hub_and_local_with_profile(None, TokenAcceptance::Verified, strict);
+        let (status, headers, body) = full(hub.handle(&ChannelRequest {
+            kind: StreamKind::Listen,
+            method: "POST".to_owned(),
+            params: params(&[("database", DB), ("VER", "8"), ("RID", "1")]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: form(&[
+                ("count", "1"),
+                ("ofs", "0"),
+                ("req0___data__", &listen_target(1002, "open")),
+            ]),
+        }));
+        assert_eq!(status, 200);
+        let message = &chunks(&body)[0][0][1];
+        let sid = message[1].as_str().unwrap();
+        assert_eq!(sid.len(), if strict { 22 } else { 32 });
+        assert!(headers
+            .iter()
+            .any(|(key, value)| *key == "x-http-session-id" && value == sid));
+        for frame in fixture["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|f| !f["targets"].as_array().unwrap().is_empty())
+        {
+            let expected = &chunks(frame["body"].as_str().unwrap())[0][0][1];
+            assert_eq!(
+                message[4],
+                if strict {
+                    expected[4].clone()
+                } else {
+                    json!(12)
+                }
+            );
+            assert_eq!(message[0], expected[0]);
+            assert_eq!(message[2], expected[2]);
+            assert_eq!(message[3], expected[3]);
+            assert_eq!(message[5], expected[5]);
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn listen_encoder_matches_frozen_production_field_order_and_default_omissions() {
+    use fireemu_adapter_grpc::rest::json::listen_response_to_json;
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../conformance/src/fs-listen/data/l3-production-frames.json"
+    ))
+    .unwrap();
+    let time = prost_types::Timestamp {
+        seconds: 0,
+        nanos: 0,
+    };
+    let response = pb::ListenResponse {
+        response_type: Some(pb::listen_response::ResponseType::DocumentChange(
+            pb::DocumentChange {
+                document: Some(pb::Document {
+                    name: "doc".into(),
+                    fields: [(
+                        "value".to_owned(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::StringValue("a0".into())),
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                    create_time: Some(time),
+                    update_time: Some(time),
+                }),
+                target_ids: vec![1002],
+                removed_target_ids: vec![],
+            },
+        )),
+    };
+    let encoded = listen_response_to_json(&response, true);
+    assert_eq!(
+        encoded,
+        r#"{"documentChange":{"document":{"name":"doc","fields":{"value":{"stringValue":"a0"}},"createTime":"1970-01-01T00:00:00Z","updateTime":"1970-01-01T00:00:00Z"},"targetIds":[1002]}}"#
+    );
+    for frame in fixture["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["boundaryComplete"] == true)
+    {
+        let body = frame["body"].as_str().unwrap().replace(' ', "");
+        assert!(!body.contains("removedTargetIds"));
+        assert!(!body.contains("NO_CHANGE"));
+        for batch in chunks(frame["body"].as_str().unwrap()) {
+            for entry in batch.as_array().unwrap() {
+                let Some(change) = entry[1][0].get("documentChange") else {
+                    continue;
+                };
+                let source = &change["document"];
+                let mut document = fireemu_adapter_grpc::rest::json::document_from_json(
+                    source,
+                    &fireemu_adapter_grpc::rest::json::FieldPath::root("document"),
+                )
+                .unwrap();
+                for (key, slot) in [
+                    ("createTime", &mut document.create_time),
+                    ("updateTime", &mut document.update_time),
+                ] {
+                    let value = fireemu_adapter_grpc::rest::json::value_from_json(
+                        &json!({"timestampValue": source[key]}),
+                    )
+                    .unwrap();
+                    let Some(pb::value::ValueType::TimestampValue(time)) = value.value_type else {
+                        panic!("expected timestamp")
+                    };
+                    *slot = Some(time);
+                }
+                let response = pb::ListenResponse {
+                    response_type: Some(pb::listen_response::ResponseType::DocumentChange(
+                        pb::DocumentChange {
+                            document: Some(document),
+                            target_ids: vec![1002],
+                            removed_target_ids: vec![],
+                        },
+                    )),
+                };
+                let encoded = listen_response_to_json(&response, true);
+                let positions: Vec<_> = ["name", "fields", "createTime", "updateTime"]
+                    .iter()
+                    .map(|key| encoded.find(&format!("\"{key}\":")).unwrap())
+                    .collect();
+                assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+                let mut expected = entry[1][0].clone();
+                expected["documentChange"]["document"]["fields"]["rank"]["integerValue"] =
+                    json!("0");
+                assert_eq!(serde_json::from_str::<Value>(&encoded).unwrap(), expected);
+            }
+        }
+    }
+    let response = pb::ListenResponse {
+        response_type: Some(pb::listen_response::ResponseType::TargetChange(
+            pb::TargetChange {
+                target_change_type: 0,
+                target_ids: vec![],
+                cause: None,
+                resume_token: vec![1, 2, 3],
+                read_time: Some(time),
+            },
+        )),
+    };
+    assert_eq!(
+        listen_response_to_json(&response, true),
+        r#"{"targetChange":{"resumeToken":"AQID","readTime":"1970-01-01T00:00:00Z"}}"#
+    );
+}
+
+#[test]
+fn listen_encoder_keeps_nondefaults_and_emulator_output() {
+    use fireemu_adapter_grpc::rest::json::listen_response_to_json;
+    use pb::listen_response::ResponseType as R;
+    let time = prost_types::Timestamp {
+        seconds: 0,
+        nanos: 0,
+    };
+    for (message, strict, emulator) in [
+        (
+            R::DocumentChange(pb::DocumentChange {
+                document: None,
+                target_ids: vec![1002],
+                removed_target_ids: vec![7],
+            }),
+            r#"{"documentChange":{"document":null,"targetIds":[1002],"removedTargetIds":[7]}}"#,
+            r#"{"documentChange":{"document":null,"removedTargetIds":[7],"targetIds":[1002]}}"#,
+        ),
+        (
+            R::DocumentChange(pb::DocumentChange {
+                document: None,
+                target_ids: vec![1002],
+                removed_target_ids: vec![],
+            }),
+            r#"{"documentChange":{"document":null,"targetIds":[1002]}}"#,
+            r#"{"documentChange":{"document":null,"removedTargetIds":[],"targetIds":[1002]}}"#,
+        ),
+        (
+            R::TargetChange(pb::TargetChange {
+                target_change_type: 0,
+                target_ids: vec![1002],
+                cause: None,
+                resume_token: vec![],
+                read_time: None,
+            }),
+            r#"{"targetChange":{"targetIds":[1002]}}"#,
+            r#"{"targetChange":{"targetChangeType":"NO_CHANGE","targetIds":[1002]}}"#,
+        ),
+        (
+            R::TargetChange(pb::TargetChange {
+                target_change_type: 3,
+                target_ids: vec![1002],
+                cause: Some(fireemu_proto_firestore::google::rpc::Status::default()),
+                resume_token: vec![1, 2, 3],
+                read_time: Some(time),
+            }),
+            r#"{"targetChange":{"targetChangeType":"CURRENT","targetIds":[1002],"cause":{"code":0,"message":""},"resumeToken":"AQID","readTime":"1970-01-01T00:00:00Z"}}"#,
+            r#"{"targetChange":{"cause":{"code":0,"message":""},"readTime":"1970-01-01T00:00:00Z","resumeToken":"AQID","targetChangeType":"CURRENT","targetIds":[1002]}}"#,
+        ),
+        (
+            R::TargetChange(pb::TargetChange::default()),
+            r#"{"targetChange":{}}"#,
+            r#"{"targetChange":{"targetChangeType":"NO_CHANGE","targetIds":[]}}"#,
+        ),
+        (
+            R::DocumentDelete(pb::DocumentDelete {
+                document: "doc".into(),
+                removed_target_ids: vec![1002],
+                read_time: Some(time),
+            }),
+            r#"{"documentDelete":{"document":"doc","readTime":"1970-01-01T00:00:00Z","removedTargetIds":[1002]}}"#,
+            r#"{"documentDelete":{"document":"doc","readTime":"1970-01-01T00:00:00Z","removedTargetIds":[1002]}}"#,
+        ),
+        (
+            R::DocumentRemove(pb::DocumentRemove {
+                document: "doc".into(),
+                removed_target_ids: vec![1002],
+                read_time: Some(time),
+            }),
+            r#"{"documentRemove":{"document":"doc","removedTargetIds":[1002],"readTime":"1970-01-01T00:00:00Z"}}"#,
+            r#"{"documentRemove":{"document":"doc","readTime":"1970-01-01T00:00:00Z","removedTargetIds":[1002]}}"#,
+        ),
+        (
+            R::Filter(pb::ExistenceFilter {
+                target_id: 1002,
+                count: 2,
+                unchanged_names: None,
+            }),
+            r#"{"filter":{"targetId":1002,"count":2}}"#,
+            r#"{"filter":{"count":2,"targetId":1002}}"#,
+        ),
+    ] {
+        let response = pb::ListenResponse {
+            response_type: Some(message),
+        };
+        assert_eq!(listen_response_to_json(&response, true), strict);
+        assert_eq!(listen_response_to_json(&response, false), emulator);
+    }
 }

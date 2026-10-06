@@ -7,6 +7,7 @@
 import grpcLib from "@grpc/grpc-js";
 import { protos as pubsubProtos } from "@google-cloud/pubsub";
 import { createStreamingPull } from "./stream.mjs";
+import { TimeLimit } from "./limits.mjs";
 
 const DURATION_FIELDS = new Set([
   "messageRetentionDuration",
@@ -207,14 +208,19 @@ export function createGrpc({
         metadata.add("x-goog-user-project", quotaProject);
       if (remainingTime) timeoutMs = Math.min(timeoutMs, remainingTime());
       const started = now();
+      const dispatchDeadline = started + timeoutMs;
       if (journalDispatch)
         capture.note("request-dispatch", {
           ...label,
           transport: "grpc",
           op: op,
-          requestDeadlineAt: new Date(started + timeoutMs).toISOString(),
+          requestDeadlineAt: new Date(dispatchDeadline).toISOString(),
         });
       if (remainingTime) timeoutMs = Math.min(timeoutMs, remainingTime());
+      if (journalDispatch) {
+        timeoutMs = Math.min(timeoutMs, Math.floor(dispatchDeadline - now()));
+        if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new TimeLimit();
+      }
       const entry = {
         ...label,
         transport: "grpc",
@@ -228,7 +234,11 @@ export function createGrpc({
           (buffer) => Response.decode(buffer),
           body,
           metadata,
-          { deadline: new Date(now() + timeoutMs) },
+          {
+            deadline: new Date(
+              journalDispatch ? Math.min(dispatchDeadline, now() + timeoutMs) : now() + timeoutMs,
+            ),
+          },
           (error, message) => {
             if (!error)
               return resolve({

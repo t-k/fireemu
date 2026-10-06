@@ -1,6 +1,7 @@
 // One native bidirectional RPC per observation. No SDK subscriber, reconnect, lease extension or retry.
 import grpcLib from "@grpc/grpc-js";
 import { protos as pubsubProtos } from "@google-cloud/pubsub";
+import { TimeLimit } from "./limits.mjs";
 
 export const STREAM_BOUNDS = Object.freeze({
   outboundFrames: 2,
@@ -83,14 +84,19 @@ export function createStreamingPull({
       if (quotaProject !== null) metadata.add("x-goog-user-project", quotaProject);
       if (remainingTime) timeoutMs = Math.min(timeoutMs, remainingTime());
       const started = now();
+      const dispatchDeadline = started + timeoutMs;
       if (journalDispatch)
         capture.note("request-dispatch", {
           ...label,
           transport: "grpc",
           op: "streamingPull",
-          requestDeadlineAt: new Date(started + timeoutMs).toISOString(),
+          requestDeadlineAt: new Date(dispatchDeadline).toISOString(),
         });
       if (remainingTime) timeoutMs = Math.min(timeoutMs, remainingTime());
+      if (journalDispatch) {
+        timeoutMs = Math.min(timeoutMs, Math.floor(dispatchDeadline - now()));
+        if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new TimeLimit();
+      }
       let inboundFrames = 0;
       let outboundFrames = 0;
       let followUpSent = false;
@@ -103,7 +109,11 @@ export function createStreamingPull({
           (bytes) => bytes,
           (bytes) => bytes,
           metadata,
-          { deadline: new Date(now() + timeoutMs) },
+          {
+            deadline: new Date(
+              journalDispatch ? Math.min(dispatchDeadline, now() + timeoutMs) : now() + timeoutMs,
+            ),
+          },
         );
         const finish = (status) => {
           if (finished) return;

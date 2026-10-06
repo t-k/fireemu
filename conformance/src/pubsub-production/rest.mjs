@@ -2,6 +2,8 @@
 // is sent, captured as it happens. A transport error or a timeout is an unknown answer (`unknown: true`,
 // no status): it is recorded and never retried.
 
+import { TimeLimit } from "./limits.mjs";
+
 const INVALID_TOKEN = "invalid-token-for-the-recording";
 const TEXT_LIMIT = 4096;
 
@@ -53,14 +55,20 @@ export function createRest({
       if (quotaProject !== null && token !== "none") headers["x-goog-user-project"] = quotaProject;
       if (remainingTime) timeoutMs = Math.min(timeoutMs, remainingTime());
       const started = now();
+      const dispatchDeadline = started + timeoutMs;
       if (journalDispatch)
         capture.note("request-dispatch", {
           ...label,
           transport: "rest",
           op: op,
-          requestDeadlineAt: new Date(started + timeoutMs).toISOString(),
+          requestDeadlineAt: new Date(dispatchDeadline).toISOString(),
         });
+      const requestBody = body === undefined ? undefined : JSON.stringify(body);
       if (remainingTime) timeoutMs = Math.min(timeoutMs, remainingTime());
+      if (journalDispatch) {
+        timeoutMs = Math.min(timeoutMs, Math.floor(dispatchDeadline - now()));
+        if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new TimeLimit();
+      }
       const entry = {
         ...label,
         transport: "rest",
@@ -72,7 +80,7 @@ export function createRest({
         const reply = await fetchImpl(`${base}${path}`, {
           method,
           headers,
-          body: body === undefined ? undefined : JSON.stringify(body),
+          body: requestBody,
           signal: AbortSignal.timeout(timeoutMs),
           redirect: "manual",
         });

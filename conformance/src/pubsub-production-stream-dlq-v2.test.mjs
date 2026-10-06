@@ -1401,11 +1401,13 @@ test("unary and native gRPC persist request deadline before dispatch", async () 
   class Client {
     close() {}
     makeUnaryRequest(_path, _serialize, _deserialize, _body, _metadata, _options, callback) {
+      assert.ok(notes.length > 0);
       assert.equal(notes.at(-1).kind, "request-dispatch");
       unary = true;
       callback(null, {});
     }
     makeBidiStreamRequest() {
+      assert.ok(notes.length > 0);
       assert.equal(notes.at(-1).kind, "request-dispatch");
       native = true;
       const rpc = new EventEmitter();
@@ -1438,5 +1440,161 @@ test("unary and native gRPC persist request deadline before dispatch", async () 
     assert.ok(notes.every((row) => Date.parse(row.requestDeadlineAt) === 930_000));
   } finally {
     transport.close();
+  }
+});
+
+test("v2 never dispatches after synchronous journaling has exhausted its persisted request deadline", async () => {
+  const { createRest } = await import("./pubsub-production/rest.mjs");
+  const { createGrpc } = await import("./pubsub-production/grpc.mjs");
+  const grpcLib = (await import("@grpc/grpc-js")).default;
+  for (const mode of ["rest", "grpc", "stream"]) {
+    let now = 0;
+    let sent = 0;
+    const common = {
+      now: () => now,
+      journalDispatch: true,
+      budget: { consume() {} },
+      capture: {
+        note() {
+          now += 31_000;
+        },
+        record() {},
+        frame() {},
+      },
+    };
+    class Client {
+      close() {}
+      makeUnaryRequest(_path, _serialize, _deserialize, _body, _metadata, _options, callback) {
+        sent += 1;
+        callback(null, {});
+      }
+      makeBidiStreamRequest() {
+        sent += 1;
+        throw new Error("late dispatch");
+      }
+    }
+    const transport =
+      mode === "rest"
+        ? createRest({
+            ...common,
+            base: "http://127.0.0.1:1",
+            fetchImpl: async () => {
+              sent += 1;
+              return new Response("{}");
+            },
+          })
+        : createGrpc({
+            ...common,
+            target: "127.0.0.1:1",
+            secure: false,
+            grpc: { ...grpcLib, Client },
+          });
+    try {
+      const action =
+        mode === "rest"
+          ? transport.request({ method: "GET", path: "/v1/projects/demo-v2/topics/own" })
+          : mode === "grpc"
+            ? transport.call({
+                service: "Publisher",
+                method: "GetTopic",
+                request: { topic: "projects/demo-v2/topics/own" },
+              })
+            : transport.stream({
+                frames: [{ subscription: resource, streamAckDeadlineSeconds: 10 }],
+              });
+      await assert.rejects(action, /time budget|deadline/);
+      assert.equal(sent, 0);
+    } finally {
+      transport.close?.();
+    }
+  }
+});
+
+test("v2 deadlines consume synchronous journal time across all transports", async () => {
+  const { createRest } = await import("./pubsub-production/rest.mjs");
+  const { createGrpc } = await import("./pubsub-production/grpc.mjs");
+  const { EventEmitter } = await import("node:events");
+  const grpcLib = (await import("@grpc/grpc-js")).default;
+  const originalTimeout = AbortSignal.timeout;
+  try {
+    for (const delay of [0, 1, 40, 99]) {
+      for (const mode of ["rest", "grpc", "stream"]) {
+        let now = 0;
+        let persisted;
+        let actualDeadline;
+        const common = {
+          now: () => now,
+          journalDispatch: true,
+          budget: { consume() {} },
+          capture: {
+            note(_kind, row) {
+              persisted = Date.parse(row.requestDeadlineAt);
+              now += delay;
+            },
+            record() {},
+            frame() {},
+          },
+        };
+        AbortSignal.timeout = (ms) => {
+          actualDeadline = now + ms;
+          return new AbortController().signal;
+        };
+        class Client {
+          close() {}
+          makeUnaryRequest(_path, _serialize, _deserialize, _body, _metadata, options, callback) {
+            actualDeadline = options.deadline.getTime();
+            callback(null, {});
+          }
+          makeBidiStreamRequest(_path, _serialize, _deserialize, _metadata, options) {
+            actualDeadline = options.deadline.getTime();
+            const rpc = new EventEmitter();
+            rpc.write = () => {};
+            rpc.end = () => {};
+            rpc.cancel = () => {};
+            process.nextTick(() => rpc.emit("status", { code: grpcLib.status.OK }));
+            return rpc;
+          }
+        }
+        const transport =
+          mode === "rest"
+            ? createRest({
+                ...common,
+                base: "http://127.0.0.1:1",
+                fetchImpl: async () => new Response("{}"),
+              })
+            : createGrpc({
+                ...common,
+                target: "127.0.0.1:1",
+                secure: false,
+                grpc: { ...grpcLib, Client },
+              });
+        try {
+          if (mode === "rest")
+            await transport.request({
+              method: "GET",
+              path: "/v1/projects/demo-v2/topics/own",
+              timeoutMs: 100,
+            });
+          else if (mode === "grpc")
+            await transport.call({
+              service: "Publisher",
+              method: "GetTopic",
+              request: { topic: "projects/demo-v2/topics/own" },
+              timeoutMs: 100,
+            });
+          else
+            await transport.stream({
+              frames: [{ subscription: resource, streamAckDeadlineSeconds: 10 }],
+              timeoutMs: 100,
+            });
+          assert.equal(persisted, 100);
+          assert.equal(actualDeadline, persisted, `${mode}: delay=${delay}`);
+        } finally {
+          transport.close?.();
+        }
+      }
+    }
+  } finally {
+    AbortSignal.timeout = originalTimeout;
   }
 });

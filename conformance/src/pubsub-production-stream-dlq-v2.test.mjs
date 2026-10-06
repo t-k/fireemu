@@ -1143,3 +1143,67 @@ test("phase bounds an unresolved credential and shortens the actual gRPC deadlin
     transport.close();
   }
 });
+
+test("descriptor refuses an omitted producer or altered runtime in a plain actual process", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const path = fileURLToPath(
+    new URL("./pubsub-production/fixtures/v2-runtime-probe.mjs", import.meta.url),
+  );
+  for (const mode of ["source-omission", "runtime-mismatch"]) {
+    const result = spawnSync(process.execPath, [path, mode], {
+      env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },
+      encoding: "utf8",
+      timeout: 15_000,
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /descriptor source\/runtime mismatch/);
+  }
+});
+
+test("v2 summary preserves project source and envelope for attempt2 admission", async () => {
+  const { summarize } = await import("./pubsub-production/record.mjs");
+  const options = {
+    runId: "0123456789ab",
+    project: "demo-v2",
+    suite: "stream-dlq-v2",
+    admitted: { sourceHead: "a".repeat(40), envelopeId: "PUBSUB-STREAM-DLQ-V2" },
+  };
+  const result = summarize({
+    options,
+    capture: { count: () => 0, unknownCount: () => 0, unknowns: () => [], perCase: () => ({}) },
+    summary: { stopped: null, cleanup: { leftover: [], errors: [], unsettled: [] } },
+  });
+  assert.equal(result.sourceHead, options.admitted.sourceHead);
+  assert.equal(result.envelopeId, options.admitted.envelopeId);
+  assert.equal(result.project, options.project);
+  assert.equal(result.closureReady, true);
+});
+
+test("descriptor equality covers generated source runtime head and schema near misses", async () => {
+  const { descriptorMatches } = await import("./pubsub-production/admission.mjs");
+  for (let seed = 0; seed < 128; seed += 1) {
+    const actual = {
+      schema: 1,
+      suite: "stream-dlq-v2",
+      head: `${seed}`.padStart(40, "0"),
+      runtime: {
+        node: `v${seed}`,
+        dependencies: [{ name: "sdk", treeSha256: `${seed}`.padStart(64, "0") }],
+      },
+      sources: [{ path: "producer.mjs", sha256: `${seed}`.padStart(64, "0") }],
+    };
+    assert.equal(descriptorMatches(structuredClone(actual), actual), true);
+    for (const changes of [
+      { schema: 2 },
+      { suite: "stream-dlq" },
+      { head: "bad" },
+      { runtime: { ...actual.runtime, node: "altered" } },
+      { runtime: { ...actual.runtime, dependencies: [] } },
+      { sources: [] },
+      { sources: [{ ...actual.sources[0], sha256: "altered" }] },
+    ])
+      assert.equal(descriptorMatches({ ...actual, ...changes }, actual), false);
+  }
+  assert.equal(descriptorMatches(null, {}), false);
+});

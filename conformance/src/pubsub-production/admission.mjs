@@ -149,16 +149,18 @@ export function describeSource() {
     })),
   };
 }
+export function descriptorMatches(descriptor, actual) {
+  return (
+    descriptor?.schema === 1 &&
+    descriptor.suite === "stream-dlq-v2" &&
+    descriptor.head === actual.head &&
+    JSON.stringify(descriptor.runtime) === JSON.stringify(actual.runtime) &&
+    JSON.stringify(descriptor.sources) === JSON.stringify(actual.sources)
+  );
+}
 export function verifyDescriptor(descriptor) {
   const actual = describeSource();
-  if (
-    descriptor.schema !== 1 ||
-    descriptor.suite !== "stream-dlq-v2" ||
-    descriptor.head !== actual.head ||
-    JSON.stringify(descriptor.runtime) !== JSON.stringify(actual.runtime) ||
-    JSON.stringify(descriptor.sources) !== JSON.stringify(actual.sources)
-  )
-    throw new Error("descriptor source/runtime mismatch");
+  if (!descriptorMatches(descriptor, actual)) throw new Error("descriptor source/runtime mismatch");
   execFileSync("git", ["-C", sourceRoot, "verify-commit", descriptor.head], {
     stdio: ["ignore", "pipe", "pipe"],
   });

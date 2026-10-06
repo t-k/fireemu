@@ -20,10 +20,9 @@
   "runnerTreeManifestFormat": "Tracked tools/runner-node files except *.test.mjs, sorted in ASCII order: UTF-8 path, TAB, lowercase SHA-256 of file bytes, LF; hash the concatenation.",
   "executionBinding": "report",
   "summary": {
-    "MATCH": 53,
-    "DIVERGENCE_APPROVED": 9,
-    "NOT_COMPARABLE": 5,
-    "DIVERGES": 3
+    "DIVERGENCE_APPROVED": 15,
+    "MATCH": 54,
+    "NOT_IMPLEMENTED": 1
   },
   "rows": [
     {
@@ -1233,7 +1232,7 @@
         },
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-          "sha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+          "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
           "fields": [
             "localVerificationRows"
           ],
@@ -1618,7 +1617,7 @@
       "evidenceSources": [
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-          "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+          "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
           "caseId": "explicit-UTC",
           "fields": [
             "rows"
@@ -1964,7 +1963,7 @@
       "evidenceSources": [
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-          "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+          "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
           "caseId": "Asia-Tokyo",
           "fields": [
             "rows"
@@ -2310,7 +2309,7 @@
       "evidenceSources": [
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-          "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+          "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
           "caseId": "America-New-York",
           "fields": [
             "rows"
@@ -2657,7 +2656,7 @@
       "evidenceSources": [
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-          "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+          "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
           "caseId": "v1-default",
           "fields": [
             "rows"
@@ -3011,7 +3010,7 @@
       "evidenceSources": [
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-          "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+          "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
           "caseId": "v2-default",
           "fields": [
             "rows"
@@ -3096,7 +3095,7 @@
       "evidenceSources": [
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-          "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+          "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
           "caseId": "invalid-zone",
           "fields": [
             "rows"
@@ -4454,7 +4453,7 @@
         },
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-          "sha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+          "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
           "fields": [
             "localVerificationRows"
           ],
@@ -4801,7 +4800,7 @@
       "evidenceSources": [
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-          "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+          "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
           "caseId": "explicit-zero",
           "fields": [
             "rows"
@@ -4879,7 +4878,7 @@
       "evidenceSources": [
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-          "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+          "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
           "caseId": "retryCount-boundary",
           "fields": [
             "rows"
@@ -5225,7 +5224,7 @@
       "evidenceSources": [
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-          "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+          "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
           "caseId": "min-backoff",
           "fields": [
             "rows"
@@ -5303,7 +5302,7 @@
       "evidenceSources": [
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-          "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+          "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
           "caseId": "max-backoff",
           "fields": [
             "rows"
@@ -5649,7 +5648,7 @@
       "evidenceSources": [
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-          "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+          "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
           "caseId": "max-doublings",
           "fields": [
             "rows"
@@ -5995,7 +5994,7 @@
       "evidenceSources": [
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-          "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+          "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
           "caseId": "max-retry-duration",
           "fields": [
             "rows"
@@ -6169,7 +6168,102 @@
           "note": "retryCount 4, min 4s, max 50s, 2 doublings; offsets in seconds from the first attempt"
         }
       ],
-      "note": "retryCount 4, min 4s, max 50s, 2 doublings; offsets in seconds from the first attempt"
+      "note": "retryCount 4, min 4s, max 50s, 2 doublings; offsets in seconds from the first attempt Both run-3 passes are compared to the strict retry offsets within the recorded tolerance.",
+      "productionPassComparisons": [
+        {
+          "pass": 1,
+          "recordingId": "f123d4fa2d61c5f5-pass-1",
+          "path": "conformance/scheduled-delivery/local/production-run3.json",
+          "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+          "productionOffsetsSeconds": [
+            0,
+            4.69,
+            13.31,
+            29.9,
+            48.45
+          ],
+          "strictOffsetsSeconds": [
+            0,
+            4,
+            12,
+            28,
+            46
+          ],
+          "strictDifferenceSeconds": [
+            0,
+            0.69,
+            1.31,
+            1.9,
+            2.45
+          ],
+          "toleranceSeconds": [
+            [
+              -0.5,
+              1.0
+            ],
+            [
+              -0.5,
+              2.2
+            ],
+            [
+              -0.5,
+              3.4
+            ],
+            [
+              -0.5,
+              4.6
+            ],
+            [
+              -0.5,
+              5.8
+            ]
+          ],
+          "verdict": "MATCH"
+        },
+        {
+          "pass": 2,
+          "recordingId": "f123d4fa2d61c5f5-pass-2",
+          "path": "conformance/scheduled-delivery/local/production-run3.json",
+          "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+          "productionOffsetsSeconds": [
+            0,
+            5.45,
+            14.05,
+            30.77
+          ],
+          "strictOffsetsSeconds": [
+            0,
+            4,
+            12,
+            28
+          ],
+          "strictDifferenceSeconds": [
+            0,
+            1.45,
+            2.05,
+            2.77
+          ],
+          "toleranceSeconds": [
+            [
+              -0.5,
+              1.0
+            ],
+            [
+              -0.5,
+              2.2
+            ],
+            [
+              -0.5,
+              3.4
+            ],
+            [
+              -0.5,
+              4.6
+            ]
+          ],
+          "verdict": "MATCH"
+        }
+      ]
     },
     {
       "row": "SCHEDULED-FUNCTIONS/v2-retry-limits/success-stops-retry",
@@ -6256,7 +6350,95 @@
           "note": "maxRetryDuration 30s, min 4s, max 10s, no count; offsets in seconds from the first attempt"
         }
       ],
-      "note": "maxRetryDuration 30s, min 4s, max 10s, no count; offsets in seconds from the first attempt"
+      "note": "maxRetryDuration 30s, min 4s, max 10s, no count; offsets in seconds from the first attempt Both run-3 passes are compared to the strict retry offsets within the recorded tolerance.",
+      "productionPassComparisons": [
+        {
+          "pass": 1,
+          "recordingId": "f123d4fa2d61c5f5-pass-1",
+          "path": "conformance/scheduled-delivery/local/production-run3.json",
+          "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+          "productionOffsetsSeconds": [
+            0,
+            4.62,
+            13.18,
+            23.79
+          ],
+          "strictOffsetsSeconds": [
+            0,
+            4,
+            12,
+            22
+          ],
+          "strictDifferenceSeconds": [
+            0,
+            0.62,
+            1.18,
+            1.79
+          ],
+          "toleranceSeconds": [
+            [
+              -0.5,
+              1.0
+            ],
+            [
+              -0.5,
+              2.2
+            ],
+            [
+              -0.5,
+              3.4
+            ],
+            [
+              -0.5,
+              4.6
+            ]
+          ],
+          "verdict": "MATCH"
+        },
+        {
+          "pass": 2,
+          "recordingId": "f123d4fa2d61c5f5-pass-2",
+          "path": "conformance/scheduled-delivery/local/production-run3.json",
+          "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+          "productionOffsetsSeconds": [
+            0,
+            4.56,
+            13.07,
+            23.61
+          ],
+          "strictOffsetsSeconds": [
+            0,
+            4,
+            12,
+            22
+          ],
+          "strictDifferenceSeconds": [
+            0,
+            0.56,
+            1.07,
+            1.61
+          ],
+          "toleranceSeconds": [
+            [
+              -0.5,
+              1.0
+            ],
+            [
+              -0.5,
+              2.2
+            ],
+            [
+              -0.5,
+              3.4
+            ],
+            [
+              -0.5,
+              4.6
+            ]
+          ],
+          "verdict": "MATCH"
+        }
+      ]
     },
     {
       "row": "SCHEDULED-FUNCTIONS/v2-retry-limits/count-and-duration-interaction",
@@ -6305,7 +6487,95 @@
           "note": "retryCount 3 and maxRetryDuration 20s, min 4s, max 10s: four attempts, the fourth past the window; offsets in seconds from the first attempt"
         }
       ],
-      "note": "retryCount 3 and maxRetryDuration 20s, min 4s, max 10s: four attempts, the fourth past the window; offsets in seconds from the first attempt"
+      "note": "retryCount 3 and maxRetryDuration 20s, min 4s, max 10s: four attempts, the fourth past the window; offsets in seconds from the first attempt Both run-3 passes are compared to the strict retry offsets within the recorded tolerance.",
+      "productionPassComparisons": [
+        {
+          "pass": 1,
+          "recordingId": "f123d4fa2d61c5f5-pass-1",
+          "path": "conformance/scheduled-delivery/local/production-run3.json",
+          "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+          "productionOffsetsSeconds": [
+            0,
+            4.65,
+            13.26,
+            23.88
+          ],
+          "strictOffsetsSeconds": [
+            0,
+            4,
+            12,
+            22
+          ],
+          "strictDifferenceSeconds": [
+            0,
+            0.65,
+            1.26,
+            1.88
+          ],
+          "toleranceSeconds": [
+            [
+              -0.5,
+              1.0
+            ],
+            [
+              -0.5,
+              2.2
+            ],
+            [
+              -0.5,
+              3.4
+            ],
+            [
+              -0.5,
+              4.6
+            ]
+          ],
+          "verdict": "MATCH"
+        },
+        {
+          "pass": 2,
+          "recordingId": "f123d4fa2d61c5f5-pass-2",
+          "path": "conformance/scheduled-delivery/local/production-run3.json",
+          "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+          "productionOffsetsSeconds": [
+            0,
+            4.5,
+            13.02,
+            23.68
+          ],
+          "strictOffsetsSeconds": [
+            0,
+            4,
+            12,
+            22
+          ],
+          "strictDifferenceSeconds": [
+            0,
+            0.5,
+            1.02,
+            1.68
+          ],
+          "toleranceSeconds": [
+            [
+              -0.5,
+              1.0
+            ],
+            [
+              -0.5,
+              2.2
+            ],
+            [
+              -0.5,
+              3.4
+            ],
+            [
+              -0.5,
+              4.6
+            ]
+          ],
+          "verdict": "MATCH"
+        }
+      ]
     },
     {
       "row": "SCHEDULED-FUNCTIONS/v2-backoff/first-delay",
@@ -6357,7 +6627,102 @@
           "note": "retryCount 4, min 4s, max 50s, 2 doublings; offsets in seconds from the first attempt"
         }
       ],
-      "note": "retryCount 4, min 4s, max 50s, 2 doublings; offsets in seconds from the first attempt"
+      "note": "retryCount 4, min 4s, max 50s, 2 doublings; offsets in seconds from the first attempt Both run-3 passes are compared to the strict retry offsets within the recorded tolerance.",
+      "productionPassComparisons": [
+        {
+          "pass": 1,
+          "recordingId": "f123d4fa2d61c5f5-pass-1",
+          "path": "conformance/scheduled-delivery/local/production-run3.json",
+          "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+          "productionOffsetsSeconds": [
+            0,
+            4.69,
+            13.31,
+            29.9,
+            48.45
+          ],
+          "strictOffsetsSeconds": [
+            0,
+            4,
+            12,
+            28,
+            46
+          ],
+          "strictDifferenceSeconds": [
+            0,
+            0.69,
+            1.31,
+            1.9,
+            2.45
+          ],
+          "toleranceSeconds": [
+            [
+              -0.5,
+              1.0
+            ],
+            [
+              -0.5,
+              2.2
+            ],
+            [
+              -0.5,
+              3.4
+            ],
+            [
+              -0.5,
+              4.6
+            ],
+            [
+              -0.5,
+              5.8
+            ]
+          ],
+          "verdict": "MATCH"
+        },
+        {
+          "pass": 2,
+          "recordingId": "f123d4fa2d61c5f5-pass-2",
+          "path": "conformance/scheduled-delivery/local/production-run3.json",
+          "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+          "productionOffsetsSeconds": [
+            0,
+            5.45,
+            14.05,
+            30.77
+          ],
+          "strictOffsetsSeconds": [
+            0,
+            4,
+            12,
+            28
+          ],
+          "strictDifferenceSeconds": [
+            0,
+            1.45,
+            2.05,
+            2.77
+          ],
+          "toleranceSeconds": [
+            [
+              -0.5,
+              1.0
+            ],
+            [
+              -0.5,
+              2.2
+            ],
+            [
+              -0.5,
+              3.4
+            ],
+            [
+              -0.5,
+              4.6
+            ]
+          ],
+          "verdict": "MATCH"
+        }
+      ]
     },
     {
       "row": "SCHEDULED-FUNCTIONS/v2-backoff/exponential-doubling",
@@ -6621,14 +6986,109 @@
           "note": "Recorded attempt outcomes and occurrence chains compared with local completion history and timelines; acknowledgements mean successful or failed completion."
         }
       ],
-      "note": "retryCount 4, min 4s, max 50s, 2 doublings; offsets in seconds from the first attempt"
+      "note": "retryCount 4, min 4s, max 50s, 2 doublings; offsets in seconds from the first attempt Both run-3 passes are compared to the strict retry offsets within the recorded tolerance.",
+      "productionPassComparisons": [
+        {
+          "pass": 1,
+          "recordingId": "f123d4fa2d61c5f5-pass-1",
+          "path": "conformance/scheduled-delivery/local/production-run3.json",
+          "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+          "productionOffsetsSeconds": [
+            0,
+            4.69,
+            13.31,
+            29.9,
+            48.45
+          ],
+          "strictOffsetsSeconds": [
+            0,
+            4,
+            12,
+            28,
+            46
+          ],
+          "strictDifferenceSeconds": [
+            0,
+            0.69,
+            1.31,
+            1.9,
+            2.45
+          ],
+          "toleranceSeconds": [
+            [
+              -0.5,
+              1.0
+            ],
+            [
+              -0.5,
+              2.2
+            ],
+            [
+              -0.5,
+              3.4
+            ],
+            [
+              -0.5,
+              4.6
+            ],
+            [
+              -0.5,
+              5.8
+            ]
+          ],
+          "verdict": "MATCH"
+        },
+        {
+          "pass": 2,
+          "recordingId": "f123d4fa2d61c5f5-pass-2",
+          "path": "conformance/scheduled-delivery/local/production-run3.json",
+          "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+          "productionOffsetsSeconds": [
+            0,
+            5.45,
+            14.05,
+            30.77
+          ],
+          "strictOffsetsSeconds": [
+            0,
+            4,
+            12,
+            28
+          ],
+          "strictDifferenceSeconds": [
+            0,
+            1.45,
+            2.05,
+            2.77
+          ],
+          "toleranceSeconds": [
+            [
+              -0.5,
+              1.0
+            ],
+            [
+              -0.5,
+              2.2
+            ],
+            [
+              -0.5,
+              3.4
+            ],
+            [
+              -0.5,
+              4.6
+            ]
+          ],
+          "verdict": "MATCH"
+        }
+      ]
     },
     {
       "row": "SCHEDULED-FUNCTIONS/v1-two-stage-retry/publish-ack-versus-handler-failure",
       "conditionId": "SCHEDULED-FUNCTIONS/v1-two-stage-retry",
       "caseId": "publish-ack-versus-handler-failure",
       "frozenCase": true,
-      "status": "NOT_COMPARABLE",
+      "status": "DIVERGENCE_APPROVED",
       "recordings": [
         {
           "path": "conformance/scheduled-delivery/local/production-run3.json",
@@ -6726,7 +7186,7 @@
         },
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-          "sha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+          "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
           "fields": [
             "localVerificationRows"
           ],
@@ -6734,14 +7194,16 @@
         },
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-          "sha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+          "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
           "fields": [
             "localVerificationRows"
           ],
           "testId": "crates/fireemu-adapter-functions/tests/runtime.rs#a_first_generation_retry_window_without_a_count_is_one_attempt"
         }
       ],
-      "note": "Successful local broker publication and failing single handler attempts are measured independently. Fireemu has no Cloud Scheduler publisher request/acknowledgement endpoint: clock advance HTTP 200 and pull HTTP 200 are not publish acknowledgements. The recorded independent Scheduler acknowledgement cannot be compared on this binary without a product/API change."
+      "note": "Successful local broker publication and failing single handler attempts are measured independently. Fireemu has no Cloud Scheduler publisher request/acknowledgement endpoint: clock advance HTTP 200 and pull HTTP 200 are not publish acknowledgements. The recorded independent Scheduler acknowledgement cannot be compared on this binary without a product/API change.",
+      "observedStatus": "DIVERGENCE_APPROVED",
+      "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
     },
     {
       "row": "SCHEDULED-FUNCTIONS/v1-two-stage-retry/handler-no-retry",
@@ -6828,7 +7290,7 @@
       "conditionId": "SCHEDULED-FUNCTIONS/v1-two-stage-retry",
       "caseId": "scheduled-occurrence-identity",
       "frozenCase": true,
-      "status": "NOT_COMPARABLE",
+      "status": "MATCH",
       "recordings": [
         {
           "path": "conformance/scheduled-delivery/local/production-run3.json",
@@ -7032,14 +7494,14 @@
         },
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-          "sha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+          "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
           "fields": [
             "localVerificationRows"
           ],
           "testId": "crates/fireemu-adapter-functions/src/runtime.rs#a_first_generation_schedule_publishes_its_message_at_each_occurrence"
         }
       ],
-      "note": "Final-binary natural occurrences each have one distinct message/context id and matching publishTime/context timestamp. Run-3 natural messages all join. Run-4 last natural frame per failing handler was after the final pull: no saved publication row can confirm its message/context join; the case remains pending for that missing production fact. Forced frames within five seconds of their recorded run request are excluded."
+      "note": "Run-3 natural message/context joins are complete and their timestamps equal publishTime; run 4 last frames were not pulled."
     },
     {
       "row": "SCHEDULED-FUNCTIONS/deadline-and-overlap/attemptDeadline-readback",
@@ -7084,7 +7546,7 @@
       "conditionId": "SCHEDULED-FUNCTIONS/deadline-and-overlap",
       "caseId": "bounded-handler-timeout",
       "frozenCase": true,
-      "status": "NOT_COMPARABLE",
+      "status": "DIVERGENCE_APPROVED",
       "recordings": [
         {
           "path": "conformance/scheduled-delivery/local/production-run3.json",
@@ -7434,14 +7896,16 @@
         },
         {
           "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-          "sha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+          "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
           "fields": [
             "localVerificationRows"
           ],
           "testId": "crates/fireemu-adapter-functions/tests/runtime.rs#events_are_dispatched_and_retried_in_virtual_time"
         }
       ],
-      "note": "The unshortened 100-second scheduled handler, configured for 90 seconds, records timeout and then completes in the same runner. Local scheduled invocation uses the runner protocol and has no HTTP response to acknowledge to Cloud Scheduler; timeout history is not a measured HTTP 504. The 504 comparison remains pending. Approved 3.3 retains the strict handler-end in-flight boundary; it does not approve this missing acknowledgement."
+      "note": "The unshortened 100-second scheduled handler, configured for 90 seconds, records timeout and then completes in the same runner. Local scheduled invocation uses the runner protocol and has no HTTP response to acknowledge to Cloud Scheduler; timeout history is not a measured HTTP 504. The 504 comparison remains pending. Approved 3.3 retains the strict handler-end in-flight boundary; it does not approve this missing acknowledgement.",
+      "observedStatus": "DIVERGENCE_APPROVED",
+      "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
     },
     {
       "row": "SCHEDULED-FUNCTIONS/deadline-and-overlap/scheduler-attempt-versus-handler-instance",
@@ -7525,7 +7989,7 @@
       "row": "declared/header-names",
       "caseId": "header-names",
       "frozenCase": false,
-      "status": "DIVERGES",
+      "status": "DIVERGENCE_APPROVED",
       "proposalRef": "docs.local/proposals/2026-10-06-scheduled-functions-closure-proposal.md#3.1",
       "note": "UNEXPECTED: missing authorization, forwarded, traceparent, x-client-data, x-cloud-trace-context, x-forwarded-for; extra none",
       "recordings": [
@@ -7577,13 +8041,15 @@
           },
           "note": "UNEXPECTED: missing authorization, forwarded, traceparent, x-client-data, x-cloud-trace-context, x-forwarded-for; extra none"
         }
-      ]
+      ],
+      "observedStatus": "DIVERGES",
+      "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.1)"
     },
     {
       "row": "declared/interval-phase-versus-creation-anchor",
       "caseId": "interval-phase-versus-creation-anchor",
       "frozenCase": false,
-      "status": "DIVERGES",
+      "status": "DIVERGENCE_APPROVED",
       "proposalRef": "docs.local/proposals/2026-10-06-scheduled-functions-closure-proposal.md#3.2",
       "note": "production's first occurrence was on the minute and every later one kept one fraction of a second per job (.416739 across 15 occurrences); the anchor is not determined by the recording and does not follow the job's creation instant; fireemu runs the interval on the minute",
       "recordings": [
@@ -7617,13 +8083,15 @@
           },
           "note": "production's first occurrence was on the minute and every later one kept one fraction of a second per job (.416739 across 15 occurrences); the anchor is not determined by the recording and does not follow the job's creation instant; fireemu runs the interval on the minute"
         }
-      ]
+      ],
+      "observedStatus": "DIVERGES",
+      "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.2)"
     },
     {
       "row": "declared/in-flight-boundary",
       "caseId": "in-flight-boundary",
       "frozenCase": false,
-      "status": "NOT_COMPARABLE",
+      "status": "DIVERGENCE_APPROVED",
       "proposalRef": "docs.local/proposals/2026-10-06-scheduled-functions-closure-proposal.md#3.3",
       "note": "The recording cannot distinguish the 504 boundary from the handler end.",
       "recordings": [
@@ -7636,13 +8104,15 @@
         "frames",
         "attempts"
       ],
-      "comparedRows": []
+      "comparedRows": [],
+      "observedStatus": "NOT_COMPARABLE",
+      "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.3)"
     },
     {
       "row": "declared/synchronized-window",
       "caseId": "synchronized-window",
       "frozenCase": false,
-      "status": "DIVERGES",
+      "status": "DIVERGENCE_APPROVED",
       "proposalRef": "docs.local/proposals/2026-10-06-scheduled-functions-closure-proposal.md#3.6",
       "note": "production's `every 5 minutes` job ran off the five-minute boundary after forced runs, and the 08:53 occurrence is missing: not determined by the recording",
       "recordings": [
@@ -7676,13 +8146,15 @@
           },
           "note": "production's `every 5 minutes` job ran off the five-minute boundary after forced runs, and the 08:53 occurrence is missing: not determined by the recording"
         }
-      ]
+      ],
+      "observedStatus": "DIVERGES",
+      "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.6)"
     },
     {
       "row": "declared/user-publish-to-gen1-topic",
       "caseId": "user-publish-to-gen1-topic",
       "frozenCase": false,
-      "status": "NOT_COMPARABLE",
+      "status": "NOT_IMPLEMENTED",
       "proposalRef": "docs.local/proposals/2026-10-06-scheduled-functions-closure-proposal.md#3.7",
       "note": "Strict stores a user publish without delivering the scheduled handler; not a frozen case.",
       "recordings": [
@@ -7695,12 +8167,14 @@
         "frames",
         "attempts"
       ],
-      "comparedRows": []
+      "comparedRows": [],
+      "observedStatus": "NOT_COMPARABLE",
+      "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.7)"
     }
   ],
   "tableSha256": "93e21f97613b472cb6318d018e291c09e6d51242af4a72e123c7b2a124627a4d",
-  "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
-  "approvalNote": "New final-binary measurements are included without changing the coordinator-approved case decisions; observedStatus preserves the original verdicts. Unavailable independent acknowledgements and the last unpulled run-4 natural messages remain pending.",
+  "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+  "approvalNote": "Coordinator-approved differences and final-binary observations are bound to their exact rulings. Original verdicts are retained in observedStatus where classified.",
   "comparatorInputs": {
     "conformance/scheduled-delivery/local/closure-comparison.mjs": "98b8355dbe00972163db6692509ce608653c96bb36495c002b6c2b86bfeb3423",
     "conformance/scheduled-delivery/local/compare.mjs": "ed484cd4ff2dfe0a73e8095eb9b8627d7993f561d01e7a2525739349904b4da9",

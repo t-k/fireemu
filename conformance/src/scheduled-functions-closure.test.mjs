@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const readRepo = (path) =>
-  JSON.parse(readFileSync(new URL(`../../${path}`, import.meta.url), "utf8"));
+  JSON.parse(
+    readFileSync(isAbsolute(path) ? path : new URL(`../../${path}`, import.meta.url), "utf8"),
+  );
 const closurePath = "spec/compatibility/closure/SCHEDULED-FUNCTIONS.json";
 // The coordinator-approved exact condition, evidence type, recipe and case inventory.
 const inventorySha256 = "6e615aa9a88b4fcbeed492ddf9e690562c9661cc1ae3252773ec7c034dd4b68a";
@@ -97,6 +101,34 @@ function validateInventory(closure) {
     assert.equal(result.artifactSha256, evidence.finalArtifactSha256);
     assert.equal(result.runnerSha256, evidence.runnerSha256);
     const rows = result.rows.filter(({ conditionId }) => conditionId === condition.conditionId);
+    for (const supplemental of evidence.supplementalComparisons ?? []) {
+      const extra = readRepo(supplemental.path);
+      assert.equal(extra.artifactSha256, evidence.finalArtifactSha256);
+      assert.equal(extra.runnerSha256, evidence.runnerSha256);
+      assert.equal(
+        createHash("sha256")
+          .update(readFileSync(new URL(`../../${supplemental.path}`, import.meta.url)))
+          .digest("hex"),
+        supplemental.sha256,
+      );
+      const selected = new Set(supplemental.caseIds ?? []);
+      rows.push(
+        ...extra.rows.filter(
+          ({ conditionId, caseId }) =>
+            conditionId === condition.conditionId && selected.has(caseId),
+        ),
+      );
+      assert.deepEqual(
+        extra.rows
+          .filter(
+            ({ conditionId, caseId }) =>
+              conditionId === condition.conditionId && selected.has(caseId),
+          )
+          .map(({ caseId }) => caseId)
+          .toSorted(),
+        [...selected].toSorted(),
+      );
+    }
     assert.equal(rows.length, condition.cases.length, "every exact case, once");
     assert.deepEqual(rows.map(({ caseId }) => caseId).toSorted(), [...condition.cases].toSorted());
     assert.ok(
@@ -116,14 +148,19 @@ function validateInventory(closure) {
           "SCHEDULED-FUNCTIONS/deadline-and-overlap/scheduler-attempt-versus-handler-instance":
             "3.3",
           "SCHEDULED-FUNCTIONS/forced-and-natural-invocation/Cloud-Scheduler-run-now": "3.4",
-          "SCHEDULED-FUNCTIONS/groc-grammar/synchronized-window": "3.6",
+          "SCHEDULED-FUNCTIONS/v1-two-stage-retry/publish-ack-versus-handler-failure": "10:24Z",
+          "SCHEDULED-FUNCTIONS/v1-two-stage-retry/scheduled-occurrence-identity": "10:24Z",
+          "SCHEDULED-FUNCTIONS/deadline-and-overlap/bounded-handler-timeout": "10:24Z",
         }[`${condition.conditionId}/${caseId}`];
         const difference = evidence.approvedDifferences?.find((row) => row.caseId === caseId);
+        const expectedRef =
+          section === "10:24Z"
+            ? "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
+            : `docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (${section})`;
         return Boolean(
           section &&
           difference?.status === "DIVERGENCE_APPROVED" &&
-          difference.decisionRef ===
-            `docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (${section})` &&
+          difference.decisionRef === expectedRef &&
           decisionRef === difference.decisionRef,
         );
       }),
@@ -145,20 +182,22 @@ test("SCHEDULED-FUNCTIONS preserves the approved inventory and evidence boundari
   validateInventory(readRepo(closurePath));
 });
 
-test("approved run-now and undetermined calendar differences retain their cited rulings", () => {
+test("approved run-now remains cited and synchronized-window remains a match", () => {
   const closure = readRepo(closurePath);
-  for (const [area, caseId, section] of [
-    ["forced-and-natural-invocation", "Cloud-Scheduler-run-now", "3.4"],
-    ["groc-grammar", "synchronized-window", "3.6"],
-  ]) {
-    const condition = closure.conditions.find(({ conditionId }) =>
-      conditionId.endsWith(`/${area}`),
-    );
-    assert.equal(condition.status, "VERIFIED");
-    const difference = condition.evidence.approvedDifferences.find((row) => row.caseId === caseId);
-    assert.equal(difference.status, "DIVERGENCE_APPROVED");
-    assert.ok(difference.decisionRef.endsWith(` (${section})`));
-  }
+  const forced = closure.conditions.find(({ conditionId }) =>
+    conditionId.endsWith("/forced-and-natural-invocation"),
+  );
+  const difference = forced.evidence.approvedDifferences.find(
+    (row) => row.caseId === "Cloud-Scheduler-run-now",
+  );
+  assert.equal(difference.status, "DIVERGENCE_APPROVED");
+  assert.ok(difference.decisionRef.endsWith(" (3.4)"));
+  const groc = closure.conditions.find(({ conditionId }) => conditionId.endsWith("/groc-grammar"));
+  const comparison = readRepo(groc.evidence.comparisonPath);
+  assert.equal(
+    comparison.rows.find(({ caseId }) => caseId === "synchronized-window").status,
+    "MATCH",
+  );
   validateInventory(closure);
 });
 
@@ -188,9 +227,14 @@ test("an approved difference cannot excuse another case or an uncited ruling", (
 });
 
 test("unapproved comparison verdicts and local differences remain refused", (t) => {
-  const path = `target/codex-out/scheduled-validator-${process.pid}.json`;
-  const file = new URL(`../../${path}`, import.meta.url);
-  t.after(() => unlinkSync(file));
+  const directory = join(
+    fileURLToPath(new URL("../../target/codex-out/", import.meta.url)),
+    `scheduled-validator-${process.pid}`,
+  );
+  mkdirSync(directory, { recursive: true });
+  const file = join(directory, "comparison.json");
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = file;
   for (const [area, caseId, status, forgedApproval] of [
     ["forced-and-natural-invocation", "natural-scheduled-run", "DIVERGES", false],
     ["forced-and-natural-invocation", "natural-scheduled-run", "NOT_COMPARABLE", false],
@@ -218,6 +262,25 @@ test("unapproved comparison verdicts and local differences remain refused", (t) 
         { ...ruling, caseId: row.caseId },
       ];
     }
+    writeFileSync(file, JSON.stringify(comparison));
+    condition.evidence.comparisonPath = path;
+    assert.throws(
+      () => validateInventory(closure),
+      /every row must match or cite its approved difference/,
+    );
+  }
+  {
+    const closure = readRepo(closurePath);
+    const condition = closure.conditions.find(({ conditionId }) =>
+      conditionId.endsWith("/forced-and-natural-invocation"),
+    );
+    const comparison = readRepo(condition.evidence.comparisonPath);
+    const row = comparison.rows.find(({ caseId }) => caseId === "natural-scheduled-run");
+    row.status = "DIVERGENCE_APPROVED";
+    row.decisionRef =
+      "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3";
+    const difference = { caseId: row.caseId, status: row.status, decisionRef: row.decisionRef };
+    condition.evidence.approvedDifferences = [difference];
     writeFileSync(file, JSON.stringify(comparison));
     condition.evidence.comparisonPath = path;
     assert.throws(

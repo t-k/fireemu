@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -14,6 +22,35 @@ test("both profiles accept recorded manifests except the documented strict refus
   assert.equal(common.status, 0, common.stderr);
   const repository = dirname(common.stdout.trim());
   const binary = resolve(root, process.env.FIREEMU_BIN ?? "target/w4/debug/fireemu");
+  const recordings = [
+    ...["recording-1", "recording-2"].flatMap((label, index) => {
+      const runId = ["189fb441835b2645", "75478d967aa09afc"][index];
+      return [
+        join(repository, "docs.local/runs/calendar-v6", label, `journal-${runId}.jsonl`),
+        join(repository, "docs.local/runs/calendar-v6", label, `result-${runId}.json`),
+      ];
+    }),
+    ...["run-1", "run-2", "run-3", "run-4"].map((run) =>
+      join(repository, "docs.local/runs/scheduled-delivery", run),
+    ),
+  ];
+  const missing = [
+    !existsSync(binary) && `binary ${binary}`,
+    ...recordings.filter((path) => !existsSync(path)),
+  ];
+  for (const run of ["run-1", "run-2", "run-3", "run-4"]) {
+    const directory = join(repository, "docs.local/runs/scheduled-delivery", run);
+    if (
+      existsSync(directory) &&
+      !readdirSync(directory).some((name) => /^journal-[a-f0-9]+\.jsonl$/.test(name))
+    ) {
+      missing.push(`private delivery journal ${run}`);
+    }
+  }
+  if (missing.filter(Boolean).length) {
+    t.skip(`private recording or final binary unavailable: ${missing.filter(Boolean).join(", ")}`);
+    return;
+  }
   const work = mkdtempSync(join(root, "target/codex-out/no-new-refusals-"));
   t.after(() => rmSync(work, { recursive: true, force: true }));
   const home = join(work, "home");

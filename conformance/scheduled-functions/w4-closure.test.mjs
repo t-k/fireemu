@@ -71,6 +71,27 @@ test("W4 preserves the frozen inventory and binds final artifact evidence withou
     closure.conditions.find(({ conditionId }) => conditionId.endsWith("/closure-review")).status,
     "PENDING_REVIEW",
   );
+  const gate = closure.conditions.find(({ conditionId }) =>
+    conditionId.endsWith("/final-artifact-regression"),
+  );
+  const gateEvidence = JSON.parse(
+    readFileSync(new URL(`../../${gate.evidence.comparisonPath}`, import.meta.url)),
+  );
+  assert.equal(gate.status, "PENDING_REVIEW");
+  assert.equal(gateEvidence.pending[0], "workspace-regression");
+  assert.deepEqual(
+    gateEvidence.rows.map(({ caseId }) => caseId),
+    [
+      "two-production-recordings",
+      "exact-frozen-case-set",
+      "strict-production-comparison",
+      "emulator-no-new-refusals",
+      "local-properties",
+      "artifact-runner-binding",
+    ],
+  );
+  assert.ok(gateEvidence.rows.every(({ status }) => status === "PASS"));
+  assert.equal(gateEvidence.productionRecordings, undefined);
 });
 
 test("exactly seven job resource cases cite S4 and the coordinator approval", () => {
@@ -89,8 +110,8 @@ test("exactly seven job resource cases cite S4 and the coordinator approval", ()
     (condition.caseDecisions ?? []).flatMap((row) => {
       assert.ok(condition.cases.includes(row.caseId));
       const id = `${condition.conditionId.slice("SCHEDULED-FUNCTIONS/".length)}/${row.caseId}`;
-      if (id === timeoutCase) {
-        assert.equal(row.decisionOfRecord, "S4, S7 and 3.3");
+      if ([timeoutCase, "v1-two-stage-retry/publish-ack-versus-handler-failure"].includes(id)) {
+        assert.ok(["S4, S7 and 3.3", "S4"].includes(row.decisionOfRecord));
         assert.match(row.decisionRef, /rulings-on-th/);
         return [];
       }
@@ -182,7 +203,15 @@ test("final-binary measurements bind the frozen cases and keep unavailable ackno
   }
   const groc = closure.conditions.find(({ conditionId }) => conditionId.endsWith("/groc-grammar"));
   assert.equal(groc.status, "VERIFIED");
-  assert.equal(groc.evidence.approvedDifferences[0].decisionRef, `${ruling} (3.6)`);
+  assert.equal(
+    JSON.parse(
+      readFileSync(new URL(`../../${groc.evidence.comparisonPath}`, import.meta.url)),
+    ).rows.find(
+      ({ conditionId, caseId }) =>
+        conditionId === groc.conditionId && caseId === "synchronized-window",
+    ).status,
+    "MATCH",
+  );
   const deadline = closure.conditions.find(({ conditionId }) =>
     conditionId.endsWith("/deadline-and-overlap"),
   );
@@ -222,8 +251,48 @@ test("final-binary measurements bind the frozen cases and keep unavailable ackno
     "bounded-handler-timeout",
   ]) {
     const row = delivery.rows.find((r) => r.caseId === caseId);
-    assert.equal(row.status, "NOT_COMPARABLE");
+    assert.equal(
+      row.status,
+      caseId === "scheduled-occurrence-identity" ? "MATCH" : "DIVERGENCE_APPROVED",
+    );
     assert.equal(row.comparedRows.length, 1);
+  }
+});
+
+test("run-3 retry evidence compares both production passes within strict tolerance", () => {
+  const delivery = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+        import.meta.url,
+      ),
+    ),
+  );
+  for (const [conditionId, caseId] of [
+    ["SCHEDULED-FUNCTIONS/v2-retry-limits", "count-and-duration-interaction"],
+    ["SCHEDULED-FUNCTIONS/v2-retry-limits", "duration-only"],
+    ["SCHEDULED-FUNCTIONS/v2-retry-limits", "finite-retry-count"],
+    ["SCHEDULED-FUNCTIONS/v2-backoff", "first-delay"],
+    ["SCHEDULED-FUNCTIONS/v2-backoff", "stable-scheduleTime"],
+  ]) {
+    const row = delivery.rows.find(
+      (candidate) => candidate.conditionId === conditionId && candidate.caseId === caseId,
+    );
+    assert.deepEqual(
+      row.productionPassComparisons.map(({ pass }) => pass),
+      [1, 2],
+    );
+    for (const comparison of row.productionPassComparisons) {
+      assert.equal(comparison.verdict, "MATCH");
+      assert.equal(
+        comparison.productionOffsetsSeconds.length,
+        comparison.strictOffsetsSeconds.length,
+      );
+      comparison.strictDifferenceSeconds.forEach((difference, index) => {
+        assert.ok(difference >= -0.5);
+        assert.ok(difference <= 1.2 * index + 1);
+      });
+    }
   }
 });
 

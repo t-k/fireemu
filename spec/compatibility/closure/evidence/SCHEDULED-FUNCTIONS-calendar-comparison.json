@@ -31,14 +31,14 @@
     }
   },
   "kind": "scheduled-functions-calendar-comparison-v1",
-  "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+  "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
   "artifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
   "runnerIndexSha256": "8d7f0f64a4e4db0c67f39c59406d6da7af0d6bac2e39060bc5b2fb2e02e406bf",
   "runnerTreeManifest": "tools/runner-node/blocking-error.mjs\t5811e02bccabf0a2d5eaac92a28fb41a1e2cba516e5d64672eb10f19bf083d43\ntools/runner-node/blocking-event.mjs\tdf8df99da6a53e828759b29b7aa0c3d9ba3c57f3bca63540d7f0227b2fadd1b2\ntools/runner-node/blocking-response.mjs\t956c1c3d0b1247fb6b0522dcd3855c33bf71d7a6f5170e81a881a38640f6c70d\ntools/runner-node/callable-app-check-loader.mjs\t035bc3759569911f579a7f37c44f100e07facc3e797d727f799f55ed0fed1a94\ntools/runner-node/callable-app-check.mjs\ta14bcf20654a8fd3dbf8e966df2f83ab0c3003a65b2713594253908500ba17ff\ntools/runner-node/diagnostic-output.mjs\tcf941644cebe930938404e81b4dc9a524156ad73030d32806e9faa2532c558fa\ntools/runner-node/discovery.mjs\t152a109ce44cabef99194bc1617d785840cbeeb837b6e516ad1a96f1bd5aa598\ntools/runner-node/http-admission.mjs\td02c219786651808490558bfba4ecbf253742211875ae49f519412e777041511\ntools/runner-node/http-lifecycle.mjs\t44a8d75de6e1b05db5c778930aca18c1f3dbc01c18b29f376053ea78930e112e\ntools/runner-node/index.mjs\t8d7f0f64a4e4db0c67f39c59406d6da7af0d6bac2e39060bc5b2fb2e02e406bf\ntools/runner-node/invocation-error.mjs\t17e78092a2e825c0545b15becc255b0fc0ac9560e3a5d3d3d1df6d3b24db80aa\ntools/runner-node/load-independent-wait.mjs\t134ce8cdbb7bc278abe6dc6f733c953747a92b06c981641de75359467da3ee6e\ntools/runner-node/log-context.mjs\tb44fa853c52851864c5f1ec780c1806c0de583fd43d591e65a385afb1a2148b6\ntools/runner-node/output.mjs\t039c26ddcd98490b000632687866da49e439684d583aad6fb10f1f1ec9412da6\ntools/runner-node/protocol.mjs\t696cec17be758196e4e6f681fda4eb1dbb70bf0ffc9d4b800d5cb1fad7320aa6\ntools/runner-node/schedule-delivery.mjs\tbc23101722c442e81bef135d25188149c170e5b318714a3ed103c2967d8d0d08\n",
   "runnerTreeManifestFormat": "Tracked tools/runner-node files except *.test.mjs, sorted in ASCII order: UTF-8 path, TAB, lowercase SHA-256 of file bytes, LF; hash the concatenation.",
   "comparatorPath": "conformance/scheduled-functions/run-w1.sh",
   "comparatorSha256": "6dbaec18fb200612c4874380d761a67c4d444a593641037c441611dbbc4369d2",
-  "executionNote": "The run-w1.sh build and original calendar corpus were rerun offline. Its two added omitted-zone SDK declarations were also repeated through the same embedded collector against both recorded creation brackets and both profiles. Binary SHA-256 is unchanged. Raw calendar and default receipts stay private under target/codex-out/. Coordinator classifications preserve observedStatus.",
+  "executionNote": "The run-w1.sh build and original calendar corpus were rerun offline. Its two added omitted-zone SDK declarations were also repeated through the same embedded collector against both recorded creation brackets and both profiles. Binary SHA-256 is unchanged. Raw calendar and default receipts stay private under target/codex-out/. Coordinator classifications preserve observedStatus. Source and integration commits are rebound to the clean release-build head; measured rows are unchanged. Source and integration commits are rebound to the clean release-build head; measured rows are unchanged.",
   "rows": [
     {
       "id": "cr01",
@@ -5776,7 +5776,7 @@
       "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
       "case": "synchronized-window",
       "profile": "strict",
-      "status": "DIVERGENCE_APPROVED",
+      "status": "MATCH",
       "reason": "recording-1: Local callback matches the advertised next time at a recorded creation anchor; recording-2: Local callback matches the advertised next time at a recorded creation anchor",
       "comparisons": [
         {
@@ -6085,9 +6085,7 @@
         }
       ],
       "caseId": "synchronized-window",
-      "observedStatus": "MATCH",
-      "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.6)",
-      "note": "Coordinator-approved declared difference, section 3.6; observedStatus preserves the comparison verdict."
+      "note": "Both v6 recordings match the synchronized window. Forced runs re-anchor the next interval occurrence about 4.5 to 5 minutes later in runs 2 to 4 for Gen1 and Gen2; strict has no run-now because it is Fireemu-only control under 3.4."
     },
     {
       "id": "tz01",
@@ -10997,7 +10995,7 @@
       "note": "Coordinator-approved declared difference, section 3.5; observedStatus preserves the comparison verdict."
     },
     {
-      "id": "gr01",
+      "id": "gr01-v1-default",
       "conditionId": "SCHEDULED-FUNCTIONS/timezone-validation-defaults",
       "case": "v1-default",
       "profile": "strict",
@@ -11313,7 +11311,7 @@
       "note": "The omitted-zone v1 interval is compared at both native UTC creation brackets because elapsed intervals are zone-independent. Run-4 CLI readback and the final-binary delivery manifest independently identify America/Los_Angeles; the delivered context timestamp matches the native next boundary."
     },
     {
-      "id": "cr01",
+      "id": "cr01-v2-default",
       "conditionId": "SCHEDULED-FUNCTIONS/timezone-validation-defaults",
       "case": "v2-default",
       "profile": "strict",
@@ -11630,8 +11628,8 @@
     }
   ],
   "summary": {
-    "MATCH": 46,
-    "DIVERGENCE_APPROVED": 2
+    "DIVERGENCE_APPROVED": 1,
+    "MATCH": 47
   },
   "emulatorRows": [
     {

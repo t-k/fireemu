@@ -114,11 +114,11 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "production-parity",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-        "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+        "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
         "rows": {
           "MATCH": 7,
           "DIVERGENCE_APPROVED": 5
@@ -130,18 +130,21 @@
         "productionRecordings": [
           {
             "pass": 1,
-            "recordingId": "156715222b86ea44",
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
             "project": "fireemu-oracle-sbx",
-            "corpusDigest": "0f98a1fc64aac9f4e577ef0237ec8433989ecb3f28c3a5352f3cf1785167f8ec"
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
           },
           {
             "pass": 2,
-            "recordingId": "f123d4fa2d61c5f5",
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
             "project": "fireemu-oracle-sbx",
-            "corpusDigest": "0f98a1fc64aac9f4e577ef0237ec8433989ecb3f28c3a5352f3cf1785167f8ec"
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
           }
         ],
-        "recordingCoverageNote": "The shared corpus digest hashes the manifest of all three public recording projections, not a claim that their fixtures are identical. Rows identify the recording actually compared: run3 is primary and runs2/4 supply additional retry chains.",
         "approvedDifferences": [
           {
             "caseId": "attempt-deadline",
@@ -168,6 +171,24 @@
             "status": "DIVERGENCE_APPROVED",
             "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
           }
+        ],
+        "supplementalRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "ecef353d18975246-pass-1",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "95174e781182e8a396b5fe23eebdb994f96e69ddcdbe1b694050e8cef448ec48",
+            "path": "conformance/scheduled-delivery/local/production-run4.json",
+            "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99"
+          },
+          {
+            "pass": 2,
+            "recordingId": "ecef353d18975246-pass-2",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "95174e781182e8a396b5fe23eebdb994f96e69ddcdbe1b694050e8cef448ec48",
+            "path": "conformance/scheduled-delivery/local/production-run4.json",
+            "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99"
+          }
         ]
       },
       "caseDecisions": [
@@ -181,7 +202,8 @@
           "caseId": "omitted-versus-null-reset",
           "status": "DIVERGENCE_APPROVED",
           "decisionOfRecord": "S4",
-          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)",
+          "note": "Production keeps the prior retryConfig when redeploy omits retry options (the CLI PATCH update mask omits retryConfig, run 4 C6); strict reloads the manifest and resets defaults. This gap is not modelled and is filed as scheduled-redeploy-keeps-prior-retry-config.md."
         },
         {
           "caseId": "SDK-attemptDeadline-versus-CLI-timeout",
@@ -209,7 +231,7 @@
           "caseId": "v1-schedule-chain",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/fixture/index.js",
@@ -239,7 +261,7 @@
           "caseId": "v2-onSchedule-string",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/fixture/index.js",
@@ -269,7 +291,7 @@
           "caseId": "v2-onSchedule-options",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/fixture/index.js",
@@ -299,7 +321,7 @@
           "caseId": "omitted-timezone",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/local/production-run4.json",
@@ -335,7 +357,7 @@
           "caseId": "explicit-timezone",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/local/production-run3.json",
@@ -359,7 +381,7 @@
           "caseId": "retry-options-preserved",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/local/production-run3.json",
@@ -394,7 +416,7 @@
           "caseId": "attempt-deadline",
           "status": "DIVERGENCE_APPROVED",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/local/production-run4.json",
@@ -414,7 +436,7 @@
           "caseId": "v1-App-Engine-job-location",
           "status": "DIVERGENCE_APPROVED",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/local/production-run4.json",
@@ -435,7 +457,7 @@
           "caseId": "v2-function-region-job-location",
           "status": "DIVERGENCE_APPROVED",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/local/production-run4.json",
@@ -456,7 +478,7 @@
           "caseId": "omitted-versus-null-reset",
           "status": "DIVERGENCE_APPROVED",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "docs.local/runs/scheduled-delivery/run-4/result-ecef353d18975246.json",
@@ -479,7 +501,7 @@
           "caseId": "fractional-retry-duration",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/local/production-run3.json",
@@ -491,7 +513,7 @@
             },
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-              "sha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+              "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
               "fields": [
                 "localVerificationRows"
               ],
@@ -503,7 +525,7 @@
           "caseId": "SDK-attemptDeadline-versus-CLI-timeout",
           "status": "DIVERGENCE_APPROVED",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/local/production-run4.json",
@@ -520,7 +542,8 @@
           ],
           "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
         }
-      ]
+      ],
+      "note": "Production keeps the prior retryConfig when redeploy omits retry options (the CLI PATCH update mask omits retryConfig, run 4 C6); strict reloads the manifest and resets defaults. This gap is not modelled and is filed as scheduled-redeploy-keeps-prior-retry-config.md."
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
@@ -547,11 +570,11 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "production-parity",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-        "comparisonSha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+        "comparisonSha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
         "rows": {
           "MATCH": 13
         },
@@ -601,11 +624,11 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "production-parity",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-        "comparisonSha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+        "comparisonSha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
         "rows": {
           "MATCH": 12,
           "DIVERGENCE_APPROVED": 1
@@ -657,11 +680,11 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "production-parity",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
-        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-        "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+        "comparisonSha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
         "rows": {
           "MATCH": 6
         },
@@ -682,8 +705,14 @@
             "corpusDigest": "a05b1a52fa586dfdf0436c38bbe3533725ce44e2fcd3cd5cec99a8cf122860a6"
           }
         ],
-        "recordingCoverageNote": "The two listed native calendar recordings provide the boundary/refusal comparisons. Pinned delivery run-3 and run-4 sources additionally establish the SDK omission defaults and CLI timezone readings; each case retains those exact sources in caseEvidence.",
-        "approvedDifferences": []
+        "approvedDifferences": [],
+        "supplementalComparisons": [
+          {
+            "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+            "sha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
+            "caseIds": []
+          }
+        ]
       },
       "obligation": "Effective generation-specific defaults and timezone acceptance",
       "source": "https://docs.cloud.google.com/scheduler/docs/configuring/cron-job-schedules; crates/fireemu-core-functions/src/cron.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js",
@@ -692,11 +721,11 @@
           "caseId": "explicit-UTC",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-              "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
               "caseId": "explicit-UTC",
               "fields": [
                 "rows"
@@ -708,11 +737,11 @@
           "caseId": "Asia-Tokyo",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-              "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
               "caseId": "Asia-Tokyo",
               "fields": [
                 "rows"
@@ -724,11 +753,11 @@
           "caseId": "America-New-York",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-              "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
               "caseId": "America-New-York",
               "fields": [
                 "rows"
@@ -740,11 +769,11 @@
           "caseId": "v1-default",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-              "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
               "caseId": "v1-default",
               "fields": [
                 "rows"
@@ -763,11 +792,11 @@
           "caseId": "v2-default",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-              "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
               "caseId": "v2-default",
               "fields": [
                 "rows"
@@ -786,11 +815,11 @@
           "caseId": "invalid-zone",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-              "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
               "caseId": "invalid-zone",
               "fields": [
                 "rows"
@@ -817,11 +846,11 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "production-parity",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-        "comparisonSha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+        "comparisonSha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
         "rows": {
           "MATCH": 5
         },
@@ -862,11 +891,11 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "production-parity",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-        "comparisonSha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+        "comparisonSha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
         "rows": {
           "MATCH": 4
         },
@@ -912,11 +941,11 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "production-parity",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-        "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+        "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
         "rows": {
           "MATCH": 9
         },
@@ -926,18 +955,21 @@
         "productionRecordings": [
           {
             "pass": 1,
-            "recordingId": "156715222b86ea44",
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
             "project": "fireemu-oracle-sbx",
-            "corpusDigest": "0f98a1fc64aac9f4e577ef0237ec8433989ecb3f28c3a5352f3cf1785167f8ec"
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
           },
           {
             "pass": 2,
-            "recordingId": "f123d4fa2d61c5f5",
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
             "project": "fireemu-oracle-sbx",
-            "corpusDigest": "0f98a1fc64aac9f4e577ef0237ec8433989ecb3f28c3a5352f3cf1785167f8ec"
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
           }
-        ],
-        "recordingCoverageNote": "The shared corpus digest hashes the manifest of all three public recording projections, not a claim that their fixtures are identical. Rows identify the recording actually compared: run3 is primary and runs2/4 supply additional retry chains."
+        ]
       },
       "obligation": "Actual Scheduler to HTTP function delivery and SDK-visible event",
       "source": "https://firebase.google.com/docs/functions/schedule-functions; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js; conformance/node_modules/firebase-functions/lib/v2/providers/scheduler.js; conformance/node_modules/firebase-functions/lib/v1/providers/pubsub.js"
@@ -961,11 +993,11 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "production-parity",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-        "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+        "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
         "rows": {
           "MATCH": 7
         },
@@ -975,18 +1007,21 @@
         "productionRecordings": [
           {
             "pass": 1,
-            "recordingId": "156715222b86ea44",
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
             "project": "fireemu-oracle-sbx",
-            "corpusDigest": "0f98a1fc64aac9f4e577ef0237ec8433989ecb3f28c3a5352f3cf1785167f8ec"
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
           },
           {
             "pass": 2,
-            "recordingId": "f123d4fa2d61c5f5",
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
             "project": "fireemu-oracle-sbx",
-            "corpusDigest": "0f98a1fc64aac9f4e577ef0237ec8433989ecb3f28c3a5352f3cf1785167f8ec"
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
           }
-        ],
-        "recordingCoverageNote": "The shared corpus digest hashes the manifest of all three public recording projections, not a claim that their fixtures are identical. Rows identify the recording actually compared: run3 is primary and runs2/4 supply additional retry chains."
+        ]
       },
       "obligation": "Actual Scheduler publish and deployed v1 handler payload",
       "source": "https://firebase.google.com/docs/functions/schedule-functions; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js; conformance/node_modules/firebase-functions/lib/v2/providers/scheduler.js; conformance/node_modules/firebase-functions/lib/v1/providers/pubsub.js"
@@ -1007,11 +1042,11 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "production-parity",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-        "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+        "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
         "rows": {
           "MATCH": 3,
           "DIVERGENCE_APPROVED": 1
@@ -1030,18 +1065,21 @@
         "productionRecordings": [
           {
             "pass": 1,
-            "recordingId": "156715222b86ea44",
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
             "project": "fireemu-oracle-sbx",
-            "corpusDigest": "0f98a1fc64aac9f4e577ef0237ec8433989ecb3f28c3a5352f3cf1785167f8ec"
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
           },
           {
             "pass": 2,
-            "recordingId": "f123d4fa2d61c5f5",
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
             "project": "fireemu-oracle-sbx",
-            "corpusDigest": "0f98a1fc64aac9f4e577ef0237ec8433989ecb3f28c3a5352f3cf1785167f8ec"
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
           }
-        ],
-        "recordingCoverageNote": "The shared corpus digest hashes the manifest of all three public recording projections, not a claim that their fixtures are identical. Rows identify the recording actually compared: run3 is primary and runs2/4 supply additional retry chains."
+        ]
       },
       "obligation": "Natural/forced Scheduler dispatch, distinct from Fireemu manual control",
       "source": "https://firebase.google.com/docs/functions/schedule-functions; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js; conformance/node_modules/firebase-functions/lib/v2/providers/scheduler.js; conformance/node_modules/firebase-functions/lib/v1/providers/pubsub.js"
@@ -1066,11 +1104,11 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "production-parity",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
-        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-        "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+        "comparisonSha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
         "rows": {
           "MATCH": 7,
           "DIVERGENCE_APPROVED": 1
@@ -1093,12 +1131,20 @@
             "corpusDigest": "a05b1a52fa586dfdf0436c38bbe3533725ce44e2fcd3cd5cec99a8cf122860a6"
           }
         ],
-        "recordingCoverageNote": "The two listed native calendar recordings provide the boundary/refusal comparisons. Pinned delivery run-3 and run-4 sources additionally establish the SDK omission defaults and CLI timezone readings; each case retains those exact sources in caseEvidence.",
         "approvedDifferences": [
           {
             "caseId": "attemptDeadline-boundary",
             "status": "DIVERGENCE_APPROVED",
             "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+          }
+        ],
+        "supplementalComparisons": [
+          {
+            "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+            "sha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
+            "caseIds": [
+              "omitted-options"
+            ]
           }
         ]
       },
@@ -1117,7 +1163,7 @@
           "caseId": "omitted-options",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/local/production-run4.json",
@@ -1139,7 +1185,7 @@
             },
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-              "sha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+              "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
               "fields": [
                 "localVerificationRows"
               ],
@@ -1151,11 +1197,11 @@
           "caseId": "explicit-zero",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-              "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
               "caseId": "explicit-zero",
               "fields": [
                 "rows"
@@ -1167,11 +1213,11 @@
           "caseId": "retryCount-boundary",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-              "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
               "caseId": "retryCount-boundary",
               "fields": [
                 "rows"
@@ -1183,11 +1229,11 @@
           "caseId": "min-backoff",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-              "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
               "caseId": "min-backoff",
               "fields": [
                 "rows"
@@ -1199,11 +1245,11 @@
           "caseId": "max-backoff",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-              "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
               "caseId": "max-backoff",
               "fields": [
                 "rows"
@@ -1215,11 +1261,11 @@
           "caseId": "max-doublings",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-              "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
               "caseId": "max-doublings",
               "fields": [
                 "rows"
@@ -1231,11 +1277,11 @@
           "caseId": "max-retry-duration",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-              "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
               "caseId": "max-retry-duration",
               "fields": [
                 "rows"
@@ -1247,7 +1293,7 @@
           "caseId": "attemptDeadline-boundary",
           "status": "DIVERGENCE_APPROVED",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/local/production-run4.json",
@@ -1283,11 +1329,11 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "production-parity",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-        "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+        "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
         "rows": {
           "MATCH": 6
         },
@@ -1297,18 +1343,21 @@
         "productionRecordings": [
           {
             "pass": 1,
-            "recordingId": "156715222b86ea44",
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
             "project": "fireemu-oracle-sbx",
-            "corpusDigest": "0f98a1fc64aac9f4e577ef0237ec8433989ecb3f28c3a5352f3cf1785167f8ec"
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
           },
           {
             "pass": 2,
-            "recordingId": "f123d4fa2d61c5f5",
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
             "project": "fireemu-oracle-sbx",
-            "corpusDigest": "0f98a1fc64aac9f4e577ef0237ec8433989ecb3f28c3a5352f3cf1785167f8ec"
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
           }
-        ],
-        "recordingCoverageNote": "The shared corpus digest hashes the manifest of all three public recording projections, not a claim that their fixtures are identical. Rows identify the recording actually compared: run3 is primary and runs2/4 supply additional retry chains."
+        ]
       },
       "obligation": "Record actual attempts and stopping rules; do not assume one shared event retry policy",
       "source": "https://docs.cloud.google.com/scheduler/docs/configuring/retry-jobs; crates/fireemu-core-functions/src/manifest.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
@@ -1330,11 +1379,11 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "production-parity",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-        "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+        "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
         "rows": {
           "MATCH": 5
         },
@@ -1344,18 +1393,21 @@
         "productionRecordings": [
           {
             "pass": 1,
-            "recordingId": "156715222b86ea44",
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
             "project": "fireemu-oracle-sbx",
-            "corpusDigest": "0f98a1fc64aac9f4e577ef0237ec8433989ecb3f28c3a5352f3cf1785167f8ec"
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
           },
           {
             "pass": 2,
-            "recordingId": "f123d4fa2d61c5f5",
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
             "project": "fireemu-oracle-sbx",
-            "corpusDigest": "0f98a1fc64aac9f4e577ef0237ec8433989ecb3f28c3a5352f3cf1785167f8ec"
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
           }
-        ],
-        "recordingCoverageNote": "The shared corpus digest hashes the manifest of all three public recording projections, not a claim that their fixtures are identical. Rows identify the recording actually compared: run3 is primary and runs2/4 supply additional retry chains."
+        ]
       },
       "obligation": "Short bounded production retry chains with dispatch/response timing",
       "source": "https://docs.cloud.google.com/scheduler/docs/configuring/retry-jobs; crates/fireemu-core-functions/src/manifest.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
@@ -1374,16 +1426,55 @@
       ],
       "status": "VERIFIED",
       "coverageStatus": "covered",
-      "evidence": null,
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+        "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
+        "rows": {
+          "DIVERGENCE_APPROVED": 1,
+          "MATCH": 3
+        },
+        "coverage": {
+          "MATCH": 7
+        },
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          },
+          {
+            "pass": 2,
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          }
+        ],
+        "approvedDifferences": [
+          {
+            "caseId": "publish-ack-versus-handler-failure",
+            "status": "DIVERGENCE_APPROVED",
+            "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
+          }
+        ]
+      },
       "note": "Verified from final-binary run-3 evidence. The persisted Gen1 schedule message remains published when its handler fails; the Cloud Scheduler publisher acknowledgement is scheduler-side and declared under S4, with no Cloud Scheduler API claimed. Run-3 natural message/context joins are complete. Run-4's last unpulled publications remain a recording limitation per row.",
       "obligation": "Separate Scheduler publish retry from v1 subscriber retry; coordinate generic Pub/Sub scope",
       "source": "https://docs.cloud.google.com/scheduler/docs/configuring/retry-jobs; crates/fireemu-core-functions/src/manifest.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js",
       "caseEvidence": [
         {
           "caseId": "publish-ack-versus-handler-failure",
-          "status": "NOT_COMPARABLE",
+          "status": "DIVERGENCE_APPROVED",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/local/production-run3.json",
@@ -1411,7 +1502,7 @@
             },
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-              "sha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+              "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
               "fields": [
                 "localVerificationRows"
               ],
@@ -1419,34 +1510,35 @@
             },
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-              "sha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+              "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
               "fields": [
                 "localVerificationRows"
               ],
               "testId": "crates/fireemu-adapter-functions/tests/runtime.rs#a_first_generation_retry_window_without_a_count_is_one_attempt"
             }
           ],
-          "coveredBy": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases"
+          "coveredBy": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases",
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
         },
         {
           "caseId": "handler-no-retry",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": []
         },
         {
           "caseId": "handler-retry-declaration",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": []
         },
         {
           "caseId": "scheduled-occurrence-identity",
-          "status": "NOT_COMPARABLE",
+          "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/local/production-run3.json",
@@ -1474,14 +1566,23 @@
             },
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-              "sha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+              "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
               "fields": [
                 "localVerificationRows"
               ],
               "testId": "crates/fireemu-adapter-functions/src/runtime.rs#a_first_generation_schedule_publishes_its_message_at_each_occurrence"
             }
           ],
-          "coveredBy": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases"
+          "coveredBy": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases",
+          "note": "Run 3 joins are complete; the last run-4 messages were not pulled."
+        }
+      ],
+      "caseDecisions": [
+        {
+          "caseId": "publish-ack-versus-handler-failure",
+          "status": "DIVERGENCE_APPROVED",
+          "decisionOfRecord": "S4",
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
         }
       ]
     },
@@ -1499,19 +1600,68 @@
       ],
       "status": "VERIFIED",
       "coverageStatus": "covered",
-      "evidence": null,
-      "caseDecisions": [
-        {
-          "caseId": "bounded-handler-timeout",
-          "status": "VERIFIED",
-          "decisionOfRecord": "S4, S7 and 3.3",
-          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+        "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
+        "rows": {
+          "DIVERGENCE_APPROVED": 3,
+          "MATCH": 1
         },
+        "coverage": {
+          "MATCH": 7
+        },
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          },
+          {
+            "pass": 2,
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          }
+        ],
+        "approvedDifferences": [
+          {
+            "caseId": "attemptDeadline-readback",
+            "status": "DIVERGENCE_APPROVED",
+            "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+          },
+          {
+            "caseId": "bounded-handler-timeout",
+            "status": "DIVERGENCE_APPROVED",
+            "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
+          },
+          {
+            "caseId": "scheduler-attempt-versus-handler-instance",
+            "status": "DIVERGENCE_APPROVED",
+            "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.3)"
+          }
+        ]
+      },
+      "caseDecisions": [
         {
           "caseId": "attemptDeadline-readback",
           "status": "DIVERGENCE_APPROVED",
           "decisionOfRecord": "S4",
           "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+        },
+        {
+          "caseId": "bounded-handler-timeout",
+          "status": "DIVERGENCE_APPROVED",
+          "decisionOfRecord": "S4, S7 and 3.3",
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
         }
       ],
       "note": "Verified from final-binary run-3 evidence: the handler continues after timeout and the run is recorded as timed out, matching the user-observable behavior. The HTTP 504 received by Cloud Scheduler is scheduler-side and declared under S4 and S7; approved 3.3 records the strict handler-end in-flight boundary. The run-3 attempt and frame readings are retained in caseEvidence.",
@@ -1522,7 +1672,7 @@
           "caseId": "attemptDeadline-readback",
           "status": "DIVERGENCE_APPROVED",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/local/production-run4.json",
@@ -1541,9 +1691,9 @@
         },
         {
           "caseId": "bounded-handler-timeout",
-          "status": "NOT_COMPARABLE",
+          "status": "DIVERGENCE_APPROVED",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/local/production-run3.json",
@@ -1556,20 +1706,21 @@
             },
             {
               "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-              "sha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+              "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
               "fields": [
                 "localVerificationRows"
               ],
               "testId": "crates/fireemu-adapter-functions/tests/runtime.rs#events_are_dispatched_and_retried_in_virtual_time"
             }
           ],
-          "coveredBy": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases"
+          "coveredBy": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases",
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
         },
         {
           "caseId": "scheduler-attempt-versus-handler-instance",
           "status": "DIVERGENCE_APPROVED",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": [
             {
               "path": "conformance/scheduled-delivery/local/production-run3.json",
@@ -1586,7 +1737,7 @@
           "caseId": "next-occurrence-during-work",
           "status": "MATCH",
           "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-          "comparisonSha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+          "comparisonSha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
           "sources": []
         }
       ]
@@ -1608,12 +1759,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
-        "artifactBuiltFrom": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
         "rows": {
           "PASS": 5
         }
@@ -1639,12 +1790,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
-        "artifactBuiltFrom": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
         "rows": {
           "PASS": 6
         }
@@ -1672,12 +1823,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
-        "artifactBuiltFrom": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
         "rows": {
           "PASS": 8
         }
@@ -1703,12 +1854,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
-        "artifactBuiltFrom": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
         "rows": {
           "PASS": 6
         }
@@ -1798,12 +1949,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
-        "artifactBuiltFrom": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
         "rows": {
           "PASS": 4
         }
@@ -1827,12 +1978,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
-        "artifactBuiltFrom": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
         "rows": {
           "PASS": 4
         }
@@ -1857,12 +2008,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
-        "artifactBuiltFrom": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
         "rows": {
           "PASS": 5
         }
@@ -1887,12 +2038,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
-        "artifactBuiltFrom": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
         "rows": {
           "PASS": 5
         }
@@ -1917,12 +2068,12 @@
       "coverageStatus": "covered",
       "evidence": {
         "evidenceType": "fireemu-only",
-        "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
-        "artifactBuiltFrom": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
         "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
         "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
-        "comparisonSha256": "7dcc236fa0292814fae15ee95062874622bd2d7627fe4d4555747c15f474a2bb",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
         "rows": {
           "PASS": 5
         }
@@ -1947,8 +2098,19 @@
       ],
       "status": "PENDING_REVIEW",
       "coverageStatus": "debt",
-      "evidence": null,
-      "note": "Final-binary declarations, omitted SDK retry options and both default-zone calendar comparisons are recorded. Gen1 publication commitment despite failure and natural message/context identities are measured, but independent Scheduler publish acknowledgement has no local endpoint and the last run-4 natural messages were not pulled. The scheduled 90-second timeout and 100-second continuing handler are measured; an HTTP 504 schedule acknowledgement has no local wire counterpart. Those two production conditions, a workspace-regression receipt and independent closure review remain pending.",
+      "evidence": {
+        "evidenceType": "closure-gate",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-final-artifact-regression.json",
+        "comparisonSha256": "6b204b3d9d8e01f5ec78f61efea29325f308020f959f6c0f02a1843e8e21790b",
+        "rows": {
+          "PASS": 6
+        },
+        "productionRequests": 0
+      },
+      "note": "Two production recordings, exact frozen case set, strict comparisons, emulator no-new-refusals, local properties and artifact-runner binding are evidenced. Workspace-regression remains pending for the coordinator CI run on the pushed head.",
       "obligation": "Final binary and bundled runner receipts with exact comparison coverage",
       "source": "spec/compatibility/closure/FUNCTIONS-HTTP.json"
     },
@@ -2009,7 +2171,7 @@
       {
         "section": "3.6",
         "caseId": "synchronized-window",
-        "note": "Run 2 records an every-five-minutes occurrence off the boundary after forced runs and a missing occurrence; the production synchronization rule remains undetermined.",
+        "note": "Both v6 recordings match the synchronized window. A forced run re-anchors the next every-five-minutes occurrence about 4.5 to 5 minutes later in runs 2 to 4 for Gen1 and Gen2; this is unreachable in strict because run-now is Fireemu-only under 3.4.",
         "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.6)",
         "status": "DIVERGENCE_APPROVED"
       }
@@ -2024,44 +2186,43 @@
       }
     ],
     "jobResourceReadings": {
-      "note": "Run 4 has three separate deploy observations: reset options restore retryConfig defaults while omitted options preserve existing values; both write the CLI time zone default. Gen2 attemptDeadline follows the function timeout clamped to 180..1800 seconds and is restored on update; Gen1 has no attemptDeadline. S4 remains the decision of record; handler-visible zone and effective retry-chain consequences stay in scope.",
+      "note": "Run 4 has three separate deploy observations: reset options restore retryConfig defaults while omitted options preserve existing values; both write the CLI time zone default. Gen2 attemptDeadline follows the function timeout clamped to 180..1800 seconds and is restored on update; Gen1 has no attemptDeadline. On redeploy, production keeps a previous deploy retryConfig when retry options are omitted (the CLI PATCH has no retryConfig in its update mask); strict rebuilds from the reloaded manifest and resets to defaults. This gap is not modelled. S4 remains the decision of record.",
       "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
     }
   },
   "integratedRegression": {
     "release": "v0.13.0",
-    "integrationCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+    "integrationCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
     "releaseBinarySha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
     "buildReceiptPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-build.json",
-    "buildReceiptSha256": "9d8d1219e46ce8723c010e0988dcb1b56f242606ac3f42ddcb7d0de0a6b77121",
+    "buildReceiptSha256": "c60dda3a1bba898642e83aa5033c5cddcb7b10397cf930ee1c8fd24a46cb5963",
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
-        "sha256": "9c8aba5360b5988b95703fb6d624813a6be084ad98f2f5c44cacfefc1b1ab9d6",
+        "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
         "rows": 48,
         "summary": {
-          "MATCH": 46,
-          "DIVERGENCE_APPROVED": 2
+          "DIVERGENCE_APPROVED": 1,
+          "MATCH": 47
         }
       },
       {
         "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
-        "sha256": "768d2916ee1f0f658145fe431987cfaf0a23408044abd61ff25a6e14f0e1a4eb",
+        "sha256": "fc74b92ad1e395df6959119bee261d5cd8f33c62957b35e99a5fa14f419e693f",
         "rows": 70,
         "summary": {
-          "MATCH": 53,
-          "DIVERGENCE_APPROVED": 9,
-          "NOT_COMPARABLE": 5,
-          "DIVERGES": 3
+          "DIVERGENCE_APPROVED": 15,
+          "MATCH": 54,
+          "NOT_IMPLEMENTED": 1
         }
       }
     ],
-    "result": "RECORDED_WITH_PENDING_CONDITIONS",
+    "result": "RECORDED_WITH_PENDING_WORKSPACE_REGRESSION",
     "productionRequests": 0,
     "releaseBindingNote": "v0.13.0 evidence is bound to this closure-base commit. A release tag with different Rust, lockfile, toolchain or runner inputs requires another final-binary comparison."
   },
   "limitations": [
-    "The frozen inventory has final-artifact comparison evidence. All nine Fireemu-only conditions are verified locally; production conditions with missing cases and the closure gates remain pending. The parent is IMPLEMENTING.",
+    "The frozen inventory has final-artifact comparison evidence. All nine Fireemu-only conditions are verified locally; the workspace-regression gate remains pending until the coordinator records the ci.yml run on the pushed head. The parent is IMPLEMENTING.",
     "DST repeated delivery is not proven by future next-time metadata.",
     "General Cloud Scheduler resource API is not claimed.",
     "The Fireemu-only conditions are bound to local tests and claim no production behaviour.",

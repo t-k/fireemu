@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "parent": "SCHEDULED-FUNCTIONS",
   "evidenceType": "fireemu-only",
-  "sourceCommit": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
+  "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
   "artifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
   "artifactBuiltFrom": "de04d3de0f0f720eb5233143989072fe64a7c1ba",
   "artifactNote": "The release binary and the mapped local tests were built from the same clean source commit. Tests execute test binaries built from those inputs; they do not execute the release binary.",

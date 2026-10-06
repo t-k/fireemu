@@ -472,23 +472,14 @@ fn paged_collection_json(
 }
 
 pub(crate) fn decode_query(value: &str) -> Result<String, RestError> {
-    let mut decoded = Vec::with_capacity(value.len());
-    let mut bytes = value.bytes();
-    while let Some(byte) = bytes.next() {
-        decoded.push(match byte {
-            b'+' => b' ',
-            b'%' => {
-                let high = bytes.next().and_then(|b| char::from(b).to_digit(16));
-                let low = bytes.next().and_then(|b| char::from(b).to_digit(16));
-                let (Some(high), Some(low)) = (high, low) else {
-                    return Err(RestError::invalid("invalid percent encoding in query"));
-                };
-                u8::try_from(high * 16 + low).expect("decoded byte")
-            }
-            other => other,
-        });
+    use fireemu_core_types::codec::{
+        percent_decode_bytes, percent_escapes_are_well_formed, PlusMode,
+    };
+    if !percent_escapes_are_well_formed(value) {
+        return Err(RestError::invalid("invalid percent encoding in query"));
     }
-    String::from_utf8(decoded).map_err(|_| RestError::invalid("query must be UTF-8"))
+    String::from_utf8(percent_decode_bytes(value, PlusMode::Space))
+        .map_err(|_| RestError::invalid("query must be UTF-8"))
 }
 
 fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), RestError> {

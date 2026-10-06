@@ -1735,7 +1735,7 @@ mod tests {
 
     proptest::proptest! {
         /// Whatever the interleaving of ordinary publishes and publishes with chosen identifiers, the ordinary ones are
-        /// numbered 1, 2, 3 ... in order (the chosen ones never use up a number) and a chosen identifier is kept.
+        /// numbered 1, 2, 3 ... in order (each number is spelled by `pubsub_message_id`) (the chosen ones never use up a number) and a chosen identifier is kept.
         #[test]
         fn chosen_identifiers_never_disturb_the_ordinary_numbering(
             steps in proptest::collection::vec(proptest::bool::ANY, 1..40)
@@ -1758,7 +1758,7 @@ mod tests {
                 } else {
                     ordinary += 1;
                     let ids = s.publish(&topic("demo-app", "jobs"), vec![data(b"x")], now).unwrap();
-                    proptest::prop_assert_eq!(ids, vec![ordinary.to_string()]);
+                    proptest::prop_assert_eq!(ids, vec![crate::pubsub_message_id(ordinary)]);
                 }
             }
         }

@@ -2270,6 +2270,7 @@ mod publication_gate_tests {
     /// A publication with chosen identifiers reaches the subscriptions with that identifier and that publish time, and
     /// reaches the topic-delivery bridge once, like any other publication.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn a_publication_with_chosen_identifiers_reaches_subscriptions_and_the_bridge() {
         use fireemu_core_pubsub::{
             Filter, PubsubMessage, SubscriptionConfig, SubscriptionName, TopicName,

@@ -9635,8 +9635,9 @@ mod tests {
             })
             .collect();
         // Every second generation Pub/Sub function has a subscription of its own, derived from
-        // the function the way the event names it; the first generation function and the
-        // schedule keep the topic's name (unrecorded, so unchanged).
+        // the function the way the event names it; the first generation function keeps the topic's name; a second
+        // generation schedule has no topic under strict, as production creates none for it (runs 156715222b86ea44 and
+        // f123d4fa2d61c5f5).
         let derived = |name: &str| {
             let function = manifest.get(name).unwrap();
             format!(
@@ -9651,11 +9652,6 @@ mod tests {
         };
         let shared = "projects/demo-app/topics/shared-jobs".to_owned();
         let mut expected = vec![
-            (
-                "projects/demo-app/topics/firebase-schedule-dailyReport".to_owned(),
-                "projects/demo-app/subscriptions/emulator-sub-firebase-schedule-dailyReport"
-                    .to_owned(),
-            ),
             (
                 shared.clone(),
                 "projects/demo-app/subscriptions/emulator-sub-shared-jobs".to_owned(),
@@ -9766,7 +9762,7 @@ mod tests {
             );
         }
         assert_eq!(listed.len(), resources.len());
-        assert_eq!(state.list_topics("demo-app").len(), 2);
+        assert_eq!(state.list_topics("demo-app").len(), 1);
         // Provisioning again changes nothing; a message published on the topic is not retained by a
         // function's subscription (the Functions bridge delivers it), whatever the subscription's name.
         provision_function_pubsub_resources(&mut state, &resources).unwrap();

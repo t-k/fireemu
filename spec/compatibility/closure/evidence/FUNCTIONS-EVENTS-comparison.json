@@ -1,0 +1,6272 @@
+{
+  "artifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+  "conditions": {
+    "FUNCTIONS-EVENTS/auth-created": "MATCH",
+    "FUNCTIONS-EVENTS/auth-deleted": "MATCH",
+    "FUNCTIONS-EVENTS/auth-payload": "MATCH",
+    "FUNCTIONS-EVENTS/delivery-retry-identity": "MATCH",
+    "FUNCTIONS-EVENTS/firestore-auth-context": "DIFF",
+    "FUNCTIONS-EVENTS/firestore-created": "MATCH",
+    "FUNCTIONS-EVENTS/firestore-deleted": "MATCH",
+    "FUNCTIONS-EVENTS/firestore-noop": "MATCH",
+    "FUNCTIONS-EVENTS/firestore-payload": "MATCH",
+    "FUNCTIONS-EVENTS/firestore-routing-params": "MATCH",
+    "FUNCTIONS-EVENTS/firestore-updated": "MATCH",
+    "FUNCTIONS-EVENTS/firestore-written": "MATCH",
+    "FUNCTIONS-EVENTS/pubsub-published": "DIFF",
+    "FUNCTIONS-EVENTS/pubsub-topic-routing": "DIFF",
+    "FUNCTIONS-EVENTS/storage-archived": "INCOMPLETE",
+    "FUNCTIONS-EVENTS/storage-bucket-routing": "DIFF",
+    "FUNCTIONS-EVENTS/storage-deleted": "DIFF",
+    "FUNCTIONS-EVENTS/storage-finalized": "DIFF",
+    "FUNCTIONS-EVENTS/storage-metadata-updated": "DIFF",
+    "FUNCTIONS-EVENTS/storage-payload": "DIFF"
+  },
+  "corpusSha256": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+  "execution": "FUNCTIONS-EVENTS formal record (FE v7) vs the final FE release binary built from 8d5f9eb81",
+  "fixtureSha256": "8f1ab2c7adacaff0eb346288b1fd32d94d26dce1bc04d6e1af8e581880afbe3f",
+  "frameAccounting": {
+    "duplicateReads": 0,
+    "frames": 278,
+    "lifecycle": 158,
+    "multiplyAttributed": 0,
+    "unattributable": 0,
+    "unidentified": 0,
+    "unknownHandlers": [],
+    "unowned": 4,
+    "withIssues": 0
+  },
+  "kind": "functions-events-comparison",
+  "localBinary": {
+    "dirty": false,
+    "runnerPath": "/Users/tk/work/firebase-emulator/.worktree/fe-promotion-final/tools/runner-node/index.mjs",
+    "runnerSha256": "8d7f0f64a4e4db0c67f39c59406d6da7af0d6bac2e39060bc5b2fb2e02e406bf",
+    "runnerTree": "9f4a4a97329710fbf6d4154abf42c743dc05196d",
+    "sha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+    "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+  },
+  "productionRun": {
+    "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+    "project": "fireemu-oracle-events",
+    "recordedAt": "2026-10-05T04:15:22.286Z"
+  },
+  "rows": [
+    {
+      "case": "new-document",
+      "caseId": "FUNCTIONS-EVENTS/firestore-created#new-document#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-created",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsCreatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/create#new-document#v1",
+      "scenarioId": "fs-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "new-document",
+      "caseId": "FUNCTIONS-EVENTS/firestore-created#new-document#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-created",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsCreatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "snapshot",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "snapshot",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/create#new-document#v2",
+      "scenarioId": "fs-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "before-absent",
+      "caseId": "FUNCTIONS-EVENTS/firestore-created#before-absent#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-created",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsCreatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/create#before-absent#v1",
+      "scenarioId": "fs-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "before-absent",
+      "caseId": "FUNCTIONS-EVENTS/firestore-created#before-absent#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-created",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsCreatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "snapshot",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "snapshot",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/create#before-absent#v2",
+      "scenarioId": "fs-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "after-present",
+      "caseId": "FUNCTIONS-EVENTS/firestore-created#after-present#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-created",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsCreatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/create#after-present#v1",
+      "scenarioId": "fs-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "after-present",
+      "caseId": "FUNCTIONS-EVENTS/firestore-created#after-present#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-created",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsCreatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "snapshot",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "snapshot",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/create#after-present#v2",
+      "scenarioId": "fs-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "changed-field",
+      "caseId": "FUNCTIONS-EVENTS/firestore-updated#changed-field#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsUpdatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/update#changed-field#v1",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "changed-field",
+      "caseId": "FUNCTIONS-EVENTS/firestore-updated#changed-field#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsUpdatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/update#changed-field#v2",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "before-present",
+      "caseId": "FUNCTIONS-EVENTS/firestore-updated#before-present#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsUpdatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/update#before-present#v1",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "before-present",
+      "caseId": "FUNCTIONS-EVENTS/firestore-updated#before-present#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsUpdatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/update#before-present#v2",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "after-present",
+      "caseId": "FUNCTIONS-EVENTS/firestore-updated#after-present#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsUpdatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/update#after-present#v1",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "after-present",
+      "caseId": "FUNCTIONS-EVENTS/firestore-updated#after-present#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsUpdatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/update#after-present#v2",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "deleted-document",
+      "caseId": "FUNCTIONS-EVENTS/firestore-deleted#deleted-document#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsDeletedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/delete#deleted-document#v1",
+      "scenarioId": "fs-delete",
+      "status": "MATCH"
+    },
+    {
+      "case": "deleted-document",
+      "caseId": "FUNCTIONS-EVENTS/firestore-deleted#deleted-document#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsDeletedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "snapshot",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "snapshot",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/delete#deleted-document#v2",
+      "scenarioId": "fs-delete",
+      "status": "MATCH"
+    },
+    {
+      "case": "before-present",
+      "caseId": "FUNCTIONS-EVENTS/firestore-deleted#before-present#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsDeletedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/delete#before-present#v1",
+      "scenarioId": "fs-delete",
+      "status": "MATCH"
+    },
+    {
+      "case": "before-present",
+      "caseId": "FUNCTIONS-EVENTS/firestore-deleted#before-present#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsDeletedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "snapshot",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "snapshot",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/delete#before-present#v2",
+      "scenarioId": "fs-delete",
+      "status": "MATCH"
+    },
+    {
+      "case": "after-absent",
+      "caseId": "FUNCTIONS-EVENTS/firestore-deleted#after-absent#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsDeletedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/delete#after-absent#v1",
+      "scenarioId": "fs-delete",
+      "status": "MATCH"
+    },
+    {
+      "case": "after-absent",
+      "caseId": "FUNCTIONS-EVENTS/firestore-deleted#after-absent#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsDeletedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "snapshot",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "snapshot",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/delete#after-absent#v2",
+      "scenarioId": "fs-delete",
+      "status": "MATCH"
+    },
+    {
+      "case": "create",
+      "caseId": "FUNCTIONS-EVENTS/firestore-written#create#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-written",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsWrittenV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/write#create#v1",
+      "scenarioId": "fs-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "create",
+      "caseId": "FUNCTIONS-EVENTS/firestore-written#create#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-written",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsWrittenV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/write#create#v2",
+      "scenarioId": "fs-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "update",
+      "caseId": "FUNCTIONS-EVENTS/firestore-written#update#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-written",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsWrittenV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/write#update#v1",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "update",
+      "caseId": "FUNCTIONS-EVENTS/firestore-written#update#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-written",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsWrittenV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/write#update#v2",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "delete",
+      "caseId": "FUNCTIONS-EVENTS/firestore-written#delete#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-written",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsWrittenV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/write#delete#v1",
+      "scenarioId": "fs-delete",
+      "status": "MATCH"
+    },
+    {
+      "case": "delete",
+      "caseId": "FUNCTIONS-EVENTS/firestore-written#delete#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-written",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsWrittenV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/write#delete#v2",
+      "scenarioId": "fs-delete",
+      "status": "MATCH"
+    },
+    {
+      "case": "same-value-write-no-event",
+      "caseId": "FUNCTIONS-EVENTS/firestore-noop#same-value-write-no-event#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-noop",
+      "delivery": "none-in-window",
+      "generation": 1,
+      "handler": "fsWrittenV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/noop#same-value-write-no-event#v1",
+      "scenarioId": "fs-noop",
+      "status": "MATCH"
+    },
+    {
+      "case": "same-value-write-no-event",
+      "caseId": "FUNCTIONS-EVENTS/firestore-noop#same-value-write-no-event#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-noop",
+      "delivery": "none-in-window",
+      "generation": 2,
+      "handler": "fsWrittenV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/noop#same-value-write-no-event#v2",
+      "scenarioId": "fs-noop",
+      "status": "MATCH"
+    },
+    {
+      "case": "matching-path",
+      "caseId": "FUNCTIONS-EVENTS/firestore-routing-params#matching-path#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsCreatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/routing#matching-path#v1",
+      "scenarioId": "fs-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "matching-path",
+      "caseId": "FUNCTIONS-EVENTS/firestore-routing-params#matching-path#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsCreatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "snapshot",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "snapshot",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/routing#matching-path#v2",
+      "scenarioId": "fs-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "nonmatching-path",
+      "caseId": "FUNCTIONS-EVENTS/firestore-routing-params#nonmatching-path#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
+      "delivery": "none-in-window",
+      "generation": 1,
+      "handler": "fsCreatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/routing#nonmatching-path#v1",
+      "scenarioId": "fs-other-path",
+      "status": "MATCH"
+    },
+    {
+      "case": "nonmatching-path",
+      "caseId": "FUNCTIONS-EVENTS/firestore-routing-params#nonmatching-path#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
+      "delivery": "none-in-window",
+      "generation": 2,
+      "handler": "fsCreatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/routing#nonmatching-path#v2",
+      "scenarioId": "fs-other-path",
+      "status": "MATCH"
+    },
+    {
+      "case": "wildcard-param",
+      "caseId": "FUNCTIONS-EVENTS/firestore-routing-params#wildcard-param#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsCreatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/routing#wildcard-param#v1",
+      "scenarioId": "fs-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "wildcard-param",
+      "caseId": "FUNCTIONS-EVENTS/firestore-routing-params#wildcard-param#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsCreatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "snapshot",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "snapshot",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/routing#wildcard-param#v2",
+      "scenarioId": "fs-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "handler-envelope",
+      "caseId": "FUNCTIONS-EVENTS/firestore-payload#handler-envelope#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsUpdatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/payload#handler-envelope#v1",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "handler-envelope",
+      "caseId": "FUNCTIONS-EVENTS/firestore-payload#handler-envelope#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsUpdatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/payload#handler-envelope#v2",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "field-values",
+      "caseId": "FUNCTIONS-EVENTS/firestore-payload#field-values#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsUpdatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/payload#field-values#v1",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "field-values",
+      "caseId": "FUNCTIONS-EVENTS/firestore-payload#field-values#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsUpdatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/payload#field-values#v2",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "document-name",
+      "caseId": "FUNCTIONS-EVENTS/firestore-payload#document-name#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsUpdatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/payload#document-name#v1",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "document-name",
+      "caseId": "FUNCTIONS-EVENTS/firestore-payload#document-name#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsUpdatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/payload#document-name#v2",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "update-time",
+      "caseId": "FUNCTIONS-EVENTS/firestore-payload#update-time#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsUpdatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/payload#update-time#v1",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "update-time",
+      "caseId": "FUNCTIONS-EVENTS/firestore-payload#update-time#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsUpdatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/payload#update-time#v2",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "event-metadata",
+      "caseId": "FUNCTIONS-EVENTS/firestore-payload#event-metadata#v1",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "fsUpdatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/payload#event-metadata#v1",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "event-metadata",
+      "caseId": "FUNCTIONS-EVENTS/firestore-payload#event-metadata#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsUpdatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/payload#event-metadata#v2",
+      "scenarioId": "fs-update",
+      "status": "MATCH"
+    },
+    {
+      "case": "authenticated-write",
+      "caseId": "FUNCTIONS-EVENTS/firestore-auth-context#authenticated-write#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-auth-context",
+      "declaredMasks": [
+        {
+          "mask": "authId-api_key-uid",
+          "path": "$.frame.event.authId",
+          "reason": "E10"
+        },
+        {
+          "mask": "authId-unknown-present",
+          "path": "$.frame.event.authId",
+          "reason": "E10"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsWrittenWithAuthContextV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "authId",
+          "authType",
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: value $.frame.event.authId (production string#55fbf1258ff8, local string#db07db31740c)",
+            "emulator: value $.frame.event.authType (production string#de9685549b5f, local string#eb8bf0d80db3)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: value $.frame.event.authId (production string#55fbf1258ff8, local string#db07db31740c)",
+        "emulator: value $.frame.event.authType (production string#de9685549b5f, local string#eb8bf0d80db3)"
+      ],
+      "row": "functions-events/firestore/auth-context#authenticated-write#v2",
+      "scenarioId": "fs-auth-client",
+      "status": "DIFF"
+    },
+    {
+      "case": "admin-write",
+      "caseId": "FUNCTIONS-EVENTS/firestore-auth-context#admin-write#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-auth-context",
+      "declaredMasks": [
+        {
+          "mask": "authId-unknown-present",
+          "path": "$.frame.event.authId",
+          "reason": "E10"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsWrittenWithAuthContextV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "authId",
+          "authType",
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/firestore/auth-context#admin-write#v2",
+      "scenarioId": "fs-auth-admin",
+      "status": "MATCH"
+    },
+    {
+      "case": "auth-type-and-id",
+      "caseId": "FUNCTIONS-EVENTS/firestore-auth-context#auth-type-and-id#v2",
+      "conditionId": "FUNCTIONS-EVENTS/firestore-auth-context",
+      "declaredMasks": [
+        {
+          "mask": "authId-api_key-uid",
+          "path": "$.frame.event.authId",
+          "reason": "E10"
+        },
+        {
+          "mask": "authId-unknown-present",
+          "path": "$.frame.event.authId",
+          "reason": "E10"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.frame.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "fsWrittenWithAuthContextV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "authId",
+          "authType",
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: value $.frame.event.authId (production string#55fbf1258ff8, local string#db07db31740c)",
+            "emulator: value $.frame.event.authType (production string#de9685549b5f, local string#eb8bf0d80db3)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: value $.frame.event.authId (production string#55fbf1258ff8, local string#db07db31740c)",
+        "emulator: value $.frame.event.authType (production string#de9685549b5f, local string#eb8bf0d80db3)"
+      ],
+      "row": "functions-events/firestore/auth-context#auth-type-and-id#v2",
+      "scenarioId": "fs-auth-client",
+      "status": "DIFF"
+    },
+    {
+      "case": "new-object",
+      "caseId": "FUNCTIONS-EVENTS/storage-finalized#new-object#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "storageFinalizedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 1)",
+            "emulator: format $.frame.event.data.id length (production 41, local 26)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 106)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 1)",
+        "emulator: format $.frame.event.data.id length (production 41, local 26)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 106)"
+      ],
+      "row": "functions-events/storage/finalize#new-object#v1",
+      "scenarioId": "storage-upload",
+      "status": "DIFF"
+    },
+    {
+      "case": "new-object",
+      "caseId": "FUNCTIONS-EVENTS/storage-finalized#new-object#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "storageFinalizedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "bucket",
+          "context",
+          "data",
+          "id",
+          "object",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "bucket",
+          "context",
+          "object",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 1)",
+            "emulator: format $.frame.event.data.id length (production 41, local 26)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 106)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 1)",
+        "emulator: format $.frame.event.data.id length (production 41, local 26)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 106)"
+      ],
+      "row": "functions-events/storage/finalize#new-object#v2",
+      "scenarioId": "storage-upload",
+      "status": "DIFF"
+    },
+    {
+      "case": "overwritten-generation",
+      "caseId": "FUNCTIONS-EVENTS/storage-finalized#overwritten-generation#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "storageFinalizedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 1)",
+            "emulator: format $.frame.event.data.id length (production 41, local 26)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 106)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 1)",
+        "emulator: format $.frame.event.data.id length (production 41, local 26)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 106)"
+      ],
+      "row": "functions-events/storage/finalize#overwritten-generation#v1",
+      "scenarioId": "storage-overwrite",
+      "status": "DIFF"
+    },
+    {
+      "case": "overwritten-generation",
+      "caseId": "FUNCTIONS-EVENTS/storage-finalized#overwritten-generation#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "storageFinalizedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "bucket",
+          "context",
+          "data",
+          "id",
+          "object",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "bucket",
+          "context",
+          "object",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 1)",
+            "emulator: format $.frame.event.data.id length (production 41, local 26)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 106)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 1)",
+        "emulator: format $.frame.event.data.id length (production 41, local 26)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 106)"
+      ],
+      "row": "functions-events/storage/finalize#overwritten-generation#v2",
+      "scenarioId": "storage-overwrite",
+      "status": "DIFF"
+    },
+    {
+      "case": "failed-upload-no-event",
+      "caseId": "FUNCTIONS-EVENTS/storage-finalized#failed-upload-no-event#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
+      "delivery": "none-in-window",
+      "generation": 1,
+      "handler": "storageFinalizedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: the local driver marked the operation INCOMPLETE"
+          ],
+          "status": "INCOMPLETE"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: the local driver marked the operation INCOMPLETE"
+      ],
+      "row": "functions-events/storage/finalize#failed-upload-no-event#v1",
+      "scenarioId": "storage-failed-upload",
+      "status": "INCOMPLETE"
+    },
+    {
+      "case": "failed-upload-no-event",
+      "caseId": "FUNCTIONS-EVENTS/storage-finalized#failed-upload-no-event#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
+      "delivery": "none-in-window",
+      "generation": 2,
+      "handler": "storageFinalizedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: the local driver marked the operation INCOMPLETE"
+          ],
+          "status": "INCOMPLETE"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: the local driver marked the operation INCOMPLETE"
+      ],
+      "row": "functions-events/storage/finalize#failed-upload-no-event#v2",
+      "scenarioId": "storage-failed-upload",
+      "status": "INCOMPLETE"
+    },
+    {
+      "case": "live-object-delete",
+      "caseId": "FUNCTIONS-EVENTS/storage-deleted#live-object-delete#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-deleted",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "storageDeletedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 1)",
+            "emulator: format $.frame.event.data.id length (production 41, local 26)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 106)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 1)",
+        "emulator: format $.frame.event.data.id length (production 41, local 26)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 106)"
+      ],
+      "row": "functions-events/storage/delete#live-object-delete#v1",
+      "scenarioId": "storage-delete",
+      "status": "DIFF"
+    },
+    {
+      "case": "live-object-delete",
+      "caseId": "FUNCTIONS-EVENTS/storage-deleted#live-object-delete#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-deleted",
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "storageDeletedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "bucket",
+          "context",
+          "data",
+          "id",
+          "object",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "bucket",
+          "context",
+          "object",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 1)",
+            "emulator: format $.frame.event.data.id length (production 41, local 26)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 106)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 1)",
+        "emulator: format $.frame.event.data.id length (production 41, local 26)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 106)"
+      ],
+      "row": "functions-events/storage/delete#live-object-delete#v2",
+      "scenarioId": "storage-delete",
+      "status": "DIFF"
+    },
+    {
+      "case": "no-event-for-missing-object",
+      "caseId": "FUNCTIONS-EVENTS/storage-deleted#no-event-for-missing-object#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-deleted",
+      "delivery": "none-in-window",
+      "generation": 1,
+      "handler": "storageDeletedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/storage/delete#no-event-for-missing-object#v1",
+      "scenarioId": "storage-delete-missing",
+      "status": "MATCH"
+    },
+    {
+      "case": "no-event-for-missing-object",
+      "caseId": "FUNCTIONS-EVENTS/storage-deleted#no-event-for-missing-object#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-deleted",
+      "delivery": "none-in-window",
+      "generation": 2,
+      "handler": "storageDeletedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/storage/delete#no-event-for-missing-object#v2",
+      "scenarioId": "storage-delete-missing",
+      "status": "MATCH"
+    },
+    {
+      "case": "custom-metadata-change",
+      "caseId": "FUNCTIONS-EVENTS/storage-metadata-updated#custom-metadata-change#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-metadata-updated",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "storageMetadataUpdatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/metadata#custom-metadata-change#v1",
+      "scenarioId": "storage-metadata",
+      "status": "DIFF"
+    },
+    {
+      "case": "custom-metadata-change",
+      "caseId": "FUNCTIONS-EVENTS/storage-metadata-updated#custom-metadata-change#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-metadata-updated",
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "storageMetadataUpdatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "bucket",
+          "context",
+          "data",
+          "id",
+          "object",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "bucket",
+          "context",
+          "object",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/metadata#custom-metadata-change#v2",
+      "scenarioId": "storage-metadata",
+      "status": "DIFF"
+    },
+    {
+      "case": "metageneration",
+      "caseId": "FUNCTIONS-EVENTS/storage-metadata-updated#metageneration#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-metadata-updated",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "storageMetadataUpdatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/metadata#metageneration#v1",
+      "scenarioId": "storage-metadata",
+      "status": "DIFF"
+    },
+    {
+      "case": "metageneration",
+      "caseId": "FUNCTIONS-EVENTS/storage-metadata-updated#metageneration#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-metadata-updated",
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "storageMetadataUpdatedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "bucket",
+          "context",
+          "data",
+          "id",
+          "object",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "bucket",
+          "context",
+          "object",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/metadata#metageneration#v2",
+      "scenarioId": "storage-metadata",
+      "status": "DIFF"
+    },
+    {
+      "case": "versioned-overwrite",
+      "caseId": "FUNCTIONS-EVENTS/storage-archived#versioned-overwrite#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-archived",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "storageArchivedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: local operation matchKey is not a valid role key"
+          ],
+          "status": "INCOMPLETE"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: local operation matchKey is not a valid role key"
+      ],
+      "row": "functions-events/storage/archive#versioned-overwrite#v1",
+      "scenarioId": "storage-archive",
+      "status": "INCOMPLETE"
+    },
+    {
+      "case": "versioned-overwrite",
+      "caseId": "FUNCTIONS-EVENTS/storage-archived#versioned-overwrite#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-archived",
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "storageArchivedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "bucket",
+          "context",
+          "data",
+          "id",
+          "object",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "bucket",
+          "context",
+          "object",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: local operation matchKey is not a valid role key"
+          ],
+          "status": "INCOMPLETE"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: local operation matchKey is not a valid role key"
+      ],
+      "row": "functions-events/storage/archive#versioned-overwrite#v2",
+      "scenarioId": "storage-archive",
+      "status": "INCOMPLETE"
+    },
+    {
+      "case": "archived-generation",
+      "caseId": "FUNCTIONS-EVENTS/storage-archived#archived-generation#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-archived",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "storageArchivedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: local operation matchKey is not a valid role key"
+          ],
+          "status": "INCOMPLETE"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: local operation matchKey is not a valid role key"
+      ],
+      "row": "functions-events/storage/archive#archived-generation#v1",
+      "scenarioId": "storage-archive",
+      "status": "INCOMPLETE"
+    },
+    {
+      "case": "archived-generation",
+      "caseId": "FUNCTIONS-EVENTS/storage-archived#archived-generation#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-archived",
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "storageArchivedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "bucket",
+          "context",
+          "data",
+          "id",
+          "object",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "bucket",
+          "context",
+          "object",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: local operation matchKey is not a valid role key"
+          ],
+          "status": "INCOMPLETE"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: local operation matchKey is not a valid role key"
+      ],
+      "row": "functions-events/storage/archive#archived-generation#v2",
+      "scenarioId": "storage-archive",
+      "status": "INCOMPLETE"
+    },
+    {
+      "case": "handler-envelope",
+      "caseId": "FUNCTIONS-EVENTS/storage-payload#handler-envelope#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "storageFinalizedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/payload#handler-envelope#v1",
+      "scenarioId": "storage-upload",
+      "status": "DIFF"
+    },
+    {
+      "case": "handler-envelope",
+      "caseId": "FUNCTIONS-EVENTS/storage-payload#handler-envelope#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "storageFinalizedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "bucket",
+          "context",
+          "data",
+          "id",
+          "object",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "bucket",
+          "context",
+          "object",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/payload#handler-envelope#v2",
+      "scenarioId": "storage-upload",
+      "status": "DIFF"
+    },
+    {
+      "case": "name-and-bucket",
+      "caseId": "FUNCTIONS-EVENTS/storage-payload#name-and-bucket#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "storageFinalizedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/payload#name-and-bucket#v1",
+      "scenarioId": "storage-upload",
+      "status": "DIFF"
+    },
+    {
+      "case": "name-and-bucket",
+      "caseId": "FUNCTIONS-EVENTS/storage-payload#name-and-bucket#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "storageFinalizedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "bucket",
+          "context",
+          "data",
+          "id",
+          "object",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "bucket",
+          "context",
+          "object",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/payload#name-and-bucket#v2",
+      "scenarioId": "storage-upload",
+      "status": "DIFF"
+    },
+    {
+      "case": "generation",
+      "caseId": "FUNCTIONS-EVENTS/storage-payload#generation#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "storageFinalizedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/payload#generation#v1",
+      "scenarioId": "storage-upload",
+      "status": "DIFF"
+    },
+    {
+      "case": "generation",
+      "caseId": "FUNCTIONS-EVENTS/storage-payload#generation#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "storageFinalizedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "bucket",
+          "context",
+          "data",
+          "id",
+          "object",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "bucket",
+          "context",
+          "object",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/payload#generation#v2",
+      "scenarioId": "storage-upload",
+      "status": "DIFF"
+    },
+    {
+      "case": "content-type",
+      "caseId": "FUNCTIONS-EVENTS/storage-payload#content-type#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "storageFinalizedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/payload#content-type#v1",
+      "scenarioId": "storage-upload",
+      "status": "DIFF"
+    },
+    {
+      "case": "content-type",
+      "caseId": "FUNCTIONS-EVENTS/storage-payload#content-type#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "storageFinalizedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "bucket",
+          "context",
+          "data",
+          "id",
+          "object",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "bucket",
+          "context",
+          "object",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/payload#content-type#v2",
+      "scenarioId": "storage-upload",
+      "status": "DIFF"
+    },
+    {
+      "case": "event-metadata",
+      "caseId": "FUNCTIONS-EVENTS/storage-payload#event-metadata#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "storageFinalizedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/payload#event-metadata#v1",
+      "scenarioId": "storage-upload",
+      "status": "DIFF"
+    },
+    {
+      "case": "event-metadata",
+      "caseId": "FUNCTIONS-EVENTS/storage-payload#event-metadata#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-payload",
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "storageFinalizedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "bucket",
+          "context",
+          "data",
+          "id",
+          "object",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "bucket",
+          "context",
+          "object",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/payload#event-metadata#v2",
+      "scenarioId": "storage-upload",
+      "status": "DIFF"
+    },
+    {
+      "case": "matching-bucket",
+      "caseId": "FUNCTIONS-EVENTS/storage-bucket-routing#matching-bucket#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "storageFinalizedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/routing#matching-bucket#v1",
+      "scenarioId": "storage-upload",
+      "status": "DIFF"
+    },
+    {
+      "case": "matching-bucket",
+      "caseId": "FUNCTIONS-EVENTS/storage-bucket-routing#matching-bucket#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "storageFinalizedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "bucket",
+          "context",
+          "data",
+          "id",
+          "object",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "bucket",
+          "context",
+          "object",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/routing#matching-bucket#v2",
+      "scenarioId": "storage-upload",
+      "status": "DIFF"
+    },
+    {
+      "case": "nonmatching-bucket",
+      "caseId": "FUNCTIONS-EVENTS/storage-bucket-routing#nonmatching-bucket#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
+      "delivery": "none-in-window",
+      "generation": 1,
+      "handler": "storageFinalizedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/storage/routing#nonmatching-bucket#v1",
+      "scenarioId": "storage-other-bucket",
+      "status": "MATCH"
+    },
+    {
+      "case": "nonmatching-bucket",
+      "caseId": "FUNCTIONS-EVENTS/storage-bucket-routing#nonmatching-bucket#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
+      "delivery": "none-in-window",
+      "generation": 2,
+      "handler": "storageFinalizedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/storage/routing#nonmatching-bucket#v2",
+      "scenarioId": "storage-other-bucket",
+      "status": "MATCH"
+    },
+    {
+      "case": "same-bucket-other-prefix-delivered",
+      "caseId": "FUNCTIONS-EVENTS/storage-bucket-routing#same-bucket-other-prefix-delivered#v1",
+      "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "storageFinalizedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/routing#same-bucket-other-prefix-delivered#v1",
+      "scenarioId": "storage-other-prefix",
+      "status": "DIFF"
+    },
+    {
+      "case": "same-bucket-other-prefix-delivered",
+      "caseId": "FUNCTIONS-EVENTS/storage-bucket-routing#same-bucket-other-prefix-delivered#v2",
+      "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "storageFinalizedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "bucket",
+          "context",
+          "data",
+          "id",
+          "object",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "bucket",
+          "context",
+          "object",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+            "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+            "emulator: format $.frame.event.data.id length (production 41, local 27)",
+            "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: format $.frame.event.data.etag length (production 16, local 8)",
+        "emulator: format $.frame.event.data.generation length (production 16, local 2)",
+        "emulator: format $.frame.event.data.id length (production 41, local 27)",
+        "emulator: format $.frame.event.data.mediaLink length (production 121, local 107)"
+      ],
+      "row": "functions-events/storage/routing#same-bucket-other-prefix-delivered#v2",
+      "scenarioId": "storage-other-prefix",
+      "status": "DIFF"
+    },
+    {
+      "case": "admin-create",
+      "caseId": "FUNCTIONS-EVENTS/auth-created#admin-create#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-created",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "authCreatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/auth/create#admin-create#v1",
+      "scenarioId": "auth-admin-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "email-password-create",
+      "caseId": "FUNCTIONS-EVENTS/auth-created#email-password-create#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-created",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "authCreatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/auth/create#email-password-create#v1",
+      "scenarioId": "auth-signup",
+      "status": "MATCH"
+    },
+    {
+      "case": "repeat-sign-in-no-event",
+      "caseId": "FUNCTIONS-EVENTS/auth-created#repeat-sign-in-no-event#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-created",
+      "delivery": "none-in-window",
+      "generation": 1,
+      "handler": "authCreatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/auth/create#repeat-sign-in-no-event#v1",
+      "scenarioId": "auth-repeat-signin",
+      "status": "MATCH"
+    },
+    {
+      "case": "single-user-delete",
+      "caseId": "FUNCTIONS-EVENTS/auth-deleted#single-user-delete#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-deleted",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "authDeletedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/auth/delete#single-user-delete#v1",
+      "scenarioId": "auth-delete",
+      "status": "MATCH"
+    },
+    {
+      "case": "bulk-delete-no-event",
+      "caseId": "FUNCTIONS-EVENTS/auth-deleted#bulk-delete-no-event#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-deleted",
+      "delivery": "none-in-window",
+      "generation": 1,
+      "handler": "authDeletedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/auth/delete#bulk-delete-no-event#v1",
+      "scenarioId": "auth-bulk-delete",
+      "status": "MATCH"
+    },
+    {
+      "case": "handler-envelope",
+      "caseId": "FUNCTIONS-EVENTS/auth-payload#handler-envelope#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-payload",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "authCreatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/auth/payload#handler-envelope#v1",
+      "scenarioId": "auth-admin-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "uid",
+      "caseId": "FUNCTIONS-EVENTS/auth-payload#uid#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-payload",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "authCreatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/auth/payload#uid#v1",
+      "scenarioId": "auth-admin-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "email",
+      "caseId": "FUNCTIONS-EVENTS/auth-payload#email#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-payload",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "authCreatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/auth/payload#email#v1",
+      "scenarioId": "auth-admin-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "empty-provider-data",
+      "caseId": "FUNCTIONS-EVENTS/auth-payload#empty-provider-data#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-payload",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "authCreatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/auth/payload#empty-provider-data#v1",
+      "scenarioId": "auth-admin-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "event-metadata",
+      "caseId": "FUNCTIONS-EVENTS/auth-payload#event-metadata#v1",
+      "conditionId": "FUNCTIONS-EVENTS/auth-payload",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "authCreatedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [
+          "notSupported"
+        ],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "notSupported",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/auth/payload#event-metadata#v1",
+      "scenarioId": "auth-admin-create",
+      "status": "MATCH"
+    },
+    {
+      "case": "handler-envelope",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-published#handler-envelope#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "pubsubPublishedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/pubsub/publish#handler-envelope#v1",
+      "scenarioId": "pubsub-publish",
+      "status": "MATCH"
+    },
+    {
+      "case": "handler-envelope",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-published#handler-envelope#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "declaredMasks": [
+        {
+          "mask": "pubsub-subscription-numbers",
+          "path": "$.frame.event.data.subscription",
+          "reason": "E11"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "pubsubPublishedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "context",
+          "data",
+          "id",
+          "message",
+          "source",
+          "specversion",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "context",
+          "message",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: value $.frame.event.data.subscription (production string#f4e80b7f8332, local string#9cd111749c58)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: value $.frame.event.data.subscription (production string#f4e80b7f8332, local string#9cd111749c58)"
+      ],
+      "row": "functions-events/pubsub/publish#handler-envelope#v2",
+      "scenarioId": "pubsub-publish",
+      "status": "DIFF"
+    },
+    {
+      "case": "base64-data",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-published#base64-data#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "pubsubPublishedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/pubsub/publish#base64-data#v1",
+      "scenarioId": "pubsub-publish",
+      "status": "MATCH"
+    },
+    {
+      "case": "base64-data",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-published#base64-data#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "declaredMasks": [
+        {
+          "mask": "pubsub-subscription-numbers",
+          "path": "$.frame.event.data.subscription",
+          "reason": "E11"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "pubsubPublishedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "context",
+          "data",
+          "id",
+          "message",
+          "source",
+          "specversion",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "context",
+          "message",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: value $.frame.event.data.subscription (production string#f4e80b7f8332, local string#9cd111749c58)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: value $.frame.event.data.subscription (production string#f4e80b7f8332, local string#9cd111749c58)"
+      ],
+      "row": "functions-events/pubsub/publish#base64-data#v2",
+      "scenarioId": "pubsub-publish",
+      "status": "DIFF"
+    },
+    {
+      "case": "attributes",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-published#attributes#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "pubsubPublishedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/pubsub/publish#attributes#v1",
+      "scenarioId": "pubsub-publish",
+      "status": "MATCH"
+    },
+    {
+      "case": "attributes",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-published#attributes#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "declaredMasks": [
+        {
+          "mask": "pubsub-subscription-numbers",
+          "path": "$.frame.event.data.subscription",
+          "reason": "E11"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "pubsubPublishedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "context",
+          "data",
+          "id",
+          "message",
+          "source",
+          "specversion",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "context",
+          "message",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: value $.frame.event.data.subscription (production string#f4e80b7f8332, local string#9cd111749c58)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: value $.frame.event.data.subscription (production string#f4e80b7f8332, local string#9cd111749c58)"
+      ],
+      "row": "functions-events/pubsub/publish#attributes#v2",
+      "scenarioId": "pubsub-publish",
+      "status": "DIFF"
+    },
+    {
+      "case": "message-id",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-published#message-id#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "pubsubPublishedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/pubsub/publish#message-id#v1",
+      "scenarioId": "pubsub-publish",
+      "status": "MATCH"
+    },
+    {
+      "case": "message-id",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-published#message-id#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "declaredMasks": [
+        {
+          "mask": "pubsub-subscription-numbers",
+          "path": "$.frame.event.data.subscription",
+          "reason": "E11"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "pubsubPublishedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "context",
+          "data",
+          "id",
+          "message",
+          "source",
+          "specversion",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "context",
+          "message",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: value $.frame.event.data.subscription (production string#f4e80b7f8332, local string#9cd111749c58)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: value $.frame.event.data.subscription (production string#f4e80b7f8332, local string#9cd111749c58)"
+      ],
+      "row": "functions-events/pubsub/publish#message-id#v2",
+      "scenarioId": "pubsub-publish",
+      "status": "DIFF"
+    },
+    {
+      "case": "publish-time",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-published#publish-time#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "pubsubPublishedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/pubsub/publish#publish-time#v1",
+      "scenarioId": "pubsub-publish",
+      "status": "MATCH"
+    },
+    {
+      "case": "publish-time",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-published#publish-time#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
+      "declaredMasks": [
+        {
+          "mask": "pubsub-subscription-numbers",
+          "path": "$.frame.event.data.subscription",
+          "reason": "E11"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "pubsubPublishedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "context",
+          "data",
+          "id",
+          "message",
+          "source",
+          "specversion",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "context",
+          "message",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: value $.frame.event.data.subscription (production string#f4e80b7f8332, local string#9cd111749c58)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: value $.frame.event.data.subscription (production string#f4e80b7f8332, local string#9cd111749c58)"
+      ],
+      "row": "functions-events/pubsub/publish#publish-time#v2",
+      "scenarioId": "pubsub-publish",
+      "status": "DIFF"
+    },
+    {
+      "case": "matching-topic",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-topic-routing#matching-topic#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "pubsubPublishedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/pubsub/routing#matching-topic#v1",
+      "scenarioId": "pubsub-publish",
+      "status": "MATCH"
+    },
+    {
+      "case": "matching-topic",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-topic-routing#matching-topic#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
+      "declaredMasks": [
+        {
+          "mask": "pubsub-subscription-numbers",
+          "path": "$.frame.event.data.subscription",
+          "reason": "E11"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "pubsubPublishedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "context",
+          "data",
+          "id",
+          "message",
+          "source",
+          "specversion",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "context",
+          "message",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: value $.frame.event.data.subscription (production string#f4e80b7f8332, local string#9cd111749c58)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: value $.frame.event.data.subscription (production string#f4e80b7f8332, local string#9cd111749c58)"
+      ],
+      "row": "functions-events/pubsub/routing#matching-topic#v2",
+      "scenarioId": "pubsub-publish",
+      "status": "DIFF"
+    },
+    {
+      "case": "nonmatching-topic",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-topic-routing#nonmatching-topic#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
+      "delivery": "none-in-window",
+      "generation": 1,
+      "handler": "pubsubPublishedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/pubsub/routing#nonmatching-topic#v1",
+      "scenarioId": "pubsub-other-topic",
+      "status": "MATCH"
+    },
+    {
+      "case": "nonmatching-topic",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-topic-routing#nonmatching-topic#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
+      "delivery": "none-in-window",
+      "generation": 2,
+      "handler": "pubsubPublishedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/pubsub/routing#nonmatching-topic#v2",
+      "scenarioId": "pubsub-other-topic",
+      "status": "MATCH"
+    },
+    {
+      "case": "ordering-key",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-topic-routing#ordering-key#v1",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
+      "delivery": "at-least-one",
+      "generation": 1,
+      "handler": "pubsubPublishedV1",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.context.contextExtras": [],
+        "$.event.context.contextKeys": [
+          "eventId",
+          "eventType",
+          "params",
+          "resource",
+          "timestamp"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/pubsub/routing#ordering-key#v1",
+      "scenarioId": "pubsub-ordering",
+      "status": "MATCH"
+    },
+    {
+      "case": "ordering-key",
+      "caseId": "FUNCTIONS-EVENTS/pubsub-topic-routing#ordering-key#v2",
+      "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
+      "declaredMasks": [
+        {
+          "mask": "pubsub-subscription-numbers",
+          "path": "$.frame.event.data.subscription",
+          "reason": "E11"
+        }
+      ],
+      "delivery": "at-least-one",
+      "generation": 2,
+      "handler": "pubsubPublishedV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "context",
+          "data",
+          "id",
+          "message",
+          "source",
+          "specversion",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "context",
+          "message",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [
+            "emulator: value $.frame.event.data.subscription (production string#f4e80b7f8332, local string#9cd111749c58)"
+          ],
+          "status": "DIFF"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [
+        "emulator: value $.frame.event.data.subscription (production string#f4e80b7f8332, local string#9cd111749c58)"
+      ],
+      "row": "functions-events/pubsub/routing#ordering-key#v2",
+      "scenarioId": "pubsub-ordering",
+      "status": "DIFF"
+    },
+    {
+      "case": "handler-failure",
+      "caseId": "FUNCTIONS-EVENTS/delivery-retry-identity#handler-failure#v2",
+      "conditionId": "FUNCTIONS-EVENTS/delivery-retry-identity",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.failed.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.failed.event.data.before.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.succeeded.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.succeeded.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "failed-then-succeeded-same-event",
+      "generation": 2,
+      "handler": "fsRetryV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/delivery/retry#handler-failure#v2",
+      "scenarioId": "fs-retry",
+      "status": "MATCH"
+    },
+    {
+      "case": "fail-once-then-success",
+      "caseId": "FUNCTIONS-EVENTS/delivery-retry-identity#fail-once-then-success#v2",
+      "conditionId": "FUNCTIONS-EVENTS/delivery-retry-identity",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.failed.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.failed.event.data.before.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.succeeded.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.succeeded.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "failed-then-succeeded-same-event",
+      "generation": 2,
+      "handler": "fsRetryV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/delivery/retry#fail-once-then-success#v2",
+      "scenarioId": "fs-retry",
+      "status": "MATCH"
+    },
+    {
+      "case": "retry-enabled",
+      "caseId": "FUNCTIONS-EVENTS/delivery-retry-identity#retry-enabled#v2",
+      "conditionId": "FUNCTIONS-EVENTS/delivery-retry-identity",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.failed.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.failed.event.data.before.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.succeeded.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.succeeded.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "failed-then-succeeded-same-event",
+      "generation": 2,
+      "handler": "fsRetryV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/delivery/retry#retry-enabled#v2",
+      "scenarioId": "fs-retry",
+      "status": "MATCH"
+    },
+    {
+      "case": "event-id-across-attempts",
+      "caseId": "FUNCTIONS-EVENTS/delivery-retry-identity#event-id-across-attempts#v2",
+      "conditionId": "FUNCTIONS-EVENTS/delivery-retry-identity",
+      "declaredMasks": [
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.failed.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.failed.event.data.before.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.succeeded.event.data.after.data",
+          "reason": "E12"
+        },
+        {
+          "mask": "firestore-field-maps-unordered",
+          "path": "$.succeeded.event.data.before.data",
+          "reason": "E12"
+        }
+      ],
+      "delivery": "failed-then-succeeded-same-event",
+      "generation": 2,
+      "handler": "fsRetryV2",
+      "production": {
+        "reasons": [],
+        "status": "MATCH"
+      },
+      "productionOnly": {
+        "$.event.eventKeys": [
+          "change",
+          "context",
+          "data",
+          "database",
+          "document",
+          "id",
+          "location",
+          "namespace",
+          "params",
+          "project",
+          "source",
+          "specversion",
+          "subject",
+          "time",
+          "traceparent",
+          "type"
+        ],
+        "$.event.extensionAttributes": [
+          "change",
+          "context",
+          "database",
+          "document",
+          "location",
+          "namespace",
+          "project",
+          "traceparent"
+        ]
+      },
+      "profiles": {
+        "emulator": {
+          "reasons": [],
+          "status": "MATCH"
+        },
+        "strict": {
+          "reasons": [],
+          "status": "MATCH"
+        }
+      },
+      "reasons": [],
+      "row": "functions-events/delivery/retry#event-id-across-attempts#v2",
+      "scenarioId": "fs-retry",
+      "status": "MATCH"
+    },
+    {
+      "row": "functions-events/gate#two-production-recordings",
+      "case": "two-production-recordings",
+      "conditionId": "FUNCTIONS-EVENTS/final-artifact-regression",
+      "status": "MATCH",
+      "reasons": [],
+      "production": {
+        "status": "MATCH",
+        "reasons": []
+      },
+      "profiles": {
+        "emulator": {
+          "status": "MATCH",
+          "reasons": []
+        },
+        "strict": {
+          "status": "MATCH",
+          "reasons": []
+        }
+      }
+    },
+    {
+      "row": "functions-events/gate#same-source-final-artifact-comparison",
+      "case": "same-source-final-artifact-comparison",
+      "conditionId": "FUNCTIONS-EVENTS/final-artifact-regression",
+      "status": "MATCH",
+      "reasons": [],
+      "production": {
+        "status": "MATCH",
+        "reasons": []
+      },
+      "profiles": {
+        "emulator": {
+          "status": "MATCH",
+          "reasons": []
+        },
+        "strict": {
+          "status": "MATCH",
+          "reasons": []
+        }
+      }
+    },
+    {
+      "row": "functions-events/gate#workspace-regression",
+      "case": "workspace-regression",
+      "conditionId": "FUNCTIONS-EVENTS/final-artifact-regression",
+      "status": "MATCH",
+      "reasons": [],
+      "production": {
+        "status": "MATCH",
+        "reasons": []
+      },
+      "profiles": {
+        "emulator": {
+          "status": "MATCH",
+          "reasons": []
+        },
+        "strict": {
+          "status": "MATCH",
+          "reasons": []
+        }
+      }
+    }
+  ],
+  "summary": {
+    "declaredMasks": [
+      {
+        "mask": "authId-api_key-uid",
+        "reason": "E10",
+        "rows": 2
+      },
+      {
+        "mask": "authId-unknown-present",
+        "reason": "E10",
+        "rows": 3
+      },
+      {
+        "mask": "firestore-field-maps-unordered",
+        "reason": "E12",
+        "rows": 26
+      },
+      {
+        "mask": "pubsub-subscription-numbers",
+        "reason": "E11",
+        "rows": 7
+      }
+    ],
+    "diff": 33,
+    "incomplete": 6,
+    "match": 70,
+    "rows": 109
+  },
+  "volatilePaths": {
+    "authCreatedV1/auth-admin-create": {
+      "$.frame.event.context.eventId": [
+        "value"
+      ],
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.metadata.creationTime": [
+        "value"
+      ]
+    },
+    "authCreatedV1/auth-repeat-signin": {},
+    "authCreatedV1/auth-signup": {
+      "$.frame.event.context.eventId": [
+        "value"
+      ],
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.email": [
+        "value"
+      ],
+      "$.frame.event.data.metadata.creationTime": [
+        "value"
+      ],
+      "$.frame.event.data.metadata.lastSignInTime": [
+        "value"
+      ],
+      "$.frame.event.data.providerData[0].email": [
+        "value"
+      ],
+      "$.frame.event.data.providerData[0].uid": [
+        "value"
+      ]
+    },
+    "authDeletedV1/auth-bulk-delete": {},
+    "authDeletedV1/auth-delete": {
+      "$.frame.event.context.eventId": [
+        "value"
+      ],
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.metadata.creationTime": [
+        "value"
+      ]
+    },
+    "fsCreatedV1/fs-create": {
+      "$.frame.event.context.eventId": [
+        "value"
+      ],
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.updateTime._seconds": [
+        "value"
+      ]
+    },
+    "fsCreatedV1/fs-other-path": {},
+    "fsCreatedV2/fs-create": {
+      "$.frame.event.data.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.updateTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.id": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    },
+    "fsCreatedV2/fs-other-path": {},
+    "fsDeletedV1/fs-delete": {
+      "$.frame.event.context.eventId": [
+        "value"
+      ],
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.updateTime._seconds": [
+        "value"
+      ]
+    },
+    "fsDeletedV2/fs-delete": {
+      "$.frame.event.data.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.updateTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.id": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    },
+    "fsRetryV2/fs-retry": {
+      "$.failed.event.data.after.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.failed.event.data.after.createTime._seconds": [
+        "value"
+      ],
+      "$.failed.event.data.after.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.failed.event.data.after.updateTime._seconds": [
+        "value"
+      ],
+      "$.failed.event.id": [
+        "value"
+      ],
+      "$.failed.event.time": [
+        "value"
+      ],
+      "$.succeeded.event.data.after.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.succeeded.event.data.after.createTime._seconds": [
+        "value"
+      ],
+      "$.succeeded.event.data.after.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.succeeded.event.data.after.updateTime._seconds": [
+        "value"
+      ],
+      "$.succeeded.event.id": [
+        "value"
+      ],
+      "$.succeeded.event.time": [
+        "value"
+      ]
+    },
+    "fsUpdatedV1/fs-update": {
+      "$.frame.event.context.eventId": [
+        "value"
+      ],
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.after.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.updateTime._seconds": [
+        "value"
+      ]
+    },
+    "fsUpdatedV2/fs-update": {
+      "$.frame.event.data.after.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.updateTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.id": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    },
+    "fsWrittenV1/fs-create": {
+      "$.frame.event.context.eventId": [
+        "value"
+      ],
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.after.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._seconds": [
+        "value"
+      ]
+    },
+    "fsWrittenV1/fs-delete": {
+      "$.frame.event.context.eventId": [
+        "value"
+      ],
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.before.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.updateTime._seconds": [
+        "value"
+      ]
+    },
+    "fsWrittenV1/fs-noop": {},
+    "fsWrittenV1/fs-update": {
+      "$.frame.event.context.eventId": [
+        "value"
+      ],
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.after.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.updateTime._seconds": [
+        "value"
+      ]
+    },
+    "fsWrittenV2/fs-create": {
+      "$.frame.event.data.after.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.id": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    },
+    "fsWrittenV2/fs-delete": {
+      "$.frame.event.data.before.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.updateTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.id": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    },
+    "fsWrittenV2/fs-noop": {},
+    "fsWrittenV2/fs-update": {
+      "$.frame.event.data.after.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.before.updateTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.id": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    },
+    "fsWrittenWithAuthContextV2/fs-auth-admin": {
+      "$.frame.event.data.after.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.id": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    },
+    "fsWrittenWithAuthContextV2/fs-auth-client": {
+      "$.frame.event.data.after.createTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.createTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._nanoseconds": [
+        "value"
+      ],
+      "$.frame.event.data.after.updateTime._seconds": [
+        "value"
+      ],
+      "$.frame.event.id": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    },
+    "pubsubPublishedV1/pubsub-ordering": {
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.attributes.probe": [
+        "value"
+      ],
+      "$.frame.event.data.data": [
+        "value"
+      ]
+    },
+    "pubsubPublishedV1/pubsub-other-topic": {},
+    "pubsubPublishedV1/pubsub-publish": {
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.attributes.probe": [
+        "value"
+      ],
+      "$.frame.event.data.data": [
+        "value"
+      ]
+    },
+    "pubsubPublishedV2/pubsub-ordering": {
+      "$.frame.event.data.message.attributes.probe": [
+        "value"
+      ],
+      "$.frame.event.data.message.data": [
+        "value"
+      ],
+      "$.frame.event.data.message.publishTime": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    },
+    "pubsubPublishedV2/pubsub-other-topic": {},
+    "pubsubPublishedV2/pubsub-publish": {
+      "$.frame.event.data.message.attributes.probe": [
+        "value"
+      ],
+      "$.frame.event.data.message.data": [
+        "value"
+      ],
+      "$.frame.event.data.message.publishTime": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    },
+    "storageArchivedV1/storage-archive": {
+      "$.frame.event.context.eventId": [
+        "value"
+      ],
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.etag": [
+        "value"
+      ],
+      "$.frame.event.data.generation": [
+        "value"
+      ],
+      "$.frame.event.data.id": [
+        "value"
+      ],
+      "$.frame.event.data.mediaLink": [
+        "value"
+      ],
+      "$.frame.event.data.timeCreated": [
+        "value"
+      ],
+      "$.frame.event.data.timeDeleted": [
+        "value"
+      ],
+      "$.frame.event.data.timeStorageClassUpdated": [
+        "value"
+      ],
+      "$.frame.event.data.updated": [
+        "value"
+      ]
+    },
+    "storageArchivedV2/storage-archive": {
+      "$.frame.event.data.etag": [
+        "value"
+      ],
+      "$.frame.event.data.generation": [
+        "value"
+      ],
+      "$.frame.event.data.id": [
+        "value"
+      ],
+      "$.frame.event.data.mediaLink": [
+        "value"
+      ],
+      "$.frame.event.data.timeCreated": [
+        "value"
+      ],
+      "$.frame.event.data.timeDeleted": [
+        "value"
+      ],
+      "$.frame.event.data.timeStorageClassUpdated": [
+        "value"
+      ],
+      "$.frame.event.data.updated": [
+        "value"
+      ],
+      "$.frame.event.id": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    },
+    "storageDeletedV1/storage-delete": {
+      "$.frame.event.context.eventId": [
+        "value"
+      ],
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.etag": [
+        "value"
+      ],
+      "$.frame.event.data.generation": [
+        "value"
+      ],
+      "$.frame.event.data.id": [
+        "value"
+      ],
+      "$.frame.event.data.mediaLink": [
+        "value"
+      ],
+      "$.frame.event.data.timeCreated": [
+        "value"
+      ],
+      "$.frame.event.data.timeStorageClassUpdated": [
+        "value"
+      ],
+      "$.frame.event.data.updated": [
+        "value"
+      ]
+    },
+    "storageDeletedV1/storage-delete-missing": {},
+    "storageDeletedV2/storage-delete": {
+      "$.frame.event.data.etag": [
+        "value"
+      ],
+      "$.frame.event.data.generation": [
+        "value"
+      ],
+      "$.frame.event.data.id": [
+        "value"
+      ],
+      "$.frame.event.data.mediaLink": [
+        "value"
+      ],
+      "$.frame.event.data.timeCreated": [
+        "value"
+      ],
+      "$.frame.event.data.timeStorageClassUpdated": [
+        "value"
+      ],
+      "$.frame.event.data.updated": [
+        "value"
+      ],
+      "$.frame.event.id": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    },
+    "storageDeletedV2/storage-delete-missing": {},
+    "storageFinalizedV1/storage-failed-upload": {},
+    "storageFinalizedV1/storage-other-bucket": {},
+    "storageFinalizedV1/storage-other-prefix": {
+      "$.frame.event.context.eventId": [
+        "value"
+      ],
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.etag": [
+        "value"
+      ],
+      "$.frame.event.data.generation": [
+        "value"
+      ],
+      "$.frame.event.data.id": [
+        "value"
+      ],
+      "$.frame.event.data.mediaLink": [
+        "value"
+      ],
+      "$.frame.event.data.timeCreated": [
+        "value"
+      ],
+      "$.frame.event.data.timeStorageClassUpdated": [
+        "value"
+      ],
+      "$.frame.event.data.updated": [
+        "value"
+      ]
+    },
+    "storageFinalizedV1/storage-overwrite": {
+      "$.frame.event.context.eventId": [
+        "value"
+      ],
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.etag": [
+        "value"
+      ],
+      "$.frame.event.data.generation": [
+        "value"
+      ],
+      "$.frame.event.data.id": [
+        "value"
+      ],
+      "$.frame.event.data.mediaLink": [
+        "value"
+      ],
+      "$.frame.event.data.timeCreated": [
+        "value"
+      ],
+      "$.frame.event.data.timeStorageClassUpdated": [
+        "value"
+      ],
+      "$.frame.event.data.updated": [
+        "value"
+      ]
+    },
+    "storageFinalizedV1/storage-upload": {
+      "$.frame.event.context.eventId": [
+        "value"
+      ],
+      "$.frame.event.context.timestamp": [
+        "fractionDigits",
+        "length",
+        "value"
+      ],
+      "$.frame.event.data.etag": [
+        "value"
+      ],
+      "$.frame.event.data.generation": [
+        "value"
+      ],
+      "$.frame.event.data.id": [
+        "value"
+      ],
+      "$.frame.event.data.mediaLink": [
+        "value"
+      ],
+      "$.frame.event.data.timeCreated": [
+        "value"
+      ],
+      "$.frame.event.data.timeStorageClassUpdated": [
+        "value"
+      ],
+      "$.frame.event.data.updated": [
+        "value"
+      ]
+    },
+    "storageFinalizedV2/storage-failed-upload": {},
+    "storageFinalizedV2/storage-other-bucket": {},
+    "storageFinalizedV2/storage-other-prefix": {
+      "$.frame.event.data.etag": [
+        "value"
+      ],
+      "$.frame.event.data.generation": [
+        "value"
+      ],
+      "$.frame.event.data.id": [
+        "value"
+      ],
+      "$.frame.event.data.mediaLink": [
+        "value"
+      ],
+      "$.frame.event.data.timeCreated": [
+        "value"
+      ],
+      "$.frame.event.data.timeStorageClassUpdated": [
+        "value"
+      ],
+      "$.frame.event.data.updated": [
+        "value"
+      ],
+      "$.frame.event.id": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    },
+    "storageFinalizedV2/storage-overwrite": {
+      "$.frame.event.data.etag": [
+        "value"
+      ],
+      "$.frame.event.data.generation": [
+        "value"
+      ],
+      "$.frame.event.data.id": [
+        "value"
+      ],
+      "$.frame.event.data.mediaLink": [
+        "value"
+      ],
+      "$.frame.event.data.timeCreated": [
+        "value"
+      ],
+      "$.frame.event.data.timeStorageClassUpdated": [
+        "value"
+      ],
+      "$.frame.event.data.updated": [
+        "value"
+      ],
+      "$.frame.event.id": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    },
+    "storageFinalizedV2/storage-upload": {
+      "$.frame.event.data.etag": [
+        "value"
+      ],
+      "$.frame.event.data.generation": [
+        "value"
+      ],
+      "$.frame.event.data.id": [
+        "value"
+      ],
+      "$.frame.event.data.mediaLink": [
+        "value"
+      ],
+      "$.frame.event.data.timeCreated": [
+        "value"
+      ],
+      "$.frame.event.data.timeStorageClassUpdated": [
+        "value"
+      ],
+      "$.frame.event.data.updated": [
+        "value"
+      ],
+      "$.frame.event.id": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    },
+    "storageMetadataUpdatedV1/storage-metadata": {
+      "$.frame.event.context.eventId": [
+        "value"
+      ],
+      "$.frame.event.context.timestamp": [
+        "value"
+      ],
+      "$.frame.event.data.etag": [
+        "value"
+      ],
+      "$.frame.event.data.generation": [
+        "value"
+      ],
+      "$.frame.event.data.id": [
+        "value"
+      ],
+      "$.frame.event.data.mediaLink": [
+        "value"
+      ],
+      "$.frame.event.data.timeCreated": [
+        "value"
+      ],
+      "$.frame.event.data.timeStorageClassUpdated": [
+        "value"
+      ],
+      "$.frame.event.data.updated": [
+        "value"
+      ]
+    },
+    "storageMetadataUpdatedV2/storage-metadata": {
+      "$.frame.event.data.etag": [
+        "value"
+      ],
+      "$.frame.event.data.generation": [
+        "value"
+      ],
+      "$.frame.event.data.id": [
+        "value"
+      ],
+      "$.frame.event.data.mediaLink": [
+        "value"
+      ],
+      "$.frame.event.data.timeCreated": [
+        "value"
+      ],
+      "$.frame.event.data.timeStorageClassUpdated": [
+        "value"
+      ],
+      "$.frame.event.data.updated": [
+        "value"
+      ],
+      "$.frame.event.id": [
+        "value"
+      ],
+      "$.frame.event.time": [
+        "value"
+      ]
+    }
+  },
+  "buildRecordPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-build.json",
+  "buildRecordSha256": "d2cf20294a0acfb8e135cb734d8e6cad8c9d854549681cf316082d43c56b9aa4"
+}

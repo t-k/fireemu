@@ -153,12 +153,36 @@
         "before-absent",
         "after-present"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-updated",
@@ -171,12 +195,36 @@
         "before-present",
         "after-present"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-deleted",
@@ -189,12 +237,36 @@
         "before-present",
         "after-absent"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-written",
@@ -207,12 +279,36 @@
         "update",
         "delete"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-noop",
@@ -223,12 +319,36 @@
       "cases": [
         "same-value-write-no-event"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 2,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-routing-params",
@@ -241,12 +361,36 @@
         "nonmatching-path",
         "wildcard-param"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-payload",
@@ -261,12 +405,36 @@
         "update-time",
         "event-metadata"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 10,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/firestore-auth-context",
@@ -279,11 +447,35 @@
         "admin-write",
         "auth-type-and-id"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         2
       ],
-      "note": "Accepted difference (scope decision E10, coordinator rulings of 2026-10-05 15:12Z and 16:25Z). In an admin write, production's authId is the writing credential's own identity (the recorder operator's email; authType unknown), and the local owner principal has none and prints `owner`. Only its presence is compared for authType unknown (the value is masked as `authId-unknown-present`); authType is compared exactly, and an ID-token write (api_key) compares the user's uid by its 28-character shape (`authId-api_key-uid`), so a wrong id there is still a difference. The comparison records each mask it used and the promotion refuses an undeclared one."
+      "note": "Accepted difference (scope decision E10, coordinator rulings of 2026-10-05 15:12Z and 16:25Z). In an admin write, production's authId is the writing credential's own identity (the recorder operator's email; authType unknown), and the local owner principal has none and prints `owner`. Only its presence is compared for authType unknown (the value is masked as `authId-unknown-present`); authType is compared exactly, and an ID-token write (api_key) compares the user's uid by its 28-character shape (`authId-api_key-uid`), so a wrong id there is still a difference. The comparison records each mask it used and the promotion refuses an undeclared one.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 3,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-finalized",
@@ -296,11 +488,35 @@
         "overwritten-generation",
         "failed-upload-no-event"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-deleted",
@@ -312,11 +528,35 @@
         "live-object-delete",
         "no-event-for-missing-object"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 4,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-metadata-updated",
@@ -328,11 +568,35 @@
         "custom-metadata-change",
         "metageneration"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 4,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-archived",
@@ -344,11 +608,35 @@
         "versioned-overwrite",
         "archived-generation"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 4,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-payload",
@@ -363,11 +651,35 @@
         "content-type",
         "event-metadata"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 10,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
@@ -380,11 +692,35 @@
         "nonmatching-bucket",
         "same-bucket-other-prefix-delivered"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/auth-created",
@@ -397,10 +733,34 @@
         "email-password-create",
         "repeat-sign-in-no-event"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 3,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/auth-deleted",
@@ -412,10 +772,34 @@
         "single-user-delete",
         "bulk-delete-no-event"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 2,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/auth-payload",
@@ -430,10 +814,34 @@
         "empty-provider-data",
         "event-metadata"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1
-      ]
+      ],
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 5,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
@@ -448,12 +856,36 @@
         "message-id",
         "publish-time"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E11): the two per-deployment numbers of the Eventarc subscription name in data.subscription of a 2nd gen event are masked (`pubsub-subscription-numbers`); the rest of the name is compared."
+      "note": "Accepted difference (scope decision E11): the two per-deployment numbers of the Eventarc subscription name in data.subscription of a 2nd gen event are masked (`pubsub-subscription-numbers`); the rest of the name is compared.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 10,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/pubsub-topic-routing",
@@ -466,12 +898,36 @@
         "nonmatching-topic",
         "ordering-key"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E11): the two per-deployment numbers of the Eventarc subscription name in data.subscription of a 2nd gen event are masked (`pubsub-subscription-numbers`); the rest of the name is compared."
+      "note": "Accepted difference (scope decision E11): the two per-deployment numbers of the Eventarc subscription name in data.subscription of a 2nd gen event are masked (`pubsub-subscription-numbers`); the rest of the name is compared.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 6,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/delivery-retry-identity",
@@ -485,14 +941,38 @@
         "retry-enabled",
         "event-id-across-attempts"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "generations": [
         2
       ],
       "sources": [
         "firestore"
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of the Gen2 Firestore retry events are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly."
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of the Gen2 Firestore retry events are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 4,
+          "DIFF": 0,
+          "INCOMPLETE": 0
+        },
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/final-artifact-regression",
@@ -505,7 +985,29 @@
         "same-source-final-artifact-comparison",
         "workspace-regression"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-10-05T04:29:28.498Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 1
+          },
+          {
+            "recordedAt": "2026-10-05T05:06:13.645Z",
+            "project": "fireemu-oracle-events",
+            "corpusDigest": "003c76e1baac452946e7604d104e0f70aeb9bce967b3e31c20f6bf8b7b066f29",
+            "pass": 2
+          }
+        ],
+        "finalArtifactSha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+        "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a",
+        "comparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "rows": {
+          "MATCH": 112
+        }
+      }
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/closure-review",
@@ -520,5 +1022,28 @@
     }
   ],
   "frozenOn": "2026-09-25",
-  "freezeAuthority": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-EVENTS closure)"
+  "freezeAuthority": "docs.local/instructions/owner-decisions.md (2026-09-25 FUNCTIONS-EVENTS closure)",
+  "integratedRegression": {
+    "release": "v0.12.0",
+    "integrationCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a",
+    "releaseBinarySha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-build.json",
+    "buildReceiptSha256": "d2cf20294a0acfb8e135cb734d8e6cad8c9d854549681cf316082d43c56b9aa4",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "sha256": "38058490c94d14a966947a6ba30976484c2fe98d9eefab1a807498cdca0a060d",
+        "rows": 112,
+        "summary": {
+          "MATCH": 112
+        },
+        "laneComparisonPath": "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json",
+        "laneComparisonSha256": "38058490c94d14a966947a6ba30976484c2fe98d9eefab1a807498cdca0a060d",
+        "identicalRows": 112,
+        "changedRows": []
+      }
+    ],
+    "result": "IDENTICAL_TO_LANE",
+    "productionRequests": 0
+  }
 }

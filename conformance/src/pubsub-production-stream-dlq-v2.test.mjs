@@ -283,6 +283,7 @@ async function recordedWorld({
   ambiguousGrant = false,
   emptySink = false,
   pullTiming = null,
+  createTiming = { createTopic: 37100, createSubscription: 13100, createSnapshot: 10300 },
   age = 0,
 } = {}) {
   const { readFileSync } = await import("node:fs");
@@ -400,7 +401,15 @@ async function recordedWorld({
             : body.returnImmediately
               ? pullTiming.emptyImmediateMs
               : pullTiming.emptyBlockingMs
-          : 1000;
+          : options.method === "PUT"
+            ? createTiming[
+                path.includes("/subscriptions/")
+                  ? "createSubscription"
+                  : path.includes("/snapshots/")
+                    ? "createSnapshot"
+                    : "createTopic"
+              ]
+            : 1000;
       const text = `\n ${JSON.stringify(value, null, 2)}\n`;
       return new Response(text, {
         status,
@@ -518,7 +527,8 @@ test("actual v2 runner restores two policies before cleanup and emits physical l
 });
 
 // Rounded above r1 L380/n344 (3463ms), r2 L510/n460 (18393ms), and r1 L520/n470
-// (10707ms). Administrative calls have a synthetic 1000ms allowance, not a service latency bound.
+// (10707ms). Creates use the successful REST maxima rounded up to100ms: topic37073ms,
+// subscription13024ms and snapshot10257ms. Other calls retain a synthetic1000ms allowance.
 const recordedPullTiming = Object.freeze({
   emptyImmediateMs: 3500,
   emptyBlockingMs: 18400,
@@ -541,6 +551,24 @@ test("recorded Pull latency envelope completes B and A within their unchanged ph
       return { id: item.id, elapsedMs: end?.fakeAt - start?.fakeAt, limitMs: item.timeoutMs };
     });
     t.diagnostic(JSON.stringify({ age, stopped: summary.stopped, elapsed }));
+    assert.deepEqual(
+      elapsed.map((item) => item.elapsedMs),
+      [535190, 74210, 1440190],
+    );
+    for (const [op, ms] of Object.entries({
+      createTopic: 37100,
+      createSubscription: 13100,
+      createSnapshot: 10300,
+    })) {
+      const calls = fixture.lines.filter(
+        (row) => row.op === op && row.transport === "rest" && row.response !== undefined,
+      );
+      assert.ok(calls.length > 0);
+      assert.ok(
+        calls.every((row) => row.ms === ms),
+        `${op} must use the recorded create envelope`,
+      );
+    }
     assert.equal(summary.stopped, null);
     assert.deepEqual(
       summary.cases.map((entry) => entry.outcome),

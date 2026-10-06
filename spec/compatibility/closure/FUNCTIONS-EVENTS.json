@@ -139,6 +139,18 @@
       "decidedBy": "coordinator (delegated)",
       "decidedOn": "2026-10-05",
       "decisionRef": "docs.local/instructions/owner-decisions.md (2026-10-05, FUNCTIONS-EVENTS Firestore Gen2 map member order, ledger line 840)"
+    },
+    {
+      "id": "E13",
+      "decision": "The comparison does not compare four members of the event listing, and two differences it hides are accepted. (a) Not compared: `contextKeys`, `contextExtras`, `eventKeys` and `extensionAttributes` are removed from both the production frames and the local frames before they are compared (the production-only paths of the comparator), because the local sessions never print them (the deployed fixture lists them only in its stdout capture mode, which the socket sessions do not use). So the CloudEvent extension attributes of a 2nd gen event and the extras of a 1st gen context are not judged by this closure; their names stay in the comparison as production-only listings, and no verdict depends on them. What covers them is Rust and runner tests, not production rows. (b) `traceparent`: every 2nd gen event of production carries it (142 of 142 frames in each of FE v5 and FE v7); fireemu sends none. (c) The `location` of a 2nd gen Firestore event: production reports the configured location of the database (us-central1 on the sandbox, 94 of 94 frames in each run); strict reports `nam5` (crates/fireemu/src/functions.rs, the Functions configuration), and fireemu cannot know the database's configured location. Nothing else is accepted by this decision: no comparator mask is involved, and the values of the other Firestore extensions (project, database, namespace, document) are not judged either.",
+      "rationale": "The closure comparison judges what the handler-visible fixture prints. The listing members that would show the two differences are absent from the local sessions, so they are declared here instead of compared. Comparing them is a follow-up (the fixture would list them in socket mode and the comparator would compare the names and the values of location, project, database, namespace, document and bucket).",
+      "reason": "The local sessions print no listing of the event's extension attributes; production's traceparent is not synthesized by fireemu, and fireemu has no way to read the database's configured location.",
+      "evidence": "FE v5 (functions-events-formal-20261004T182904Z-a9621bfae74fe9bc) and FE v7 (functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702): traceparent is present in 142 of 142 2nd gen frames (Firestore, Storage and Pub/Sub) of each run, and the 2nd gen Firestore `location` is us-central1 in 94 of 94 frames of each run. fireemu: no traceparent anywhere in crates or tools/runner-node (the statements of the difference are test comments), and `location: \"nam5\"` in the Functions configuration of the daemon. Issues: fe-events-traceparent-missing.md (synthesize traceparent) and fe-firestore-event-location-hardcoded.md (make the Firestore event location configurable), both in docs.local/issues/open.",
+      "review": "PENDING (the closure review)",
+      "status": "APPROVED",
+      "decidedBy": "coordinator (delegated)",
+      "decidedOn": "2026-10-06",
+      "decisionRef": "docs.local/runs/ownership-lane/coordinator-rulings.md (2026-10-06 08:50Z, ruling on M1) and the closure review docs.local/reviews/2026-10-06-fe-promotion-closure-review.md (M1)"
     }
   ],
   "conditions": [
@@ -158,7 +170,7 @@
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
       "evidence": {
         "productionRecordings": [
           {
@@ -200,7 +212,7 @@
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
       "evidence": {
         "productionRecordings": [
           {
@@ -242,7 +254,7 @@
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
       "evidence": {
         "productionRecordings": [
           {
@@ -284,7 +296,7 @@
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
       "evidence": {
         "productionRecordings": [
           {
@@ -324,7 +336,7 @@
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
       "evidence": {
         "productionRecordings": [
           {
@@ -366,7 +378,7 @@
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
       "evidence": {
         "productionRecordings": [
           {
@@ -410,7 +422,7 @@
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of a 2nd gen event are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
       "evidence": {
         "productionRecordings": [
           {
@@ -451,7 +463,7 @@
       "generations": [
         2
       ],
-      "note": "Accepted difference (scope decision E10, coordinator rulings of 2026-10-05 15:12Z and 16:25Z). In an admin write, production's authId is the writing credential's own identity (the recorder operator's email; authType unknown), and the local owner principal has none and prints `owner`. Only its presence is compared for authType unknown (the value is masked as `authId-unknown-present`); authType is compared exactly, and an ID-token write (api_key) compares the user's uid by its 28-character shape (`authId-api_key-uid`), so a wrong id there is still a difference. The comparison records each mask it used and the promotion refuses an undeclared one.",
+      "note": "Accepted difference (scope decision E10, coordinator rulings of 2026-10-05 15:12Z and 16:25Z). In an admin write, production's authId is the writing credential's own identity (the recorder operator's email; authType unknown), and the local owner principal has none and prints `owner`. Only its presence is compared for authType unknown (the value is masked as `authId-unknown-present`); authType is compared exactly, and an ID-token write (api_key) compares the user's uid by its 28-character shape (`authId-api_key-uid`), so a wrong id there is still a difference. The comparison records each mask it used and the promotion refuses an undeclared one. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
       "evidence": {
         "productionRecordings": [
           {
@@ -516,7 +528,8 @@
           "INCOMPLETE": 0
         },
         "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
-      }
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b))."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-deleted",
@@ -556,7 +569,8 @@
           "INCOMPLETE": 0
         },
         "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
-      }
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b))."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-metadata-updated",
@@ -596,7 +610,8 @@
           "INCOMPLETE": 0
         },
         "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
-      }
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b))."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-archived",
@@ -636,7 +651,8 @@
           "INCOMPLETE": 0
         },
         "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
-      }
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b))."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-payload",
@@ -679,7 +695,8 @@
           "INCOMPLETE": 0
         },
         "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
-      }
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b))."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/storage-bucket-routing",
@@ -720,7 +737,8 @@
           "INCOMPLETE": 0
         },
         "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
-      }
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b))."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/auth-created",
@@ -760,7 +778,8 @@
           "INCOMPLETE": 0
         },
         "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
-      }
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/auth-deleted",
@@ -799,7 +818,8 @@
           "INCOMPLETE": 0
         },
         "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
-      }
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/auth-payload",
@@ -841,7 +861,8 @@
           "INCOMPLETE": 0
         },
         "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a"
-      }
+      },
+      "note": "Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows."
     },
     {
       "conditionId": "FUNCTIONS-EVENTS/pubsub-published",
@@ -861,7 +882,7 @@
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E11): the two per-deployment numbers of the Eventarc subscription name in data.subscription of a 2nd gen event are masked (`pubsub-subscription-numbers`); the rest of the name is compared.",
+      "note": "Accepted difference (scope decision E11): the two per-deployment numbers of the Eventarc subscription name in data.subscription of a 2nd gen event are masked (`pubsub-subscription-numbers`); the rest of the name is compared. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)).",
       "evidence": {
         "productionRecordings": [
           {
@@ -903,7 +924,7 @@
         1,
         2
       ],
-      "note": "Accepted difference (scope decision E11): the two per-deployment numbers of the Eventarc subscription name in data.subscription of a 2nd gen event are masked (`pubsub-subscription-numbers`); the rest of the name is compared.",
+      "note": "Accepted difference (scope decision E11): the two per-deployment numbers of the Eventarc subscription name in data.subscription of a 2nd gen event are masked (`pubsub-subscription-numbers`); the rest of the name is compared. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)).",
       "evidence": {
         "productionRecordings": [
           {
@@ -948,7 +969,7 @@
       "sources": [
         "firestore"
       ],
-      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of the Gen2 Firestore retry events are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly.",
+      "note": "Accepted difference (scope decision E12, ledger line 840): the document field maps of the Gen2 Firestore retry events are compared without regard to member order (`firestore-field-maps-unordered`); values are compared exactly. Declared difference (scope decision E13): the closure comparison does not compare contextKeys, contextExtras, eventKeys and extensionAttributes, so the CloudEvent extension attributes and the 1st gen context extras of these events are judged by Rust and runner tests, not by production rows. Production sends traceparent on every 2nd gen event; fireemu sends none (accepted, E13 (b)). The 2nd gen Firestore location is the database's configured location in production (us-central1 on the sandbox) and nam5 in strict (accepted, E13 (c)).",
       "evidence": {
         "productionRecordings": [
           {

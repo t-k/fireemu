@@ -6145,6 +6145,7 @@ mod schedule_capacity_tests {
     use crate::runner::{Runner, SpawnSpec};
     use fireemu_core_session::clock::VirtualClock;
     use fireemu_core_session::fault::{FaultAction, FaultMatch, FaultPlan, FaultRule, FaultState};
+    use fireemu_core_types::ids::SessionId;
     use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
     use proptest::strategy::Strategy as _;
     use serde_json::json;

@@ -1227,6 +1227,9 @@ test("native silence observer preserves early server events and clears pending t
       },
       clear: (id) => pending.delete(id),
     });
+    rpc.write(Buffer.from([1]));
+    rpc.write(Buffer.from([2]));
+    assert.equal(pending.size, 1, "the timer must be live before testing cleanup");
     time = 25;
     for (const fn of listeners.get(event) ?? []) fn({});
     assert.equal(o.snapshot().completedWindow, false);

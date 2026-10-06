@@ -243,6 +243,59 @@ async function runMode({ browser, config, run, mode, accounts, cases }) {
     }
     contexts.add(context);
     contextIds.set(context, contextIds.size + 1);
+    // Keep terminate evidence outside the CDP target destroyed by reload or close.
+    const terminates = new WeakMap();
+    context.on("request", (request) => {
+      if (!capturing || listenChannelCi(request.url()) === null) return;
+      const url = new URL(request.url());
+      if (url.searchParams.get("TYPE") !== "terminate") return;
+      const session = sessions.get(url.searchParams.get("SID"));
+      if (!l3.closeSession || session !== l3.closeSession) return;
+      let state;
+      try {
+        state = pages.get(request.frame().page());
+      } catch {
+        /* An unload request can outlive its frame; the SID still identifies it. */
+      }
+      const bytes = Buffer.byteLength(request.postData() ?? "");
+      totalBytes += bytes;
+      const event = {
+        event: ++sequence,
+        elapsedMs: Date.now() - started,
+        phase: state?.phase,
+        page: state?.name,
+        method: request.method(),
+        path: url.pathname,
+        session: label(sessions, url.searchParams.get("SID")),
+        sessionMask: valueMask(url.searchParams.get("SID") ?? ""),
+        terminate: true,
+        dispatched: true,
+        outcome: "unknown",
+        status: null,
+        requestBodyBytes: bytes,
+        bodyBytes: 0,
+        targets: [],
+        boundaries: [],
+        boundaryComplete: false,
+        overflow: totalBytes + queuedBytes > WIRE_BYTES,
+      };
+      wire.push(event);
+      terminates.set(request, event);
+    });
+    context.on("response", (response) => {
+      const event = terminates.get(response.request());
+      if (event) event.status = response.status();
+    });
+    context.on("requestfinished", (request) => {
+      const event = terminates.get(request);
+      if (event) event.outcome = "completed";
+    });
+    context.on("requestfailed", (request) => {
+      const event = terminates.get(request);
+      if (event)
+        event.outcome =
+          request.failure()?.errorText === "net::ERR_ABORTED" ? "cancelled" : "unknown";
+    });
     // Context routing also covers unload requests and replacement tabs.
     await context.route("**/*", async (route) => {
       const request = route.request();
@@ -343,6 +396,12 @@ async function runMode({ browser, config, run, mode, accounts, cases }) {
     cdp.on("Network.requestWillBeSent", ({ requestId, request }) => {
       if (!capturing || listenChannelCi(request.url) === null) return;
       const url = new URL(request.url);
+      if (
+        url.searchParams.get("TYPE") === "terminate" &&
+        l3.closeSession &&
+        sessions.get(url.searchParams.get("SID")) === l3.closeSession
+      )
+        return;
       const event = {
         event: ++sequence,
         elapsedMs: Date.now() - started,
@@ -555,11 +614,20 @@ async function runMode({ browser, config, run, mode, accounts, cases }) {
     pages.get(a).phase = "before-close";
     const closed = a.waitForEvent("close", { timeout: STEP_TIMEOUT_MS });
     await Promise.all([closed, a.close({ runBeforeUnload: true })]);
+    l3.closeOutcome = "closed";
     const a2 = await newPage(context, "A2", "replacement");
     await a2.evaluate(() => window.listenL3Subscribe());
     await waitSnapshot(a2);
     await checkpoint(a2, "replacement");
     await checkpoint(b, "control-end");
+    const terminateUntil = Date.now() + STEP_TIMEOUT_MS;
+    while (
+      Date.now() < terminateUntil &&
+      wire.some((e) => e.terminate && e.session === l3.closeSession && e.outcome === "unknown")
+    ) {
+      check();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
     l3.controlCompleted = true;
     await stopPage(a2, "A2");
     await stopPage(b, "B");
@@ -738,6 +806,7 @@ async function runMode({ browser, config, run, mode, accounts, cases }) {
           .at(-1)?.session ?? null;
       evidence.terminate = wire.filter((e) => e.terminate && e.session === evidence.oldSession);
     }
+    if (id === "202") evidence.closeOutcome = l3.closeOutcome;
     if (["203", "203C"].includes(id)) {
       evidence.cacheMode = id === "203" ? "persistent" : "memory";
       evidence.sameProfile = l3.profile?.sameProfile ?? false;

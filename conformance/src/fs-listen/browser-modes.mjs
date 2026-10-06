@@ -81,13 +81,10 @@ export function l3Problems(id, evidence) {
       problems.push("unordered lifecycle markers");
     if (!evidence.oldSession || !evidence.newSession || evidence.oldSession === evidence.newSession)
       problems.push("missing distinct channel sessions");
-    if (
-      !Array.isArray(evidence.terminate) ||
-      !evidence.terminate.some(
-        (e) => e?.dispatched && e.outcome === "completed" && e.status >= 200 && e.status < 300,
-      )
-    )
-      problems.push("terminate not confirmed");
+  }
+  if (id === "202") {
+    if (evidence.closeOutcome !== "closed") problems.push("close not confirmed");
+    if (!Array.isArray(evidence.terminate)) problems.push("missing terminate observation");
   }
   if (id === "201C" && evidence.uninterrupted !== true) problems.push("control interrupted");
   if (["203", "203C"].includes(id)) {

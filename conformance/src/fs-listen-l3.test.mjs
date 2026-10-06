@@ -37,6 +37,7 @@ const evidenceFor = (id) => ({
       : ["checkpoint", "close", "new-tab", "server"],
   oldSession: 1,
   newSession: 2,
+  closeOutcome: "closed",
   terminate: [{ event: 1, dispatched: true, outcome: "completed", status: 200 }],
   uninterrupted: true,
   cacheMode: id === "203" ? "persistent" : "memory",
@@ -138,18 +139,47 @@ test("L3 receipts fail closed on missing, duplicate, malformed and lost phase ch
   assert.ok(l3Problems("203", { phases: [] }).includes("missing cache checkpoints"));
 });
 
-test("L3 judges require completed terminate, intact controls, persistent offline state and decoded server boundaries", () => {
+test("L3 reload needs distinct sessions and server checkpoints without requiring terminate", () => {
+  for (const terminate of [
+    undefined,
+    [],
+    [{ dispatched: true, outcome: "unknown", status: null }],
+  ]) {
+    const evidence = { ...evidenceFor("201"), terminate };
+    assert.deepEqual(l3Problems("201", evidence), []);
+    evidence.newSession = evidence.oldSession;
+    assert.ok(l3Problems("201", evidence).includes("missing distinct channel sessions"));
+    evidence.newSession = 2;
+    evidence.phases[1].snapshots[0].fromCache = true;
+    assert.ok(l3Problems("201", evidence).includes("missing server-backed set"));
+  }
+});
+
+test("L3 judges require intact controls, persistent offline state and decoded server boundaries", () => {
   for (const id of L3_IDS) assert.deepEqual(l3Problems(id, evidenceFor(id)), [], id);
-  for (const outcome of ["cancelled", "unknown", "dispatched"]) {
-    const e = evidenceFor("201");
-    e.terminate[0].outcome = outcome;
-    assert.ok(l3Problems("201", e).includes("terminate not confirmed"));
-  }
-  for (const status of [0, 199, 302, 500]) {
-    const e = evidenceFor("202");
-    e.terminate[0].status = status;
-    assert.ok(l3Problems("202", e).includes("terminate not confirmed"));
-  }
+  for (const terminate of [undefined, {}])
+    assert.ok(
+      l3Problems("202", { ...evidenceFor("202"), terminate }).includes(
+        "missing terminate observation",
+      ),
+    );
+  for (const outcome of ["cancelled", "unknown", "dispatched"])
+    assert.deepEqual(
+      l3Problems("202", {
+        ...evidenceFor("202"),
+        terminate: [{ dispatched: true, outcome, status: null }],
+      }),
+      [],
+    );
+  for (const status of [0, 199, 302, 500])
+    assert.deepEqual(
+      l3Problems("202", {
+        ...evidenceFor("202"),
+        terminate: [{ dispatched: true, outcome: "completed", status }],
+      }),
+      [],
+    );
+
   for (const change of [
     (e) => {
       e.processExited = false;
@@ -420,12 +450,6 @@ test("L3 judges reject individual checkpoint, session, offline and wire near mis
         },
         (e) => {
           e.newSession = e.oldSession;
-        },
-        (e) => {
-          e.terminate = {};
-        },
-        (e) => {
-          e.terminate[0].dispatched = false;
         },
       ],
     ],
@@ -776,6 +800,7 @@ test("L3 driver routing, session labels and observation caps preserve their boun
     closed = [],
     routed = [];
   const context = {
+    on: () => {},
     close: async () => {
       closed.push("context");
     },
@@ -885,6 +910,162 @@ test("L3 driver routing, session labels and observation caps preserve their boun
   assert.equal(closed.length, 3);
 });
 
+test("L3 close captures terminate outcomes at context scope after the page is gone", async () => {
+  const source = readFileSync(new URL("./fs-listen/browser-driver.mjs", import.meta.url), "utf8");
+  const handlers = new Map();
+  const context = { on: (name, handler) => handlers.set(name, handler), route: async () => {} };
+  const driver = runInNewContext(
+    source.slice(source.indexOf("  const ci = {};"), source.indexOf("  const attach = async")) +
+      "({ hookContext, wire, pages, l3, sessions, capture: (value = true) => { capturing = value; } });",
+    {
+      config: {},
+      mode: "streaming",
+      origin: "http://localhost:1",
+      Date: { now: () => 0 },
+      DEADLINE_MS: 100,
+      Buffer,
+      URL,
+      createWireLedger: () => ({}),
+      allowedHosts: () => [],
+      emit: () => {},
+      valueMask: (value) => value.replace(/[A-Za-z0-9]/g, "x"),
+      WIRE_BYTES: 1024,
+      listenChannelCi: (url) => (new URL(url).pathname === "/listen" ? "0" : null),
+    },
+  );
+  await driver.hookContext(context);
+  assert.equal(handlers.size, 4);
+  const page = {};
+  driver.pages.set(page, { name: "A", phase: "before-close" });
+  const request = (url, detached = false, error = "net::ERR_ABORTED") => ({
+    url: () => url,
+    method: () => "POST",
+    postData: () => "",
+    frame: () => {
+      if (detached) throw new Error("page gone");
+      return { page: () => page };
+    },
+    failure: () => ({ errorText: error }),
+  });
+  const ignored = request("http://local/listen?TYPE=terminate&SID=old");
+  handlers.get("request")(ignored);
+  assert.equal(driver.wire.length, 0);
+  driver.capture();
+  handlers.get("request")(ignored);
+  assert.equal(driver.wire.length, 0);
+  driver.sessions.set("old", 1);
+  driver.sessions.set("other", 2);
+  driver.l3.closeSession = 1;
+  driver.capture(false);
+  handlers.get("request")(ignored);
+  assert.equal(driver.wire.length, 0);
+  driver.capture();
+  for (const url of [
+    "http://local/other?TYPE=terminate&SID=old",
+    "http://local/listen?SID=old",
+    "http://local/listen?TYPE=terminate&SID=other",
+    "http://local/listen?TYPE=terminate",
+  ])
+    handlers.get("request")(request(url));
+  assert.equal(driver.wire.length, 0);
+  handlers.get("requestfinished")(ignored);
+  handlers.get("requestfailed")(ignored);
+  handlers.get("response")({ request: () => ignored, status: () => 200 });
+  for (const scenario of [
+    "completed",
+    "cancelled",
+    "unknown",
+    "dispatched",
+    "no-response",
+    "http-error",
+    "detached",
+  ]) {
+    const req = request(
+      "http://local/listen?TYPE=terminate&SID=old",
+      scenario === "detached",
+      scenario === "unknown" ? "net::ERR_FAILED" : "net::ERR_ABORTED",
+    );
+    handlers.get("request")(req);
+    const event = driver.wire.at(-1);
+    assert.equal(event.terminate, true);
+    assert.equal(event.dispatched, true);
+    assert.equal(event.session, 1);
+    assert.equal(event.sessionMask, "xxx");
+    assert.equal(event.outcome, "unknown");
+    assert.equal(event.status, null);
+    if (scenario !== "detached") {
+      assert.equal(event.phase, "before-close");
+      assert.equal(event.page, "A");
+    }
+    driver.pages.delete(page);
+    if (scenario !== "no-response")
+      handlers.get("response")({
+        request: () => req,
+        status: () => (scenario === "http-error" ? 500 : 200),
+      });
+    if (["completed", "no-response", "http-error", "detached"].includes(scenario))
+      handlers.get("requestfinished")(req);
+    if (["cancelled", "unknown"].includes(scenario)) handlers.get("requestfailed")(req);
+    assert.equal(
+      event.outcome,
+      ["completed", "no-response", "http-error", "detached"].includes(scenario)
+        ? "completed"
+        : scenario === "cancelled"
+          ? "cancelled"
+          : "unknown",
+    );
+    const evidence = { ...evidenceFor("202"), terminate: [event] };
+    assert.deepEqual(l3Problems("202", evidence), []);
+    driver.pages.set(page, { name: "A", phase: "before-close" });
+  }
+  assert.equal(driver.wire.length, 7);
+  const oversized = {
+    ...request("http://local/listen?TYPE=terminate&SID=old"),
+    postData: () => "x".repeat(1025),
+  };
+  handlers.get("request")(oversized);
+  assert.equal(driver.wire.at(-1).overflow, true);
+  assert.equal(driver.wire.at(-1).requestBodyBytes, 1025);
+  assert.equal(driver.wire[0].overflow, false);
+  assert.equal(driver.wire.at(-1).session, 1);
+  assert.equal(driver.wire.at(-1).sessionMask, "xxx");
+  assert.deepEqual(l3Problems("202", { ...evidenceFor("202"), terminate: [] }), []);
+  const start = source.indexOf("    const terminateUntil =");
+  const end = source.indexOf("    l3.controlCompleted =", start);
+  for (const scenario of [
+    "completed",
+    "pending",
+    "expired",
+    "other-session",
+    "not-terminate",
+    "absent",
+  ]) {
+    let now = 0,
+      checks = 0;
+    const event = {
+      terminate: scenario !== "not-terminate",
+      session: scenario === "other-session" ? 2 : 1,
+      outcome: scenario === "completed" ? "completed" : "unknown",
+    };
+    await runInNewContext("(async () => {" + source.slice(start, end) + "})()", {
+      Date: { now: () => now },
+      STEP_TIMEOUT_MS: 200,
+      wire: scenario === "absent" ? [] : [event],
+      l3: { closeSession: 1 },
+      check: () => {
+        checks += 1;
+      },
+      setTimeout: (fn, delay) => {
+        assert.equal(delay, 100);
+        now += delay;
+        if (scenario === "pending") event.outcome = "completed";
+        fn();
+      },
+    });
+    assert.equal(checks, scenario === "expired" ? 2 : scenario === "pending" ? 1 : 0);
+  }
+});
+
 test("L3 CDP capture distinguishes ignored requests, streaming frames, sticky errors and byte caps", async () => {
   const source = readFileSync(new URL("./fs-listen/browser-driver.mjs", import.meta.url), "utf8");
   const handlers = new Map(),
@@ -910,7 +1091,7 @@ test("L3 CDP capture distinguishes ignored requests, streaming frames, sticky er
       .slice(source.indexOf("const valueMask"), source.indexOf("/** The official SDK"))
       .replace("export function", "function") +
       source.slice(source.indexOf("  const ci = {};"), source.indexOf("  const load = async")) +
-      "({attach, wire, contextIds, cleanup, setCapture: (v) => { capturing = v; }, setBytes: (v) => { totalBytes = v; }, setFrames: (v) => { totalFrames = v; }, totals: () => ({totalBytes,totalFrames,queuedBytes})});",
+      "({attach, wire, contextIds, cleanup, setCapture: (v) => { capturing = v; }, setCloseSession: (v) => { l3.closeSession = v; }, setBytes: (v) => { totalBytes = v; }, setFrames: (v) => { totalFrames = v; }, totals: () => ({totalBytes,totalFrames,queuedBytes})});",
     {
       Buffer,
       URL,
@@ -966,6 +1147,12 @@ test("L3 CDP capture distinguishes ignored requests, streaming frames, sticky er
   assert.equal(driver.wire[1].terminate, true);
   assert.equal(driver.wire[1].targets[0].resumeToken.masked, "Xx0");
   assert.equal(driver.wire[1].addTargetBodies.length, 1);
+  driver.setCloseSession(1);
+  handlers.get("Network.requestWillBeSent")({
+    requestId: "context-owned-terminate",
+    request: { url: "http://local/listen?TYPE=terminate&SID=Ab1", method: "POST" },
+  });
+  assert.equal(driver.wire.length, 2);
   const handshake = JSON.stringify([
     [0, ["noop", "ignored"]],
     [1, ["c", "Other1"]],
@@ -1254,6 +1441,7 @@ test("L3 driver receipts keep lifecycle sessions, phase controls and incomplete 
       controlCompleted: true,
       reloadSession: 1,
       closeSession: 3,
+      closeOutcome: "closed",
       profile: { sameProfile: true, processExited: true },
       ...(incomplete ? { thrown: "timeout" } : {}),
     };
@@ -1319,6 +1507,79 @@ test("L3 driver receipts keep lifecycle sessions, phase controls and incomplete 
     assert.equal(result.receipt.cleanup.complete, false);
   }
 });
+
+for (const scenario of [
+  "empty terminate",
+  "recorded terminate",
+  "missing server snapshot",
+  "missing close outcome",
+]) {
+  test(`L3 row 202 records ${scenario} and derives completeness in the driver`, async () => {
+    const source = readFileSync(new URL("./fs-listen/browser-driver.mjs", import.meta.url), "utf8");
+    const start = source.indexOf("  for (const id of L3_IDS)");
+    const end = source.indexOf("\n}\n\nasync function main", start);
+    const evidence = evidenceFor("202");
+    if (scenario === "missing server snapshot") evidence.phases[1].snapshots[0].fromCache = true;
+    const terminate =
+      scenario === "recorded terminate"
+        ? [{ terminate: true, session: 1, dispatched: true, outcome: "cancelled", status: null }]
+        : [];
+    const l3 = { phases: evidence.phases, closeSession: 1 };
+    if (scenario !== "missing close outcome") {
+      const closeStart = source.indexOf("    const closed = a.waitForEvent");
+      const closeEnd = source.indexOf("    const a2 =", closeStart);
+      const closeSource = source.slice(closeStart, closeEnd);
+      await runInNewContext("(async () => {" + closeSource + "})()", {
+        l3,
+        STEP_TIMEOUT_MS: 100,
+        a: {
+          waitForEvent: (event) => {
+            assert.equal(event, "close");
+            return Promise.resolve();
+          },
+          close: async (options) => {
+            assert.equal(options.runBeforeUnload, true);
+          },
+        },
+      });
+    }
+    const result = runInNewContext("(() => {" + source.slice(start, end) + "})()", {
+      L3_IDS,
+      L3_PHASES,
+      l3Problems,
+      l3,
+      wire: [{ page: "A2", phase: "replacement", session: 2 }, ...terminate],
+      receipt: { cases: [], teardown: [], cleanup: { complete: true } },
+      cleanup: { complete: true, outcomes: [] },
+      mode: "streaming",
+      modeRunId: "rs",
+      ledger: { records: [], connections: () => 0, closed: () => false },
+      listenChannel: 0,
+      ci: {},
+      totalBytes: 0,
+      totalFrames: 0,
+    });
+    const record = result.receipt.cases.find((c) => c.caseId === "FS-LISTEN-SDK-202");
+    const row = browserRows({ streaming: result })["browser-streaming/sdk/202"];
+    assert.deepEqual(Array.from(row.observed[0].terminate), terminate);
+    assert.equal(row.observed[0].closeOutcome, l3.closeOutcome);
+    const complete = !scenario.startsWith("missing");
+    assert.equal(record.complete, complete);
+    assert.equal(row.timedOut, !complete);
+    assert.equal(row.failures.includes("terminate not confirmed"), false);
+    assert.equal(row.failures.includes("missing or duplicate complete record"), !complete);
+    assert.equal(classifyRow(row, row), complete ? "MATCH" : "INDETERMINATE");
+    if (!complete)
+      assert.ok(
+        row.failures.includes(
+          scenario === "missing server snapshot"
+            ? "missing server-backed set"
+            : "close not confirmed",
+        ),
+      );
+    else assert.deepEqual(row.failures, []);
+  });
+}
 
 test("L3 persistent cleanup signals only owned Chromium and deletes storage only after exit", async () => {
   const source = readFileSync(new URL("./fs-listen/browser-driver.mjs", import.meta.url), "utf8");

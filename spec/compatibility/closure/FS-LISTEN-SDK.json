@@ -7,7 +7,7 @@
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
     "decision": "PENDING",
-    "note": "The current 18-case catalog is local-only. No case is VERIFIED and no production permission is granted."
+    "note": "The final source-bound release comparison and coordinator closure rulings are recorded; the additional boundary-token-relationship difference and independent Opus closure review remain open."
   },
   "scopeDecisions": [
     {
@@ -124,7 +124,7 @@
         "FS-LISTEN-SDK-101C"
       ],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
-      "status": "PENDING_RECORDING",
+      "status": "VERIFIED",
       "observation": {
         "method": "Existing and absent document snapshots, server barrier and callback order.",
         "transports": [
@@ -153,7 +153,26 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+      "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "rows": {
+          "MATCH": 16,
+          "DIVERGES": 0,
+          "NOT_COMPARABLE": 0
+        },
+        "productionRuns": [
+          "nmuuj1wmw",
+          "nmuukqlh3",
+          "nmuvbfyog",
+          "nmuvdlnpu",
+          "nmuw7z5c9"
+        ]
+      }
     },
     {
       "conditionId": "FS-LISTEN-SDK/pending-writes",
@@ -163,7 +182,7 @@
         "FS-LISTEN-SDK-102C"
       ],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
-      "status": "PENDING_RECORDING",
+      "status": "VERIFIED",
       "observation": {
         "method": "Local pending-write metadata before acknowledgement versus a second-client write with no local pending flag.",
         "transports": [
@@ -192,7 +211,26 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+      "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "rows": {
+          "MATCH": 16,
+          "DIVERGES": 0,
+          "NOT_COMPARABLE": 0
+        },
+        "productionRuns": [
+          "nmuuj1wmw",
+          "nmuukqlh3",
+          "nmuvbfyog",
+          "nmuvdlnpu",
+          "nmuw7z5c9"
+        ]
+      }
     },
     {
       "conditionId": "FS-LISTEN-SDK/query-change-order",
@@ -202,7 +240,7 @@
         "FS-LISTEN-SDK-103C"
       ],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
-      "status": "PENDING_RECORDING",
+      "status": "VERIFIED",
       "observation": {
         "method": "Query added, modified, reordered and removed changes with old/new indexes versus an outside-predicate silent control. Include limitToLast reversal and its document change indexes after a bounded update. Compare one multi-document transaction commit delivered in one SDK callback against separate commits that produce distinct callbacks.",
         "transports": [
@@ -231,7 +269,26 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+      "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "rows": {
+          "MATCH": 32,
+          "DIVERGES": 0,
+          "NOT_COMPARABLE": 0
+        },
+        "productionRuns": [
+          "nmuuj1wmw",
+          "nmuukqlh3",
+          "nmuvbfyog",
+          "nmuvdlnpu",
+          "nmuw7z5c9"
+        ]
+      }
     },
     {
       "conditionId": "FS-LISTEN-SDK/reconnect-resume",
@@ -241,7 +298,7 @@
         "FS-LISTEN-SDK-104C"
       ],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
-      "status": "PENDING_RECORDING",
+      "status": "VERIFIED",
       "observation": {
         "method": "Forced stream break, cache-served interval and complete resumed document set versus uninterrupted delivery.",
         "transports": [
@@ -270,7 +327,26 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+      "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "rows": {
+          "MATCH": 16,
+          "DIVERGES": 0,
+          "NOT_COMPARABLE": 0
+        },
+        "productionRuns": [
+          "nmuuj1wmw",
+          "nmuukqlh3",
+          "nmuvbfyog",
+          "nmuvdlnpu",
+          "nmuw7z5c9"
+        ]
+      }
     },
     {
       "conditionId": "FS-LISTEN-SDK/unsubscribe",
@@ -280,7 +356,7 @@
         "FS-LISTEN-SDK-105C"
       ],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
-      "status": "PENDING_RECORDING",
+      "status": "VERIFIED",
       "observation": {
         "method": "Unsubscribed callback silence while an active witness receives the write versus two active listeners.",
         "transports": [
@@ -309,7 +385,26 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+      "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "rows": {
+          "MATCH": 16,
+          "DIVERGES": 0,
+          "NOT_COMPARABLE": 0
+        },
+        "productionRuns": [
+          "nmuuj1wmw",
+          "nmuukqlh3",
+          "nmuvbfyog",
+          "nmuvdlnpu",
+          "nmuw7z5c9"
+        ]
+      }
     },
     {
       "conditionId": "FS-LISTEN-SDK/initial-unauthenticated-refusal",
@@ -318,7 +413,7 @@
         "FS-LISTEN-SDK-106N"
       ],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
-      "status": "PENDING_RECORDING",
+      "status": "VERIFIED",
       "observation": {
         "method": "A listener started after sign-out refuses its initial target; no in-flight Auth state change is tested here. Case 106 belongs to AUTH-FS-CROSS.",
         "transports": [
@@ -347,7 +442,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required.",
+      "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "fixtureEvidence": {
         "fixture": "conformance/auth-fs-cross-stage2-production.json",
         "decisionRef": "L8",
@@ -358,6 +453,25 @@
         "covers": "A listener started after sign-out ends permission-denied with no server snapshot, over the Node SDK and the browser SDK (default transport).",
         "recordings": 2,
         "status": "RECORDED_NOT_COMPARED"
+      },
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "rows": {
+          "MATCH": 8,
+          "DIVERGES": 0,
+          "NOT_COMPARABLE": 0
+        },
+        "productionRuns": [
+          "nmuuj1wmw",
+          "nmuukqlh3",
+          "nmuvbfyog",
+          "nmuvdlnpu",
+          "nmuw7z5c9"
+        ]
       }
     },
     {
@@ -368,7 +482,7 @@
         "FS-LISTEN-SDK-107C"
       ],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
-      "status": "PENDING_RECORDING",
+      "status": "VERIFIED",
       "observation": {
         "method": "Raw callback count without metadata-change subscription, including a same-data silent control. Compare includeMetadataChanges: true with the default false case 107; record backend CURRENT and NO_CHANGE timing.",
         "transports": [
@@ -397,7 +511,28 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+      "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "rows": {
+          "MATCH": 28,
+          "DIVERGES": 0,
+          "NOT_COMPARABLE": 0
+        },
+        "productionRuns": [
+          "nmuuicyas",
+          "nmuukwo6n",
+          "nmuuj1wmw",
+          "nmuukqlh3",
+          "nmuvbfyog",
+          "nmuvdlnpu",
+          "nmuw7z5c9"
+        ]
+      }
     },
     {
       "conditionId": "FS-LISTEN-SDK/cross-principal-rules",
@@ -407,7 +542,7 @@
         "FS-LISTEN-SDK-108C"
       ],
       "recipeStatus": "EXISTING_CATALOG_PROPOSED_MAPPING",
-      "status": "PENDING_RECORDING",
+      "status": "VERIFIED",
       "observation": {
         "method": "Default-tenant owner and nonowner listeners on a private document, with server snapshot and permission-denied ordering. Use two static principals only; Auth state changes belong to AUTH-FS-CROSS.",
         "transports": [
@@ -436,7 +571,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required.",
+      "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
       "fixtureEvidence": {
         "fixture": "conformance/auth-fs-cross-stage2-production.json",
         "decisionRef": "L8",
@@ -449,6 +584,25 @@
         "covers": "The owner receives the private document; with the other principal's token the listener on it ends permission-denied.",
         "recordings": 2,
         "status": "RECORDED_NOT_COMPARED"
+      },
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "rows": {
+          "MATCH": 16,
+          "DIVERGES": 0,
+          "NOT_COMPARABLE": 0
+        },
+        "productionRuns": [
+          "nmuuj1wmw",
+          "nmuukqlh3",
+          "nmuvbfyog",
+          "nmuvdlnpu",
+          "nmuw7z5c9"
+        ]
       }
     },
     {
@@ -458,7 +612,7 @@
         "fs-listen-sdk/raw-resume-token"
       ],
       "recipeStatus": "PROPOSED",
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "observation": {
         "method": "Direct gRPC Listen with chosen current, stale and invalid resume tokens, RESET/TargetChange and a fresh-target control.",
         "transports": [
@@ -481,7 +635,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required. Stale is read as both an older token that is still inside the resume window and a token aged past it (about 30 minutes): packet L1 records both (rows native/resume-token/older and native/resume-token-expired/expired), beside the invalid-bytes, other-query and fresh-target rows.",
+      "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer. The S1 differences remain declared; ruling 2 judges each varying production row against both complete recorded answers without additional masking. The native/resume-token-expired program was replayed with the release binary after its real 35-minute wait; the L8 Auth fixture does not replace this expiry case.",
       "fixtureEvidence": {
         "fixture": "conformance/auth-fs-cross-stage2-production.json",
         "decisionRef": "L8",
@@ -491,6 +645,24 @@
         "covers": "A native gRPC Listen resumed with the current resume token, by the principal that got it and by another one: the frames that follow.",
         "recordings": 2,
         "status": "RECORDED_NOT_COMPARED"
+      },
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "rows": {
+          "MATCH": 84,
+          "DIVERGES": 8,
+          "NOT_COMPARABLE": 0
+        },
+        "productionRuns": [
+          "nmuuicyas",
+          "nmuukwo6n",
+          "nmuv70w0y",
+          "nmuv8dk6e"
+        ]
       }
     },
     {
@@ -500,7 +672,7 @@
         "fs-listen-sdk/browser-tab-lifecycle"
       ],
       "recipeStatus": "PROPOSED",
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "observation": {
         "method": "In a real browser, observe backend-visible WebChannel terminate on tab close and the first server snapshot in a new session after reload or a new tab, with a no-reload control and complete process cleanup.",
         "transports": [
@@ -524,7 +696,22 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Existing local receipts use the historical catalog. New conf_* sandbox recordings, complete cleanup and final-artifact comparison are still required."
+      "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer. A single L3 recording is accepted by owner ledger 921 and ruling 4, with a per-row note. Terminate on tab close is UNOBSERVED (the browser sent none) and is not claimed.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "rows": {
+          "MATCH": 6,
+          "DIVERGES": 0,
+          "NOT_COMPARABLE": 0
+        },
+        "productionRuns": [
+          "nmuw7z5c9"
+        ]
+      }
     },
     {
       "conditionId": "FS-LISTEN-SDK/existence-filter-reconnect",
@@ -533,7 +720,7 @@
         "fs-listen-sdk/existence-filter-reconnect"
       ],
       "recipeStatus": "PROPOSED",
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "observation": {
         "method": "On native gRPC and SDK reconnection, delete a document while disconnected; observe ExistenceFilter count, BloomFilter unchanged_names and SDK removal of the stale document, with a no-deletion control.",
         "transports": [
@@ -556,7 +743,28 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "A finite sandbox corpus, two recordings per declared transport, complete cleanup and final-artifact comparison remain required."
+      "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "rows": {
+          "MATCH": 14,
+          "DIVERGES": 2,
+          "NOT_COMPARABLE": 0
+        },
+        "productionRuns": [
+          "nmuuicyas",
+          "nmuukwo6n",
+          "nmuuj1wmw",
+          "nmuukqlh3",
+          "nmuvbfyog",
+          "nmuvdlnpu",
+          "nmuw7z5c9"
+        ]
+      }
     },
     {
       "conditionId": "FS-LISTEN-SDK/backend-cache-transitions",
@@ -565,7 +773,7 @@
         "fs-listen-sdk/backend-cache-transitions"
       ],
       "recipeStatus": "PROPOSED",
-      "status": "PENDING_CORPUS",
+      "status": "MISMATCH",
       "observation": {
         "method": "Observe fromCache-to-server snapshot timing and a persistent-cache resume after browser restart: compare backend resume token and read-time response with a cold-cache control. SDK-internal-only cache behavior is excluded.",
         "transports": [
@@ -586,7 +794,22 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "A finite sandbox corpus, two recordings per declared transport, complete cleanup and final-artifact comparison remain required."
+      "note": "D4 and D5 are approved declared differences under coordinator closure ruling 3. All four 203/203C rows also show boundary-token-relationship: production CURRENT and the following NO_CHANGE share a token, while strict uses different tokens. This additional difference is named and retained as DIVERGES; no approval for it is claimed.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "rows": {
+          "MATCH": 0,
+          "DIVERGES": 4,
+          "NOT_COMPARABLE": 0
+        },
+        "productionRuns": [
+          "nmuw7z5c9"
+        ]
+      }
     },
     {
       "conditionId": "FS-LISTEN-SDK/native-target-protocol",
@@ -595,7 +818,7 @@
         "fs-listen-sdk/native-target-protocol"
       ],
       "recipeStatus": "PROPOSED",
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "observation": {
         "method": "On one native gRPC Listen stream, test AddTarget and RemoveTarget, duplicate and invalid target_id, once, read_time, expected_count, missing-index refusal and a collection-group target; include valid controls and exact target lifecycle.",
         "transports": [
@@ -615,7 +838,23 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "A finite sandbox corpus, two recordings per declared transport, complete cleanup and final-artifact comparison remain required."
+      "note": "Every recorded row is MATCH or an approved declared difference under coordinator closure rulings 1-5 (2026-10-06 10:07Z). Approved differences retain their DIVERGES verdicts; variable production rows cite the matching production answer.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "rows": {
+          "MATCH": 34,
+          "DIVERGES": 0,
+          "NOT_COMPARABLE": 0
+        },
+        "productionRuns": [
+          "nmuuicyas",
+          "nmuukwo6n"
+        ]
+      }
     },
     {
       "conditionId": "FS-LISTEN-SDK/final-artifact-regression",
@@ -640,7 +879,21 @@
         ],
         "recordingsRequired": 0
       },
-      "note": "Final-artifact or independent closure review has no production request and remains open until its own evidence is approved."
+      "note": "The complete final release replay is source-bound; verification remains pending because backend-cache-transitions has four unapproved boundary-token-relationship rows. The build record clean status covers runtime inputs only; the uncommitted generator and tests are test-side tools, not runtime inputs.",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "comparisonSha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "finalArtifactSha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+        "sourceCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+        "runnerTreeSha256": "694f809940bac50aca678336a874db30a384fb8fd66cb899d8a6b8ad459d21d6",
+        "rows": {
+          "MATCH": 286,
+          "DIVERGES": 14,
+          "NOT_COMPARABLE": 0
+        },
+        "buildRecordPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+        "buildRecordSha256": "272a3d2c2340694eaf1a84104ce2b22fb20be1da0a08311c78206a35ceb1bc6e"
+      }
     },
     {
       "conditionId": "FS-LISTEN-SDK/closure-review",
@@ -665,11 +918,11 @@
         ],
         "recordingsRequired": 0
       },
-      "note": "Final-artifact or independent closure review has no production request and remains open until its own evidence is approved."
+      "note": "Independent Opus closure review is pending; no approval or parent promotion is claimed."
     }
   ],
   "productionPlan": {
-    "status": "PROPOSAL_ONLY",
+    "status": "PRODUCTION_RECORDED",
     "authorizesProduction": false,
     "selectedProject": "fireemu-oracle-query",
     "candidateProject": "fireemu-oracle-query",
@@ -710,7 +963,7 @@
       "Finite native target, cache, ExistenceFilter, metadata and limitToLast corpus with local shadow and clean-context review",
       "Twice-recorded sandbox packet, JSONL ledger admission and owner permission"
     ],
-    "productionExecuted": false,
+    "productionExecuted": true,
     "project": "fireemu-oracle-query",
     "changesRules": false,
     "rulesCollections": [
@@ -722,12 +975,12 @@
     "nativeProject": "fireemu-oracle-txn",
     "nativeProjectReason": "L7: native gRPC Listen with the owner access token needs no Rules and costs nothing on the unbilled txn project."
   },
-  "note": "The shared 18-case catalog uses case IDs as recipe IDs; 15 belong to this parent and 106, 109 and 109C belong to AUTH-FS-CROSS under R2. Additional recipes use fs-listen-sdk/<condition>. Historical local shadows bind the old o6_listen paths and remain immutable. No production recording or closure is claimed.",
+  "note": "Nine saved production recordings were compared offline with the strict release binary built from HEAD 6294e1e5d. Coordinator closure rulings 1-5 verify 12 conditions. The additional boundary-token-relationship difference keeps backend-cache-transitions and final-artifact verification open; independent closure review is pending. This task made zero production requests. Historical localEvidence and frozen inventory requirements are retained; the evidence and per-condition notes record the approved exceptions.",
   "profileComparison": {
     "profile": "strict",
     "localOutcome": "Strict revocation and tenant deletion listeners end on refresh; emulator profile listeners continue in focused local checks.",
     "officialEmulatorComparison": "PENDING",
-    "productionComparison": "PENDING",
+    "productionComparison": "RECORDED_WITH_DECLARED_AND_UNAPPROVED_DIFFERENCES",
     "note": "A strict-only refusal is not yet a production compatibility claim. AUTH-FS-CROSS owns the state-change observations."
   },
   "movedCatalogCases": [
@@ -755,10 +1008,32 @@
     "project": "fireemu-oracle-query",
     "database": "(default)",
     "credentials": "Unauthenticated Web SDK for public conf_listen cases and two throwaway Email/Password Firebase Auth accounts for conf_rules_owner cases.",
-    "productionExecuted": false,
+    "productionExecuted": true,
     "nativeProject": "fireemu-oracle-txn",
     "nativeCredentials": "Owner access token (gcloud auth application-default print-access-token); no end-user credential."
   },
   "amendedOn": "2026-10-05",
-  "amendment": "Owner ledger 824 (2026-10-05) and the coordinator: native gRPC Listen recordings run on fireemu-oracle-txn (L7) and the AUTH-FS-CROSS stage-2 fixture serves as Listen evidence for three behaviours (L8). The 15 conditions, the frozen catalog mapping and every other scope decision are unchanged."
+  "amendment": "Owner ledger 824 (2026-10-05) and the coordinator: native gRPC Listen recordings run on fireemu-oracle-txn (L7) and the AUTH-FS-CROSS stage-2 fixture serves as Listen evidence for three behaviours (L8). The 15 conditions, the frozen catalog mapping and every other scope decision are unchanged.",
+  "integratedRegression": {
+    "release": "v0.13.0",
+    "integrationCommit": "6294e1e5d8b49e0abf5cf1365dc0234685aaa322",
+    "releaseBinarySha256": "9c772a9896a7847b254b9223a4e33f9cbe6b7d873a06e615817df10aa33c6ec5",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-build.json",
+    "buildReceiptSha256": "272a3d2c2340694eaf1a84104ce2b22fb20be1da0a08311c78206a35ceb1bc6e",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/FS-LISTEN-SDK-comparison.json",
+        "sha256": "efcded8aae0070614191830a6f8749a7d766670602e7ba5f595c6a9b2c67880d",
+        "rows": 300,
+        "summary": {
+          "MATCH": 286,
+          "DIVERGES": 14,
+          "NOT_COMPARABLE": 0
+        }
+      }
+    ],
+    "result": "RECORDED_WITH_UNAPPROVED_DIFFERENCE",
+    "productionRequests": 0,
+    "note": "Final release replay completed. Parent remains IMPLEMENTING; backend-cache-transitions and final-artifact verification remain open for the named boundary-token-relationship difference. The kind is disclosed in release-strict-regression EXCLUDED_KINDS because production recordings are private and the replay requires the real-time expired-token case and Chromium."
+  }
 }

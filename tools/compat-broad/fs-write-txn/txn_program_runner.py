@@ -22,7 +22,7 @@ from txn_program_management import MetadataSession
 
 
 def wire_scope(table):
-    return {'slug': table['slug'], 'documents': list(table['documents']), 'states': list(table['states'])}
+    return {'slug': table['slug'], 'documents': list(table['documents']), 'states': list(table['states']), **{key: copy.deepcopy(table[key]) for key in ('databases', 'placements') if key in table}}
 
 
 class SessionBudget(RequestBudget):
@@ -92,13 +92,20 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
         extra = {} if project == PROJECT else {'project': project}
         metadata = MetadataSession(bearer, baseline, budget, request_fn=request_once if project == PROJECT else functools.partial(request_once, project=project), **extra)
         preflight = metadata.preflight()
-        wire = NodeWire(runtime, wire_scope(table), **({} if project == PROJECT else {'project': project}))
+        if table['name'] == 'p16-foreign-tokens':
+            metadata.create_named_database(plan['databases']['named'], journal)
+        wire = NodeWire(runtime, wire_scope({**table, **plan}), **({} if project == PROJECT else {'project': project}))
         collector = Collector(plan, table, budget, wire, bearer, save=journal, before_send=check, observation_deadline=budget.observation_deadline)
         receipt = collector.run()
         receipt['metadata'] = preflight
         if receipt.get('journalFailure') or budget.failed:
             raise ValueError('program journal failed; metadata postflight is forbidden')
         budget.begin_recovery()
+        if table['name'] == 'p16-foreign-tokens':
+            if not receipt.get('complete'):
+                raise ValueError('named database retained after incomplete document recovery')
+            if not metadata.delete_named_database(journal)['closureReady']:
+                raise ValueError('named database deletion requires A2 readback')
         receipt['postflight'] = metadata.postflight()
         check()
     except (Exception, KeyboardInterrupt) as error:
@@ -106,6 +113,11 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
             receipt = {'kind': 'txn-program-recording-v1', 'complete': False, 'graphComplete': False, 'program': plan['program'], 'packetName': plan['packetName'], 'sourceDigest': plan['sourceDigest'], 'corpusDigest': plan['corpusDigest'], 'nonce': nonce, 'ownerId': owner_id, 'unknownStarts': [], 'openTokens': [], 'cleanup': {'absent': None}, 'unrecovered': True}
         receipt['complete'] = False
         receipt['failureType'] = type(error).__name__
+    if metadata is not None and hasattr(metadata, 'named_database'):
+        receipt['namedDatabase'] = copy.deepcopy(metadata.named_database)
+        receipt['closureReady'] = metadata.named_database['closureReady']
+        if not receipt['closureReady']:
+            receipt['complete'] = False
     receipt['sandboxRequests'] = budget.total
     receipt['phaseRequests'] = dict(budget.used)
     receipt['runtime'] = copy.deepcopy(runtime)

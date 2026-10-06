@@ -591,6 +591,7 @@ def test_projection_binds_the_receipt_to_its_table():
 @pytest.mark.parametrize("fail_at", [None, 5])
 def test_cleanup_owns_the_exact_full_name_and_token_origin_in_another_database(fail_at):
     table = copy.deepcopy(support.TABLE)
+    table["project"] = "fireemu-oracle-query"
     table["databases"] = {"named": "projects/fireemu-oracle-query/databases/txn-{nonce}"}
     table["placements"] = {"a": "named", "m": "named"}
     for row in table["steps"]:

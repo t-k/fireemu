@@ -189,7 +189,7 @@ def main():
     runtime = discover_runtime(Path(os.environ.get("NODE_BINARY") or shutil.which("node")))
     plan = compile_plan(table, os.urandom(16).hex(), os.urandom(16).hex())
     project = table_project(table)
-    wire = NodeWire(runtime, wire_scope(table), target={"kind": "local", "host": host, "port": int(port)}, **({} if project == DEFAULT_PROJECT else {"project": project}))
+    wire = NodeWire(runtime, wire_scope({**table, **plan}), target={"kind": "local", "host": host, "port": int(port)}, **({} if project == DEFAULT_PROJECT else {"project": project}))
     source = json.loads(Path(sys.argv[1]).read_text())
     recorded = "steps" in source
     if os.environ.get("COMPARE_CLOCK") == "frozen":

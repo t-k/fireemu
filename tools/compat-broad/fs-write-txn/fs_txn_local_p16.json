@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "firebaseJson": "../../../target/codex-out/s3-rehearsal/firebase.json",
+  "firestore": {"edition": "standard", "apiMode": "native"},
+  "projects": {"requireDemoPrefix": true, "unknownProjects": "serve"},
+  "daemon": {"authProjectNumbers": {"demo-program": "123456789", "demo-fireemu-oracle-txn": "987654321"}}
+}

@@ -329,3 +329,20 @@ def test_a_frozen_replay_of_a_recording_judges_the_clock_rows():
 
 def test_a_frozen_replay_of_a_freeze_file_has_no_clock_rows():
     assert tool.clock_rows_for("frozen", False, _writes(0), _writes(0)) is None
+
+
+def test_p16_foreign_token_cases_and_reads_are_compared_in_both_transports():
+    import fs_txn_table_p16 as p16
+    from txn_program_program import compile_plan
+    plan = compile_plan(p16.TABLE, "a" * 32, "b" * 32)
+    cases = [{"caseId": step["caseId"], "code": 3, "details": "foreign transaction"} for step in plan["steps"] if step["caseId"]]
+    reads = [{"site": step["id"], "code": 3, "state": None, "documents": None} for step in plan["steps"] if step["caseId"] and step["rpc"] in ("GetDocument", "BatchGetDocuments")]
+    expected = {"cases": cases, "reads": reads}
+    rows = tool.compare(expected, expected, {}, {}, p16.TABLE["project"])
+    assert len(rows[0]) == len(plan["cases"]) == 24
+    assert len(rows[1]) == 6
+    assert all(row["match"] for section in rows for row in section)
+    for index, case in enumerate(cases):
+        changed = {**expected, "cases": [dict(row, code=0) if i == index else row for i, row in enumerate(cases)]}
+        result = tool.compare(expected, changed, {}, {}, p16.TABLE["project"])
+        assert sum(not row["match"] for section in result for row in section) == 1

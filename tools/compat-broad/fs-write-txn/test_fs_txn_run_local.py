@@ -19,3 +19,28 @@ def test_a_stopped_recording_reports_its_failure_and_what_it_left_unknown():
     receipt = {"complete": False, "failureType": "ValueError", "steps": [], "cleanupSteps": [], "unknownStarts": ["s"], "unknownRollbacks": ["r"], "unknownCommits": ["c"]}
     summary = tool.summarize(receipt)
     assert (summary["complete"], summary["failure"], summary["unknownStarts"], summary["unknownRollbacks"], summary["unknownCommits"], summary["waits"]) == (False, "ValueError", ["s"], ["r"], ["c"], [])
+
+
+def test_local_main_passes_the_compiled_declarations_to_node_wire(tmp_path, monkeypatch):
+    import sys
+    import txn_program_wire as wire_module
+    import fs_txn_table_p16 as p16
+    scopes = []
+    class Recording:
+        def __init__(self, plan, table, budget, wire, *args, **kwargs):
+            assert wire.scope["databases"] == plan["databases"]
+            assert wire.scope["placements"] == p16.TABLE["placements"]
+            assert "{nonce}" not in wire.scope["databases"]["named"]
+            scopes.append(wire.scope)
+        def _observe(self): pass
+        def run(self):
+            return {"complete": True, "failureType": None, "steps": [], "cleanupSteps": [], "unknownStarts": [], "unknownRollbacks": [], "unknownCommits": []}
+    monkeypatch.setattr(tool, "Collector", Recording)
+    monkeypatch.setattr(wire_module, "discover_runtime", lambda _: {})
+    monkeypatch.setattr(wire_module, "verify_runtime", lambda _: None)
+    monkeypatch.setenv("SMOKE_TABLE", "fs_txn_table_p16")
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:12345")
+    monkeypatch.delenv("COMPARE_CLOCK", raising=False)
+    monkeypatch.setattr(sys, "argv", ["fs_txn_run_local.py", str(tmp_path / "summary.json")])
+    tool.main()
+    assert len(scopes) == 1

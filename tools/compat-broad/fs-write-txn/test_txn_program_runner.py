@@ -314,3 +314,70 @@ def test_the_whole_task_budget_is_rechecked_before_each_recording(tmp_path):
     kwargs["record_once"] = once
     with pytest.raises(ValueError, match="limit"): runner.record_twice(**kwargs)
     assert calls == [0]
+
+
+def test_run_once_passes_resolved_declarations_to_the_real_wire(tmp_path, monkeypatch):
+    import txn_program_wire as wire_module
+    table = {**TABLE, "databases": {"named": "projects/fireemu-oracle-sbx/databases/txn-{nonce}"}, "placements": {}}
+    scopes = []
+    class Metadata:
+        def __init__(self, *args, **kwargs): pass
+        def preflight(self): return {}
+        def postflight(self): return {}
+    class Recording:
+        def __init__(self, plan, table, budget, wire, *args, **kwargs):
+            scopes.append(wire.scope)
+        def run(self): return {"complete": True}
+    monkeypatch.setattr(runner, "MetadataSession", Metadata)
+    monkeypatch.setattr(runner, "Collector", Recording)
+    monkeypatch.setattr(runner, "refresh", lambda *args, **kwargs: "owner")
+    monkeypatch.setattr(wire_module, "verify_runtime", lambda _: None)
+    receipt = runner.run_once(0, table, "a" * 32, "b" * 32, tmp_path, baseline={}, runtime={}, check=lambda: None)
+    assert receipt["complete"] is True
+    assert scopes[0]["databases"] == {"named": "projects/fireemu-oracle-sbx/databases/txn-" + "a" * 32}
+    assert scopes[0]["placements"] == {}
+
+
+@pytest.mark.parametrize("unknown", [None, "create-database", "delete-database"])
+def test_p16_real_runner_orders_management_and_keeps_unknown_mutations_open(tmp_path, monkeypatch, unknown):
+    table = importlib.import_module("fs_txn_table_p16").TABLE
+    from test_txn_program_management import BASELINE, ABSENT, answer
+    import txn_program_wire as wire_module
+    named = "projects/fireemu-oracle-query/databases/txn-" + "a" * 32
+    calls = []
+    deleted = []
+    def request(slot, token, resource=None, *, project):
+        assert project == table["project"]
+        calls.append(slot)
+        if slot == unknown: return answer(None, 503, False)
+        if slot == "oauth-tokeninfo":
+            return answer({"issued_to": "test-client", "user_id": "test-subject", "scope": BASELINE["credentialPrincipal"]["requiredScopes"][0], "expires_in": 3600})
+        if slot == "project": return answer({"projectId": project, "projectNumber": "123456789"})
+        if slot == "database": return answer({**BASELINE["databaseExpected"], "uid": "synthetic-query-uid"})
+        if slot == "named-database":
+            return answer({"name": named}) if "create-database" in calls and not deleted else ABSENT
+        if slot == "create-database": return answer({"name": named + "/operations/create-1", "done": True, "response": {"name": named}})
+        assert slot == "delete-database"
+        deleted.append(True)
+        return answer({"name": named + "/operations/delete-1", "done": True, "response": {}})
+    class Recording:
+        def __init__(self, plan, table, budget, wire, *args, **kwargs):
+            assert wire.scope["databases"] == plan["databases"]
+            assert wire.scope["placements"] == table["placements"]
+            calls.append("collector")
+        def run(self): return {"complete": True, "journalFailure": False}
+    monkeypatch.setattr(runner, "request_once", request)
+    monkeypatch.setattr(runner, "refresh", lambda *args, **kwargs: "owner")
+    monkeypatch.setattr(runner, "Collector", Recording)
+    monkeypatch.setattr(wire_module, "verify_runtime", lambda _: None)
+    receipt = runner.run_once(0, table, "a" * 32, "b" * 32, tmp_path, baseline=copy.deepcopy(BASELINE), runtime={}, check=lambda: None)
+    assert receipt["complete"] is (unknown is None)
+    assert receipt["closureReady"] is (unknown is None)
+    assert calls.count("create-database") == 1
+    if unknown == "create-database":
+        assert "collector" not in calls and "delete-database" not in calls
+        assert receipt["namedDatabase"]["unknownCreate"] is True
+    else:
+        assert calls.index("create-database") < calls.index("collector") < calls.index("delete-database")
+        assert calls.count("delete-database") == 1
+    if unknown == "delete-database": assert receipt["namedDatabase"]["unknownDelete"] is True

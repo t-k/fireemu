@@ -339,6 +339,12 @@ def test_database_declaration_and_placement_keys_bind_the_digest_only_when_prese
 
 
 def test_nonce_resolution_cannot_alias_two_declared_databases(program, table):
-    changed = {**table, "databases": {"x": "projects/fireemu-oracle-query/databases/txn-{nonce}", "y": f"projects/fireemu-oracle-query/databases/txn-{NONCE}"}}
+    changed = {**table, "project": "fireemu-oracle-query", "databases": {"x": "projects/fireemu-oracle-query/databases/txn-{nonce}", "y": f"projects/fireemu-oracle-query/databases/txn-{NONCE}"}}
     with pytest.raises(ValueError, match="repeat"):
+        plan(program, changed)
+
+
+def test_billed_secondary_projects_are_refused_before_a_plan_can_be_budgeted(program, table):
+    changed = {**table, "project": "fireemu-oracle-txn", "databases": {"named": "projects/fireemu-oracle-query/databases/txn-{nonce}"}}
+    with pytest.raises(ValueError, match="billed secondary"):
         plan(program, changed)

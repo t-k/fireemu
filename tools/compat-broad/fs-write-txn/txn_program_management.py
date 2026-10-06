@@ -7,6 +7,8 @@ assumed; after a run it reads the project and the database again. That is six ma
 
 from __future__ import annotations
 
+import copy
+import re
 import time
 
 import txn_sandbox_management as management
@@ -109,3 +111,79 @@ class MetadataSession(management.MetadataSession):
         if self.project != PROJECT:
             observed["databaseSettings"] = dict(self._database_settings)
         return observed
+
+
+    def _named_request(self, slot, resource, save):
+        self.budget.charge("management")
+        self.named_database["lastRequestEpoch"] = time.time()
+        save(copy.deepcopy(self.named_database))
+        result = self.request(slot, self._token, resource)
+        if not isinstance(result, dict) or result.get("workerReaped") is not True:
+            raise ValueError("named database worker is not reaped")
+        return result
+
+    def _wait_database_operation(self, result, save):
+        resource = self.named_database["database"]
+        body = result.get("body")
+        if result.get("complete") is not True or result.get("status") != 200 or not isinstance(body, dict):
+            raise ValueError("named database mutation outcome is unknown")
+        operation = body.get("name")
+        if not isinstance(operation, str) or not re.fullmatch(re.escape(resource) + r"/operations/[A-Za-z0-9_-]+", operation):
+            raise ValueError("named database operation differs")
+        for attempt in range(11):
+            if body.get("done") is True:
+                if "error" in body or not isinstance(body.get("response"), dict):
+                    raise ValueError("named database operation did not succeed")
+                return body["response"]
+            if attempt == 10:
+                break
+            time.sleep(1)
+            result = self._named_request("database-operation", operation, save)
+            body = result.get("body")
+            if result.get("complete") is not True or result.get("status") != 200 or not isinstance(body, dict) or body.get("name") != operation:
+                break
+        raise ValueError("named database operation is unknown or unfinished")
+
+    def create_named_database(self, resource, save):
+        if self.project != QUERY_PROJECT or not self._ready or hasattr(self, "named_database") or not isinstance(resource, str) or not re.fullmatch(r"projects/fireemu-oracle-query/databases/txn-[a-f0-9]{32}", resource):
+            raise ValueError("one resolved run-prefixed query database required")
+        # Firestore holds deleted database IDs for five minutes before reuse: https://firebase.google.com/docs/firestore/manage-databases#delete_a_database
+        # This run never reuses an ID, including after an unknown create or delete.
+        self.named_database = {"database": resource, "closureReady": False, "unknownCreate": False, "unknownDelete": False, "createConfirmed": False, "deleteAttempted": False, "deleteConfirmed": False, "lastRequestEpoch": None, "a2": False}
+        probe = self._named_request("named-database", resource, save)
+        if probe.get("complete") is not True or probe.get("status") != 404 or (probe.get("body") or {}).get("error", {}).get("status") != "NOT_FOUND":
+            raise ValueError("run database name was not proven absent")
+        self.named_database["unknownCreate"] = True
+        response = self._wait_database_operation(self._named_request("create-database", resource, save), save)
+        if response.get("name") != resource:
+            raise ValueError("created database identity differs")
+        self.named_database.update(unknownCreate=False, createConfirmed=True)
+        read = self._named_request("named-database", resource, save)
+        if read.get("complete") is not True or read.get("status") != 200 or (read.get("body") or {}).get("name") != resource:
+            raise ValueError("confirmed create lacks its database readback; A2 required")
+        save(copy.deepcopy(self.named_database))
+        return copy.deepcopy(self.named_database)
+
+    def delete_named_database(self, save):
+        state = self.named_database
+        if not state["createConfirmed"] or state["unknownCreate"] or state["deleteAttempted"]:
+            raise ValueError("unknown mutations are sticky; deletion cannot be sent or repeated")
+        state.update(deleteAttempted=True, unknownDelete=True, a2=False)
+        self._wait_database_operation(self._named_request("delete-database", state["database"], save), save)
+        state.update(unknownDelete=False, deleteConfirmed=True)
+        return self.readback_named_database(None, save)
+
+    def readback_named_database(self, a2_epoch, save):
+        state = self.named_database
+        if a2_epoch is not None:
+            if type(a2_epoch) not in (int, float) or a2_epoch > time.time() or not 600 <= a2_epoch - state["lastRequestEpoch"] < float("inf"):
+                raise ValueError("A2 readback requires at least ten minutes after the last request")
+            state["a2"] = True
+        state["a2"] = a2_epoch is not None
+        result = self._named_request("named-database", state["database"], save)
+        if state["a2"] and result.get("complete") is True and result.get("status") == 200 and (result.get("body") or {}).get("name") == state["database"]:
+            state.update(createConfirmed=True, unknownCreate=False)
+        absent = result.get("complete") is True and result.get("status") == 404 and (result.get("body") or {}).get("error", {}).get("status") == "NOT_FOUND"
+        state["closureReady"] = absent and state["createConfirmed"] and not state["unknownCreate"] and (state["deleteConfirmed"] or state["a2"])
+        save(copy.deepcopy(state))
+        return copy.deepcopy(state)

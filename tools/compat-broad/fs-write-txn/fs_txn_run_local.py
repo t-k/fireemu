@@ -74,7 +74,7 @@ def main():
     runtime = discover_runtime(Path(os.environ.get("NODE_BINARY") or shutil.which("node")))
     plan = compile_plan(table, os.urandom(16).hex(), os.urandom(16).hex())
     project = table.get("project", "fireemu-oracle-sbx")
-    wire = NodeWire(runtime, wire_scope(table), target={"kind": "local", "host": host, "port": int(port)}, **({} if project == "fireemu-oracle-sbx" else {"project": project}))
+    wire = NodeWire(runtime, wire_scope({**table, **plan}), target={"kind": "local", "host": host, "port": int(port)}, **({} if project == "fireemu-oracle-sbx" else {"project": project}))
     # The collector keeps only the type of the error that stopped it; a rehearsal prints the whole of it (never used against production).
     original = Collector._observe
 

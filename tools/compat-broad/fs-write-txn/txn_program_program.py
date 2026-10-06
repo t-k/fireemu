@@ -148,6 +148,8 @@ def _validate_table(table):
         rendered = resource.replace("{nonce}", "a" * 32)
         if not re.fullmatch(r"projects/(" + "|".join(map(re.escape, PROJECTS)) + r")/databases/(\(default\)|[a-z][a-z0-9-]{2,61}[a-z0-9])", rendered):
             _bad("database declaration names an invalid database or project")
+    if any(resource.split("/")[1] != table.get("project", PROJECT) and resource.split("/")[1] not in FREE_TIER_PROJECTS for resource in databases.values()):
+        _bad("billed secondary project requires its own budget; use it as the primary project")
     if len(set(databases.values()) | {primary}) != len(databases) + 1:
         _bad("database declarations repeat")
     if any(role not in table["documents"] or not isinstance(alias, str) or alias not in databases for role, alias in placements.items()):

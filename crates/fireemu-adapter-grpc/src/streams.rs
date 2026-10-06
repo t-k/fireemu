@@ -15,7 +15,7 @@
 //!
 //! A token is only honoured while the store can still reproduce its version exactly
 //! (`FirestoreState::is_retained`: not compacted away by the one-hour retention window, not
-//! ahead of this database). An undecodable, future or expired token falls back to `RESET`,
+//! ahead of this database). A future or expired token falls back to `RESET`; strict removes non-empty undecodable tokens and the emulator resets them,
 //! so a token is never resumed against unrelated history; the client drops its cache and
 //! replays from scratch. Security Rules are re-checked on every refresh; a denial removes
 //! the target with a `PERMISSION_DENIED` cause.
@@ -732,7 +732,7 @@ fn handle_listen_request(
                     return Ok(());
                 }
             };
-            if let Some(refusal) = malformed_token_refusal(ctx, target, id) {
+            if let Some(refusal) = malformed_token_refusal(ctx, parent, target, &kind, id) {
                 out.push(refusal);
                 return Ok(());
             }
@@ -755,6 +755,7 @@ fn handle_listen_request(
             // start over and would silently line up with unrelated history.
             let binding = TokenBinding {
                 epoch: ctx.local.epoch(),
+                strict: ctx.gateway.production_refusals(),
                 database: database_hash,
                 target: target_hash,
             };
@@ -877,19 +878,27 @@ fn decode_refusal(id: i32, error: &Status) -> Vec<pb::ListenResponse> {
 /// not refused and keeps the reset.
 fn malformed_token_refusal(
     ctx: &StreamContext,
+    parent: &Parent,
     target: &pb::Target,
+    kind: &TargetKind,
     id: i32,
 ) -> Option<pb::ListenResponse> {
+    let binding = TokenBinding {
+        epoch: ctx.local.epoch(),
+        strict: ctx.gateway.production_refusals(),
+        database: database_hash(parent, ctx.local.database_generation(parent)),
+        target: target_hash(kind),
+    };
     let malformed = matches!(
         &target.resume_type,
         Some(pb::target::ResumeType::ResumeToken(bytes))
-            if !bytes.is_empty() && !is_token_shaped(bytes)
+            if !bytes.is_empty() && matches!(parse_resume_token(bytes, &binding), Resume::Invalid)
     );
     (ctx.gateway.production_refusals() && malformed)
         .then(|| removed_with_cause(id, &Status::invalid_argument("bad resume token")))
 }
 
-/// Whether `bytes` have the shape of a token this daemon issues (32 bytes).
+/// Whether `bytes` have the shape of an emulator-profile token (32 bytes).
 fn is_token_shaped(bytes: &[u8]) -> bool {
     <[u8; 32]>::try_from(bytes).is_ok()
 }
@@ -1036,6 +1045,7 @@ fn refresh_all(
             let read_time = encode_instant(read_at);
             let binding = TokenBinding {
                 epoch: local.epoch(),
+                strict: ctx.gateway.production_refusals(),
                 database: database_hash,
                 target: 0,
             };
@@ -1293,7 +1303,7 @@ fn resume_answer_of(ctx: &StreamContext, target: &pb::Target, kind: &TargetKind)
         && matches!(kind, TargetKind::Query(_))
         && matches!(
             &target.resume_type,
-            Some(pb::target::ResumeType::ResumeToken(bytes)) if is_token_shaped(bytes)
+            Some(pb::target::ResumeType::ResumeToken(bytes)) if bytes.len() == 11
         );
     match (resumed_query, target.expected_count.is_some()) {
         (false, _) => ResumeAnswer::Exact,
@@ -1473,6 +1483,8 @@ fn resolve_resume(
 /// What a resume token is bound to besides its version.
 #[derive(Debug, Clone, Copy)]
 struct TokenBinding {
+    /// Strict uses the recorded 11-byte length; the emulator keeps 32 bytes.
+    strict: bool,
     /// Backend reset epoch.
     epoch: u64,
     /// Hash of the project / database.
@@ -1555,10 +1567,19 @@ fn target_hash(kind: &TargetKind) -> u64 {
     fnv(&format!("{kind:?}"))
 }
 
-/// 32 bytes: version, epoch, database hash, target hash (big-endian).
+/// Strict: 8-byte big-endian version and a 3-byte binding check. Emulator: four 8-byte words.
+/// The truncated check can collide; it is an opaque binding check, not authentication.
 fn resume_token(version: CommitVersion, binding: &TokenBinding) -> Vec<u8> {
     let mut out = Vec::with_capacity(32);
     out.extend_from_slice(&version.value().to_be_bytes());
+    if binding.strict {
+        let check = fnv(&format!(
+            "{}/{}/{}",
+            binding.epoch, binding.database, binding.target
+        ));
+        out.extend_from_slice(&check.to_be_bytes()[5..]);
+        return out;
+    }
     out.extend_from_slice(&binding.epoch.to_be_bytes());
     out.extend_from_slice(&binding.database.to_be_bytes());
     out.extend_from_slice(&binding.target.to_be_bytes());
@@ -1567,6 +1588,26 @@ fn resume_token(version: CommitVersion, binding: &TokenBinding) -> Vec<u8> {
 
 /// A token this daemon issued for this epoch, database and target (or for every target).
 fn parse_resume_token(bytes: &[u8], binding: &TokenBinding) -> Resume {
+    if binding.strict {
+        let Ok(raw) = <[u8; 11]>::try_from(bytes) else {
+            return Resume::Invalid;
+        };
+        let version =
+            CommitVersion::from_value(u64::from_be_bytes(raw[..8].try_into().unwrap_or([0; 8])));
+        let global = TokenBinding {
+            target: 0,
+            ..*binding
+        };
+        if raw[8..] != resume_token(version, binding)[8..]
+            && raw[8..] != resume_token(version, &global)[8..]
+        {
+            return Resume::Invalid;
+        }
+        return Resume::Version(version);
+    }
+    if !is_token_shaped(bytes) {
+        return Resume::Invalid;
+    }
     let Ok(raw) = <[u8; 32]>::try_from(bytes) else {
         return Resume::Invalid;
     };

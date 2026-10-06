@@ -6587,6 +6587,14 @@ mod schedule_capacity_tests {
                             clock.lock().unwrap().advance(delta).unwrap();
                             runtime.on_clock_changed();
                             let count = admitted(&runtime).len();
+                            let summaries = outcomes(&runtime, id);
+                            if policy == CatchUpPolicy::None {
+                                assert_eq!(
+                                    summaries.len(),
+                                    usize::try_from(index).unwrap(),
+                                    "{id}: {profile:?}: one ns early"
+                                );
+                            }
                             clock
                                 .lock()
                                 .unwrap()
@@ -6595,6 +6603,19 @@ mod schedule_capacity_tests {
                             runtime.on_clock_changed();
                             if policy == CatchUpPolicy::None {
                                 assert!(admitted(&runtime).is_empty(), "{id}: {profile:?}");
+                                let mut expected = summaries;
+                                expected.push("skipped: catch-up none (1 run)".to_owned());
+                                assert_eq!(
+                                    outcomes(&runtime, id),
+                                    expected,
+                                    "{id}: {profile:?}: at the instant"
+                                );
+                                runtime.on_clock_changed();
+                                assert_eq!(
+                                    outcomes(&runtime, id),
+                                    expected,
+                                    "{id}: {profile:?}: repeated notification"
+                                );
                             } else {
                                 let runs = admitted(&runtime);
                                 assert_eq!(runs.len(), count + 1, "{id}: {profile:?}: {policy:?}");
@@ -6610,6 +6631,57 @@ mod schedule_capacity_tests {
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn strict_interval_backlog_over_the_cap_keeps_phase_aligned_runs_due() {
+        use super::{CodebaseSpec, FunctionsHttpProfile, OverlapPolicy};
+
+        let (base, clock) = runtime_with(CatchUpPolicy::All, OverlapPolicy::Allow, 2, START).await;
+        let manifest = parse_manifest(&json!({"functions": [{"name": "tick", "generation": 2,
+            "trigger": {"type": "schedule", "schedule": "every 5 minutes", "timeZone": "UTC"}}]}))
+        .unwrap();
+        let runtime = FunctionsRuntime::with_codebases(
+            vec![CodebaseSpec {
+                name: "default".to_owned(),
+                manifest,
+                runner: base.current_runners()[0].1.clone(),
+                spawn: None,
+                cleanup_dir: None,
+            }],
+            base.config.clone(),
+            clock.clone(),
+            FunctionsHttpProfile::Strict,
+        )
+        .unwrap();
+        advance(&clock, 25 * 60);
+        for (first, last) in [
+            ("2026-08-29T12:06:00Z", "2026-08-29T12:11:00Z"),
+            ("2026-08-29T12:16:00Z", "2026-08-29T12:21:00Z"),
+        ] {
+            runtime.on_clock_changed();
+            assert_eq!(
+                admitted(&runtime),
+                vec![run("tick", first), run("tick", last)]
+            );
+            assert_eq!(runtime.inner.lock().unwrap().jobs[0].cursor, t(last));
+            assert!(pending(&runtime));
+            runtime.on_clock_changed();
+            assert_eq!(
+                admitted(&runtime),
+                vec![run("tick", first), run("tick", last)],
+                "a full chunk holds the backlog"
+            );
+            runtime.inner.lock().unwrap().payloads.clear();
+        }
+        runtime.on_clock_changed();
+        assert_eq!(
+            admitted(&runtime),
+            vec![run("tick", "2026-08-29T12:26:00Z")]
+        );
+        assert!(!pending(&runtime));
+        assert!(outcomes(&runtime, "tick").is_empty(), "all drops no runs");
+        finish(&base).await;
     }
 
     // ----- a rewind ---------------------------------------------------------------------------

@@ -3082,7 +3082,28 @@ fn manifest_for_profile(
                 .map_err(|e| format!("manifest: function {:?}: time zone: {e}", function.name))?;
             // Calendar v6 cr13 is invalid even without DST; ds01 has no occurrence in its zone.
             if schedule.next_after_in(now, &*zone).is_none() {
-                let reason = if schedule.next_after(now, 0).is_none() {
+                // A bounded search cannot prove impossibility. Only the recorded class (cr13: one numeric
+                // day of month, numeric months, any day of week "*") is judged impossible structurally.
+                let fields: Vec<&str> = schedule.as_str().split_whitespace().collect();
+                let impossible = match fields.as_slice() {
+                    [_, _, day, months, "*"] => day.parse::<u32>().is_ok_and(|day| {
+                        months
+                            .split(',')
+                            .map(|month| month.parse::<u32>().ok().filter(|m| (1..=12).contains(m)))
+                            .collect::<Option<Vec<_>>>()
+                            .is_some_and(|months| {
+                                months.iter().all(|month| {
+                                    day > match month {
+                                        2 => 29,
+                                        4 | 6 | 9 | 11 => 30,
+                                        _ => 31,
+                                    }
+                                })
+                            })
+                    }),
+                    _ => false,
+                };
+                let reason = if impossible {
                     "The provided schedule or timezone are invalid."
                 } else {
                     "Cannot find next schedule time."
@@ -7276,6 +7297,56 @@ mod tests {
                 "manifest: function \"cr13\": schedule: The provided schedule or timezone are invalid.");
             assert!(
                 super::manifest_for_profile(CompatibilityProfile::Emulator, &document, now).is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn a_rare_valid_schedule_is_not_reported_as_invalid() {
+        let document = json!({"functions": [{"name": "rare", "trigger": {
+            "type": "schedule", "schedule": "5th mon of feb 00:00", "timeZone": "UTC",
+        }}]});
+        let now = fireemu_core_types::time::LogicalInstant::parse_rfc3339("2026-10-05T00:30:00Z")
+            .unwrap();
+        if let Err(error) =
+            super::manifest_for_profile(CompatibilityProfile::Strict, &document, now)
+        {
+            assert_eq!(
+                error,
+                "manifest: function \"rare\": schedule: Cannot find next schedule time."
+            );
+        }
+    }
+
+    #[test]
+    fn calendar_v6_days_exceeding_every_listed_month_are_reported_as_invalid() {
+        // The recorded class (cr13) and its numeric generalization get the invalid message;
+        // other shapes are unrecorded and keep the generic one.
+        for (schedule, reason) in [
+            (
+                "0 0 30 2 *",
+                "The provided schedule or timezone are invalid.",
+            ),
+            (
+                "0 0 31 4,6 *",
+                "The provided schedule or timezone are invalid.",
+            ),
+            ("0 0 30,31 2 *", "Cannot find next schedule time."),
+            ("0 0 31 apr,jun *", "Cannot find next schedule time."),
+        ] {
+            let document = json!({"functions": [{"name": "impossible", "trigger": {
+                "type": "schedule", "schedule": schedule, "timeZone": "UTC",
+            }}]});
+            let error = super::manifest_for_profile(
+                CompatibilityProfile::Strict,
+                &document,
+                crate::config::RuntimeConfig::default().clock_start,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error,
+                format!("manifest: function \"impossible\": schedule: {reason}"),
+                "{schedule}"
             );
         }
     }

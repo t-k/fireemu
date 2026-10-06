@@ -249,7 +249,7 @@ export async function hReadList(transport, { path, key, phase }, meter) {
     meter();
     const reply = await transport.request({
       method: "GET",
-      path: `${path}${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ""}`,
+      path: `${path}${pageToken ? `${path.includes("?") ? "&" : "?"}pageToken=${encodeURIComponent(pageToken)}` : ""}`,
       op: `h.${key}.list`,
       label: { case: `h-${phase}` },
     });
@@ -273,7 +273,8 @@ export function hReady({
   functions,
   services,
   triggers,
-  channel,
+  topics,
+  subscriptions,
   names = [m.observe, m.filtered],
 }) {
   const identities = [];
@@ -286,29 +287,9 @@ export function hReady({
       f?.environment !== "GEN_2" ||
       f?.state !== "ACTIVE" ||
       f?.eventTrigger?.triggerRegion !== m.location ||
-      f?.eventTrigger?.channel !== m.channel ||
-      f?.eventTrigger?.eventType !== m.type ||
       !service ||
-      service.terminalCondition?.state !== "CONDITION_SUCCEEDED" ||
       !trigger ||
-      trigger.destination?.cloudFunction !== full ||
-      trigger.channel !== m.channel
-    )
-      return { ready: false, identities };
-    const filters = new Map((trigger.eventFilters ?? []).map((v) => [v.attribute, v.value]));
-    const additional =
-      name === m.observe
-        ? []
-        : [
-            ["source", m.source],
-            ["tenant", m.tenant],
-          ];
-    if (
-      filters.size !== additional.length + 1 ||
-      filters.get("type") !== m.type ||
-      additional.some(([k, v]) => filters.get(k) !== v) ||
-      f.eventTrigger.retryPolicy !==
-        (name === m.observe ? "RETRY_POLICY_RETRY" : "RETRY_POLICY_DO_NOT_RETRY")
+      trigger.destination?.cloudFunction !== full
     )
       return { ready: false, identities };
     // Explicit declared placement, including source/build/AR and global managed Pub/Sub names.
@@ -330,7 +311,8 @@ export function hReady({
       const resource = trigger.transport?.pubsub?.[key];
       if (
         typeof resource !== "string" ||
-        !resource.startsWith(`projects/${m.project}/${collection}/`)
+        !resource.startsWith(`projects/${m.project}/${collection}/`) ||
+        !(key === "topic" ? topics : subscriptions)?.some((item) => item.name === resource)
       )
         return { ready: false, identities };
     }
@@ -346,5 +328,5 @@ export function hReady({
       repository: f.buildConfig.dockerRepository,
     });
   }
-  return { ready: channel?.name === m.channel && channel.state === "ACTIVE", identities };
+  return { ready: true, identities };
 }

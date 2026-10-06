@@ -9,22 +9,26 @@ import { hUnknown, hDisposition, hCliFailed, hReadList, hReady } from "./h-deplo
 
 /** Reuse stage C byte capture, but all H 5xx answers are unknown, including 501. */
 export function createHRest(options) {
-  const capture = {
-    ...options.capture,
-    record: (entry) => {
-      if (entry.response?.status >= 500) {
-        entry.response.unknown = true;
-        entry.unknown = true;
-      }
-      return options.capture.record(entry);
-    },
-  };
-  const rest = createRawRest({ ...options, capture });
   return {
-    ...rest,
+    ...createRawRest(options),
     request: async (spec) => {
+      let response;
+      const rest = createRawRest({
+        ...options,
+        capture: {
+          ...options.capture,
+          record: (entry) => {
+            response = entry.response;
+            if (entry.response?.status >= 500) {
+              entry.response.unknown = true;
+              entry.unknown = true;
+            }
+            return options.capture.record(entry);
+          },
+        },
+      });
       const reply = await rest.request(spec);
-      return { ...reply, unknown: hUnknown(reply) };
+      return { ...response, ...reply, unknown: hUnknown(reply) };
     },
   };
 }
@@ -122,7 +126,7 @@ export async function recordH({
         phase,
         evidence.operation,
       );
-      if (reply.body.metadata?.target !== write.name)
+      if (reply.body.name !== write.operation || reply.body.metadata?.target !== write.name)
         throw new Error("H operation target mismatch");
       if (reply.body.done === true) {
         write.state = reply.body.error ? "failed" : "confirmed";
@@ -132,7 +136,7 @@ export async function recordH({
       await sleep(2000);
     }
   };
-  const lists = async (names) => {
+  const lists = async (phase) => {
     const read = async (host, version, collection) => {
       const transport = {
         request: async (spec) => {
@@ -144,15 +148,21 @@ export async function recordH({
       };
       return hReadList(
         transport,
-        { path: `/${version}/${parent}/${collection}`, key: collection, phase: "readiness" },
-        () => meter("readiness"),
+        {
+          path: `/${version}/${host === "pubsub" ? `projects/${m.project}` : parent}/${collection}${host === "pubsub" ? "?pageSize=100" : ""}`,
+          key: collection,
+          phase,
+        },
+        () => meter(phase),
       );
     };
-    const functions = await read("functions", "v2", "functions");
-    const services = await read("run", "v2", "services");
-    const triggers = await read("eventarc", "v1", "triggers");
-    const channel = await get("eventarc", `/v1/${m.channel}`, "readiness", evidence.readiness);
-    return hReady({ manifest: m, functions, services, triggers, channel: channel.body, names });
+    return {
+      functions: await read("functions", "v2", "functions"),
+      services: await read("run", "v2", "services"),
+      triggers: await read("eventarc", "v1", "triggers"),
+      topics: await read("pubsub", "v1", "topics"),
+      subscriptions: await read("pubsub", "v1", "subscriptions"),
+    };
   };
   const pause = async (ms) => {
     const end = now() + ms;
@@ -166,17 +176,71 @@ export async function recordH({
     }
   };
   try {
-    // No implicit API enabling, Firestore creation, Auth or Rules setup.
-    for (const api of APIS) {
-      const reply = await get(
+    // This envelope enables publishing once and never disables it.
+    const servicesPath = `/v1/projects/${m.project}/services?filter=state:ENABLED&pageSize=200`;
+    let enabled = await hReadList(
+      { request: (spec) => request("usage", spec, "preflight", evidence.preflight) },
+      { path: servicesPath, key: "services", phase: "preflight" },
+      () => {},
+    );
+    note("h-enabled-services-before", enabled);
+    m.projectNumber = enabled[0]?.name?.split("/")[1];
+    if (
+      !/^[0-9]{12}$/.test(m.projectNumber ?? "") ||
+      enabled.some((s) => s.name?.split("/")[1] !== m.projectNumber)
+    )
+      throw new Error("H enabled-services project mismatch");
+    for (const api of APIS.filter((api) => api !== "eventarcpublishing.googleapis.com"))
+      if (!enabled.some((s) => s.state === "ENABLED" && s.config?.name === api))
+        throw new Error(`H prerequisite disabled: ${api}`);
+    if (!enabled.some((s) => s.config?.name === "eventarcpublishing.googleapis.com")) {
+      const write = {
+        name: "eventarcpublishing.googleapis.com",
+        host: "usage",
+        action: "enable",
+        state: "unknown",
+      };
+      result.writes.push(write);
+      note("h-write-issued", write);
+      const answer = await request(
         "usage",
-        `/v1/projects/${m.project}/services/${api}`,
+        {
+          method: "POST",
+          path: `/v1/projects/${m.project}/services/${write.name}:enable`,
+          body: {},
+          op: "h.service.enable",
+        },
         "preflight",
         evidence.preflight,
       );
-      if (reply.body.state !== "ENABLED" || reply.body.config?.name !== api)
-        throw new Error(`H prerequisite disabled: ${api}`);
+      if (answer.status !== 200 || typeof answer.body.name !== "string")
+        throw new Error("H enable unknown");
+      write.operation = answer.body.name;
+      for (let poll = 0; poll < 10; poll++) {
+        const operation = await get(
+          "usage",
+          `/v1/${write.operation}`,
+          "preflight",
+          evidence.preflight,
+        );
+        if (operation.body.name !== write.operation) throw new Error("H enable operation mismatch");
+        if (operation.body.done === true) {
+          if (operation.body.error) throw new Error("H enable failed");
+          write.state = "confirmed";
+          break;
+        }
+        await sleep(2000);
+      }
+      if (write.state !== "confirmed") throw new Error("H enable pending; never resend");
     }
+    enabled = await hReadList(
+      { request: (spec) => request("usage", spec, "preflight", evidence.preflight) },
+      { path: servicesPath, key: "services", phase: "preflight" },
+      () => {},
+    );
+    note("h-enabled-services-after", enabled);
+    if (!APIS.every((api) => enabled.some((s) => s.state === "ENABLED" && s.config?.name === api)))
+      throw new Error("H prerequisites incomplete after enable");
     const database = await get(
       "firestore",
       `/v1/projects/${m.project}/databases/(default)`,
@@ -218,15 +282,12 @@ export async function recordH({
       triggers: baselineTriggers,
       database: database.body,
     });
-    for (const name of [m.observe, m.filtered]) {
-      const reply = await get(
-        "functions",
-        `/v2/${parent}/functions/${name}`,
-        "preflight",
-        evidence.notFound,
-      );
-      if (reply.status !== 404) throw new Error("H export already exists");
-    }
+    const initial = await lists("preflight");
+    result.baselineLists = initial;
+    note("h-preflight-lists", initial);
+    for (const name of [m.observe, m.filtered])
+      if (initial.functions.some((f) => f.name === `${parent}/functions/${name}`))
+        throw new Error("H export already exists");
     const retrySubject = hPublishes(m).find((p) => p.retry).body.events[0];
     const markerId = createHash("sha256")
       .update(JSON.stringify([retrySubject.source, retrySubject.id]))
@@ -249,7 +310,7 @@ export async function recordH({
       const deployed = await cli(name);
       let writes;
       try {
-        writes = evidence.cliWrites(deployed, m);
+        writes = evidence.cliWrites(deployed, m, name);
       } catch {
         result.cleanup.unconfirmed.push(`cli:${name}:unreadable-writes`);
         throw new Error("needs-review: H CLI output");
@@ -266,12 +327,36 @@ export async function recordH({
       await settle(write, "readiness");
       let readiness;
       for (let poll = 0; poll < 40; poll++) {
-        readiness = await lists(attempted);
+        const inventory = await lists("readiness");
+        note("h-readiness-lists", inventory);
+        readiness = hReady({ manifest: m, ...inventory, names: attempted });
         if (readiness.ready) break;
         await sleep(30_000);
       }
       if (!readiness?.ready) throw new Error("H readiness incomplete");
       result.identities = readiness.identities;
+      // H1 exact-name GETs are raw observations, including errors; they settle nothing.
+      for (const identity of readiness.identities)
+        for (const [host, version, resource] of [
+          ["functions", "v2", identity.function],
+          ["run", "v2", identity.service],
+          ["eventarc", "v1", identity.trigger],
+          ["pubsub", "v1", identity.topic],
+          ["pubsub", "v1", identity.subscription],
+        ]) {
+          meter("readiness");
+          try {
+            const reply = await transports[host].request({
+              method: "GET",
+              path: `/${version}/${resource}`,
+              op: "h.observeOnly",
+              label: { case: "h-observeOnly" },
+            });
+            note("h-observeOnly", { host, resource, reply });
+          } catch {
+            note("h-observeOnly", { host, resource, unknown: true });
+          }
+        }
       for (const identity of readiness.identities) {
         const own = result.writes.find(
           (w) => w.name === identity.function && w.action === "create",
@@ -436,18 +521,31 @@ export async function recordH({
       const full = `${parent}/functions/${name}`;
       const creation = result.writes.find((w) => w.name === full && w.action === "create");
       try {
-        const current = await get(
-          "functions",
-          `/v2/${full}`,
-          "cleanup",
-          (r, spec) => evidence.readiness(r, spec) || evidence.notFound(r, spec),
-        );
-        const read =
-          current.status === 200 && current.body.name === full
-            ? "present"
-            : current.status === 404
-              ? "absent"
-              : "unknown";
+        const inventory = await lists("cleanup");
+        note("h-cleanup-lists", inventory);
+        const current = inventory.functions.find((f) => f.name === full);
+        const read = current ? "present" : "absent";
+        // A positive complete list confirms a partial deployment and inventories its children.
+        if (current && !result.identities.some((i) => i.function === full)) {
+          const service = inventory.services.find((s) => s.name === current.serviceConfig?.service);
+          const trigger = inventory.triggers.find((t) => t.name === current.eventTrigger?.trigger);
+          const identity = {
+            function: full,
+            handler: name,
+            service: service?.name,
+            trigger: trigger?.name,
+            topic: trigger?.transport?.pubsub?.topic,
+            subscription: trigger?.transport?.pubsub?.subscription,
+          };
+          if (
+            identity.service &&
+            identity.trigger &&
+            inventory.topics.some((t) => t.name === identity.topic) &&
+            inventory.subscriptions.some((s) => s.name === identity.subscription)
+          )
+            result.identities.push(identity);
+          else result.cleanup.unconfirmed.push(`cli:${name}:managed-inventory`);
+        }
         const disposition = hDisposition({ create: creation.state, read });
         if (disposition.confirmed) creation.state = "confirmed";
         if (!disposition.canDelete) {
@@ -483,34 +581,41 @@ export async function recordH({
             reply.body.done === true ? (reply.body.error ? "failed" : "confirmed") : "pending";
           await settle(deletion, "cleanup");
         }
-        const absent = await get("functions", `/v2/${full}`, "cleanup", evidence.notFound);
-        if (
-          !hDisposition({
-            create: creation.state,
-            deletion: deletion.state,
-            read: absent.status === 404 ? "absent" : "unknown",
-          }).closed
-        )
-          result.cleanup.unsettled.push(full);
-        if (deletion.state === "confirmed")
-          for (const identity of result.identities.filter((i) => i.function === full)) {
-            for (const [host, version, resource] of [
-              ["run", "v2", identity.service],
-              ["eventarc", "v1", identity.trigger],
-              ["pubsub", "v1", identity.topic],
-              ["pubsub", "v1", identity.subscription],
-            ]) {
-              const reply = await get(
-                host,
-                `/${version}/${resource}`,
-                "cleanup",
-                evidence.notFound,
-              );
-              if (reply.status !== 404) result.cleanup.unsettled.push(resource);
-            }
+        const after = await lists("cleanup");
+        note("h-cleanup-lists-after-delete", after);
+        const closed =
+          deletion.state === "confirmed" && !after.functions.some((f) => f.name === full);
+        if (!closed) result.cleanup.unsettled.push(full);
+        for (const identity of result.identities.filter((i) => i.function === full)) {
+          for (const [key, resource] of [
+            ["services", identity.service],
+            ["triggers", identity.trigger],
+            ["topics", identity.topic],
+            ["subscriptions", identity.subscription],
+          ]) {
+            // R2: only confirmed children, and only after R1 settles their function.
+            if (!closed || after[key].some((item) => item.name === resource))
+              result.cleanup.unsettled.push(resource);
           }
+        }
       } catch {
         result.cleanup.unsettled.push(full);
+      }
+    }
+    if (attempted.length && result.baselineLists) {
+      try {
+        const remaining = await lists("cleanup");
+        note("h-final-lists", remaining);
+        for (const key of ["functions", "services", "triggers", "topics", "subscriptions"])
+          for (const item of remaining[key])
+            if (
+              !result.baselineLists[key].some((before) => before.name === item.name) &&
+              !result.cleanup.unsettled.includes(item.name) &&
+              !result.cleanup.unconfirmed.includes(item.name)
+            )
+              result.cleanup.unsettled.push(item.name);
+      } catch {
+        result.cleanup.unsettled.push("incomplete-final-lists");
       }
     }
     // Stop retry execution before the exact marker can be removed.
@@ -665,13 +770,13 @@ export async function recordH({
   return result;
 }
 
-/** Separate coordinator A2: exact-name reads only, at least ten minutes after the latest request. */
+/** Separate coordinator A2: ruled complete lists, at least ten minutes after the latest request. */
 export async function hA2({ recording, transports, evidence, now, note }) {
   if (!Number.isFinite(recording.lastRequestAt) || now() - recording.lastRequestAt < 600_000)
     throw new Error("H A2 must wait ten minutes after the latest request");
   const names = new Map();
   for (const write of recording.writes) {
-    if (write.name && write.host)
+    if (write.name && write.host && ["create", "delete"].includes(write.action))
       names.set(write.name, {
         host: write.host,
         version:
@@ -688,29 +793,64 @@ export async function hA2({ recording, transports, evidence, now, note }) {
       ["pubsub", identity.topic],
       ["pubsub", identity.subscription],
     ])
-      names.set(name, { host, version: ["functions", "run"].includes(host) ? "v2" : "v1" });
+      if (name)
+        names.set(name, { host, version: ["functions", "run"].includes(host) ? "v2" : "v1" });
   if (recording.marker) names.set(recording.marker, { host: "firestore", version: "v1" });
   const facts = [];
   let requests = 0;
+  const collections = new Map();
   for (const [name, { host, version }] of names) {
-    if (++requests > H_LIMITS.a2) throw new Error("H A2 ceiling");
-    const reply = await transports[host].request({
-      method: "GET",
-      path: `/${version}/${name}`,
-      op: "h.a2.read",
-      label: { case: "h-a2" },
-    });
-    const read =
-      !hUnknown(reply) &&
-      evidence.notFound(reply, { host, method: "GET", path: `/${version}/${name}` }) &&
-      reply.status === 404
-        ? "absent"
-        : !hUnknown(reply) &&
-            evidence.readiness(reply, { host, method: "GET", path: `/${version}/${name}` }) &&
-            reply.status === 200 &&
-            reply.body.name === name
-          ? "present"
-          : "unknown";
+    let read = "unknown";
+    const collection = name.match(
+      /^(projects\/[^/]+(?:\/locations\/[^/]+)?\/(functions|services|triggers|topics|subscriptions))\/[^/]+$/,
+    );
+    if (collection && evidence.a2ListRuling === true) {
+      const path = `/${version}/${collection[1]}${host === "pubsub" ? "?pageSize=100" : ""}`;
+      if (!collections.has(path)) {
+        try {
+          const items = await hReadList(
+            {
+              request: async (spec) => {
+                const reply = await transports[host].request(spec);
+                if (!evidence.readiness(reply, { ...spec, host }))
+                  throw new Error("H A2 list shape");
+                return reply;
+              },
+            },
+            { path, key: collection[2], phase: "a2" },
+            () => {
+              if (++requests > H_LIMITS.a2) throw new Error("H A2 ceiling");
+            },
+          );
+          collections.set(path, items);
+          note("h-a2-list", { path, items });
+        } catch {
+          collections.set(path, null);
+        }
+      }
+      const items = collections.get(path);
+      if (items) read = items.some((item) => item.name === name) ? "present" : "absent";
+    } else if (!collection) {
+      if (++requests > H_LIMITS.a2) throw new Error("H A2 ceiling");
+      const path = `/${version}/${name}`;
+      const reply = await transports[host].request({
+        method: "GET",
+        path,
+        op: "h.a2.read",
+        label: { case: "h-a2" },
+      });
+      read =
+        !hUnknown(reply) &&
+        evidence.notFound(reply, { host, method: "GET", path }) &&
+        reply.status === 404
+          ? "absent"
+          : !hUnknown(reply) &&
+              evidence.readiness(reply, { host, method: "GET", path }) &&
+              reply.status === 200 &&
+              reply.body.name === name
+            ? "present"
+            : "unknown";
+    }
     const creation = recording.writes.find((w) => w.name === name && w.action === "create");
     const deletion = recording.writes.find((w) => w.name === name && w.action === "delete");
     // Managed children whose function DELETE completed use that cascade's own disposition.
@@ -726,6 +866,8 @@ export async function hA2({ recording, transports, evidence, now, note }) {
       mode: "a2",
       ageMs: now() - recording.lastRequestAt,
     });
+    if (owner && !facts.some((fact) => fact.name === owner.function && fact.closed))
+      disposition.closed = false;
     facts.push({ name, read, ...disposition });
     note("h-a2-read", facts.at(-1));
   }
@@ -738,24 +880,28 @@ export async function hA2({ recording, transports, evidence, now, note }) {
   );
   let retentionVerified = false;
   if (typeof evidence.retention === "function") {
-    const retained = await evidence.retention({
-      recording,
-      manifest: recording.manifest,
-      baseline: recording.baseline,
-      get: async (host, path, judge) => {
-        if (++requests > H_LIMITS.a2) throw new Error("H A2 ceiling");
-        const reply = await transports[host].request({
-          method: "GET",
-          path,
-          op: "h.a2.retention",
-          label: { case: "h-a2" },
-        });
-        if (hUnknown(reply) || !judge(reply, { host, method: "GET", path }))
-          throw new Error("needs-review: H A2 retention answer");
-        return reply;
-      },
-    });
-    retentionVerified = retained?.complete === true && retained?.atBaseline === true;
+    try {
+      const retained = await evidence.retention({
+        recording,
+        manifest: recording.manifest,
+        baseline: recording.baseline,
+        get: async (host, path, judge) => {
+          if (++requests > H_LIMITS.a2) throw new Error("H A2 ceiling");
+          const reply = await transports[host].request({
+            method: "GET",
+            path,
+            op: "h.a2.retention",
+            label: { case: "h-a2" },
+          });
+          if (hUnknown(reply) || !judge(reply, { host, method: "GET", path }))
+            throw new Error("needs-review: H A2 retention answer");
+          return reply;
+        },
+      });
+      retentionVerified = retained?.complete === true && retained?.atBaseline === true;
+    } catch {
+      retentionVerified = false;
+    }
   }
   const cleanupReady =
     facts.every((f) => f.closed) &&

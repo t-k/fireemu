@@ -23,7 +23,8 @@
       "freeTier": true,
       "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
       "etag": "IIK0/oyCopcDMPC5zK2hlpcD"
-    }
+    },
+    "bodyBytes": 718
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -56,7 +57,8 @@
       },
       "satisfiesPzi": true,
       "registryUri": "us-central1-docker.pkg.dev/fireemu-oracle-events/gcf-artifacts"
-    }
+    },
+    "bodyBytes": 828
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -65,7 +67,8 @@
     "url": "https://artifactregistry.googleapis.com/v1/projects/fireemu-oracle-events/locations/us-central1/repositories/gcf-artifacts/packages?pageSize=100",
     "status": 200,
     "bytes": 3,
-    "body": {}
+    "body": {},
+    "bodyBytes": 3
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -74,7 +77,8 @@
     "url": "https://cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-events/locations/us-central1/functions",
     "status": 200,
     "bytes": 3,
-    "body": {}
+    "body": {},
+    "bodyBytes": 3
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -83,7 +87,8 @@
     "url": "https://run.googleapis.com/v2/projects/fireemu-oracle-events/locations/us-central1/services",
     "status": 200,
     "bytes": 3,
-    "body": {}
+    "body": {},
+    "bodyBytes": 3
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -92,7 +97,8 @@
     "url": "https://eventarc.googleapis.com/v1/projects/fireemu-oracle-events/locations/us-central1/triggers",
     "status": 200,
     "bytes": 3,
-    "body": {}
+    "body": {},
+    "bodyBytes": 3
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -103,7 +109,8 @@
     "bytes": 72,
     "body": {
       "name": "projects/fireemu-oracle-events/topics/fe-events-primary"
-    }
+    },
+    "bodyBytes": 72
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -1729,7 +1736,8 @@
           "satisfiesPzi": true
         }
       ]
-    }
+    },
+    "bodyBytes": 73683
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -3677,7 +3685,8 @@
           "etag": "\"CMfJjNYGEKiPycYD/cHJvamVjdHMvZmlyZWVtdS1vcmFjbGUtZXZlbnRzL2xvY2F0aW9ucy91cy1jZW50cmFsMS9zZXJ2aWNlcy9mc2NyZWF0ZWR2Mg\""
         }
       ]
-    }
+    },
+    "bodyBytes": 75543
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -4090,7 +4099,8 @@
           }
         }
       ]
-    }
+    },
+    "bodyBytes": 15298
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -4114,7 +4124,8 @@
       },
       "createTime": "2026-10-05T04:29:29.387151Z",
       "updateTime": "2026-10-05T04:29:29.387151Z"
-    }
+    },
+    "bodyBytes": 396
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -4129,7 +4140,8 @@
         "message": "Document \"projects/fireemu-oracle-events/databases/(default)/documents/fe_events_primary/e85d9c0ed4d118f6bacd57515f1\" not found.",
         "status": "NOT_FOUND"
       }
-    }
+    },
+    "bodyBytes": 213
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -4861,7 +4873,8 @@
           "receiveTimestamp": "2026-10-05T04:31:26.011196367Z"
         }
       ]
-    }
+    },
+    "bodyBytes": 80193
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -4870,7 +4883,8 @@
     "url": "https://cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-events/locations/us-central1/functions",
     "status": 200,
     "bytes": 3,
-    "body": {}
+    "body": {},
+    "bodyBytes": 3
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -4879,7 +4893,8 @@
     "url": "https://run.googleapis.com/v2/projects/fireemu-oracle-events/locations/us-central1/services",
     "status": 200,
     "bytes": 3,
-    "body": {}
+    "body": {},
+    "bodyBytes": 3
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -4888,7 +4903,8 @@
     "url": "https://eventarc.googleapis.com/v1/projects/fireemu-oracle-events/locations/us-central1/triggers",
     "status": 200,
     "bytes": 3,
-    "body": {}
+    "body": {},
+    "bodyBytes": 3
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -4897,7 +4913,8 @@
     "url": "https://firestore.googleapis.com/v1/projects/fireemu-oracle-events/databases/(default)/documents/fe_events_retry_markers/027bae6131763d8c169c55c13d88436b352fadd021764cc54c97032e768a3163",
     "status": 200,
     "bytes": 3,
-    "body": {}
+    "body": {},
+    "bodyBytes": 3
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",
@@ -4906,7 +4923,8 @@
     "url": "https://artifactregistry.googleapis.com/v1/projects/fireemu-oracle-events/locations/us-central1/repositories/gcf-artifacts/packages?pageSize=100",
     "status": 200,
     "bytes": 3,
-    "body": {}
+    "body": {},
+    "bodyBytes": 3
   },
   {
     "run": "functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702",

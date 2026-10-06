@@ -197,9 +197,17 @@ test("H recorder fails closed before cloud writes without frozen production shap
 });
 
 // This world verifies orchestration only; it is not production shape admission evidence.
-function hWorld({ partial = false, unknownDelete = false } = {}) {
+function hWorld({
+  partial = false,
+  unknownDelete = false,
+  pendingDelete = false,
+  cascadePresent = false,
+  observationUnknown = false,
+  enable = false,
+} = {}) {
   let clock = Date.parse("2026-10-06T00:00:00Z");
   let channel = false;
+  let publishingEnabled = !enable;
   let marker = false;
   let insert = 0;
   const functions = new Map();
@@ -257,11 +265,37 @@ function hWorld({ partial = false, unknownDelete = false } = {}) {
   const absent = () => ({ status: 404, body: { error: { code: 404, status: "NOT_FOUND" } } });
   const request = async (host, spec) => {
     calls.push({ host, ...spec });
-    if (host === "usage")
+    if (spec.op === "h.observeOnly" && observationUnknown)
+      return { status: 503, unknown: true, body: {} };
+    if (host === "usage") {
+      if (spec.method === "POST") return { status: 200, body: { name: "operations/enable" } };
+      if (spec.path.includes("operations/")) {
+        publishingEnabled = true;
+        return { status: 200, body: { name: "operations/enable", done: true, response: {} } };
+      }
       return {
         status: 200,
-        body: { state: "ENABLED", config: { name: spec.path.split("/").at(-1) } },
+        body: {
+          services: [
+            "artifactregistry",
+            "cloudbuild",
+            "cloudfunctions",
+            "cloudresourcemanager",
+            "eventarc",
+            "firestore",
+            "logging",
+            "pubsub",
+            "run",
+            "storage",
+            ...(publishingEnabled ? ["eventarcpublishing"] : []),
+          ].map((api) => ({
+            name: `projects/123456789012/services/${api}.googleapis.com`,
+            state: "ENABLED",
+            config: { name: `${api}.googleapis.com` },
+          })),
+        },
       };
+    }
     if (host === "logging") return { status: 200, body: { entries } };
     if (host === "firestore") {
       if (spec.path.endsWith("databases/(default)"))
@@ -277,13 +311,32 @@ function hWorld({ partial = false, unknownDelete = false } = {}) {
           }
         : absent();
     }
+    if (spec.path.includes("/topics?"))
+      return {
+        status: 200,
+        body: {
+          topics: [...functions.values()].map((f) => ({ name: trigger(f).transport.pubsub.topic })),
+        },
+      };
+    if (spec.path.includes("/subscriptions?"))
+      return {
+        status: 200,
+        body: {
+          subscriptions: [...functions.values()].map((f) => ({
+            name: trigger(f).transport.pubsub.subscription,
+          })),
+        },
+      };
     if (spec.path.endsWith("/functions"))
       return { status: 200, body: { functions: [...functions.values()] } };
     if (spec.path.endsWith("/services"))
       return {
         status: 200,
         body: {
-          services: [...functions.values()].map((f) => ({
+          services: [
+            ...functions.values(),
+            ...(cascadePresent && deleted.length ? [makeFunction(m.observe)] : []),
+          ].map((f) => ({
             name: f.serviceConfig.service,
             terminalCondition: { state: "CONDITION_SUCCEEDED" },
           })),
@@ -293,6 +346,17 @@ function hWorld({ partial = false, unknownDelete = false } = {}) {
       return { status: 200, body: { triggers: [...functions.values()].map(trigger) } };
     if (host === "functions") {
       const name = spec.path.split("/").at(-1);
+      if (spec.path.includes("/operations/"))
+        return {
+          status: 200,
+          body: {
+            name: spec.path.slice(4),
+            metadata: {
+              target: `${m.channel.replace("/channels/firebase", "/functions/")}${name.replace(/^delete-/, "")}`,
+            },
+            done: false,
+          },
+        };
       if (spec.method === "DELETE") {
         deleted.push(name);
         if (unknownDelete) return { status: 503, unknown: true, body: {} };
@@ -302,7 +366,7 @@ function hWorld({ partial = false, unknownDelete = false } = {}) {
           body: {
             name: `projects/${m.project}/locations/us-central1/operations/delete-${name}`,
             metadata: { target: spec.path.slice(4) },
-            done: true,
+            done: !pendingDelete,
           },
         };
       }
@@ -405,6 +469,7 @@ function hWorld({ partial = false, unknownDelete = false } = {}) {
       readiness: () => true,
       operation: () => true,
       notFound: (r) => r.status === 404,
+      a2ListRuling: true,
       cliWrites: (deployed) => ({
         complete: !partial,
         function: { state: "confirmed" },
@@ -524,12 +589,13 @@ test("H A2 cannot close opaque CLI writes or an unknown create, and enforces its
     note: () => {},
     evidence: {
       notFound: (r) => r.status === 404,
+      a2ListRuling: true,
       readiness: () => true,
       retention: async () => ({ complete: true, atBaseline: true }),
     },
     transports: {
       functions: {
-        request: async () => ({ status: 404, body: { error: { code: 404, status: "NOT_FOUND" } } }),
+        request: async () => ({ status: 200, body: {} }),
       },
     },
   };
@@ -596,12 +662,13 @@ test("H A2 keeps restoration and handler-evidence obligations separate from reso
     note: () => {},
     evidence: {
       notFound: (r) => r.status === 404,
+      a2ListRuling: true,
       readiness: () => true,
       retention: async () => ({ complete: true, atBaseline: true }),
     },
     transports: {
       functions: {
-        request: async () => ({ status: 404, body: { error: { status: "NOT_FOUND" } } }),
+        request: async () => ({ status: 200, body: {} }),
       },
     },
   };
@@ -723,4 +790,240 @@ test("H CLI kills a real SIGTERM-resistant child and the test reaps it on failur
       if (!closed) await new Promise((resolve) => child.once("close", resolve));
     }
   }
+});
+
+test("H R1 requires its own completed DELETE even when a fresh list omits the function", async () => {
+  const world = hWorld({ pendingDelete: true });
+  const result = await recordH(world.options);
+  assert.equal(result.closureReady, false);
+  assert.ok(
+    result.cleanup.unsettled.includes(
+      `projects/${m.project}/locations/us-central1/functions/${m.filtered}`,
+    ),
+  );
+  assert.equal(world.deleted.filter((name) => name === m.filtered).length, 1);
+});
+
+test("H R2 keeps a listed cascade open after its function settles", async () => {
+  const world = hWorld({ cascadePresent: true });
+  const result = await recordH(world.options);
+  assert.equal(result.closureReady, false);
+  assert.ok(
+    result.cleanup.unsettled.includes(
+      `projects/${m.project}/locations/us-central1/services/${m.observe.toLowerCase()}`,
+    ),
+  );
+  assert.equal(world.deleted.includes("firebase"), false);
+});
+
+test("H observeOnly GET failures settle nothing and do not block closure", async () => {
+  const world = hWorld({ observationUnknown: true });
+  const result = await recordH(world.options);
+  assert.equal(result.closureReady, true);
+  const reads = world.calls.filter((call) => call.op === "h.observeOnly");
+  assert.equal(reads.length, 15);
+  assert.ok(reads.every((call) => call.method === "GET"));
+});
+
+test("H enables publishing once between recorded complete service lists and never disables it", async () => {
+  const world = hWorld({ enable: true });
+  const notes = [];
+  world.options.note = (kind, value) => notes.push({ kind, value });
+  const result = await recordH(world.options);
+  assert.equal(result.closureReady, true);
+  const writes = world.calls.filter((call) => call.host === "usage" && call.method === "POST");
+  assert.equal(writes.length, 1);
+  assert.match(writes[0].path, /eventarcpublishing.googleapis.com:enable$/);
+  assert.deepEqual(writes[0].body, {});
+  assert.equal(
+    notes
+      .find((n) => n.kind === "h-enabled-services-before")
+      .value.some((s) => s.config.name === "eventarcpublishing.googleapis.com"),
+    false,
+  );
+  assert.equal(
+    notes
+      .find((n) => n.kind === "h-enabled-services-after")
+      .value.some((s) => s.config.name === "eventarcpublishing.googleapis.com"),
+    true,
+  );
+});
+
+test("H deploy 2 never runs after partial deploy 1 and complete lists drive cleanup", async () => {
+  const world = hWorld({ partial: true });
+  const result = await recordH(world.options);
+  assert.equal(
+    result.writes.filter((write) => write.kind === "function" && write.action === "create").length,
+    1,
+  );
+  for (const collection of ["functions", "services", "triggers", "topics", "subscriptions"])
+    assert.ok(
+      world.calls.some(
+        (call) =>
+          call.label?.case === "h-cleanup" &&
+          new URL(call.path, "https://offline.invalid").pathname.endsWith(`/${collection}`),
+      ),
+    );
+});
+
+test("H R4 requires a ledger ruling and complete fresh lists, and R3 rejects absent unknown creates", async () => {
+  const { hA2 } = await import("./eventarc-production/h-record.mjs");
+  const full = `projects/${m.project}/locations/us-central1/functions/${m.observe}`;
+  const recording = {
+    manifest: m,
+    lastRequestAt: 0,
+    writes: [
+      { name: full, host: "functions", action: "create", state: "confirmed" },
+      { name: full, host: "functions", action: "delete", state: "unknown" },
+    ],
+    identities: [],
+    cleanup: {},
+    evidence: { complete: true },
+    stopped: null,
+  };
+  let requests = 0;
+  const options = {
+    recording,
+    now: () => 600000,
+    note: () => {},
+    evidence: {
+      a2ListRuling: true,
+      readiness: () => true,
+      retention: async () => ({ complete: true, atBaseline: true }),
+    },
+    transports: {
+      functions: {
+        request: async (spec) => {
+          requests++;
+          assert.equal(spec.path, `/v2/projects/${m.project}/locations/us-central1/functions`);
+          return { status: 200, body: {} };
+        },
+      },
+    },
+  };
+  assert.equal((await hA2(options)).cleanupReady, true);
+  assert.equal(requests, 1);
+  assert.equal(
+    (await hA2({ ...options, evidence: { ...options.evidence, a2ListRuling: false } }))
+      .cleanupReady,
+    false,
+  );
+  for (const state of ["unknown", "pending"])
+    assert.equal(
+      (
+        await hA2({
+          ...options,
+          recording: { ...recording, writes: [{ ...recording.writes[0], state }] },
+        })
+      ).cleanupReady,
+      false,
+    );
+  for (const body of [{ functions: "bad" }, { nextPageToken: "never-exhausted" }])
+    assert.equal(
+      (
+        await hA2({
+          ...options,
+          transports: { functions: { request: async () => ({ status: 200, body }) } },
+        })
+      ).cleanupReady,
+      false,
+    );
+  await assert.rejects(hA2({ ...options, now: () => 599999 }), /ten minutes/);
+});
+
+test("H R2 A2 cannot close a cascade before its unknown function create settles", async () => {
+  const { hA2 } = await import("./eventarc-production/h-record.mjs");
+  const full = `projects/${m.project}/locations/us-central1/functions/${m.observe}`;
+  const service = `projects/${m.project}/locations/us-central1/services/owned`;
+  const result = await hA2({
+    recording: {
+      lastRequestAt: 0,
+      writes: [{ name: full, host: "functions", action: "create", state: "unknown" }],
+      identities: [{ function: full, service }],
+      cleanup: {},
+    },
+    now: () => 600000,
+    note: () => {},
+    evidence: {
+      a2ListRuling: true,
+      readiness: () => true,
+      retention: async () => ({ complete: true, atBaseline: true }),
+    },
+    transports: Object.fromEntries(
+      ["functions", "run"].map((host) => [
+        host,
+        { request: async () => ({ status: 200, body: {} }) },
+      ]),
+    ),
+  });
+  assert.equal(result.cleanupReady, false);
+  assert.equal(result.facts.find((f) => f.name === service).closed, false);
+});
+
+test("H R2 lists that omit children cannot settle them before a pending parent DELETE settles", async () => {
+  const world = hWorld({ pendingDelete: true });
+  const result = await recordH(world.options);
+  assert.equal(result.closureReady, false);
+  for (const identity of result.identities)
+    for (const name of [identity.service, identity.trigger, identity.topic, identity.subscription])
+      assert.ok(result.cleanup.unsettled.includes(name));
+});
+
+test("H closure remains false when the CLI never captured its own default channel CREATE", async () => {
+  const world = hWorld();
+  const cliWrites = world.options.evidence.cliWrites;
+  world.options.evidence.cliWrites = (...args) => ({ ...cliWrites(...args), resources: [] });
+  const result = await recordH(world.options);
+  assert.equal(result.stopped, null);
+  assert.equal(result.evidence.complete, true);
+  assert.ok(result.cleanup.unconfirmed.includes(m.channel));
+  assert.equal(result.closureReady, false);
+});
+
+test("H production judges receive native metadata from each concurrent REST response", async () => {
+  const { hProductionEvidence } = await import("./eventarc-production/h-production.mjs");
+  const records = JSON.parse(
+    readFileSync(
+      new URL("./eventarc-production/fixtures/h-fe/stage-c-replay.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const recorded = records.find((r) => r.sequence === 2);
+  const captured = [];
+  const transport = createHRest({
+    base: "http://offline.invalid",
+    capture: { record: (entry) => captured.push(entry) },
+    budget: createBudget(2),
+    fetchImpl: async (url) => {
+      const body = structuredClone(recorded.body);
+      if (url.endsWith("other")) body.error.message += " other";
+      const raw = `${JSON.stringify(body, null, 2)}\n`;
+      return new Response(raw, {
+        status: 404,
+        headers: { "content-length": String(Buffer.byteLength(raw)) },
+      });
+    },
+  });
+  const paths = [recorded.path, recorded.path.replace("firebase", "other")];
+  const replies = await Promise.all(
+    paths.map((path) => transport.request({ method: "GET", path })),
+  );
+  for (let i = 0; i < replies.length; i++) {
+    const reply = replies[i];
+    assert.equal(Buffer.from(reply.bodyBase64, "base64").length, reply.bodyBytes);
+    assert.ok(reply.bodySha256);
+    assert.equal(
+      hProductionEvidence.notFound(reply, { host: "eventarc", method: "GET", path: paths[i] }),
+      true,
+    );
+    assert.equal(
+      hProductionEvidence.notFound(
+        { ...reply, bodyBytes: 1 },
+        { host: "eventarc", method: "GET", path: paths[i] },
+      ),
+      false,
+    );
+  }
+  assert.notEqual(replies[0].bodyBytes, replies[1].bodyBytes);
+  assert.equal(captured.length, 2);
 });

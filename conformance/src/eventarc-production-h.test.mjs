@@ -478,3 +478,125 @@ test("H rejects an isolated run mismatch and retry timestamps beyond the window 
     false,
   );
 });
+
+test("H generates a fresh run ID and pins caller-supplied recording identities", () => {
+  const ids = new Set();
+  for (let i = 0; i < 128; i++) {
+    const current = hManifest({ project: "fireemu-oracle-events" });
+    assert.match(current.runId, /^[a-f0-9]{12}$/);
+    assert.equal(ids.has(current.runId), false);
+    ids.add(current.runId);
+    assert.equal(current.observe, `fe${current.runId}HObserve`);
+    assert.equal(current.markerCollection, `fe_h_${current.runId}`);
+    assert.equal(
+      hManifest({ project: current.project, runId: current.runId }).runId,
+      current.runId,
+    );
+  }
+});
+
+test("H pagination preserves recorded query fields, order and the phase meter", async () => {
+  const { hReadList } = await import("./eventarc-production/h-deploy.mjs");
+  for (let pages = 1; pages <= 5; pages++) {
+    let count = 0;
+    let meter = 0;
+    const result = await hReadList(
+      {
+        request: async (spec) => {
+          const url = new URL(spec.path, "https://offline.invalid");
+          assert.equal(url.searchParams.get("filter"), "state:ENABLED");
+          assert.equal(url.searchParams.get("pageSize"), "200");
+          assert.equal(url.searchParams.get("pageToken"), count ? `page ${count}` : null);
+          count++;
+          return {
+            status: 200,
+            body: {
+              services: [{ name: `item-${count}` }],
+              ...(count < pages ? { nextPageToken: `page ${count}` } : {}),
+            },
+          };
+        },
+      },
+      {
+        path: "/v1/projects/demo/services?filter=state:ENABLED&pageSize=200",
+        key: "services",
+        phase: "preflight",
+      },
+      () => meter++,
+    );
+    assert.equal(meter, pages);
+    assert.deepEqual(
+      result.map((item) => item.name),
+      Array.from({ length: pages }, (_, i) => `item-${i + 1}`),
+    );
+  }
+});
+
+test("H rejects recorded frame key order that differs from the native event", () => {
+  const bad = {
+    ...entry,
+    textPayload: `FE_EVENTS_FRAME ${JSON.stringify({ ...frame, eventKeys: Object.keys(event).toReversed() })}`,
+  };
+  assert.equal(
+    parseHEntries({ entries: [bad] }, { manifest, origins, readAt: "2026-10-06T00:00:02Z" })
+      .incomplete,
+    true,
+  );
+});
+
+test("H each observation stays incomplete when the capture is incomplete", () => {
+  const observation = {
+    case: "wrong-tenant",
+    candidates: [],
+    negativeHandlers: [manifest.filtered],
+    known: true,
+    status: 200,
+    before: true,
+    after: true,
+    sentAt: 0,
+    endedAt: 120000,
+  };
+  assert.equal(
+    judgeH({
+      manifest,
+      observations: [observation],
+      capture: { complete: false, finalRead: true, frames: [] },
+    }).observations[0].complete,
+    false,
+  );
+});
+
+test("H retry received after the window remains incomplete even with timely log timestamps", () => {
+  const subject = {
+    case: "retry",
+    candidates: [{ id: event.id, source: event.source }],
+    retryHandler: manifest.observe,
+    known: true,
+    status: 200,
+    before: true,
+    after: true,
+    sentAt: 0,
+    endedAt: 600000,
+    windowMs: 600000,
+  };
+  const frames = [
+    {
+      frame: { ...frame, attempt: "failed" },
+      logTimestamp: new Date(1).toISOString(),
+      readAt: new Date(2).toISOString(),
+    },
+    {
+      frame: { ...frame, invocationId: "attempt-2", attempt: "succeeded" },
+      logTimestamp: new Date(3).toISOString(),
+      readAt: new Date(600001).toISOString(),
+    },
+  ];
+  assert.equal(
+    judgeH({
+      manifest,
+      observations: [subject],
+      capture: { complete: true, finalRead: true, frames },
+    }).complete,
+    false,
+  );
+});

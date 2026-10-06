@@ -1,4 +1,5 @@
 import { baseAttributes, CE_TYPE } from "./cases/support.mjs";
+import { randomBytes } from "node:crypto";
 
 export const H_LIMITS = Object.freeze({
   preflight: 30,
@@ -9,7 +10,7 @@ export const H_LIMITS = Object.freeze({
   a2: 40,
 });
 
-export function hManifest({ project, runId }) {
+export function hManifest({ project, runId = randomBytes(6).toString("hex") }) {
   if (!/^[a-f0-9]{12}$/.test(runId) || !/^[a-z][a-z0-9-]{4,62}$/.test(project))
     throw new Error("invalid H project or run ID");
   return {

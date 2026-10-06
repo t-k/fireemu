@@ -4457,6 +4457,8 @@ impl LocalBackend {
             }
             SnapshotSelector::NewTransaction(options) => {
                 let transaction = self.new_transaction(parent, db, options, now)?;
+                db.touch_transaction(&transaction, now)
+                    .map_err(|error| status_from_error(&error))?;
                 let report = self.token(parent, &transaction);
                 Ok(SelectedSnapshot {
                     transaction: Some(transaction),

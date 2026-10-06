@@ -950,7 +950,7 @@ test("a wait that ran out after the target was removed with a cause is a final a
 // ---- the production recordings of L1, replayed ----
 
 const L1 = JSON.parse(
-  readFileSync(new URL("../fixtures/fs-listen/l1-production-rows.json", import.meta.url), "utf8"),
+  readFileSync(new URL("./fs-listen/data/l1-production-rows.json", import.meta.url), "utf8"),
 ).recordings;
 
 test("L1 production, native: the two recordings agree on every row once optional filters are set aside, and each is fit to compare", () => {
@@ -1063,7 +1063,7 @@ test("only an entry that opts in covers a local wait that ran out for an answer 
 
 test("the divergence registers name rows of the recorded production run, quote what both runs recorded and cite the runs or the official emulator", () => {
   const read = (name) =>
-    JSON.parse(readFileSync(new URL(`../fixtures/fs-listen/${name}`, import.meta.url), "utf8"));
+    JSON.parse(readFileSync(new URL(`./fs-listen/data/${name}`, import.meta.url), "utf8"));
   const strict = read("divergences-strict.json");
   const emulator = read("divergences-emulator.json");
   const rows = new Set(Object.keys(L1["native-1"].rows));
@@ -1308,13 +1308,10 @@ test("M1: a filter only one production run sent is optional; a local filter neit
 
 test("M2: a strict register entry can never cover a local hang or an empty local row", () => {
   const strict = JSON.parse(
-    readFileSync(new URL("../fixtures/fs-listen/divergences-strict.json", import.meta.url), "utf8"),
+    readFileSync(new URL("./fs-listen/data/divergences-strict.json", import.meta.url), "utf8"),
   );
   const emulator = JSON.parse(
-    readFileSync(
-      new URL("../fixtures/fs-listen/divergences-emulator.json", import.meta.url),
-      "utf8",
-    ),
+    readFileSync(new URL("./fs-listen/data/divergences-emulator.json", import.meta.url), "utf8"),
   );
   for (const [id, entry] of Object.entries(strict)) {
     assert.equal(typeof entry === "string" || entry.coversLocalTimeout !== true, true, id);

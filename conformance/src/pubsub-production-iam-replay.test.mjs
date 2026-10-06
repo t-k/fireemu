@@ -165,7 +165,10 @@ for (let offset = 0; offset < rows.length; offset += 3) {
     const current = { ...readback, response: { status: 200, body: requested } };
     const set = {
       ...written,
-      request: { ...written.request, body: { policy: { ...before, etag: requested.etag } } },
+      request: {
+        ...written.request,
+        body: { policy: { ...before, version: requested.version, etag: requested.etag } },
+      },
     };
     const replay = replayClient([current, set, readback]);
     assert.deepEqual(await manager.restore(replay.client), { restored: [resource], unsettled: [] });

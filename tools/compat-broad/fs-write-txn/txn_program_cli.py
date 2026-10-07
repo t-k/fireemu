@@ -42,7 +42,7 @@ def sha(raw):
 
 def table_for(name):
     if name == 'p17-admin-sdk-retry':
-        return {'name': name, 'program': 'FS-TRANSACTION-P17-ADMIN-SDK-RETRY', 'slug': 'txn-p17', 'documents': [f'{case}-{role}' for case in ('conflict', 'control', 'retry', 'retry-older') for role in ('a', 'b', 'c')], 'states': ['baseline', 'writer', 'transaction-baseline', 'transaction-writer'], 'steps': [], 'cases': ['conflict', 'control', 'retry', 'retry-older'], 'caps': {'observation': 88, 'tokenCleanup': 0, 'documentCleanup': 36, 'management': 6, 'credential': 1}, 'observationSeconds': 180, 'recoverySeconds': 120, 'maxTokens': 9, 'envelopeId': 'FS-TRANSACTION-p17-admin-sdk-retry-001', 'project': 'fireemu-oracle-txn', 'sourceFile': str(HERE / 'admin_sdk_retry.mjs')}
+        return {'name': name, 'program': 'FS-TRANSACTION-P17-ADMIN-SDK-RETRY', 'slug': 'txn-p17', 'documents': [f'{case}-{role}' for case in ('conflict', 'control', 'retry', 'retry-older') for role in ('a', 'b', 'c')], 'states': ['baseline', 'writer', 'transaction-baseline', 'transaction-writer'], 'steps': [], 'cases': ['conflict', 'control', 'retry', 'retry-older'], 'caps': {'observation': 88, 'tokenCleanup': 0, 'documentCleanup': 36, 'management': 6, 'credential': 1}, 'observationSeconds': 180, 'recoverySeconds': 120, 'maxTokens': 9, 'envelopeId': 'FS-TRANSACTION-p17-admin-sdk-retry-002', 'project': 'fireemu-oracle-txn', 'sourceFile': str(HERE / 'admin_sdk_retry.mjs')}
     if not isinstance(name, str) or name not in TABLES:
         raise ValueError('program table is not registered')
     table = importlib.import_module(TABLES[name]).TABLE

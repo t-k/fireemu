@@ -394,8 +394,11 @@ for (const outcome of ['writer-aborted', 'writer-late', 'older-retry', 'rollback
 }
 
 
-test('production SDK TLS auth and custom headers reach the loopback server exactly once', async () => {
+test('production SDK TLS auth and custom headers reach the loopback server exactly once', { timeout: 30_000 }, async () => {
   const { Firestore } = require('@google-cloud/firestore');
+  const { getApps, deleteApp } = require('firebase-admin/app');
+  const originalApps = new Set(getApps());
+  const clients = [];
   const { v1: { FirestoreClient } } = require('@google-cloud/firestore');
   const descriptor = new FirestoreClient({ projectId: 'demo-descriptors' });
   const fs = descriptor._protos.google.firestore.v1;
@@ -422,6 +425,7 @@ test('production SDK TLS auth and custom headers reach the loopback server exact
   const intercepted = [];
   let port;
   Firestore.prototype.settings = function (value) {
+    clients.push(this);
     headers = value.auth.getClient().then(client => client.getRequestHeaders());
     const transform = value['grpc.callInvocationTransformer'];
     return settings.call(this, { ...value, host: `127.0.0.1:${port}`, 'grpc.ssl_target_name_override': 'localhost',
@@ -452,5 +456,12 @@ test('production SDK TLS auth and custom headers reach the loopback server exact
     assert.equal((await headers).get('authorization'), 'Bearer offline-parent');
     assert.equal(receipt.sandboxRequests, 1);
     assert.equal(receipt.complete, false);
-  } finally { Firestore.prototype.settings = settings; grpc.credentials.createSsl = createSsl; server.forceShutdown(); await descriptor.close(); }
+  } finally {
+    Firestore.prototype.settings = settings;
+    grpc.credentials.createSsl = createSsl;
+    server.forceShutdown();
+    await Promise.all(clients.map(client => client.terminate()));
+    await Promise.all(getApps().filter(app => !originalApps.has(app)).map(app => deleteApp(app)));
+    await descriptor.close();
+  }
 });

@@ -2,6 +2,8 @@
 // Limits are local resource policies, not Firebase quotas. They count encoded
 // pending frames (including the stream's in-flight write), not process-wide RSS.
 import { performance } from 'node:perf_hooks';
+import timers from 'node:timers';
+const {setTimeout, clearTimeout} = timers;
 import { MAX_FRAME_BYTES } from './protocol.mjs';
 
 export const MAX_PENDING_BYTES = 32 * 1024 * 1024;

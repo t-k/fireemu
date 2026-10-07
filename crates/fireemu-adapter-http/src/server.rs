@@ -207,7 +207,7 @@ async fn respond(
                             }
                         }
                         Some(c) if control::is_control_path(&path) => {
-                            control::handle_with(c, &method, &path, &headers, &json)
+                            control::handle_async(c, &method, &path, &headers, &json).await
                         }
                         _ if crate::identity_toolkit::request_may_invoke_blocking_auth(
                             state.blocking.as_deref(),

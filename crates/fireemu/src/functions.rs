@@ -1469,6 +1469,7 @@ async fn supervise_codebase_reloads(
             &secret,
             callable_trusted_protocol,
             &resources.node_probe_cache,
+            runtime.clock_snapshot(),
         )
         .await
         {
@@ -2594,6 +2595,44 @@ fn default_runner_for_codebase(
     ])
 }
 
+fn launch_codebases(
+    cfg: &RuntimeConfig,
+    codebases: &[crate::config::FunctionsCodebase],
+    hosts: &EmulatorHosts,
+    runner_secret: &str,
+    callable_trusted_protocol: bool,
+    node_probe_cache: &Arc<NodeProbeCache>,
+    clock_snapshot: fireemu_core_session::clock::ClockSnapshot,
+) -> Vec<(
+    String,
+    tokio::task::JoinHandle<Result<fireemu_adapter_functions::runtime::CodebaseSpec, String>>,
+)> {
+    codebases
+        .iter()
+        .map(|codebase| {
+            let label = codebase.codebase.clone();
+            let cfg = (*cfg).clone();
+            let codebase = codebase.clone();
+            let hosts = hosts.clone();
+            let runner_secret = runner_secret.to_owned();
+            let node_probe_cache = node_probe_cache.clone();
+            let start = tokio::spawn(async move {
+                start_codebase(
+                    &cfg,
+                    &codebase,
+                    &hosts,
+                    &runner_secret,
+                    callable_trusted_protocol,
+                    &node_probe_cache,
+                    clock_snapshot,
+                )
+                .await
+            });
+            (label, start)
+        })
+        .collect()
+}
+
 /// Starts one runner process per configured codebase and the runtime that multiplexes them,
 /// and installs it as the backend's synchronous commit observer (Storage events are wired by
 /// the caller through [`storage_sink`]).
@@ -2606,6 +2645,8 @@ pub async fn start(
     runner_secret: &str,
     callable_trusted_protocol: bool,
 ) -> Result<Arc<FunctionsRuntime>, String> {
+    cfg.functions_clock
+        .bind(&mut *clock.lock().map_err(|_| "clock lock poisoned")?)?;
     let codebases = cfg.functions_to_load();
     if codebases.is_empty() {
         return Err("functions.source is not configured".to_owned());
@@ -2633,29 +2674,15 @@ pub async fn start(
     let node_probe_cache = Arc::new(NodeProbeCache::default());
     #[cfg(unix)]
     drop(schedule_orphan_function_snapshot_sweep(std::env::temp_dir()));
-    let starts = codebases
-        .iter()
-        .map(|codebase| {
-            let label = codebase.codebase.clone();
-            let cfg = (*cfg).clone();
-            let codebase = codebase.clone();
-            let hosts = hosts.clone();
-            let runner_secret = runner_secret.to_owned();
-            let node_probe_cache = node_probe_cache.clone();
-            let start = tokio::spawn(async move {
-                start_codebase(
-                    &cfg,
-                    &codebase,
-                    &hosts,
-                    &runner_secret,
-                    callable_trusted_protocol,
-                    &node_probe_cache,
-                )
-                .await
-            });
-            (label, start)
-        })
-        .collect();
+    let starts = launch_codebases(
+        cfg,
+        &codebases,
+        hosts,
+        runner_secret,
+        callable_trusted_protocol,
+        &node_probe_cache,
+        clock.lock().expect("clock lock").snapshot(),
+    );
     let outcomes = join_codebase_starts(starts).await;
     if let Some(error) = outcomes.iter().find_map(|outcome| outcome.as_ref().err()) {
         for spec in outcomes.iter().filter_map(|outcome| outcome.as_ref().ok()) {
@@ -2682,6 +2709,8 @@ pub async fn start(
         catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
             .unwrap_or_default(),
         functions_host: hosts.functions.clone(),
+        clock_policy: cfg.functions_clock,
+        clock_start_pinned: cfg.clock_start_pinned,
         subscription_naming: subscription_naming(cfg.profile),
         auth_context: auth_context_naming(cfg.profile),
     };
@@ -2797,6 +2826,7 @@ async fn start_codebase(
     runner_secret: &str,
     callable_trusted_protocol: bool,
     node_probe_cache: &Arc<NodeProbeCache>,
+    clock_snapshot: fireemu_core_session::clock::ClockSnapshot,
 ) -> Result<fireemu_adapter_functions::runtime::CodebaseSpec, String> {
     let source = codebase.source.clone();
     let label = &codebase.codebase;
@@ -2948,6 +2978,12 @@ async fn start_codebase(
             debug_features.to_owned(),
         ));
     }
+    env.push((
+        "FIREEMU_CLOCK_JSON".into(),
+        cfg.functions_clock
+            .runner_options(clock_snapshot)
+            .to_string(),
+    ));
     let spec = SpawnSpec {
         command,
         cwd: Some(source),
@@ -2959,6 +2995,22 @@ async fn start_codebase(
             .await
             .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?,
     );
+    if cfg.functions_clock.date_virtual {
+        let capability = runner.hello().clock.as_ref();
+        let supports = capability.is_some_and(|c| {
+            c["version"] == 1
+                && c["date"] == true
+                && (!cfg.functions_clock.timers_virtual || c["timers"] == true)
+        });
+        if !supports {
+            runner.kill_now();
+            return Err(format!("the Functions codebase {label:?}: runner does not support the requested virtual clock"));
+        }
+        if let Err(error) = runner.sync_clock(clock_snapshot).await {
+            runner.kill_now();
+            return Err(error);
+        }
+    }
     if cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some() {
         let actual = runner.hello().inspector_port;
         let port_matches = cfg
@@ -5029,6 +5081,18 @@ impl BlockingAuthBridge {
             };
         };
         self.require_selected_target(selection, &target)?;
+        let synchronize_date = self.runtime.application_clock_policy().date_virtual;
+        if synchronize_date {
+            let handle = tokio::runtime::Handle::try_current()
+                .map_err(|_| BlockingFunctionFailure::unhandled())?;
+            handle
+                .block_on(tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(admission_deadline),
+                    self.runtime.sync_blocking_auth_clock(&target),
+                ))
+                .map_err(|_| BlockingFunctionFailure::timeout())?
+                .map_err(|_| BlockingFunctionFailure::unhandled())?;
+        }
         let context = narrow_blocking_auth_credentials(
             context,
             self.forward_inbound_credentials,
@@ -5056,10 +5120,10 @@ impl BlockingAuthBridge {
         // The token the function's firebase-functions decodes into its event, as Identity
         // Platform and the official Auth emulator deliver it.
         let body = serde_json::json!({"data": {"jwt": unsigned_jwt(&claims)}}).to_string();
-        // The platform's deadline covers a cold start; a recovered runner is fireemu's cold start,
-        // so its call waits only for what is left of the deadline. An admitted runner keeps the
-        // whole deadline, and a function whose own timeout equals it still times out first.
-        let budget = if recovered {
+        // Recovery and virtual-clock acknowledgement share the platform's native deadline.
+        // A warm native-clock runner keeps its full budget; a function with an equal own
+        // timeout still times out before the platform envelope.
+        let budget = if recovered || synchronize_date {
             blocking_auth_remaining(admission_deadline)?
         } else {
             self.deadline
@@ -5321,6 +5385,25 @@ fn run_schedule_error(
 pub struct Hook(pub Arc<FunctionsRuntime>);
 
 impl FunctionsHook for Hook {
+    fn validate_clock_target(
+        &self,
+        instant: fireemu_core_types::time::LogicalInstant,
+    ) -> Result<(), String> {
+        self.0.validate_clock(instant)
+    }
+    fn sync_clock(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
+        Box::pin(self.0.sync_clock())
+    }
+    fn run_due(
+        &self,
+        budget: usize,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<serde_json::Value, String>> + Send + '_>,
+    > {
+        Box::pin(self.0.run_due(budget))
+    }
     fn on_clock_changed(&self) {
         self.0.on_clock_changed();
     }
@@ -7934,9 +8017,16 @@ mod tests {
                     functions_manifest: Some(manifest_path.display().to_string()),
                     ..crate::config::RuntimeConfig::default()
                 };
-                let started =
-                    super::start_codebase(&cfg, &codebase, &hosts, "test-secret", false, &cache)
-                        .await;
+                let started = super::start_codebase(
+                    &cfg,
+                    &codebase,
+                    &hosts,
+                    "test-secret",
+                    false,
+                    &cache,
+                    VirtualClock::new(cfg.clock_start).snapshot(),
+                )
+                .await;
                 if let (super::CompatibilityProfile::Strict, Some(text)) = (profile, refused_text) {
                     let error = started.err().unwrap();
                     assert!(error.contains(text), "{retry}: {error}");
@@ -8130,9 +8220,16 @@ mod tests {
                     functions_manifest: Some(manifest_path.display().to_string()),
                     ..crate::config::RuntimeConfig::default()
                 };
-                let started =
-                    super::start_codebase(&cfg, &codebase, &hosts, "test-secret", false, &cache)
-                        .await;
+                let started = super::start_codebase(
+                    &cfg,
+                    &codebase,
+                    &hosts,
+                    "test-secret",
+                    false,
+                    &cache,
+                    VirtualClock::new(cfg.clock_start).snapshot(),
+                )
+                .await;
                 if profile == CompatibilityProfile::Strict && name != "gr13" {
                     assert_eq!(
                         started.err().unwrap(),
@@ -8965,6 +9062,129 @@ mod tests {
 
         let value = result.expect("the first request waits for runner recovery");
         assert!(value.is_object());
+    }
+
+    fn virtual_date_fake_runner_spec(
+        snapshot: fireemu_core_session::clock::ClockSnapshot,
+    ) -> fireemu_adapter_functions::runner::SpawnSpec {
+        use fireemu_adapter_functions::application_clock::ApplicationClockPolicy;
+        use fireemu_adapter_functions::runner::SpawnSpec;
+        let policy = ApplicationClockPolicy {
+            date_virtual: true,
+            ..Default::default()
+        };
+        SpawnSpec {
+            command: vec![
+                "python3".to_owned(),
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../fireemu-adapter-functions/tests/fake_runner.py")
+                    .display()
+                    .to_string(),
+            ],
+            cwd: None,
+            env: vec![(
+                "FIREEMU_CLOCK_JSON".to_owned(),
+                policy.runner_options(snapshot).to_string(),
+            )],
+            hello_timeout: Duration::from_secs(60),
+        }
+    }
+
+    #[test]
+    fn blocking_auth_synchronizes_a_replacement_loaded_before_the_last_clock_ack() {
+        use fireemu_adapter_functions::application_clock::ApplicationClockPolicy;
+        use fireemu_adapter_functions::runner::Runner;
+        use fireemu_adapter_functions::runtime::{CodebaseSpec, FunctionsConfig, FunctionsRuntime};
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::{
+            BlockingAuthEvent, BlockingAuthTokenPolicy, Trigger,
+        };
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
+
+        let executor = tokio::runtime::Runtime::new().unwrap();
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let policy = ApplicationClockPolicy {
+            date_virtual: true,
+            ..Default::default()
+        };
+        let spec = virtual_date_fake_runner_spec(clock.lock().unwrap().snapshot());
+        let (initial, replacement, unrelated) = executor.block_on(async {
+            (
+                Arc::new(Runner::spawn_spec(&spec).await.unwrap()),
+                Arc::new(Runner::spawn_spec(&spec).await.unwrap()),
+                Arc::new(Runner::spawn_spec(&spec).await.unwrap()),
+            )
+        });
+        let mut manifest = parse_manifest(initial.hello().manifest.as_ref().unwrap()).unwrap();
+        let mut guard = manifest.get("echo").unwrap().clone();
+        guard.name = "clockGuard".to_owned();
+        guard.trigger = Trigger::BlockingAuth {
+            event: BlockingAuthEvent::BeforeCreate,
+            token_policy: BlockingAuthTokenPolicy::default(),
+        };
+        manifest.functions.push(guard);
+        // Construct outside an entered executor so the observer cannot mask admission sync.
+        let runtime = FunctionsRuntime::with_codebases(
+            vec![
+                CodebaseSpec {
+                    name: "default".to_owned(),
+                    manifest,
+                    runner: initial,
+                    spawn: Some(spec.clone()),
+                    cleanup_dir: None,
+                },
+                CodebaseSpec {
+                    name: "unrelated".to_owned(),
+                    manifest: fireemu_core_functions::manifest::FunctionManifest::default(),
+                    runner: unrelated.clone(),
+                    spawn: None,
+                    cleanup_dir: None,
+                },
+            ],
+            FunctionsConfig {
+                retry_attempts: 1,
+                clock_policy: policy,
+                ..FunctionsConfig::for_tests(1, "test-secret".to_owned())
+            },
+            clock.clone(),
+            fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+        )
+        .unwrap();
+        let delta = LogicalDuration::from_millis(1);
+        clock.lock().unwrap().advance(delta).unwrap();
+        let snapshot = clock.lock().unwrap().snapshot();
+        executor
+            .block_on(runtime.runner().sync_clock(snapshot))
+            .unwrap();
+        runtime
+            .reload_codebase(CodebaseSpec {
+                name: "default".to_owned(),
+                manifest: runtime.manifest().clone(),
+                runner: replacement,
+                spawn: Some(spec),
+                cleanup_dir: None,
+            })
+            .unwrap();
+        // A dead sibling with an old clock must not affect this admitted handler.
+        unrelated.kill_now();
+        let bridge = super::BlockingAuthBridge::new(runtime.clone());
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(NewUser::email("clock@example.test"), runtime.now())
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        let result = executor.block_on(async {
+            tokio::task::spawn_blocking(move || {
+                bridge.invoke(BlockingAuthEvent::BeforeCreate, &user)
+            })
+            .await
+            .unwrap()
+        });
+        executor.block_on(runtime.shutdown());
+        assert_eq!(result.unwrap()["clockNowMillis"], 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -10499,6 +10719,9 @@ mod tests {
                 overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
                 catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
                 functions_host: None,
+                clock_policy:
+                    fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
+                clock_start_pinned: false,
                 subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
                 ),
                 auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),

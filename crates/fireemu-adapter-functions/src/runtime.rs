@@ -278,6 +278,10 @@ pub struct FunctionsConfig {
     /// `defaultUri` is the function's public URL, so the runtime has to know its own address
     /// to build one and to recognise a task that named it explicitly.
     pub functions_host: Option<String>,
+    /// Explicit application-clock modes.
+    pub clock_policy: crate::application_clock::ApplicationClockPolicy,
+    /// Whether service timestamps use the configured daemon clock instead of wall time.
+    pub clock_start_pinned: bool,
     /// How the subscription of a Pub/Sub function is named (and which the events name): by profile.
     pub subscription_naming: crate::events::SubscriptionNaming,
     /// How the writer of a Firestore event with auth context is named: by profile.
@@ -300,6 +304,8 @@ impl FunctionsConfig {
             overlap: OverlapPolicy::Allow,
             catch_up: CatchUpPolicy::All,
             functions_host: None,
+            clock_policy: crate::application_clock::ApplicationClockPolicy::default(),
+            clock_start_pinned: false,
             subscription_naming: crate::events::SubscriptionNaming::default(),
             auth_context: crate::events::AuthContextNaming::default(),
         }
@@ -321,6 +327,8 @@ impl std::fmt::Debug for FunctionsConfig {
             .field("overlap", &self.overlap)
             .field("catch_up", &self.catch_up)
             .field("functions_host", &self.functions_host)
+            .field("clock_policy", &self.clock_policy)
+            .field("clock_start_pinned", &self.clock_start_pinned)
             .field("subscription_naming", &self.subscription_naming)
             .field("auth_context", &self.auth_context)
             .finish()
@@ -994,6 +1002,23 @@ impl RestartBudget {
 }
 
 impl Codebase {
+    fn from_spec(spec: CodebaseSpec) -> Self {
+        Self {
+            name: spec.name,
+            manifest: spec.manifest,
+            restart_gate: Arc::new(AsyncMutex::new(())),
+            restart_budget: Mutex::new(RestartBudget::default()),
+            restart_wake_scheduled: std::sync::atomic::AtomicBool::new(false),
+            generation: std::sync::RwLock::new(CodebaseGeneration {
+                revision: 0,
+                runner: spec.runner,
+                spawn: spec.spawn,
+                cleanup_dir: CodebaseGeneration::cleanup(spec.cleanup_dir),
+                blocking_restart_ticket: None,
+            }),
+        }
+    }
+
     fn exhaust_restart_budget(&self) {
         if let Ok(mut budget) = self.restart_budget.lock() {
             if budget
@@ -1121,15 +1146,19 @@ pub struct FunctionsRuntime {
     schedule_publisher: std::sync::RwLock<Option<Arc<dyn ScheduleTopicPublisher>>>,
     /// The union of every codebase's manifest.
     manifest: FunctionManifest,
-    config: FunctionsConfig,
+    pub(crate) config: FunctionsConfig,
     profile: FunctionsHttpProfile,
     clock: Arc<Mutex<VirtualClock>>,
+    _clock_observer: Arc<fireemu_core_session::clock::ClockObserver>,
+    task_clock_wake: Notify,
     /// The codebases, in configuration order.
     codebases: Vec<Codebase>,
     /// Function name to its codebase's index in `codebases`.
     owner: BTreeMap<String, usize>,
     /// Live Eventarc registrations, linearized with publication and source reload.
     eventarc_registry: Mutex<crate::eventarc::TriggerRegistry>,
+    /// Serialize schedule batches while Gen1 publication temporarily releases `inner`.
+    schedule_sweep: Mutex<()>,
     inner: Mutex<Inner>,
     /// Only active Cloud Tasks dispatches own Tokio tasks. Reset and shutdown replace this set,
     /// which aborts every old-generation attempt and its retry timer.
@@ -1182,11 +1211,12 @@ impl Drop for TaskCompletion {
             return;
         };
         let finished = runtime.inner.lock().is_ok_and(|mut inner| {
-            inner.task_scheduler.finish_with_outcome(
+            inner.task_scheduler.finish_with_outcome_at(
                 &self.queue,
                 self.id,
                 self.generation,
                 self.failed,
+                runtime.task_now(),
             )
         });
         if finished {
@@ -1303,6 +1333,10 @@ impl FunctionsRuntime {
         eventarc_registry: crate::eventarc::TriggerRegistry,
         profile: FunctionsHttpProfile,
     ) -> Arc<Self> {
+        config
+            .clock_policy
+            .bind(&mut clock.lock().expect("clock lock"))
+            .expect("validated clock policy");
         let now = clock
             .lock()
             .map(|c| c.now())
@@ -1352,34 +1386,30 @@ impl FunctionsRuntime {
             )
             .expect("a single attempt is a valid policy")
         });
-        let task_scheduler = crate::task_scheduler::TaskScheduler::from_manifest(
-            &manifest,
-            std::time::Instant::now(),
-        );
-        Arc::new(Self {
+        let initial = clock.lock().expect("clock lock").snapshot();
+        let task_start = if config.clock_policy.tasks_virtual {
+            crate::task_scheduler::TaskTime::Virtual(initial.elapsed_nanos)
+        } else {
+            std::time::Instant::now().into()
+        };
+        let task_scheduler =
+            crate::task_scheduler::TaskScheduler::from_manifest(&manifest, task_start);
+        let (updates, receiver) = tokio::sync::watch::channel(initial);
+        let observer: Arc<fireemu_core_session::clock::ClockObserver> = Arc::new(move |snapshot| {
+            updates.send_replace(snapshot);
+        });
+        clock.lock().expect("clock lock").observe(&observer);
+        let runtime = Arc::new(Self {
+            _clock_observer: observer,
+            task_clock_wake: Notify::new(),
             manifest,
             config,
             profile,
             clock,
-            codebases: codebases
-                .into_iter()
-                .map(|c| Codebase {
-                    name: c.name,
-                    manifest: c.manifest,
-                    restart_gate: Arc::new(AsyncMutex::new(())),
-                    restart_budget: Mutex::new(RestartBudget::default()),
-                    restart_wake_scheduled: std::sync::atomic::AtomicBool::new(false),
-                    generation: std::sync::RwLock::new(CodebaseGeneration {
-                        revision: 0,
-                        runner: c.runner,
-                        spawn: c.spawn,
-                        cleanup_dir: CodebaseGeneration::cleanup(c.cleanup_dir),
-                        blocking_restart_ticket: None,
-                    }),
-                })
-                .collect(),
+            codebases: codebases.into_iter().map(Codebase::from_spec).collect(),
             owner,
             eventarc_registry: Mutex::new(eventarc_registry),
+            schedule_sweep: Mutex::new(()),
             inner: Mutex::new(Inner {
                 task_scheduler,
                 next_task: 0,
@@ -1420,7 +1450,149 @@ impl FunctionsRuntime {
             trigger_generation: std::sync::atomic::AtomicU64::new(0),
             shutting_down: std::sync::atomic::AtomicBool::new(false),
             dispatch_stopping: std::sync::atomic::AtomicBool::new(false),
-        })
+        });
+        runtime.start_clock_observer(receiver);
+        runtime
+    }
+
+    fn start_clock_observer(
+        self: &Arc<Self>,
+        mut receiver: tokio::sync::watch::Receiver<fireemu_core_session::clock::ClockSnapshot>,
+    ) {
+        let weak = Arc::downgrade(self);
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                while receiver.changed().await.is_ok() {
+                    let Some(runtime) = weak.upgrade() else {
+                        break;
+                    };
+                    runtime.task_clock_wake.notify_waiters();
+                    runtime.wake.notify_one();
+                    if let Err(error) = runtime.sync_clock().await {
+                        eprintln!("[functions] {error}");
+                    }
+                }
+            });
+        }
+    }
+
+    fn task_now(&self) -> crate::task_scheduler::TaskTime {
+        if self.config.clock_policy.tasks_virtual {
+            crate::task_scheduler::TaskTime::Virtual(self.clock_snapshot().elapsed_nanos)
+        } else {
+            std::time::Instant::now().into()
+        }
+    }
+
+    fn task_epoch_millis(&self) -> u64 {
+        if self.config.clock_policy.tasks_virtual {
+            u64::try_from(
+                self.clock_snapshot()
+                    .instant
+                    .as_nanos()
+                    .div_euclid(1_000_000),
+            )
+            .unwrap_or(0)
+        } else {
+            epoch_millis()
+        }
+    }
+
+    async fn wait_task_until(&self, deadline: crate::task_scheduler::TaskTime) {
+        if let crate::task_scheduler::TaskTime::Real(instant) = deadline {
+            tokio::time::sleep_until(tokio::time::Instant::from_std(instant)).await;
+            return;
+        }
+        loop {
+            let changed = self.task_clock_wake.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if self.task_now() >= deadline {
+                return;
+            }
+            changed.await;
+        }
+    }
+
+    /// Current state used for initialization and generation-scoped synchronization.
+    #[must_use]
+    pub fn clock_snapshot(&self) -> fireemu_core_session::clock::ClockSnapshot {
+        self.clock.lock().expect("clock lock").snapshot()
+    }
+
+    /// Check Date representability before mutating the daemon clock.
+    pub fn validate_clock(&self, instant: LogicalInstant) -> Result<(), String> {
+        self.config.clock_policy.validate(instant)
+    }
+
+    async fn sync_runner_clock(&self, runner: &Runner) -> Result<(), String> {
+        if self.config.clock_policy.date_virtual {
+            runner.sync_clock(self.clock_snapshot()).await?;
+        }
+        Ok(())
+    }
+
+    /// Synchronize only the exact runner generation reserved by Blocking Auth admission.
+    pub async fn sync_blocking_auth_clock(
+        &self,
+        target: &BlockingAuthTarget,
+    ) -> Result<(), String> {
+        self.sync_runner_clock(&target.runner).await
+    }
+
+    /// Application time choices used by synchronous native invocation bridges.
+    #[must_use]
+    pub const fn application_clock_policy(
+        &self,
+    ) -> crate::application_clock::ApplicationClockPolicy {
+        self.config.clock_policy
+    }
+
+    /// Acknowledge the latest clock in each still-current runner generation.
+    pub async fn sync_clock(&self) -> Result<(), String> {
+        if !self.config.clock_policy.date_virtual {
+            return Ok(());
+        }
+        loop {
+            let snapshot = self.clock_snapshot();
+            let runners: Vec<_> = self
+                .codebases
+                .iter()
+                .map(|c| {
+                    let generation = c.generation();
+                    (generation.revision, generation.runner.clone())
+                })
+                .collect();
+            for (_, runner) in &runners {
+                runner.sync_clock(snapshot).await?;
+            }
+            if self.clock_snapshot().revision == snapshot.revision
+                && self
+                    .codebases
+                    .iter()
+                    .zip(&runners)
+                    .all(|(c, (revision, runner))| {
+                        let generation = c.generation();
+                        generation.revision == *revision && Arc::ptr_eq(&generation.runner, runner)
+                    })
+            {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Drain a bounded timer batch separately from daemon event idleness.
+    pub async fn run_due(&self, budget: usize) -> Result<Value, String> {
+        if !self.config.clock_policy.timers_virtual {
+            return Err("virtual application timers are disabled".into());
+        }
+        self.sync_clock().await?;
+        let mut reports = Vec::new();
+        for codebase in &self.codebases {
+            let runner = codebase.generation().runner.clone();
+            reports.push(json!({"codebase":codebase.name,"timers":runner.run_due(budget).await?}));
+        }
+        Ok(json!({"codebases":reports}))
     }
 
     /// The manifest.
@@ -1533,7 +1705,7 @@ impl FunctionsRuntime {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Ok(mut inner) = self.inner.lock() {
-                inner.task_scheduler.close(std::time::Instant::now());
+                inner.task_scheduler.close(self.task_now());
             }
             std::mem::take(&mut *attempts)
         };
@@ -2548,7 +2720,18 @@ impl FunctionsRuntime {
             inner.next_task += 1;
             inner.next_task
         };
-        let task = crate::tasks::accept(project, location, queue, &default_uri, body, next_id)?;
+        let mut task = crate::tasks::accept(project, location, queue, &default_uri, body, next_id)?;
+        if self.config.clock_policy.tasks_virtual {
+            if let Some(text) = task.schedule_time.as_deref() {
+                LogicalInstant::parse_rfc3339(text)
+                    .map_err(|_| refuse(400, "scheduleTime must be RFC 3339"))?;
+            } else {
+                task.schedule_time =
+                    Some(self.clock_snapshot().instant.to_rfc3339().map_err(|_| {
+                        refuse(400, "clock instant cannot be represented as scheduleTime")
+                    })?);
+            }
+        }
         // A task may name its own URL (`opts.uri`). Only this emulator's own function URLs
         // are accepted: the official emulator will POST a task to any address, and a local
         // emulator that makes an arbitrary outbound request on a caller's say-so is a
@@ -2575,7 +2758,7 @@ impl FunctionsRuntime {
             .lock()
             .map_err(|_| refuse(500, "runtime poisoned"))?
             .task_scheduler
-            .enqueue(queue, task.clone(), retry, retained_bytes);
+            .enqueue_at(queue, task.clone(), retry, retained_bytes, self.task_now());
         match admission {
             Ok(()) => {}
             Err(AdmissionError::Duplicate | AdmissionError::QueueFull) => {
@@ -2613,10 +2796,8 @@ impl FunctionsRuntime {
 
     /// Delivers one task, retrying on the official schedule until it succeeds or runs out.
     ///
-    /// Backoff is real time, as it is upstream: the default unit is 100 ms, so three attempts
-    /// cost 300 ms rather than a clock advance. That is the one place in this runtime where a
-    /// wait is not on the virtual clock, and it is deliberate -- a task queue's retry policy
-    /// is a wall-clock policy in production too.
+    /// Backoff follows the explicit task-clock policy. Request and shutdown deadlines always
+    /// use native time so a pinned test clock cannot strand transport or process cleanup.
     async fn dispatch_task(
         self: &Arc<Self>,
         dispatch: &crate::task_scheduler::Dispatch,
@@ -2634,7 +2815,7 @@ impl FunctionsRuntime {
                 return false;
             }
             if started.is_some_and(|first_delivery| {
-                task_retry_exhausted(first_delivery, dispatch.retry, attempt)
+                task_retry_exhausted(first_delivery, dispatch.retry, attempt, self.task_now())
             }) {
                 eprintln!(
                     "[functions] task {:?} gave up after {} attempt(s)",
@@ -2658,7 +2839,7 @@ impl FunctionsRuntime {
                 attempt,
                 execution_count,
                 previous,
-                epoch_millis(),
+                self.task_epoch_millis(),
             );
             // The runner's HTTP server routes on the public path, and strips it before the
             // handler sees the request, so the dispatch carries the function's own URL path
@@ -2667,7 +2848,7 @@ impl FunctionsRuntime {
                 "/{}/{}/{}",
                 dispatch.project, dispatch.region, dispatch.function
             );
-            let attempt_started = std::time::Instant::now();
+            let attempt_started = self.task_now();
             let outcome = tokio::time::timeout(
                 Duration::from_secs(task.dispatch_deadline_seconds),
                 self.invoke_task_http(&target, &path, &headers, &body),
@@ -2709,7 +2890,7 @@ impl FunctionsRuntime {
                 previous = Some(status);
             }
             attempt += 1;
-            if task_retry_exhausted(first_delivery, dispatch.retry, attempt) {
+            if task_retry_exhausted(first_delivery, dispatch.retry, attempt, self.task_now()) {
                 eprintln!(
                     "[functions] task {:?} gave up after {} attempt(s)",
                     task.name,
@@ -2717,11 +2898,13 @@ impl FunctionsRuntime {
                 );
                 return true;
             }
-            tokio::time::sleep(Duration::from_millis(
-                dispatch.retry.backoff_millis(attempt),
-            ))
-            .await;
+            let backoff = Duration::from_millis(dispatch.retry.backoff_millis(attempt));
             let retry_deadline = task_retry_deadline(first_delivery, dispatch.retry, attempt);
+            let backoff_deadline = self.task_now() + backoff;
+            self.wait_task_until(
+                retry_deadline.map_or(backoff_deadline, |expiry| expiry.min(backoff_deadline)),
+            )
+            .await;
             if !self.wait_for_task_token(dispatch, retry_deadline).await {
                 return true;
             }
@@ -2731,14 +2914,14 @@ impl FunctionsRuntime {
     async fn wait_for_task_token(
         &self,
         dispatch: &crate::task_scheduler::Dispatch,
-        retry_deadline: Option<std::time::Instant>,
+        retry_deadline: Option<crate::task_scheduler::TaskTime>,
     ) -> bool {
         loop {
             let decision = {
                 let Ok(mut inner) = self.inner.lock() else {
                     return false;
                 };
-                let now = std::time::Instant::now();
+                let now = self.task_now();
                 if retry_deadline.is_some_and(|deadline| now > deadline) {
                     return false;
                 }
@@ -2754,7 +2937,12 @@ impl FunctionsRuntime {
                 crate::task_scheduler::RetryToken::Gone => return false,
                 crate::task_scheduler::RetryToken::WaitUntil(deadline) => {
                     let deadline = retry_deadline.map_or(deadline, |expiry| expiry.min(deadline));
-                    tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+                    // Equality remains eligible if a token was available, but an expired
+                    // token wait cannot make progress at a pinned clock.
+                    if self.task_now() >= deadline {
+                        return false;
+                    }
+                    self.wait_task_until(deadline).await;
                 }
             }
         }
@@ -3023,6 +3211,12 @@ impl FunctionsRuntime {
     /// change, carrying a count that is exact up to the cap and "at least" beyond it.
     #[allow(clippy::too_many_lines)]
     pub fn on_clock_changed(self: &Arc<Self>) {
+        self.task_clock_wake.notify_waiters();
+        self.wake.notify_one();
+        let _sweep = self
+            .schedule_sweep
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = self.now();
         let Ok(mut inner) = self.inner.lock() else {
             return;
@@ -3490,7 +3684,7 @@ impl FunctionsRuntime {
                 inner.catch_up_pending = false;
                 inner.schedule_recheck_pending = false;
                 // A task accepted before the reset must not reach the new session's handlers.
-                inner.task_scheduler.reset(std::time::Instant::now());
+                inner.task_scheduler.reset(self.task_now());
                 for job in &mut inner.jobs {
                     job.cursor = now;
                 }
@@ -3651,6 +3845,19 @@ impl FunctionsRuntime {
         }
     }
 
+    fn clock_spawn_spec(&self, spec: &SpawnSpec) -> SpawnSpec {
+        let mut spawn = spec.clone();
+        spawn.env.retain(|(key, _)| key != "FIREEMU_CLOCK_JSON");
+        spawn.env.push((
+            "FIREEMU_CLOCK_JSON".into(),
+            self.config
+                .clock_policy
+                .runner_options(self.clock_snapshot())
+                .to_string(),
+        ));
+        spawn
+    }
+
     async fn recover_dead_runner_locked(
         self: &Arc<Self>,
         index: usize,
@@ -3718,7 +3925,8 @@ impl FunctionsRuntime {
                 return Err("runner recovery was superseded".to_owned());
             }
             let _source_generation = respawn.cleanup_dir.clone();
-            let runner = match Runner::spawn_spec(spawn).await {
+            let spawn = self.clock_spawn_spec(spawn);
+            let runner = match Runner::spawn_spec(&spawn).await {
                 Ok(runner) => Arc::new(runner),
                 Err(error) => {
                     eprintln!("[functions] runner restart attempt failed: {error}");
@@ -3758,9 +3966,11 @@ impl FunctionsRuntime {
             .ok_or_else(|| format!("function {} has no codebase owner", target.function))?;
         let current = self.runner_at(index);
         if current.is_alive() && target.origin_runner.ptr_eq(&Arc::downgrade(&current)) {
+            self.sync_runner_clock(&current).await?;
             return Ok(target.addr.clone());
         }
         let runner = self.recover_dead_runner(index).await?;
+        self.sync_runner_clock(&runner).await?;
         let port = runner
             .hello()
             .http_port
@@ -4083,11 +4293,11 @@ impl FunctionsRuntime {
         let Ok(mut inner) = self.inner.lock() else {
             return json!({});
         };
-        inner
-            .task_scheduler
-            .statistics(&self.config.project, |function| {
-                self.manifest.get(function).map(|spec| spec.region.clone())
-            })
+        inner.task_scheduler.statistics_at(
+            &self.config.project,
+            |function| self.manifest.get(function).map(|spec| spec.region.clone()),
+            self.task_now(),
+        )
     }
 
     /// Waits until the runtime is idle or `timeout` (real time) elapses.
@@ -4830,7 +5040,11 @@ impl FunctionsRuntime {
             match action {
                 FaultAction::Delay { seconds } => {
                     if let Ok(mut clock) = self.clock.lock() {
-                        let _ = clock.advance(LogicalDuration::from_seconds(seconds.max(0)));
+                        if let Err(error) =
+                            clock.advance(LogicalDuration::from_seconds(seconds.max(0)))
+                        {
+                            return Some(Err(error.to_string()));
+                        }
                     }
                     self.on_clock_changed();
                 }
@@ -4890,7 +5104,7 @@ impl FunctionsRuntime {
                 Some(deadline) => {
                     tokio::select! {
                         () = &mut wake => {}
-                        () = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => {}
+                        () = self.wait_task_until(deadline) => {}
                     }
                 }
                 None => wake.await,
@@ -4900,7 +5114,7 @@ impl FunctionsRuntime {
 
     /// Moves ready Cloud Tasks from their bounded FIFOs into active dispatch slots. Only an
     /// active slot owns a Tokio task; pending bodies remain plain queue entries.
-    fn dispatch_tasks_ready(self: &Arc<Self>) -> Option<std::time::Instant> {
+    fn dispatch_tasks_ready(self: &Arc<Self>) -> Option<crate::task_scheduler::TaskTime> {
         if self
             .dispatch_stopping
             .load(std::sync::atomic::Ordering::SeqCst)
@@ -4934,8 +5148,12 @@ impl FunctionsRuntime {
             let occupied = inner.running.len().max(inner.task_scheduler.active());
             let room = self.config.max_running.saturating_sub(occupied);
             let epoch = inner.epoch;
-            let (dispatches, next_wake) = inner.task_scheduler.dispatch_ready(
-                std::time::Instant::now(),
+            let (dispatches, next_wake) = inner.task_scheduler.dispatch_ready_at(
+                self.task_now(),
+                self.config
+                    .clock_policy
+                    .tasks_virtual
+                    .then(|| self.clock_snapshot().instant.as_nanos()),
                 &self.config.project,
                 |function| {
                     let spec = self.manifest.get(function)?;
@@ -5080,6 +5298,9 @@ impl FunctionsRuntime {
                 self.crash_and_respawn(index, generation);
             }
             tokio::spawn(async move {
+                let clock_error = runtime.sync_runner_clock(&runner).await.err();
+                let fault_outcome = fault_outcome
+                    .or_else(|| clock_error.map(|error| (InvokeOutcome::Failed(error), retry)));
                 let Invocation { outcome, late } = match fault_outcome {
                     Some((outcome, retry_override)) => {
                         runtime.complete(
@@ -5414,10 +5635,10 @@ fn log_http_timeout(timeout: u64) {
 }
 
 fn task_retry_deadline(
-    first_delivery: std::time::Instant,
+    first_delivery: crate::task_scheduler::TaskTime,
     retry: fireemu_core_functions::manifest::TaskRetryConfig,
     attempt: u32,
-) -> Option<std::time::Instant> {
+) -> Option<crate::task_scheduler::TaskTime> {
     (attempt > retry.max_attempts)
         .then_some(retry.max_retry_millis)
         .flatten()
@@ -5426,13 +5647,14 @@ fn task_retry_deadline(
 }
 
 fn task_retry_exhausted(
-    first_delivery: std::time::Instant,
+    first_delivery: crate::task_scheduler::TaskTime,
     retry: fireemu_core_functions::manifest::TaskRetryConfig,
     attempt: u32,
+    now: crate::task_scheduler::TaskTime,
 ) -> bool {
     #[allow(clippy::cast_possible_truncation)]
-    let elapsed = first_delivery
-        .elapsed()
+    let elapsed = now
+        .saturating_duration_since(first_delivery)
         .as_millis()
         .min(u128::from(u64::MAX)) as u64;
     retry.exhausted(attempt, elapsed)
@@ -7765,6 +7987,155 @@ mod schedule_capacity_tests {
         recorder.0.lock().unwrap().clone()
     }
 
+    #[tokio::test]
+    async fn concurrent_virtual_schedule_sweeps_preserve_the_catch_up_cap_and_order() {
+        struct BlockedPublisher {
+            entered: std::sync::mpsc::Sender<()>,
+            release: Mutex<std::sync::mpsc::Receiver<()>>,
+            first: std::sync::atomic::AtomicBool,
+            recorder: Recorder,
+        }
+        impl super::ScheduleTopicPublisher for BlockedPublisher {
+            fn publish(&self, topic: &str, id: &str, at: LogicalInstant) -> Result<(), String> {
+                if self.first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    self.entered.send(()).unwrap();
+                    self.release
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(10))
+                        .unwrap();
+                }
+                self.recorder.publish(topic, id, at)
+            }
+        }
+        let spec = SpawnSpec {
+            command: vec![
+                "python3".into(),
+                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").into(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(60),
+        };
+        let runner = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "tick", "generation": 1, "trigger": {"type": "schedule", "schedule": "every 1 minutes"}}
+        ]})).unwrap();
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(START),
+        )));
+        let runtime = FunctionsRuntime::with_codebases(
+            vec![super::CodebaseSpec {
+                name: "default".into(),
+                manifest,
+                runner,
+                spawn: Some(spec),
+                cleanup_dir: None,
+            }],
+            FunctionsConfig {
+                clock_policy: crate::application_clock::ApplicationClockPolicy {
+                    date_virtual: true,
+                    ..Default::default()
+                },
+                ..FunctionsConfig::for_tests(5, "s".into())
+            },
+            clock.clone(),
+            crate::http::FunctionsHttpProfile::Strict,
+        )
+        .unwrap();
+        let (entered, waiting) = std::sync::mpsc::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let publisher = Arc::new(BlockedPublisher {
+            entered,
+            release: Mutex::new(blocked),
+            first: std::sync::atomic::AtomicBool::new(true),
+            recorder: Recorder::default(),
+        });
+        runtime.set_schedule_topic_publisher(publisher.clone());
+        advance(&clock, 600);
+        let producing = runtime.clone();
+        let first = std::thread::spawn(move || producing.on_clock_changed());
+        waiting.recv_timeout(Duration::from_secs(10)).unwrap();
+        let producing = runtime.clone();
+        let (finished, done) = std::sync::mpsc::channel();
+        let second = std::thread::spawn(move || {
+            producing.on_clock_changed();
+            finished.send(()).unwrap();
+        });
+        let overlapped = done.recv_timeout(Duration::from_millis(500)).is_ok();
+        release.send(()).unwrap();
+        first.join().unwrap();
+        second.join().unwrap();
+        let times: Vec<_> = recorded(&publisher.recorder)
+            .iter()
+            .map(|row| row.2)
+            .collect();
+        let expected: Vec<_> = (1..=5)
+            .map(|minute| LogicalInstant::from_unix_seconds(START + minute * 60))
+            .collect();
+        let queued = admitted(&runtime);
+        finish(&runtime).await;
+        assert!(
+            !overlapped,
+            "the second sweep must wait for the first publication batch"
+        );
+        assert_eq!(
+            times, expected,
+            "exactly five ordered occurrences, without duplicates"
+        );
+        assert_eq!(queued.len(), 5);
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config { cases: 16, failure_persistence: None, ..Default::default() })]
+        #[test]
+        fn concurrent_virtual_schedule_sweeps_never_duplicate_or_reorder_occurrences(
+            advances in proptest::collection::vec(0i64..=900, 1..12),
+        ) {
+            let tokio = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            tokio.block_on(async {
+                let spec = SpawnSpec {
+                    command: vec!["python3".into(), concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").into()],
+                    cwd: None, env: Vec::new(), hello_timeout: Duration::from_secs(60),
+                };
+                let runner = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+                let manifest = parse_manifest(&json!({"functions": [
+                    {"name": "tick", "generation": 1, "trigger": {"type": "schedule", "schedule": "every 1 minutes"}}
+                ]})).unwrap();
+                let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_unix_seconds(START))));
+                let runtime = FunctionsRuntime::with_codebases(
+                    vec![super::CodebaseSpec { name: "default".into(), manifest, runner, spawn: Some(spec), cleanup_dir: None }],
+                    FunctionsConfig {
+                        clock_policy: crate::application_clock::ApplicationClockPolicy { date_virtual: true, ..Default::default() },
+                        ..FunctionsConfig::for_tests(5, "s".into())
+                    }, clock.clone(), crate::http::FunctionsHttpProfile::Strict,
+                ).unwrap();
+                let publisher = Arc::new(Recorder::default());
+                runtime.set_schedule_topic_publisher(publisher.clone());
+                let mut end = START;
+                for seconds in advances {
+                    advance(&clock, seconds);
+                    end += seconds;
+                    loop {
+                        std::thread::scope(|scope| {
+                            scope.spawn(|| runtime.on_clock_changed());
+                            scope.spawn(|| runtime.on_clock_changed());
+                        });
+                        let more = pending(&runtime);
+                        runtime.inner.lock().unwrap().payloads.clear();
+                        if !more { break; }
+                    }
+                }
+                let actual: Vec<_> = recorded(&publisher).iter().map(|row| row.2.as_nanos()).collect();
+                let expected: Vec<_> = (START / 60 + 1..=end / 60).map(|minute| LogicalInstant::from_unix_seconds(minute * 60).as_nanos()).collect();
+                finish(&runtime).await;
+                proptest::prop_assert!(actual.windows(2).all(|pair| pair[0] < pair[1]), "no duplicate or out-of-order occurrence");
+                proptest::prop_assert_eq!(actual, expected);
+                Ok(())
+            })?;
+        }
+    }
+
     /// The `data.messageId` of each queued schedule run, in admission order.
     fn queued_message_ids(runtime: &FunctionsRuntime) -> Vec<Option<String>> {
         let inner = runtime.inner.lock().unwrap();
@@ -8028,6 +8399,8 @@ mod schedule_capacity_tests {
                 overlap: super::OverlapPolicy::Allow,
                 catch_up: CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
+                clock_policy: crate::application_clock::ApplicationClockPolicy::default(),
+                clock_start_pinned: false,
                 subscription_naming: crate::events::SubscriptionNaming::default(),
                 auth_context: crate::events::AuthContextNaming::default(),
             },

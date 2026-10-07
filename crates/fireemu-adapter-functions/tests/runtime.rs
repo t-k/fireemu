@@ -613,6 +613,25 @@ async fn start_task_runtime_with_policy_and_env(
     configure: impl Fn(&str) -> (TaskRetryConfig, TaskRateLimits),
     extra_env: Vec<(String, String)>,
 ) -> Arc<FunctionsRuntime> {
+    start_task_runtime_using_clock(
+        probe,
+        max_running,
+        configure,
+        extra_env,
+        Arc::new(Mutex::new(VirtualClock::new(START))),
+        fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
+    )
+    .await
+}
+
+async fn start_task_runtime_using_clock(
+    probe: &Path,
+    max_running: usize,
+    configure: impl Fn(&str) -> (TaskRetryConfig, TaskRateLimits),
+    extra_env: Vec<(String, String)>,
+    clock: Arc<Mutex<VirtualClock>>,
+    clock_policy: fireemu_adapter_functions::application_clock::ApplicationClockPolicy,
+) -> Arc<FunctionsRuntime> {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let mut env = vec![(
         "FIREEMU_FAKE_TASK_PROBE".to_owned(),
@@ -642,9 +661,10 @@ async fn start_task_runtime_with_policy_and_env(
             max_running,
             retry_attempts: 1,
             functions_host: Some("127.0.0.1:5001".into()),
+            clock_policy,
             ..FunctionsConfig::for_tests(1, "s".into())
         },
-        Arc::new(Mutex::new(VirtualClock::new(START))),
+        clock,
         Arc::new(runner),
         Some(spec),
     );
@@ -5495,6 +5515,105 @@ fn a_schedule_run_refusal_displays_its_message() {
         ScheduleRunError::Refused("function \"ok\" is not scheduled".to_owned()).to_string(),
         "function \"ok\" is not scheduled"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn virtual_task_exact_retry_expiry_retires_rate_wait_and_long_backoff() {
+    for backoff in [10, 10_000] {
+        let dir = std::env::temp_dir().join(format!(
+            "virtual-task-expiry-{}-{backoff}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let probe = dir.join("entries");
+        let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+        let runtime = start_task_runtime_using_clock(
+            &probe,
+            1,
+            |_| {
+                (
+                    TaskRetryConfig {
+                        max_attempts: 1,
+                        max_retry_millis: Some(1000),
+                        max_backoff_millis: backoff,
+                        max_doublings: 0,
+                        min_backoff_millis: backoff,
+                    },
+                    TaskRateLimits {
+                        max_concurrent_dispatches: 1,
+                        max_dispatches_per_second: 0.1,
+                    },
+                )
+            },
+            Vec::new(),
+            clock.clone(),
+            fireemu_adapter_functions::application_clock::ApplicationClockPolicy {
+                tasks_virtual: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        runtime
+            .enqueue_task("demo-app", "us-central1", "taskA", &task_body("failing"))
+            .unwrap();
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(10))
+            .unwrap();
+        let _ = wait_for_task_entries(&probe, 1).await;
+        // The fake response is recorded before its HTTP response reaches the attempt loop.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(1))
+            .unwrap();
+        runtime
+            .await_idle(Duration::from_secs(2))
+            .await
+            .expect("exact expiry must release retry capacity");
+        assert_eq!(std::fs::read_to_string(&probe).unwrap().lines().count(), 1);
+        runtime.shutdown().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn virtual_tasks_accept_extreme_clock_moves_without_host_instant_overflow() {
+    let dir = std::env::temp_dir().join(format!("virtual-task-extreme-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let runtime = start_task_runtime_using_clock(
+        &dir.join("entries"),
+        1,
+        |_| {
+            (
+                TaskRetryConfig::default(),
+                TaskRateLimits {
+                    max_concurrent_dispatches: 1,
+                    max_dispatches_per_second: 1.0,
+                },
+            )
+        },
+        Vec::new(),
+        clock.clone(),
+        fireemu_adapter_functions::application_clock::ApplicationClockPolicy {
+            tasks_virtual: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(i64::MAX))
+        .unwrap();
+    assert!(runtime.task_queue_stats().is_object());
+    runtime.reset();
+    assert!(runtime.task_queue_stats().is_object());
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 // ---------------------------------------------------------------------------------------------

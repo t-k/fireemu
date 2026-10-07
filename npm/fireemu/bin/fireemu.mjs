@@ -12,13 +12,12 @@
 // published beside this launcher.
 
 import { spawn } from "node:child_process";
-import { chmodSync, accessSync, constants as fsConstants, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { resolveBinary, ensureExecutable } from "../binary.mjs";
 import { constants as osConstants } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 
 /** This launcher's own manifest: the version, and the platforms published with it. */
@@ -29,33 +28,6 @@ function manifest() {
 /** `@fireemu/<os>-<arch>` for the platform this process runs on. */
 function platformPackage() {
   return `@fireemu/${process.platform}-${process.arch}`;
-}
-
-/** The daemon's file name inside a platform package. */
-function binaryName() {
-  return process.platform === "win32" ? "fireemu.exe" : "fireemu";
-}
-
-/**
- * The daemon to run.
- *
- * `FIREEMU_BINARY_PATH` wins so a vendored, air-gapped or locally built binary can be used
- * without touching `node_modules`. Otherwise the platform package is resolved through Node's
- * own algorithm, which finds it wherever the package manager put it -- a flat `node_modules`,
- * a pnpm store, or a workspace root.
- */
-function resolveBinary() {
-  const override = process.env.FIREEMU_BINARY_PATH;
-  if (override) {
-    return { path: override, from: "FIREEMU_BINARY_PATH" };
-  }
-  const pkg = platformPackage();
-  try {
-    const root = dirname(require.resolve(`${pkg}/package.json`));
-    return { path: join(root, "bin", binaryName()), from: pkg };
-  } catch {
-    return undefined;
-  }
 }
 
 /** The error a user can act on: what this host is, and what was published. */
@@ -82,29 +54,6 @@ function noBinaryMessage() {
     "build one from source (https://github.com/t-k/fireemu) and point",
     "FIREEMU_BINARY_PATH at it.",
   ].join("\n");
-}
-
-/**
- * Makes sure the binary is executable.
- *
- * npm preserves the executable bit through a tarball, but a registry proxy, a `pnpm` store on
- * a filesystem that drops modes, or an archive round-tripped through a zip can lose it. Fixing
- * it here keeps the package free of an install script; a read-only installation that is
- * already executable is left alone.
- */
-function ensureExecutable(path) {
-  if (process.platform === "win32") return;
-  try {
-    accessSync(path, fsConstants.X_OK);
-    return;
-  } catch {
-    // Fall through and try to grant it.
-  }
-  try {
-    chmodSync(path, 0o755);
-  } catch {
-    // A read-only install: let the spawn below report the real failure.
-  }
 }
 
 function main() {

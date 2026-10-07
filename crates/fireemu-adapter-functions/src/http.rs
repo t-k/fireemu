@@ -1299,11 +1299,15 @@ async fn respond_eventarc_strict(
     let declared_channel = |channel: &str| runtime.eventarc_channel_declared(channel);
     let declared_in =
         |project: &str, location: &str| runtime.eventarc_channels_declared_in(project, location);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| {
-            u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
-        });
+    let now = if runtime.config.clock_start_pinned {
+        u64::try_from(runtime.now().as_nanos().max(0)).unwrap_or(u64::MAX)
+    } else {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| {
+                u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
+            })
+    };
     let world = World {
         project: runtime.project(),
         request_id: &request_id,

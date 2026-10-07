@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { withTestWorld } from "../../npm/fireemu/testing.mjs";
 
 const runner = fileURLToPath(new URL("./index.mjs", import.meta.url));
 const frame = (value) => {
@@ -179,4 +180,106 @@ test("emulator: every scheduled invocation is unchanged (direct handler call, th
   assert.equal(calls[1].context.eventId, "42-3");
   assert.equal(calls[1].context.resource.name, JOB.replace("okV2", "okV1"));
   assert.equal(calls[1].context.resource.type, undefined);
+});
+
+test("strict world: scheduled wrappers and Gen1 contexts keep occurrence time under virtual Date", { skip: !process.env.FIREEMU_TEST_BINARY, timeout: 60_000 }, async (t) => {
+  const source = await mkdtemp(join(tmpdir(), "fireemu-world-schedule-source-"));
+  t.after(() => rm(source, { recursive: true, force: true }));
+  await writeFile(join(source, "package.json"), JSON.stringify({ private: true, main: "index.cjs" }));
+  await writeFile(join(source, "index.cjs"), `
+    const handler = async event => {
+      const now = new Date().toISOString();
+      const response = await fetch('http://' + process.env.FIRESTORE_EMULATOR_HOST + '/v1/projects/' + process.env.GCLOUD_PROJECT + '/databases/(default)/documents/scheduled/gen2', {
+        method: 'PATCH', headers: { authorization: 'Bearer owner', 'content-type': 'application/json' },
+        body: JSON.stringify({ fields: { scheduleTime: { stringValue: event.scheduleTime }, via: { stringValue: event.via }, now: { stringValue: now } } }),
+      });
+      if (!response.ok) throw Error('local write failed: ' + response.status);
+    };
+    const schedule = async (req, res) => {
+      await handler({ scheduleTime: req.header('x-cloudscheduler-scheduletime'), via: 'wrapper' });
+      res.status(200).send();
+    };
+    schedule.run = handler;
+    schedule.__endpoint = { platform: 'gcfv2', scheduleTrigger: { schedule: 'every 1 minutes' } };
+    const gen1 = async (data, context) => {
+      const now = new Date().toISOString();
+      const response = await fetch('http://' + process.env.FIRESTORE_EMULATOR_HOST + '/v1/projects/' + process.env.GCLOUD_PROJECT + '/databases/(default)/documents/scheduled/gen1', {
+        method: 'PATCH', headers: { authorization: 'Bearer owner', 'content-type': 'application/json' },
+        body: JSON.stringify({ fields: { timestamp: { stringValue: context.timestamp }, now: { stringValue: now } } }),
+      });
+      if (!response.ok) throw Error('local write failed: ' + response.status);
+    };
+    gen1.run = gen1;
+    gen1.__endpoint = { platform: 'gcfv1', scheduleTrigger: { schedule: 'every 1 minutes' } };
+    module.exports = { schedule, gen1 };
+  `);
+  await withTestWorld({
+    binaryPath: process.env.FIREEMU_TEST_BINARY,
+    projectId: "demo-app", clockStart: "2026-10-05T08:44:00Z",
+    functionsSource: source, services: ["functions", "pubsub", "firestore"],
+    config: { schemaVersion: 1, profile: "strict", firestore: { edition: "standard", backend: "native" } },
+    clock: { date: "virtual", timers: "real", tasks: "real" },
+    env: { PATH: process.env.PATH, NODE_PATH: "", FIREEMU_RUNNER_NODE: runner },
+  }, async world => {
+    await world.clock.advance({ seconds: 90 });
+    const deadline = Date.now() + 15_000;
+    const documents = {};
+    while (Date.now() < deadline) {
+      for (const id of ["gen1", "gen2"]) {
+        const reply = await fetch(`${world.endpoints.firestore.url}/v1/projects/${world.projectId}/databases/(default)/documents/scheduled/${id}`, { headers: { authorization: "Bearer owner" } });
+        if (reply.status === 404) continue;
+        assert.equal(reply.status, 200, await reply.clone().text());
+        documents[id] = (await reply.json()).fields;
+      }
+      if (documents.gen1 && documents.gen2) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.ok(documents.gen1 && documents.gen2, "both scheduled functions must finish");
+    assert.equal(documents.gen2.via.stringValue, "wrapper");
+    assert.equal(documents.gen2.scheduleTime.stringValue, "2026-10-05T01:45:00-07:00");
+    assert.equal(documents.gen2.now.stringValue, "2026-10-05T08:45:30.000Z");
+    assert.equal(documents.gen1.timestamp.stringValue, "2026-10-05T08:45:00Z");
+    assert.equal(documents.gen1.now.stringValue, "2026-10-05T08:45:30.000Z");
+  });
+});
+
+test("strict world: pinned Eventarc channel and operation times advance with the daemon clock even with native Date", { skip: !process.env.FIREEMU_TEST_BINARY, timeout: 60_000 }, async (t) => {
+  const source = await mkdtemp(join(tmpdir(), "fireemu-world-eventarc-source-"));
+  t.after(() => rm(source, { recursive: true, force: true }));
+  await writeFile(join(source, "package.json"), JSON.stringify({ private: true, main: "index.cjs" }));
+  await writeFile(join(source, "index.cjs"), SOURCE);
+  await withTestWorld({
+    binaryPath: process.env.FIREEMU_TEST_BINARY,
+    projectId: "demo-app", clockStart: "2026-01-01T00:00:00Z",
+    functionsSource: source, services: ["functions"],
+    config: { schemaVersion: 1, profile: "strict" },
+    clock: { date: "real", timers: "real", tasks: "real" },
+    env: { PATH: process.env.PATH, NODE_PATH: "", FIREEMU_RUNNER_NODE: runner },
+  }, async world => {
+    const base = world.endpoints.eventarc.url;
+    const parent = `projects/${world.projectId}/locations/us-central1`;
+    const channel = `${parent}/channels/pinned`;
+    const reply = await fetch(`${base}/v1/${parent}/channels?channelId=pinned`, {
+      method: "POST", headers: { authorization: "Bearer ya29.test-only", "content-type": "application/json" },
+      body: JSON.stringify({ name: channel }),
+    });
+    assert.equal(reply.status, 200);
+    const operation = await reply.json();
+    assert.equal(operation.metadata.createTime, "2026-01-01T00:00:00.000000000Z");
+    assert.equal(operation.done, false);
+    const headers = { authorization: "Bearer ya29.test-only" };
+    assert.equal((await (await fetch(`${base}/v1/${operation.name}`, { headers })).json()).done, false);
+    await new Promise(resolve => setTimeout(resolve, 5500));
+    assert.equal((await (await fetch(`${base}/v1/${operation.name}`, { headers })).json()).done, false, "wall time cannot finish a pinned operation");
+    await world.clock.advance({ seconds: 4 });
+    assert.equal((await (await fetch(`${base}/v1/${operation.name}`, { headers })).json()).done, false);
+    await world.clock.advance(1381);
+    const done = await (await fetch(`${base}/v1/${operation.name}`, { headers })).json();
+    assert.equal(done.done, true);
+    assert.equal(done.metadata.endTime, "2026-01-01T00:00:05.381000000Z");
+    assert.equal(done.response.createTime, "2025-12-31T23:59:59.994000000Z", "the recorded six-millisecond channel offset is preserved");
+    const created = await (await fetch(`${base}/v1/${channel}`, { headers })).json();
+    assert.equal(created.createTime, done.response.createTime);
+    assert.equal(created.updateTime, "2026-01-01T00:00:05.401000000Z");
+  });
 });

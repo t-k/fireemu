@@ -1180,6 +1180,8 @@ pub struct RuntimeConfig {
     pub functions_loaded: Vec<FunctionsCodebase>,
     /// Runner command (`functions.runner`); default: the bundled Node runner.
     pub functions_runner: Option<Vec<String>>,
+    /// Explicit application-clock modes; omitted policies retain native time.
+    pub functions_clock: fireemu_adapter_functions::application_clock::ApplicationClockPolicy,
     /// Node inspector port requested by `--inspect-functions`; applied after executable selection.
     pub functions_inspect_port: Option<u16>,
     /// Whether `--inspect-functions` requested one dynamic inspector port per codebase.
@@ -1442,6 +1444,8 @@ impl Default for RuntimeConfig {
             functions_codebases: Vec::new(),
             functions_loaded: Vec::new(),
             functions_runner: None,
+            functions_clock:
+                fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
             functions_inspect_port: None,
             functions_inspect_dynamic: false,
             functions_manifest: None,
@@ -3237,10 +3241,40 @@ impl RuntimeConfig {
                 "runner",
                 "maxGlobalConcurrency",
                 "unservedTriggers",
+                "clock",
             ]
             .contains(&key.as_str())
             {
                 return Err(ConfigError(format!("unknown config key functions.{key}")));
+            }
+        }
+        if let Some(value) = f.get("clock") {
+            let modes = value
+                .as_object()
+                .ok_or_else(|| ConfigError("functions.clock must be an object".into()))?;
+            for (name, value) in modes {
+                let mode = value.as_str().ok_or_else(|| {
+                    ConfigError(format!("functions.clock.{name} must be real or virtual"))
+                })?;
+                if !["real", "virtual"].contains(&mode) {
+                    return Err(ConfigError(format!(
+                        "functions.clock.{name} must be real or virtual"
+                    )));
+                }
+                let flag = match name.as_str() {
+                    "date" => &mut cfg.functions_clock.date_virtual,
+                    "timers" => &mut cfg.functions_clock.timers_virtual,
+                    "tasks" => &mut cfg.functions_clock.tasks_virtual,
+                    _ => {
+                        return Err(ConfigError(format!(
+                            "unknown config key functions.clock.{name}"
+                        )))
+                    }
+                };
+                *flag = mode == "virtual";
+            }
+            if cfg.functions_clock.timers_virtual && !cfg.functions_clock.date_virtual {
+                return Err(ConfigError("virtual timers require virtual Date".into()));
             }
         }
         if let Some(m) = f.get("manifest").and_then(Value::as_str) {
@@ -3980,6 +4014,14 @@ impl RuntimeConfig {
                 .ok_or_else(|| ConfigError("appCheck must be an object".to_owned()))?;
             cfg.app_check = Self::parse_app_check(app_check)?;
         }
+        if cfg.functions_clock.any_virtual() && !cfg.clock_start_pinned {
+            return Err(ConfigError(
+                "functions.clock virtual policies require daemon.clockStart".into(),
+            ));
+        }
+        cfg.functions_clock
+            .validate(cfg.clock_start)
+            .map_err(ConfigError)?;
         Ok(cfg)
     }
 }
@@ -3989,6 +4031,43 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn functions_application_clock_is_explicit_and_requires_a_pinned_start() {
+        let input = json!({"schemaVersion":1,"firestore":{"edition":"standard","apiMode":"native"},
+            "functions":{"clock":{"date":"virtual","timers":"real","tasks":"virtual"}},
+            "daemon":{"clockStart":"2026-01-31T23:59:00Z"}});
+        let config = RuntimeConfig::from_json(&input).unwrap();
+        assert!(config.functions_clock.date_virtual);
+        assert!(!config.functions_clock.timers_virtual);
+        assert!(config.functions_clock.tasks_virtual);
+        let mut missing = input.clone();
+        missing.as_object_mut().unwrap().remove("daemon");
+        assert!(RuntimeConfig::from_json(&missing)
+            .unwrap_err()
+            .0
+            .contains("clockStart"));
+        let mut invalid = input.clone();
+        invalid["functions"]["clock"] = json!({"date":"real","timers":"virtual"});
+        assert!(RuntimeConfig::from_json(&invalid)
+            .unwrap_err()
+            .0
+            .contains("virtual Date"));
+        for bad in [
+            json!({"date":false}),
+            json!({"date":"warp"}),
+            json!({"other":"real"}),
+            Value::Null,
+        ] {
+            invalid["functions"]["clock"] = bad;
+            assert!(RuntimeConfig::from_json(&invalid).is_err());
+        }
+        let default = RuntimeConfig::default();
+        assert_eq!(
+            default.functions_clock,
+            fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default()
+        );
+    }
 
     fn parse(auth: &Value) -> Result<RuntimeConfig, ConfigError> {
         RuntimeConfig::from_json(&json!({

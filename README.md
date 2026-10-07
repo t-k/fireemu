@@ -129,6 +129,8 @@ Use `--ui-port 0` to disable the UI. When automatic UI startup cannot bind the d
 
 When a Functions codebase is loaded, the Functions page shows registered functions, triggers, invocation results, and logs. You can run scheduled functions immediately or advance the virtual clock to their next scheduled execution. 
 
+For clock-sensitive and parallel integration tests, [test clocks and independent worlds](docs/test-worlds.md) describes explicit Node Date/timer/Cloud Tasks policies and the `fireemu/testing` helper. Separate worlds isolate their clocks, Rules, Functions and service state, including when they use the same project ID.
+
 ### Export data
 
 To save data from a running emulator, run the following command in another terminal.

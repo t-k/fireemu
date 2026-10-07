@@ -13,6 +13,9 @@ import { pathToFileURL } from "node:url";
 import { existsSync, readFileSync, readlinkSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { createServer } from "node:http";
+import timers from "node:timers";
+const {setTimeout, clearTimeout} = timers;
+import { createRuntimeClock } from "./clock.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { url as inspectorUrl } from "node:inspector";
 import { instrumentCallables } from "./callable-app-check.mjs";
@@ -1522,6 +1525,10 @@ async function invoke(functions, manifest, msg) {
 
 
 async function main() {
+  const clockOptions = JSON.parse(process.env.FIREEMU_CLOCK_JSON ?? '{}');
+  const runtimeClock = createRuntimeClock(clockOptions);
+  let clockRevision = BigInt(clockOptions.revision ?? '0');
+  runtimeClock.install();
   let functions;
   let manifest;
   let runnerReady = false;
@@ -1537,6 +1544,25 @@ async function main() {
         deferCleanShutdownGroupCleanup();
         finishOutput();
         return false;
+      }
+      if (msg.type === 'clock:set' || msg.type === 'clock:runDue') {
+        void (async () => {
+          try {
+            let status;
+            if (msg.type === 'clock:set') {
+              const revision = BigInt(msg.revision);
+              if (revision < clockRevision) throw new Error('stale clock revision');
+              status = runtimeClock.update(msg);
+              clockRevision = revision;
+            } else {
+              status = await runtimeClock.runDue(msg.budget);
+            }
+            send({type:'result',invocationId:msg.invocationId,ok:true,timers:status});
+          } catch (error) {
+            send({type:'result',invocationId:msg.invocationId,ok:false,error:invocationFailure(error).message});
+          }
+        })();
+        return;
       }
       if (!runnerReady) {
         process.stderr.write('[functions] invocation received before runner hello\n');
@@ -1670,6 +1696,7 @@ async function main() {
   send({
     type: "hello",
     runner: "node",
+    clock: {version:1,date:true,timers:true},
     codebase: args.codebase,
     version: process.version,
     inspectorPort: activeInspectorPort,

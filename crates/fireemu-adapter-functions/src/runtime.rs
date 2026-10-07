@@ -280,6 +280,8 @@ pub struct FunctionsConfig {
     pub functions_host: Option<String>,
     /// Explicit application-clock modes.
     pub clock_policy: crate::application_clock::ApplicationClockPolicy,
+    /// Whether service timestamps use the configured daemon clock instead of wall time.
+    pub clock_start_pinned: bool,
     /// How the subscription of a Pub/Sub function is named (and which the events name): by profile.
     pub subscription_naming: crate::events::SubscriptionNaming,
     /// How the writer of a Firestore event with auth context is named: by profile.
@@ -303,6 +305,7 @@ impl FunctionsConfig {
             catch_up: CatchUpPolicy::All,
             functions_host: None,
             clock_policy: crate::application_clock::ApplicationClockPolicy::default(),
+            clock_start_pinned: false,
             subscription_naming: crate::events::SubscriptionNaming::default(),
             auth_context: crate::events::AuthContextNaming::default(),
         }
@@ -325,6 +328,7 @@ impl std::fmt::Debug for FunctionsConfig {
             .field("catch_up", &self.catch_up)
             .field("functions_host", &self.functions_host)
             .field("clock_policy", &self.clock_policy)
+            .field("clock_start_pinned", &self.clock_start_pinned)
             .field("subscription_naming", &self.subscription_naming)
             .field("auth_context", &self.auth_context)
             .finish()
@@ -1141,7 +1145,7 @@ pub struct FunctionsRuntime {
     schedule_publisher: std::sync::RwLock<Option<Arc<dyn ScheduleTopicPublisher>>>,
     /// The union of every codebase's manifest.
     manifest: FunctionManifest,
-    config: FunctionsConfig,
+    pub(crate) config: FunctionsConfig,
     clock: Arc<Mutex<VirtualClock>>,
     _clock_observer: Arc<fireemu_core_session::clock::ClockObserver>,
     task_clock_wake: Notify,
@@ -1151,6 +1155,8 @@ pub struct FunctionsRuntime {
     owner: BTreeMap<String, usize>,
     /// Live Eventarc registrations, linearized with publication and source reload.
     eventarc_registry: Mutex<crate::eventarc::TriggerRegistry>,
+    /// Serialize schedule batches while Gen1 publication temporarily releases `inner`.
+    schedule_sweep: Mutex<()>,
     inner: Mutex<Inner>,
     /// Only active Cloud Tasks dispatches own Tokio tasks. Reset and shutdown replace this set,
     /// which aborts every old-generation attempt and its retry timer.
@@ -1400,6 +1406,7 @@ impl FunctionsRuntime {
             codebases: codebases.into_iter().map(Codebase::from_spec).collect(),
             owner,
             eventarc_registry: Mutex::new(eventarc_registry),
+            schedule_sweep: Mutex::new(()),
             inner: Mutex::new(Inner {
                 task_scheduler,
                 next_task: 0,
@@ -1456,9 +1463,8 @@ impl FunctionsRuntime {
                     let Some(runtime) = weak.upgrade() else {
                         break;
                     };
-                    if runtime.config.clock_policy.any_virtual() {
-                        runtime.on_clock_changed();
-                    }
+                    runtime.task_clock_wake.notify_waiters();
+                    runtime.wake.notify_one();
                     if let Err(error) = runtime.sync_clock().await {
                         eprintln!("[functions] {error}");
                     }
@@ -3195,6 +3201,10 @@ impl FunctionsRuntime {
     pub fn on_clock_changed(self: &Arc<Self>) {
         self.task_clock_wake.notify_waiters();
         self.wake.notify_one();
+        let _sweep = self
+            .schedule_sweep
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = self.now();
         let Ok(mut inner) = self.inner.lock() else {
             return;
@@ -7795,6 +7805,155 @@ mod schedule_capacity_tests {
         recorder.0.lock().unwrap().clone()
     }
 
+    #[tokio::test]
+    async fn concurrent_virtual_schedule_sweeps_preserve_the_catch_up_cap_and_order() {
+        struct BlockedPublisher {
+            entered: std::sync::mpsc::Sender<()>,
+            release: Mutex<std::sync::mpsc::Receiver<()>>,
+            first: std::sync::atomic::AtomicBool,
+            recorder: Recorder,
+        }
+        impl super::ScheduleTopicPublisher for BlockedPublisher {
+            fn publish(&self, topic: &str, id: &str, at: LogicalInstant) -> Result<(), String> {
+                if self.first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    self.entered.send(()).unwrap();
+                    self.release
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(10))
+                        .unwrap();
+                }
+                self.recorder.publish(topic, id, at)
+            }
+        }
+        let spec = SpawnSpec {
+            command: vec![
+                "python3".into(),
+                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").into(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(60),
+        };
+        let runner = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "tick", "generation": 1, "trigger": {"type": "schedule", "schedule": "every 1 minutes"}}
+        ]})).unwrap();
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(START),
+        )));
+        let runtime = FunctionsRuntime::with_codebases(
+            vec![super::CodebaseSpec {
+                name: "default".into(),
+                manifest,
+                runner,
+                spawn: Some(spec),
+                cleanup_dir: None,
+            }],
+            FunctionsConfig {
+                clock_policy: crate::application_clock::ApplicationClockPolicy {
+                    date_virtual: true,
+                    ..Default::default()
+                },
+                ..FunctionsConfig::for_tests(5, "s".into())
+            },
+            clock.clone(),
+            crate::http::FunctionsHttpProfile::Strict,
+        )
+        .unwrap();
+        let (entered, waiting) = std::sync::mpsc::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let publisher = Arc::new(BlockedPublisher {
+            entered,
+            release: Mutex::new(blocked),
+            first: std::sync::atomic::AtomicBool::new(true),
+            recorder: Recorder::default(),
+        });
+        runtime.set_schedule_topic_publisher(publisher.clone());
+        advance(&clock, 600);
+        let producing = runtime.clone();
+        let first = std::thread::spawn(move || producing.on_clock_changed());
+        waiting.recv_timeout(Duration::from_secs(10)).unwrap();
+        let producing = runtime.clone();
+        let (finished, done) = std::sync::mpsc::channel();
+        let second = std::thread::spawn(move || {
+            producing.on_clock_changed();
+            finished.send(()).unwrap();
+        });
+        let overlapped = done.recv_timeout(Duration::from_millis(500)).is_ok();
+        release.send(()).unwrap();
+        first.join().unwrap();
+        second.join().unwrap();
+        let times: Vec<_> = recorded(&publisher.recorder)
+            .iter()
+            .map(|row| row.2)
+            .collect();
+        let expected: Vec<_> = (1..=5)
+            .map(|minute| LogicalInstant::from_unix_seconds(START + minute * 60))
+            .collect();
+        let queued = admitted(&runtime);
+        finish(&runtime).await;
+        assert!(
+            !overlapped,
+            "the second sweep must wait for the first publication batch"
+        );
+        assert_eq!(
+            times, expected,
+            "exactly five ordered occurrences, without duplicates"
+        );
+        assert_eq!(queued.len(), 5);
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config { cases: 16, failure_persistence: None, ..Default::default() })]
+        #[test]
+        fn concurrent_virtual_schedule_sweeps_never_duplicate_or_reorder_occurrences(
+            advances in proptest::collection::vec(0i64..=900, 1..12),
+        ) {
+            let tokio = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            tokio.block_on(async {
+                let spec = SpawnSpec {
+                    command: vec!["python3".into(), concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").into()],
+                    cwd: None, env: Vec::new(), hello_timeout: Duration::from_secs(60),
+                };
+                let runner = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+                let manifest = parse_manifest(&json!({"functions": [
+                    {"name": "tick", "generation": 1, "trigger": {"type": "schedule", "schedule": "every 1 minutes"}}
+                ]})).unwrap();
+                let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_unix_seconds(START))));
+                let runtime = FunctionsRuntime::with_codebases(
+                    vec![super::CodebaseSpec { name: "default".into(), manifest, runner, spawn: Some(spec), cleanup_dir: None }],
+                    FunctionsConfig {
+                        clock_policy: crate::application_clock::ApplicationClockPolicy { date_virtual: true, ..Default::default() },
+                        ..FunctionsConfig::for_tests(5, "s".into())
+                    }, clock.clone(), crate::http::FunctionsHttpProfile::Strict,
+                ).unwrap();
+                let publisher = Arc::new(Recorder::default());
+                runtime.set_schedule_topic_publisher(publisher.clone());
+                let mut end = START;
+                for seconds in advances {
+                    advance(&clock, seconds);
+                    end += seconds;
+                    loop {
+                        std::thread::scope(|scope| {
+                            scope.spawn(|| runtime.on_clock_changed());
+                            scope.spawn(|| runtime.on_clock_changed());
+                        });
+                        let more = pending(&runtime);
+                        runtime.inner.lock().unwrap().payloads.clear();
+                        if !more { break; }
+                    }
+                }
+                let actual: Vec<_> = recorded(&publisher).iter().map(|row| row.2.as_nanos()).collect();
+                let expected: Vec<_> = (START / 60 + 1..=end / 60).map(|minute| LogicalInstant::from_unix_seconds(minute * 60).as_nanos()).collect();
+                finish(&runtime).await;
+                proptest::prop_assert!(actual.windows(2).all(|pair| pair[0] < pair[1]), "no duplicate or out-of-order occurrence");
+                proptest::prop_assert_eq!(actual, expected);
+                Ok(())
+            })?;
+        }
+    }
+
     /// The `data.messageId` of each queued schedule run, in admission order.
     fn queued_message_ids(runtime: &FunctionsRuntime) -> Vec<Option<String>> {
         let inner = runtime.inner.lock().unwrap();
@@ -8059,6 +8218,7 @@ mod schedule_capacity_tests {
                 catch_up: CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
                 clock_policy: crate::application_clock::ApplicationClockPolicy::default(),
+                clock_start_pinned: false,
                 subscription_naming: crate::events::SubscriptionNaming::default(),
                 auth_context: crate::events::AuthContextNaming::default(),
             },

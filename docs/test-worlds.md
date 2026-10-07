@@ -24,11 +24,15 @@ Clock control commands acknowledge the current Functions runner generations befo
 | Surface | Effect of advancing the world clock |
 | --- | --- |
 | Scheduled Functions and event retry eligibility | Admit due work according to the configured catch-up and retry policies. |
+| Strict scheduled delivery | Gen2 `x-cloudscheduler-scheduletime` uses the occurrence with the Los Angeles offset; Gen1 context timestamps and Pub/Sub publish times use the occurrence, even when virtual Date reads the destination instant. |
+| Scheduler retry backoff | Due retries and `maxRetrySeconds` windows use the daemon clock; advancing it can release retries or exhaust their retry window. |
 | Node `Date.now()`, `new Date()` and `Date()` | Read the destination time when `date` is virtual. Explicit Date values keep their normal meaning. |
 | Delayed JavaScript timers | When `timers` is virtual, positive clock movement consumes delay and makes callbacks due. Call `world.clock.runDue()` to execute a bounded batch. |
 | Cloud Tasks | When `tasks` is virtual, scheduleTime eligibility uses world wall time; rate refill, retry backoff, retry duration and statistics windows use positive elapsed time. |
 | Pub/Sub retention and delivery deadlines | Use the world-owned logical clock under the existing service policies. |
 | Firestore history and TTL | Existing clock-control compaction and TTL sweep policies apply within this daemon; advancing is not a promise of unconditional immediate TTL deletion. |
+| Strict Firestore writer lock waits | A contended writer aborts with `ABORTED` after 20 seconds of wall time or an advance of at least 20 seconds from the start of its wait. |
+| Strict Eventarc channel and operation times | Use the daemon clock when `daemon.clockStart` is pinned, including in worlds; otherwise use wall time. A frozen clock keeps an operation pending until a clock move reaches its completion time. Recorded channel timestamp offsets still apply. |
 | Auth, App Check, Storage timestamps and Rules `request.time` | Subsequent service operations observe the pinned world clock. |
 | `setImmediate`, Promise continuations, `nextTick`, networking, `performance.now()` and `process.hrtime()` | Keep native event-loop and monotonic-time behavior. |
 | HTTP, function invocation, IPC, output, readiness, await-idle and shutdown timeouts | Keep native deadlines, so a frozen test clock cannot disable lifecycle safeguards. |

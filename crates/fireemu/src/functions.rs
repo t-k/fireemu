@@ -2707,6 +2707,7 @@ pub async fn start(
             .unwrap_or_default(),
         functions_host: hosts.functions.clone(),
         clock_policy: cfg.functions_clock,
+        clock_start_pinned: cfg.clock_start_pinned,
         subscription_naming: subscription_naming(cfg.profile),
         auth_context: auth_context_naming(cfg.profile),
     };
@@ -10531,6 +10532,7 @@ mod tests {
                 functions_host: None,
                 clock_policy:
                     fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
+                clock_start_pinned: false,
                 subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
                 ),
                 auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),

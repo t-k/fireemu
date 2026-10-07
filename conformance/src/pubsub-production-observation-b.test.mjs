@@ -1103,3 +1103,83 @@ test("B native uncertain statuses and aggregate trailers cannot confirm a remote
     }
   }
 });
+
+test("B callback before status still counts native body plus initial and trailing metadata", async () => {
+  const { default: grpc } = await import("@grpc/grpc-js");
+  const meter = createMeter({ now: () => 0 });
+  meter.enter(makePlan().cells.find((c) => c.transport === "grpc"));
+  let cancelled = 0;
+  const bytes = Buffer.from(
+    typeOf("Topic")
+      .encode(
+        typeOf("Topic").fromObject({
+          name: "projects/fixture-project/topics/fe123456abcdef-x",
+          labels: { value: "R".repeat(56000) },
+        }),
+      )
+      .finish(),
+  );
+  const initial = new grpc.Metadata();
+  initial.add("x-initial", "R".repeat(1000));
+  const trailers = new grpc.Metadata();
+  trailers.add("x-trailing", "R".repeat(7000));
+  const client = {
+    close() {},
+    makeUnaryRequest(_p, _e, _d, _r, _m, _o, callback) {
+      const rpc = new EventEmitter();
+      rpc.cancel = () => {
+        cancelled++;
+      };
+      queueMicrotask(() => {
+        rpc.emit("metadata", initial);
+        callback(null, bytes);
+        rpc.emit("status", { code: 0, details: "", metadata: trailers });
+      });
+      return rpc;
+    },
+  };
+  const wire = createWire({ meter, client, getToken: async () => "fake", journal: { write() {} } });
+  try {
+    const reply = await wire.call({
+      category: "create",
+      transport: "grpc",
+      service: "Publisher",
+      method: "CreateTopic",
+      request: { name: "projects/fixture-project/topics/fe123456abcdef-x" },
+    });
+    assert.equal(reply.unknown, true);
+    assert.equal(reply.ok, false);
+    assert.equal(reply.bodyBytes, null);
+    assert.ok(cancelled > 0);
+  } finally {
+    wire.close();
+  }
+});
+test("B complete redirect, server error and sub-200 responses remain unknown", async () => {
+  for (const status of [101, 302, 503]) {
+    const meter = createMeter({ now: () => 0 });
+    meter.enter(makePlan().cells[0]);
+    const response = new Response('{"error":{"status":"UNKNOWN"}}', { status: 200 });
+    const fake = { status, ok: false, headers: response.headers, body: response.body };
+    const wire = createWire({
+      meter,
+      client: { close() {} },
+      getToken: async () => "fake",
+      journal: { write() {} },
+      fetch: async () => fake,
+    });
+    try {
+      const reply = await wire.call({
+        category: "create",
+        transport: "rest",
+        service: "Publisher",
+        method: "CreateTopic",
+        request: { name: "projects/fixture-project/topics/fe123456abcdef-x" },
+      });
+      assert.equal(reply.unknown, true);
+      assert.equal(reply.ok, false);
+    } finally {
+      wire.close();
+    }
+  }
+});

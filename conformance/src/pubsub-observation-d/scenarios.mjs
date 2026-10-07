@@ -189,7 +189,8 @@ export async function runCell({
     if (intent) ledger.answered({ ...intent, kind });
     if (method.startsWith("Get") && !method.includes("Iam")) {
       ledger.observeRead(name, reply);
-      if (reply.code === "NOT_FOUND" && !settled(ledger, name)) absentSeen.add(name);
+      if (kind === "error" && reply.code === "NOT_FOUND" && !settled(ledger, name))
+        absentSeen.add(name);
     }
     if (method.includes("Iam"))
       journal.write({

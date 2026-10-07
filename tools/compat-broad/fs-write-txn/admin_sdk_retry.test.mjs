@@ -394,30 +394,37 @@ for (const outcome of ['writer-aborted', 'writer-late', 'older-retry', 'rollback
 }
 
 
-test('production SDK custom headers reach the interceptor and loopback server exactly once', async () => {
+test('production SDK TLS auth and custom headers reach the loopback server exactly once', async () => {
   const { Firestore } = require('@google-cloud/firestore');
   const { v1: { FirestoreClient } } = require('@google-cloud/firestore');
   const descriptor = new FirestoreClient({ projectId: 'demo-descriptors' });
   const fs = descriptor._protos.google.firestore.v1;
   const server = new grpc.Server();
+  // Generate ephemeral TLS material in memory without reading or writing key files.
+  const tls = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', '/dev/stdout', '-out', '/dev/stdout', '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1', '-days', '1'], { encoding: 'utf8' });
+  assert.equal(tls.status, 0, 'offline TLS certificate generation must succeed');
+  const privateKey = Buffer.from(tls.stdout.match(/-----BEGIN PRIVATE KEY-----[\s\S]*?-----END PRIVATE KEY-----/)[0]);
+  const cert = Buffer.from(tls.stdout.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)[0]);
   const received = [];
   server.addService({ BatchGetDocuments: { path: '/google.firestore.v1.Firestore/BatchGetDocuments', requestStream: false, responseStream: true,
     requestSerialize: fs.BatchGetDocumentsRequest.serialize, requestDeserialize: fs.BatchGetDocumentsRequest.deserialize,
     responseSerialize: fs.BatchGetDocumentsResponse.serialize, responseDeserialize: fs.BatchGetDocumentsResponse.deserialize } }, {
     BatchGetDocuments(call) {
-      received.push(call.metadata.get('x-goog-user-project'));
-      call.sendMetadata(new grpc.Metadata());
-      call.emit('error', { code: 9, details: 'offline stop after metadata' });
+      received.push({ authorization: call.metadata.get('authorization'), quotaProject: call.metadata.get('x-goog-user-project') });
+      // A pre-existing document stops the recorder after this successful read, before any write.
+      call.write({ found: { name: call.request.documents[0], fields: {}, createTime: { seconds: '1' }, updateTime: { seconds: '1' } }, readTime: { seconds: '1' } });
+      call.end();
     },
   });
-  const port = await new Promise((resolve, reject) => server.bindAsync('127.0.0.1:0', grpc.ServerCredentials.createInsecure(), (error, value) => error ? reject(error) : resolve(value)));
   const settings = Firestore.prototype.settings;
+  const createSsl = grpc.credentials.createSsl;
   let headers;
   const intercepted = [];
+  let port;
   Firestore.prototype.settings = function (value) {
     headers = value.auth.getClient().then(client => client.getRequestHeaders());
     const transform = value['grpc.callInvocationTransformer'];
-    return settings.call(this, { ...value, host: `127.0.0.1:${port}`, ssl: false,
+    return settings.call(this, { ...value, host: `127.0.0.1:${port}`, 'grpc.ssl_target_name_override': 'localhost',
       'grpc.callInvocationTransformer': properties => {
         transform(properties);
         properties.callOptions.interceptors.unshift((options, nextCall) => new grpc.InterceptingCall(nextCall(options), {
@@ -428,17 +435,22 @@ test('production SDK custom headers reach the interceptor and loopback server ex
     });
   };
   try {
+    port = await new Promise((resolve, reject) => server.bindAsync('127.0.0.1:0', grpc.ServerCredentials.createSsl(null, [{ private_key: privateKey, cert_chain: cert }]), (error, value) => error ? reject(error) : resolve(value)));
+    // Change only the trust root; GAX still combines TLS with its real auth metadata plugin.
+    grpc.credentials.createSsl = () => createSsl(cert);
     const admission = { bearer: 'offline-parent', check: () => {}, journal: event => {
       if (event.event === 'dispatch' && (!event.row.metadataKeys.includes('x-goog-user-project') || event.row.quotaProject !== 'fireemu-oracle-txn')) throw new Error('SDK quota project metadata missing');
     } };
     const receipt = await recordAdminRetries({ project: 'fireemu-oracle-txn', admission });
+    assert.equal(receipt.steps[0].result.code, 0);
+    assert.equal(receipt.steps[0].result.response.responses[0].found.name, receipt.steps[0].request.documents[0]);
     assert.deepEqual(intercepted, [['fireemu-oracle-txn']]);
-    assert.deepEqual(received, [['fireemu-oracle-txn']]);
+    assert.deepEqual(received, [{ authorization: ['Bearer offline-parent'], quotaProject: ['fireemu-oracle-txn'] }]);
     assert.equal(receipt.steps[0].quotaProject, 'fireemu-oracle-txn');
     assert.equal(receipt.steps[0].metadataKeys.filter(key => key === 'x-goog-user-project').length, 1);
-    assert.equal((await headers)['x-goog-user-project'], undefined);
-    assert.equal((await headers).Authorization, 'Bearer offline-parent');
+    assert.equal((await headers).has('x-goog-user-project'), false);
+    assert.equal((await headers).get('authorization'), 'Bearer offline-parent');
     assert.equal(receipt.sandboxRequests, 1);
     assert.equal(receipt.complete, false);
-  } finally { Firestore.prototype.settings = settings; server.forceShutdown(); await descriptor.close(); }
+  } finally { Firestore.prototype.settings = settings; grpc.credentials.createSsl = createSsl; server.forceShutdown(); await descriptor.close(); }
 });

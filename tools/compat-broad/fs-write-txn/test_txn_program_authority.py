@@ -1,7 +1,7 @@
 """Program-scoped authority: exact scope, revocation, shared history and send-time authorization."""
 
 import importlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -277,7 +277,8 @@ def test_initial_gates_accept_real_project_history_read_only(source):
     scope = {**SCOPE, "project": "fireemu-oracle-query/(default)+fireemu-oracle-query/txn-{nonce}+fireemu-oracle-txn/(default)"}
     pins = {**PINS, "project": "fireemu-oracle-query", "scope": scope}
     decisions = AUTHORITY + envelope_row(scope=scope) + approve_row()
-    now = datetime(2026, 10, 7, tzinfo=timezone.utc)
+    projects = {resource.split('/')[0] for resource in scope['project'].split('+')}
+    now = max(datetime.fromisoformat(row['ts'].replace('Z', '+00:00')) for row in rows if row.get('project') in projects or projects.intersection(row.get('projects', []))) + timedelta(minutes=31)
     assert authority.verify_initial_gates(rows, now, decisions, pins)
     assert path.read_bytes() == original
 

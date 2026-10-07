@@ -24,6 +24,7 @@ export function createFieldNormalization(capture, peer) {
   )
     throw new Error("two distinct recorded run identities required for normalization");
   const runs = starts.map((rows) => rows[0].runId);
+  const rowRun = new Map([capture, peer].flatMap((rows, index) => rows.map((row) => [row, index])));
   const policies = new Map();
   const evidence = [];
   const messages = ["receivedMessages", 0, "message"];
@@ -146,15 +147,15 @@ export function createFieldNormalization(capture, peer) {
     evidence,
     normalize(body, row) {
       const value = structuredClone(body);
+      const index = rowRun.get(row);
+      if (index === undefined) return value;
       for (const rule of policies.get(coordinate(row)) ?? []) {
         const original = read(value, rule.path);
         // Run-bound classifiers reject values from a third run or a changed producer template.
         const valid =
           rule.shape.type === "RFC3339"
             ? isDeepStrictEqual(timeShape(original), rule.shape)
-            : runs.some((run) =>
-                isDeepStrictEqual(rule.classify(original, run, runs.indexOf(run)), rule.shape),
-              );
+            : isDeepStrictEqual(rule.classify(original, runs[index], index), rule.shape);
         if (!valid) continue;
         const parent = read(value, rule.path.slice(0, -1));
         parent[rule.path.at(-1)] = { observedValue: "normalized", shape: rule.shape };

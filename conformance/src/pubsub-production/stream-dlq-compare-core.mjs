@@ -47,6 +47,11 @@ export function normalizeBody(value, key = "", user = false, aliases = new Map()
     const normalized = value.map((v) => normalizeBody(v, key, false, aliases));
     if (
       ["topics", "subscriptions", "snapshots"].includes(key) &&
+      value.every((v) => typeof v === "string")
+    )
+      return normalized.toSorted();
+    if (
+      ["topics", "subscriptions", "snapshots"].includes(key) &&
       value.every((v) => typeof v?.name === "string")
     )
       return normalized.toSorted((a, b) => a.name.localeCompare(b.name));

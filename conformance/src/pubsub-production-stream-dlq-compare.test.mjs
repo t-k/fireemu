@@ -1511,19 +1511,59 @@ test("field normalization replays redacted actual two-run bodies and format near
   );
   const frames = a.filter((r) => r.note === "stream-frame" && r.direction === "in");
   assert.equal(frames.length, 1);
-  const nativeRow = {
-    case: "stream-invalid-deadline/grpc",
-    step: frames[0].step,
-    op: "streamingPull",
-    transport: "grpc",
-  };
   assert.deepEqual(
-    core.normalizeBody(policy.normalize(frames[0].body, nativeRow)),
+    core.normalizeBody(
+      policy.normalize(
+        frames[0].body,
+        a.find((r) => r.n === 16),
+      ),
+    ),
     core.normalizeBody(
       policy.normalize(
         b.find((r) => r.note === "stream-frame" && r.direction === "in").body,
-        nativeRow,
+        b.find((r) => r.n === 16),
       ),
     ),
   );
+});
+
+test("normalization cannot exchange the peer producer identity within a local response", () => {
+  const [a, b] = JSON.parse(
+    readFileSync(
+      new URL(
+        "./pubsub-production/fixtures/stream-dlq-normalization-recorded.json",
+        import.meta.url,
+      ),
+    ),
+  ).captures;
+  const policy = core.createFieldNormalization(a, b);
+  const expected = a.find((r) => r.n === 26),
+    peer = b.find((r) => r.n === 26);
+  const actual = structuredClone(expected);
+  actual.response.body.receivedMessages[0].message.data =
+    peer.response.body.receivedMessages[0].message.data;
+  assert.equal(core.judgeRow(expected, actual, { fieldNormalization: policy }).verdict, "DIVERGES");
+  const attrs = structuredClone(expected);
+  attrs.response.body.receivedMessages[0].message.attributes.recorderRun =
+    peer.response.body.receivedMessages[0].message.attributes.recorderRun;
+  assert.equal(core.judgeRow(expected, attrs, { fieldNormalization: policy }).verdict, "DIVERGES");
+});
+
+test("string list layouts preserve exact membership and cardinality independently of permutation", () => {
+  for (const key of ["subscriptions", "snapshots"]) {
+    const expected = exchange({
+      [key]: ["projects/demo/subscriptions/a", "projects/demo/subscriptions/b"],
+    });
+    assert.equal(
+      core.judgeRow(expected, exchange({ [key]: expected.response.body[key].toReversed() }))
+        .verdict,
+      "MATCH",
+    );
+    for (const list of [
+      ["projects/demo/subscriptions/a"],
+      ["projects/demo/subscriptions/a", "projects/demo/subscriptions/a"],
+      ["projects/demo/subscriptions/a", "projects/demo/subscriptions/c"],
+    ])
+      assert.equal(core.judgeRow(expected, exchange({ [key]: list })).verdict, "DIVERGES");
+  }
 });

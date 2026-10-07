@@ -7,11 +7,13 @@ export const minimumCallMs = (method) =>
     ? 43000
     : method === "CreateSubscription"
       ? 19000
-      : method.startsWith("Delete")
-        ? 13000
-        : method === "Publish"
-          ? 6000
-          : 10000;
+      : method === "CreateSnapshot"
+        ? 16000
+        : method.startsWith("Delete")
+          ? 13000
+          : method === "Publish"
+            ? 6000
+            : 10000;
 export const CAPS = Object.freeze({
   G3: { requests: 680, rest: 340, grpc: 340, streams: 0, cellMs: 120000 },
   G7: { requests: 14, rest: 14, grpc: 0, streams: 0 },
@@ -81,6 +83,7 @@ export function makePlan() {
       otherMs: 30000,
       minimumCreateTopicMs: 43000,
       minimumCreateSubscriptionMs: 19000,
+      minimumCreateSnapshotMs: 16000,
       minimumDeleteMs: 13000,
       minimumPublishMs: 6000,
       minimumOtherMs: 10000,

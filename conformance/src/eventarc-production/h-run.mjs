@@ -28,10 +28,8 @@ import { hProductionEvidence } from "./h-production.mjs";
 export const H_A2_RULING =
   "- 2026-10-06 | EVENTARC-H A2 list settlement | decision=APPROVE; for EVENTARC packet H recordings on fireemu-oracle-events, a separate coordinator A2 may use a fresh complete 2xx list (every page, nextPageToken exhausted, page cap not reached, envelope judged against the recorded shape) that omits an exact name, read at least 600 seconds after the recording's latest request, as the absence read in place of a 404, only in five collections: Cloud Functions v2 functions in us-central1, Cloud Run v2 services in us-central1, Eventarc triggers in us-central1, Pub/Sub topics (global) and Pub/Sub subscriptions (global); it closes only a create the run confirmed by its own complete positive list or its own done operation, or that name's own unknown or not-done DELETE; an unknown or operation-pending CREATE is never closed by absence; a managed Run service, trigger, topic or subscription closes only after its function closed; A2 may send one DELETE each for the exact run-owned confirmed retry marker and baseline-absent confirmed firebase channel, only after functions and cascades close, with a complete judged trigger list showing no channel dependents and exact-name read-backs; never resend a prior DELETE; the firebase channel and the retry marker keep their exact-name recorded GET and 404 routes | Claude（委任。オーナーの裁量の委任 2026-09-28） | docs.local/reviews/2026-10-06-eventarc-packet-h-v1-presend-review.md";
 
-export const H2_A2_RULING = H_A2_RULING.replace("EVENTARC-H A2", "EVENTARC-H2 A2")
-  .replace("packet H recordings", "packet H2 recordings")
-  .replace("confirmed firebase channel", "confirmed firebase and run-owned named channels")
-  .replace("the firebase channel and the retry marker", "both channels and the retry marker");
+export const H2_A2_RULING =
+  "- 2026-10-07 | EVENTARC-H2 A2 list settlement | decision=APPROVE; for EVENTARC packet H2 recordings (H2-A and H2-B) on fireemu-oracle-events, a separate coordinator A2 may use a fresh complete 2xx list (every page, nextPageToken exhausted, page cap not reached, envelope judged against the recorded shape) that omits an exact name, read at least 600 seconds after the recording's latest request, as the absence read in place of a 404, only in five collections: Cloud Functions v2 functions in us-central1, Cloud Run v2 services in us-central1, Eventarc triggers in us-central1, Pub/Sub topics (global) and Pub/Sub subscriptions (global); it closes only a create the run confirmed by its own complete positive list or its own done operation, a create whose own single native CREATE was answered with a judged 4xx refusal and no operation, or that name's own unknown or not-done DELETE; an unknown or operation-pending CREATE is never closed by absence; a managed Run service, trigger, topic or subscription closes only after its function closed; A2 may read the own operation of a prior channel DELETE and may send one DELETE each for the exact run-owned confirmed retry marker, the baseline-absent confirmed firebase channel and the run-owned confirmed named channel, only after functions and cascades close, with a complete judged trigger list showing no channel dependents and exact-name read-backs; the Pub/Sub topic a channel GET reports as pubsubTopic is that channel's own topic, not a function cascade, and closes only on that channel's DELETE done by its own operation, a 404 read-back of the channel and its absence from a complete topics list; never resend a prior DELETE; both channels and the retry marker keep their exact-name recorded GET and 404 routes | Claude（委任。オーナーの裁量の委任 2026-09-28） | docs.local/reviews/2026-10-07-eventarc-h2-presend-review.md";
 
 /** Replay checkpoints and unanswered intents; never infer ownership from absence or CLI exit. */
 export function readHJournal(path) {
@@ -223,7 +221,7 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
         const token = createTokenProvider({
           now,
           execFile: async (...args) => {
-            if (++credentialCalls > (m.functions ? 12 : 4))
+            if (++credentialCalls > (m.functions ? 16 : 4))
               throw new Error("H token invocation ceiling");
             if (deps.execToken) return deps.execToken(...args);
             return new Promise((resolve, reject) =>
@@ -276,22 +274,53 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
           const evidence = {
             ...(deps.evidence ?? hProductionEvidence),
             a2ListRuling: true,
-            ...(m.functions ? { a2ChannelRuling: true } : {}),
+            ...(m.functions
+              ? {
+                  a2ChannelRuling: readFileSync(config.ownerLedger, "utf8")
+                    .split("\n")
+                    .includes(H2_A2_RULING),
+                }
+              : {}),
           };
           if (m.functions)
             evidence.admitSegment ??= async ({ segment, result, settlement }) => {
               // Each admission binds the live checkpoint; a blanket pre-admission cannot continue a stopped probe.
+              const checkpoint = join(config.out, `checkpoint-${segment}.json`);
+              const preimage = JSON.stringify(result);
+              const fd = openSync(checkpoint, "wx", 0o600);
+              try {
+                writeFileSync(fd, preimage);
+                fsyncSync(fd);
+              } finally {
+                closeSync(fd);
+              }
               const digest = (await import("node:crypto"))
                 .createHash("sha256")
-                .update(JSON.stringify(result))
+                .update(preimage)
                 .digest("hex");
-              const line = `EVENTARC-H2 segment ${settlement ? `settlement (${settlement}) and ` : ""}admission | run=${m.runId}; source=${config.sourceCommit}; segment=${segment}; checkpoint=${digest}; decision=APPROVE`;
-              note("h-segment-admission-required", { segment, line });
+              const topic = `EVENTARC-H2 segment ${settlement ? `settlement (${settlement}) and ` : ""}admission`;
+              const body = `run=${m.runId}; source=${config.sourceCommit}; segment=${segment}; checkpoint=${digest}; decision=APPROVE`;
+              const line = `- ${new Date(now()).toISOString().slice(0, 10)} | ${topic} | ${body} | Claude（委任。オーナーの裁量の委任 2026-09-28） | docs.local/runs/${config.out.split(/[\\/]/).at(-1)}`;
+              note("h-segment-admission-required", { segment, checkpoint, line });
               while (
                 !controller.signal.aborted &&
                 now() + 21 * 60_000 <= result.startedAt + m.wallMs - m.cleanupReserveMs
               ) {
-                if (readFileSync(config.ownerLedger, "utf8").split("\n").includes(line))
+                if (
+                  readFileSync(config.ownerLedger, "utf8")
+                    .split("\n")
+                    .some((entry) => {
+                      const columns = entry.split(" | ");
+                      return (
+                        columns.length === 5 &&
+                        /^- \d{4}-\d{2}-\d{2}$/.test(columns[0]) &&
+                        columns[1] === topic &&
+                        columns[2] === body &&
+                        columns[3].length > 0 &&
+                        columns[4].length > 0
+                      );
+                    })
+                )
                   return true;
                 await sleep(5000);
               }

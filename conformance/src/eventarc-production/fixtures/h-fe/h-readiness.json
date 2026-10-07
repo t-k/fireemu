@@ -802,5 +802,28 @@
     },
     "bodyBytes": 484,
     "bodyBase64": "ewogICJuYW1lIjogInByb2plY3RzL2ZpcmVlbXUtb3JhY2xlLWV2ZW50cy9sb2NhdGlvbnMvdXMtY2VudHJhbDEvb3BlcmF0aW9ucy9vcGVyYXRpb24tYWFhYWFhYWFhYWFhYS02NWQyN2Q0Y2EwMzUwLTM4YjI0YWEwLWI1YTkyNmRlIiwKICAibWV0YWRhdGEiOiB7CiAgICAiQHR5cGUiOiAidHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUuY2xvdWQuZnVuY3Rpb25zLnYyLk9wZXJhdGlvbk1ldGFkYXRhIiwKICAgICJjcmVhdGVUaW1lIjogIjIwMjYtMTAtMDZUMDg6MzE6NTYuMTIzNDU2Nzg5WiIsCiAgICAidGFyZ2V0IjogInByb2plY3RzL2ZpcmVlbXUtb3JhY2xlLWV2ZW50cy9sb2NhdGlvbnMvdXMtY2VudHJhbDEvZnVuY3Rpb25zL2ZlMmFkNTM1NjNlNjFjSE9ic2VydmUiLAogICAgInZlcmIiOiAiY3JlYXRlIiwKICAgICJjYW5jZWxSZXF1ZXN0ZWQiOiBmYWxzZSwKICAgICJhcGlWZXJzaW9uIjogInYyIgogIH0sCiAgImRvbmUiOiBmYWxzZQp9Cg=="
+  },
+  {
+    "run": "H1-v5-A2",
+    "case": "channel-operation-not-done",
+    "method": "GET",
+    "url": "https://eventarc.googleapis.com/v1/projects/demo-eventarc-h/locations/us-central1/operations/operation-1234567890121-65d29513a209a-f2e2629b-85ef954c",
+    "status": 200,
+    "body": {
+      "name": "projects/demo-eventarc-h/locations/us-central1/operations/operation-123456789012-65d29513a209a-f2e2629b-85ef954c",
+      "metadata": {
+        "@type": "type.googleapis.com/google.cloud.eventarc.v1.OperationMetadata",
+        "createTime": "2026-10-06T10:18:18.123456789Z",
+        "target": "projects/demo-eventarc-h/locations/us-central1/channels/firebase",
+        "verb": "delete",
+        "requestedCancellation": false,
+        "apiVersion": "v1"
+      },
+      "done": false
+    },
+    "bodyBase64": "ewogICJuYW1lIjogInByb2plY3RzL2RlbW8tZXZlbnRhcmMtaC9sb2NhdGlvbnMvdXMtY2VudHJhbDEvb3BlcmF0aW9ucy9vcGVyYXRpb24tMTIzNDU2Nzg5MDEyLTY1ZDI5NTEzYTIwOWEtZjJlMjYyOWItODVlZjk1NGMiLAogICJtZXRhZGF0YSI6IHsKICAgICJAdHlwZSI6ICJ0eXBlLmdvb2dsZWFwaXMuY29tL2dvb2dsZS5jbG91ZC5ldmVudGFyYy52MS5PcGVyYXRpb25NZXRhZGF0YSIsCiAgICAiY3JlYXRlVGltZSI6ICIyMDI2LTEwLTA2VDEwOjE4OjE4LjEyMzQ1Njc4OVoiLAogICAgInRhcmdldCI6ICJwcm9qZWN0cy9kZW1vLWV2ZW50YXJjLWgvbG9jYXRpb25zL3VzLWNlbnRyYWwxL2NoYW5uZWxzL2ZpcmViYXNlIiwKICAgICJ2ZXJiIjogImRlbGV0ZSIsCiAgICAicmVxdWVzdGVkQ2FuY2VsbGF0aW9uIjogZmFsc2UsCiAgICAiYXBpVmVyc2lvbiI6ICJ2MSIKICB9LAogICJkb25lIjogZmFsc2UKfQo=",
+    "bodyBytes": 461,
+    "bodySha256": "616cf4d503a85b6f251e798f4d15df8fc9b7164327893115ee7299ca886dfc10",
+    "latencyMs": 1166
   }
 ]

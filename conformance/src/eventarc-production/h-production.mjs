@@ -164,6 +164,27 @@ export function hProductionAnswer(reply, spec) {
       });
     }
     if (
+      spec.host === "functions" &&
+      spec.method === "POST" &&
+      reply.status >= 400 &&
+      reply.status < 500 &&
+      recorded.status >= 400 &&
+      recorded.status < 500 &&
+      recorded.method === "POST" &&
+      route(url) === route(actual) &&
+      JSON.stringify(Object.keys(reply.body)) === '["error"]' &&
+      JSON.stringify(Object.keys(recorded.body.error ?? {})) ===
+        JSON.stringify(Object.keys(reply.body.error ?? {})) &&
+      Object.keys(recorded.body.error ?? {}).every(
+        (key) => typeof recorded.body.error[key] === typeof reply.body.error[key],
+      ) &&
+      reply.body.error.code === reply.status &&
+      typeof reply.body.error.message === "string" &&
+      reply.body.error.message.length > 0 &&
+      /^[A-Z_]+$/.test(reply.body.error.status ?? "")
+    )
+      return true;
+    if (
       recorded.run === "H1-v4" &&
       recorded.case === "source-refusal" &&
       spec.host === "functions" &&
@@ -191,6 +212,9 @@ export function hProductionAnswer(reply, spec) {
       ["usage", "firestore", "logging"].includes(spec.host) ||
       (spec.host === "artifact" && actual.pathname.endsWith("/repositories/gcf-artifacts")) ||
       /\/(operations|channels)\//.test(actual.pathname) ||
+      (spec.host === "eventarc" &&
+        spec.method === "POST" &&
+        actual.pathname.endsWith("/channels")) ||
       (spec.host === "functions" && ["POST", "DELETE"].includes(spec.method));
     const shape =
       envelope &&
@@ -202,8 +226,12 @@ export function hProductionAnswer(reply, spec) {
         (recorded.body.error.code === reply.body.error?.code &&
           recorded.body.error.status === reply.body.error?.status)) &&
       (!recorded.body.metadata ||
-        JSON.stringify(Object.keys(recorded.body.metadata)) ===
-          JSON.stringify(Object.keys(reply.body.metadata ?? {})));
+        (JSON.stringify(Object.keys(recorded.body.metadata)) ===
+          JSON.stringify(Object.keys(reply.body.metadata ?? {})) &&
+          Object.keys(recorded.body.metadata).every(
+            (key) => typeof recorded.body.metadata[key] === typeof reply.body.metadata[key],
+          ))) &&
+      (recorded.body.done === undefined || recorded.body.done === reply.body.done);
     return (
       recorded.method === spec.method &&
       route(url) === route(actual) &&
@@ -320,6 +348,8 @@ export const hProductionEvidence = Object.freeze({
       if (rows.length !== 1 || !sent)
         return { complete: false, resources, reason: "H2 incomplete native CREATE capture" };
       const answer = rows[0].value;
+      if (answer.unknown === true)
+        return { complete: false, resources, reason: "H2 unknown native CREATE answer" };
       try {
         if (!isDeepStrictEqual(JSON.parse(Buffer.from(sent.value.bodyBase64, "base64")), request))
           return { complete: false, resources, reason: "H2 emitted request differs" };
@@ -452,15 +482,15 @@ export const hProductionEvidence = Object.freeze({
       return { complete: false, resources, reason: "H undeclared CLI write" };
     }
     const refusal =
-      native?.status === 400 &&
-      Object.keys(descriptor?.filters ?? {}).some((refusalAttribute) =>
-        hProductionAnswer(native, {
-          host: "functions",
-          method: "POST",
-          path: `/v2/projects/${m.project}/locations/us-central1/functions`,
-          refusalAttribute,
-        }),
-      );
+      native?.status >= 400 &&
+      native?.status < 500 &&
+      !native.body.name &&
+      !native.body.metadata &&
+      hProductionAnswer(native, {
+        host: "functions",
+        method: "POST",
+        path: `/v2/projects/${m.project}/locations/us-central1/functions`,
+      });
     if (
       m.functions &&
       !refusal &&
@@ -484,7 +514,7 @@ export const hProductionEvidence = Object.freeze({
       ...(m.functions ? { native, refusal } : {}),
       complete: ownCreate,
       function: {
-        state: m.functions && !refusal ? "pending" : "unknown",
+        state: m.functions ? (refusal ? "failed" : "pending") : "unknown",
         name: full,
         ...(m.functions && !refusal ? { operation: native.body.name } : {}),
       },

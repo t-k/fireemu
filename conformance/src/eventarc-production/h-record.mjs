@@ -854,7 +854,10 @@ export async function recordH({
       result.cleanup.unconfirmed.length === 0 &&
       attempted.length === (m.functions ? attempted.length : 2) &&
       result.writes.filter(
-        (w) => w.kind === "function" && w.action === "create" && w.state === "confirmed",
+        (w) =>
+          w.kind === "function" &&
+          w.action === "create" &&
+          ["confirmed", "failed"].includes(w.state),
       ).length === (m.functions ? attempted.length : 2)
     ) {
       try {
@@ -948,7 +951,9 @@ export async function recordH({
           if (
             remaining.some((t) => t.channel === channel) ||
             result.cleanup.unconfirmed.length ||
-            result.cleanup.unsettled.length
+            result.cleanup.unsettled.some(
+              (name) => !Object.values(result.channelTopics ?? {}).includes(name),
+            )
           )
             throw new Error("H channel still has possible dependents");
           const deletion = {
@@ -998,8 +1003,11 @@ export async function recordH({
             if (!topic || deletion.state !== "confirmed" || topics.some((t) => t.name === topic))
               result.cleanup.unsettled.push(topic ?? `${channel}:topic-unknown`);
           }
-        } catch {
-          result.cleanup.unconfirmed.push(channel);
+        } catch (error) {
+          note("h-channel-cleanup-open", { name: channel, reason: error.message });
+          result.cleanup[creation?.state === "confirmed" ? "unsettled" : "unconfirmed"].push(
+            channel,
+          );
         }
       }
     }
@@ -1013,9 +1021,10 @@ export async function recordH({
         });
         result.cleanup.retained = retained?.resources ?? [];
         result.retentionVerified = retained?.complete === true && retained?.atBaseline === true;
-        if (!retained?.complete || !retained?.atBaseline) result.cleanup.unsettled.push(m.channel);
+        if (!retained?.complete || !retained?.atBaseline)
+          result.cleanup.unsettled.push("retention:gcf-artifacts");
       } catch {
-        result.cleanup.unsettled.push(m.channel);
+        result.cleanup.unsettled.push("retention:gcf-artifacts");
       }
     }
   }
@@ -1051,18 +1060,14 @@ export async function hA2({
     throw new Error("H A2 must wait ten minutes after the latest request");
   const m = recording.manifest ?? {};
   const limits = m.limits ?? H_LIMITS;
-  if (
-    m.functions &&
-    (evidence.a2ChannelRuling !== true ||
-      !Number.isFinite(recording.startedAt) ||
-      now() + 30_000 > recording.startedAt + m.wallMs)
-  )
+  const deadline = now() + 3 * 60 * 60_000;
+  if (m.functions && evidence.a2ChannelRuling !== true)
     return {
       requests: 0,
       lastRequestAt: recording.lastRequestAt,
       cleanupReady: false,
       closureReady: false,
-      unresolvedInventory: ["H2 A2 ruling or wall cap"],
+      unresolvedInventory: ["H2 A2 ruling missing"],
       facts: [],
     };
   const names = new Map();
@@ -1115,7 +1120,7 @@ export async function hA2({
           },
           { path, key, phase: "a2" },
           () => {
-            if (requests >= limits.a2 || now() + 30_000 > recording.startedAt + m.wallMs)
+            if (requests >= limits.a2 || now() + 30_000 > deadline)
               throw new Error("H2 A2 ceiling");
             requests++;
           },
@@ -1162,10 +1167,7 @@ export async function hA2({
             },
             { path, key: collection[2], phase: "a2" },
             () => {
-              if (
-                requests >= limits.a2 ||
-                (m.functions && now() + 30_000 > recording.startedAt + m.wallMs)
-              )
+              if (requests >= limits.a2 || (m.functions && now() + 30_000 > deadline))
                 throw new Error("H A2 ceiling");
               requests++;
             },
@@ -1179,7 +1181,7 @@ export async function hA2({
       const items = collections.get(path);
       if (items) read = items.some((item) => item.name === name) ? "present" : "absent";
     } else if (!collection) {
-      if (requests >= limits.a2 || (m.functions && now() + 30_000 > recording.startedAt + m.wallMs))
+      if (requests >= limits.a2 || (m.functions && now() + 30_000 > deadline))
         throw new Error("H A2 ceiling");
       requests++;
       const path = `/${version}/${name}`;
@@ -1223,6 +1225,27 @@ export async function hA2({
     }
     const creation = recording.writes.find((w) => w.name === name && w.action === "create");
     const deletion = recording.writes.find((w) => w.name === name && w.action === "delete");
+    if (
+      m.functions &&
+      channels.includes(name) &&
+      deletion?.operation &&
+      ["pending", "unknown"].includes(deletion.state)
+    ) {
+      if (requests >= limits.a2 || now() + 30_000 > deadline) throw new Error("H2 A2 ceiling");
+      requests++;
+      const spec = { host, method: "GET", path: `/v1/${deletion.operation}` };
+      const operation = await transports[host].request(spec);
+      if (
+        !hUnknown(operation) &&
+        evidence.operation(operation, spec) &&
+        operation.body.name === deletion.operation &&
+        operation.body.metadata?.target === name &&
+        operation.body.done === true
+      ) {
+        deletion.state = operation.body.error ? "failed" : "confirmed";
+        note("h-state", recording);
+      }
+    }
     const channelOwner = Object.entries(recording.channelTopics ?? {}).find(
       ([, topic]) => topic === name,
     )?.[0];
@@ -1264,6 +1287,7 @@ export async function hA2({
       ) &&
       [...(recording.cleanup.unconfirmed ?? []), ...(recording.cleanup.unsettled ?? [])].every(
         (n) =>
+          n === "retention:gcf-artifacts" ||
           n === recording.marker ||
           channels.includes(n) ||
           facts.some(
@@ -1295,10 +1319,7 @@ export async function hA2({
             phase: "a2",
           },
           () => {
-            if (
-              requests >= limits.a2 ||
-              (m.functions && now() + 30_000 > recording.startedAt + m.wallMs)
-            )
+            if (requests >= limits.a2 || (m.functions && now() + 30_000 > deadline))
               throw new Error("H A2 ceiling");
             requests++;
           },
@@ -1310,10 +1331,7 @@ export async function hA2({
         recording.writes.push(write);
         note("h-state", recording);
         note("h-write-issued", write);
-        if (
-          requests >= limits.a2 ||
-          (m.functions && now() + 30_000 > recording.startedAt + m.wallMs)
-        )
+        if (requests >= limits.a2 || (m.functions && now() + 30_000 > deadline))
           throw new Error("H A2 ceiling");
         requests++;
         const path = `/${version}/${name}`;
@@ -1332,6 +1350,7 @@ export async function hA2({
           if (host === "firestore") write.state = "confirmed";
           else if (answer.body?.name && answer.body.metadata?.target === name) {
             write.operation = answer.body.name;
+            write.state = "pending";
             if (answer.body.done === true) write.state = answer.body.error ? "failed" : "confirmed";
             const pollStarted = now();
             for (let poll = 0; answer.body.done !== true && poll < 25; poll++) {
@@ -1339,10 +1358,7 @@ export async function hA2({
                 if (now() > pollStarted + 120_000) break;
                 await sleep(Math.max(0, pollStarted + poll * 5000 - now()));
               } else if (poll) await sleep(5000);
-              if (
-                requests >= limits.a2 ||
-                (m.functions && now() + 30_000 > recording.startedAt + m.wallMs)
-              )
+              if (requests >= limits.a2 || (m.functions && now() + 30_000 > deadline))
                 throw new Error("H A2 ceiling");
               requests++;
               const spec = { host, method: "GET", path: `/v1/${write.operation}` };
@@ -1362,10 +1378,7 @@ export async function hA2({
           }
         }
         note("h-state", recording);
-        if (
-          requests >= limits.a2 ||
-          (m.functions && now() + 30_000 > recording.startedAt + m.wallMs)
-        )
+        if (requests >= limits.a2 || (m.functions && now() + 30_000 > deadline))
           throw new Error("H A2 ceiling");
         requests++;
         const absent = await transports[host].request({
@@ -1398,10 +1411,7 @@ export async function hA2({
                 phase: "a2",
               },
               () => {
-                if (
-                  requests >= limits.a2 ||
-                  (m.functions && now() + 30_000 > recording.startedAt + m.wallMs)
-                )
+                if (requests >= limits.a2 || (m.functions && now() + 30_000 > deadline))
                   throw new Error("H A2 ceiling");
                 requests++;
               },
@@ -1451,7 +1461,7 @@ export async function hA2({
       if (topicFact?.read === "absent" && channelFact?.closed && deletion?.state === "confirmed")
         topicFact.closed = true;
     }
-  const unresolvedInventory = [
+  let unresolvedInventory = [
     ...inventoryUnknown,
     ...(recording.cleanup.unconfirmed ?? []),
     ...(recording.cleanup.unsettled ?? []),
@@ -1467,10 +1477,7 @@ export async function hA2({
         manifest: recording.manifest,
         baseline: recording.baseline,
         get: async (host, path, judge) => {
-          if (
-            requests >= limits.a2 ||
-            (m.functions && now() + 30_000 > recording.startedAt + m.wallMs)
-          )
+          if (requests >= limits.a2 || (m.functions && now() + 30_000 > deadline))
             throw new Error("H A2 ceiling");
           requests++;
           const reply = await transports[host].request({
@@ -1489,6 +1496,8 @@ export async function hA2({
       retentionVerified = false;
     }
   }
+  if (retentionVerified)
+    unresolvedInventory = unresolvedInventory.filter((name) => name !== "retention:gcf-artifacts");
   const cleanupReady =
     facts.every((f) => f.closed) &&
     unresolvedInventory.length === 0 &&

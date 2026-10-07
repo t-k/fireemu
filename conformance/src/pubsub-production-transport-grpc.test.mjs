@@ -15,7 +15,7 @@ import {
 } from "./pubsub-production/grpc.mjs";
 
 const v1 = protos.google.pubsub.v1;
-const TOKEN = "ya29.a0AfH6SMBsecretsecretsecretsecretsecret";
+const TOKEN = "synthetic-access-token-for-tests-only";
 const HANG = Symbol("hang");
 const typeOf = (name) => (name === "Empty" ? protos.google.protobuf.Empty : v1[name]);
 

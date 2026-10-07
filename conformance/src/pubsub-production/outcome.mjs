@@ -20,10 +20,13 @@ const nativeErrors = new Set([
   "UNIMPLEMENTED",
 ]);
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
-export function unknownOutcome(reply) {
+export function unknownOutcome(reply, { method, request } = {}) {
   if (!object(reply) || reply.unknown === true || !object(reply.body)) return true;
   if (reply.ok === true)
     return (
+      (method === "UpdateSubscription" &&
+        (typeof request?.subscription?.name !== "string" ||
+          reply.body.name !== request.subscription.name)) ||
       reply.code !== "OK" ||
       "error" in reply.body ||
       (reply.status !== undefined &&
@@ -42,4 +45,7 @@ export function unknownOutcome(reply) {
     (reply.body.error.code !== undefined && reply.body.error.code !== reply.status)
   );
 }
-export const normalizeOutcome = (reply) => ({ ...reply, unknown: unknownOutcome(reply) });
+export const normalizeOutcome = (reply, context) => ({
+  ...reply,
+  unknown: unknownOutcome(reply, context),
+});

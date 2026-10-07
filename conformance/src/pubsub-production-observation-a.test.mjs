@@ -515,7 +515,10 @@ test("REST subscription update uses the request subscription name and field mask
     client: { close() {} },
     fetch: async (url, options) => {
       sent = { url, ...options };
-      return new Response("{}", { status: 200 });
+      return new Response(
+        JSON.stringify({ name: "projects/fixture/subscriptions/fe123456abcdef-a" }),
+        { status: 200 },
+      );
     },
   });
   await wire.call({
@@ -1898,3 +1901,133 @@ test("native G1 setup update and cleanup traverse decoded protobuf requests", as
     wire.close();
   }
 });
+
+for (const transport of ["rest", "grpc"])
+  test(`Task26 actual ${transport} malformed update success stops the cell while cleanup and durable debt survive`, async () => {
+    const { createJournal } = await import("./pubsub-observation/journal.mjs");
+    const { tempDir } = await import("./test-tmpdir.mjs");
+    const { join } = await import("node:path");
+    for (const foreign of [false, true])
+      for (const refuseDelete of [false, true]) {
+        const cell = makePlan().cells.find(
+          (item) => item.id === (transport === "rest" ? "R3" : "N3"),
+        );
+        const meter = createMeter({ now: () => 0 });
+        meter.enter(cell);
+        const world = fakeWorld();
+        const journalRoot = tempDir("pubsub-task26-");
+        const journal = createJournal(journalRoot, "123456abcdef");
+        const ledger = createLedger();
+        const answer = async (method, request) => {
+          if (method.startsWith("Delete") && refuseDelete) throw new Error("cleanup refused");
+          const reply = await world.call({ method, request });
+          return method === "UpdateSubscription"
+            ? { ...reply, body: foreign ? { name: `${request.subscription.name}-foreign` } : {} }
+            : reply;
+        };
+        const wire = createWire({
+          meter,
+          journal,
+          getToken: async () => "fixture-token",
+          fetch: async (url, options) => {
+            const name = decodeURIComponent(new URL(url).pathname.slice(4));
+            const suffix = name.includes("/topics/") ? "Topic" : "Subscription";
+            const method =
+              options.method === "PATCH"
+                ? "UpdateSubscription"
+                : `${{ PUT: "Create", GET: "Get", DELETE: "Delete" }[options.method]}${suffix}`;
+            const request = options.body === undefined ? { name } : JSON.parse(options.body);
+            const reply = await answer(method, request);
+            return new Response(JSON.stringify(reply.body), {
+              status: reply.ok ? 200 : (reply.status ?? 404),
+            });
+          },
+          client: {
+            close() {},
+            makeUnaryRequest(path, _encode, _decode, raw, _metadata, _options, callback) {
+              const method = path.split("/").at(-1);
+              const service = path.includes("Publisher") ? "Publisher" : "Subscriber";
+              const [input, output] = SERVICES[service].methods[method];
+              const request = typeOf(input).toObject(typeOf(input).decode(raw), {
+                defaults: false,
+              });
+              if (method.startsWith("Get") || method.startsWith("Delete"))
+                request.name = request[method.endsWith("Topic") ? "topic" : "subscription"];
+              if (method === "UpdateSubscription")
+                request.updateMask = request.updateMask.paths.join(",");
+              const rpc = new EventEmitter();
+              rpc.cancel = () => {};
+              queueMicrotask(async () => {
+                try {
+                  const reply = await answer(method, request);
+                  callback(
+                    reply.ok ? null : { code: 5, details: "missing own resource" },
+                    reply.ok
+                      ? Buffer.from(
+                          typeOf(output).encode(typeOf(output).fromObject(reply.body)).finish(),
+                        )
+                      : undefined,
+                  );
+                  rpc.emit("status", { code: reply.ok ? 0 : 5, details: "" });
+                } catch {
+                  callback({ code: 14, details: "cleanup refused" });
+                  rpc.emit("status", { code: 14, details: "cleanup refused" });
+                }
+              });
+              return rpc;
+            },
+          },
+        });
+        try {
+          const result = await runCell({
+            cell,
+            meter,
+            wire,
+            ledger,
+            runId: "123456abcdef",
+            journal,
+          });
+          assert.equal(result.complete, false);
+          assert.equal(result.cleanupClosed, !refuseDelete);
+          assert.equal(
+            world.calls.filter((call) => call.method === "UpdateSubscription").length,
+            1,
+          );
+          await assert.rejects(
+            wire.call({
+              cellId: "later",
+              category: "get",
+              transport,
+              service: "Publisher",
+              method: "GetTopic",
+              request: { name: "projects/fixture-project/topics/fe123456abcdef-later" },
+            }),
+            /source stopped/,
+          );
+          if (!refuseDelete) {
+            assert.equal(world.resources.size, 0);
+            assert.equal(ledger.outstanding().length, 0);
+          }
+        } finally {
+          wire.close();
+          journal.close();
+        }
+        const recovery = readFileSync(join(journalRoot, "recovery-123456abcdef.jsonl"), "utf8")
+          .trim()
+          .split("\n")
+          .map(JSON.parse);
+        const outstanding = recovery.at(-1).obligations;
+        assert.equal(outstanding.length > 0, refuseDelete);
+        if (refuseDelete) {
+          for (const name of world.resources.keys())
+            assert.ok(outstanding.some((obligation) => obligation.name === name));
+          assert.ok(
+            outstanding.some((obligation) =>
+              obligation.requests.some(
+                (request) => request.action === "create" && request.resolution === "confirmed",
+              ),
+            ),
+          );
+        }
+      }
+  });

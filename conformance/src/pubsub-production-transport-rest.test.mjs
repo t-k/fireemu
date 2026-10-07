@@ -5,7 +5,7 @@ import { createBudget, createCapture } from "./pubsub-production/capture.mjs";
 import { createRest, parseBody } from "./pubsub-production/rest.mjs";
 import { createTokenProvider } from "./pubsub-production/token.mjs";
 
-const TOKEN = "ya29.a0AfH6SMBsecretsecretsecretsecretsecret";
+const TOKEN = "synthetic-access-token-for-tests-only";
 
 async function server(handler) {
   const seen = [];

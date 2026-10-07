@@ -19,7 +19,7 @@ fireemu-core-firestore = { path = "../fireemu-core-firestore" }
 fireemu-core-storage = { path = "../fireemu-core-storage" }
 fireemu-core-session = { path = "../fireemu-core-session" }
 fireemu-adapter-grpc = { path = "../fireemu-adapter-grpc" }
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "io-util", "process", "time"] }
 hyper = { version = "1", features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }

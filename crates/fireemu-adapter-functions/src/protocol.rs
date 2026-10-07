@@ -16,10 +16,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FRAME_LENGTH_DIGITS: usize = 8;
 
-/// Encodes one frame.
+/// Encodes one JSON frame from a `Value` or `RawValue`, retaining raw member order.
 #[must_use]
-pub fn encode_frame(v: &Value) -> Vec<u8> {
-    let payload = serde_json::to_vec(v).unwrap_or_default();
+pub fn encode_frame(v: &impl std::fmt::Display) -> Vec<u8> {
+    let payload = v.to_string().into_bytes();
     let mut out = format!("{}\n", payload.len()).into_bytes();
     out.extend_from_slice(&payload);
     out
@@ -66,10 +66,10 @@ pub async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
         .map_err(|e| std::io::Error::other(format!("malformed frame JSON: {e}")))
 }
 
-/// Writes one frame.
+/// Writes one JSON frame from a `Value` or `RawValue`.
 pub async fn write_frame<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut W,
-    v: &Value,
+    v: &impl std::fmt::Display,
 ) -> std::io::Result<()> {
     writer.write_all(&encode_frame(v)).await?;
     writer.flush().await

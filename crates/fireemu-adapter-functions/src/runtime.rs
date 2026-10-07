@@ -711,6 +711,7 @@ struct Inner {
 struct QueuedPayload {
     function: String,
     payload: Arc<Value>,
+    raw_data: Option<Arc<str>>,
     retained_bytes: usize,
     source: EventSource,
     /// When the runtime admitted the event. The runner frame carries it as `admittedAt`: it is
@@ -1801,6 +1802,7 @@ impl FunctionsRuntime {
                 subject,
                 time,
                 payload,
+                None,
             );
         }
     }
@@ -1837,6 +1839,7 @@ impl FunctionsRuntime {
                     &subject,
                     at,
                     payload,
+                    None,
                 );
             }
             return Ok(self.empty_event_reservation());
@@ -1895,9 +1898,11 @@ impl FunctionsRuntime {
         subject: &str,
         time: LogicalInstant,
         payload: &Value,
+        raw_data: Option<&str>,
     ) -> bool {
         let Some(retained_bytes) =
             Self::retained_event_bytes(function, event_type, subject, payload)
+                .and_then(|bytes| bytes.checked_add(raw_data.map_or(0, str::len)))
         else {
             return false;
         };
@@ -1940,6 +1945,7 @@ impl FunctionsRuntime {
                 QueuedPayload {
                     function: function.to_owned(),
                     payload: Arc::new(payload.clone()),
+                    raw_data: raw_data.map(Arc::from),
                     retained_bytes,
                     source,
                     admitted_at: time,
@@ -2084,6 +2090,7 @@ impl FunctionsRuntime {
                 payload: QueuedPayload {
                     function: draft.function,
                     payload: draft.payload,
+                    raw_data: None,
                     retained_bytes,
                     source,
                     admitted_at: draft.time,
@@ -2897,7 +2904,9 @@ impl FunctionsRuntime {
             }
             let payload_bytes = serde_json::to_vec(&event.event)
                 .map_err(|_| EventarcPublishError::InvalidEvent)?
-                .len();
+                .len()
+                .checked_add(event.raw_data.as_deref().map_or(0, str::len))
+                .ok_or(EventarcPublishError::Capacity)?;
             let remaining = MAX_ACTIVE_EVENTARC_RECORDS.saturating_sub(delivery_count);
             let functions = registry
                 .matching_functions(channel, &event.event_type, &event.attributes, remaining)
@@ -2955,6 +2964,7 @@ impl FunctionsRuntime {
                     channel,
                     time,
                     &event.event,
+                    event.raw_data.as_deref(),
                 );
                 debug_assert!(admitted, "pre-admitted Eventarc delivery must enqueue");
             }
@@ -5055,6 +5065,7 @@ impl FunctionsRuntime {
                 epoch,
                 &queued.payload,
                 queued.admitted_at,
+                queued.raw_data.as_deref(),
             );
             let key = format!("{}-{attempt}", id.value());
             inner.running.insert(key.clone(), function_name.clone());
@@ -5123,6 +5134,7 @@ impl FunctionsRuntime {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn invoke_request(
         &self,
         id: EventId,
@@ -5131,7 +5143,11 @@ impl FunctionsRuntime {
         epoch: Epoch,
         event: &Value,
         admitted_at: LogicalInstant,
-    ) -> Result<Value, fireemu_adapter_support::entropy::EntropyUnavailable> {
+        raw_data: Option<&str>,
+    ) -> Result<
+        Box<serde_json::value::RawValue>,
+        fireemu_adapter_support::entropy::EntropyUnavailable,
+    > {
         let now = self.now();
         let deadline = now
             .checked_add(LogicalDuration::from_seconds(i64::from(
@@ -5167,7 +5183,7 @@ impl FunctionsRuntime {
             }
             event["traceparent"] = json!(format!("00-{trace_id}-{parent_id}-01"));
         }
-        Ok(json!({
+        let request = json!({
             "invocationId": format!("{}-{attempt}", id.value()),
             "function": spec.name,
             "entryPoint": spec.entry_point,
@@ -5178,7 +5194,41 @@ impl FunctionsRuntime {
             "attempt": attempt,
             "session": self.config.session.value().to_string(),
             "epoch": epoch.value(),
-        }))
+        });
+        let mut members: BTreeMap<_, _> = request
+            .as_object()
+            .expect("invocation request is an object")
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.clone(),
+                    serde_json::value::to_raw_value(value).expect("JSON value serializes"),
+                )
+            })
+            .collect();
+        if let Some(raw_data) = raw_data {
+            let mut payload: BTreeMap<_, _> = event
+                .as_object()
+                .expect("custom event is an object")
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        name.clone(),
+                        serde_json::value::to_raw_value(value).expect("JSON value serializes"),
+                    )
+                })
+                .collect();
+            payload.insert(
+                "data".to_owned(),
+                serde_json::value::RawValue::from_string(raw_data.to_owned())
+                    .expect("custom JSON data was validated before admission"),
+            );
+            members.insert(
+                "event".to_owned(),
+                serde_json::value::to_raw_value(&payload).expect("raw event serializes"),
+            );
+        }
+        Ok(serde_json::value::to_raw_value(&members).expect("raw invocation serializes"))
     }
 
     /// Frees an invocation slot.
@@ -5558,16 +5608,20 @@ mod task_completion_tests {
                 },
                 Trigger::Eventarc {
                     event_type: "example.event".to_owned(),
-                    channel: "google".to_owned(),
+                    channel: "locations/us-central1/channels/custom".to_owned(),
                     filters: std::collections::BTreeMap::default(),
                 },
             ] {
                 spec.trigger = trigger;
+                let raw_data = matches!(spec.trigger, Trigger::Eventarc { .. })
+                    .then_some(r#"{"z":3,"a":{"last":true,"first":null}}"#);
                 for generation in [FunctionGeneration::First, FunctionGeneration::Second] {
                     spec.generation = generation;
                     // FE v5/v7 retry frames have the same event id and different trace and parent ids.
                     for (event_id, attempt) in [(1, 1), (1, 2), (2, 1), (2, 2)] {
-                        let event = json!({"id": format!("event-{event_id}"), "specversion": "1.0", "data": {}});
+                        let data =
+                            raw_data.map_or(json!({}), |raw| serde_json::from_str(raw).unwrap());
+                        let event = json!({"id": format!("event-{event_id}"), "specversion": "1.0", "data": data});
                         let request = runtime
                             .invoke_request(
                                 EventId::new(event_id),
@@ -5576,8 +5630,14 @@ mod task_completion_tests {
                                 Epoch::initial(),
                                 &event,
                                 runtime.now(),
+                                raw_data,
                             )
                             .unwrap();
+                        if let Some(raw_data) = raw_data {
+                            assert!(request.get().contains(&format!("\"data\":{raw_data}")));
+                        }
+                        let request: serde_json::Value =
+                            serde_json::from_str(request.get()).unwrap();
                         let delivered = &request["event"];
                         if profile == FunctionsHttpProfile::Strict
                             && generation == FunctionGeneration::Second
@@ -6144,6 +6204,7 @@ mod task_completion_tests {
                     "projects/demo-app/locations/us-central1/channels/custom",
                     now,
                     &payload,
+                    None,
                 ));
             }
             let retained = inner.active_event_bytes;
@@ -6156,6 +6217,7 @@ mod task_completion_tests {
                 "projects/demo-app/locations/us-central1/channels/custom",
                 now,
                 &payload,
+                None,
             ));
             assert!(FunctionsRuntime::enqueue(
                 &mut inner,
@@ -6166,6 +6228,7 @@ mod task_completion_tests {
                 "documents/reserved-for-other-sources",
                 now,
                 &payload,
+                None,
             ));
             FunctionsRuntime::remove_payload(&mut inner, super::EventId::new(1));
             assert!(inner.active_event_bytes < retained);
@@ -6178,6 +6241,7 @@ mod task_completion_tests {
                 "projects/demo-app/locations/us-central1/channels/custom",
                 now,
                 &payload,
+                None,
             ));
 
             inner.active_event_bytes = super::MAX_ACTIVE_EVENT_BYTES - 1;

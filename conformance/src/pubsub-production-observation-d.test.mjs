@@ -782,3 +782,26 @@ test("D authentic prior-C and exact APPROVE scope refuse modified SHA identity p
   }
 });
 import { sha256 } from "./pubsub-production/admission.mjs";
+
+test("D pure generated near misses keep source tokens and recovery age closed", async () => {
+  const expected = { data: "YWJj", attributes: { recorderRun: "123456abcdef" } },
+    values = new Map([["own", expected]]),
+    body = {
+      receivedMessages: [{ ackId: "observed", message: { messageId: "own", ...expected } }],
+    };
+  assert.equal(parseDelivery(body, values).length, 1);
+  for (const field of ["messageId", "data", "attributes", "ackId"]) {
+    const changed = structuredClone(body);
+    if (field === "ackId") changed.receivedMessages[0].ackId = "";
+    else
+      changed.receivedMessages[0].message[field] =
+        field === "attributes" ? { recorderRun: "foreign" } : "foreign";
+    assert.throws(() => parseDelivery(changed, values));
+  }
+  for (const age of [0, 599999, NaN, -1])
+    await assert.rejects(() => recoverA2({ elapsedMs: age }), /minimum age/);
+  for (const c of makePlan().cells) {
+    assert.equal(c.cellMs, c.arm === "no-new-grant" ? 900000 : 1800000);
+    assert.equal(c.cleanupReserveMs, c.arm === "no-new-grant" ? 60000 : 120000);
+  }
+});

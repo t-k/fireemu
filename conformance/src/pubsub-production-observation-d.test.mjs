@@ -1248,3 +1248,55 @@ test("D actual REST unreadable and3xx5xx answers remain unknown", async () => {
     }
   }
 });
+
+test("Task24 D retains all graph obligations when restoration throws outside per-entry catches", async () => {
+  const w = world(makePlan().cells.find((c) => c.arm !== "no-new-grant"));
+  const checkpoints = [];
+  w.journal.recovery = (row) => checkpoints.push(structuredClone(row));
+  const r = await runCell({
+    ...w,
+    createIamManager(options) {
+      const manager = createIamOwnership(options);
+      return {
+        ...manager,
+        async restore() {
+          throw new Error("restoration unavailable");
+        },
+      };
+    },
+  });
+  assert.equal(r.complete, false);
+  assert.equal(r.cleanupClosed, false);
+  assert.equal(w.calls.filter((c) => c.method.startsWith("Delete")).length, 0);
+  assert.equal(w.resources.size, 4);
+  assert.equal(checkpoints.at(-1).obligations.length, 4);
+  assert.ok(checkpoints.at(-1).iam.length >= 2);
+});
+
+test("Task24 D preserves returned unsettled entries even when the manager reports no outstanding delta", async () => {
+  const w = world(makePlan().cells.find((c) => c.arm !== "no-new-grant"));
+  const checkpoints = [];
+  w.journal.recovery = (row) => checkpoints.push(structuredClone(row));
+  let manager;
+  const r = await runCell({
+    ...w,
+    iamJournal: {
+      write(row) {
+        if (row.phase === "restore-confirmed")
+          throw new Error("restore confirmation persistence refused");
+        w.journal.write(row);
+      },
+    },
+    createIamManager(options) {
+      manager = createIamOwnership(options);
+      return manager;
+    },
+  });
+  assert.equal(manager.outstanding().length, 0);
+  assert.equal(r.iam.unsettled.length, 2);
+  assert.equal(r.cleanupClosed, false);
+  assert.equal(r.complete, false);
+  assert.equal(w.calls.filter((c) => c.method.startsWith("Delete")).length, 0);
+  assert.equal(checkpoints.at(-1).obligations.length, 4);
+  assert.equal(checkpoints.at(-1).iam.length, 2);
+});

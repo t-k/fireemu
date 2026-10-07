@@ -1,5 +1,7 @@
+import { protectCell, checkpoint, obligations } from "../pubsub-observation/safety.mjs";
+import { normalizeOutcome } from "../pubsub-production/outcome.mjs";
 import { isDeepStrictEqual } from "node:util";
-import { kindOf } from "../pubsub-production/ledger.mjs";
+import { kindOf } from "../pubsub-observation/ledger.mjs";
 import { createIamOwnership, readPolicy, waitAfterLastGrant } from "../pubsub-production/iam.mjs";
 import { PROJECT, makePlan, minimumCallMs } from "./plan.mjs";
 const settled = (ledger, name) =>
@@ -113,6 +115,7 @@ export async function runCell({
   journal,
   iamJournal = journal,
   serviceAgent,
+  createIamManager = createIamOwnership,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
 }) {
   const g = graph(cell, runId),
@@ -153,6 +156,10 @@ export async function runCell({
         : null;
     if (action === "delete" && (ledger.deleting(name) || ledger.unconfirmed(name)))
       throw new Error("unknown delete cannot retry");
+    if (action) {
+      tracked.add(name);
+      checkpoint(journal, ledger, tracked, cell.id, [{ name, action, transport: transport }]);
+    }
     const intent = action
       ? { name, action, transport, requestId: ledger.sent({ name, action, transport }) }
       : null;
@@ -171,6 +178,7 @@ export async function runCell({
       if (intent) ledger.answered({ ...intent, kind: "unknown" });
       throw error;
     }
+    reply = normalizeOutcome(reply);
     let kind = kindOf(reply);
     if (
       (action === "create" || (method.startsWith("Get") && !method.includes("Iam"))) &&
@@ -234,214 +242,278 @@ export async function runCell({
       },
     };
   };
-  try {
-    for (const resource of g.resources) {
-      if (!(await send("create", resource.method, resource.request)).ok)
-        throw new Error("required setup refused");
-      if (!(await send("resourceGet", methodFor(resource.name, "Get"), { name: resource.name })).ok)
-        throw new Error("setup read missing");
-    }
-    if (cell.arm === "managed-grant-readback-wait") {
-      if (
-        !/^serviceAccount:service-\d{1,20}@gcp-sa-pubsub\.iam\.gserviceaccount\.com$/.test(
-          serviceAgent ?? "",
+  let cleanupClosed = true;
+  const failures = await protectCell({
+    body: async () => {
+      for (const resource of g.resources) {
+        if (!(await send("create", resource.method, resource.request)).ok)
+          throw new Error("required setup refused");
+        if (
+          !(await send("resourceGet", methodFor(resource.name, "Get"), { name: resource.name })).ok
         )
-      )
-        throw new Error("scoped service agent required");
-      manager = createIamOwnership({
-        journal: { write: (row) => iamJournal.write({ cellId: cell.id, ...row }) },
-        assertOwned: assertIam,
-        now: meter.clock,
-      });
-      const client = iamClient("grant");
-      await manager.grant(client, g.subscription, "roles/pubsub.subscriber", serviceAgent);
-      const last = await manager.grant(client, g.deadTopic, "roles/pubsub.publisher", serviceAgent);
-      observe("iam-window", {
-        waitAfterLastGrantMs: 900000,
-        grantedAt: last.grantedAt,
-        phaseMs: cell.cellMs,
-        iamConvergenceClaim: false,
-        requestsDuringWait: 0,
-      });
-      await waitAfterLastGrant({ grantedAt: last.grantedAt, now: meter.clock, sleep: wait });
-    } else {
-      for (const resource of iamAllowed) {
-        const r = await send(
-          "baselineIamGet",
-          "GetIamPolicy",
-          { resource, requestedPolicyVersion: 3 },
-          "rest",
-        );
-        if (!r.ok || r.status !== 200) throw new Error("unreadable baseline IAM");
-        readPolicy(r.body);
+          throw new Error("setup read missing");
       }
-      observe("baseline-permission", {
-        status: "UNAUDITED",
-        newGrant: false,
-        effectivePermissionClaim: false,
+      if (cell.arm === "managed-grant-readback-wait") {
+        if (
+          !/^serviceAccount:service-\d{1,20}@gcp-sa-pubsub\.iam\.gserviceaccount\.com$/.test(
+            serviceAgent ?? "",
+          )
+        )
+          throw new Error("scoped service agent required");
+        manager = createIamManager({
+          journal: {
+            write: (row) => {
+              checkpoint(
+                journal,
+                ledger,
+                tracked,
+                cell.id,
+                [],
+                [{ resource: row.resource, role: row.role, member: row.member, state: row.phase }],
+              );
+              iamJournal.write({ cellId: cell.id, ...row });
+            },
+          },
+          assertOwned: assertIam,
+          now: meter.clock,
+        });
+        const client = iamClient("grant");
+        await manager.grant(client, g.subscription, "roles/pubsub.subscriber", serviceAgent);
+        const last = await manager.grant(
+          client,
+          g.deadTopic,
+          "roles/pubsub.publisher",
+          serviceAgent,
+        );
+        observe("iam-window", {
+          waitAfterLastGrantMs: 900000,
+          grantedAt: last.grantedAt,
+          phaseMs: cell.cellMs,
+          iamConvergenceClaim: false,
+          requestsDuringWait: 0,
+        });
+        await waitAfterLastGrant({ grantedAt: last.grantedAt, now: meter.clock, sleep: wait });
+      } else {
+        for (const resource of iamAllowed) {
+          const r = await send(
+            "baselineIamGet",
+            "GetIamPolicy",
+            { resource, requestedPolicyVersion: 3 },
+            "rest",
+          );
+          if (!r.ok || r.status !== 200) throw new Error("unreadable baseline IAM");
+          readPolicy(r.body);
+        }
+        observe("baseline-permission", {
+          status: "UNAUDITED",
+          newGrant: false,
+          effectivePermissionClaim: false,
+        });
+      }
+      const expected = {
+          data: Buffer.from(`dlq-${runId}-${cell.id}`).toString("base64"),
+          attributes: { recorderRun: runId, recorderCell: cell.id },
+        },
+        published = new Map();
+      const publication = await send("publish", "Publish", {
+        topic: g.topic,
+        messages: [expected],
       });
-    }
-    const expected = {
-        data: Buffer.from(`dlq-${runId}-${cell.id}`).toString("base64"),
-        attributes: { recorderRun: runId, recorderCell: cell.id },
-      },
-      published = new Map();
-    const publication = await send("publish", "Publish", { topic: g.topic, messages: [expected] });
-    if (
-      !publication.ok ||
-      !Array.isArray(publication.body?.messageIds) ||
-      publication.body.messageIds.length !== 1 ||
-      typeof publication.body.messageIds[0] !== "string" ||
-      !publication.body.messageIds[0]
-    )
-      throw new Error("publication is not bound");
-    published.set(publication.body.messageIds[0], expected);
-    observe("publication-binding", {
-      messageIds: publication.body.messageIds,
-      messages: [expected],
-    });
-    const windowStart = meter.clock(),
-      end = Math.min(windowStart + 900000, windowStart + meter.remaining());
-    let sourceAttempts = 0,
-      sinkAttempts = 0,
-      forwarded = false;
-    const enough = () => meter.clock() + minimumCallMs("Pull") < end;
-    const pullSource = async (nack) => {
-      const r = await send("sourcePull", "Pull", {
-        subscription: g.subscription,
-        maxMessages: 1,
-        returnImmediately: false,
+      if (
+        !publication.ok ||
+        !Array.isArray(publication.body?.messageIds) ||
+        publication.body.messageIds.length !== 1 ||
+        typeof publication.body.messageIds[0] !== "string" ||
+        !publication.body.messageIds[0]
+      )
+        throw new Error("publication is not bound");
+      published.set(publication.body.messageIds[0], expected);
+      observe("publication-binding", {
+        messageIds: publication.body.messageIds,
+        messages: [expected],
       });
-      sourceAttempts++;
-      if (!r.ok) throw new Error("source pull refused");
-      const items = parseDelivery(r.body, published);
-      observe("source-delivery", {
-        attempt: sourceAttempts,
-        items,
-        selectorVerdict: "NOT_COMPARABLE",
-      });
-      if (nack)
-        for (const item of items) {
+      const windowStart = meter.clock(),
+        end = Math.min(windowStart + 900000, windowStart + meter.remaining());
+      let sourceAttempts = 0,
+        sinkAttempts = 0,
+        forwarded = false;
+      const enough = () => meter.clock() + minimumCallMs("Pull") < end;
+      const pullSource = async (nack) => {
+        const r = await send("sourcePull", "Pull", {
+          subscription: g.subscription,
+          maxMessages: 1,
+          returnImmediately: false,
+        });
+        sourceAttempts++;
+        if (!r.ok) throw new Error("source pull refused");
+        const items = parseDelivery(r.body, published);
+        observe("source-delivery", {
+          attempt: sourceAttempts,
+          items,
+          selectorVerdict: "NOT_COMPARABLE",
+        });
+        if (nack)
+          for (const item of items) {
+            if (
+              !(
+                await send("nack", "ModifyAckDeadline", {
+                  subscription: g.subscription,
+                  ackIds: [item.ackId],
+                  ackDeadlineSeconds: 0,
+                })
+              ).ok
+            )
+              throw new Error("source nack refused");
+          }
+      };
+      const pullSink = async () => {
+        if (sinkAttempts >= 60 || !enough()) return;
+        const r = await send("sinkPull", "Pull", {
+          subscription: g.sink,
+          maxMessages: 1,
+          returnImmediately: true,
+        });
+        sinkAttempts++;
+        if (!r.ok) throw new Error("sink pull refused");
+        const items = parseForwarded(r.body, expected, g.subscription);
+        observe("sink-delivery", {
+          attempt: sinkAttempts,
+          items,
+          deliveryWitness: items.length > 0,
+        });
+        if (items.length && !forwarded) {
           if (
             !(
-              await send("nack", "ModifyAckDeadline", {
-                subscription: g.subscription,
-                ackIds: [item.ackId],
-                ackDeadlineSeconds: 0,
+              await send("ownAck", "Acknowledge", {
+                subscription: g.sink,
+                ackIds: items.map((i) => i.ackId),
               })
             ).ok
           )
-            throw new Error("source nack refused");
+            throw new Error("sink ack refused");
+          forwarded = true;
         }
-    };
-    const pullSink = async () => {
-      if (sinkAttempts >= 60 || !enough()) return;
-      const r = await send("sinkPull", "Pull", {
-        subscription: g.sink,
-        maxMessages: 1,
-        returnImmediately: true,
-      });
-      sinkAttempts++;
-      if (!r.ok) throw new Error("sink pull refused");
-      const items = parseForwarded(r.body, expected, g.subscription);
-      observe("sink-delivery", { attempt: sinkAttempts, items, deliveryWitness: items.length > 0 });
-      if (items.length && !forwarded) {
-        if (
-          !(
-            await send("ownAck", "Acknowledge", {
-              subscription: g.sink,
-              ackIds: items.map((i) => i.ackId),
-            })
-          ).ok
-        )
-          throw new Error("sink ack refused");
-        forwarded = true;
-      }
-    };
-    if (cell.mode === "720-second-source-inactivity") {
-      for (let i = 0; i < 9 && enough(); i++) {
-        await pullSource(true);
-        await pullSink();
-        if (i < 8 && enough()) await wait(1000);
-      }
-      const paused = meter.clock();
-      const resumeAt = paused + 720000;
-      observe("inactivity-start", { sourceAttempts, resumeAt });
-      while (meter.clock() < resumeAt && enough()) {
-        if (meter.clock() + minimumCallMs("Pull") + minimumCallMs("Pull") >= end) break;
-        await pullSink();
-        const left = Math.min(
-          30000,
-          resumeAt - meter.clock(),
-          end - meter.clock() - minimumCallMs("Pull"),
-        );
-        if (left > 0) await wait(left);
-        else break;
-      }
-      if (sourceAttempts !== 9 || meter.clock() < resumeAt || !enough()) {
-        observe("inactivity-not-completed", {
+      };
+      if (cell.mode === "720-second-source-inactivity") {
+        for (let i = 0; i < 9 && enough(); i++) {
+          await pullSource(true);
+          await pullSink();
+          if (i < 8 && enough()) await wait(1000);
+        }
+        const paused = meter.clock();
+        const resumeAt = paused + 720000;
+        observe("inactivity-start", { sourceAttempts, resumeAt });
+        while (meter.clock() < resumeAt && enough()) {
+          if (meter.clock() + minimumCallMs("Pull") + minimumCallMs("Pull") >= end) break;
+          await pullSink();
+          const left = Math.min(
+            30000,
+            resumeAt - meter.clock(),
+            end - meter.clock() - minimumCallMs("Pull"),
+          );
+          if (left > 0) await wait(left);
+          else break;
+        }
+        if (sourceAttempts !== 9 || meter.clock() < resumeAt || !enough()) {
+          observe("inactivity-not-completed", {
+            elapsedMs: meter.clock() - paused,
+            requiredMs: 720000,
+          });
+          throw new Error("source inactivity window clipped by phase");
+        }
+        observe("inactivity-completed", {
           elapsedMs: meter.clock() - paused,
-          requiredMs: 720000,
+          noSourcePullDuringWindow: true,
+          resetInferred: false,
         });
-        throw new Error("source inactivity window clipped by phase");
       }
-      observe("inactivity-completed", {
-        elapsedMs: meter.clock() - paused,
-        noSourcePullDuringWindow: true,
-        resetInferred: false,
+      while (sourceAttempts < 60 && enough()) {
+        await pullSource(cell.mode !== "passive-deadline");
+        await pullSink();
+        const delay = cell.mode === "passive-deadline" ? 11000 : 1000;
+        if (meter.clock() + delay + minimumCallMs("Pull") >= end) break;
+        await wait(delay);
+      }
+      observe("bounded-window-end", {
+        sourceAttempts,
+        sinkAttempts,
+        forwarded,
+        observedWindowMs: meter.clock() - windowStart,
+        emptyWindowVerdict: forwarded ? "WITNESS_RECORDED" : "NOT_COMPARABLE",
+        iamConvergenceClaim: false,
       });
-    }
-    while (sourceAttempts < 60 && enough()) {
-      await pullSource(cell.mode !== "passive-deadline");
-      await pullSink();
-      const delay = cell.mode === "passive-deadline" ? 11000 : 1000;
-      if (meter.clock() + delay + minimumCallMs("Pull") >= end) break;
-      await wait(delay);
-    }
-    observe("bounded-window-end", {
-      sourceAttempts,
-      sinkAttempts,
-      forwarded,
-      observedWindowMs: meter.clock() - windowStart,
-      emptyWindowVerdict: forwarded ? "WITNESS_RECORDED" : "NOT_COMPARABLE",
-      iamConvergenceClaim: false,
-    });
-    complete = true;
-  } catch (error) {
-    reason = error.message;
-    observe("case-incomplete", { reason, verdict: "NOT_COMPARABLE" });
-  }
-  if (manager) {
-    iam = await manager.restore(iamClient("restore"));
-    if (iam.unsettled.length) {
-      complete = false;
-      reason = "IAM restoration unresolved; retain lock and stop later cells";
-    }
-  }
-  let cleanupClosed = iam.unsettled.length === 0;
-  if (cleanupClosed)
-    for (const name of [...tracked].sort(
-      (a, b) => Number(b.includes("/subscriptions/")) - Number(a.includes("/subscriptions/")),
-    )) {
-      if (settled(ledger, name)) continue;
-      try {
-        if (ledger.unconfirmed(name)) {
-          const r = await send("cleanupGet", methodFor(name, "Get"), { name });
-          ledger.observeRead(name, r);
-          if (ledger.unconfirmed(name)) {
-            cleanupClosed = false;
-            continue;
-          }
+      complete = true;
+    },
+    report: (error) => {
+      reason = error.message;
+      observe("case-incomplete", { reason, verdict: "NOT_COMPARABLE" });
+    },
+    finalize: async () => {
+      for (const name of ledger.state().keys()) if (allowed.has(name)) tracked.add(name);
+      if (manager) {
+        try {
+          iam = await manager.restore(iamClient("restore"));
+        } catch {
+          iam = { restored: [], unsettled: [{ state: "restoration-unestablished" }] };
         }
-        if (!ledger.deleting(name) && !absentSeen.has(name))
-          await send("cleanupDelete", methodFor(name, "Delete"), { name });
-        if (!ledger.settleAbsent(name, await send("cleanupGet", methodFor(name, "Get"), { name })))
-          cleanupClosed = false;
-      } catch {
-        cleanupClosed = false;
+        iam.unsettled = [...iam.unsettled, ...manager.outstanding()];
+        if (iam.unsettled.length) {
+          complete = false;
+          reason = "IAM restoration unresolved; retain lock and stop later cells";
+        }
       }
-      if (!settled(ledger, name)) cleanupClosed = false;
-    }
+      cleanupClosed = iam.unsettled.length === 0;
+      if (cleanupClosed)
+        for (const name of [...tracked].sort(
+          (a, b) => Number(b.includes("/subscriptions/")) - Number(a.includes("/subscriptions/")),
+        )) {
+          if (settled(ledger, name)) continue;
+          try {
+            if (ledger.unconfirmed(name)) {
+              const r = await send("cleanupGet", methodFor(name, "Get"), { name });
+              ledger.observeRead(name, r);
+              if (ledger.unconfirmed(name)) {
+                cleanupClosed = false;
+                continue;
+              }
+            }
+            if (!ledger.deleting(name) && !absentSeen.has(name))
+              await send("cleanupDelete", methodFor(name, "Delete"), { name });
+            if (
+              !ledger.settleAbsent(name, await send("cleanupGet", methodFor(name, "Get"), { name }))
+            )
+              cleanupClosed = false;
+          } catch {
+            cleanupClosed = false;
+          }
+          if (!settled(ledger, name)) cleanupClosed = false;
+        }
+    },
+    persist: () =>
+      checkpoint(
+        journal,
+        ledger,
+        tracked,
+        cell.id,
+        [],
+        iam.unsettled.map(({ resource, role, member, state }) => ({
+          resource,
+          role,
+          member,
+          state,
+        })),
+      ),
+  });
+  if (failures.length) {
+    complete = false;
+    reason ??= failures[0].message;
+  }
+  if (
+    failures.finalizationFailed ||
+    failures.persistenceFailed ||
+    obligations(ledger, tracked).length
+  )
+    cleanupClosed = false;
   try {
     meter.remaining(true);
   } catch {

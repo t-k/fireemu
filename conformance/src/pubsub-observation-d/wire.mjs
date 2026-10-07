@@ -1,3 +1,4 @@
+import { normalizeOutcome } from "../pubsub-production/outcome.mjs";
 import grpc from "@grpc/grpc-js";
 import { protos } from "@google-cloud/pubsub";
 import { SERVICES, requestToWire, responseFromWire } from "../pubsub-production/grpc.mjs";
@@ -372,7 +373,12 @@ export function createWire({
                   metadataBytesIn,
                   layoutVerdict: "NOT_COMPARABLE_METADATA_OVERFLOW",
                 });
-              } else resolve({ ...candidate, metadataBytesIn });
+              } else
+                resolve({
+                  ...candidate,
+                  metadataBytesIn,
+                  unknown: candidate.unknown || statusNames[status.code] !== candidate.code,
+                });
             });
             controller.signal.addEventListener("abort", () => rpc.cancel(), { once: true });
           });
@@ -383,6 +389,8 @@ export function createWire({
         clearTimeout(requestTimer);
         controllers.delete(controller);
       }
+      reply = normalizeOutcome(reply);
+      if (reply.unknown && !maintenance) sourceStopped = true;
       reply.durationMs = meter.clock() - monotonicStarted;
       journal.write({
         event: "response",

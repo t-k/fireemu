@@ -80,6 +80,19 @@ export function scenarioComplete(scenario) {
     wire.length !== attempts * 2
   )
     return false;
+  const seedVersion = versionKey(scenario.seed?.updateTime);
+  const witnessVersion = versionKey(scenario.witness?.updateTime);
+  const finalVersion = versionKey(scenario.final?.updateTime);
+  if (
+    !seedVersion ||
+    !witnessVersion ||
+    !finalVersion ||
+    scenario.seed?.status !== 200 ||
+    scenario.seed.path !== scenario.path ||
+    scenario.witness?.status !== 200 ||
+    (scenario.scenario === "conflict" && witnessVersion === seedVersion)
+  )
+    return false;
   const admitted = scenario.events.filter((e) => e.event === "wire");
   if (
     admitted.length !== wire.length ||
@@ -111,6 +124,7 @@ export function scenarioComplete(scenario) {
       commit.request.writes.length !== 1 ||
       !versionKey(document.updateTime) ||
       versionKey(document.updateTime) !== versionKey(write.currentDocument?.updateTime) ||
+      versionKey(document.updateTime) !== (i === 0 ? seedVersion : witnessVersion) ||
       commit.request.transactionPresent === true ||
       batch.request.transactionPresent === true
     )
@@ -122,6 +136,13 @@ export function scenarioComplete(scenario) {
     )
       return false;
     const refused = scenario.scenario === "conflict" && i === 0;
+    if (
+      !refused &&
+      (commit.response?.writeResults?.length !== 1 ||
+        versionKey(commit.response.writeResults[0].updateTime) !== finalVersion ||
+        finalVersion === versionKey(document.updateTime))
+    )
+      return false;
     if (
       refused
         ? commit.response?.error?.code !== 9 &&
@@ -246,25 +267,28 @@ export async function runLocalRetry(target, { artifact, artifactSource, receiptP
               ].includes(e.event),
             );
           for (const path of owned) {
-            const read = await request(path);
-            const item = {
-              path,
-              readStatus: read.status,
-              updateTime: read.body.updateTime,
-              deleted: false,
-              absent: false,
-            };
+            const item = { path, phase: "read", deleted: false, absent: false };
             outcome.cleanup.push(item);
-            if (read.status !== 200 || !read.body.updateTime) continue;
-            const deleted = await request(
-              `${path}?currentDocument.updateTime=${encodeURIComponent(read.body.updateTime)}`,
-              { method: "DELETE" },
-            );
-            item.deleteStatus = deleted.status;
-            item.deleted = deleted.status === 200;
-            const absent = await request(path);
-            item.absenceStatus = absent.status;
-            item.absent = absent.status === 404;
+            try {
+              const read = await request(path);
+              item.readStatus = read.status;
+              item.updateTime = read.body.updateTime;
+              if (read.status !== 200 || !read.body.updateTime) continue;
+              item.phase = "delete";
+              const deleted = await request(
+                `${path}?currentDocument.updateTime=${encodeURIComponent(read.body.updateTime)}`,
+                { method: "DELETE" },
+              );
+              item.deleteStatus = deleted.status;
+              item.deleted = deleted.status === 200;
+              item.phase = "absence";
+              const absent = await request(path);
+              item.absenceStatus = absent.status;
+              item.absent = absent.status === 404;
+              item.phase = "done";
+            } catch {
+              item.failure = "cleanup-request-failed";
+            }
           }
         }
         outcome.complete = scenarioComplete(outcome);

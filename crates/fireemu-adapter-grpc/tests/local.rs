@@ -832,14 +832,25 @@ async fn a_busy_holder_keeps_its_locks_past_the_lease() {
 async fn foreign_transaction_tokens_match_profile_over_grpc() {
     for strict in [true, false] {
         let (mut client, _clock, backend, server) = start_profile_with_state(strict, None).await;
-        for (project, database, tampered) in [
-            ("demo-app", "other", None),
-            ("demo-other", "(default)", None),
-            ("demo-other", "other", None),
-            ("demo-app", "other", Some(8)),
-            ("demo-app", "other", Some(12)),
-            ("demo-app", "(default)", Some(23)),
-        ] {
+        for (issuer_project, issuer_database, project, database, tampered) in [
+            ("demo-app", "(default)", "demo-app", "other", None),
+            ("demo-app", "(default)", "demo-other", "(default)", None),
+            ("demo-app", "(default)", "demo-other", "other", None),
+            ("demo-app", "(default)", "demo-app", "other", Some(8)),
+            ("demo-app", "(default)", "demo-app", "other", Some(12)),
+            ("demo-app", "(default)", "demo-app", "(default)", Some(23)),
+            ("demo-app", "db-000518cc", "demo-app", "db-000cec18", None),
+            ("db-000518cc", "(default)", "db-000cec18", "other", None),
+        ]
+        .into_iter()
+        .chain((0..24).flat_map(|index| {
+            ["(default)", "other"]
+                .map(|database| ("demo-app", "(default)", "demo-app", database, Some(index)))
+        })) {
+            let issuer = format!("projects/{issuer_project}/databases/{issuer_database}");
+            let issuer_parent =
+                fireemu_adapter_grpc::decode::parse_parent(&format!("{issuer}/documents")).unwrap();
+            backend.ensure_database(&issuer_parent).unwrap();
             let target = format!("projects/{project}/databases/{database}");
             let parent =
                 fireemu_adapter_grpc::decode::parse_parent(&format!("{target}/documents")).unwrap();
@@ -849,7 +860,7 @@ async fn foreign_transaction_tokens_match_profile_over_grpc() {
                 .unwrap();
             let original = client
                 .begin_transaction(pb::BeginTransactionRequest {
-                    database: DB.to_owned(),
+                    database: issuer.clone(),
                     ..Default::default()
                 })
                 .await
@@ -868,7 +879,7 @@ async fn foreign_transaction_tokens_match_profile_over_grpc() {
                     tonic::Code::InvalidArgument,
                     "transaction token does not belong to this database",
                 )
-            } else if project != "demo-app" {
+            } else if project != issuer_project {
                 (tonic::Code::InvalidArgument, "Invalid transaction.")
             } else {
                 (
@@ -876,7 +887,50 @@ async fn foreign_transaction_tokens_match_profile_over_grpc() {
                     "The referenced transaction has expired or is no longer valid.",
                 )
             };
-            for method in ["GetDocument", "BatchGetDocuments", "Commit", "Rollback"] {
+            for method in [
+                "GetDocument",
+                "BatchGetDocuments",
+                "Commit",
+                "Rollback",
+                "ListDocuments",
+                "RunQuery",
+                "RunAggregationQuery",
+                "RetryBeginTransaction",
+                "RetryBatchGetDocuments",
+                "RetryRunQuery",
+                "RetryRunAggregationQuery",
+            ] {
+                let retry_options = pb::TransactionOptions {
+                    mode: Some(pb::transaction_options::Mode::ReadWrite(
+                        pb::transaction_options::ReadWrite {
+                            retry_transaction: transaction.clone(),
+                            ..Default::default()
+                        },
+                    )),
+                };
+                let aggregation_query = pb::StructuredAggregationQuery {
+                    query_type: Some(
+                        pb::structured_aggregation_query::QueryType::StructuredQuery(
+                            pb::StructuredQuery {
+                                from: vec![sq::CollectionSelector {
+                                    collection_id: "items".to_owned(),
+                                    all_descendants: false,
+                                }],
+                                ..Default::default()
+                            },
+                        ),
+                    ),
+                    aggregations: vec![pb::structured_aggregation_query::Aggregation {
+                        alias: "count".to_owned(),
+                        operator: Some(
+                            pb::structured_aggregation_query::aggregation::Operator::Count(
+                                pb::structured_aggregation_query::aggregation::Count {
+                                    up_to: None,
+                                },
+                            ),
+                        ),
+                    }],
+                };
                 let refused = match method {
                     "GetDocument" => client
                         .get_document(pb::GetDocumentRequest {
@@ -909,7 +963,7 @@ async fn foreign_transaction_tokens_match_profile_over_grpc() {
                         request.transaction = transaction.clone();
                         client.commit(request).await.unwrap_err()
                     }
-                    _ => client
+                    "Rollback" => client
                         .rollback(pb::RollbackRequest {
                             database: target.clone(),
                             transaction: transaction.clone(),
@@ -917,6 +971,37 @@ async fn foreign_transaction_tokens_match_profile_over_grpc() {
                         })
                         .await
                         .unwrap_err(),
+                    "ListDocuments" => client.list_documents(pb::ListDocumentsRequest {
+                        parent: format!("{target}/documents"), collection_id: "items".to_owned(),
+                        consistency_selector: Some(pb::list_documents_request::ConsistencySelector::Transaction(transaction.clone())),
+                        ..Default::default()
+                    }).await.unwrap_err(),
+                    "RetryBeginTransaction" => client.begin_transaction(pb::BeginTransactionRequest {
+                        database: target.clone(), options: Some(retry_options.clone()), ..Default::default()
+                    }).await.unwrap_err(),
+                    "RetryBatchGetDocuments" => client.batch_get_documents(pb::BatchGetDocumentsRequest {
+                        database: target.clone(), documents: vec![format!("{target}/documents/items/read")],
+                        consistency_selector: Some(pb::batch_get_documents_request::ConsistencySelector::NewTransaction(retry_options.clone())), ..Default::default()
+                    }).await.unwrap_err(),
+                    "RunQuery" | "RetryRunQuery" => {
+                        let mut request = query("items", None);
+                        request.parent = format!("{target}/documents");
+                        request.consistency_selector = Some(if method.starts_with("Retry") {
+                            pb::run_query_request::ConsistencySelector::NewTransaction(retry_options.clone())
+                        } else {
+                            pb::run_query_request::ConsistencySelector::Transaction(transaction.clone())
+                        });
+                        client.run_query(request).await.unwrap_err()
+                    }
+                    _ => client.run_aggregation_query(pb::RunAggregationQueryRequest {
+                        parent: format!("{target}/documents"),
+                        query_type: Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(aggregation_query)),
+                        consistency_selector: Some(if method.starts_with("Retry") {
+                            pb::run_aggregation_query_request::ConsistencySelector::NewTransaction(retry_options.clone())
+                        } else {
+                            pb::run_aggregation_query_request::ConsistencySelector::Transaction(transaction.clone())
+                        }), ..Default::default()
+                    }).await.unwrap_err(),
                 };
                 assert_eq!(
                     refused.code(),
@@ -942,7 +1027,7 @@ async fn foreign_transaction_tokens_match_profile_over_grpc() {
             );
             client
                 .rollback(pb::RollbackRequest {
-                    database: DB.to_owned(),
+                    database: issuer.clone(),
                     transaction: original,
                     ..Default::default()
                 })

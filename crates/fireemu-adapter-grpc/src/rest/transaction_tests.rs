@@ -60,6 +60,7 @@ fn foreign_transaction_tokens_match_profile_over_rest() {
         if !strict {
             let mut gateway = (*state.gateway).clone();
             gateway.ctx.policy = IndexValidationPolicy::Emulator;
+            gateway.enforce_limits = false;
             state.local = Arc::new(LocalBackend::new(
                 gateway.clone(),
                 Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
@@ -67,14 +68,25 @@ fn foreign_transaction_tokens_match_profile_over_rest() {
             ));
             state.gateway = Arc::new(gateway);
         }
-        for (project, database, tampered) in [
-            ("demo-app", "other", None),
-            ("demo-other", "(default)", None),
-            ("demo-other", "other", None),
-            ("demo-app", "other", Some(8)),
-            ("demo-app", "other", Some(12)),
-            ("demo-app", "(default)", Some(23)),
-        ] {
+        for (issuer_project, issuer_database, project, database, tampered) in [
+            ("demo-app", "(default)", "demo-app", "other", None),
+            ("demo-app", "(default)", "demo-other", "(default)", None),
+            ("demo-app", "(default)", "demo-other", "other", None),
+            ("demo-app", "(default)", "demo-app", "other", Some(8)),
+            ("demo-app", "(default)", "demo-app", "other", Some(12)),
+            ("demo-app", "(default)", "demo-app", "(default)", Some(23)),
+            ("demo-app", "db-000518cc", "demo-app", "db-000cec18", None),
+            ("db-000518cc", "(default)", "db-000cec18", "other", None),
+        ]
+        .into_iter()
+        .chain((0..24).flat_map(|index| {
+            ["(default)", "other"]
+                .map(|database| ("demo-app", "(default)", "demo-app", database, Some(index)))
+        })) {
+            let issuer_docs =
+                format!("/v1/projects/{issuer_project}/databases/{issuer_database}/documents");
+            let issuer = crate::decode::parse_parent(&issuer_docs[4..]).unwrap();
+            state.local.ensure_database(&issuer).unwrap();
             let docs = format!("/v1/projects/{project}/databases/{database}/documents");
             let parent = crate::decode::parse_parent(&docs[4..]).unwrap();
             state.local.ensure_database(&parent).unwrap();
@@ -83,7 +95,7 @@ fn foreign_transaction_tokens_match_profile_over_rest() {
             let (status, begun) = call(
                 &state,
                 "POST",
-                &format!("{DOCS}:beginTransaction"),
+                &format!("{issuer_docs}:beginTransaction"),
                 json!({"options": {"readWrite": {}}}),
             );
             assert_eq!(status, 200, "{begun}");
@@ -103,7 +115,7 @@ fn foreign_transaction_tokens_match_profile_over_rest() {
                     "INVALID_ARGUMENT",
                     "transaction token does not belong to this database",
                 )
-            } else if project != "demo-app" {
+            } else if project != issuer_project {
                 (400, "INVALID_ARGUMENT", "Invalid transaction.")
             } else {
                 (
@@ -112,7 +124,19 @@ fn foreign_transaction_tokens_match_profile_over_rest() {
                     "The referenced transaction has expired or is no longer valid.",
                 )
             };
-            for method in ["GetDocument", "BatchGetDocuments", "Commit", "Rollback"] {
+            for method in [
+                "GetDocument",
+                "BatchGetDocuments",
+                "Commit",
+                "Rollback",
+                "ListDocuments",
+                "RunQuery",
+                "RunAggregationQuery",
+                "RetryBeginTransaction",
+                "RetryBatchGetDocuments",
+                "RetryRunQuery",
+                "RetryRunAggregationQuery",
+            ] {
                 let (status, refused) = match method {
                     "GetDocument" => call(
                         &state,
@@ -137,18 +161,67 @@ fn foreign_transaction_tokens_match_profile_over_rest() {
                             "writes": [{"update": {"name": format!("{}/guard/should-not-write", &docs[4..])}}]
                         }),
                     ),
-                    _ => call(
+                    "Rollback" => call(
                         &state,
                         "POST",
                         &format!("{docs}:rollback"),
                         json!({"transaction": transaction}),
                     ),
+                    "ListDocuments" => call(
+                        &state,
+                        "GET",
+                        &format!("{docs}/guard?transaction={query_transaction}"),
+                        Value::Null,
+                    ),
+                    "RetryBeginTransaction" => call(
+                        &state,
+                        "POST",
+                        &format!("{docs}:beginTransaction"),
+                        json!({"options": {"readWrite": {"retryTransaction": transaction}}}),
+                    ),
+                    "RetryBatchGetDocuments" => call(
+                        &state,
+                        "POST",
+                        &format!("{docs}:batchGet"),
+                        json!({"documents": [format!("{}/guard/read", &docs[4..])],
+                            "newTransaction": {"readWrite": {"retryTransaction": transaction}}}),
+                    ),
+                    _ => {
+                        let aggregation = method.ends_with("AggregationQuery");
+                        let action = if aggregation {
+                            "runAggregationQuery"
+                        } else {
+                            "runQuery"
+                        };
+                        let query = json!({"from": [{"collectionId": "guard"}]});
+                        let mut body = if aggregation {
+                            json!({"structuredAggregationQuery": {"structuredQuery": query,
+                                "aggregations": [{"alias": "count", "count": {}}]}})
+                        } else {
+                            json!({"structuredQuery": query})
+                        };
+                        if method.starts_with("Retry") {
+                            body["newTransaction"] =
+                                json!({"readWrite": {"retryTransaction": transaction}});
+                        } else {
+                            body["transaction"] = json!(transaction);
+                        }
+                        call(&state, "POST", &format!("{docs}:{action}"), body)
+                    }
                 };
                 assert_eq!(
                     status, http,
                     "strict={strict} {project}/{database} {method}: {refused}"
                 );
-                let error = if method == "BatchGetDocuments" {
+                let error = if matches!(
+                    method,
+                    "BatchGetDocuments"
+                        | "RetryBatchGetDocuments"
+                        | "RunQuery"
+                        | "RetryRunQuery"
+                        | "RunAggregationQuery"
+                        | "RetryRunAggregationQuery"
+                ) {
                     &refused[0]["error"]
                 } else {
                     &refused["error"]
@@ -170,7 +243,7 @@ fn foreign_transaction_tokens_match_profile_over_rest() {
             let (status, rolled_back) = call(
                 &state,
                 "POST",
-                &format!("{DOCS}:rollback"),
+                &format!("{issuer_docs}:rollback"),
                 json!({"transaction": original}),
             );
             assert_eq!(

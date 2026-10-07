@@ -484,3 +484,76 @@ test("Task24 final recovery persistence failure is explicit and cannot be labell
   assert.equal(failures.persistenceFailed, true);
   assert.equal(failures.length, 1);
 });
+
+test("Task24 each recorder closes journals and listeners after reporting and wire-close failures", async () => {
+  const family = process.env.OBSERVATION_PACKET ?? "A";
+  const namespace =
+    family === "A" ? "pubsub-observation" : `pubsub-observation-${family.toLowerCase()}`;
+  const { main } = await import(`./${namespace}/record.mjs`);
+  const { EventEmitter } = await import("node:events");
+  const out = tempDir("pubsub-run-finalizer-"),
+    signals = new EventEmitter(),
+    w = world({ dispatchFailure: true });
+  let savedJournal, exitCode;
+  const values = {
+    authority: "fixture",
+    descriptor: "fixture",
+    packet: "fixture",
+    E: "fixture",
+    V: "fixture",
+    lock: "fixture",
+    "run-id": runId,
+    out,
+  };
+  const summary = await main(
+    ["--record", ...Object.entries(values).flatMap(([key, value]) => [`--${key}`, value])],
+    {
+      admit: () => ({
+        check() {},
+        descriptor: { head: "a".repeat(40) },
+        descriptorSha256: "b".repeat(64),
+        scope: { envelopeId: "FIXTURE", packetSha256: "c".repeat(64) },
+      }),
+      createCredentials: () => async () => "fixture-token",
+      signals,
+      setExitCode: (code) => {
+        exitCode = code;
+      },
+      createWire({ journal }) {
+        savedJournal = journal;
+        const write = journal.write;
+        journal.write = (row) => {
+          if (
+            row.event === "case-incomplete" ||
+            row.stage === "case-incomplete" ||
+            row.event === "run-incomplete"
+          )
+            throw new Error("reporting refused");
+          write(row);
+        };
+        return {
+          ...w.wire,
+          close() {
+            throw new Error("wire close refused");
+          },
+          async open() {
+            throw new Error("stream refused");
+          },
+        };
+      },
+    },
+  );
+  assert.equal(summary.recordingComplete, false);
+  assert.equal(summary.resourcesClosed, false);
+  assert.equal(exitCode, 2);
+  assert.equal(signals.listenerCount("SIGINT"), 0);
+  assert.equal(signals.listenerCount("SIGTERM"), 0);
+  assert.throws(() => savedJournal.write({ event: "late" }), /closed journal/);
+  const recovery = readFileSync(join(out, `recovery-${runId}.jsonl`), "utf8")
+    .trim()
+    .split("\n")
+    .map(JSON.parse);
+  assert.ok(recovery.some((row) => row.event === "recovery-binding"));
+  assert.ok(Array.isArray(recovery.at(-1).obligations));
+  assert.ok(w.calls.some((call) => call.method === "DeleteTopic"));
+});

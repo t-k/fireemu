@@ -43,7 +43,7 @@ const result = (verdict, reason, declaredDifferences = []) => ({
 });
 
 /** Only named recording artifacts are read; launch inputs, dotenv and credentials are never opened. */
-export function loadHRecording(directory) {
+export function loadHRecording(directory, cleanupClose) {
   const names = readdirSync(directory).toSorted();
   const original = names.filter((n) => /^issued-[a-f0-9]{12}\.jsonl$/.test(n));
   if (original.length !== 1) throw new Error("one original H issued journal is required");
@@ -78,7 +78,27 @@ export function loadHRecording(directory) {
         ),
       )
     : state;
-  const closed = latest.cleanupReady === true || latest.closureReady === true;
+  let closed = latest.cleanupReady === true || latest.closureReady === true;
+  let cleanupProof;
+  if (cleanupClose !== undefined) {
+    const path = resolve(cleanupClose);
+    if (/private-inputs|credential|secret|token|\.env/i.test(basename(path)))
+      throw new Error("cleanup close must not be a credential or launch-input file");
+    const bytes = readFileSync(path);
+    const receipt = JSON.parse(bytes);
+    if (
+      receipt?.event !== "cleanup-verified" ||
+      receipt.taskId !== "PUBSUB-EVENTARC" ||
+      receipt.project !== observed.manifest.project ||
+      receipt.runId !== runId ||
+      receipt.envelopeId !== `EVENTARC-H2-${runId}` ||
+      receipt.runDir !== resolve(directory) ||
+      receipt.sandboxAtBaseline !== true
+    )
+      throw new Error("cleanup close binding does not match the original recording");
+    cleanupProof = { path, bytes: bytes.toString("utf8"), sha256: hash(bytes) };
+    closed = true;
+  }
   const publications = rows.filter((r) => ["publishEvents", "sdk.publishEvents"].includes(r.op));
   const observations = observed.publishes;
   if (
@@ -100,7 +120,17 @@ export function loadHRecording(directory) {
     capture: observed.capture,
     segments: observed.segments ?? [],
     publications,
-    production: { runId, closed, sha256: hash(JSON.stringify(digests)), journals: digests },
+    production: {
+      runId,
+      closed,
+      sha256: hash(
+        JSON.stringify(
+          cleanupProof ? { journals: digests, cleanupCloseSha256: cleanupProof.sha256 } : digests,
+        ),
+      ),
+      journals: digests,
+      ...(cleanupProof ? { cleanupClose: cleanupProof } : {}),
+    },
   };
 }
 
@@ -419,7 +449,7 @@ export function writeEvidence(path, value) {
 /** The owned fireemu exec session supplies all endpoints and shuts down its runners on exit. */
 async function localSession(path) {
   const session = JSON.parse(readFileSync(path)),
-    h = loadHRecording(session.recording);
+    h = loadHRecording(session.recording, session.cleanupClose);
   const control = process.env.FIREEMU_CONTROL_URL;
   const eventarc = process.env.CLOUD_EVENTARC_EMULATOR_HOST;
   const logging = process.env.FIREBASE_LOGGING_EMULATOR_HOST;
@@ -485,8 +515,8 @@ async function localSession(path) {
 }
 
 /** Copy only frozen source files, reuse pinned installed dependencies and deny non-loopback Node I/O. */
-export async function runLocal({ recording, binary, out }) {
-  const h = loadHRecording(recording);
+export async function runLocal({ recording, binary, out, cleanupClose }) {
+  const h = loadHRecording(recording, cleanupClose);
   if (!h.production.closed) throw new Error("recording cleanup is still open");
   const work = resolve(root, "target/codex-out", `h-replay-${h.manifest.runId}`);
   mkdirSync(work, { recursive: true });
@@ -583,7 +613,12 @@ const send=globalThis.fetch;globalThis.fetch=(url,init={})=>{const u=new URL(url
   const session = join(work, "session.json");
   writeFileSync(
     session,
-    JSON.stringify({ recording: resolve(recording), out: resolve(out), artifact }),
+    JSON.stringify({
+      recording: resolve(recording),
+      out: resolve(out),
+      artifact,
+      cleanupClose: cleanupClose === undefined ? undefined : resolve(cleanupClose),
+    }),
   );
   const home = join(work, "home"),
     tmp = join(work, "tmp");
@@ -640,18 +675,20 @@ export async function main(argv) {
   const options = {};
   for (let i = 0; i < argv.length; i += 2) {
     if (
-      !["--recording", "--binary", "--base", "--local", "--out"].includes(argv[i]) ||
+      !["--recording", "--binary", "--base", "--local", "--out", "--cleanup-close"].includes(
+        argv[i],
+      ) ||
       !argv[i + 1]
     )
       throw new Error("usage: --recording --binary --out (or --base --local)");
-    options[argv[i].slice(2)] = argv[i + 1];
+    options[argv[i] === "--cleanup-close" ? "cleanupClose" : argv[i].slice(2)] = argv[i + 1];
   }
   if (options.binary) return runLocal(options);
   if (!options.recording || !options.base || !options.local || !options.out)
     throw new Error("usage: --recording --base --local --out");
   if (/private-inputs|credential|secret|token|\.env/i.test(basename(options.local)))
     throw new Error("local capture must not be a credential or launch-input file");
-  const recording = loadHRecording(options.recording);
+  const recording = loadHRecording(options.recording, options.cleanupClose);
   if (!recording.production.closed) throw new Error("recording cleanup is still open");
   const local = JSON.parse(readFileSync(options.local));
   if (

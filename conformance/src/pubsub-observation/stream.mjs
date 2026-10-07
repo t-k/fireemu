@@ -133,13 +133,13 @@ export async function openStream({
       cancelled &&
       ((status.code === 1 && ["window-end", "unacked-owned-delivery"].includes(cancelReason)) ||
         (status.code === 4 && state.windowExpired));
-    if ([1, 2, 4, 13, 14, 15].includes(status.code) && !localEnd) state.incomplete = true;
+    if ([1, 2, 4, 8, 13, 14, 15].includes(status.code) && !localEnd) state.incomplete = true;
     event("stream-status", state.terminal);
     wake();
   });
   rpc.on("error", (error) => {
     if (
-      [1, 2, 4, 13, 14, 15].includes(error.code) &&
+      [1, 2, 4, 8, 13, 14, 15].includes(error.code) &&
       !(
         cancelled &&
         ((error.code === 1 && ["window-end", "unacked-owned-delivery"].includes(cancelReason)) ||

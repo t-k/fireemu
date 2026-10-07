@@ -1403,7 +1403,7 @@ test("stream dispatch persistence clips the effective window within the original
 });
 
 test("intentional local cancellation is distinct from unrelated uncertain transport statuses", async () => {
-  for (const code of [1, 2, 4, 13, 14, 15]) {
+  for (const code of [1, 2, 4, 8, 13, 14, 15]) {
     const meter = createMeter({ now: () => 0 });
     meter.enter(makePlan().cells[0]);
     const rpc = new EventEmitter();
@@ -1735,4 +1735,59 @@ test("source deadline properties also bind a delayed first cell", () => {
       assert.throws(() => meter.start("create", "rest"), /time/);
     }
   }
+});
+
+test("native resource exhaustion after an owned stream delivery stays incomplete", async () => {
+  const meter = createMeter({ now: () => 0 }),
+    cell = makePlan().cells.find((item) => item.id === "S01"),
+    world = fakeWorld();
+  meter.enter(cell);
+  let payload;
+  const original = world.call;
+  world.call = async (call) => {
+    if (call.method === "Publish") payload = call.request.messages[0].data;
+    return original(call);
+  };
+  world.open = async ({ opener, cellId }) => {
+    const rpc = new EventEmitter();
+    rpc.cancel = () => {};
+    rpc.write = () => {
+      queueMicrotask(() => {
+        const Type = protos.google.pubsub.v1.StreamingPullResponse;
+        rpc.emit(
+          "data",
+          Buffer.from(
+            Type.encode(
+              Type.fromObject({
+                receivedMessages: [
+                  { ackId: "owned-ack", message: { messageId: "own-id", data: payload } },
+                ],
+              }),
+            ).finish(),
+          ),
+        );
+        rpc.emit("error", { code: 8, details: "Received message larger than max" });
+        rpc.emit("status", { code: 8, details: "lost terminal result" });
+      });
+      return true;
+    };
+    return openStream({
+      meter,
+      opener,
+      cellId,
+      credential: async () => "fake",
+      journal: { write() {}, frame() {} },
+      client: { makeBidiStreamRequest: () => rpc },
+    });
+  };
+  const result = await runCell({
+    cell,
+    meter,
+    wire: world,
+    ledger: createLedger(),
+    runId: "123456abcdef",
+    journal: { write() {} },
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.cleanupClosed, true);
 });

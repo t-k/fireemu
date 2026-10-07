@@ -673,10 +673,19 @@ impl PubSubHandle {
 
     fn commit_dead_letter(&self, forward: &DeadLetterForward) {
         let _publication = self.lock_publication();
-        let published = self.publish_locked(
-            &forward.dead_letter_topic,
-            vec![forward.message.message.clone()],
-        );
+        let message = if self.profile == PubSubProfile::Strict {
+            let Ok(message) = fireemu_core_pubsub::dead_letter::forwarded_message(
+                &forward.message,
+                &forward.source_subscription,
+                forward.source_delivery_count,
+            ) else {
+                return;
+            };
+            message
+        } else {
+            forward.message.message.clone()
+        };
+        let published = self.publish_locked(&forward.dead_letter_topic, vec![message]);
         if published.is_ok() {
             let mut state = self.state();
             let _ = state

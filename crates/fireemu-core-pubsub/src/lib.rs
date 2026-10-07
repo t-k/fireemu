@@ -14,6 +14,7 @@
 //! the virtual clock and `await-idle` stays deterministic. The HTTP/gRPC surface lives in the
 //! `fireemu-adapter-pubsub` crate, mirroring the Firestore and Storage core/adapter split.
 
+pub mod dead_letter;
 pub mod error;
 pub mod filter;
 pub mod message;

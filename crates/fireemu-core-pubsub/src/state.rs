@@ -69,6 +69,8 @@ pub struct Snapshot {
 /// One exhausted source message waiting for dead-letter destination admission.
 #[derive(Debug, Clone)]
 pub struct DeadLetterForward {
+    /// Source deliveries captured when the transfer was selected.
+    pub source_delivery_count: u32,
     /// The source subscription that owns the pending message.
     pub source_subscription: SubscriptionName,
     /// The configured destination topic.
@@ -1309,17 +1311,23 @@ impl PubSubState {
                 .expect("subscription present");
             sub.pull(max, now, || format!("ack-{:016x}", seed_bump.next_u64()))
         };
-        let dead_letter_topic = self
+        let dead_letter_policy = self
             .subscriptions
             .get(&key)
             .and_then(|s| s.config().dead_letter_policy.as_ref())
-            .map(|policy| policy.dead_letter_topic.clone());
+            .map(|policy| {
+                (
+                    policy.dead_letter_topic.clone(),
+                    policy.max_delivery_attempts,
+                )
+            });
         let received = outcome.received;
-        let dead_lettered = match dead_letter_topic {
-            Some(topic) => outcome
+        let dead_lettered = match dead_letter_policy {
+            Some((topic, count)) => outcome
                 .dead_lettered
                 .into_iter()
                 .map(|message| DeadLetterForward {
+                    source_delivery_count: count,
                     source_subscription: name.clone(),
                     dead_letter_topic: topic.clone(),
                     message,
@@ -1348,22 +1356,29 @@ impl PubSubState {
             .values()
             .flat_map(|subscription| {
                 let source_subscription = subscription.config().name.clone();
-                let dead_letter_topic = subscription
-                    .config()
-                    .dead_letter_policy
-                    .as_ref()
-                    .map(|policy| policy.dead_letter_topic.clone());
+                let dead_letter_topic =
+                    subscription
+                        .config()
+                        .dead_letter_policy
+                        .as_ref()
+                        .map(|policy| {
+                            (
+                                policy.dead_letter_topic.clone(),
+                                policy.max_delivery_attempts,
+                            )
+                        });
                 subscription
                     .pending_forwards()
                     .into_iter()
                     .filter_map(move |message| {
-                        dead_letter_topic
-                            .clone()
-                            .map(|dead_letter_topic| DeadLetterForward {
+                        dead_letter_topic.clone().map(|(dead_letter_topic, count)| {
+                            DeadLetterForward {
+                                source_delivery_count: count,
                                 source_subscription: source_subscription.clone(),
                                 dead_letter_topic,
                                 message,
-                            })
+                            }
+                        })
                     })
             })
             .collect()
@@ -1920,6 +1935,10 @@ mod tests {
         state.delete_topic(&dead_topic).unwrap();
         assert!(state.pull(&source, 10, now).unwrap().is_empty());
         assert_eq!(state.pending_dead_letters().len(), 1);
+        assert_eq!(
+            state.pending_dead_letters()[0].source_delivery_count,
+            MIN_DEAD_LETTER_ATTEMPTS
+        );
         assert!(state.pull(&source, 10, now).unwrap().is_empty());
 
         state.delete_subscription(&dead_sub).unwrap();
@@ -1933,6 +1952,7 @@ mod tests {
         let pending = state.pending_dead_letters();
         assert_eq!(pending.len(), 1);
         let forward = &pending[0];
+        assert_eq!(forward.source_delivery_count, MIN_DEAD_LETTER_ATTEMPTS);
         state
             .publish(
                 &forward.dead_letter_topic,

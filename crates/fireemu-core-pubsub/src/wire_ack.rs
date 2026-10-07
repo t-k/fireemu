@@ -14,14 +14,29 @@ pub fn encode(seed: u64, streaming: bool) -> Vec<u8> {
     bytes
 }
 
-/// Decodes only complete canonical payloads in either supported width.
+/// Encodes the observed compact unary width without selecting when to issue it.
+#[must_use]
+pub fn encode_compact_unary(seed: u64) -> Vec<u8> {
+    let mut bytes = encode(seed, false);
+    bytes.truncate(146);
+    // Keep truncated ordinary unary payloads outside the compact format domain.
+    bytes[8] ^= 0x80;
+    bytes
+}
+
+/// Decodes only complete canonical payloads in a supported format.
 #[must_use]
 pub fn decode(bytes: &[u8]) -> Option<u64> {
-    if ![142, 147].contains(&bytes.len()) {
+    if ![142, 146, 147].contains(&bytes.len()) {
         return None;
     }
     let seed = u64::from_be_bytes(bytes[..8].try_into().ok()?);
-    (encode(seed, bytes.len() == 142) == bytes).then_some(seed)
+    let canonical = if bytes.len() == 146 {
+        encode_compact_unary(seed)
+    } else {
+        encode(seed, bytes.len() == 142)
+    };
+    (canonical == bytes).then_some(seed)
 }
 
 #[cfg(test)]
@@ -38,6 +53,28 @@ mod tests {
             prop_assert_eq!(decode(&changed),None);
             prop_assert_eq!(decode(&bytes[..bytes.len()-1]),None);
             let mut extended=bytes;extended.push(0);prop_assert_eq!(decode(&extended),None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod compact_tests {
+    use super::*;
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn compact_unary_payload_roundtrips_with_full_integrity(seed in any::<u64>(), position in 0usize..146) {
+            let mut compact=encode(seed,false);
+            compact.truncate(146);
+            compact[8] ^= 0x80; // Distinct format domain: a truncated unary token is not compact.
+            prop_assert_eq!(encode_compact_unary(seed),compact.clone());
+            prop_assert_eq!(decode(&compact),Some(seed));
+            let mut changed=compact.clone();changed[position]^=1;
+            prop_assert_eq!(decode(&changed),None);
+            for unsupported in [0usize,7,8,141,143,144,145,148] {
+                let mut resized=compact.clone();resized.resize(unsupported,0);
+                prop_assert_eq!(decode(&resized),None);
+            }
         }
     }
 }

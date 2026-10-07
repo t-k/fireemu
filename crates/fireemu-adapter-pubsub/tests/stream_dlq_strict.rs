@@ -1221,3 +1221,215 @@ async fn strict_list_resource_defaults_use_the_recorded_empty_label_omission() {
         );
     }
 }
+
+#[tokio::test]
+async fn forwarded_identity_attributes_follow_the_recorded_strict_shape_only() {
+    // The paired sink receipts are run1/run2 n114; values remain causal, not fixture literals.
+    for profile in [PubSubProfile::Strict, PubSubProfile::Emulator] {
+        let server = Server::new(profile).await;
+        let project = "demo-oracle-masks0";
+        let source_topic = format!("projects/{project}/topics/source-topic");
+        let sink_topic = format!("projects/{project}/topics/sink-topic");
+        let source = format!("projects/{project}/subscriptions/source-sub");
+        let sink = format!("projects/{project}/subscriptions/sink-sub");
+        for topic in [&source_topic, &sink_topic] {
+            assert_eq!(
+                server
+                    .rest("PUT", &format!("/v1/{topic}"), json!({}))
+                    .await
+                    .0,
+                200
+            );
+        }
+        for (name, body) in [
+            (
+                &source,
+                json!({"topic":source_topic,"ackDeadlineSeconds":10,"deadLetterPolicy":{"deadLetterTopic":sink_topic,"maxDeliveryAttempts":5}}),
+            ),
+            (&sink, json!({"topic":sink_topic,"ackDeadlineSeconds":10})),
+        ] {
+            assert_eq!(
+                server.rest("PUT", &format!("/v1/{name}"), body).await.0,
+                200
+            );
+        }
+        let original_attributes = json!({"recorderRun":"000000000001","user":"keep"});
+        let (status, published) = server
+            .rest(
+                "POST",
+                &format!("/v1/{source_topic}:publish"),
+                json!({"messages":[{"data":"b3JpZ2luYWw=","attributes":original_attributes}]}),
+            )
+            .await;
+        assert_eq!(status, 200);
+        let published: Value = serde_json::from_slice(&published).unwrap();
+        for _ in 0..5 {
+            let (status, bytes) = server
+                .rest(
+                    "POST",
+                    &format!("/v1/{source}:pull"),
+                    json!({"maxMessages":1,"returnImmediately":true}),
+                )
+                .await;
+            assert_eq!(status, 200);
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            let ack = body["receivedMessages"][0]["ackId"].as_str().unwrap();
+            assert_eq!(
+                server
+                    .rest(
+                        "POST",
+                        &format!("/v1/{source}:modifyAckDeadline"),
+                        json!({"ackIds":[ack],"ackDeadlineSeconds":0})
+                    )
+                    .await
+                    .0,
+                200
+            );
+        }
+        // This triggers the existing local transfer decision; no production timing claim.
+        assert_eq!(
+            server
+                .rest(
+                    "POST",
+                    &format!("/v1/{source}:pull"),
+                    json!({"maxMessages":1,"returnImmediately":true})
+                )
+                .await
+                .0,
+            200
+        );
+        let mut client = SubscriberClient::new(server.channel().await);
+        let delivered = client
+            .pull(pb::PullRequest {
+                subscription: sink.clone(),
+                max_messages: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(delivered.received_messages.len(), 1);
+        let received = &delivered.received_messages[0];
+        let message = received.message.as_ref().unwrap();
+        assert_eq!(message.data, b"original");
+        assert_ne!(
+            message.message_id,
+            published["messageIds"][0].as_str().unwrap()
+        );
+        assert_eq!(message.attributes["recorderRun"], "000000000001");
+        assert_eq!(message.attributes["user"], "keep");
+        if profile == PubSubProfile::Strict {
+            assert_eq!(message.message_id.len(), 17);
+            assert!(message.message_id.bytes().all(|b| b.is_ascii_digit()));
+            assert_eq!(
+                message.attributes["CloudPubSubDeadLetterSourceSubscription"],
+                "source-sub"
+            );
+            assert_eq!(
+                message.attributes["CloudPubSubDeadLetterSourceSubscriptionProject"],
+                project
+            );
+            assert_eq!(
+                message.attributes["CloudPubSubDeadLetterSourceTopicPublishTime"],
+                "2023-11-14T22:13:20.123+00:00"
+            );
+            assert_eq!(
+                message.attributes["CloudPubSubDeadLetterSourceDeliveryCount"],
+                "5"
+            );
+            assert_eq!(message.attributes.len(), 6);
+        } else {
+            assert_eq!(message.attributes.len(), 2);
+        }
+        client
+            .acknowledge(pb::AcknowledgeRequest {
+                subscription: sink.clone(),
+                ack_ids: vec![received.ack_id.clone()],
+            })
+            .await
+            .unwrap();
+        assert!(client
+            .pull(pb::PullRequest {
+                subscription: sink,
+                max_messages: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .received_messages
+            .is_empty());
+    }
+}
+
+#[test]
+fn paired_recorded_sink_bodies_replay_through_the_forward_metadata_generator() {
+    use base64::Engine as _;
+    use fireemu_core_pubsub::{PubsubMessage, StoredMessage, SubscriptionName};
+    let fixture: Value = serde_json::from_str(include_str!("../../../conformance/src/pubsub-production/fixtures/stream-dlq-normalization-recorded.json")).unwrap();
+    for capture in fixture["captures"].as_array().unwrap() {
+        let row = |n| {
+            capture
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["n"] == n)
+                .unwrap()
+        };
+        let source_row = row(100);
+        let source_message = &source_row["response"]["body"]["receivedMessages"][0]["message"];
+        let expected = &row(114)["response"]["body"]["receivedMessages"][0]["message"];
+        let source = StoredMessage {
+            message_id: source_message["messageId"].as_str().unwrap().into(),
+            publish_time: LogicalInstant::parse_rfc3339(
+                source_message["publishTime"].as_str().unwrap(),
+            )
+            .unwrap(),
+            message: PubsubMessage {
+                data: base64::engine::general_purpose::STANDARD
+                    .decode(source_message["data"].as_str().unwrap())
+                    .unwrap(),
+                attributes: source_message["attributes"]
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap().into()))
+                    .collect(),
+                ordering_key: source_message["orderingKey"].as_str().unwrap_or("").into(),
+            },
+        };
+        let path = source_row["request"]["path"].as_str().unwrap();
+        let subscription = SubscriptionName::parse(
+            path.strip_prefix("/v1/")
+                .unwrap()
+                .strip_suffix(":pull")
+                .unwrap(),
+        )
+        .unwrap();
+        let count = expected["attributes"]["CloudPubSubDeadLetterSourceDeliveryCount"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let generated =
+            fireemu_core_pubsub::dead_letter::forwarded_message(&source, &subscription, count)
+                .unwrap();
+        assert_eq!(
+            serde_json::to_value(&generated.attributes).unwrap(),
+            expected["attributes"]
+        );
+        assert_eq!(
+            generated.data,
+            base64::engine::general_purpose::STANDARD
+                .decode(expected["data"].as_str().unwrap())
+                .unwrap()
+        );
+        let recorded_ack = row(80)["response"]["body"]["receivedMessages"][0]["ackId"]
+            .as_str()
+            .unwrap();
+        assert_eq!(recorded_ack.len(), 195);
+        assert!(recorded_ack
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
+    }
+}

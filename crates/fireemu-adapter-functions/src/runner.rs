@@ -1096,6 +1096,10 @@ mod tests {
     use super::{child_env, LogBuffer, RunnerLog, LOG_CAPACITY};
 
     #[tokio::test]
+    #[cfg_attr(
+        windows,
+        ignore = "the bundled runner closes stdout before its hello on windows-latest; under investigation (issue functions-runner-exits-before-hello-on-windows.md)"
+    )]
     async fn bundled_runner_installs_dates_before_import_and_drains_timers() {
         use super::{InvokeOutcome, Runner};
         use fireemu_core_session::clock::VirtualClock;

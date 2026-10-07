@@ -1594,3 +1594,111 @@ test("string list layouts preserve exact membership and cardinality independentl
       assert.equal(core.judgeRow(expected, exchange({ [key]: list })).verdict, "DIVERGES");
   }
 });
+
+test("recorded layout producer normalization preserves the varying ACK format", () => {
+  const [a, b] = JSON.parse(
+    readFileSync(
+      new URL(
+        "./pubsub-production/fixtures/stream-dlq-normalization-recorded.json",
+        import.meta.url,
+      ),
+    ),
+  ).captures;
+  const policy = core.createFieldNormalization(a, b);
+  const rows = [a, b].map((capture) => capture.find((row) => row.n === 85));
+  assert.ok(
+    policy.evidence.some(
+      (proof) =>
+        proof.case === "rest-layout-routes/rest" &&
+        proof.path === "/receivedMessages/0/message/data",
+    ),
+  );
+  const bodies = rows.map((row) => policy.normalize(row.response.body, row));
+  assert.deepEqual(
+    bodies[0].receivedMessages[0].message.data,
+    bodies[1].receivedMessages[0].message.data,
+  );
+  for (let i = 0; i < rows.length; i += 1)
+    assert.equal(
+      bodies[i].receivedMessages[0].ackId,
+      rows[i].response.body.receivedMessages[0].ackId,
+    );
+  assert.notEqual(
+    bodies[0].receivedMessages[0].ackId.length,
+    bodies[1].receivedMessages[0].ackId.length,
+  );
+});
+
+test("normalized receive shape cannot certify a raw ACK binding or causal followup", async () => {
+  const [a, b] = JSON.parse(
+    readFileSync(
+      new URL(
+        "./pubsub-production/fixtures/stream-dlq-normalization-recorded.json",
+        import.meta.url,
+      ),
+    ),
+  ).captures;
+  const policy = core.createFieldNormalization(a, b);
+  const publish = a.find((row) => row.n === 99),
+    pull = a.find((row) => row.n === 114);
+  const local = structuredClone(pull);
+  const received = local.response.body.receivedMessages[0];
+  received.message.messageId = "2".repeat(17);
+  received.ackId = "B".repeat(received.ackId.length);
+  received.message.attributes.CloudPubSubDeadLetterSourceTopicPublishTime =
+    "2020-01-01T00:00:00.123+00:00";
+  assert.equal(core.judgeRow(pull, local, { fieldNormalization: policy }).verdict, "MATCH");
+  const at = "2026-10-05T00:00:01.000Z";
+  const followup = {
+    n: 115,
+    case: pull.case,
+    step: "28",
+    op: "acknowledge",
+    transport: "rest",
+    at,
+    ms: 0,
+    request: {
+      method: "POST",
+      path: pull.request.path.replace(/:pull$/, ":acknowledge"),
+      body: { ackIds: [pull.response.body.receivedMessages[0].ackId] },
+    },
+    response: { status: 200, body: {}, bodyBytes: 2 },
+  };
+  const rows = [publish, pull, followup];
+  const capture = [
+    { ...a.find((row) => row.note === "run-start"), at },
+    ...rows.flatMap((row) => [
+      {
+        note: "request-dispatch",
+        case: row.case,
+        step: row.step,
+        op: row.op,
+        transport: row.transport,
+        at,
+      },
+      Object.assign(row, { at, ms: 0 }),
+    ]),
+    { note: "run-end", at },
+  ];
+  let bindings;
+  const called = [];
+  const report = await core.compareRecording(
+    { capture, issued: [], iam: [] },
+    {
+      fieldNormalization: policy,
+      replay: async (row, request, context) => {
+        called.push(row.n);
+        bindings = context.bindings;
+        if (row.n === 99)
+          return { ...row, response: { ...row.response, body: { messageIds: ["2".repeat(17)] } } };
+        return local;
+      },
+    },
+  );
+  const result = report.rows.find((row) => row.n === 114);
+  assert.equal(result.verdict, "NOT_COMPARABLE");
+  assert.match(result.reason, /ambiguous received message binding/);
+  assert.throws(() => bindings.get("ack", pull.response.body.receivedMessages[0].ackId), /binding/);
+  assert.equal(report.rows.find((row) => row.n === 115).verdict, "NOT_COMPARABLE");
+  assert.deepEqual(called, [99, 114]);
+});

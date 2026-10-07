@@ -1042,7 +1042,19 @@ async fn strict_pagination_all_rest_and_native_lists_and_emulator_controls() {
                 "{route}"
             );
             if profile == PubSubProfile::Strict {
-                assert_eq!(body["nextPageToken"].as_str().unwrap().len(), 26);
+                let token = body["nextPageToken"].as_str().unwrap();
+                assert_eq!(token.len(), 26);
+                let (_, next_bytes) = server
+                    .rest(
+                        "GET",
+                        &format!("/v1/projects/demo-paging/{route}?pageSize=1&pageToken={token}"),
+                        json!({}),
+                    )
+                    .await;
+                let next: Value = serde_json::from_slice(&next_bytes).unwrap();
+                assert_eq!(next[member].as_array().unwrap().len(), 1, "{route}");
+                assert_ne!(next[member][0], body[member][0], "{route}");
+                assert_ne!(next["nextPageToken"], body["nextPageToken"], "{route}");
             }
         }
         for size in [-1, 1001] {

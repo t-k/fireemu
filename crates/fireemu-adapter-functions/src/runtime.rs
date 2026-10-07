@@ -1159,6 +1159,7 @@ pub struct FunctionsRuntime {
     eventarc_registry: Mutex<crate::eventarc::TriggerRegistry>,
     /// Serialize schedule batches while Gen1 publication temporarily releases `inner`.
     schedule_sweep: Mutex<()>,
+    schedule_sweep_rerun: std::sync::atomic::AtomicBool,
     inner: Mutex<Inner>,
     /// Only active Cloud Tasks dispatches own Tokio tasks. Reset and shutdown replace this set,
     /// which aborts every old-generation attempt and its retry timer.
@@ -1410,6 +1411,7 @@ impl FunctionsRuntime {
             owner,
             eventarc_registry: Mutex::new(eventarc_registry),
             schedule_sweep: Mutex::new(()),
+            schedule_sweep_rerun: std::sync::atomic::AtomicBool::new(false),
             inner: Mutex::new(Inner {
                 task_scheduler,
                 next_task: 0,
@@ -3211,199 +3213,228 @@ impl FunctionsRuntime {
     /// change, carrying a count that is exact up to the cap and "at least" beyond it.
     #[allow(clippy::too_many_lines)]
     pub fn on_clock_changed(self: &Arc<Self>) {
+        use std::sync::atomic::Ordering;
+
         self.task_clock_wake.notify_waiters();
         self.wake.notify_one();
-        let _sweep = self
-            .schedule_sweep
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let now = self.now();
-        let Ok(mut inner) = self.inner.lock() else {
-            return;
-        };
-        // Once shutdown began the dispatcher is stopping: a run enqueued now would never be
-        // delivered and would keep the session busy. `begin_shutdown` sets the flag under this
-        // lock, so the check is made under it too.
-        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
-            return;
-        }
-        let mut enqueued = false;
-        let policy = self.config.catch_up;
-        let cap = self.config.max_catch_up_runs.max(1);
-        let room = cap.saturating_sub(inner.payloads.len());
-        // A full catch-up room holds back only the schedule backlog. Held events and due
-        // retries below are released on every clock change, whatever the room.
-        let backlog_held = policy == CatchUpPolicy::All && room == 0 && inner.catch_up_pending;
-        let chunk = room.max(1);
-        let mut pending = false;
-        let mut steps = 0u64;
-        let mut runs: Vec<(String, String, LogicalInstant)> = Vec::new();
-        let mut skipped: Vec<(String, RunCount)> = Vec::new();
-        let jobs: &mut [_] = if backlog_held {
-            &mut []
-        } else {
-            &mut inner.jobs
-        };
-        for job in jobs {
-            // Translate only interval schedules into the epoch-based core calculation, then restore their phase.
-            let shift = LogicalDuration::from_nanos(-job.phase.as_nanos());
-            let (Some(from), Some(to)) = (job.cursor.checked_add(shift), now.checked_add(shift))
-            else {
-                continue;
+
+        // Publish the request before trying the guard, including same-thread re-entry.
+        self.schedule_sweep_rerun.store(true, Ordering::SeqCst);
+        loop {
+            let sweep = match self.schedule_sweep.try_lock() {
+                Ok(sweep) => sweep,
+                Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => return,
             };
-            match policy {
-                CatchUpPolicy::All => {
-                    let due = job
-                        .schedule
-                        .runs_between_in(from, to, &*job.zone, chunk.saturating_add(1))
-                        .into_iter()
-                        .filter_map(|at| at.checked_add(job.phase))
-                        .collect::<Vec<_>>();
-                    if due.len() > chunk {
-                        // Beyond the cap: enqueue `chunk` runs now and leave the cursor at
-                        // the last one so the rest stays due instead of vanishing.
-                        let kept: Vec<LogicalInstant> = due.into_iter().take(chunk).collect();
-                        job.cursor = kept.last().copied().unwrap_or(job.cursor);
-                        pending = true;
-                        runs.extend(
-                            kept.into_iter()
-                                .map(|t| (job.function.clone(), job.region.clone(), t)),
-                        );
-                    } else {
-                        if now.as_nanos() > job.cursor.as_nanos() {
-                            job.cursor = now;
-                        }
-                        runs.extend(
-                            due.into_iter()
-                                .map(|t| (job.function.clone(), job.region.clone(), t)),
-                        );
-                    }
-                }
-                CatchUpPolicy::Latest | CatchUpPolicy::None => {
-                    // Neither policy keeps more than one run, so the due window is answered
-                    // directly instead of enumerated: a reverse search for the run `latest`
-                    // would keep, and a count that stops at the cap. The work no longer grows
-                    // with the number of occurrences the clock jumped over.
-                    let mut window = job.schedule.window_in(from, to, &*job.zone, cap as u64);
-                    window.latest = window.latest.and_then(|at| at.checked_add(job.phase));
-                    steps = steps.saturating_add(window.steps);
-                    if now.as_nanos() > job.cursor.as_nanos() {
-                        job.cursor = now;
-                    }
-                    let dropped = match (policy, window.latest) {
-                        (CatchUpPolicy::Latest, Some(t)) => {
-                            runs.push((job.function.clone(), job.region.clone(), t));
-                            window.count.saturating_sub(1)
-                        }
-                        (CatchUpPolicy::None, Some(_)) => window.count,
-                        _ => RunCount::Exact(0),
-                    };
-                    if !dropped.is_zero() {
-                        skipped.push((job.function.clone(), dropped));
-                    }
-                }
-            }
-        }
-        if !backlog_held {
-            inner.catch_up_pending = pending;
-        }
-        inner.catch_up_steps = inner.catch_up_steps.saturating_add(steps);
-        let label = match policy {
-            CatchUpPolicy::Latest => "latest",
-            _ => "none",
-        };
-        // One record per job and clock change summarises what the policy dropped: the count
-        // is exact up to the catch-up cap and "at least" beyond it, so neither the work nor
-        // the retained history grows with the size of the jump.
-        for (function, count) in skipped {
-            inner.record_invocation(InvocationRecord {
-                event_id: 0,
-                function,
-                attempt: 0,
-                outcome: format!("skipped: catch-up {label} ({count})"),
-            });
-        }
-        // Oldest occurrence first across jobs (the sort is stable: job order breaks ties), and
-        // the sweep stops at the first capacity refusal, so freed capacity always goes to the
-        // oldest due run, whatever its job and however many copies it needs.
-        runs.sort_by_key(|(_, _, at)| at.as_nanos());
-        // The handlers executing before this sweep: under `skip-in-flight` only these suppress an occurrence, never a
-        // run this same sweep admitted (a jump over several occurrences runs each, as each would have run when it came).
-        let executing: BTreeSet<String> = inner.running.values().cloned().collect();
-        let epoch = inner.epoch;
-        for (index, (function, region, at)) in runs.iter().enumerate() {
-            if self.config.overlap == OverlapPolicy::SkipInFlight && executing.contains(function) {
-                inner.record_invocation(InvocationRecord {
-                    event_id: 0,
-                    function: function.clone(),
-                    attempt: 0,
-                    outcome: "skipped: in flight".to_owned(),
-                });
-                continue;
-            }
-            if !self.admit_scheduled_run(&mut inner, function) {
-                continue;
-            }
-            let ordinal = inner.next_event + 1;
-            let id = format!("{}-{}", self.config.session.value(), ordinal);
-            let mut payload = schedule_event(&id, &self.config.project, region, function, *at);
-            let message = self.schedule_message_topic(function).map(|topic| {
-                let message_id = schedule_message_id(self.config.session, ordinal);
-                payload["data"]["messageId"] = Value::String(message_id.clone());
-                (topic, message_id, *at)
-            });
-            if let Ok(reservation) = self.enqueue_schedule_run(
-                &mut inner,
-                EventSource::Scheduler,
-                function,
-                *at,
-                &payload,
-            ) {
-                enqueued = true;
-                if message.is_none() {
-                    continue;
-                }
-                drop(inner);
-                let _ = self.publish_schedule_messages(reservation, message);
-                inner = self
-                    .inner
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if inner.epoch != epoch
-                    || self.shutting_down.load(std::sync::atomic::Ordering::SeqCst)
-                {
+            'sweeps: loop {
+                self.schedule_sweep_rerun.store(false, Ordering::SeqCst);
+                let now = self.now();
+                let Ok(mut inner) = self.inner.lock() else {
+                    return;
+                };
+                // Once shutdown began the dispatcher is stopping: a run enqueued now would never be
+                // delivered and would keep the session busy. `begin_shutdown` sets the flag under this
+                // lock, so the check is made under it too.
+                if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
                     return;
                 }
-                continue;
-            }
-            // Refused for capacity: move back the cursor of every job with a run not admitted
-            // (this one and all later ones) so those occurrences are due again, and keep the
-            // catch-up pending so the next completion, cancelled reservation or clock change
-            // retries them. A job's earliest such run decides its cursor.
-            for (function, _, at) in &runs[index..] {
-                let before = LogicalInstant::from_nanos(at.as_nanos() - 1);
-                if let Some(job) = inner.jobs.iter_mut().find(|job| &job.function == function) {
-                    if before.as_nanos() < job.cursor.as_nanos() {
-                        job.cursor = before;
+                let mut enqueued = false;
+                let policy = self.config.catch_up;
+                let cap = self.config.max_catch_up_runs.max(1);
+                let room = cap.saturating_sub(inner.payloads.len());
+                // A full catch-up room holds back only the schedule backlog. Held events and due
+                // retries below are released on every clock change, whatever the room.
+                let backlog_held =
+                    policy == CatchUpPolicy::All && room == 0 && inner.catch_up_pending;
+                let chunk = room.max(1);
+                let mut pending = false;
+                let mut steps = 0u64;
+                let mut runs: Vec<(String, String, LogicalInstant)> = Vec::new();
+                let mut skipped: Vec<(String, RunCount)> = Vec::new();
+                let jobs: &mut [_] = if backlog_held {
+                    &mut []
+                } else {
+                    &mut inner.jobs
+                };
+                for job in jobs {
+                    // Translate only interval schedules into the epoch-based core calculation, then restore their phase.
+                    let shift = LogicalDuration::from_nanos(-job.phase.as_nanos());
+                    let (Some(from), Some(to)) =
+                        (job.cursor.checked_add(shift), now.checked_add(shift))
+                    else {
+                        continue;
+                    };
+                    match policy {
+                        CatchUpPolicy::All => {
+                            let due = job
+                                .schedule
+                                .runs_between_in(from, to, &*job.zone, chunk.saturating_add(1))
+                                .into_iter()
+                                .filter_map(|at| at.checked_add(job.phase))
+                                .collect::<Vec<_>>();
+                            if due.len() > chunk {
+                                // Beyond the cap: enqueue `chunk` runs now and leave the cursor at
+                                // the last one so the rest stays due instead of vanishing.
+                                let kept: Vec<LogicalInstant> =
+                                    due.into_iter().take(chunk).collect();
+                                job.cursor = kept.last().copied().unwrap_or(job.cursor);
+                                pending = true;
+                                runs.extend(
+                                    kept.into_iter()
+                                        .map(|t| (job.function.clone(), job.region.clone(), t)),
+                                );
+                            } else {
+                                if now.as_nanos() > job.cursor.as_nanos() {
+                                    job.cursor = now;
+                                }
+                                runs.extend(
+                                    due.into_iter()
+                                        .map(|t| (job.function.clone(), job.region.clone(), t)),
+                                );
+                            }
+                        }
+                        CatchUpPolicy::Latest | CatchUpPolicy::None => {
+                            // Neither policy keeps more than one run, so the due window is answered
+                            // directly instead of enumerated: a reverse search for the run `latest`
+                            // would keep, and a count that stops at the cap. The work no longer grows
+                            // with the number of occurrences the clock jumped over.
+                            let mut window =
+                                job.schedule.window_in(from, to, &*job.zone, cap as u64);
+                            window.latest = window.latest.and_then(|at| at.checked_add(job.phase));
+                            steps = steps.saturating_add(window.steps);
+                            if now.as_nanos() > job.cursor.as_nanos() {
+                                job.cursor = now;
+                            }
+                            let dropped = match (policy, window.latest) {
+                                (CatchUpPolicy::Latest, Some(t)) => {
+                                    runs.push((job.function.clone(), job.region.clone(), t));
+                                    window.count.saturating_sub(1)
+                                }
+                                (CatchUpPolicy::None, Some(_)) => window.count,
+                                _ => RunCount::Exact(0),
+                            };
+                            if !dropped.is_zero() {
+                                skipped.push((job.function.clone(), dropped));
+                            }
+                        }
                     }
                 }
+                if !backlog_held {
+                    inner.catch_up_pending = pending;
+                }
+                inner.catch_up_steps = inner.catch_up_steps.saturating_add(steps);
+                let label = match policy {
+                    CatchUpPolicy::Latest => "latest",
+                    _ => "none",
+                };
+                // One record per job and clock change summarises what the policy dropped: the count
+                // is exact up to the catch-up cap and "at least" beyond it, so neither the work nor
+                // the retained history grows with the size of the jump.
+                for (function, count) in skipped {
+                    inner.record_invocation(InvocationRecord {
+                        event_id: 0,
+                        function,
+                        attempt: 0,
+                        outcome: format!("skipped: catch-up {label} ({count})"),
+                    });
+                }
+                // Oldest occurrence first across jobs (the sort is stable: job order breaks ties), and
+                // the sweep stops at the first capacity refusal, so freed capacity always goes to the
+                // oldest due run, whatever its job and however many copies it needs.
+                runs.sort_by_key(|(_, _, at)| at.as_nanos());
+                // The handlers executing before this sweep: under `skip-in-flight` only these suppress an occurrence, never a
+                // run this same sweep admitted (a jump over several occurrences runs each, as each would have run when it came).
+                let executing: BTreeSet<String> = inner.running.values().cloned().collect();
+                let epoch = inner.epoch;
+                for (index, (function, region, at)) in runs.iter().enumerate() {
+                    if self.config.overlap == OverlapPolicy::SkipInFlight
+                        && executing.contains(function)
+                    {
+                        inner.record_invocation(InvocationRecord {
+                            event_id: 0,
+                            function: function.clone(),
+                            attempt: 0,
+                            outcome: "skipped: in flight".to_owned(),
+                        });
+                        continue;
+                    }
+                    if !self.admit_scheduled_run(&mut inner, function) {
+                        continue;
+                    }
+                    let ordinal = inner.next_event + 1;
+                    let id = format!("{}-{}", self.config.session.value(), ordinal);
+                    let mut payload =
+                        schedule_event(&id, &self.config.project, region, function, *at);
+                    let message = self.schedule_message_topic(function).map(|topic| {
+                        let message_id = schedule_message_id(self.config.session, ordinal);
+                        payload["data"]["messageId"] = Value::String(message_id.clone());
+                        (topic, message_id, *at)
+                    });
+                    if let Ok(reservation) = self.enqueue_schedule_run(
+                        &mut inner,
+                        EventSource::Scheduler,
+                        function,
+                        *at,
+                        &payload,
+                    ) {
+                        enqueued = true;
+                        if message.is_none() {
+                            continue;
+                        }
+                        drop(inner);
+                        let _ = self.publish_schedule_messages(reservation, message);
+                        inner = self
+                            .inner
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if inner.epoch != epoch
+                            || self.shutting_down.load(std::sync::atomic::Ordering::SeqCst)
+                        {
+                            continue 'sweeps;
+                        }
+                        continue;
+                    }
+                    // Refused for capacity: move back the cursor of every job with a run not admitted
+                    // (this one and all later ones) so those occurrences are due again, and keep the
+                    // catch-up pending so the next completion, cancelled reservation or clock change
+                    // retries them. A job's earliest such run decides its cursor.
+                    for (function, _, at) in &runs[index..] {
+                        let before = LogicalInstant::from_nanos(at.as_nanos() - 1);
+                        if let Some(job) =
+                            inner.jobs.iter_mut().find(|job| &job.function == function)
+                        {
+                            if before.as_nanos() < job.cursor.as_nanos() {
+                                job.cursor = before;
+                            }
+                        }
+                    }
+                    inner.catch_up_pending = true;
+                    break;
+                }
+                // Events a `delay` fault held back became due with the clock.
+                if inner.delayed.values().any(|h| h.until <= now) {
+                    enqueued = true;
+                }
+                for id in inner.outbox.retries_due(now) {
+                    if inner.outbox.update(id, |r| r.retry_due(now)).is_ok() {
+                        inner.causality.transition(id.value(), "due", 0, now, false);
+                        enqueued = true;
+                    }
+                }
+                drop(inner);
+                if enqueued {
+                    self.wake.notify_one();
+                }
+                if !self.schedule_sweep_rerun.load(Ordering::SeqCst) {
+                    break;
+                }
             }
-            inner.catch_up_pending = true;
-            break;
-        }
-        // Events a `delay` fault held back became due with the clock.
-        if inner.delayed.values().any(|h| h.until <= now) {
-            enqueued = true;
-        }
-        for id in inner.outbox.retries_due(now) {
-            if inner.outbox.update(id, |r| r.retry_due(now)).is_ok() {
-                inner.causality.transition(id.value(), "due", 0, now, false);
-                enqueued = true;
+            drop(sweep);
+            // A trigger can set the flag after the last check but before guard release.
+            // Either this caller reacquires it, or its new owner services the request.
+            if !self.schedule_sweep_rerun.load(Ordering::SeqCst) {
+                return;
             }
-        }
-        drop(inner);
-        if enqueued {
-            self.wake.notify_one();
         }
     }
 
@@ -8076,14 +8107,114 @@ mod schedule_capacity_tests {
         let queued = admitted(&runtime);
         finish(&runtime).await;
         assert!(
-            !overlapped,
-            "the second sweep must wait for the first publication batch"
+            overlapped,
+            "the second trigger must return while the first publication batch runs"
         );
         assert_eq!(
             times, expected,
             "exactly five ordered occurrences, without duplicates"
         );
         assert_eq!(queued.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn a_trigger_during_publication_reruns_the_sweep_and_delivers_new_occurrences_once() {
+        struct BlockedPublisher {
+            entered: std::sync::mpsc::Sender<()>,
+            release: Mutex<std::sync::mpsc::Receiver<()>>,
+            first: std::sync::atomic::AtomicBool,
+            recorder: Recorder,
+        }
+        impl super::ScheduleTopicPublisher for BlockedPublisher {
+            fn publish(&self, topic: &str, id: &str, at: LogicalInstant) -> Result<(), String> {
+                if self.first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    self.entered.send(()).unwrap();
+                    self.release
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(10))
+                        .unwrap();
+                }
+                self.recorder.publish(topic, id, at)
+            }
+        }
+        let spec = SpawnSpec {
+            command: vec![
+                "python3".into(),
+                concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").into(),
+            ],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(60),
+        };
+        let runner = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "tick", "generation": 1, "trigger": {"type": "schedule", "schedule": "every 1 minutes"}}
+        ]})).unwrap();
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(START),
+        )));
+        let runtime = FunctionsRuntime::with_codebases(
+            vec![super::CodebaseSpec {
+                name: "default".into(),
+                manifest,
+                runner,
+                spawn: Some(spec),
+                cleanup_dir: None,
+            }],
+            FunctionsConfig {
+                clock_policy: crate::application_clock::ApplicationClockPolicy {
+                    date_virtual: true,
+                    ..Default::default()
+                },
+                ..FunctionsConfig::for_tests(20, "s".into())
+            },
+            clock.clone(),
+            crate::http::FunctionsHttpProfile::Strict,
+        )
+        .unwrap();
+        let (entered, waiting) = std::sync::mpsc::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let publisher = Arc::new(BlockedPublisher {
+            entered,
+            release: Mutex::new(blocked),
+            first: std::sync::atomic::AtomicBool::new(true),
+            recorder: Recorder::default(),
+        });
+        runtime.set_schedule_topic_publisher(publisher.clone());
+        advance(&clock, 60);
+        let producing = runtime.clone();
+        let first = std::thread::spawn(move || producing.on_clock_changed());
+        waiting.recv_timeout(Duration::from_secs(10)).unwrap();
+        advance(&clock, 60);
+        let producing = runtime.clone();
+        let (finished, done) = std::sync::mpsc::channel();
+        let second = std::thread::spawn(move || {
+            producing.on_clock_changed();
+            finished.send(()).unwrap();
+        });
+        let overlapped = done.recv_timeout(Duration::from_millis(500)).is_ok();
+        release.send(()).unwrap();
+        first.join().unwrap();
+        second.join().unwrap();
+        let times: Vec<_> = recorded(&publisher.recorder)
+            .iter()
+            .map(|row| row.2)
+            .collect();
+        let expected: Vec<_> = (1..=2)
+            .map(|minute| LogicalInstant::from_unix_seconds(START + minute * 60))
+            .collect();
+        let queued = admitted(&runtime);
+        finish(&runtime).await;
+        assert!(
+            overlapped,
+            "a trigger must return while publication is blocked"
+        );
+        assert_eq!(
+            times, expected,
+            "both clock windows are delivered once in order"
+        );
+        assert_eq!(queued.len(), 2);
     }
 
     proptest::proptest! {

@@ -783,6 +783,65 @@ mod tests {
     }
 
     #[test]
+    fn an_active_eventarc_channel_remains_publishable_after_snapshot_restore() {
+        use fireemu_adapter_functions::eventarc_channels::{ChannelStore, Created, Lookup};
+        use fireemu_adapter_functions::eventarc_strict::{evaluate, route, Input, Outcome, World};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::determinism::Clock;
+        use fireemu_core_types::time::LogicalDuration;
+        use std::sync::Mutex;
+
+        let clock = Arc::new(Mutex::new(VirtualClock::new(AT)));
+        let hook = super::SessionClock(clock.clone());
+        let scope = Scope::AllExcept(BTreeSet::new());
+        let captured = hook.capture(&scope).unwrap();
+        let channels = ChannelStore::default();
+        let name = "projects/demo-app/locations/us-central1/channels/restored";
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(10))
+            .unwrap();
+        let now = u64::try_from(clock.lock().unwrap().now().as_nanos()).unwrap();
+        assert!(matches!(channels.create(name, now), Created::Started(_)));
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(10))
+            .unwrap();
+        let now = u64::try_from(clock.lock().unwrap().now().as_nanos()).unwrap();
+        let active = channels.lookup(name, now);
+        assert!(matches!(active, Lookup::Ready(_)));
+
+        hook.restore(&scope, &captured).unwrap();
+        assert_eq!(clock.lock().unwrap().now(), AT);
+        let now = u64::try_from(clock.lock().unwrap().now().as_nanos()).unwrap();
+        assert_eq!(channels.lookup(name, now), active);
+        let route = route("POST", &format!("/v1/{name}:publishEvents")).unwrap();
+        let body = br#"{"events":[{"@type":"type.googleapis.com/io.cloudevents.v1.CloudEvent","id":"restored","source":"//test/source","specVersion":"1.0","type":"com.example.done","attributes":{"datacontenttype":{"ceString":"application/json"}},"textData":"{}"}]}"#;
+        let outcome = evaluate(
+            &Input {
+                route: &route,
+                query: None,
+                bearer: Some("ya29.fixture"),
+                body,
+            },
+            &World {
+                project: "demo-app",
+                request_id: "0123456789abcdef",
+                declared_channel: &|_| false,
+                declared_in: &|_, _| Vec::new(),
+                channels: &channels,
+                now,
+            },
+        );
+        let Outcome::Answer(answer) = outcome else {
+            panic!("an API-created channel must answer directly")
+        };
+        assert_eq!(answer.status, 200, "{}", answer.text());
+    }
+
+    #[test]
     fn a_restore_brings_back_the_time_to_live_policies_the_capture_held() {
         let backend = backend();
         backend

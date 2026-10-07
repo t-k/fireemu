@@ -1300,7 +1300,16 @@ async fn respond_eventarc_strict(
     let declared_in =
         |project: &str, location: &str| runtime.eventarc_channels_declared_in(project, location);
     let now = if runtime.config.clock_start_pinned {
-        u64::try_from(runtime.now().as_nanos().max(0)).unwrap_or(u64::MAX)
+        match u64::try_from(runtime.now().as_nanos()) {
+            Ok(now) => now,
+            Err(_) => {
+                return json_answer(&crate::eventarc_strict::failure(
+                    400,
+                    "INVALID_ARGUMENT",
+                    "The pinned clock is outside the Eventarc channel timestamp range.",
+                ));
+            }
+        }
     } else {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

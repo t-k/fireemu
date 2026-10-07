@@ -678,6 +678,160 @@ async fn the_emulator_profile_ignores_the_credential_as_the_official_emulator_do
 }
 
 #[tokio::test]
+async fn strict_pinned_channel_clock_refuses_unrepresentable_instants_and_keeps_active_channels_after_rewind(
+) {
+    use fireemu_core_types::time::LogicalDuration;
+
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let spec = SpawnSpec {
+        command: vec![
+            "python3".into(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").into(),
+        ],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: Duration::from_secs(60),
+    };
+    let runner = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+    let manifest = parse_manifest(&json!({"functions": []})).unwrap();
+    let runtime = FunctionsRuntime::with_codebases(
+        vec![CodebaseSpec {
+            name: "default".into(),
+            manifest,
+            runner,
+            spawn: Some(spec),
+            cleanup_dir: None,
+        }],
+        FunctionsConfig {
+            project: PROJECT.into(),
+            clock_start_pinned: true,
+            ..FunctionsConfig::for_tests(1000, "s".into())
+        },
+        clock.clone(),
+        FunctionsHttpProfile::Strict,
+    )
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let serving = runtime.clone();
+    let server = tokio::spawn(async move {
+        serve_eventarc_with_profile(
+            listener,
+            serving,
+            HttpAdmission::new(),
+            FunctionsHttpProfile::Strict,
+        )
+        .await
+    });
+    let scratch =
+        std::env::temp_dir().join(format!("fireemu-eventarc-pinned-{}", std::process::id()));
+    std::fs::create_dir(&scratch).unwrap();
+    let server = Listener {
+        addr,
+        runtime,
+        frames: scratch.join("frames.jsonl"),
+        scratch,
+        server,
+    };
+    let parent = "/v1/projects/demo-app/locations/us-central1/channels";
+    let body =
+        json!({"name": "projects/demo-app/locations/us-central1/channels/pinned"}).to_string();
+    for instant in [
+        LogicalInstant::from_unix_seconds(32_503_680_000),
+        LogicalInstant::from_nanos(-1),
+    ] {
+        clock
+            .lock()
+            .unwrap()
+            .try_set_allow_backwards(instant)
+            .unwrap();
+        let (status, answer) = server
+            .send(
+                "POST",
+                &format!("{parent}?channelId=pinned"),
+                true,
+                Some(&body),
+            )
+            .await;
+        assert_eq!(status, 400, "{answer}");
+        assert_eq!(error_of(&answer)["status"], "INVALID_ARGUMENT");
+        assert!(error_of(&answer)["message"]
+            .as_str()
+            .unwrap()
+            .contains("clock"));
+    }
+    clock
+        .lock()
+        .unwrap()
+        .try_set_allow_backwards(START)
+        .unwrap();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(10))
+        .unwrap();
+    let (status, answer) = server
+        .send(
+            "POST",
+            &format!("{parent}?channelId=pinned"),
+            true,
+            Some(&body),
+        )
+        .await;
+    assert_eq!(status, 200, "{answer}");
+    let operation: Value = serde_json::from_str(&answer).unwrap();
+    let channel = format!("{parent}/pinned");
+    let (status, creating) = server.send("GET", &channel, true, None).await;
+    assert_eq!(status, 200);
+    assert!(serde_json::from_str::<Value>(&creating)
+        .unwrap()
+        .get("state")
+        .is_none());
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(10))
+        .unwrap();
+    let (status, active) = server.send("GET", &channel, true, None).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        serde_json::from_str::<Value>(&active).unwrap()["state"],
+        "ACTIVE"
+    );
+    clock
+        .lock()
+        .unwrap()
+        .try_set_allow_backwards(START)
+        .unwrap();
+    let (status, rewound) = server.send("GET", &channel, true, None).await;
+    assert_eq!((status, rewound), (200, active));
+    let (status, finished) = server
+        .send(
+            "GET",
+            &format!("/v1/{}", operation["name"].as_str().unwrap()),
+            true,
+            None,
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        serde_json::from_str::<Value>(&finished).unwrap()["done"],
+        true
+    );
+    let body = publish_body(&[event("eu")]);
+    let (status, answer) = server
+        .send(
+            "POST",
+            &format!("{channel}:publishEvents"),
+            true,
+            Some(&body),
+        )
+        .await;
+    assert_eq!((status, answer.as_str()), (200, "{}\n"));
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn strict_serves_the_channel_api_over_http_and_the_emulator_profile_serves_none_of_it() {
     // Operations that take a tenth of a second, so that the test waits for them.
     let channels = Arc::new(ChannelStore::new(

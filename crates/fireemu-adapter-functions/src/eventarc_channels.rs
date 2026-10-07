@@ -274,6 +274,8 @@ struct Record {
 
 #[derive(Debug, Default)]
 struct State {
+    /// Lifecycle time never rewinds when the session clock is restored or set backwards.
+    now: Nanos,
     /// Channels by full name.
     channels: BTreeMap<String, Record>,
     /// The time of creation of each channel that has been deleted, by UID (for the page tokens that name it).
@@ -360,7 +362,9 @@ impl ChannelStore {
     }
 
     /// Forgets the channels whose deletion has finished.
-    fn settle(state: &mut State, now: Nanos) {
+    fn settle(state: &mut State, now: Nanos) -> Nanos {
+        let now = now.max(state.now);
+        state.now = now;
         let gone: Vec<String> = state
             .channels
             .iter()
@@ -372,6 +376,7 @@ impl ChannelStore {
                 state.retired.insert(record.uid, record.create_time);
             }
         }
+        now
     }
 
     fn view(name: &str, record: &Record, phase: Phase) -> ChannelView {
@@ -383,9 +388,9 @@ impl ChannelStore {
                 // Not updated yet.
                 Phase::Creating => record.create_time,
                 // The deletion moved it (2 ms after the operation's `createTime` in the recording).
-                Phase::Deleting => record
-                    .deleting
-                    .map_or(record.update_time, |(start, _)| start + UPDATE_AFTER_DELETE),
+                Phase::Deleting => record.deleting.map_or(record.update_time, |(start, _)| {
+                    start.saturating_add(UPDATE_AFTER_DELETE)
+                }),
                 Phase::Active => record.update_time,
             },
             pubsub_topic: if phase == Phase::Creating {
@@ -413,7 +418,7 @@ impl ChannelStore {
     /// What the channel is at `now`.
     pub fn lookup(&self, name: &str, now: Nanos) -> Lookup {
         let mut state = self.state();
-        Self::settle(&mut state, now);
+        let now = Self::settle(&mut state, now);
         Self::lookup_in(&state, name, now)
     }
 
@@ -421,7 +426,7 @@ impl ChannelStore {
     /// creates when it deploys a function that triggers on it). Nothing changes when it is known.
     pub fn declare(&self, name: &str, now: Nanos) {
         let mut state = self.state();
-        Self::settle(&mut state, now);
+        let now = Self::settle(&mut state, now);
         if state.channels.contains_key(name) {
             return;
         }
@@ -457,19 +462,19 @@ impl ChannelStore {
     /// Accepts the creation of the channel `name` (a full resource name) at `now`.
     pub fn create(&self, name: &str, now: Nanos) -> Created {
         let mut state = self.state();
-        Self::settle(&mut state, now);
+        let now = Self::settle(&mut state, now);
         if Self::lookup_in(&state, name, now).view().is_some() {
             return Created::Exists;
         }
         let operation = self.operation_name(parent_of(name), now);
-        let end = now + self.timing().create;
+        let end = now.checked_add(self.timing().create).unwrap_or(Nanos::MAX);
         let (uid, suffix) = self.identity();
         let record = Record {
             uid,
             suffix,
             create_time: now.saturating_sub(CHANNEL_BEFORE_OPERATION),
             ready_at: end,
-            update_time: end + UPDATE_AFTER_READY,
+            update_time: end.saturating_add(UPDATE_AFTER_READY),
             deleting: None,
         };
         let mut response = Self::view(name, &record, Phase::Active);
@@ -497,7 +502,7 @@ impl ChannelStore {
     /// (a `404`, observed).
     pub fn delete(&self, name: &str, now: Nanos) -> Deleted {
         let mut state = self.state();
-        Self::settle(&mut state, now);
+        let now = Self::settle(&mut state, now);
         match Self::lookup_in(&state, name, now) {
             Lookup::Absent | Lookup::Deleting(_) => return Deleted::Absent,
             Lookup::Creating(_) | Lookup::Ready(_) => {}
@@ -516,8 +521,11 @@ impl ChannelStore {
             .channels
             .get(name)
             .map_or(now, |record| record.ready_at);
-        let end = now.max(ready_at) + duration;
-        let moved = now + UPDATE_AFTER_DELETE;
+        let end = now
+            .max(ready_at)
+            .checked_add(duration)
+            .unwrap_or(Nanos::MAX);
+        let moved = now.checked_add(UPDATE_AFTER_DELETE).unwrap_or(Nanos::MAX);
         if let Some(record) = state.channels.get_mut(name) {
             record.deleting = Some((now, end));
         }
@@ -553,7 +561,8 @@ impl ChannelStore {
 
     /// The operation `name` as a read shows it at `now`, or `None` when this store never issued it.
     pub fn operation(&self, name: &str, now: Nanos) -> Option<Ordered> {
-        let state = self.state();
+        let mut state = self.state();
+        let now = Self::settle(&mut state, now);
         let operation = state.operations.get(name)?;
         Some(operation_json(operation, now))
     }
@@ -575,7 +584,7 @@ impl ChannelStore {
         now: Nanos,
     ) -> Listing {
         let mut state = self.state();
-        Self::settle(&mut state, now);
+        let now = Self::settle(&mut state, now);
         let prefix = format!("projects/{project}/locations/");
         let in_scope = |name: &str| {
             name.strip_prefix(&prefix).is_some_and(|rest| {
@@ -1017,6 +1026,72 @@ mod tests {
     }
 
     #[test]
+    fn channel_deadlines_saturate_without_wrapping_at_the_nanosecond_limit() {
+        let store = store();
+        let channel = name("us-central1", "limit");
+        let now = u64::MAX - 1;
+        let creation = started(store.create(&channel, now));
+        assert!(!done(&store.operation(&creation.operation, now).unwrap()));
+        assert!(matches!(store.lookup(&channel, now), Lookup::Creating(_)));
+        let Lookup::Ready(view) = store.lookup(&channel, u64::MAX) else {
+            panic!("creation must finish at the representable limit")
+        };
+        assert_eq!(view.update_time, u64::MAX);
+        assert!(done(
+            &store.operation(&creation.operation, u64::MAX).unwrap()
+        ));
+        assert!(matches!(
+            store.delete(&channel, u64::MAX),
+            Deleted::Started(_)
+        ));
+        assert_eq!(store.lookup(&channel, u64::MAX), Lookup::Absent);
+
+        let store = self::store();
+        let creation = started(store.create(&channel, now));
+        let Deleted::Started(deletion) = store.delete(&channel, now) else {
+            panic!("deletion while creating must be accepted")
+        };
+        assert!(!done(&store.operation(&deletion.operation, now).unwrap()));
+        assert!(done(
+            &store.operation(&deletion.operation, u64::MAX).unwrap()
+        ));
+        assert_eq!(store.lookup(&channel, u64::MAX), Lookup::Absent);
+        assert_eq!(
+            store.operation(&creation.operation, u64::MAX).unwrap()["response"]["updateTime"],
+            rfc3339(u64::MAX).as_str()
+        );
+
+        let store = self::store();
+        store.declare(&channel, now);
+        assert!(matches!(store.delete(&channel, now), Deleted::Started(_)));
+        let Lookup::Deleting(view) = store.lookup(&channel, now) else {
+            panic!("deletion must remain pending before the limit")
+        };
+        assert_eq!(view.update_time, u64::MAX);
+    }
+
+    #[test]
+    fn completed_channel_phases_and_operations_do_not_rewind() {
+        let store = store();
+        let channel = name("us-central1", "rewind");
+        let creation = started(store.create(&channel, T0 + 10 * SECOND));
+        let active = store.lookup(&channel, T0 + 20 * SECOND);
+        assert!(matches!(active, Lookup::Ready(_)));
+        assert_eq!(store.lookup(&channel, T0), active);
+        assert!(done(&store.operation(&creation.operation, T0).unwrap()));
+        assert_eq!(
+            store.list(PROJECT, "us-central1", None, 10, T0).items,
+            vec![active.view().unwrap().clone()]
+        );
+        let Deleted::Started(deletion) = store.delete(&channel, T0) else {
+            panic!("deletion must be accepted")
+        };
+        assert_eq!(store.lookup(&channel, T0 + 24 * SECOND), Lookup::Absent);
+        assert_eq!(store.lookup(&channel, T0), Lookup::Absent);
+        assert!(done(&store.operation(&deletion.operation, T0).unwrap()));
+    }
+
+    #[test]
     fn the_phases_of_a_channel_are_creating_ready_deleting_absent() {
         let store = store();
         let channel = name("us-central1", "c");
@@ -1084,11 +1159,27 @@ mod tests {
             Deleted::Started(started) => started,
             other @ Deleted::Absent => panic!("not started: {other:?}"),
         };
+        assert!(matches!(
+            store.lookup(&channel, T0 + 4_950_000_000),
+            Lookup::Creating(_)
+        ));
         // The creation ends at T0 + 5 s as it was going to; the deletion a deletion (4 s) after that.
         assert!(done(
             &store
                 .operation(&creation.operation, T0 + 5 * SECOND)
                 .unwrap()
+        ));
+        // The creation's response shows the channel as the deletion moved it.
+        let response = store
+            .operation(&creation.operation, T0 + 5 * SECOND)
+            .unwrap();
+        assert_eq!(
+            response["response"]["updateTime"],
+            rfc3339(T0 + 4_900_000_000 + 2 * NANOS_PER_MILLI).as_str()
+        );
+        assert!(matches!(
+            store.lookup(&channel, T0 + 6 * SECOND),
+            Lookup::Deleting(_)
         ));
         assert!(!done(
             &store
@@ -1100,23 +1191,6 @@ mod tests {
                 .operation(&deletion.operation, T0 + 9 * SECOND)
                 .unwrap()
         ));
-        // The creation's response shows the channel as the deletion moved it.
-        let response = store
-            .operation(&creation.operation, T0 + 5 * SECOND)
-            .unwrap();
-        assert_eq!(
-            response["response"]["updateTime"],
-            rfc3339(T0 + 4_900_000_000 + 2 * NANOS_PER_MILLI).as_str()
-        );
-        // During the rest of the creation the channel is still being created; then it is being deleted.
-        assert!(matches!(
-            store.lookup(&channel, T0 + 4_950_000_000),
-            Lookup::Creating(_)
-        ));
-        assert!(matches!(
-            store.lookup(&channel, T0 + 6 * SECOND),
-            Lookup::Deleting(_)
-        ));
         assert_eq!(store.lookup(&channel, T0 + 9 * SECOND), Lookup::Absent);
     }
 
@@ -1127,7 +1201,13 @@ mod tests {
         let two = name("us-central1", "c2");
         let first = started(store.create(&one, T0));
         let second = started(store.create(&two, T0));
-        let before = store.operation(&second.operation, T0 + 5 * SECOND).unwrap();
+        // Read the comparison from an independent store without advancing this store's lifecycle.
+        let baseline = self::store();
+        let _ = baseline.create(&one, T0);
+        let baseline_second = started(baseline.create(&two, T0));
+        let before = baseline
+            .operation(&baseline_second.operation, T0 + 5 * SECOND)
+            .unwrap();
         // Deleted while its creation runs: its own creation's response moves, another channel's does not.
         let _ = store.delete(&one, T0 + 4 * SECOND);
         assert_eq!(

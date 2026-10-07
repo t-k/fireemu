@@ -410,11 +410,22 @@ fs.writeSync(1, JSON.stringify({event: 'receipt', receipt}) + '\n');
 """
     loopback_metadata = tmp_path / 'loopback-metadata.json'
     if fault.startswith('loopback-'): loopback_metadata.write_text('[]')
+    children = []
     def popen(args, **kwargs):
         if len(args) == 3 and args[1:] == [table['sourceFile'], 'production']:
-            return original([args[0], '-e', script, str(local_path), fault, table['sourceFile'], str(loopback_metadata)], **kwargs)
+            child = original([args[0], '-e', script, str(local_path), fault, table['sourceFile'], str(loopback_metadata)], **kwargs)
+            children.append(child)
+            return child
         return original(args, **kwargs)
     monkeypatch.setattr(runner.subprocess, 'Popen', popen)
+    run = runner.subprocess.run
+    def process_proof(args, **kwargs):
+        if args[:2] == ['ps', '-p']:
+            # The restricted offline test cannot query ps; verify only its own retained child handle.
+            assert any(child.pid == int(args[2]) and table['sourceFile'] in child.args for child in children)
+            return __import__('types').SimpleNamespace(stdout='node ' + table['sourceFile'])
+        return run(args, **kwargs)
+    monkeypatch.setattr(runner.subprocess, 'run', process_proof)
     def refresh(_baseline, budget, **kwargs):
         budget.charge('credential')
         return 'offline-parent'
@@ -984,3 +995,104 @@ def test_two_database_recovery_reserves_each_delete_readback_and_postflight(tmp_
     assert result["complete"] and result["requests"] == 10
     assert calls == ["oauth-tokeninfo", "project", "database", "delete-database", "named-database", "delete-database", "named-database", "project", "database"]
     assert all(state["unknownDelete"] and not state["closureReady"] for state in result["runs"])
+
+
+@pytest.mark.parametrize('fault', ['handoff', 'terminate', 'delete-app', 'receipt-build', 'redaction', 'write-cap', 'zero-write', 'write-error'])
+def test_sdk_production_handoff_and_stopped_child_diagnostics(tmp_path, monkeypatch, fault):
+    import shutil
+    import time
+    from txn_program_cli import table_for
+    table = table_for('p17-admin-sdk-retry')
+    runtime = {'nodeExecutable': shutil.which('node'), 'dependencies': {}, 'nodeSha256': 'offline-node', 'lockSha256': 'offline-lock'}
+    original = runner.subprocess.Popen
+    script = r"""
+const fs = require('node:fs');
+const source = fs.readFileSync(process.argv[1], 'utf8');
+const fault = process.argv[2];
+const body = source.slice(source.indexOf('if (process.argv[1] &&')).replace(/^if .*\{/, 'if (true) {').replaceAll('import.meta.url', '"offline"');
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+process.argv = [process.execPath, process.argv[1], 'production'];
+process.stdout._handle.setBlocking(false);
+const recordAdminRetries = async ({ admission }) => {
+  // Simulate completed cleanup before the shutdown or receipt-construction failure.
+  if (!['handoff', 'write-cap', 'zero-write', 'write-error'].includes(fault)) {
+    if (fault === 'redaction') {
+      fs.writeSync(2, 'noise\n'.repeat(4000));
+      const secrets = ['AI' + 'za' + 'x'.repeat(35), 'ya' + '29.' + 'y'.repeat(40), 'Bearer ' + 'z'.repeat(48),
+        '-----BEGIN ' + 'PRIVATE KEY-----\n' + 'sensitive-body\n-----END ' + 'PRIVATE KEY-----'];
+      throw new Error('after cleanup: ' + secrets.join('\n') + '\nlast safe diagnostic');
+    }
+    throw new Error('after cleanup: ' + fault + '\nshutdown failed');
+  }
+  const receipt = { complete: true, nonce: admission.nonce, ownerId: admission.ownerId, sandboxRequests: 0,
+    runtime: { target: 'production', manifest: { dependencies: {} }, nodeSha256: 'offline-node', lockSha256: 'offline-lock' },
+    steps: [], cleanupSteps: [], padding: 'p'.repeat(1024 * 1024) };
+  const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  receipt.receiptDigest = require('node:crypto').createHash('sha256').update(JSON.stringify(canonical(receipt))).digest('hex');
+  return receipt;
+};
+const write = (fd, ...args) => {
+  if (fd === 1 && Buffer.isBuffer(args[0])) {
+    if (fault === 'zero-write') return 0;
+    if (fault === 'write-cap' || fault === 'write-error') throw Object.assign(new Error('offline write error'), { code: fault === 'write-cap' ? 'EAGAIN' : 'EIO' });
+  }
+  return fs.writeSync(fd, ...args);
+};
+let clock = 0;
+new AsyncFunction('writeSync', 'readSync', 'recordAdminRetries', 'performance', body)(write, fs.readSync, recordAdminRetries, fault === 'write-cap' ? { now: () => clock += 5000 } : require('node:perf_hooks').performance)
+  .catch(() => { process.exitCode = 2; });
+"""
+    def popen(args, **kwargs):
+        if args[1:] == [table['sourceFile'], 'production']:
+            return original([args[0], '-e', script, table['sourceFile'], fault], **kwargs)
+        return original(args, **kwargs)
+    monkeypatch.setattr(runner.subprocess, 'Popen', popen)
+    if fault == 'handoff':
+        read = runner.os.read
+        def slow_read(fd, size):
+            time.sleep(0.001)
+            return read(fd, min(size, 1024))
+        monkeypatch.setattr(runner.os, 'read', slow_read)
+    monkeypatch.setattr(runner, 'refresh', lambda *_args, **_kwargs: 'offline-parent')
+    class Metadata:
+        def __init__(self, *_args, **_kwargs): pass
+        def preflight(self): return {'rules-absent': 'absent'}
+        def postflight(self): return {'unchanged': True}
+    monkeypatch.setattr(runner, 'MetadataSession', Metadata)
+    receipt = runner.run_once(0, table, 'a' * 32, 'b' * 32, tmp_path, baseline={}, runtime=runtime, check=lambda: None)
+    if fault == 'handoff':
+        assert receipt['complete'] is True
+        assert receipt['padding'] == 'p' * (1024 * 1024)
+    else:
+        assert receipt['complete'] is False
+        assert receipt['failureMessage'] == 'SDK worker receipt incomplete'
+        assert receipt['childExitCode'] == 1
+        tail = receipt['childStderrTail']
+        assert len(tail.encode()) <= 8192
+        if fault == 'write-cap':
+            assert tail == 'SDK receipt write timed out\n'
+        elif fault == 'zero-write':
+            assert tail == 'SDK receipt write made no progress\n'
+        elif fault == 'write-error':
+            assert tail == 'offline write error\n'
+        elif fault == 'redaction':
+            assert tail.endswith('last safe diagnostic\n')
+            for sensitive in ['AI' + 'za', 'ya' + '29.', 'z' * 48, 'sensitive-body', 'PRIVATE KEY']:
+                assert sensitive not in tail
+        else:
+            assert tail == 'after cleanup: ' + fault + ' shutdown failed\n'
+        final = json.loads((tmp_path / 'journal-1/sdk-final-receipt.json').read_text())
+        assert final == receipt
+
+
+@pytest.mark.parametrize('kind', ['api-key', 'access-token', 'bearer', 'private-key'])
+def test_sdk_failure_message_redaction_unit(tmp_path, monkeypatch, kind):
+    from txn_program_cli import table_for
+    samples = {'api-key': 'AI' + 'za' + 'x' * 35, 'access-token': 'ya' + '29.' + 'y' * 40,
+               'bearer': 'Bearer ' + 'z' * 48, 'private-key': '-----BEGIN ' + 'RSA PRIVATE KEY-----\nbody\n-----END ' + 'RSA PRIVATE KEY-----'}
+    def fail(*_args, **_kwargs): raise ValueError('safe prefix ' + samples[kind] + ' safe suffix')
+    monkeypatch.setattr(runner, 'refresh', fail)
+    receipt = runner.run_once(0, table_for('p17-admin-sdk-retry'), 'a' * 32, 'b' * 32, tmp_path, baseline={}, runtime={}, check=lambda: None)
+    assert receipt['failureMessage'] == 'safe prefix [credential-redacted] safe suffix'
+    assert receipt['childExitCode'] is None
+    assert receipt['childStderrTail'] == ''

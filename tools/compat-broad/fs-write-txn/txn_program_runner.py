@@ -93,6 +93,10 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
     documents = {}
     metadata = None
     collector = None
+    child = None
+    bearer = None
+    stderr_tail = bytearray()
+    stderr_truncated = False
     try:
         check()
         project = table.get('project', PROJECT)
@@ -103,19 +107,27 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
         preflight = metadata.preflight()
         if table['name'] == 'p17-admin-sdk-retry':
             worker = Path(table['sourceFile'])
-            child = subprocess.Popen([runtime['nodeExecutable'], str(worker), 'production'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env={'LANG': 'C', 'LC_ALL': 'C', 'TZ': 'UTC'}, close_fds=True)
+            child = subprocess.Popen([runtime['nodeExecutable'], str(worker), 'production'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={'LANG': 'C', 'LC_ALL': 'C', 'TZ': 'UTC'}, close_fds=True)
             end = budget.started + 300
             buffered = bytearray()
             try:
+                os.set_blocking(child.stderr.fileno(), False)
                 with selectors.DefaultSelector() as selector:
                     selector.register(child.stdout, selectors.EVENT_READ)
+                    selector.register(child.stderr, selectors.EVENT_READ)
                     while selector.get_map():
                         if time.monotonic() >= end: raise TimeoutError('SDK recording wall cap exceeded')
                         for key, _ in selector.select(min(0.2, end - time.monotonic())):
                             block = os.read(key.fd, 4096)
                             if not block:
                                 selector.unregister(key.fileobj)
-                                break
+                                continue
+                            if key.fileobj is child.stderr:
+                                stderr_tail.extend(block)
+                                if len(stderr_tail) > 8192:
+                                    stderr_truncated = True
+                                    del stderr_tail[:-8192]
+                                continue
                             buffered.extend(block)
                             if len(buffered) > 4194304: raise ValueError('SDK IPC capacity exceeded')
                             while b'\n' in buffered:
@@ -215,7 +227,15 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
                         proof = subprocess.run(['ps', '-p', str(child.pid), '-o', 'comm=', '-o', 'args='], capture_output=True, text=True, timeout=2).stdout
                         if str(worker) not in proof: raise RuntimeError('SDK child identity changed')
                         child.kill(); child.wait(timeout=2)
-                for pipe in (child.stdin, child.stdout): pipe.close()
+                while True:
+                    try: block = os.read(child.stderr.fileno(), 4096)
+                    except BlockingIOError: break
+                    if not block: break
+                    stderr_tail.extend(block)
+                    if len(stderr_tail) > 8192:
+                        stderr_truncated = True
+                        del stderr_tail[:-8192]
+                for pipe in (child.stdin, child.stdout, child.stderr): pipe.close()
         else:
             if table['name'] == 'p16-foreign-tokens':
                 metadata.create_named_database(plan['databases']['named'], journal)
@@ -240,6 +260,18 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
         receipt['complete'] = False
         receipt['failureType'] = type(error).__name__
         if table['name'] == 'p17-admin-sdk-retry':
+            tail = stderr_tail.decode('utf-8', errors='replace')
+            if stderr_truncated:
+                # Drop a clipped first line so a credential prefix cannot be lost at the tail boundary.
+                tail = tail.partition('\n')[2]
+            receipt.update(failureMessage=str(error), childExitCode=None if child is None else child.returncode, childStderrTail=tail)
+            for field in ('failureMessage', 'childStderrTail'):
+                value = receipt[field]
+                if bearer: value = value.replace(bearer, '[credential-redacted]')
+                value = re.sub(r'(?s)-----BEGIN[^-\r\n]*PRIVATE KEY-----.*?(?:-----END[^-\r\n]*PRIVATE KEY-----|$)', '[credential-redacted]', value)
+                value = re.sub(r'(?s)^.*?-----END[^-\r\n]*PRIVATE KEY-----', '[credential-redacted]', value)
+                value = re.sub(r'AIza[A-Za-z0-9_-]*|ya29\.[A-Za-z0-9._~-]*|(?i:Bearer)\s+[^\s\"<>]+', '[credential-redacted]', value)
+                receipt[field] = value if field == 'failureMessage' else value.encode('utf-8')[-8192:].decode('utf-8', errors='ignore')
             receipt.update(documents=documents, steps=list(dispatched.values()), cleanupSteps=[], unknownCommits=[seq for seq, row in dispatched.items() if row['rpc'] == 'Commit' and (not row.get('result') or row.get('outcomeClass') == 'UNKNOWN')], unknownStarts=[seq for seq, row in dispatched.items() if row['rpc'] == 'BatchGetDocuments' and row['request'].get('newTransaction') and (not row.get('result') or row.get('outcomeClass') == 'UNKNOWN')], timingMode='wall-clock', timingSource='grpc-js-client-interceptor', unrecovered=True)
             receipt['tokens'] = {}
             for row in dispatched.values():

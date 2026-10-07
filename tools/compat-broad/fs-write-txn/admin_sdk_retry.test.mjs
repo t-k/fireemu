@@ -404,7 +404,7 @@ test('production SDK TLS auth and custom headers reach the loopback server exact
   const fs = descriptor._protos.google.firestore.v1;
   const server = new grpc.Server();
   // Generate ephemeral TLS material in memory without reading or writing key files.
-  const tls = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', '/dev/stdout', '-out', '/dev/stdout', '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1', '-days', '1'], { encoding: 'utf8' });
+  const tls = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', '-', '-out', '-', '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1', '-days', '1'], { encoding: 'utf8' });
   assert.equal(tls.status, 0, 'offline TLS certificate generation must succeed');
   const privateKey = Buffer.from(tls.stdout.match(/-----BEGIN PRIVATE KEY-----[\s\S]*?-----END PRIVATE KEY-----/)[0]);
   const cert = Buffer.from(tls.stdout.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/)[0]);

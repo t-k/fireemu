@@ -364,7 +364,21 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
       };
       const spec = exchange({ event: 'ready' });
       const receipt = await recordAdminRetries({ project: 'fireemu-oracle-txn', admission: { ...spec, journal: value => exchange(value), check: () => {} } });
-      writeSync(1, JSON.stringify({ event: 'receipt', receipt }) + '\n');
+      const bytes = Buffer.from(JSON.stringify({ event: 'receipt', receipt }) + '\n');
+      const deadline = performance.now() + 10_000;
+      const pause = new Int32Array(new SharedArrayBuffer(4));
+      let offset = 0;
+      while (offset < bytes.length) {
+        if (performance.now() >= deadline) throw new Error('SDK receipt write timed out');
+        try {
+          const written = writeSync(1, bytes, offset, bytes.length - offset);
+          if (written === 0) throw new Error('SDK receipt write made no progress');
+          offset += written;
+        } catch (error) {
+          if (error.code !== 'EAGAIN') throw error;
+          Atomics.wait(pause, 0, 0, 5);
+        }
+      }
     } else if (mode === 'project' && !output || mode === 'compare' && !output) {
       const input = JSON.parse(readFileSync(0, 'utf8'));
       process.stdout.write(JSON.stringify(mode === 'project' ? projectAdminReceipt(input) : compareAdminReceipts(input.production, input.local)) + '\n');
@@ -386,5 +400,5 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     console.log(`complete ${receipt.complete} requests ${receipt.sandboxRequests} receipt ${relative(root, destination)}`);
     if (!receipt.complete) process.exitCode = 1;
     }
-  } catch (error) { console.error(error.message); process.exitCode = 1; }
+  } catch (error) { process.exitCode = 1; console.error(String(error?.message ?? error).replace(/[\r\n]+/g, ' ')); }
 }

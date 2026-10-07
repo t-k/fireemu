@@ -560,13 +560,19 @@ test("resource ownership replays both recorded route sets and rejects nearby nam
         kind: "unknown",
       });
       assert.equal(
-        ledger.observeRead(name, { ...response, ok: true }),
+        ledger.observeRead(name, { ...response, ok: true, code: "OK" }),
         true,
         `${record.runId}/n${record.n}`,
       );
-      assert.equal(ledger.observeRead(`${name}-nearby`, { ...response, ok: true }), false);
+      assert.equal(
+        ledger.observeRead(`${name}-nearby`, { ...response, ok: true, code: "OK" }),
+        false,
+      );
       for (const status of [199, 302, 503])
-        assert.equal(ledger.observeRead(name, { ...response, status, ok: true }), false);
+        assert.equal(
+          ledger.observeRead(name, { ...response, status, ok: true, code: "OK" }),
+          false,
+        );
     } else if (record.route.startsWith("GET404")) {
       const name = "projects/redacted-project/topics/resource",
         ledger = createLedger();

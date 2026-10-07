@@ -1,3 +1,4 @@
+import { createRecoveryJournal } from "./safety.mjs";
 import { openSync, closeSync, writeFileSync, fsyncSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { sanitize } from "../pubsub-production/capture.mjs";
@@ -6,11 +7,20 @@ import { CAPS } from "./plan.mjs";
 export function createJournal(out, runId) {
   mkdirSync(out, { recursive: true, mode: 0o700 });
   const fd = openSync(resolve(out, `capture-${runId}.jsonl`), "wx", 0o600);
+  let recovery;
+  try {
+    recovery = createRecoveryJournal(out, runId);
+    recovery.write({ event: "recovery-open", obligations: [], iam: [] });
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
   let n = 0,
     frame = 0,
     bytes = 0,
     closed = false;
   const journal = {
+    recovery: (value) => recovery.write(value),
     write(value) {
       if (closed) throw new Error("closed journal");
       const line = `${JSON.stringify({ n: ++n, at: new Date().toISOString(), ...sanitize(value) })}\n`;
@@ -39,7 +49,11 @@ export function createJournal(out, runId) {
     close() {
       if (!closed) {
         closed = true;
-        closeSync(fd);
+        try {
+          closeSync(fd);
+        } finally {
+          recovery.close();
+        }
       }
     },
   };

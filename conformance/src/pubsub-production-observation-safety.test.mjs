@@ -606,3 +606,173 @@ test("Task24 each packet never treats unknown NOT_FOUND as permission to suppres
   );
   assert.equal(w.resources.size, 0, family);
 });
+
+for (const transport of (process.env.OBSERVATION_PACKET ?? "A") === "A"
+  ? ["rest", "grpc"]
+  : ["grpc"])
+  for (const variant of transport === "grpc"
+    ? ["missing", "foreign", "matching", "invalid-request"]
+    : ["missing", "foreign", "matching"])
+    test(`Task26 selected actual ${transport} wire classifies ${variant} update success before capture and source stop`, async () => {
+      const family = process.env.OBSERVATION_PACKET ?? "A";
+      const namespace =
+        family === "A" ? "pubsub-observation" : `pubsub-observation-${family.toLowerCase()}`;
+      const { createWire: familyWire, typeOf: familyType } = await import(
+        `./${namespace}/wire.mjs`
+      );
+      const { EventEmitter } = await import("node:events");
+      const name = "projects/fixture-project/subscriptions/fe123456abcdef-update";
+      const body =
+        variant === "missing" ? {} : { name: variant === "foreign" ? `${name}-foreign` : name };
+      const rows = [];
+      let dispatches = 0;
+      const wire = familyWire({
+        meter: { ...meter, start() {}, payload() {} },
+        journal: {
+          write(row) {
+            rows.push(row);
+          },
+        },
+        getToken: async () => "fixture-token",
+        fetch: async (_url, options) => {
+          dispatches++;
+          return new Response(JSON.stringify(options.method === "DELETE" ? {} : body), {
+            status: 200,
+          });
+        },
+        client: {
+          close() {},
+          makeUnaryRequest(path, _encode, _decode, _raw, _metadata, _options, callback) {
+            dispatches++;
+            const rpc = new EventEmitter();
+            rpc.cancel = () => {};
+            queueMicrotask(() => {
+              const Type = familyType(
+                path.endsWith("/DeleteSubscription") ? "Empty" : "Subscription",
+              );
+              callback(null, Buffer.from(Type.encode(Type.fromObject(body)).finish()));
+              rpc.emit("status", { code: 0, details: "" });
+            });
+            return rpc;
+          },
+        },
+      });
+      const call = {
+        cellId: "fixture",
+        category: "get",
+        transport,
+        service: "Subscriber",
+        method: "UpdateSubscription",
+        request: {
+          subscription: { name: variant === "invalid-request" ? undefined : name },
+          updateMask: "labels",
+        },
+      };
+      try {
+        const reply = await wire.call(call);
+        const unknown = variant === "invalid-request" || body.name !== name;
+        assert.equal(reply.unknown, unknown, `${family}/${transport}/${body.name ?? "missing"}`);
+        assert.equal(rows.find((row) => row.event === "response").reply.unknown, unknown);
+        if (unknown) {
+          await assert.rejects(wire.call({ ...call, cellId: "later" }), /source stopped/);
+          assert.equal(dispatches, 1);
+          await wire.call({
+            ...call,
+            category: "cleanupDelete",
+            method: "DeleteSubscription",
+            request: { name },
+          });
+          assert.equal(dispatches, 2);
+        } else {
+          await wire.call({ ...call, cellId: "later" });
+          assert.equal(dispatches, 2);
+        }
+      } finally {
+        wire.close();
+      }
+    });
+
+test("Task26 update context rejects invalid request identities and never clears prior uncertainty", () => {
+  const name = "projects/fixture-project/subscriptions/fe123456abcdef-update";
+  for (const identity of [undefined, null, 7, {}]) {
+    const reply = { ok: true, code: "OK", unknown: false, body: { name: identity } };
+    assert.equal(
+      normalizeOutcome(reply, {
+        method: "UpdateSubscription",
+        request: { subscription: { name: identity } },
+      }).unknown,
+      true,
+    );
+  }
+  const reply = { ok: true, code: "OK", unknown: true, body: { name } };
+  assert.equal(
+    normalizeOutcome(reply, { method: "UpdateSubscription", request: { subscription: { name } } })
+      .unknown,
+    true,
+  );
+  assert.equal(
+    normalizeOutcome(
+      { ok: false, code: "NOT_FOUND", body: { error: { status: "NOT_FOUND" } } },
+      { method: "UpdateSubscription", request: { subscription: { name } } },
+    ).unknown,
+    false,
+  );
+});
+
+test("Task26 generated update identity equality follows a direct reference relation", () => {
+  for (let seed = 1; seed <= 64; seed++) {
+    const name = `projects/fixture-project/subscriptions/fe123456abcdef-${seed.toString(36)}`;
+    for (const identity of [name, `${name}-foreign`, undefined, null, seed]) {
+      const reply = { ok: true, code: "OK", unknown: false, body: { name: identity } };
+      assert.equal(
+        normalizeOutcome(reply, {
+          method: "UpdateSubscription",
+          request: { subscription: { name } },
+        }).unknown,
+        identity !== name,
+      );
+    }
+  }
+});
+
+if ((process.env.OBSERVATION_PACKET ?? "A") !== "A")
+  test("Task26 non-A REST update remains outside the finite route catalogue without dispatch", async () => {
+    const family = process.env.OBSERVATION_PACKET;
+    const { createWire: familyWire } = await import(
+      `./pubsub-observation-${family.toLowerCase()}/wire.mjs`
+    );
+    let starts = 0;
+    const wire = familyWire({
+      meter: { ...meter, start() {}, payload() {} },
+      journal: { write() {} },
+      getToken: async () => {
+        starts++;
+        return "fixture-token";
+      },
+      fetch: async () => {
+        starts++;
+        throw new Error("unexpected dispatch");
+      },
+      client: { close() {} },
+    });
+    try {
+      await assert.rejects(
+        wire.call({
+          cellId: "fixture",
+          category: "get",
+          transport: "rest",
+          service: "Subscriber",
+          method: "UpdateSubscription",
+          routeName: "projects/fixture-project/subscriptions/fe123456abcdef-update",
+          request: {
+            subscription: { name: "projects/fixture-project/subscriptions/fe123456abcdef-update" },
+            updateMask: "labels",
+          },
+        }),
+        /unlisted REST route/,
+      );
+      assert.equal(starts, 0);
+    } finally {
+      wire.close();
+    }
+  });

@@ -18,7 +18,7 @@ import { createWire } from "./pubsub-observation-c/wire.mjs";
 import { requestToWire } from "./pubsub-production/grpc.mjs";
 import { EventEmitter } from "node:events";
 import { main } from "./pubsub-observation-c/record.mjs";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { minimumCallMs } from "./pubsub-observation-c/plan.mjs";
@@ -545,6 +545,35 @@ test("C a spent cell cannot restart or reset its category budget", () => {
   clock = 180000;
   assert.throws(() => meter.enter(plan.cells[1]), /time/);
   assert.deepEqual(meter.snapshot(), spent);
+});
+
+test("C delivery parser accepts masked same-route production replies from both recorded runs", () => {
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL("./pubsub-observation-c/fixtures/recorded-delivery.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  assert.equal(fixture.rows.length, 16);
+  assert.equal(new Set(fixture.rows.map((r) => r.runId)).size, 2);
+  for (const row of fixture.rows) {
+    const published = new Map(
+      Object.entries(row.published).map(([id, value]) => [id, value.message]),
+    );
+    const items = scenarios.parseDelivery(row.response.body, published);
+    assert.equal(items.length, row.response.body.receivedMessages.length);
+    assert.equal(row.layoutVerdict, "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED");
+    const changed = structuredClone(row.response.body);
+    changed.receivedMessages[0].message.messageId += "-foreign";
+    assert.throws(() => scenarios.parseDelivery(changed, published));
+    if (row.transport === "grpc") {
+      const Type = typeOf(SERVICES.Subscriber.methods.Pull[0]);
+      assert.equal(
+        Type.decode(encodeRequest("Subscriber", "Pull", row.request.body)).subscription,
+        row.request.body.subscription,
+      );
+    }
+  }
 });
 
 function priorProof() {

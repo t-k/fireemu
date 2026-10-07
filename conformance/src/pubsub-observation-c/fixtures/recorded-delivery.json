@@ -1,0 +1,962 @@
+{
+  "schema": 1,
+  "purpose": "Masked same-route publication-bound delivery structure only; no physical byte layout or selector inference. Opaque equality,width and base64 payload byte width retained.",
+  "rows": [
+    {
+      "runId": "851444882d56",
+      "n": 292,
+      "transport": "rest",
+      "request": {
+        "method": "POST",
+        "path": "/v1/projects/opeoiid-macaqi-bot/subscriptions/hr365340320s78-gr-j-i:pull",
+        "body": {
+          "maxMessages": 1,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "ODLFRO2MSYP9NMziRP8EUeD_XTPvJVBBO97FRO22SYpvNMz2rPAEUED5XTPvJvbBODLFr22MSypvNm12R9aeueDNX3PvJvBBO9LFrOkmSyPvNm12Rpaeue9n9-9VJvb9OdLfrokmS0PV1MZIRpA4UeDNXT9-JVbBOD7FRok2SYPVNmzIRpaEUE9NXTP-JV1BO9L",
+              "message": {
+                "data": "bG93",
+                "attributes": {
+                  "n": "1",
+                  "color": "red"
+                },
+                "messageId": "42505066473582050",
+                "publishTime": "2026-10-04T21:40:28.372Z"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "42505066473582050": {
+          "runId": "851444882d56",
+          "n": 270,
+          "message": {
+            "data": "bG93",
+            "attributes": {
+              "color": "red",
+              "n": "1"
+            }
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    },
+    {
+      "runId": "851444882d56",
+      "n": 320,
+      "transport": "grpc",
+      "request": {
+        "rpc": "Subscriber/Pull",
+        "body": {
+          "subscription": "projects/opeoiid-macaqi-bot/subscriptions/bg166783138i88-vf-w-q",
+          "maxMessages": 1,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "code": "OK",
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "StYxSQXMJNvSKAnNUt1sPi28BQiPTaFSStYxSQxmJnVSKANNUt1Spi2kbQipTafSSty3SqXMJNVsKaNNUtLspIyKB0iPTAFSSty3SqxmJNvSKANNUtLs32YKb0iPTAf-sT4X6Q5mJnvs4-N7UtL6PiYKBQ0-TaFSST4XSqx8JNVSKanNUtlSPI2KBQI-TA3SS1YX",
+              "message": {
+                "data": "c3Nta3pwemFiZ3Vpdml1",
+                "messageId": "50275516387730945",
+                "publishTime": "2026-10-04T21:40:51.997Z"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "50275516387730945": {
+          "runId": "851444882d56",
+          "n": 301,
+          "message": {
+            "data": "c3Nta3pwemFiZ3Vpdml1"
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    },
+    {
+      "runId": "851444882d56",
+      "n": 350,
+      "transport": "rest",
+      "request": {
+        "method": "POST",
+        "path": "/v1/projects/opeoiid-macaqi-bot/subscriptions/zi707658662g15-sm-b-x:pull",
+        "body": {
+          "maxMessages": 3,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "IJWHJksbLchMBkmGzLYQP17sHaAxJJEQIJwHJKs7lCHMbK6GZlyQPBhshAA1jjEQIJWHJksBLcHMbk6gzlyqpb7SH4A1jJeQIjWHJKsBLc7MBKmgzl_4pbhS14Axj9EqIjwh1Ksbl_7mbkmgZlY4PbHSHA8-JjEQIJ4HJks7LCHMBkmGZlyQPB7SHAA-JJ2QIj",
+              "message": {
+                "data": "dQ==",
+                "attributes": {
+                  "n": "1"
+                },
+                "messageId": "47130283089831850",
+                "publishTime": "2026-10-04T21:41:34.515Z"
+              }
+            },
+            {
+              "ackId": "HCBJKyphZhwTQclKxMJFA31sGbRfTODXHCbJKYp1zHWTqC9KXmjFADpsgBR7toDXHCBJKypHZhWTqc9kxmjfad1SG9R7tOdXHcBJKYpHZh0TQClkxm_7adpS69Rft4DxHcbj0Yphz_0tqclkXmJ7AdPSGB1-ToDXHC9JKyp1ZHWTQclKXmjFAD1SGBR-TO5XHc",
+              "message": {
+                "data": "aw==",
+                "attributes": {
+                  "n": "2"
+                },
+                "messageId": "80549698698107116",
+                "publishTime": "2026-10-04T21:41:34.515Z"
+              }
+            },
+            {
+              "ackId": "RPGSBbhmXzyPHgrPvLWGO78oGpTqLNIPRPgSBBh6xZYPhG9PVlwGOPyogPT8lnIPRPGSBbhMXZYPhg9pvlwgop8OG9T8lNiPRpGSBBhMXz0PHGrpvL_4opyO29Tql7IpRpgs9Bhmx_0phgrpVlW4OpYOGP9-LnIPRP2SBbh6XZYPHgrPVlwGOP8OGPT-LN0PRp",
+              "message": {
+                "data": "dg==",
+                "attributes": {
+                  "n": "3"
+                },
+                "messageId": "23729787132092185",
+                "publishTime": "2026-10-04T21:41:34.515Z"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "47130283089831850": {
+          "runId": "851444882d56",
+          "n": 349,
+          "message": {
+            "data": "dQ==",
+            "attributes": {
+              "n": "1"
+            }
+          }
+        },
+        "23729787132092185": {
+          "runId": "851444882d56",
+          "n": 349,
+          "message": {
+            "data": "dg==",
+            "attributes": {
+              "n": "3"
+            }
+          }
+        },
+        "80549698698107116": {
+          "runId": "851444882d56",
+          "n": 349,
+          "message": {
+            "data": "aw==",
+            "attributes": {
+              "n": "2"
+            }
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    },
+    {
+      "runId": "851444882d56",
+      "n": 370,
+      "transport": "grpc",
+      "request": {
+        "rpc": "Subscriber/Pull",
+        "body": {
+          "subscription": "projects/opeoiid-macaqi-bot/subscriptions/qq441945826v91-fb-y-n",
+          "maxMessages": 3,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "code": "OK",
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "RdBfXBPUVLuLJCoBLa1dIl34HIuQZfHGRdBfXBpuVlULJ0oBLa1Dil3uhIuqZfhGRDBfXBpUVLUlJcOBLAx9iLvUH8uQZFHGRDb1XBpuVlulJCOBLaXdiLvuhi0QZfh-rdBf7B1uVlUljcO7LaX9IlVUHI0-ZfHGRD3FXbp4VLULJcoBLaxDIL3UHIU-ZF7GR1BF",
+              "message": {
+                "data": "dQ==",
+                "attributes": {
+                  "n": "1"
+                },
+                "messageId": "14881608340325505",
+                "publishTime": "2026-10-04T21:41:51.487Z"
+              }
+            },
+            {
+              "ackId": "KqLcDRHGPCbIMJvOCg8eKm83XHfGQkLUKqLcDRhgPcBIM5vOCg8Ekm8hxHfgQklUKQLcDRhGPCBiMjVOCGk8kMgHX5fGQKLUKQl6DRhgPcbiMJVOCgKekMghxh9GQkl-kqLc9R1gPcBimjV6CgK8KmGHXH9-QkLUKQ5CDrh0PCBIMjvOCgkEKM8HXHF-QK3UK2LC",
+              "message": {
+                "data": "aw==",
+                "attributes": {
+                  "n": "2"
+                },
+                "messageId": "57786160110746000",
+                "publishTime": "2026-10-04T21:41:51.487Z"
+              }
+            },
+            {
+              "ackId": "ZgVgVIFSEBaQOZnMGi2tGd71EVjQTzILZgVgVIfsEbAQO1nMGi2Tgd7deVjqTziLZGVgVIfSE9AqOzNMGIa1gDfDE3jQTZILZGv2VIfsEbaqOZNMGIAtgDfdev3QTzi-zgVg5I9sEbAqozN2GiA1GdFDEV3-TzILZG1GVif2EBAQOznMGiaTGD7DEVJ-TZ2LZ8VG",
+              "message": {
+                "data": "dg==",
+                "attributes": {
+                  "n": "3"
+                },
+                "messageId": "21555570234029416",
+                "publishTime": "2026-10-04T21:41:51.487Z"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "57786160110746000": {
+          "runId": "851444882d56",
+          "n": 369,
+          "message": {
+            "data": "aw==",
+            "attributes": {
+              "n": "2"
+            }
+          }
+        },
+        "14881608340325505": {
+          "runId": "851444882d56",
+          "n": 369,
+          "message": {
+            "data": "dQ==",
+            "attributes": {
+              "n": "1"
+            }
+          }
+        },
+        "21555570234029416": {
+          "runId": "851444882d56",
+          "n": 369,
+          "message": {
+            "data": "dg==",
+            "attributes": {
+              "n": "3"
+            }
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    },
+    {
+      "runId": "851444882d56",
+      "n": 385,
+      "transport": "rest",
+      "request": {
+        "method": "POST",
+        "path": "/v1/projects/opeoiid-macaqi-bot/subscriptions/rb729140157h87-it-i-z:pull",
+        "body": {
+          "maxMessages": 2,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "HOXIWJ3KJIA1NEmlJQ2LBoR_QMYuWYHNHOXIwJ3kJIa1NeM5jQILBOR1QMYuWyhNH8XIwJ3KJiajNe65J4IlboRXQ6YuWyHNHOXiw3tkJi6jNeM5JQilboRXqm8uWYh1HoxiwjtkJ-aJn8MLJqI3BoRXQM8-WYhNHO5IWjt4JIAJNemLJqiLBO1XQMY-WY1NH8X",
+              "message": {
+                "data": "dmxh",
+                "attributes": {
+                  "color": "red"
+                },
+                "messageId": "40001240338317040",
+                "publishTime": "2026-10-04T21:42:09.511Z"
+              }
+            },
+            {
+              "ackId": "CLLDMR9WIUL4ETemPI6LVfR_BPZqQPNBCLLDmR9wIUl4EtE2pIGLVFR0BPZqQpnBC7LDmR9WIUliEt62P0GlvfRKB7ZqQpNBCLLdm3twIu7iEtE2PiglvfRKbp5qQPn3ClldmrtwI-lIe1EMPiG9VfRKBP5-QPnBCL9DMrt4IULIEteMPigLVF9KBPZ-QP5BC7L",
+              "message": {
+                "data": "d2p6bm96anRq",
+                "attributes": {
+                  "color": "red",
+                  "extra": "1"
+                },
+                "messageId": "31518361172781230",
+                "publishTime": "2026-10-04T21:42:09.511Z"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "31518361172781230": {
+          "runId": "851444882d56",
+          "n": 384,
+          "message": {
+            "data": "d2p6bm96anRq",
+            "attributes": {
+              "color": "red",
+              "extra": "1"
+            }
+          }
+        },
+        "40001240338317040": {
+          "runId": "851444882d56",
+          "n": 384,
+          "message": {
+            "data": "dmxh",
+            "attributes": {
+              "color": "red"
+            }
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    },
+    {
+      "runId": "851444882d56",
+      "n": 392,
+      "transport": "rest",
+      "request": {
+        "method": "POST",
+        "path": "/v1/projects/opeoiid-macaqi-bot/subscriptions/at576622957d24-ma-s-x2:pull",
+        "body": {
+          "maxMessages": 1,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "OQUVRxtqCydIVhkHhRTRG56eBaBhIPLYOQuVRXt6cYDIvHKhHrtRGNeebAB1ipLYOQUVRx1QCyDIvh8hhrtrgn6EB2B1i3lYOqUVRxtQCydIv38Hhr_rgNee7ABhi3LyOq_v1Xtqc6-I5HkhHrT7GnEEBA9-IPlYOQ8VRxt6CYDIVhkHHrtRGN6EBAB-IP1YOq",
+              "message": {
+                "data": "dA==",
+                "attributes": {
+                  "color": "red"
+                },
+                "messageId": "58871660190940746",
+                "publishTime": "2026-10-04T21:42:34.662Z"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "58871660190940746": {
+          "runId": "851444882d56",
+          "n": 391,
+          "message": {
+            "data": "dA==",
+            "attributes": {
+              "color": "red"
+            }
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    },
+    {
+      "runId": "851444882d56",
+      "n": 397,
+      "transport": "grpc",
+      "request": {
+        "rpc": "Subscriber/Pull",
+        "body": {
+          "subscription": "projects/opeoiid-macaqi-bot/subscriptions/vd389402096f71-ty-j-c",
+          "maxMessages": 2,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "code": "OK",
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "DAGXXF1BLVH2KNkkCJ6YGsA_SGXtNLQZDA6XXF15LV1yKNk0cJQYGSA7SGXtNlqZDaGXxffBLvhyKn40C16ygsATS8XtNLQZDAGxx3FBLvhyKnK0C1q2gSat0G5tNlq1DagxxffbL31ykNkKCjQ2GsATSG5-NlQZDA6XXff5LVHYKnkKCjqYGS8TSGX-NL6ZD6G",
+              "message": {
+                "data": "dmxh",
+                "attributes": {
+                  "color": "red"
+                },
+                "messageId": "38427220231180708",
+                "publishTime": "2026-10-04T21:42:50.506Z"
+              }
+            },
+            {
+              "ackId": "ATQDJM1HJSM6MCwqDX4OAmS_ABLrSNWZAT2DJM11JS8aMCw2dXWOAMS0ABLrSnwZAtQDjmvHJSmaMc42D14oamSUA3LrSNWZATQdj8VHJsmaMcW2DXw8aMsu6B9rSnw9AtqdjmvhJ08amCwQDxW8AmSUAB9-SnWZAT2DJmv1JSMAMcwQDxwOAM4UABL-SN0ZA7Q",
+              "message": {
+                "data": "d2p6bm96anRq",
+                "attributes": {
+                  "extra": "1",
+                  "color": "red"
+                },
+                "messageId": "50263010559963473",
+                "publishTime": "2026-10-04T21:42:50.506Z"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "50263010559963473": {
+          "runId": "851444882d56",
+          "n": 396,
+          "message": {
+            "data": "d2p6bm96anRq",
+            "attributes": {
+              "color": "red",
+              "extra": "1"
+            }
+          }
+        },
+        "38427220231180708": {
+          "runId": "851444882d56",
+          "n": 396,
+          "message": {
+            "data": "dmxh",
+            "attributes": {
+              "color": "red"
+            }
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    },
+    {
+      "runId": "851444882d56",
+      "n": 404,
+      "transport": "grpc",
+      "request": {
+        "rpc": "Subscriber/Pull",
+        "body": {
+          "subscription": "projects/opeoiid-macaqi-bot/subscriptions/gi663887157o96-sf-n-e7",
+          "maxMessages": 1,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "code": "OK",
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "OwQrOEUBILbVLCeDIp2oHt56VDyZSWWFOwQrOEubIlBVL4EDIp2Oht5ivDyzSwwFOWQ7Oe2BILBvLcEDIp-6hTdIV9yZSWWFOWQ7OEuBIlbvL4EDIPAohTdIv9yZSww-oWQr8E2bIlb7lC05IpA6HtDIVD4-SwWFOW4ROeu7ILBVLceDIpaOHT5IVDY-SW0FO8QR",
+              "message": {
+                "data": "dA==",
+                "attributes": {
+                  "color": "red"
+                },
+                "messageId": "92521972882847893",
+                "publishTime": "2026-10-04T21:43:12.209Z"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "92521972882847893": {
+          "runId": "851444882d56",
+          "n": 403,
+          "message": {
+            "data": "dA==",
+            "attributes": {
+              "color": "red"
+            }
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 289,
+      "transport": "rest",
+      "request": {
+        "method": "POST",
+        "path": "/v1/projects/opeoiid-macaqi-bot/subscriptions/eoq4qj2nkm24l5-sm-d-g:pull",
+        "body": {
+          "maxMessages": 1,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "TLPULsjrIncLKbgQbVQXT45hQhGiSORQTlpULsjriNCLKbGqb1qXTYxhqHGis8rqTlpULSjRINcLkB8qbV-xt4XHQ9GIsOrQTlpUL4jRINCLk3gqbVQ1tYxH0H4I6O9QTlp67sJ3iNcL0BgQBvQ1TyXHQH4-SoRQTL7ULsj3INCLKbgQBvqXTY5HQHG-SO9QTl",
+              "message": {
+                "data": "dA==",
+                "messageId": "72374257395123477",
+                "publishTime": "2026-10-04T23:03:33.515Z",
+                "orderingKey": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "72374257395123477": {
+          "runId": "a8ed1cce53f0",
+          "n": 284,
+          "message": {
+            "data": "dA==",
+            "orderingKey": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 317,
+      "transport": "grpc",
+      "request": {
+        "rpc": "Subscriber/Pull",
+        "body": {
+          "subscription": "projects/opeoiid-macaqi-bot/subscriptions/xwf4nm9ibd55u5-qe-f-n",
+          "maxMessages": 1,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "code": "OK",
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "ZNBJCT3NQEB9SNasNZ0BLeY_JSAmKXtXZNBJcT3nQ039SN42nZGBLEY2JSAmKxtXZnBJct3NQebpSn42N1GBleYCJ6AmKxTXZnBJcTfNQEbpSn4sNZgBl4yCjsAmKxt5ZnBJctfnQ0bpsnaSNzG3LeYCJS4-KXtXZN5JCtf3QeBPSnaSNzgBLE6CJSA-KX5XZ5B",
+              "message": {
+                "data": "dA==",
+                "attributes": {
+                  "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk": "v"
+                },
+                "messageId": "96068662810857891",
+                "publishTime": "2026-10-04T23:03:53.505Z"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "96068662810857891": {
+          "runId": "a8ed1cce53f0",
+          "n": 304,
+          "message": {
+            "data": "dA==",
+            "attributes": {
+              "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk": "v"
+            }
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 347,
+      "transport": "rest",
+      "request": {
+        "method": "POST",
+        "path": "/v1/projects/opeoiid-macaqi-bot/subscriptions/dux8lz3swf55p5-xd-a-m:pull",
+        "body": {
+          "maxMessages": 3,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "EJTLLY1VWVS0SWnwZO8ROvF_BHJcSRBXEj1LLY19WVsaSWnwzOOROVF1BHJcSrbXE3TLly1VWvsaSw32Z-ORovFJB9JcSrBXE3TllYZVWvSaS8nwZooRo3fJ1HJcSrb3EjTLlyzvW_SasWNWZoO9OvFJBH9-SrBXEJ1LLyz9WVSASwnWZooROV1JBHJ-SR5XE3T",
+              "message": {
+                "data": "dQ==",
+                "attributes": {
+                  "n": "1"
+                },
+                "messageId": "24992144149213365",
+                "publishTime": "2026-10-04T23:04:32.259Z"
+              }
+            },
+            {
+              "ackId": "XVHFZZ3HEYQ4ASzvWI6TAdE_WVXuPGMVXv3FZZ33EYqqASzvwIITADE5WVXuPgmVX5HFzz3HEyqqAs59W-ITadEVW7XuPgMVX5HfzZNHEyQqA4zvWIiTa1eV2VXuPgm7XvHFzznhE_QqaSZVWiI3AdEVWV1-PgMVXV3FZzn3EYQQAszVWiiTAD4VWVX-PG4VX5H",
+              "message": {
+                "data": "aw==",
+                "attributes": {
+                  "n": "2"
+                },
+                "messageId": "15182638918073876",
+                "publishTime": "2026-10-04T23:04:32.259Z"
+              }
+            },
+            {
+              "ackId": "OKABHP5UWHW9QLwsLJ9ZWvQ_NVEjSJBJOk4BHP52WHwzQLwslJTZWVQ8NVEjSjbJO8ABhp5UWHwzQl48L-TZwvQKN5EjSjBJO8AbhPPUWhWzQ1wsLJtZw3qK1VEjSjb5OkABhppuW_WzqLWSLjT7WvQKNV6-SjBJOK4BHpp2WHWZQlwSLjtZWV4KNVE-SJ5JO8A",
+              "message": {
+                "data": "dg==",
+                "attributes": {
+                  "n": "3"
+                },
+                "messageId": "93040212877110966",
+                "publishTime": "2026-10-04T23:04:32.259Z"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "93040212877110966": {
+          "runId": "a8ed1cce53f0",
+          "n": 346,
+          "message": {
+            "data": "dg==",
+            "attributes": {
+              "n": "3"
+            }
+          }
+        },
+        "24992144149213365": {
+          "runId": "a8ed1cce53f0",
+          "n": 346,
+          "message": {
+            "data": "dQ==",
+            "attributes": {
+              "n": "1"
+            }
+          }
+        },
+        "15182638918073876": {
+          "runId": "a8ed1cce53f0",
+          "n": 346,
+          "message": {
+            "data": "aw==",
+            "attributes": {
+              "n": "2"
+            }
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 367,
+      "transport": "grpc",
+      "request": {
+        "rpc": "Subscriber/Pull",
+        "body": {
+          "subscription": "projects/opeoiid-macaqi-bot/subscriptions/oia7jd6zje02r8-zb-u-v",
+          "maxMessages": 3,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "code": "OK",
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "KySeLGDZANjSZOuTBq6nQx47HAvXSkFEKySeLGdzAnJSZoUTBq6Nqx4jhAvxSkfEKYS-L63ZANJsZoUTBq6nqXkJH4vXSkFEKYS0LG3ZAN3sZo2TBQYnqXkjhAVXSkf-kyS07G3zAnjSzou1BqY7QxKJHA3-SKfEKY6ELgd3AnJSZouTBqyNQX4JHAV-SK5EK2SE",
+              "message": {
+                "data": "dQ==",
+                "attributes": {
+                  "n": "1"
+                },
+                "messageId": "70755726408722728",
+                "publishTime": "2026-10-04T23:04:49.546Z"
+              }
+            },
+            {
+              "ackId": "GwZjJWOSAMfUHVeCIf4pMs71SOjKJhXJGwZjJWosAmFUHvECIf4Pms7lsOjkJhxJGWZ-J00SAMFuHvECIf4pmSnLS0jKJhXJGWZ1JW0SAM5uHv0CIfUpmSnlsOJKJhx-gwZ11W0sAmfUhve8IfU9MsNLSO3-JHxJGW1JJwo4AmFUHveCIfuPMS7LSOJ-JH9JG8ZJ",
+              "message": {
+                "data": "aw==",
+                "attributes": {
+                  "n": "2"
+                },
+                "messageId": "17869316145673050",
+                "publishTime": "2026-10-04T23:04:49.546Z"
+              }
+            },
+            {
+              "ackId": "VyHfTBKFUQvHHYuFBw2aBe40ABxEUzGXVyHfTBkfUqVHHyUFBw2Abe4waBxeUzgXVYH-T34FU8VhHyUFBw2abEmWA3xEUzGXVYH3TB4FUQ1hHy6FBwMabEmwaBXEUzg-vyH31B4fUqvHhyu3BwM8BeMWAB3-UZgXVY7FTbk1UqVHHyuFBwmABE4WABX-UZ8XV6HF",
+              "message": {
+                "data": "dg==",
+                "attributes": {
+                  "n": "3"
+                },
+                "messageId": "72349710369803008",
+                "publishTime": "2026-10-04T23:04:49.546Z"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "70755726408722728": {
+          "runId": "a8ed1cce53f0",
+          "n": 366,
+          "message": {
+            "data": "dQ==",
+            "attributes": {
+              "n": "1"
+            }
+          }
+        },
+        "17869316145673050": {
+          "runId": "a8ed1cce53f0",
+          "n": 366,
+          "message": {
+            "data": "aw==",
+            "attributes": {
+              "n": "2"
+            }
+          }
+        },
+        "72349710369803008": {
+          "runId": "a8ed1cce53f0",
+          "n": 366,
+          "message": {
+            "data": "dg==",
+            "attributes": {
+              "n": "3"
+            }
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 382,
+      "transport": "rest",
+      "request": {
+        "method": "POST",
+        "path": "/v1/projects/opeoiid-macaqi-bot/subscriptions/qne6ph2val96v1-bd-s-e:pull",
+        "body": {
+          "maxMessages": 2,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "EKSHJZ3IMKW3DFcuFV2VDbP_UZSsLZqQEKSHjZ3iMKw3DFc8fVYVDBP5UZSsLzqQEkShj1fIMkwnDf48F9yVdbPVU3SsLzQQEkShjZfiMkWnDfC8F9yVdbPvuzSsLzq2EkSHjzfiM4wn_1CUFvY9DbPVUZ8-LZqQEK8HJzf0MKWNDfcUFvyVDB9VUZS-LZ2QE0S",
+              "message": {
+                "data": "dmxh",
+                "attributes": {
+                  "color": "red"
+                },
+                "messageId": "53994727638084153",
+                "publishTime": "2026-10-04T23:05:07.944Z"
+              }
+            },
+            {
+              "ackId": "NBXVTD4LBOW5COomLO3UJvO_IHRtCDuBNBXVtD4lBOw5COo0lOFUJVO4IHRtCduBNbXvt9yLBOwlCo40L0fUjvOAI7RtCdUBNbXvtDylBoWlCoO0LOfUjvOaihRtCdu7NbXVtdylB0wl_8OMLoF0JvOAIH5-CDuBNB5VTdy9BOWLCooMLofUJV8AIHR-CD8BN1X",
+              "message": {
+                "data": "d2p6bm96anRq",
+                "attributes": {
+                  "extra": "1",
+                  "color": "red"
+                },
+                "messageId": "41706418745004081",
+                "publishTime": "2026-10-04T23:05:07.944Z"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "41706418745004081": {
+          "runId": "a8ed1cce53f0",
+          "n": 381,
+          "message": {
+            "data": "d2p6bm96anRq",
+            "attributes": {
+              "color": "red",
+              "extra": "1"
+            }
+          }
+        },
+        "53994727638084153": {
+          "runId": "a8ed1cce53f0",
+          "n": 381,
+          "message": {
+            "data": "dmxh",
+            "attributes": {
+              "color": "red"
+            }
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 389,
+      "transport": "rest",
+      "request": {
+        "method": "POST",
+        "path": "/v1/projects/opeoiid-macaqi-bot/subscriptions/rxy1uw2jsp77n9-uv-v-u5:pull",
+        "body": {
+          "maxMessages": 1,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "status": 200,
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "BDWHEljfLedIIogKeTPKB18nTiQvYSLiBDwHELj3lEDIiOGKEtpKBDsntIQ1ysLIBDwHEljFLeDIio8keTpKbd8NT4Q1y2lIBDWHELJfLeDIIO8keT-KbdSNt4q1ySLiBD_H4Ljfl2DI40GkEtP6BdSNTI4-YSlIBD0HElj3LEDIIogKEtpKBD8NTIQ-YS3IBd",
+              "message": {
+                "data": "dA==",
+                "attributes": {
+                  "color": "red"
+                },
+                "messageId": "67932262436341198",
+                "publishTime": "2026-10-04T23:05:31.053Z"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "67932262436341198": {
+          "runId": "a8ed1cce53f0",
+          "n": 388,
+          "message": {
+            "data": "dA==",
+            "attributes": {
+              "color": "red"
+            }
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 394,
+      "transport": "grpc",
+      "request": {
+        "rpc": "Subscriber/Pull",
+        "body": {
+          "subscription": "projects/opeoiid-macaqi-bot/subscriptions/mxx5ch3zvs79d7-fn-y-m",
+          "maxMessages": 2,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "code": "OK",
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "CDOCWL1VIUL5XKbbGI5LAxP_CEEdCCVGCD2CWL17IUlbXK1bGi5LAXP4CEE7CcVGCDOcwl1VIU1bXK1BG8plaxpcC2eDCCVGCDOCwL1vIUlbXK17GIPlaxPcceED8CvgCD2c-lN7IU1B5kBBGiP7AxPCCE0-CcVGCD2CWln7IULBXkbBGipLAX1CCEE-CC5GC9O",
+              "message": {
+                "data": "dmxh",
+                "attributes": {
+                  "color": "red"
+                },
+                "messageId": "34269558918450835",
+                "publishTime": "2026-10-04T23:05:46.945Z"
+              }
+            },
+            {
+              "ackId": "PYOMBJ7FYAN6PIlzUS2KNmR_SPNxXDOFPY6MBJ71YAngPI7zUs2KNMR5SPN5XdOFPYOmbj7FYA5gPI7ZU4aknmrpS1nXXDOFPYOMbJ7fYAngPI77USaknmRpspNX1DofPY6m-jT1YA5G7iLZUsA4NmRPSP5-XdOFPY6MBjt1YANGPilZUsaKNM3PSPN-XD0FP4O",
+              "message": {
+                "data": "d2p6bm96anRq",
+                "attributes": {
+                  "color": "red",
+                  "extra": "1"
+                },
+                "messageId": "80252982441066534",
+                "publishTime": "2026-10-04T23:05:46.945Z"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "80252982441066534": {
+          "runId": "a8ed1cce53f0",
+          "n": 393,
+          "message": {
+            "data": "d2p6bm96anRq",
+            "attributes": {
+              "color": "red",
+              "extra": "1"
+            }
+          }
+        },
+        "34269558918450835": {
+          "runId": "a8ed1cce53f0",
+          "n": 393,
+          "message": {
+            "data": "dmxh",
+            "attributes": {
+              "color": "red"
+            }
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 401,
+      "transport": "grpc",
+      "request": {
+        "rpc": "Subscriber/Pull",
+        "body": {
+          "subscription": "projects/opeoiid-macaqi-bot/subscriptions/ugh5ke4drr36l3-nm-j-n7",
+          "maxMessages": 1,
+          "returnImmediately": false
+        }
+      },
+      "response": {
+        "code": "OK",
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "CTEEGA9PFCI5YGjbUW4KLfM_FENiHGZNCT6EGA91FCI5YGJbuWKKLFM9FENiHgzNCtEEgajPFcipYg99U4KKlfMLF8NiHGZNCTEEgaJpFcipYGJbUWk41fMl7E9iHGz5CtEEgajpF44p88jBUwK4LfMLFE9-HgZNCT6EGaj1FCIPYgjBUwkKLF8LFEN-HG1NC5E",
+              "message": {
+                "data": "dA==",
+                "attributes": {
+                  "color": "red"
+                },
+                "messageId": "29604701198039998",
+                "publishTime": "2026-10-04T23:06:11.108Z"
+              }
+            }
+          ]
+        }
+      },
+      "published": {
+        "29604701198039998": {
+          "runId": "a8ed1cce53f0",
+          "n": 400,
+          "message": {
+            "data": "dA==",
+            "attributes": {
+              "color": "red"
+            }
+          }
+        }
+      },
+      "layoutVerdict": "NOT_COMPARABLE_LEGACY_BODY_BYTES_NOT_RECORDED"
+    }
+  ]
+}

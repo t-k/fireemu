@@ -1,13 +1,14 @@
 import test from 'node:test';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
-import { mkdirSync, symlinkSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { localTarget, rpcRecorder, recordAdminRetries, projectAdminReceipt, compareAdminReceipts } from './admin_sdk_retry.mjs';
 
 const require = createRequire(new URL('../../../conformance/package.json', import.meta.url));
 const grpc = require('@grpc/grpc-js');
+import { runtimeInfo } from './txn_program_transport.mjs';
 
 test('local admission rejects remote hosts, malformed ports and non-demo projects', () => {
   assert.deepEqual(localTarget('127.0.0.1:1234', 'demo-admin-retry'), { host: '127.0.0.1', port: 1234 });
@@ -464,4 +465,109 @@ test('production SDK TLS auth and custom headers reach the loopback server exact
     await Promise.all(getApps().filter(app => !originalApps.has(app)).map(app => deleteApp(app)));
     await descriptor.close();
   }
+});
+
+
+test('recorded production projections match and reject unsupported attempt and writer families', async t => {
+  const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  const fixtures = [1, 2].map(index => JSON.parse(readFileSync(new URL(`./admin_sdk_retry.production-${index}.fixture.json`, import.meta.url), 'utf8')));
+  const runtime = { node: process.version, nodeSha256: createHash('sha256').update(readFileSync(process.execPath)).digest('hex'), lockSha256: createHash('sha256').update(readFileSync(new URL('../../../conformance/pnpm-lock.yaml', import.meta.url))).digest('hex'), manifest: runtimeInfo() };
+  const sourceDigest = createHash('sha256').update(readFileSync(new URL('./admin_sdk_retry.mjs', import.meta.url))).update(readFileSync(new URL('../fs-listen-resume/listen_sdk_adapter.mjs', import.meta.url))).digest('hex');
+  const corpusDigest = createHash('sha256').update(JSON.stringify([{ caseId: 'conflict', maxAttempts: 1 }, { caseId: 'control', maxAttempts: 1 }, { caseId: 'retry', maxAttempts: 2 }, { caseId: 'retry-older', maxAttempts: 2 }])).digest('hex');
+  for (const [index, fixture] of fixtures.entries()) {
+    Object.assign(fixture.receipt.runtime, runtime);
+    Object.assign(fixture.receipt, { sourceDigest, corpusDigest });
+    const bound = { ...fixture.receipt }; delete bound.receiptDigest;
+    fixture.receipt.receiptDigest = createHash('sha256').update(JSON.stringify(canonical(bound))).digest('hex');
+    await t.test(`production recording ${index + 1} returns the recorded case projections`, () => {
+      assert.deepEqual(projectAdminReceipt(fixture.receipt).cases, fixture.expectedCases);
+    });
+  }
+  await t.test('two production recordings compare as a match', () => {
+    const comparison = compareAdminReceipts(fixtures[0].receipt, fixtures[1].receipt);
+    assert.equal(comparison.mismatches, 0);
+    assert.equal(comparison.attempts.length, 5);
+    assert.ok(comparison.attempts.every(row => row.match));
+  });
+  const faults = [
+    ['unknown transaction code', receipt => { receipt.steps.find(row => row.caseId === 'conflict' && row.client === 'transaction' && row.rpc === 'Commit').result.code = 7; }, /refusal|sequence/],
+    ['unknown writer code', receipt => { receipt.steps.find(row => row.caseId === 'control' && row.client === 'writer' && row.rpc === 'Commit').result.code = 7; }, /writer/],
+    ['missing transaction rollback', receipt => { receipt.steps = receipt.steps.filter(row => !(row.caseId === 'retry-older' && row.client === 'transaction' && row.rpc === 'Rollback')); }, /sequence/],
+    ['missing writer rollback', receipt => { receipt.steps = receipt.steps.filter(row => !(row.caseId === 'conflict' && row.client === 'writer' && row.rpc === 'Rollback')); }, /writer/],
+    ['refused transaction rollback', receipt => { receipt.steps.find(row => row.caseId === 'retry-older' && row.client === 'transaction' && row.rpc === 'Rollback').result.code = 10; }, /sequence/],
+    ['refused writer rollback', receipt => { receipt.steps.find(row => row.caseId === 'conflict' && row.client === 'writer' && row.rpc === 'Rollback').result.code = 10; }, /writer/],
+    ['unknown local transaction rollback', receipt => { receipt.runtime.target = 'local'; receipt.steps.find(row => row.caseId === 'retry-older' && row.client === 'transaction' && row.rpc === 'Rollback').result.code = 7; }, /sequence/],
+    ['unknown local writer rollback', receipt => { receipt.runtime.target = 'local'; receipt.steps.find(row => row.caseId === 'conflict' && row.client === 'writer' && row.rpc === 'Rollback').result.code = 7; }, /writer/],
+    ['refused transaction read', receipt => { receipt.steps.find(row => row.caseId === 'conflict' && row.client === 'transaction' && row.rpc === 'BatchGetDocuments').result.code = 10; }, /sequence/],
+    ['refused writer read', receipt => { receipt.steps.find(row => row.caseId === 'conflict' && row.client === 'writer' && row.rpc === 'BatchGetDocuments').result.code = 10; }, /writer/],
+    ['extra transaction RPC', receipt => { receipt.steps.find(row => row.caseId === 'retry-older' && row.client === 'transaction' && row.rpc === 'Rollback').rpc = 'GetDocument'; }, /sequence/],
+    ['extra writer RPC', receipt => { receipt.steps.find(row => row.caseId === 'conflict' && row.client === 'writer' && row.rpc === 'Rollback').rpc = 'GetDocument'; }, /writer/],
+    ['mismatched retry lineage', receipt => { receipt.steps.find(row => row.caseId === 'retry-older' && row.client === 'transaction' && row.attempt === 2 && row.rpc === 'BatchGetDocuments').request.newTransaction.readWrite.retryTransaction = 'Zm9yZWlnbg=='; }, /lineage/],
+    ['missing retry lineage', receipt => { delete receipt.steps.find(row => row.caseId === 'retry-older' && row.client === 'transaction' && row.attempt === 2 && row.rpc === 'BatchGetDocuments').request.newTransaction.readWrite.retryTransaction; }, /lineage/],
+    ['missing issued token and retry lineage', receipt => {
+      for (const row of receipt.steps.filter(row => row.caseId === 'retry-older' && row.client === 'transaction' && row.rpc === 'BatchGetDocuments')) {
+        if (row.attempt === 1) row.result.response.responses = row.result.response.responses.filter(frame => !frame.transaction);
+        else delete row.request.newTransaction.readWrite.retryTransaction;
+      }
+    }, /lineage/],
+    ['more than two attempts', receipt => {
+      const entry = receipt.attempts.find(value => value.caseId === 'retry-older');
+      entry.callbackCount = 3;
+      entry.attempts.push({ ...structuredClone(entry.attempts[1]), callbackCount: 3 });
+      const extra = structuredClone(receipt.steps.filter(row => row.caseId === 'retry-older' && row.client === 'transaction' && row.attempt === 2));
+      extra.push(structuredClone(receipt.steps.findLast(row => row.caseId === 'retry-older' && row.client === 'witness' && row.site === 'retry-older/post-state')));
+      const read = extra.find(row => row.rpc === 'BatchGetDocuments' && row.client === 'transaction');
+      read.request.newTransaction.readWrite.retryTransaction = read.result.response.responses.find(frame => frame.transaction).transaction;
+      for (const row of extra) { row.attempt = 3; row.sequence += receipt.steps.length; }
+      receipt.steps.push(...extra);
+    }, /callback/],
+  ];
+  for (const [name, mutate, error] of faults) await t.test(name, () => {
+    const receipt = structuredClone(fixtures[0].receipt);
+    mutate(receipt);
+    const rows = [...receipt.steps.sort((a, b) => a.sequence - b.sequence), ...receipt.cleanupSteps];
+    rows.forEach((row, index) => { row.sequence = index; row.outcomeClass = row.result.code === 0 ? 'OK' : [3, 5, 9, 10].includes(row.result.code) ? 'REFUSED' : 'OTHER'; });
+    receipt.phaseRequests.observation = receipt.steps.length;
+    receipt.sandboxRequests = Object.values(receipt.phaseRequests).reduce((a, b) => a + b, 0);
+    for (const entry of receipt.attempts) {
+      for (const attempt of entry.attempts) {
+        const native = receipt.steps.filter(row => row.caseId === entry.caseId && row.client === 'transaction' && row.attempt === attempt.callbackCount);
+        const commit = native.find(row => row.rpc === 'Commit');
+        attempt.refusalCode = commit.result.code;
+        attempt.refusalMessage = commit.result.details;
+        attempt.rpcSequence = native.map(row => ({ code: row.result.code, rpc: row.rpc, sequence: row.sequence }));
+      }
+      const writer = receipt.steps.filter(row => row.caseId === entry.caseId && row.client === 'writer');
+      const commit = writer.find(row => row.rpc === 'Commit');
+      entry.writer = { code: commit.result.code, message: commit.result.details, rpcSequence: writer.map(row => ({ code: row.result.code, message: row.result.details, rpc: row.rpc, sequence: row.sequence })) };
+    }
+    const bound = { ...receipt }; delete bound.receiptDigest;
+    receipt.receiptDigest = createHash('sha256').update(JSON.stringify(canonical(bound))).digest('hex');
+    assert.throws(() => projectAdminReceipt(receipt), error);
+  });
+  for (const client of ['transaction', 'writer']) await t.test(`inconsistent ${client} RPC summary is refused`, () => {
+    const receipt = structuredClone(fixtures[0].receipt);
+    const entry = receipt.attempts[0];
+    const sequence = client === 'transaction' ? entry.attempts[0].rpcSequence : entry.writer.rpcSequence;
+    sequence[0].sequence++;
+    const bound = { ...receipt }; delete bound.receiptDigest;
+    receipt.receiptDigest = createHash('sha256').update(JSON.stringify(canonical(bound))).digest('hex');
+    assert.throws(() => projectAdminReceipt(receipt), /sequence|writer/);
+  });
+  const localPath = new URL('../../../target/codex-out/s5a-judge/local-reduced.json', import.meta.url);
+  await t.test('recorded local conflict compares as a per-case mismatch', { skip: !existsSync(localPath) }, () => {
+    const local = JSON.parse(readFileSync(localPath, 'utf8'));
+    Object.assign(local.runtime, runtime);
+    Object.assign(local, { sourceDigest, corpusDigest });
+    const bound = { ...local }; delete bound.receiptDigest;
+    local.receiptDigest = createHash('sha256').update(JSON.stringify(canonical(bound))).digest('hex');
+    const comparison = compareAdminReceipts(fixtures[0].receipt, local);
+    const conflict = comparison.attempts.find(row => row.caseId === 'conflict');
+    assert.ok(comparison.mismatches > 0);
+    assert.equal(conflict.match, false);
+    assert.equal(conflict.production.refusalCode, 0);
+    assert.equal(conflict.local.refusalCode, 10);
+    assert.equal(conflict.production.writer.code, 10);
+    assert.equal(conflict.local.writer.code, 0);
+  });
 });

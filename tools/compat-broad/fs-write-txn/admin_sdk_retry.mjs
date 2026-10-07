@@ -314,10 +314,10 @@ export function projectAdminReceipt(receipt) {
       if (!frame || ['role', 'owner', 'nonce', 'state'].some(key => frame.found.fields[key]?.stringValue !== attempt.readState?.[key])) throw new Error('SDK attempt read state differs');
       if (index > 0) {
         const previous = receipt.steps.find(row => row.caseId === spec.caseId && row.client === 'transaction' && row.attempt === index && row.rpc === 'BatchGetDocuments');
-        if (read.request.newTransaction?.readWrite?.retryTransaction !== previous.result.response.responses.find(frame => frame.transaction)?.transaction) throw new Error('SDK retry lineage differs');
+        if (!read.request.newTransaction?.readWrite?.retryTransaction || read.request.newTransaction.readWrite.retryTransaction !== previous.result.response.responses.find(frame => frame.transaction)?.transaction) throw new Error('SDK retry lineage differs');
       }
       const sequence = native.map(row => ({ sequence: row.sequence, rpc: row.rpc, code: row.result.code }));
-      if (!commit || attempt.callbackCount !== index + 1 || attempt.refusalCode !== commit.result.code || attempt.refusalMessage !== commit.result.details || JSON.stringify(sequence) !== JSON.stringify(attempt.rpcSequence)) throw new Error('SDK attempt refusal or RPC sequence differs');
+      if (!commit || ![0, 10].includes(commit.result.code) || JSON.stringify(native.map(row => [row.rpc, row.result.code])) !== JSON.stringify([['BatchGetDocuments', 0], ['Commit', commit.result.code], ...(commit.result.code === 10 ? [['Rollback', receipt.runtime.target === 'local' && [3, 10].includes(native.at(-1)?.result.code) ? native.at(-1).result.code : 0]] : [])]) || attempt.callbackCount !== index + 1 || attempt.refusalCode !== commit.result.code || attempt.refusalMessage !== commit.result.details || JSON.stringify(canonical(sequence)) !== JSON.stringify(canonical(attempt.rpcSequence))) throw new Error('SDK attempt refusal or RPC sequence differs');
       const witness = receipt.steps.find(row => row.sequence > commit.sequence && row.caseId === spec.caseId && row.client === 'witness' && row.site === `${spec.caseId}/post-state`);
       if (!witness || witness.result.code !== 0 || witness.result.response.responses.length !== 3) throw new Error('SDK witness evidence differs');
       const state = Object.fromEntries(['a', 'b', 'c'].map(role => {
@@ -333,7 +333,7 @@ export function projectAdminReceipt(receipt) {
     const writerRows = receipt.steps.filter(row => row.caseId === spec.caseId && row.client === 'writer');
     const writerCommit = writerRows.find(row => row.rpc === 'Commit');
     const writerSequence = writerRows.map(row => ({ sequence: row.sequence, rpc: row.rpc, code: row.result.code, message: row.result.details }));
-    if (!writerCommit || ![0, 10].includes(writerCommit.result.code) || entry.writer?.code !== writerCommit.result.code || entry.writer?.message !== writerCommit.result.details || JSON.stringify(entry.writer?.rpcSequence) !== JSON.stringify(writerSequence)) throw new Error('SDK writer outcome differs');
+    if (!writerCommit || ![0, 10].includes(writerCommit.result.code) || JSON.stringify(writerRows.map(row => [row.rpc, row.result.code])) !== JSON.stringify([...(spec.caseId === 'control' ? [] : [['BatchGetDocuments', 0]]), ['Commit', writerCommit.result.code], ...(writerCommit.result.code === 10 && spec.caseId !== 'control' ? [['Rollback', receipt.runtime.target === 'local' && [3, 10].includes(writerRows.at(-1)?.result.code) ? writerRows.at(-1).result.code : 0]] : [])]) || entry.writer?.code !== writerCommit.result.code || entry.writer?.message !== writerCommit.result.details || JSON.stringify(canonical(entry.writer?.rpcSequence)) !== JSON.stringify(canonical(writerSequence))) throw new Error('SDK writer outcome differs');
     cases.push({ writer: { code: entry.writer.code, message: entry.writer.message, rpcSequence: writerSequence.map(({ rpc, code, message }) => ({ rpc, code, message })) }, caseId: spec.caseId, callbackCount: entry.callbackCount, refusalCode: entry.refusalCode, refusalMessage: entry.refusalMessage, finalState: attempts.at(-1).finalState, attempts });
   }
   if (receipt.attempts.length !== cases.length) throw new Error('SDK case inventory differs');
@@ -341,7 +341,7 @@ export function projectAdminReceipt(receipt) {
 }
 
 export function compareAdminReceipts(production, local) {
-  if (production.runtime?.target !== 'production' || local.runtime?.target !== 'local') throw new Error('SDK comparison requires production and local receipts');
+  if (production.runtime?.target !== 'production' || !['local', 'production'].includes(local.runtime?.target)) throw new Error('SDK comparison requires production and local or production receipts');
   const left = projectAdminReceipt(production), right = projectAdminReceipt(local);
   if (production.runtime.nodeSha256 !== local.runtime.nodeSha256 || production.runtime.lockSha256 !== local.runtime.lockSha256 || JSON.stringify(Object.entries(production.runtime.manifest.dependencies).map(([name, row]) => [name, row.version, row.treeSha256]).sort()) !== JSON.stringify(Object.entries(local.runtime.manifest.dependencies).map(([name, row]) => [name, row.version, row.treeSha256]).sort())) throw new Error('SDK comparison runtime differs');
   if (left.sourceDigest !== right.sourceDigest || left.corpusDigest !== right.corpusDigest) throw new Error('SDK comparison source differs');

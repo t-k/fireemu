@@ -1600,8 +1600,8 @@ test("metadata byte properties preserve repeated UTF-8 and binary value widths",
     { default: grpc } = await import("@grpc/grpc-js");
   for (let seed = 0; seed < 256; seed++) {
     const metadata = new grpc.Metadata(),
-      binary = Buffer.alloc(seed, 0x78),
-      values = ["é", String(seed)];
+      binary = Buffer.from("é".repeat(seed)),
+      values = ["ascii-%C3%A9", String(seed)];
     for (const value of values) metadata.add("x-text", value);
     metadata.add("x-bin", binary);
     const raw =

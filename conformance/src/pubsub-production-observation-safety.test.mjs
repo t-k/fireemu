@@ -10,7 +10,8 @@ function world({ dispatchFailure = false, reportingFailure = false, updates418 =
     rows = [];
   const journal = {
     write(row) {
-      if (reportingFailure && row.event === "case-incomplete") throw new Error("report refused");
+      if (reportingFailure && (row.event === "case-incomplete" || row.stage === "case-incomplete"))
+        throw new Error("report refused");
       rows.push(row);
     },
   };
@@ -429,4 +430,44 @@ test("Task24 actual A cell cleanup runs even when stream dispose throws", async 
   assert.equal(result.complete, false);
   assert.equal(result.cleanupClosed, true);
   assert.equal(w.calls.filter((c) => c.method.startsWith("Delete")).length, 2);
+});
+
+test("Task24 each selected wire captures unexpected replies and refuses later source dispatch", async () => {
+  const family = process.env.OBSERVATION_PACKET ?? "A";
+  const namespace =
+    family === "A" ? "pubsub-observation" : `pubsub-observation-${family.toLowerCase()}`;
+  const { createWire: familyWire } = await import(`./${namespace}/wire.mjs`);
+  const rows = [];
+  let calls = 0;
+  const wire = familyWire({
+    meter: { ...meter, start() {}, payload() {} },
+    journal: {
+      write(row) {
+        rows.push(row);
+      },
+    },
+    getToken: async () => "fixture-token",
+    client: { close() {} },
+    fetch: async () => {
+      calls++;
+      return new Response("{}", { status: 418 });
+    },
+  });
+  const call = {
+    cellId: "fixture",
+    category: "get",
+    transport: "rest",
+    service: "Publisher",
+    method: "GetTopic",
+    request: { name: "projects/fixture-project/topics/fe123456abcdef-target" },
+  };
+  try {
+    const reply = await wire.call(call);
+    assert.equal(reply.unknown, true, family);
+    assert.equal(rows.find((r) => r.event === "response").reply.unknown, true, family);
+    await assert.rejects(wire.call({ ...call, cellId: "later" }), /source stopped/);
+    assert.equal(calls, 1, family);
+  } finally {
+    wire.close();
+  }
 });

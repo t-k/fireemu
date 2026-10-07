@@ -1,8 +1,9 @@
+import { acquireResources } from "../pubsub-observation/safety.mjs";
 import { readFileSync, openSync, closeSync, fsyncSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sha256, claimSourceRun } from "../pubsub-production/admission.mjs";
-import { createLedger, readLedger } from "../pubsub-production/ledger.mjs";
+import { createLedger, readLedger } from "../pubsub-observation/ledger.mjs";
 import { describeSource, admit } from "./admission.mjs";
 import { makePlan, PROJECT, SUITE } from "./plan.mjs";
 import { createMeter } from "./meter.mjs";
@@ -97,29 +98,46 @@ export async function main(args = process.argv.slice(2), deps = {}) {
   const admission = (deps.admit ?? admit)(options);
   const input = options.a2 ? recoveryInput(admission, options.runId) : null;
   // The default source path has no contingency activation switch and never silently retries a cell.
+  const noncePreflight = options.a2 ? null : admission.preflightUnusedRun?.();
   claimSourceRun({ out: options.out, runId: options.runId });
-  const journal = createJournal(options.out, options.runId);
-  const ledgerFd = openSync(resolve(options.out, `issued-${options.runId}.jsonl`), "wx", 0o600);
-  const issuedJournal = {
-    write: (row) => {
-      writeFileSync(ledgerFd, `${JSON.stringify(row)}\n`);
-      fsyncSync(ledgerFd);
-    },
-  };
-  const ledger = input
-    ? readLedger(input.ledgerPath).withJournal(issuedJournal)
-    : createLedger({ journal: issuedJournal });
-  const meter = createMeter({ a2: options.a2 });
-  const token = (deps.createCredentials ?? createCredentials)();
-  const guardedToken = (value) => {
-    admission.check();
-    return token(value);
-  };
-  const wire = (deps.createWire ?? createWire)({
-    meter,
-    journal,
-    getToken: guardedToken,
-    beforeDispatch: () => admission.check(),
+  const { journal, ledgerFd, ledger, meter, wire } = acquireResources((registerClose) => {
+    const journal = createJournal(options.out, options.runId);
+    registerClose(() => journal.close());
+    journal.recovery({
+      event: "recovery-binding",
+      suite: SUITE,
+      sourceHead: admission.descriptor.head,
+      packetSha256: admission.scope.packetSha256,
+      descriptorSha256: admission.descriptorSha256,
+      noncePreflight,
+      obligations: [],
+      iam: [],
+    });
+    const ledgerFd = openSync(resolve(options.out, `issued-${options.runId}.jsonl`), "wx", 0o600);
+    registerClose(() => closeSync(ledgerFd));
+    const issuedJournal = {
+      write: (row) => {
+        writeFileSync(ledgerFd, `${JSON.stringify(row)}\n`);
+        fsyncSync(ledgerFd);
+      },
+    };
+    const ledger = input
+      ? readLedger(input.ledgerPath).withJournal(issuedJournal)
+      : createLedger({ journal: issuedJournal });
+    const meter = createMeter({ a2: options.a2 });
+    const token = (deps.createCredentials ?? createCredentials)();
+    const guardedToken = (value) => {
+      admission.check();
+      return token(value);
+    };
+    const wire = (deps.createWire ?? createWire)({
+      meter,
+      journal,
+      getToken: guardedToken,
+      beforeDispatch: () => admission.check(),
+    });
+    registerClose(() => wire.close());
+    return { journal, ledgerFd, ledger, meter, wire };
   });
   let signalled = false;
   const interrupted = new AbortController();
@@ -133,8 +151,15 @@ export async function main(args = process.argv.slice(2), deps = {}) {
   const stop = () => {
     signalled = true;
     interrupted.abort();
-    wire.abortSource?.();
-    journal.write({ event: "signal-stop" });
+    for (const operation of [
+      () => wire.abortSource?.(),
+      () => journal.write({ event: "signal-stop" }),
+    ])
+      try {
+        operation();
+      } catch {
+        /* The ordinary finalizer retains obligations. */
+      }
   };
   signals.on("SIGINT", stop);
   signals.on("SIGTERM", stop);
@@ -201,13 +226,25 @@ export async function main(args = process.argv.slice(2), deps = {}) {
     }
   } catch (failure) {
     error = failure.message;
-    journal.write({ event: "run-incomplete", error });
+    try {
+      journal.write({ event: "run-incomplete", error });
+    } catch {
+      /* Independent recovery remains available. */
+    }
   } finally {
-    signals.removeListener("SIGINT", stop);
-    signals.removeListener("SIGTERM", stop);
-    wire.close();
-    journal.close();
-    closeSync(ledgerFd);
+    for (const operation of [
+      () => signals.removeListener("SIGINT", stop),
+      () => signals.removeListener("SIGTERM", stop),
+      () => wire.close(),
+      () => journal.close(),
+      () => closeSync(ledgerFd),
+    ]) {
+      try {
+        operation();
+      } catch {
+        error ??= "run finalization failed; inspect recovery journal";
+      }
+    }
   }
   const summary = {
     schema: 1,
@@ -224,6 +261,8 @@ export async function main(args = process.argv.slice(2), deps = {}) {
     a2: options.a2,
     signalled,
     error,
+    noncePreflight,
+    recoveryPath: `recovery-${options.runId}.jsonl`,
     results,
     meter: meter.snapshot(),
     captureSha256: sha256(readFileSync(resolve(options.out, `capture-${options.runId}.jsonl`))),

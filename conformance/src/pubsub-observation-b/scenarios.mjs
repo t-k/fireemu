@@ -1,4 +1,6 @@
-import { kindOf } from "../pubsub-production/ledger.mjs";
+import { protectCell, checkpoint, obligations } from "../pubsub-observation/safety.mjs";
+import { normalizeOutcome } from "../pubsub-production/outcome.mjs";
+import { kindOf } from "../pubsub-observation/ledger.mjs";
 import { PROJECT, makePlan, minimumCallMs } from "./plan.mjs";
 const kinds = { topics: "Topic", subscriptions: "Subscription", snapshots: "Snapshot" };
 const resourceRank = (name) =>
@@ -111,6 +113,10 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal }) {
         : null;
     if (action === "delete" && ledger.deleting(name))
       throw new Error("unknown delete cannot retry");
+    if (action) {
+      tracked.add(name);
+      checkpoint(journal, ledger, tracked, cell.id, [{ name, action, transport: cell.transport }]);
+    }
     const intent = action
       ? {
           name,
@@ -134,6 +140,7 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal }) {
       if (intent) ledger.answered({ ...intent, kind: "unknown" });
       throw error;
     }
+    reply = normalizeOutcome(reply);
     let kind = kindOf(reply);
     if (
       (action === "create" || method.startsWith("Get")) &&
@@ -197,109 +204,128 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal }) {
     meter.remaining();
     return observation;
   };
-  try {
-    journal.write({
-      event: "cell-manifest",
-      cellId: cell.id,
-      manifest,
-      creationOrder: manifest.resources.map((r) => r.name),
-      canonicalCoordinates: cell.coordinates,
-    });
-    for (const r of manifest.resources) {
-      if (
-        cell.kind === "snapshots" &&
-        r.method === "CreateSnapshot" &&
-        !tracked.has(manifest.members[0]) &&
-        !tracked.has(manifest.members[1]) &&
-        !tracked.has(manifest.members[2])
-      ) {
-        const reply = await send("publish", "Publish", {
-          topic: manifest.topic,
-          messages: [{ data: Buffer.from("snapshot prerequisite").toString("base64") }],
-        });
-        if (!reply.ok) throw new Error("snapshot prerequisite publication refused");
-      }
-      if (!(await send("create", r.method, r.request)).ok)
-        throw new Error("resource setup refused");
-      if (!(await send("get", resourceMethod(r.name, "Get"), { name: r.name })).ok)
-        throw new Error("setup read missing");
-    }
-    const baseline = await list("baseline", { pageSize: 1000 });
-    if (
-      baseline.nextPageToken ||
-      baseline.names.length !== 4 ||
-      manifest.members.some((n) => !baseline.names.includes(n))
-    )
-      throw new Error("baseline member coverage incomplete");
-    const first = await list("first", { pageSize: 1 });
-    if (first.names.length !== 1 || !first.nextPageToken)
-      throw new Error("issued cursor witness missing");
-    deletedCursor = first.names[0];
-    if (
-      !(
-        await send("cursorDelete", resourceMethod(deletedCursor, "Delete"), { name: deletedCursor })
-      ).ok
-    )
-      throw new Error("cursor deletion refused");
-    const absent = await send("cursorGet", resourceMethod(deletedCursor, "Get"), {
-      name: deletedCursor,
-    });
-    if (!ledger.settleAbsent(deletedCursor, absent))
-      throw new Error("cursor delete readback incomplete");
-    let page = await list("after-delete", { pageSize: 1, pageToken: first.nextPageToken }, false);
-    const traversed = new Set(page.names);
-    let exhausted = page.verdict !== "known-refusal" && !page.nextPageToken;
-    for (let i = 0; i < 2 && page.nextPageToken; i++) {
-      const next = await list(
-        `continuation-${i + 1}`,
-        { pageSize: 1, pageToken: page.nextPageToken },
-        false,
-      );
-      if (next.names.some((n) => traversed.has(n)))
-        throw new Error("page traversal repeated a member");
-      for (const name of next.names) traversed.add(name);
-      page = next;
-      exhausted = page.verdict !== "known-refusal" && !page.nextPageToken;
-    }
-    const original = first.nextPageToken;
-    const changed = (original[0] === "A" ? "B" : "A") + original.slice(1);
-    await list("altered-token", { pageSize: 1, pageToken: changed }, false);
-    const control = await list("ownership-control", { pageSize: 1000 });
-    const remaining = manifest.members.filter((n) => n !== deletedCursor);
-    if (
-      control.nextPageToken ||
-      control.names.length !== 3 ||
-      remaining.some((n) => !control.names.includes(n))
-    )
-      throw new Error("post-delete member coverage incomplete");
-    complete = exhausted && traversed.size === 3 && remaining.every((n) => traversed.has(n));
-    if (!complete)
-      reason = "bounded traversal insufficient; no invented continuation or hidden polling";
-  } catch (error) {
-    reason = error.message;
-    journal.write({ event: "case-incomplete", cellId: cell.id, reason });
-  }
   let cleanupClosed = true;
-  for (const name of [...tracked].sort((a, b) => resourceRank(b) - resourceRank(a))) {
-    if (settled(ledger, name)) continue;
-    try {
-      if (ledger.unconfirmed(name)) {
-        const reply = await send("cleanupGet", resourceMethod(name, "Get"), { name });
-        ledger.observeRead(name, reply);
-        if (ledger.unconfirmed(name)) {
-          cleanupClosed = false;
-          continue;
+  const failures = await protectCell({
+    body: async () => {
+      journal.write({
+        event: "cell-manifest",
+        cellId: cell.id,
+        manifest,
+        creationOrder: manifest.resources.map((r) => r.name),
+        canonicalCoordinates: cell.coordinates,
+      });
+      for (const r of manifest.resources) {
+        if (
+          cell.kind === "snapshots" &&
+          r.method === "CreateSnapshot" &&
+          !tracked.has(manifest.members[0]) &&
+          !tracked.has(manifest.members[1]) &&
+          !tracked.has(manifest.members[2])
+        ) {
+          const reply = await send("publish", "Publish", {
+            topic: manifest.topic,
+            messages: [{ data: Buffer.from("snapshot prerequisite").toString("base64") }],
+          });
+          if (!reply.ok) throw new Error("snapshot prerequisite publication refused");
         }
+        if (!(await send("create", r.method, r.request)).ok)
+          throw new Error("resource setup refused");
+        if (!(await send("get", resourceMethod(r.name, "Get"), { name: r.name })).ok)
+          throw new Error("setup read missing");
       }
-      if (!ledger.deleting(name) && !absentSeen.has(name))
-        await send("cleanupDelete", resourceMethod(name, "Delete"), { name });
-      const reply = await send("cleanupGet", resourceMethod(name, "Get"), { name });
-      if (!ledger.settleAbsent(name, reply)) cleanupClosed = false;
-    } catch {
-      cleanupClosed = false;
-    }
-    if (!settled(ledger, name)) cleanupClosed = false;
+      const baseline = await list("baseline", { pageSize: 1000 });
+      if (
+        baseline.nextPageToken ||
+        baseline.names.length !== 4 ||
+        manifest.members.some((n) => !baseline.names.includes(n))
+      )
+        throw new Error("baseline member coverage incomplete");
+      const first = await list("first", { pageSize: 1 });
+      if (first.names.length !== 1 || !first.nextPageToken)
+        throw new Error("issued cursor witness missing");
+      deletedCursor = first.names[0];
+      if (
+        !(
+          await send("cursorDelete", resourceMethod(deletedCursor, "Delete"), {
+            name: deletedCursor,
+          })
+        ).ok
+      )
+        throw new Error("cursor deletion refused");
+      const absent = await send("cursorGet", resourceMethod(deletedCursor, "Get"), {
+        name: deletedCursor,
+      });
+      if (!ledger.settleAbsent(deletedCursor, absent))
+        throw new Error("cursor delete readback incomplete");
+      let page = await list("after-delete", { pageSize: 1, pageToken: first.nextPageToken }, false);
+      const traversed = new Set(page.names);
+      let exhausted = page.verdict !== "known-refusal" && !page.nextPageToken;
+      for (let i = 0; i < 2 && page.nextPageToken; i++) {
+        const next = await list(
+          `continuation-${i + 1}`,
+          { pageSize: 1, pageToken: page.nextPageToken },
+          false,
+        );
+        if (next.names.some((n) => traversed.has(n)))
+          throw new Error("page traversal repeated a member");
+        for (const name of next.names) traversed.add(name);
+        page = next;
+        exhausted = page.verdict !== "known-refusal" && !page.nextPageToken;
+      }
+      const original = first.nextPageToken;
+      const changed = (original[0] === "A" ? "B" : "A") + original.slice(1);
+      await list("altered-token", { pageSize: 1, pageToken: changed }, false);
+      const control = await list("ownership-control", { pageSize: 1000 });
+      const remaining = manifest.members.filter((n) => n !== deletedCursor);
+      if (
+        control.nextPageToken ||
+        control.names.length !== 3 ||
+        remaining.some((n) => !control.names.includes(n))
+      )
+        throw new Error("post-delete member coverage incomplete");
+      complete = exhausted && traversed.size === 3 && remaining.every((n) => traversed.has(n));
+      if (!complete)
+        reason = "bounded traversal insufficient; no invented continuation or hidden polling";
+    },
+    report: (error) => {
+      reason = error.message;
+      journal.write({ event: "case-incomplete", cellId: cell.id, reason });
+    },
+    finalize: async () => {
+      for (const name of ledger.state().keys()) if (allowed.has(name)) tracked.add(name);
+      for (const name of [...tracked].sort((a, b) => resourceRank(b) - resourceRank(a))) {
+        if (settled(ledger, name)) continue;
+        try {
+          if (ledger.unconfirmed(name)) {
+            const reply = await send("cleanupGet", resourceMethod(name, "Get"), { name });
+            ledger.observeRead(name, reply);
+            if (ledger.unconfirmed(name)) {
+              cleanupClosed = false;
+              continue;
+            }
+          }
+          if (!ledger.deleting(name) && !absentSeen.has(name))
+            await send("cleanupDelete", resourceMethod(name, "Delete"), { name });
+          const reply = await send("cleanupGet", resourceMethod(name, "Get"), { name });
+          if (!ledger.settleAbsent(name, reply)) cleanupClosed = false;
+        } catch {
+          cleanupClosed = false;
+        }
+        if (!settled(ledger, name)) cleanupClosed = false;
+      }
+    },
+    persist: () => checkpoint(journal, ledger, tracked, cell.id, [], []),
+  });
+  if (failures.length) {
+    complete = false;
+    reason ??= failures[0].message;
   }
+  if (
+    failures.finalizationFailed ||
+    failures.persistenceFailed ||
+    obligations(ledger, tracked).length
+  )
+    cleanupClosed = false;
   try {
     meter.remaining(true);
   } catch {

@@ -1,3 +1,4 @@
+import { unusedRunPreflight } from "../pubsub-observation/safety.mjs";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,6 +28,8 @@ const git = (...args) =>
 export function describeSource() {
   return {
     schema: 1,
+    requestBudgetAuthority:
+      "hash-bound packet.plan.caps; ceilings include unused fresh cells and two IAM read reservations",
     suite: SUITE,
     head: git("rev-parse", "HEAD"),
     runtime: runtimeIdentity(),
@@ -251,5 +254,18 @@ export function admit(options, now = Date.now()) {
     )
       throw new Error("run2 requires complete closed run1");
   }
-  return { scope, descriptor, descriptorSha256: descriptorFile.sha256, check, plan: makePlan() };
+  return {
+    scope,
+    descriptor,
+    descriptorSha256: descriptorFile.sha256,
+    check,
+    plan: makePlan(),
+    preflightUnusedRun: () =>
+      unusedRunPreflight({
+        runId: options.runId,
+        out: options.out,
+        ledgerPath: resolve(main, "docs.local/runs/sandbox-ledger.jsonl"),
+        runsRoot: resolve(main, "docs.local/runs"),
+      }),
+  };
 }

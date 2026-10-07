@@ -129,6 +129,9 @@ test("boundary encoding properties hold for small exact byte targets and message
 });
 
 const { createWire, readResponse } = await import("./pubsub-observation/wire.mjs");
+const { encodeRequest, typeOf } = await import("./pubsub-observation/wire.mjs");
+const { SERVICES } = await import("./pubsub-production/grpc.mjs");
+
 test("REST bounded reader cancels oversized bodies before buffering the whole response", async () => {
   let cancelled = 0,
     reads = 0;
@@ -1790,4 +1793,102 @@ test("native resource exhaustion after an owned stream delivery stays incomplete
   });
   assert.equal(result.complete, false);
   assert.equal(result.cleanupClosed, true);
+});
+
+test("native Get/Delete selectors preserve exact generated resource names on all four routes", () => {
+  for (const [kind, service, suffix] of [
+    ["topics", "Publisher", "Topic"],
+    ["subscriptions", "Subscriber", "Subscription"],
+  ]) {
+    const field = suffix === "Topic" ? "topic" : "subscription";
+    for (const verb of ["Get", "Delete"])
+      for (let seed = 0; seed < 256; seed++) {
+        const name = `projects/fixture-${seed % 17}/${kind}/fe123456abcdef-${seed}-${seed % 2 ? "é" : "e\u0301"}`;
+        const method = `${verb}${suffix}`;
+        const request = Object.freeze({ name });
+        const Type = typeOf(SERVICES[service].methods[method][0]);
+        const raw = encodeRequest(service, method, request);
+        const decoded = Type.toObject(Type.decode(raw), { defaults: false });
+        assert.deepEqual(decoded, { [field]: name }, `${method}/${seed}`);
+        assert.deepEqual(request, { name });
+        assert.equal(raw.length, Buffer.byteLength(name) + 2);
+      }
+  }
+});
+
+test("native G1 setup update and cleanup traverse decoded protobuf requests", async () => {
+  const cell = makePlan().cells.find((item) => item.id === "N3");
+  const meter = createMeter({ now: () => 0 });
+  meter.enter(cell);
+  const world = fakeWorld();
+  const methods = [];
+  const wire = createWire({
+    meter,
+    getToken: async () => "fake",
+    journal: { write() {} },
+    client: {
+      close() {},
+      makeUnaryRequest(path, _encode, _decode, raw, _metadata, _options, callback) {
+        const method = path.split("/").at(-1);
+        const service = path.includes("Publisher") ? "Publisher" : "Subscriber";
+        const [input, output] = SERVICES[service].methods[method];
+        const request = typeOf(input).toObject(typeOf(input).decode(raw), {
+          defaults: false,
+          bytes: String,
+          longs: String,
+        });
+        methods.push(method);
+        const rpc = new EventEmitter();
+        rpc.cancel = () => {};
+        queueMicrotask(async () => {
+          const selector = method.endsWith("Topic") ? "topic" : "subscription";
+          if (method.startsWith("Get") || method.startsWith("Delete")) {
+            if (typeof request[selector] !== "string" || request[selector].length === 0) {
+              callback({ code: 3, details: "missing native resource selector" });
+              rpc.emit("status", { code: 3, details: "missing native resource selector" });
+              return;
+            }
+            request.name = request[selector];
+          }
+          if (method === "UpdateSubscription")
+            request.updateMask = request.updateMask.paths.join(",");
+          const reply = await world.call({ method, request });
+          const Type = typeOf(output);
+          callback(
+            reply.ok ? null : { code: 5, details: "missing own resource" },
+            reply.ok ? Buffer.from(Type.encode(Type.fromObject(reply.body)).finish()) : undefined,
+          );
+          rpc.emit("status", { code: reply.ok ? 0 : 5, details: "" });
+        });
+        return rpc;
+      },
+    },
+  });
+  try {
+    const ledger = createLedger();
+    const result = await runCell({
+      cell,
+      meter,
+      wire,
+      ledger,
+      runId: "123456abcdef",
+      journal: { write() {} },
+    });
+    assert.equal(result.complete, true);
+    assert.equal(result.cleanupClosed, true);
+    assert.equal(world.resources.size, 0);
+    assert.equal(ledger.outstanding().length, 0);
+    for (const method of [
+      "CreateTopic",
+      "CreateSubscription",
+      "GetTopic",
+      "GetSubscription",
+      "UpdateSubscription",
+      "DeleteTopic",
+      "DeleteSubscription",
+    ])
+      assert.ok(methods.includes(method), method);
+  } finally {
+    wire.close();
+  }
 });

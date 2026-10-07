@@ -270,7 +270,7 @@ def _identity(value, label):
 
 def corpus_digest(table):
     if table['name'] == 'p17-admin-sdk-retry':
-        return hashlib.sha256(json.dumps([{'caseId': 'conflict', 'maxAttempts': 1}, {'caseId': 'control', 'maxAttempts': 1}, {'caseId': 'retry', 'maxAttempts': 2}], separators=(',', ':')).encode()).hexdigest()
+        return hashlib.sha256(json.dumps([{'caseId': 'conflict', 'maxAttempts': 1}, {'caseId': 'control', 'maxAttempts': 1}, {'caseId': 'retry', 'maxAttempts': 2}, {'caseId': 'retry-older', 'maxAttempts': 2}], separators=(',', ':')).encode()).hexdigest()
     steps = _validate_table(table)
     body = {
         "steps": steps,
@@ -322,8 +322,8 @@ def compile_plan(table, nonce, owner_id):
     }
     if table["name"] == "p17-admin-sdk-retry":
         plan["documents"] = {role: f"{database}/documents/oracle/{nonce}/txn-p17-{role.rsplit('-', 1)[0]}/{role.rsplit('-', 1)[1]}" for role in table["documents"]}
-        plan["releasePolicy"] = "sdk-rollback-exact-gone-before-next-case"
-        plan["maxUnresolvedTokens"] = 6
+        plan["releasePolicy"] = "sdk-rollback-definite-before-next-case"
+        plan["maxUnresolvedTokens"] = 9
     if table.get("thresholds"):
         plan["thresholds"] = dict(table["thresholds"])
     return plan

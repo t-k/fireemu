@@ -10,7 +10,7 @@ import { runtimeInfo } from './txn_program_transport.mjs';
 import { admitMode } from '../fs-listen-resume/listen_sdk_adapter.mjs';
 
 const require = createRequire(new URL('../../../conformance/package.json', import.meta.url));
-const CASES = [{ caseId: 'conflict', maxAttempts: 1 }, { caseId: 'control', maxAttempts: 1 }, { caseId: 'retry', maxAttempts: 2 }];
+const CASES = [{ caseId: 'conflict', maxAttempts: 1 }, { caseId: 'control', maxAttempts: 1 }, { caseId: 'retry', maxAttempts: 2 }, { caseId: 'retry-older', maxAttempts: 2 }];
 
 export function localTarget(host, project) {
   const match = /^127\.0\.0\.1:([1-9][0-9]{0,4})$/.exec(host ?? '');
@@ -32,14 +32,14 @@ export function rpcRecorder(grpc) {
     const context = { ...(recorder.storage.getStore() ?? recorder.context) };
     const rpc = options.method_definition.path.split('/').at(-1);
     const frames = [];
-    let row, startCall;
+    let row, startCall, metadataKeys = [], quotaProject = null;
     return new grpc.InterceptingCall(nextCall(options), {
       sendMessage(message, next) {
         if (recorder.blocked || recorder.observationStopped && context.phase !== 'documentCleanup' && rpc !== 'Rollback') throw new Error('SDK dispatch blocked');
         if (recorder.rows.some(previous => previous.rpc === rpc && previous.site === context.site && previous.phase === context.phase && previous.attempt === context.attempt && previous.result?.code !== 0 && previous.result && JSON.stringify(previous.request) === JSON.stringify(json(message)))) throw new Error('SDK native redispatch blocked');
         if (performance.now() >= recorder.deadline) throw new Error('SDK campaign deadline exceeded');
         recorder.check(context);
-        row = { sequence: recorder.rows.length, ...context, transport: 'grpc', rpc, request: json(message),
+        row = { sequence: recorder.rows.length, ...context, transport: 'grpc', rpc, request: json(message), metadataKeys, quotaProject,
           timing: { deadlineSeconds: Math.min(30, Math.max(0, (Number(options.deadline ?? Date.now() + 30_000) - Date.now()) / 1000)), dispatchMonotonic: performance.now() / 1000, dispatchUtc: new Date().toISOString() } };
         recorder.rows.push(row);
         inflight.add(row.sequence);
@@ -51,6 +51,8 @@ export function rpcRecorder(grpc) {
         recorder.onDispatch?.(row);
       },
       start(metadata, _listener, next) {
+        metadataKeys = Object.keys(metadata.getMap()).sort();
+        quotaProject = metadata.get('x-goog-user-project')[0] ?? null;
         // Hold metadata too: an RPC must not start before durable admission.
         startCall = () => next(metadata, {
           onReceiveMessage(message, forward) {
@@ -71,7 +73,7 @@ export function rpcRecorder(grpc) {
             row.outcomeClass = status.code === 0 ? 'OK' : [1, 2, 4, 13, 14].includes(status.code) ? 'UNKNOWN' : [3, 5, 9, 10].includes(status.code) ? 'REFUSED' : 'OTHER';
             if (status.code !== 0 && rpc === 'BatchGetDocuments' && row.request.newTransaction && frames.length) row.outcomeClass = 'UNKNOWN';
             if (row.outcomeClass === 'UNKNOWN') recorder.blocked = true;
-            else if (status.code !== 0 && !(status.code === 10 && rpc === 'Commit' && row.client === 'transaction' || rpc === 'Rollback' && status.code === 10 && status.details === 'The referenced transaction has expired or is no longer valid.')) recorder.observationStopped = true;
+            else if (status.code !== 0 && !(status.code === 10 && rpc === 'Commit' && ['transaction', 'writer'].includes(row.client) || rpc === 'Rollback')) recorder.observationStopped = true;
             try { recorder.journal({ event: 'status', row }); }
             catch { recorder.journalFailure = recorder.blocked = true; }
             const work = Promise.resolve().then(() => recorder.onStatus?.(row)).finally(() => forward(status));
@@ -120,7 +122,7 @@ export async function recordAdminRetries({ host, project, admission }) {
       apps.push(app);
       const db = getFirestore(app);
       db.settings({ host: production ? 'firestore.googleapis.com' : host, ssl: production, preferRest: false,
-        auth: { getUniverseDomain: async () => 'googleapis.com', getProjectId: async () => project, getClient: async () => ({ getRequestHeaders: async () => ({ Authorization: `Bearer ${admission.bearer}` }) }) },
+        auth: { getUniverseDomain: async () => 'googleapis.com', getProjectId: async () => project, getClient: async () => ({ getRequestHeaders: async () => ({ Authorization: `Bearer ${admission.bearer}`, ...(production ? { 'x-goog-user-project': project } : {}) }) }) },
         clientConfig: { interfaces: { 'google.firestore.v1.Firestore': { retry_codes: { no_retry: [] }, methods: Object.fromEntries(['BatchGetDocuments', 'Commit', 'Rollback', 'DeleteDocument'].map(method => [method, { retry_codes_name: 'no_retry', timeout_millis: 10000 }])) } } },
         'grpc.enable_retries': 0,
         'grpc.callInvocationTransformer': properties => {
@@ -146,7 +148,8 @@ export async function recordAdminRetries({ host, project, admission }) {
           if ((await witness.doc(path).get()).exists) throw new Error('owned document already exists');
           documents[`${caseId}-${role}`] = { name: witness.doc(path).formattedName, state: 'baseline', status: 'possibly-owned' };
           recorder.journal({ event: 'responsibility', nonce, ownerId, documents });
-          await witness.doc(path).create(fields(role, 'baseline'));
+          // Pinned SDK batch.commit() adds ABORTED retries; _commit honors an empty retry list.
+          await witness.batch().create(witness.doc(path), fields(role, 'baseline'))._commit({ retryCodes: [] });
           documents[`${caseId}-${role}`].status = 'created';
           recorder.journal({ event: 'responsibility', nonce, ownerId, documents });
         });
@@ -166,6 +169,20 @@ export async function recordAdminRetries({ host, project, admission }) {
         if (row.attempt === 1 && caseId !== 'control') await writerPending;
         attempt.finalState = await readState();
       };
+      let writerReady, dispatched, startWriter;
+      if (caseId !== 'control') {
+        let ready, failReady;
+        dispatched = new Promise(resolve => { writerDispatched = resolve; });
+        writerReady = new Promise((resolve, reject) => { ready = resolve; failReady = reject; });
+        const canCommit = new Promise(resolve => { releaseWriter = resolve; });
+        startWriter = () => recorder.storage.run(context('writer', 'writer'), () => writer.runTransaction(async concurrent => {
+          await concurrent.get(writer.doc(paths.b));
+          concurrent.set(writer.doc(paths.a), fields('a', 'writer'));
+          ready();
+          await canCommit;
+        }, { maxAttempts: 1 })).catch(error => { writerError = error.code ?? 'writer-failure'; failReady(error); });
+        if (caseId === 'retry-older') { writerPending = startWriter(); await writerReady; }
+      }
       try {
         await recorder.storage.run(context('transaction', 'transaction'), () => db.runTransaction(async transaction => {
           entry.callbackCount += 1;
@@ -175,19 +192,11 @@ export async function recordAdminRetries({ host, project, admission }) {
           entry.attempts.push({ callbackCount: count, readState: snapshot.data(), refusalCode: null, refusalMessage: null, finalState: null, rpcSequence: [] });
           if (count === 1) {
             if (caseId === 'control') {
-              await recorder.storage.run(context('writer', 'writer'), () => writer.doc(paths.c).set(fields('c', 'writer')));
+              await recorder.storage.run(context('writer', 'writer'), () => writer.batch().set(writer.doc(paths.c), fields('c', 'writer'))._commit({ retryCodes: [] })).catch(error => {
+                if (recorder.rows.find(row => row.caseId === caseId && row.client === 'writer' && row.rpc === 'Commit')?.result?.code !== 10) throw error;
+              });
             } else {
-              let ready, failReady;
-              const dispatched = new Promise(resolve => { writerDispatched = resolve; });
-              const writerReady = new Promise((resolve, reject) => { ready = resolve; failReady = reject; });
-              const canCommit = new Promise(resolve => { releaseWriter = resolve; });
-              writerPending = recorder.storage.run(context('writer', 'writer'), () => writer.runTransaction(async concurrent => {
-                await concurrent.get(writer.doc(paths.b));
-                concurrent.set(writer.doc(paths.a), fields('a', 'writer'));
-                ready();
-                await canCommit;
-              }, { maxAttempts: 1 })).catch(error => { writerError = error.code ?? 'writer-failure'; failReady(error); });
-              await writerReady;
+              if (caseId !== 'retry-older') { writerPending = startWriter(); await writerReady; }
               releaseWriter();
               await dispatched;
               // The first waiting committer wins strict's deadlock resolution.
@@ -199,13 +208,15 @@ export async function recordAdminRetries({ host, project, admission }) {
       } catch (error) { entry.refusalCode = error.code ?? 'sdk-failure'; entry.refusalMessage = String(error.details ?? error.message).split(recorder.bearer ?? '\0').join('[credential-redacted]'); }
       finally { releaseWriter(); await writerPending; await recorder.drain(); }
       if (recorder.blocked || recorder.observationStopped) throw new Error('SDK observation stopped; review required');
-      if (writerError !== null) throw new Error('concurrent writer did not complete');
+      if (writerError !== null && writerError !== 10) throw new Error('concurrent writer did not complete');
+      const writerCommit = recorder.rows.find(row => row.caseId === caseId && row.client === 'writer' && row.rpc === 'Commit');
+      entry.writer = { code: writerCommit.result.code, message: writerCommit.result.details, rpcSequence: recorder.rows.filter(row => row.caseId === caseId && row.client === 'writer').map(row => ({ sequence: row.sequence, rpc: row.rpc, code: row.result.code, message: row.result.details })) };
       entry.finalState = await readState();
       for (const attempt of entry.attempts) {
         attempt.rpcSequence = recorder.rows.filter(row => row.caseId === caseId && row.client === 'transaction' && row.attempt === attempt.callbackCount).map(row => ({ sequence: row.sequence, rpc: row.rpc, code: row.result.code }));
       }
       const issued = new Set(recorder.rows.filter(row => row.caseId === caseId).flatMap(row => (row.frames ?? []).filter(frame => frame?.transaction).map(frame => frame.transaction)));
-      for (const row of recorder.rows.filter(row => row.caseId === caseId)) if (row.rpc === 'Commit' && row.result?.code === 0 || row.rpc === 'Rollback' && (row.result?.code === 0 || row.result?.code === 10 && row.result.details === 'The referenced transaction has expired or is no longer valid.')) issued.delete(row.request.transaction);
+      for (const row of recorder.rows.filter(row => row.caseId === caseId)) if (row.rpc === 'Commit' && row.result?.code === 0 || row.rpc === 'Rollback' && row.result && row.outcomeClass !== 'UNKNOWN') issued.delete(row.request.transaction);
       if (issued.size) throw new Error('SDK unresolved token before next case');
       recorder.onDispatch = recorder.onStatus = null;
     }
@@ -226,7 +237,7 @@ export async function recordAdminRetries({ host, project, admission }) {
           const snapshot = await ref.get();
           if (snapshot.exists) {
             if (snapshot.data().owner !== ownerId || snapshot.data().nonce !== nonce) throw new Error('cleanup ownership differs');
-            await ref.delete({ lastUpdateTime: snapshot.updateTime });
+            await witness.batch().delete(ref, { lastUpdateTime: snapshot.updateTime })._commit({ retryCodes: [] });
           }
           recorder.storage.getStore().site += '/verify';
           if ((await ref.get()).exists) throw new Error('cleanup readback differs');
@@ -253,7 +264,7 @@ export async function recordAdminRetries({ host, project, admission }) {
     }
     const token = Object.values(tokens).find(token => token.value === row.request.transaction);
     if (token && row.rpc === 'Commit' && row.result?.code === 0) token.state = 'committed';
-    if (token && row.rpc === 'Rollback' && (row.result?.code === 0 || row.result?.code === 10 && row.result.details === 'The referenced transaction has expired or is no longer valid.')) token.state = row.result.code === 0 ? 'rolled-back' : 'released-refused';
+    if (token && row.rpc === 'Rollback' && row.result && row.outcomeClass !== 'UNKNOWN') token.state = row.result.code === 0 ? 'rolled-back' : 'released-refused';
   }
   const openTokens = Object.keys(tokens).filter(role => tokens[role].state === 'open');
   const unrecovered = recorder.journalFailure || !absent || unknown.length > 0 || openTokens.length > 0 || failureType !== null;
@@ -289,7 +300,7 @@ export function projectAdminReceipt(receipt) {
   const rows = [...receipt.steps, ...receipt.cleanupSteps].sort((a, b) => a.sequence - b.sequence);
   if (rows.some((row, i) => row.sequence !== i || !row.result?.complete || row.outcomeClass !== (row.result.code === 0 ? 'OK' : [3, 5, 9, 10].includes(row.result.code) ? 'REFUSED' : 'OTHER') || [1, 2, 4, 13, 14].includes(row.result.code) || !row.result.childReaped) || Object.values(receipt.phaseRequests).some(value => !Number.isInteger(value) || value < 0) || Object.values(receipt.phaseRequests).reduce((a, b) => a + b, 0) !== receipt.sandboxRequests || rows.length !== receipt.phaseRequests.observation + receipt.phaseRequests.documentCleanup || receipt.phaseRequests.observation !== receipt.steps.length || receipt.phaseRequests.documentCleanup !== receipt.cleanupSteps.length || receipt.phaseRequests.tokenCleanup !== 0) throw new Error('SDK RPC accounting differs');
   const owned = Object.entries(receipt.documents);
-  if (owned.length !== 9 || owned.some(([, document]) => document.status !== 'confirmed-absent') || owned.some(([role]) => !receipt.cleanupSteps.some(row => row.site === `cleanup/${role}/verify` && row.result.code === 0 && row.result.response.responses.length === 1 && row.result.response.responses[0].missing === receipt.documents[role].name))) throw new Error('SDK cleanup evidence differs');
+  if (owned.length !== 12 || owned.some(([, document]) => document.status !== 'confirmed-absent') || owned.some(([role]) => !receipt.cleanupSteps.some(row => row.site === `cleanup/${role}/verify` && row.result.code === 0 && row.result.response.responses.length === 1 && row.result.response.responses[0].missing === receipt.documents[role].name))) throw new Error('SDK cleanup evidence differs');
   const cases = [];
   for (const spec of CASES) {
     const entry = receipt.attempts.find(value => value.caseId === spec.caseId);
@@ -318,7 +329,11 @@ export function projectAdminReceipt(receipt) {
       return { callbackCount: attempt.callbackCount, refusalCode: attempt.refusalCode, refusalMessage: attempt.refusalMessage, finalState: state, rpcSequence: sequence.map(({ rpc, code }) => ({ rpc, code })) };
     });
     if (['a', 'b', 'c'].some(role => ['role', 'owner', 'nonce', 'state'].some(key => entry.finalState?.[role]?.[key] !== entry.attempts.at(-1).finalState?.[role]?.[key]))) throw new Error('SDK final state differs');
-    cases.push({ caseId: spec.caseId, callbackCount: entry.callbackCount, refusalCode: entry.refusalCode, refusalMessage: entry.refusalMessage, finalState: attempts.at(-1).finalState, attempts });
+    const writerRows = receipt.steps.filter(row => row.caseId === spec.caseId && row.client === 'writer');
+    const writerCommit = writerRows.find(row => row.rpc === 'Commit');
+    const writerSequence = writerRows.map(row => ({ sequence: row.sequence, rpc: row.rpc, code: row.result.code, message: row.result.details }));
+    if (!writerCommit || ![0, 10].includes(writerCommit.result.code) || entry.writer?.code !== writerCommit.result.code || entry.writer?.message !== writerCommit.result.details || JSON.stringify(entry.writer?.rpcSequence) !== JSON.stringify(writerSequence)) throw new Error('SDK writer outcome differs');
+    cases.push({ writer: { code: entry.writer.code, message: entry.writer.message, rpcSequence: writerSequence.map(({ rpc, code, message }) => ({ rpc, code, message })) }, caseId: spec.caseId, callbackCount: entry.callbackCount, refusalCode: entry.refusalCode, refusalMessage: entry.refusalMessage, finalState: attempts.at(-1).finalState, attempts });
   }
   if (receipt.attempts.length !== cases.length) throw new Error('SDK case inventory differs');
   return { kind: 'txn-admin-sdk-projection-v1', sourceDigest: receipt.sourceDigest, corpusDigest: receipt.corpusDigest, cases, timing: Object.fromEntries(['deadlineSeconds', 'dispatchMonotonic', 'responseMonotonic', 'dispatchUtc', 'responseUtc', 'elapsedSeconds', 'writerDispatchMargin', 'sdkBackoff'].map(key => [key, 'NOT_COMPARABLE'])) };
@@ -329,8 +344,8 @@ export function compareAdminReceipts(production, local) {
   const left = projectAdminReceipt(production), right = projectAdminReceipt(local);
   if (production.runtime.nodeSha256 !== local.runtime.nodeSha256 || production.runtime.lockSha256 !== local.runtime.lockSha256 || JSON.stringify(Object.entries(production.runtime.manifest.dependencies).map(([name, row]) => [name, row.version, row.treeSha256]).sort()) !== JSON.stringify(Object.entries(local.runtime.manifest.dependencies).map(([name, row]) => [name, row.version, row.treeSha256]).sort())) throw new Error('SDK comparison runtime differs');
   if (left.sourceDigest !== right.sourceDigest || left.corpusDigest !== right.corpusDigest) throw new Error('SDK comparison source differs');
-  const attempts = left.cases.flatMap((entry, i) => entry.attempts.map((attempt, j) => ({ caseId: entry.caseId, callbackCount: j + 1, production: attempt, local: right.cases[i].attempts[j] ?? null, match: JSON.stringify(attempt) === JSON.stringify(right.cases[i].attempts[j]) })));
-  for (const [i, entry] of right.cases.entries()) for (let j = left.cases[i].attempts.length; j < entry.attempts.length; j++) attempts.push({ caseId: entry.caseId, callbackCount: j + 1, production: null, local: entry.attempts[j], match: false });
+  const attempts = left.cases.flatMap((entry, i) => entry.attempts.map((attempt, j) => ({ caseId: entry.caseId, callbackCount: j + 1, production: { ...attempt, writer: entry.writer }, local: right.cases[i].attempts[j] ? { ...right.cases[i].attempts[j], writer: right.cases[i].writer } : null, match: JSON.stringify(attempt) === JSON.stringify(right.cases[i].attempts[j]) && JSON.stringify(entry.writer) === JSON.stringify(right.cases[i].writer) })));
+  for (const [i, entry] of right.cases.entries()) for (let j = left.cases[i].attempts.length; j < entry.attempts.length; j++) attempts.push({ caseId: entry.caseId, callbackCount: j + 1, production: null, local: { ...entry.attempts[j], writer: entry.writer }, match: false });
   return { kind: 'txn-admin-sdk-comparison-v1', complete: true, attempts, mismatches: attempts.filter(row => !row.match).length, timing: left.timing };
 }
 

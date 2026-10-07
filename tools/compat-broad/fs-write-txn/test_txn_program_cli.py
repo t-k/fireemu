@@ -341,9 +341,9 @@ def test_sdk_packet_scope_pins_its_own_branch_runtime_and_attempt_budget(monkeyp
     value = cli.packet_value(table=table, source_commit='a' * 40, runtime={}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-p17-admin-sdk-retry-test', envelope_relative='docs.local/reviews/sdk-envelope.md')
     assert value['sourceBranch'] == 'work/fs-txn-s5a-admin'
     assert value['project'] == 'fireemu-oracle-txn'
-    assert value['caps'] == {'observation': 64, 'tokenCleanup': 0, 'documentCleanup': 27, 'management': 6, 'credential': 1}
-    assert value['requestsPerRecording'] == 98
-    assert value['scope']['writes'] == 'owned-9-documents'
+    assert value['caps'] == {'observation': 88, 'tokenCleanup': 0, 'documentCleanup': 36, 'management': 6, 'credential': 1}
+    assert value['requestsPerRecording'] == 131
+    assert value['scope']['writes'] == 'owned-12-documents'
     assert value['scope']['retries'] == 'sdk-aborted-callback-only-max-two'
     assert value['scope']['timingSource'] == 'grpc-js-client-interceptor'
     assert value['retries'] == value['scope']['retries']
@@ -359,3 +359,38 @@ def test_sdk_source_manifest_binds_the_reused_adapter_transitively():
     assert 'tools/compat-broad/fs-listen-resume/listen_journal.mjs' in manifest
     assert 'tools/compat-broad/fs-listen-resume/listen_collector.mjs' in manifest
     assert 'conformance/package.json' in manifest
+
+
+def test_sdk_recovery_packet_binds_action_snapshot_wait_and_distinct_envelope(monkeypatch):
+    table = cli.table_for('p17-admin-sdk-retry')
+    monkeypatch.setattr(cli, 'runner_sha256', lambda _name: 'c' * 64)
+    monkeypatch.setattr(cli, 'refuse_virtualenv', lambda _runtime: None)
+    recovery = {'action': 'a2', 'snapshotPath': 'docs.local/runs/sdk-stopped/sdk-final-receipt.json', 'snapshotSha256': 'e' * 64, 'notBefore': '2026-10-07T00:10:00Z', 'originalPacketId': 'fs-transaction-p17-admin-sdk-retry-original', 'lockSha256': 'f' * 64}
+    value = cli.packet_value(table=table, source_commit='a' * 40, runtime={}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-p17-admin-sdk-retry-recovery', envelope_relative='docs.local/reviews/sdk-recovery-envelope.md', sdk_recovery=recovery)
+    assert value['sdkRecovery'] == recovery
+    assert value['envelopeId'] == 'FS-TRANSACTION-p17-admin-sdk-retry-a2-001'
+    assert value['scope']['retries'] == 'none'
+    assert value['scope']['writes'] == 'none'
+    assert value['recordings'] == 2
+    for key, changed in [('action', 'unexpected'), ('snapshotPath', 'tools/file.json'), ('snapshotSha256', 'bad'), ('notBefore', 'bad')]:
+        with pytest.raises(ValueError): cli.packet_value(table=table, source_commit='a' * 40, runtime={}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-p17-admin-sdk-retry-recovery', envelope_relative='docs.local/reviews/sdk-recovery-envelope.md', sdk_recovery={**recovery, key: changed})
+
+
+def test_sdk_recovery_snapshot_size_is_bounded_and_digest_checked(tmp_path):
+    path = tmp_path / 'receipt.json'
+    raw = json.dumps({'packetName': 'p17-admin-sdk-retry', 'padding': 'x' * 70000}).encode()
+    path.write_bytes(raw)
+    assert cli._read_packet(path, cli.sha(raw), label='SDK snapshot')['packetName'] == 'p17-admin-sdk-retry'
+    with pytest.raises(ValueError): cli._read_packet(path, 'a' * 64, label='SDK snapshot')
+    path.write_bytes(b' ' * 4194305)
+    with pytest.raises(ValueError): cli._read_packet(path, cli.sha(path.read_bytes()), label='SDK snapshot')
+
+
+def test_sdk_packet_size_widening_remains_closed_and_bounded(tmp_path):
+    path = tmp_path / 'packet.json'
+    raw = json.dumps({'packetName': 'p17-admin-sdk-retry', 'padding': 'x' * 70000}).encode()
+    path.write_bytes(raw)
+    assert cli._read_packet(path, cli.sha(raw))['packetName'] == 'p17-admin-sdk-retry'
+    with pytest.raises(ValueError): cli._read_packet(path, cli.sha(raw), label='envelope')
+    path.write_bytes(b' ' * 262145)
+    with pytest.raises(ValueError): cli._read_packet(path, cli.sha(path.read_bytes()))

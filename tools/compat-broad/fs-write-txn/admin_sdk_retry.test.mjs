@@ -96,14 +96,14 @@ test('strict rehearsal proves conflict, control, retry lineage, per-attempt stat
   assert.equal(receipt.graphComplete, true);
   assert.equal(receipt.unrecovered, false);
   assert.deepEqual(receipt.openTokens, []);
-  assert.equal(Object.keys(receipt.tokens).length, 6);
-  assert.equal(Object.values(receipt.tokens).filter(token => token.state === 'committed').length, 4);
-  assert.equal(Object.values(receipt.tokens).filter(token => token.state === 'released-refused').length, 2);
+  assert.equal(Object.keys(receipt.tokens).length, 9);
+  assert.equal(Object.values(receipt.tokens).filter(token => token.state === 'committed').length, 6);
+  assert.equal(Object.values(receipt.tokens).filter(token => token.state === 'released-refused').length, 3);
   assert.deepEqual(receipt.cleanup, { absent: true });
   assert.deepEqual(receipt.phaseRequests, { observation: receipt.steps.length, tokenCleanup: 0, documentCleanup: receipt.cleanupSteps.length, management: 0, credential: 0 });
   assert.equal(receipt.sandboxRequests, receipt.steps.length + receipt.cleanupSteps.length);
   assert.deepEqual([...receipt.steps, ...receipt.cleanupSteps].map(row => row.sequence).sort((a, b) => a - b), Array.from({ length: receipt.sandboxRequests }, (_, i) => i));
-  const [conflict, control, retry] = receipt.attempts;
+  const [conflict, control, retry, older] = receipt.attempts;
   assert.equal(conflict.caseId, 'conflict');
   assert.equal(conflict.callbackCount, 1);
   assert.equal(conflict.refusalCode, 10);
@@ -122,6 +122,8 @@ test('strict rehearsal proves conflict, control, retry lineage, per-attempt stat
   const firstRead = receipt.steps.find(row => row.caseId === 'retry' && row.client === 'transaction' && row.rpc === 'BatchGetDocuments' && row.attempt === 1);
   const nextRead = receipt.steps.find(row => row.caseId === 'retry' && row.client === 'transaction' && row.rpc === 'BatchGetDocuments' && row.attempt === 2);
   assert.equal(nextRead.request.newTransaction.readWrite.retryTransaction, firstRead.result.response.responses.find(frame => frame.transaction).transaction);
+  assert.equal(older.caseId, 'retry-older');
+  assert.equal(older.callbackCount, 2);
   for (const entry of receipt.attempts) {
     for (const attempt of entry.attempts) {
       assert.deepEqual(attempt.rpcSequence, receipt.steps.filter(row => row.caseId === entry.caseId && row.attempt === attempt.callbackCount && row.client === 'transaction').map(row => ({ sequence: row.sequence, rpc: row.rpc, code: row.result.code })));
@@ -136,7 +138,7 @@ test('strict rehearsal proves conflict, control, retry lineage, per-attempt stat
       assert.equal(commit.result.code, 10);
     }
   }
-  assert.equal(receipt.cleanupSteps.filter(row => row.site.endsWith('/verify')).length, 9);
+  assert.equal(receipt.cleanupSteps.filter(row => row.site.endsWith('/verify')).length, 12);
   assert.ok(receipt.cleanupSteps.filter(row => row.site.endsWith('/verify')).every(row => row.result.code === 0 && row.result.response.responses.every(frame => frame.missing)));
 });
 
@@ -190,8 +192,18 @@ test('SDK projection compares each attempt and explicitly excludes timing', { sk
   seal(production);
   const comparison = compareAdminReceipts(production, local);
   assert.equal(comparison.mismatches, 0);
-  assert.equal(comparison.attempts.length, 4);
+  assert.equal(comparison.attempts.length, 6);
   assert.ok(Object.values(comparison.timing).every(value => value === 'NOT_COMPARABLE'));
+  const writer = production.steps.find(row => row.caseId === 'control' && row.client === 'writer' && row.rpc === 'Commit');
+  writer.result.details = 'changed writer message';
+  production.attempts[1].writer.message = writer.result.details;
+  production.attempts[1].writer.rpcSequence.find(row => row.rpc === 'Commit').message = writer.result.details;
+  seal(production);
+  assert.equal(compareAdminReceipts(production, local).mismatches, 1);
+  writer.result.details = local.steps.find(row => row.caseId === 'control' && row.client === 'writer' && row.rpc === 'Commit').result.details;
+  production.attempts[1].writer.message = writer.result.details;
+  production.attempts[1].writer.rpcSequence.find(row => row.rpc === 'Commit').message = writer.result.details;
+  seal(production);
   production.attempts[2].attempts[0].refusalMessage = 'changed';
   assert.throws(() => projectAdminReceipt(production), /refusal|digest/);
   production.attempts[2].attempts[0].refusalMessage = local.attempts[2].attempts[0].refusalMessage;
@@ -211,7 +223,7 @@ test('SDK projection compares each attempt and explicitly excludes timing', { sk
 });
 
 
-test('non-exact rollback refusal remains blocked for A2', async () => {
+test('definite rollback refusal is observed without stopping acquisition', async () => {
   const recorder = rpcRecorder(grpc);
   const fake = { start(_metadata, listener) { this.listener = listener; }, sendMessageWithContext() {} };
   const call = recorder.interceptor({ method_definition: { path: '/google.firestore.v1.Firestore/Rollback' } }, () => fake);
@@ -219,8 +231,9 @@ test('non-exact rollback refusal remains blocked for A2', async () => {
   call.sendMessage({ database: 'owned', transaction: Buffer.from('issued') });
   fake.listener.onReceiveStatus({ code: 10, details: 'another refusal' });
   await recorder.drain();
-  assert.equal(recorder.observationStopped, true);
-  assert.throws(() => call.sendMessage({ database: 'owned', transaction: Buffer.from('issued') }), /blocked/);
+  assert.equal(recorder.observationStopped, false);
+  assert.equal(recorder.blocked, false);
+  assert.throws(() => call.sendMessage({ database: 'owned', transaction: Buffer.from('issued') }), /redispatch/);
 });
 
 test('partial transaction stream preserves frames and classifies refusal as unknown', async () => {
@@ -257,4 +270,143 @@ test('definite refusal stops observation while allowing owned cleanup', async ()
   fake.listener.onReceiveStatus({ code: 0, details: '' });
   await recorder.drain();
   assert.equal(sent, 2);
+});
+
+for (const client of ['writer', 'transaction']) {
+  test(`${client} ABORTED commit is an observation`, async () => {
+    const recorder = rpcRecorder(grpc);
+    recorder.context = { client, site: 'retry/transaction', phase: 'observation' };
+    const fake = { start(_metadata, listener) { this.listener = listener; }, sendMessageWithContext() {} };
+    const call = recorder.interceptor({ method_definition: { path: '/google.firestore.v1.Firestore/Commit' } }, () => fake);
+    const metadata = new grpc.Metadata();
+    metadata.set('authorization', 'offline-parent');
+    metadata.set('x-goog-user-project', 'fireemu-oracle-txn');
+    call.start(metadata, { onReceiveMetadata() {}, onReceiveMessage() {}, onReceiveStatus() {} });
+    call.sendMessage({ transaction: Buffer.from('issued') });
+    fake.listener.onReceiveStatus({ code: 10, details: 'Too much contention on these documents. Please try again.' });
+    await recorder.drain();
+    assert.equal(recorder.observationStopped, false);
+    assert.equal(recorder.blocked, false);
+    assert.deepEqual(recorder.rows[0].metadataKeys, ['authorization', 'x-goog-user-project']);
+    assert.equal(recorder.rows[0].quotaProject, 'fireemu-oracle-txn');
+    assert.equal(JSON.stringify(recorder.rows).includes('offline-parent'), false);
+  });
+}
+
+for (const code of [0, 3, 5, 7, 8, 9, 10, 16]) {
+  test(`definite Rollback code ${code} never stops observation`, async () => {
+    const recorder = rpcRecorder(grpc);
+    const fake = { start(_metadata, listener) { this.listener = listener; }, sendMessageWithContext() {} };
+    const call = recorder.interceptor({ method_definition: { path: '/google.firestore.v1.Firestore/Rollback' } }, () => fake);
+    call.start(new grpc.Metadata(), { onReceiveMetadata() {}, onReceiveMessage() {}, onReceiveStatus() {} });
+    call.sendMessage({ transaction: Buffer.from('issued') });
+    fake.listener.onReceiveStatus({ code, details: 'Invalid transaction.' });
+    await recorder.drain();
+    assert.equal(recorder.observationStopped, false);
+    assert.equal(recorder.blocked, false);
+    assert.equal(recorder.rows[0].result.code, code);
+  });
+}
+
+for (const outcome of ['writer-aborted', 'writer-late', 'older-retry', 'rollback-invalid', 'rollback-unknown']) {
+  test(`local SDK stub observes ${outcome} with native evidence in every case`, async () => {
+    const { v1: { FirestoreClient } } = require('@google-cloud/firestore');
+    const descriptor = new FirestoreClient({ projectId: 'demo-descriptors' });
+    const protos = descriptor._protos;
+    const fs = protos.google.firestore.v1;
+    const server = new grpc.Server();
+    const docs = new Map(), transactions = new Map(), held = new Map();
+    let token = 0, tick = 0;
+    const timestamp = () => ({ seconds: '1788004860', nanos: ++tick });
+    const apply = (request, done) => {
+      const time = timestamp();
+      for (const write of request.writes) {
+        if (write.delete) {
+          assert.deepEqual(write.currentDocument.updateTime, docs.get(write.delete).updateTime);
+          docs.delete(write.delete);
+        } else docs.set(write.update.name, { ...write.update, createTime: time, updateTime: time });
+      }
+      done(null, { writeResults: request.writes.map(() => ({ updateTime: time })), commitTime: time });
+    };
+    const handlers = {
+      BatchGetDocuments(call) {
+        if (call.request.newTransaction) {
+          const identity = Buffer.from(`issued-${++token}`);
+          transactions.set(identity.toString('base64'), call.request.documents[0]);
+          call.write({ transaction: identity, readTime: timestamp() });
+        }
+        for (const name of call.request.documents) call.write(docs.has(name) ? { found: docs.get(name), readTime: timestamp() } : { missing: name, readTime: timestamp() });
+        call.end();
+      },
+      Commit(call, done) {
+        const request = call.request;
+        const read = transactions.get(request.transaction?.toString('base64'));
+        const caseId = read?.split('/').at(-2);
+        const writer = read?.endsWith('/b');
+        if (writer) {
+          if (outcome === 'writer-aborted' || outcome.startsWith('rollback-')) done({ code: 10, details: 'Too much contention on these documents. Please try again.' });
+          else held.set(caseId, () => apply(request, done));
+        } else if (read) {
+          if (outcome === 'older-retry' && caseId.endsWith('older') && held.has(caseId)) {
+            held.get(caseId)(); held.delete(caseId);
+            done({ code: 10, details: 'Too much contention on these documents. Please try again.' });
+          } else {
+            apply(request, done);
+            if (held.has(caseId)) { held.get(caseId)(); held.delete(caseId); }
+          }
+        } else if (['writer-aborted', 'rollback-invalid'].includes(outcome) && request.writes[0].update?.name.endsWith('/txn-p17-control/c') && request.writes[0].update.fields.state?.stringValue === 'writer') done({ code: 10, details: 'Too much contention on these documents. Please try again.' });
+        else apply(request, done);
+      },
+      Rollback(_call, done) {
+        if (outcome === 'rollback-invalid') done({ code: 3, details: 'Invalid transaction.' });
+        else if (outcome === 'rollback-unknown') done({ code: 14, details: 'offline unavailable' });
+        else done(null, {});
+      },
+    };
+    server.addService(Object.fromEntries(Object.keys(handlers).map(method => [method, { path: `/google.firestore.v1.Firestore/${method}`, requestStream: false, responseStream: method === 'BatchGetDocuments', requestSerialize: fs[`${method}Request`].serialize, requestDeserialize: fs[`${method}Request`].deserialize, responseSerialize: (method === 'Rollback' ? protos.google.protobuf.Empty : fs[`${method}Response`]).serialize, responseDeserialize: (method === 'Rollback' ? protos.google.protobuf.Empty : fs[`${method}Response`]).deserialize }])), handlers);
+    const port = await new Promise((resolve, reject) => server.bindAsync('127.0.0.1:0', grpc.ServerCredentials.createInsecure(), (error, value) => error ? reject(error) : resolve(value)));
+    try {
+      const receipt = await recordAdminRetries({ host: `127.0.0.1:${port}`, project: 'demo-admin-retry' });
+      if (outcome === 'rollback-unknown') {
+        assert.equal(receipt.complete, false);
+        assert.equal(receipt.attempts.length, 1);
+        assert.ok(receipt.unknownRollbacks.length);
+        assert.ok(receipt.openTokens.length);
+        return;
+      }
+      assert.equal(receipt.complete, true);
+      assert.deepEqual(receipt.openTokens, []);
+      const projected = projectAdminReceipt(receipt);
+      assert.deepEqual(projected.cases.map(entry => entry.caseId), ['conflict', 'control', 'retry', 'retry-older']);
+      for (const entry of projected.cases) {
+        assert.equal(entry.writer.code, ['writer-late', 'older-retry'].includes(outcome) ? 0 : 10);
+        assert.ok(entry.writer.rpcSequence.some(row => row.rpc === 'Commit'));
+        assert.equal(entry.callbackCount, outcome === 'older-retry' && entry.caseId === 'retry-older' ? 2 : 1);
+        if (entry.caseId !== 'control' && outcome !== 'older-retry') assert.equal(entry.finalState.b, 'transaction-baseline');
+      }
+      const olderReads = receipt.steps.filter(row => row.caseId === 'retry-older' && row.rpc === 'BatchGetDocuments' && row.request.newTransaction);
+      assert.equal(olderReads[0].client, 'writer');
+      assert.equal(olderReads[1].client, 'transaction');
+      if (outcome === 'rollback-invalid') assert.ok(projected.cases.some(entry => entry.writer.rpcSequence.some(row => row.rpc === 'Rollback' && row.code === 3)));
+      assert.equal(docs.size, 0);
+    } finally { server.forceShutdown(); await descriptor.close(); }
+  });
+}
+
+
+test('production SDK auth supplies the oracle quota project without credential discovery', async () => {
+  const { Firestore } = require('@google-cloud/firestore');
+  const settings = Firestore.prototype.settings;
+  let headers;
+  Firestore.prototype.settings = function (value) {
+    headers = value.auth.getClient().then(client => client.getRequestHeaders());
+    throw new Error('offline stop before any native channel');
+  };
+  try {
+    const receipt = await recordAdminRetries({ project: 'fireemu-oracle-txn', admission: { bearer: 'offline-parent', journal: () => {}, check: () => {} } });
+    assert.equal((await headers)['x-goog-user-project'], 'fireemu-oracle-txn');
+    assert.equal((await headers).Authorization, 'Bearer offline-parent');
+    assert.equal(receipt.sandboxRequests, 0);
+    assert.equal(receipt.complete, false);
+  } finally { Firestore.prototype.settings = settings; }
 });

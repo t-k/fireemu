@@ -131,13 +131,14 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
                                         row = event['row']
                                         if row['sequence'] != len(dispatched) or row['phase'] not in ('observation', 'documentCleanup'): raise ValueError('SDK dispatch accounting differs')
                                         if row['phase'] == 'documentCleanup': budget.begin_recovery()
+                                        if 'x-goog-user-project' not in row.get('metadataKeys', []) or row.get('quotaProject') != project: raise ValueError('SDK quota project metadata missing')
                                         request = row['request']
                                         if any(value.get('outcomeClass') == 'UNKNOWN' for value in dispatched.values()): raise ValueError('SDK unknown answer blocks redispatch')
                                         if row.get('transport') != 'grpc' or row.get('rpc') not in ('BatchGetDocuments', 'Commit', 'Rollback', 'DeleteDocument'): raise ValueError('SDK RPC scope differs')
                                         if row['rpc'] in ('BatchGetDocuments', 'Commit', 'Rollback') and request.get('database') != plan['database']: raise ValueError('SDK database scope differs')
                                         names = set(plan['documents'].values())
                                         if row['rpc'] == 'BatchGetDocuments' and (not isinstance(request.get('documents'), list) or not 1 <= len(request['documents']) <= 3 or not set(request['documents']) <= names): raise ValueError('SDK read scope differs')
-                                        if row['rpc'] == 'DeleteDocument' and (request.get('name') not in names or not request.get('currentDocument', {}).get('updateTime')): raise ValueError('SDK delete scope differs')
+                                        if row['rpc'] == 'DeleteDocument': raise ValueError('SDK direct delete is not used')
                                         if row['rpc'] == 'Commit':
                                             if not isinstance(request.get('writes'), list) or not 1 <= len(request['writes']) <= 1: raise ValueError('SDK write scope differs')
                                             for write in request['writes']:
@@ -159,7 +160,7 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
                                     elif event.get('event') == 'status':
                                         row = event['row']
                                         before = dispatched.get(row['sequence'])
-                                        if before is None or before.get('result') or any(row.get(key) != before.get(key) for key in ('transport', 'rpc', 'request', 'client', 'site', 'phase', 'caseId', 'attempt')) or row.get('frames') != before.get('frames', []): raise ValueError('SDK status does not match its dispatch')
+                                        if before is None or before.get('result') or any(row.get(key) != before.get(key) for key in ('transport', 'rpc', 'request', 'client', 'site', 'phase', 'caseId', 'attempt', 'metadataKeys', 'quotaProject')) or row.get('frames') != before.get('frames', []): raise ValueError('SDK status does not match its dispatch')
                                         if any(row['timing'].get(key) != before['timing'].get(key) for key in ('deadlineSeconds', 'dispatchMonotonic', 'dispatchUtc')): raise ValueError('SDK status changed dispatch timing')
                                         result = row.get('result', {})
                                         if type(result.get('code')) is not int or not 0 <= result['code'] <= 16 or not isinstance(result.get('details'), str) or len(result['details']) > 4096 or bearer in result['details']: raise ValueError('SDK native status differs')
@@ -235,7 +236,7 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
                 for frame in row.get('frames', []):
                     if frame and frame.get('transaction'): receipt['tokens'][f"{row.get('caseId')}-{row.get('client')}-{row.get('attempt')}"] = {'value': frame['transaction'], 'transport': 'grpc', 'state': 'open'}
                 for token in receipt['tokens'].values():
-                    if token['value'] == row['request'].get('transaction') and (row['rpc'] == 'Commit' and row.get('result', {}).get('code') == 0 or row['rpc'] == 'Rollback' and (row.get('result', {}).get('code') == 0 or row.get('result', {}).get('code') == 10 and row['result'].get('details') == 'The referenced transaction has expired or is no longer valid.')): token['state'] = 'closed'
+                    if token['value'] == row['request'].get('transaction') and (row['rpc'] == 'Commit' and row.get('result', {}).get('code') == 0 or row['rpc'] == 'Rollback' and row.get('result') and row.get('outcomeClass') != 'UNKNOWN'): token['state'] = 'closed'
             receipt['openTokens'] = [role for role, token in receipt['tokens'].items() if token['state'] == 'open']
             receipt['unknownRollbacks'] = [seq for seq, row in dispatched.items() if row['rpc'] == 'Rollback' and (not row.get('result') or row.get('outcomeClass') == 'UNKNOWN')]
             receipt['unknownWrites'] = [seq for seq, row in dispatched.items() if row['rpc'] in ('Commit', 'DeleteDocument') and (not row.get('result') or row.get('outcomeClass') == 'UNKNOWN')]
@@ -258,6 +259,106 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
         save_private(directory / 'sdk-final-receipt.json', receipt)
     else: receipt['runtime'] = copy.deepcopy(runtime)
     return receipt
+
+
+def sdk_document_action(snapshot, action, send, *, now):
+    """Recover exact SDK-owned names; A2 reads never settle an unknown create by absence."""
+    from txn_program_cli import table_for
+    if action not in ('cleanup', 'a2') or snapshot.get('kind') not in ('txn-program-recording-v1', 'txn-admin-sdk-recovery-v1') or snapshot.get('packetName') != 'p17-admin-sdk-retry' or now.tzinfo is None:
+        raise ValueError('SDK cleanup or A2 snapshot required')
+    plan = compile_plan(table_for('p17-admin-sdk-retry'), snapshot['nonce'], snapshot['ownerId'])
+    documents = copy.deepcopy(snapshot['documents'])
+    if any(role not in plan['documents'] or doc.get('name') != plan['documents'][role] for role, doc in documents.items()): raise ValueError('SDK recovery document scope differs')
+    rows = snapshot.get('steps', []) + snapshot.get('cleanupSteps', [])
+    unknown = [row for row in rows if row.get('outcomeClass') == 'UNKNOWN' or not row.get('result')]
+    if unknown and any(now - shared._instant(row['timing']['dispatchUtc']) < dt.timedelta(minutes=10) for row in unknown): raise ValueError('SDK 10-minute A2 wait has not elapsed')
+    unknown_writes = {row['sequence']: row for row in unknown if row['rpc'] in ('Commit', 'DeleteDocument') and row['sequence'] not in snapshot.get('settledWrites', [])}
+    original_unknown_writes = set(unknown_writes)
+    tokens = copy.deepcopy(snapshot.get('tokens', {}))
+    evidence = []
+    blocked = False
+    def dispatch(rpc, request):
+        nonlocal blocked
+        if blocked or len(evidence) >= 45: raise ValueError('SDK recovery dispatch blocked')
+        try: result = send(rpc, request)
+        except (Exception, KeyboardInterrupt): result = {'complete': False, 'code': 2, 'details': 'SDK recovery IPC or journal incomplete'}
+        row = {'sequence': max((row['sequence'] for row in rows), default=-1) + len(evidence) + 1, 'rpc': rpc, 'request': copy.deepcopy(request), 'result': copy.deepcopy(result), 'timing': {'dispatchUtc': now.isoformat()}, 'outcomeClass': 'UNKNOWN' if not result.get('complete') or result.get('code') in (1, 2, 4, 13, 14) else 'OK' if result.get('code') == 0 else 'REFUSED'}
+        evidence.append(row)
+        if row['outcomeClass'] == 'UNKNOWN' and rpc in ('Commit', 'DeleteDocument'): unknown_writes[row['sequence']] = row
+        if not result.get('complete') or result.get('code') in (1, 2, 4, 13, 14): blocked = True
+        return result
+    if action == 'cleanup':
+        for token in tokens.values():
+            if token['state'] != 'open': continue
+            result = dispatch('Rollback', {'database': plan['database'], 'transaction': token['value']})
+            if blocked: break
+            token['state'] = 'rolled-back' if result['code'] == 0 else 'released-refused'
+    for role, document in documents.items():
+        if blocked: break
+        name = document['name']
+        read = dispatch('GetDocument', {'name': name})
+        if blocked: break
+        body = read.get('response')
+        absent = read.get('code') == 5
+        owned = read.get('code') == 0 and isinstance(body, dict) and body.get('name') == name and body.get('fields', {}).get('owner') == {'stringValue': snapshot['ownerId']} and body['fields'].get('nonce') == {'stringValue': snapshot['nonce']} and body['fields'].get('role') == {'stringValue': name.rsplit('/', 1)[1]} and body.get('updateTime')
+        if not absent and not owned: continue
+        for sequence, row in list(unknown_writes.items()):
+            writes = row['request'].get('writes', []) if row['rpc'] == 'Commit' else [{'delete': row['request'].get('name')}]
+            if len(writes) != 1: continue
+            write = writes[0]
+            if absent and write.get('delete') == name or owned and write.get('update', {}).get('name') == name and write['update'].get('fields') == body['fields']:
+                del unknown_writes[sequence]
+        unresolved_update = any(any(write.get('update', {}).get('name') == name for write in row['request'].get('writes', [])) for row in unknown_writes.values())
+        if action == 'cleanup' and owned and not unresolved_update:
+            deleted = dispatch('DeleteDocument', {'name': name, 'currentDocument': {'updateTime': body['updateTime']}})
+            if blocked: break
+            if deleted.get('code') != 0: continue
+            verified = dispatch('GetDocument', {'name': name})
+            if blocked: break
+            absent = verified.get('code') == 5
+        document['status'] = 'confirmed-absent' if absent else 'owned-readback'
+    open_tokens = [role for role, token in tokens.items() if token['state'] == 'open']
+    complete = not blocked and not unknown_writes and not open_tokens and not snapshot.get('unknownStarts') and all(doc.get('status') == 'confirmed-absent' for doc in documents.values())
+    return {'kind': 'txn-admin-sdk-recovery-v1', 'packetName': 'p17-admin-sdk-retry', 'action': action, 'complete': complete, 'nonce': snapshot['nonce'], 'ownerId': snapshot['ownerId'], 'documents': documents, 'tokens': tokens, 'openTokens': open_tokens, 'unknownStarts': snapshot.get('unknownStarts', []), 'unknownWrites': sorted(unknown_writes), 'settledWrites': sorted(set(snapshot.get('settledWrites', [])) | (original_unknown_writes - set(unknown_writes))), 'unknownAnswers': blocked, 'steps': rows + evidence, 'cleanupSteps': [], 'requests': len(evidence)}
+
+
+def record_sdk_action(*, table, snapshot, action, directory, baseline, runtime, check, now):
+    """Run a separately packet-pinned SDK action through the existing bounded native wire."""
+    directory = Path(directory)
+    directory.mkdir(mode=0o700)
+    plan = compile_plan(table, snapshot['nonce'], snapshot['ownerId'])
+    budget = SessionBudget(plan, table, check, lambda value: save_private(directory / f"charged-{value['requests']:03d}.json", value))
+    journal = directory / 'sdk-recovery-journal.jsonl'
+    result = None
+    try:
+        check()
+        bearer = refresh(baseline, budget, before_send=check)
+        metadata = MetadataSession(bearer, baseline, budget, request_fn=functools.partial(request_once, project=plan['project']), project=plan['project'])
+        before = metadata.preflight()
+        def send(rpc, request):
+            check()
+            phase = 'observation' if rpc == 'Rollback' else 'documentCleanup'
+            if phase == 'documentCleanup': budget.begin_recovery()
+            budget.charge(phase)
+            name = request.get('name') or request.get('writes', [{}])[0].get('delete')
+            case = name.split('/')[-2].removeprefix('txn-p17-') if name else 'conflict'
+            wire = NodeWire(runtime, {'slug': 'txn-p17-' + case, 'documents': ['a', 'b', 'c'], 'states': table['states']}, project=plan['project'])
+            shared.append_ledger(journal, {'event': 'dispatch', 'rpc': rpc, 'request': request, 'ts': now().isoformat()})
+            answer = wire.send('grpc', rpc, request, nonce=snapshot['nonce'], owner_id=snapshot['ownerId'], bearer=bearer)
+            shared.append_ledger(journal, {'event': 'status', 'rpc': rpc, 'result': answer})
+            return answer
+        result = sdk_document_action(snapshot, action, send, now=now())
+        budget.begin_recovery()
+        if not result['unknownAnswers']:
+            after = metadata.postflight()
+            if before.get('project') != after.get('project') or before.get('database') != after.get('database'): result['complete'] = False
+            result.update(metadata=before, postflight=after)
+    except (Exception, KeyboardInterrupt):
+        if result is not None: result['complete'] = False
+        raise
+    finally:
+        save_private(directory / 'sdk-recovery-receipt.json', {'complete': False, 'failure': 'action-incomplete', 'requests': budget.total} if result is None else {**result, 'sandboxRequests': budget.total, 'phaseRequests': budget.used})
+    return result
 
 
 def _row(pins, attempt, directory, nonce, outcome, requests, now):

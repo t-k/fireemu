@@ -1,6 +1,8 @@
 import grpc from "@grpc/grpc-js";
 import { protos } from "@google-cloud/pubsub";
 import { PROJECT } from "./plan.mjs";
+import { metadataBytes, FRAMING_RESERVE } from "./metadata.mjs";
+import { CAPS } from "./plan.mjs";
 const Request = protos.google.pubsub.v1.StreamingPullRequest;
 const Response = protos.google.pubsub.v1.StreamingPullResponse;
 
@@ -19,6 +21,8 @@ export async function openStream({
   const metadata = new grpc.Metadata();
   metadata.add("authorization", `Bearer ${token}`);
   metadata.add("x-goog-user-project", PROJECT);
+  if (metadataBytes(metadata) + FRAMING_RESERVE > CAPS.metadataBytesEachDirection)
+    throw new Error("stream outgoing metadata byte cap");
   const intentAt = now(),
     intentClock = meter.clock();
   const initialRemaining = meter.remaining();
@@ -57,6 +61,7 @@ export async function openStream({
     windowExpired: false,
     received: 0,
     preDispatchMs,
+    metadataBytesIn: FRAMING_RESERVE,
   };
   const wake = () => {
     const callback = waiter;
@@ -110,7 +115,19 @@ export async function openStream({
       cancel("frame-overflow-or-decode");
     }
   });
+  const acceptMetadata = (value, details) => {
+    state.metadataBytesIn += metadataBytes(value, details);
+    event("stream-metadata", { metadataBytesIn: state.metadataBytesIn });
+    if (state.metadataBytesIn > CAPS.metadataBytesEachDirection) {
+      state.incomplete = true;
+      cancel("metadata-overflow");
+    }
+  };
+  rpc.on("metadata", (value) => {
+    if (!disposed) acceptMetadata(value);
+  });
   rpc.on("status", (status) => {
+    if (!disposed) acceptMetadata(status.metadata, status.details);
     state.terminal = { code: status.code };
     const localEnd =
       cancelled &&

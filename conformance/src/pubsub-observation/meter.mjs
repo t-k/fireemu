@@ -32,6 +32,7 @@ export function createMeter({ now = () => performance.now(), a2 = false } = {}) 
   const api = {
     clock: time,
     enter(value) {
+      if (cell) remaining(true);
       if (
         a2
           ? value.group !== "G7"

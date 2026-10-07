@@ -812,8 +812,13 @@ test("native unary rejects a valid oversized protobuf response before decoding i
     client: {
       close() {},
       makeUnaryRequest(...args) {
-        args.at(-1)(null, response);
-        return new EventEmitter();
+        const rpc = new EventEmitter();
+        rpc.cancel = () => {};
+        queueMicrotask(() => {
+          args.at(-1)(null, response);
+          rpc.emit("status", { code: 0, details: "" });
+        });
+        return rpc;
       },
     },
   });
@@ -902,9 +907,14 @@ test("native request duration uses the meter clock rather than wall clock adjust
     client: {
       close() {},
       makeUnaryRequest(...args) {
-        clock += 5;
-        args.at(-1)(null, raw);
-        return new EventEmitter();
+        const rpc = new EventEmitter();
+        rpc.cancel = () => {};
+        queueMicrotask(() => {
+          clock += 5;
+          args.at(-1)(null, raw);
+          rpc.emit("status", { code: 0, details: "" });
+        });
+        return rpc;
       },
     },
   });
@@ -1415,5 +1425,193 @@ test("intentional local cancellation is distinct from unrelated uncertain transp
     } finally {
       stream.dispose();
     }
+  }
+});
+
+test("native unary aggregates headers, body and trailers before accepting success", async () => {
+  const { default: grpc } = await import("@grpc/grpc-js");
+  const initial = new grpc.Metadata(),
+    trailing = new grpc.Metadata();
+  initial.add("x-first", "a".repeat(20000));
+  trailing.add("x-last", "b".repeat(45000));
+  const meter = createMeter({ now: () => 0 });
+  meter.enter(makePlan().cells.find((item) => item.id === "N3"));
+  const raw = Buffer.from(
+    protos.google.pubsub.v1.Topic.encode({
+      name: "projects/fixture/topics/fe123456abcdef-a",
+    }).finish(),
+  );
+  const wire = createWire({
+    meter,
+    journal: { write() {} },
+    getToken: async () => "fake",
+    client: {
+      close() {},
+      makeUnaryRequest(...args) {
+        const rpc = new EventEmitter();
+        rpc.cancel = () => {};
+        queueMicrotask(() => {
+          rpc.emit("metadata", initial);
+          args.at(-1)(null, raw);
+          rpc.emit("status", { code: 0, details: "", metadata: trailing });
+        });
+        return rpc;
+      },
+    },
+  });
+  const reply = await wire.call({
+    category: "get",
+    transport: "grpc",
+    service: "Publisher",
+    method: "GetTopic",
+    request: { name: "projects/fixture/topics/fe123456abcdef-a" },
+  });
+  assert.equal(reply.unknown, true);
+  wire.close();
+});
+
+test("stream metadata includes both initial headers and trailing metadata", async () => {
+  const { default: grpc } = await import("@grpc/grpc-js");
+  const first = new grpc.Metadata(),
+    last = new grpc.Metadata();
+  first.add("x-first", "a".repeat(20000));
+  last.add("x-last", "b".repeat(45000));
+  const meter = createMeter({ now: () => 0 });
+  meter.enter(makePlan().cells[0]);
+  const rpc = new EventEmitter();
+  rpc.write = () => true;
+  rpc.cancel = () => {};
+  rpc.end = () => {};
+  const stream = await openStream({
+    meter,
+    credential: async () => "fake",
+    client: { makeBidiStreamRequest: () => rpc },
+    journal: { write() {}, frame() {} },
+    cellId: "S01",
+    opener: {},
+  });
+  try {
+    rpc.emit("metadata", first);
+    rpc.emit("status", { code: 0, details: "", metadata: last });
+    assert.equal(stream.state().incomplete, true);
+  } finally {
+    stream.dispose();
+  }
+});
+
+test("over-budget stream credentials are refused before physical opening", async () => {
+  const meter = createMeter({ now: () => 0 });
+  meter.enter(makePlan().cells[0]);
+  const rpc = new EventEmitter();
+  rpc.write = () => true;
+  rpc.cancel = () => {};
+  rpc.end = () => {};
+  let opens = 0,
+    stream;
+  try {
+    await assert.rejects(async () => {
+      stream = await openStream({
+        meter,
+        credential: async () => "x".repeat(65537),
+        client: {
+          makeBidiStreamRequest: () => {
+            opens++;
+            return rpc;
+          },
+        },
+        journal: { write() {}, frame() {} },
+        cellId: "S01",
+        opener: {},
+      });
+    }, /metadata/);
+    assert.equal(opens, 0);
+  } finally {
+    stream?.dispose();
+  }
+});
+
+test("response persistence overrun retains its actual answer and stops cell completion", async () => {
+  let clock = 0;
+  const meter = createMeter({ now: () => clock });
+  meter.enter(makePlan().cells.find((item) => item.id === "R3"));
+  const wire = createWire({
+    meter,
+    journal: {
+      write(row) {
+        if (row.event === "response") clock = 120000;
+      },
+    },
+    getToken: async () => "fake",
+    client: { close() {} },
+    fetch: async () => new Response('{"name":"projects/fixture/topics/fe123456abcdef-a"}'),
+  });
+  const reply = await wire.call({
+    category: "get",
+    transport: "rest",
+    service: "Publisher",
+    method: "GetTopic",
+    request: { name: "projects/fixture/topics/fe123456abcdef-a" },
+  });
+  assert.equal(reply.ok, true);
+  assert.equal(reply.budgetOverrun, true);
+  assert.throws(() => meter.enter(makePlan().cells[0]), /time/);
+  wire.close();
+});
+
+test("final settlement and case-result fsync overruns cannot advance the next cell", async () => {
+  for (const at of ["settlement", "case-result"]) {
+    let clock = 0;
+    const meter = createMeter({ now: () => clock }),
+      cell = makePlan().cells.find((item) => item.id === "R3");
+    meter.enter(cell);
+    const ledger = createLedger({
+      journal: {
+        write(row) {
+          if (
+            at === "settlement" &&
+            row.phase === "resolved" &&
+            row.resolution === "gone" &&
+            row.name.endsWith("-topic")
+          )
+            clock = 120000;
+        },
+      },
+    });
+    const result = await runCell({
+      cell,
+      meter,
+      wire: fakeWorld(),
+      ledger,
+      runId: "123456abcdef",
+      journal: {
+        write(row) {
+          if (at === "case-result" && row.event === "case-result") clock = 120000;
+        },
+      },
+    });
+    assert.equal(result.complete, false, at);
+    assert.equal(result.cleanupClosed, true, at);
+    assert.throws(() => meter.enter(makePlan().cells[0]), /time/);
+  }
+});
+
+test("metadata byte properties preserve repeated UTF-8 and binary value widths", async () => {
+  const { metadataBytes } = await import("./pubsub-observation/metadata.mjs"),
+    { default: grpc } = await import("@grpc/grpc-js");
+  for (let seed = 0; seed < 256; seed++) {
+    const metadata = new grpc.Metadata(),
+      binary = Buffer.alloc(seed, 0x78),
+      values = ["é", String(seed)];
+    for (const value of values) metadata.add("x-text", value);
+    metadata.add("x-bin", binary);
+    const raw =
+      values.map((value) => `x-text: ${value}\r\n`).join("") +
+      `x-bin: ${binary.toString("base64")}\r\n`;
+    assert.equal(metadataBytes(metadata), Buffer.byteLength(raw));
+    const details = `é message ${seed}`;
+    assert.ok(
+      metadataBytes(metadata, details) >=
+        Buffer.byteLength(raw) + Buffer.byteLength(encodeURIComponent(details)),
+    );
   }
 });

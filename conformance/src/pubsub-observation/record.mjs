@@ -186,6 +186,7 @@ export async function main(args = process.argv.slice(2), deps = {}) {
         ledger,
         runId: options.runId,
         elapsedMs: input.elapsedMs,
+        meter,
       });
       resourcesClosed = recovery.closed;
       results.push(recovery);

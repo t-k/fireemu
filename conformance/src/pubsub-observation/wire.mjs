@@ -5,6 +5,7 @@ import { sha256 } from "../pubsub-production/admission.mjs";
 import { CAPS, PROJECT, minimumCallMs } from "./plan.mjs";
 import { encodedSizes } from "./payload.mjs";
 import { openStream } from "./stream.mjs";
+import { metadataBytes, FRAMING_RESERVE } from "./metadata.mjs";
 
 const statusNames = Object.fromEntries(
   Object.entries(grpc.status).map(([key, value]) => [value, key]),
@@ -12,26 +13,9 @@ const statusNames = Object.fromEntries(
 const unsure = new Set(["UNKNOWN", "INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED", "CANCELLED"]);
 const types = protos.google.pubsub.v1;
 // This reservation is for framing overhead, not an assertion about TCP retransmissions.
-const FRAMING_RESERVE = 4096;
 const headerBytes = (headers) =>
   [...(headers?.entries?.() ?? [])].reduce(
     (sum, [name, value]) => sum + Buffer.byteLength(name) + Buffer.byteLength(value) + 4,
-    0,
-  );
-const grpcHeaderBytes = (metadata) =>
-  Object.keys(metadata?.getMap?.() ?? {}).reduce(
-    (sum, key) =>
-      sum +
-      metadata
-        .get(key)
-        .reduce(
-          (n, value) =>
-            n +
-            Buffer.byteLength(key) +
-            (Buffer.isBuffer(value) ? 4 * Math.ceil(value.length / 3) : Buffer.byteLength(value)) +
-            4,
-          0,
-        ),
     0,
   );
 export const typeOf = (name) => (name === "Empty" ? protos.google.protobuf.Empty : types[name]);
@@ -273,6 +257,14 @@ export function createWire({
           metadata.add("authorization", `Bearer ${token}`);
           metadata.add("x-goog-user-project", PROJECT);
           let metadataBytesIn = FRAMING_RESERVE;
+          let candidate = {
+            ok: false,
+            code: "UNKNOWN",
+            unknown: true,
+            body: {},
+            bodyBytes: null,
+            layoutVerdict: "NOT_COMPARABLE",
+          };
           reply = await new Promise((resolve) => {
             const rpc = client.makeUnaryRequest(
               `${SERVICES[service].path}/${method}`,
@@ -284,20 +276,20 @@ export function createWire({
               (error, bytes) => {
                 if (error) {
                   const code = statusNames[error.code] ?? "UNKNOWN";
-                  metadataBytesIn += grpcHeaderBytes(error.metadata);
                   const details =
                     typeof error.details === "string" &&
                     Buffer.byteLength(error.details) + metadataBytesIn <=
                       CAPS.metadataBytesEachDirection
                       ? error.details
                       : null;
-                  resolve({
+                  candidate = {
                     ok: false,
                     code,
                     unknown: unsure.has(code) || details === null,
                     body: details === null ? {} : { error: { status: code, message: details } },
                     bodyBytes: null,
-                  });
+                    layoutVerdict: "NOT_COMPARABLE_NATIVE_ERROR_BODY_NOT_CAPTURED",
+                  };
                 } else {
                   try {
                     if (
@@ -305,7 +297,7 @@ export function createWire({
                       bytes.length + metadataBytesIn > CAPS.metadataBytesEachDirection
                     )
                       throw new Error("native response byte cap");
-                    resolve({
+                    candidate = {
                       ok: true,
                       code: "OK",
                       unknown: false,
@@ -313,16 +305,38 @@ export function createWire({
                       bodyBytes: bytes.length,
                       metadataBytesIn,
                       bodySha256: sha256(bytes),
-                    });
+                    };
                   } catch {
-                    resolve({ ok: false, code: "UNKNOWN", unknown: true, body: {} });
+                    candidate = {
+                      ok: false,
+                      code: "UNKNOWN",
+                      unknown: true,
+                      body: {},
+                      bodyBytes: null,
+                      layoutVerdict: "NOT_COMPARABLE",
+                    };
                   }
                 }
               },
             );
             rpc.on("metadata", (value) => {
-              metadataBytesIn += grpcHeaderBytes(value);
+              metadataBytesIn += metadataBytes(value);
               if (metadataBytesIn > CAPS.metadataBytesEachDirection) rpc.cancel();
+            });
+            rpc.on("status", (status) => {
+              metadataBytesIn += metadataBytes(status.metadata, status.details);
+              if (metadataBytesIn + (candidate.bodyBytes ?? 0) > CAPS.metadataBytesEachDirection) {
+                rpc.cancel();
+                resolve({
+                  ok: false,
+                  code: "UNKNOWN",
+                  unknown: true,
+                  body: {},
+                  bodyBytes: null,
+                  metadataBytesIn,
+                  layoutVerdict: "NOT_COMPARABLE_METADATA_OVERFLOW",
+                });
+              } else resolve({ ...candidate, metadataBytesIn });
             });
             controller.signal.addEventListener("abort", () => rpc.cancel(), { once: true });
           });
@@ -343,6 +357,12 @@ export function createWire({
         durationMs: reply.durationMs,
         reply,
       });
+      try {
+        meter.remaining(maintenance);
+      } catch {
+        reply.budgetOverrun = true;
+        journal.write({ event: "request-budget-overrun", cellId, requestId, transport, method });
+      }
       return reply;
     },
     async open(options) {

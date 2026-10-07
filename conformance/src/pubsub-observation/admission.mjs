@@ -16,6 +16,7 @@ export const SOURCE_FILES = Object.freeze([
     "admission",
     "credentials",
     "journal",
+    "metadata",
     "meter",
     "payload",
     "plan",

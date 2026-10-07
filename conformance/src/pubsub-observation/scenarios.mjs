@@ -33,8 +33,11 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
     absentSeen = new Set();
   let complete = false,
     reason = null,
+    budgetOverrun = false,
     stream;
   const send = async (category, method, request, { routeName, candidates } = {}) => {
+    const maintenance = category.startsWith("cleanup");
+    meter.remaining(maintenance);
     const name =
       request.name ?? request.topic ?? request.subscription?.name ?? request.subscription;
     if (
@@ -98,6 +101,12 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
       if (reply.code === "NOT_FOUND" && !settled(ledger, name)) absentSeen.add(name);
     }
     if (kind === "unknown" || kind === "pending") throw new Error("unknown answer stops the cell");
+    if (reply.budgetOverrun) budgetOverrun = true;
+    try {
+      meter.remaining(maintenance);
+    } catch {
+      budgetOverrun = true;
+    }
     return reply;
   };
   const setup = async (twoTopics = false) => {
@@ -380,19 +389,33 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
     }
     if (!settled(ledger, name)) cleanupClosed = false;
   }
+  try {
+    meter.remaining(true);
+  } catch {
+    budgetOverrun = true;
+  }
   const result = {
     cellId: cell.id,
-    complete,
+    complete: complete && !budgetOverrun,
     reason,
     cleanupClosed,
     names: [...tracked],
     outstanding: ledger.outstanding().filter((item) => tracked.has(item.name)),
+    budgetOverrun,
   };
   journal.write({ event: "case-result", ...result });
+  try {
+    meter.remaining(true);
+  } catch {
+    result.complete = false;
+    result.budgetOverrun = true;
+    result.reason = "cell or source budget exceeded during persistence";
+    journal.write({ event: "case-budget-overrun", ...result });
+  }
   return result;
 }
 
-export async function recoverA2({ wire, ledger, runId, elapsedMs }) {
+export async function recoverA2({ wire, ledger, runId, elapsedMs, meter }) {
   if (!Number.isFinite(elapsedMs) || elapsedMs < 600000) throw new Error("A2 minimum age required");
   const originalIds = new Set(
     [...ledger.state().values()].flatMap((item) => item.requests.map((request) => request.id)),
@@ -416,6 +439,7 @@ export async function recoverA2({ wire, ledger, runId, elapsedMs }) {
     });
     ledger.observeRead(name, reply);
     ledger.settleAbsent(name, reply, { a2ElapsedMs: elapsedMs, a2EligibleRequestIds: originalIds });
+    meter?.remaining(true);
   }
   return {
     closed: [...ledger.state().keys()].every((name) => settled(ledger, name)),

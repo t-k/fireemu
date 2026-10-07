@@ -145,3 +145,22 @@ def test_the_transports_in_the_scope_come_from_the_table():
     grpc_only = {**support.TABLE, "steps": tuple(step for step in support.TABLE["steps"] if step["transport"] == "grpc"), "caps": {**support.TABLE["caps"], "observation": 11}, "maxTokens": 1}
     assert authority.envelope_scope(grpc_only)["transports"] == "grpc"
     assert authority.envelope_scope(support.TABLE)["transports"] == "grpc+rest"
+
+
+@pytest.mark.parametrize('missing', ['none', 'envelope', 'version', 'wrong-scope', 'duplicate'])
+def test_sdk_admission_requires_exact_e_and_v_even_for_direct_owner(missing):
+    from txn_program_cli import table_for
+    table = table_for('p17-admin-sdk-retry')
+    scope = authority.envelope_scope(table)
+    pins = {**PINS, 'packetName': table['name'], 'project': table['project'], 'envelopeId': table['envelopeId'], 'requestsPerRecording': 98, 'estimatedUsdPerRecording': 0, 'scope': scope}
+    topic = 'FS-TRANSACTION ' + table['name']
+    envelope = f"- 2026-10-07 | {topic} envelope | " + '; '.join(f'{key}={value}' for key, value in {'envelopeId': table['envelopeId'], **scope, 'maxRequests': 196, 'reserveUsd': 0}.items()) + f" | オーナー | {pins['envelopePath']}\n"
+    version = f"- 2026-10-07 | {topic} | " + '; '.join(f'{key}={value}' for key, value in {'decision': 'APPROVE', 'envelopeId': pins['envelopeId'], 'packetSha256': pins['packetSha256'], 'sourceCommit': pins['sourceCommit'], 'runnerSha256': pins['runnerSha256'], 'requestsPerRecording': 98, 'estimatedUsdPerRecording': 0, 'recordings': 2}.items()) + f" | オーナー | {pins['packetPath']}\n"
+    text = envelope + version
+    if missing == 'envelope': text = version
+    if missing == 'version': text = envelope
+    if missing == 'wrong-scope': text = text.replace('owned-9-documents', 'owned-8-documents')
+    if missing == 'duplicate': text += version
+    if missing == 'none': assert authority.authorize(text, pins) == (196, 0)
+    else:
+        with pytest.raises(ValueError): authority.authorize(text, pins)

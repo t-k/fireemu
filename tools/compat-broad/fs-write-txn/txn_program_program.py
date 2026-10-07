@@ -59,7 +59,9 @@ def _bad(reason):
 
 
 def source_digest(table):
-    return hashlib.sha256(Path(table["sourceFile"]).read_bytes()).hexdigest()
+    raw = Path(table["sourceFile"]).read_bytes()
+    if table["name"] == "p17-admin-sdk-retry": raw += (Path(table["sourceFile"]).parent.parent / "fs-listen-resume/listen_sdk_adapter.mjs").read_bytes()
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _step(row):
@@ -98,6 +100,10 @@ def _step(row):
 
 
 def _validate_table(table):
+    if table.get("name") == "p17-admin-sdk-retry":
+        from txn_program_cli import table_for
+        if table != table_for("p17-admin-sdk-retry"): _bad("SDK contract differs")
+        return []
     if not isinstance(table, dict) or not all(key in table for key in ("name", "program", "slug", "documents", "states", "steps", "caps", "observationSeconds", "recoverySeconds", "maxTokens", "sourceFile")):
         _bad("a table field is missing")
     if not isinstance(table["slug"], str) or not _LABEL.fullmatch(table["slug"]) or not isinstance(table["program"], str) or not isinstance(table["name"], str):
@@ -263,6 +269,8 @@ def _identity(value, label):
 
 
 def corpus_digest(table):
+    if table['name'] == 'p17-admin-sdk-retry':
+        return hashlib.sha256(json.dumps([{'caseId': 'conflict', 'maxAttempts': 1}, {'caseId': 'control', 'maxAttempts': 1}, {'caseId': 'retry', 'maxAttempts': 2}], separators=(',', ':')).encode()).hexdigest()
     steps = _validate_table(table)
     body = {
         "steps": steps,
@@ -297,7 +305,7 @@ def compile_plan(table, nonce, owner_id):
         "documents": {role: f"{database}/documents/oracle/{nonce}/{table['slug']}/{role}" for role in table["documents"]},
         "states": list(table["states"]),
         "steps": steps,
-        "cases": [step["caseId"] for step in steps if step["caseId"]],
+        "cases": table["cases"] if table["name"] == "p17-admin-sdk-retry" else [step["caseId"] for step in steps if step["caseId"]],
         "maxTokens": table["maxTokens"],
         "maxUnresolvedTokens": 1,
         "releasePolicy": "rollback-zero-before-next-chain",
@@ -312,6 +320,10 @@ def compile_plan(table, nonce, owner_id):
         "sourceDigest": source_digest(table),
         "corpusDigest": corpus_digest(table),
     }
+    if table["name"] == "p17-admin-sdk-retry":
+        plan["documents"] = {role: f"{database}/documents/oracle/{nonce}/txn-p17-{role.rsplit('-', 1)[0]}/{role.rsplit('-', 1)[1]}" for role in table["documents"]}
+        plan["releasePolicy"] = "sdk-rollback-exact-gone-before-next-case"
+        plan["maxUnresolvedTokens"] = 6
     if table.get("thresholds"):
         plan["thresholds"] = dict(table["thresholds"])
     return plan

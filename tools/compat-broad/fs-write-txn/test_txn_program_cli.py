@@ -332,3 +332,30 @@ def test_a_wrong_branch_or_a_dirty_tree_is_refused_with_the_branch_it_needs(monk
     monkeypatch.setattr(cli, "_git", git({("status", "--porcelain"): "", ("branch", "--show-current"): ""}))
     with pytest.raises(ValueError, match="a detached head"):
         cli.signed_source_commit()
+
+
+def test_sdk_packet_scope_pins_its_own_branch_runtime_and_attempt_budget(monkeypatch):
+    table = cli.table_for('p17-admin-sdk-retry')
+    monkeypatch.setattr(cli, 'runner_sha256', lambda _name: 'c' * 64)
+    monkeypatch.setattr(cli, 'refuse_virtualenv', lambda _runtime: None)
+    value = cli.packet_value(table=table, source_commit='a' * 40, runtime={}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-p17-admin-sdk-retry-test', envelope_relative='docs.local/reviews/sdk-envelope.md')
+    assert value['sourceBranch'] == 'work/fs-txn-s5a-admin'
+    assert value['project'] == 'fireemu-oracle-txn'
+    assert value['caps'] == {'observation': 64, 'tokenCleanup': 0, 'documentCleanup': 27, 'management': 6, 'credential': 1}
+    assert value['requestsPerRecording'] == 98
+    assert value['scope']['writes'] == 'owned-9-documents'
+    assert value['scope']['retries'] == 'sdk-aborted-callback-only-max-two'
+    assert value['scope']['timingSource'] == 'grpc-js-client-interceptor'
+    assert value['retries'] == value['scope']['retries']
+    assert value['timingSource'] == value['scope']['timingSource']
+    assert value['observationSeconds'] == 180
+    assert value['recoverySeconds'] == 120
+
+
+def test_sdk_source_manifest_binds_the_reused_adapter_transitively():
+    manifest = cli.source_manifest('p17-admin-sdk-retry')
+    assert 'tools/compat-broad/fs-write-txn/admin_sdk_retry.mjs' in manifest
+    assert 'tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs' in manifest
+    assert 'tools/compat-broad/fs-listen-resume/listen_journal.mjs' in manifest
+    assert 'tools/compat-broad/fs-listen-resume/listen_collector.mjs' in manifest
+    assert 'conformance/package.json' in manifest

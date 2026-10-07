@@ -1,9 +1,10 @@
 import test from 'node:test';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
-import { mkdirSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdirSync, symlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { localTarget, rpcRecorder, recordAdminRetries } from './admin_sdk_retry.mjs';
+import { localTarget, rpcRecorder, recordAdminRetries, projectAdminReceipt, compareAdminReceipts } from './admin_sdk_retry.mjs';
 
 const require = createRequire(new URL('../../../conformance/package.json', import.meta.url));
 const grpc = require('@grpc/grpc-js');
@@ -88,6 +89,7 @@ test('interceptor captures context at dispatch even when another client finishes
 
 test('strict rehearsal proves conflict, control, retry lineage, per-attempt state and cleanup', { skip: !process.env.FIRESTORE_EMULATOR_HOST }, async () => {
   const receipt = await recordAdminRetries({ host: process.env.FIRESTORE_EMULATOR_HOST, project: 'demo-admin-retry' });
+  writeFileSync(new URL('../../../target/codex-out/s5a-step2/local.receipt.json', import.meta.url), JSON.stringify(receipt) + '\n');
   assert.equal(receipt.kind, 'txn-program-recording-v1');
   assert.equal(receipt.program, 'FS-TRANSACTION-P17-ADMIN-SDK-RETRY');
   assert.equal(receipt.complete, true);
@@ -136,4 +138,123 @@ test('strict rehearsal proves conflict, control, retry lineage, per-attempt stat
   }
   assert.equal(receipt.cleanupSteps.filter(row => row.site.endsWith('/verify')).length, 9);
   assert.ok(receipt.cleanupSteps.filter(row => row.site.endsWith('/verify')).every(row => row.result.code === 0 && row.result.response.responses.every(frame => frame.missing)));
+});
+
+
+test('journal failure blocks dispatch and remains fail closed', () => {
+  const recorder = rpcRecorder(grpc);
+  let sent = 0, started = 0;
+  recorder.journal = () => { throw new Error('journal failed'); };
+  const fake = { start() { started++; }, sendMessageWithContext() { sent++; } };
+  const call = recorder.interceptor({ method_definition: { path: '/google.firestore.v1.Firestore/Commit' } }, () => fake);
+  call.start(new grpc.Metadata(), { onReceiveMetadata() {}, onReceiveMessage() {}, onReceiveStatus() {} });
+  assert.equal(started, 0);
+  assert.throws(() => call.sendMessage({ database: 'owned' }), /journal/);
+  recorder.journal = () => {};
+  assert.throws(() => call.sendMessage({ database: 'owned' }), /blocked/);
+  assert.equal(sent, 0);
+  assert.equal(started, 0);
+  assert.equal(recorder.journalFailure, true);
+});
+
+test('unknown native status is durable and blocks automatic redispatch', async () => {
+  const recorder = rpcRecorder(grpc);
+  const journal = [];
+  recorder.journal = value => journal.push(structuredClone(value));
+  const fake = { start(_metadata, listener) { this.listener = listener; }, sendMessageWithContext() {} };
+  const call = recorder.interceptor({ method_definition: { path: '/google.firestore.v1.Firestore/Commit' } }, () => fake);
+  call.start(new grpc.Metadata(), { onReceiveMetadata() {}, onReceiveMessage() {}, onReceiveStatus() {} });
+  call.sendMessage({ database: 'owned' });
+  fake.listener.onReceiveStatus({ code: 14, details: 'unavailable' });
+  await recorder.drain();
+  assert.deepEqual(journal.map(value => value.event), ['dispatch', 'status']);
+  assert.equal(journal[0].row.result, undefined);
+  assert.equal(journal[1].row.outcomeClass, 'UNKNOWN');
+  assert.throws(() => call.sendMessage({ database: 'owned' }), /blocked/);
+});
+
+test('expired campaign deadline prevents native dispatch', () => {
+  const recorder = rpcRecorder(grpc);
+  recorder.deadline = -1;
+  const call = recorder.interceptor({ method_definition: { path: '/google.firestore.v1.Firestore/Commit' } }, () => ({ sendMessageWithContext() { assert.fail('must not send'); } }));
+  assert.throws(() => call.sendMessage({ database: 'owned' }), /deadline/);
+  assert.equal(recorder.rows.length, 0);
+});
+
+test('SDK projection compares each attempt and explicitly excludes timing', { skip: !process.env.FIRESTORE_EMULATOR_HOST }, async () => {
+  const local = await recordAdminRetries({ host: process.env.FIRESTORE_EMULATOR_HOST, project: 'demo-admin-retry' });
+  const production = structuredClone(local);
+  production.runtime.target = 'production';
+  const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  const seal = value => { const bound = { ...value }; delete bound.receiptDigest; value.receiptDigest = createHash('sha256').update(JSON.stringify(canonical(bound))).digest('hex'); };
+  seal(production);
+  const comparison = compareAdminReceipts(production, local);
+  assert.equal(comparison.mismatches, 0);
+  assert.equal(comparison.attempts.length, 4);
+  assert.ok(Object.values(comparison.timing).every(value => value === 'NOT_COMPARABLE'));
+  production.attempts[2].attempts[0].refusalMessage = 'changed';
+  assert.throws(() => projectAdminReceipt(production), /refusal|digest/);
+  production.attempts[2].attempts[0].refusalMessage = local.attempts[2].attempts[0].refusalMessage;
+  production.steps.find(row => row.caseId === 'retry' && row.rpc === 'Commit' && row.client === 'transaction').result.details = 'changed';
+  production.attempts[2].attempts[0].refusalMessage = 'changed';
+  seal(production);
+  assert.equal(compareAdminReceipts(production, local).mismatches, 1);
+  production.attempts[0].attempts[0].finalState.a.state = 'baseline';
+  production.attempts[0].finalState.a.state = 'baseline';
+  seal(production);
+  assert.throws(() => projectAdminReceipt(production), /witness/);
+  production.attempts[0].attempts[0].finalState.a.state = 'writer';
+  production.attempts[0].finalState.a.state = 'writer';
+  production.unknownCommits.push(1);
+  seal(production);
+  assert.throws(() => projectAdminReceipt(production), /complete/);
+});
+
+
+test('non-exact rollback refusal remains blocked for A2', async () => {
+  const recorder = rpcRecorder(grpc);
+  const fake = { start(_metadata, listener) { this.listener = listener; }, sendMessageWithContext() {} };
+  const call = recorder.interceptor({ method_definition: { path: '/google.firestore.v1.Firestore/Rollback' } }, () => fake);
+  call.start(new grpc.Metadata(), { onReceiveMetadata() {}, onReceiveMessage() {}, onReceiveStatus() {} });
+  call.sendMessage({ database: 'owned', transaction: Buffer.from('issued') });
+  fake.listener.onReceiveStatus({ code: 10, details: 'another refusal' });
+  await recorder.drain();
+  assert.equal(recorder.observationStopped, true);
+  assert.throws(() => call.sendMessage({ database: 'owned', transaction: Buffer.from('issued') }), /blocked/);
+});
+
+test('partial transaction stream preserves frames and classifies refusal as unknown', async () => {
+  const recorder = rpcRecorder(grpc);
+  const fake = { start(_metadata, listener) { this.listener = listener; }, sendMessageWithContext() {} };
+  const call = recorder.interceptor({ method_definition: { path: '/google.firestore.v1.Firestore/BatchGetDocuments' } }, () => fake);
+  call.start(new grpc.Metadata(), { onReceiveMetadata() {}, onReceiveMessage() {}, onReceiveStatus() {} });
+  call.sendMessage({ newTransaction: { readWrite: {} } });
+  fake.listener.onReceiveMessage({ transaction: Buffer.from('issued') });
+  fake.listener.onReceiveStatus({ code: 10, details: 'stream refused' });
+  await recorder.drain();
+  assert.equal(recorder.rows[0].outcomeClass, 'UNKNOWN');
+  assert.equal(recorder.rows[0].frames[0].transaction, Buffer.from('issued').toString('base64'));
+  assert.equal(recorder.blocked, true);
+});
+
+
+test('definite refusal stops observation while allowing owned cleanup', async () => {
+  const recorder = rpcRecorder(grpc);
+  recorder.context = { phase: 'observation', site: 'transaction', client: 'transaction' };
+  let sent = 0;
+  const fake = { start(_metadata, listener) { this.listener = listener; }, sendMessageWithContext() { sent++; } };
+  const call = recorder.interceptor({ method_definition: { path: '/google.firestore.v1.Firestore/Commit' } }, () => fake);
+  call.start(new grpc.Metadata(), { onReceiveMetadata() {}, onReceiveMessage() {}, onReceiveStatus() {} });
+  call.sendMessage({ database: 'owned', writes: [] });
+  fake.listener.onReceiveStatus({ code: 9, details: 'definite refusal' });
+  await recorder.drain();
+  assert.equal(recorder.observationStopped, true);
+  assert.equal(recorder.blocked, false);
+  recorder.context = { phase: 'documentCleanup', site: 'cleanup', client: 'witness' };
+  const cleanup = recorder.interceptor({ method_definition: { path: '/google.firestore.v1.Firestore/Commit' } }, () => fake);
+  cleanup.start(new grpc.Metadata(), { onReceiveMetadata() {}, onReceiveMessage() {}, onReceiveStatus() {} });
+  cleanup.sendMessage({ database: 'owned', writes: [{ delete: 'owned-document' }] });
+  fake.listener.onReceiveStatus({ code: 0, details: '' });
+  await recorder.drain();
+  assert.equal(sent, 2);
 });

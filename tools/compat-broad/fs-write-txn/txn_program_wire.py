@@ -20,7 +20,7 @@ ROOT = HERE.parents[2]
 WORKER = HERE / 'txn_program_transport.mjs'
 LOCK = ROOT / 'conformance/pnpm-lock.yaml'
 _ENV = {'LANG': 'C', 'LC_ALL': 'C', 'TZ': 'UTC'}
-_SEEDS = {'@grpc/grpc-js', '@google-cloud/firestore'}
+_SEEDS = {'@grpc/grpc-js', '@google-cloud/firestore', 'firebase-admin'}
 _RUNTIME_STAMPS = {}
 
 
@@ -51,7 +51,7 @@ def discover_runtime(executable):
     if not node.is_absolute() or not node.is_file():
         raise ValueError('program absolute Node executable required')
     result = subprocess.run([str(node), str(WORKER), '--runtime-info'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=_ENV, timeout=12, check=True)
-    if len(result.stdout) > 65536:
+    if len(result.stdout) > 262144:
         raise ValueError('program runtime receipt capacity exceeded')
     info = json.loads(result.stdout)
     runtime = {**info, 'nodeExecutable': str(node), 'nodeSha256': _sha(node), 'workerSha256': _sha(WORKER), 'lockSha256': _sha(LOCK), 'pythonVersion': PYTHON_VERSION, 'pythonExecutable': sys.executable, 'pythonSha256': _sha(sys.executable)}
@@ -170,7 +170,7 @@ def _verify_runtime_full(value):
         reachable.add(key)
         pending.extend(child for child in dependencies[key]['requires'].values() if child is not None)
     if reachable != set(dependencies): raise ValueError('program dependency graph is not closed')
-    if dependencies['@grpc/grpc-js']['version'] != '1.14.4' or dependencies['@google-cloud/firestore']['version'] != '8.7.1':
+    if dependencies['@grpc/grpc-js']['version'] != '1.14.4' or dependencies['@google-cloud/firestore']['version'] != '8.7.1' or dependencies['firebase-admin']['version'] != '14.3.0':
         raise ValueError('program dependency versions differ')
 
 

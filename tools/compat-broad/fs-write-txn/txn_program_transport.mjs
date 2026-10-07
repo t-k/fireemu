@@ -296,7 +296,13 @@ export function runtimeInfo() {
   const modules = realpathSync(new URL('../../../conformance/node_modules', import.meta.url));
   const resolveRoot = (name, resolver) => {
     let entry;
-    try { entry = resolver.resolve(`${name}/package.json`); } catch { entry = resolver.resolve(name); }
+    try { entry = resolver.resolve(`${name}/package.json`); } catch {
+      try { entry = resolver.resolve(name); } catch (error) {
+        // ESM-only exports can hide both the manifest and the CommonJS entry.
+        entry = (resolver.resolve.paths(name) ?? []).map(base => `${base}/${name}/package.json`).find(path => path.startsWith(modules + '/') && statSync(path, { throwIfNoEntry: false })?.isFile());
+        if (!entry) throw error;
+      }
+    }
     let root = dirname(realpathSync(entry));
     while (!statSync(join(root, 'package.json'), { throwIfNoEntry: false })?.isFile() || typeof JSON.parse(readFileSync(join(root, 'package.json'))).name !== 'string') {
       const parent = dirname(root);
@@ -306,7 +312,7 @@ export function runtimeInfo() {
     if (relative(modules, root).startsWith('..')) throw new Error('program dependency escaped its checkout');
     return root;
   };
-  const pending = ['@grpc/grpc-js', '@google-cloud/firestore'].map(name => resolveRoot(name, require));
+  const pending = ['@grpc/grpc-js', '@google-cloud/firestore', 'firebase-admin'].map(name => resolveRoot(name, require));
   while (pending.length) {
     const root = pending.pop();
     const key = relative(modules, root);

@@ -18,6 +18,8 @@ _TAKEN_NAMES = ('p09-grpc-retry', 'p10-grpc-boundary', 'p10-grpc-idle', 'expiry-
 def envelope_scope(table):
     """The resource scope an envelope must state, derived from the table alone."""
     plan = compile_plan(table, 'a' * 32, 'b' * 32)
+    if table['name'] == 'p17-admin-sdk-retry':
+        return {'project': 'fireemu-oracle-txn/(default)', 'writes': 'owned-9-documents', 'iamConfig': 'none', 'retries': 'sdk-aborted-callback-only-max-two', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': '180', 'recoverySeconds': '120', 'maxTokens': '6', 'maxUnresolvedTokens': '6', 'releasePolicy': 'sdk-rollback-exact-gone-before-next-case', 'timing': 'wall-clock', 'timingSource': 'grpc-js-client-interceptor', 'transports': 'grpc', 'writerDeadlineSeconds': '30'}
     writer = any(step['role'] == 'outside-writer' for step in plan['steps'])
     return {'project': f"{plan['project']}/(default)", 'writes': f"owned-{len(plan['documents'])}-documents", 'iamConfig': 'none', 'retries': 'none', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': str(plan['observationSeconds']), 'recoverySeconds': str(plan['recoverySeconds']), 'maxTokens': str(plan['maxTokens']), 'maxUnresolvedTokens': str(plan['maxUnresolvedTokens']), 'releasePolicy': plan['releasePolicy'], 'timing': plan['timing'], 'timingSource': 'parent-wire-envelope', 'transports': '+'.join(sorted({step['transport'] for step in plan['steps']})), 'writerDeadlineSeconds': '30' if writer else 'none'}
 
@@ -73,7 +75,7 @@ def authorize(decisions, pins):
             exact.append(columns)
     if len(exact) != 1:
         raise ValueError('one explicit exact-version program APPROVE row required')
-    if shared.normalize_authority(exact[0][3]).startswith(shared.normalize_authority('オーナー')):
+    if packet_name != 'p17-admin-sdk-retry' and shared.normalize_authority(exact[0][3]).startswith(shared.normalize_authority('オーナー')):
         return 2 * requests, 0.02
     envelopes = []
     for columns, _tokens in entries:
@@ -129,17 +131,17 @@ def verify_initial_gates(rows, now, decisions, pins):
     if any(row.get('envelopeId') == pins['envelopeId'] for row in rows) or any(row.get('packetId') == pins['packetId'] and row.get('outcome') == 'reserved' for row in rows):
         raise ValueError('program packet or envelope already consumed')
     project = pins.get('project', PROJECT)
-    sandbox = [row for row in rows if row.get('project') == project]
+    sandbox = [row for row in rows if row.get('project') == project or project in row.get('projects', [])]
     for index, row in enumerate(sandbox):
         shared._instant(row.get('ts'))
-        if row.get('outcome') == 'reserved' or row.get('event') == 'started':
+        if (row.get('taskId') in (TASK_ID, 'FS-TRANSACTION') or row.get('packetId') == pins['packetId'] or row.get('envelopeId') == pins['envelopeId']) and (row.get('outcome') == 'reserved' or row.get('event') == 'started'):
             key = next((name for name in ('attemptId', 'runId', 'runDir') if row.get(name)), None)
             if key is None or not shared._closed_attempt(row, key, sandbox[index + 1:]):
                 raise ValueError(f'{project} has an open attempt')
     task = [row for row in sandbox if row.get('taskId') == TASK_ID]
     if task and not shared._terminal(max(reversed(task), key=lambda row: shared._instant(row['ts']))):
         raise ValueError('FS-TRANSACTION requires recovery')
-    activity = [row for row in sandbox if row.get('event') not in ('note', 'started') and not str(row.get('outcome', '')).startswith('reserved') and row.get('outcome') != 'historical-unknown-hold']
+    activity = sandbox
     latest = max(activity, key=lambda row: shared._instant(row['ts'])) if activity else None
     if latest and now - shared._instant(latest['ts']) < shared.IDLE_GAP:
         raise ValueError(f'{project} needs 30 minutes since last activity')

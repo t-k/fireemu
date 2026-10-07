@@ -38,6 +38,8 @@ def sha(raw):
 
 
 def table_for(name):
+    if name == 'p17-admin-sdk-retry':
+        return {'name': name, 'program': 'FS-TRANSACTION-P17-ADMIN-SDK-RETRY', 'slug': 'txn-p17', 'documents': [f'{case}-{role}' for case in ('conflict', 'control', 'retry') for role in ('a', 'b', 'c')], 'states': ['baseline', 'writer', 'transaction-baseline', 'transaction-writer'], 'steps': [], 'cases': ['conflict', 'control', 'retry'], 'caps': {'observation': 64, 'tokenCleanup': 0, 'documentCleanup': 27, 'management': 6, 'credential': 1}, 'observationSeconds': 180, 'recoverySeconds': 120, 'maxTokens': 6, 'envelopeId': 'FS-TRANSACTION-p17-admin-sdk-retry-001', 'project': 'fireemu-oracle-txn', 'sourceFile': str(HERE / 'admin_sdk_retry.mjs')}
     if not isinstance(name, str) or name not in TABLES:
         raise ValueError('program table is not registered')
     table = importlib.import_module(TABLES[name]).TABLE
@@ -53,6 +55,7 @@ def _source_paths(name):
     search = [HERE, HERE.parent, ROOT / 'tools/compat-broad/fs-request-bytes-boundary']
     pending = list(HERE.glob('*txn_program*.py')) + list(HERE.glob('*txn_program*.mjs')) + [table_file]
     pending.append(ROOT / 'tools/compat-broad/fs-request-bytes-boundary/request_bytes_preflight.py')
+    if name == 'p17-admin-sdk-retry': pending.extend([HERE / 'admin_sdk_retry.mjs', ROOT / 'conformance/package.json'])
     result = set()
     while pending:
         path = pending.pop()
@@ -60,6 +63,12 @@ def _source_paths(name):
         if relative in result: continue
         if path.is_symlink() or not path.is_file(): raise ValueError('program source entry must be regular')
         raw = path.read_bytes(); result.add(relative)
+        if path.suffix == '.mjs':
+            for imported in re.findall(r'''(?:from\s+|import\s*)['"](\.[^'"]+)['"]''', raw.decode()):
+                candidate = (path.parent / imported).resolve()
+                if not candidate.is_relative_to(ROOT): raise ValueError('program adapter import escaped checkout')
+                pending.append(candidate)
+            continue
         if path.suffix != '.py': continue
         for node in ast.walk(ast.parse(raw, filename=relative)):
             modules = [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module] if isinstance(node, ast.ImportFrom) and node.module else []
@@ -107,18 +116,19 @@ def refuse_virtualenv(runtime):
 def packet_value(*, table, source_commit, runtime, baseline_sha256, envelope_sha256, packet_id, envelope_relative):
     refuse_virtualenv(runtime)
     plan = compile_plan(table, 'a' * 32, 'b' * 32)
-    return {'schemaVersion': 1, 'program': table['program'], 'packetName': table['name'], 'packetId': packet_id, 'project': plan['project'], 'database': '(default)', 'recordings': 2, 'requestsPerRecording': requests_per_recording(table), 'estimatedUsdPerRecording': budget_for(plan['project'])[0], 'sourceCommit': source_commit, 'runnerSha256': runner_sha256(table['name']), 'closureSha256': sha(CLOSURE.read_bytes()), 'corpusDigest': corpus_digest(table), 'planSourceDigest': source_digest(table), 'baselineSha256': baseline_sha256, 'envelopeId': table['envelopeId'], 'envelopePath': envelope_relative, 'envelopeSha256': envelope_sha256, 'runtime': runtime, 'iamConfig': 'none', 'retries': 'none', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': plan['observationSeconds'], 'recoverySeconds': plan['recoverySeconds'], 'maxTokens': plan['maxTokens'], 'timing': 'wall-clock', 'timingSource': 'parent-wire-envelope', 'reserveUsd': budget_for(plan['project'])[1], 'maxUnresolvedTokens': plan['maxUnresolvedTokens'], 'releasePolicy': plan['releasePolicy'], 'caps': plan['caps'], 'cases': plan['cases'], 'scope': envelope_scope(table)}
+    return {'schemaVersion': 1, 'program': table['program'], 'packetName': table['name'], 'packetId': packet_id, 'project': plan['project'], 'database': '(default)', 'recordings': 2, 'requestsPerRecording': requests_per_recording(table), 'estimatedUsdPerRecording': budget_for(plan['project'])[0], 'sourceCommit': source_commit, 'runnerSha256': runner_sha256(table['name']), 'closureSha256': sha(CLOSURE.read_bytes()), 'corpusDigest': corpus_digest(table), 'planSourceDigest': source_digest(table), 'baselineSha256': baseline_sha256, 'envelopeId': table['envelopeId'], 'envelopePath': envelope_relative, 'envelopeSha256': envelope_sha256, 'runtime': runtime, 'iamConfig': 'none', 'retries': ('sdk-aborted-callback-only-max-two' if table['name'] == 'p17-admin-sdk-retry' else 'none'), 'onStop': 'needs-recovery-lock-held', 'observationSeconds': plan['observationSeconds'], 'recoverySeconds': plan['recoverySeconds'], 'maxTokens': plan['maxTokens'], 'timing': 'wall-clock', 'timingSource': ('grpc-js-client-interceptor' if table['name'] == 'p17-admin-sdk-retry' else 'parent-wire-envelope'), 'reserveUsd': budget_for(plan['project'])[1], 'maxUnresolvedTokens': plan['maxUnresolvedTokens'], 'releasePolicy': plan['releasePolicy'], 'caps': plan['caps'], 'cases': plan['cases'], 'scope': envelope_scope(table), **({'sourceBranch': 'work/fs-txn-s5a-admin'} if table['name'] == 'p17-admin-sdk-retry' else {})}
 
 
 def _read_packet(path, digest, *, label='packet'):
     raw = Path(path).read_bytes()
-    if len(raw) > 65536 or sha(raw) != digest: raise ValueError(f'program {label} bytes differ from review')
+    if len(raw) > 262144 or sha(raw) != digest: raise ValueError(f'program {label} bytes differ from review')
+    if len(raw) > 65536 and (label != 'packet' or json.loads(raw).get('packetName') not in {*TABLES, 'p17-admin-sdk-retry'}): raise ValueError(f'program {label} bytes differ from review')
     return json.loads(raw)
 
 
 def load_packet(path, digest, baseline_path, envelope_path, *, table, source_commit, packet_relative, envelope_relative):
     value = _read_packet(path, digest)
-    if not isinstance(value, dict) or set(value) != FIELDS or type(value['schemaVersion']) is not int or type(value['recordings']) is not int or type(value['requestsPerRecording']) is not int:
+    if not isinstance(value, dict) or set(value) != (FIELDS | {'sourceBranch'} if table['name'] == 'p17-admin-sdk-retry' else FIELDS) or type(value['schemaVersion']) is not int or type(value['recordings']) is not int or type(value['requestsPerRecording']) is not int:
         raise ValueError('closed program packet schema differs')
     if not isinstance(value['packetId'], str) or not re.fullmatch(rf"fs-transaction-{re.escape(table['name'])}-[A-Za-z0-9_-]{{4,64}}", value['packetId']): raise ValueError('program packet identity differs')
     if not isinstance(envelope_relative, str) or not envelope_relative.startswith('docs.local/reviews/') or '..' in Path(envelope_relative).parts or not packet_relative.startswith('docs.local/reviews/') or '..' in Path(packet_relative).parts:
@@ -150,10 +160,10 @@ def _git(*args):
     return subprocess.run(['git', *args], cwd=ROOT, check=True, capture_output=True, text=True).stdout.strip()
 
 
-def signed_source_commit():
+def signed_source_commit(expected_branch='work/codex-fs-transaction'):
     dirty, branch = _git('status', '--porcelain'), _git('branch', '--show-current')
-    if dirty or branch != 'work/codex-fs-transaction':
-        raise ValueError(f"program requires a clean checkout on branch work/codex-fs-transaction (this one is on {branch or 'a detached head'}{' and has uncommitted changes' if dirty else ''})")
+    if dirty or branch != expected_branch:
+        raise ValueError(f"program requires a clean checkout on branch {expected_branch} (this one is on {branch or 'a detached head'}{' and has uncommitted changes' if dirty else ''})")
     commit = _git('rev-parse', 'HEAD')
     if not re.fullmatch(r'[a-f0-9]{40}', commit): raise ValueError('program source commit invalid')
     _git('verify-commit', commit)
@@ -200,10 +210,14 @@ def main(argv=None):
     ledger = main_root / 'docs.local/runs/sandbox-ledger.jsonl'
     def admit():
         assert_clean_environment()
-        pins = load_packet(packet, args.packet_sha256, baseline, envelope, table=table, source_commit=signed_source_commit(), packet_relative=packet.relative_to(main_root).as_posix(), envelope_relative=envelope_relative)
+        pins = load_packet(packet, args.packet_sha256, baseline, envelope, table=table, source_commit=(signed_source_commit(value['sourceBranch']) if table['name'] == 'p17-admin-sdk-retry' else signed_source_commit()), packet_relative=packet.relative_to(main_root).as_posix(), envelope_relative=envelope_relative)
         verify_review(review, args.review_sha256, pins); verify_go(args.go_packet_sha256, pins)
         return pins
     pins = admit()
+    if table['name'] == 'p17-admin-sdk-retry':
+        import txn_sandbox_admission as shared
+        # Retain the O_EXCL launch guard for coordinator PID/inode-checked closure.
+        shared.acquire_shared_lock(ledger.parent / (pins['packetId'] + '.launch-guard'), pins['packetId'])
     def check():
         if admit() != pins: raise ValueError('program admission pins changed')
         authorize(decisions_path.read_text(), pins)

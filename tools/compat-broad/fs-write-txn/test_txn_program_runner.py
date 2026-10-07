@@ -314,3 +314,133 @@ def test_the_whole_task_budget_is_rechecked_before_each_recording(tmp_path):
     kwargs["record_once"] = once
     with pytest.raises(ValueError, match="limit"): runner.record_twice(**kwargs)
     assert calls == [0]
+
+
+@pytest.mark.parametrize('fault', ['complete', 'unknown-commit', 'unknown-rollback', 'foreign-document', 'forged-status', 'journal-failure', 'event-journal-failure', 'final-journal-failure'])
+def test_sdk_broker_preserves_responsibility_and_denies_failure_paths(tmp_path, monkeypatch, fault):
+    import shutil
+    from txn_program_cli import table_for
+    from txn_program_wire import discover_runtime
+    import txn_program_cli
+    import txn_program_collector
+    table = table_for('p17-admin-sdk-retry')
+    local_path = runner.Path(__file__).resolve().parents[3] / 'target/codex-out/s5a-step2/local.receipt.json'
+    if not local_path.is_file(): pytest.skip('requires the local strict SDK receipt')
+    runtime = discover_runtime(runner.Path(shutil.which('node')))
+    original = runner.subprocess.Popen
+    script = r"""
+const fs = require('fs');
+const local = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const fault = process.argv[2];
+function exchange(event) {
+  fs.writeSync(1, JSON.stringify(event) + '\n');
+  const b = Buffer.alloc(1), bytes = [];
+  while (fs.readSync(0, b, 0, 1, null)) { if (b[0] === 10) break; bytes.push(b[0]); }
+  return JSON.parse(Buffer.from(bytes).toString());
+}
+const spec = exchange({ event: 'ready' });
+const raw = JSON.stringify(local).split(local.nonce).join(spec.nonce).split(local.ownerId).join(spec.ownerId).split('demo-admin-retry').join('fireemu-oracle-txn');
+const receipt = JSON.parse(raw);
+receipt.runtime.target = 'production';
+const rows = [...receipt.steps, ...receipt.cleanupSteps].sort((a,b) => a.sequence-b.sequence);
+for (const row of rows) {
+  const dispatch = JSON.parse(JSON.stringify(row));
+  delete dispatch.frames; delete dispatch.result; delete dispatch.outcomeClass;
+  delete dispatch.timing.responseUtc; delete dispatch.timing.responseMonotonic;
+  if (fault === 'foreign-document') { dispatch.request.database = 'projects/foreign-project/databases/(default)'; }
+  exchange({event: 'dispatch', row: dispatch});
+  for (const frame of row.frames ?? []) exchange({event: 'frame', sequence: row.sequence, frame});
+  if (fault === 'forged-status') row.request.database = 'projects/foreign-project/databases/(default)';
+    if (fault === 'unknown-commit' && row.rpc === 'Commit' && row.client === 'transaction' || fault === 'unknown-rollback' && row.rpc === 'Rollback') { row.result.code = 14; row.result.details = 'offline unavailable'; row.result.response = null; row.outcomeClass = 'UNKNOWN'; }
+  row.result.childReaped = false; row.result.workerExitCode = null;
+  exchange({event: 'status', row});
+  row.result.childReaped = true; row.result.workerExitCode = 0;
+}
+const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+const bound = {...receipt}; delete bound.receiptDigest;
+receipt.receiptDigest = require('crypto').createHash('sha256').update(JSON.stringify(canonical(bound))).digest('hex');
+fs.writeSync(1, JSON.stringify({event: 'receipt', receipt}) + '\n');
+"""
+    def popen(args, **kwargs):
+        if len(args) == 3 and args[1:] == [table['sourceFile'], 'production']:
+            return original([args[0], '-e', script, str(local_path), fault, table['sourceFile']], **kwargs)
+        return original(args, **kwargs)
+    monkeypatch.setattr(runner.subprocess, 'Popen', popen)
+    def refresh(_baseline, budget, **kwargs):
+        budget.charge('credential')
+        return 'offline-parent'
+    class Metadata:
+        def __init__(self, _bearer, _baseline, budget, **kwargs): self.budget = budget
+        def preflight(self):
+            for _ in range(4): self.budget.charge('management')
+            return {'rules-absent': 'absent'}
+        def postflight(self):
+            for _ in range(2): self.budget.charge('management')
+            return {'unchanged': True}
+    monkeypatch.setattr(runner, 'refresh', refresh)
+    monkeypatch.setattr(runner, 'MetadataSession', Metadata)
+    if fault == 'journal-failure': monkeypatch.setattr(runner.shared, 'append_ledger', lambda *_args: (_ for _ in ()).throw(OSError('offline journal failure')))
+    if fault in ('event-journal-failure', 'final-journal-failure'):
+        append = runner.shared.append_ledger
+        def final_failure(path, event):
+            if event['event'] == ('dispatch' if fault == 'event-journal-failure' else 'final'): raise OSError('offline journal failure')
+            return append(path, event)
+        monkeypatch.setattr(runner.shared, 'append_ledger', final_failure)
+    if fault in ('journal-failure', 'final-journal-failure'):
+        with pytest.raises(OSError): runner.run_once(0, table, 'a' * 32, 'b' * 32, tmp_path, baseline={}, runtime=runtime, check=lambda: None)
+        final = json.loads((tmp_path / 'journal-1/sdk-final-receipt.json').read_text())
+        assert final['complete'] is False
+        assert final['unrecovered'] is True
+        assert final['journalFailure'] is True
+        bound = {key: value for key, value in final.items() if key != 'receiptDigest'}
+        assert final['receiptDigest'] == __import__('hashlib').sha256(json.dumps(bound, sort_keys=True, separators=(',', ':'), allow_nan=False, ensure_ascii=False).encode()).hexdigest()
+        return
+    receipt = runner.run_once(0, table, 'a' * 32, 'b' * 32, tmp_path, baseline={}, runtime=runtime, check=lambda: None)
+    if fault == 'complete':
+        assert receipt['complete'] is True
+        assert receipt['phaseRequests']['management'] == 6
+        assert receipt['phaseRequests']['credential'] == 1
+        local = json.loads(local_path.read_text())
+        assert receipt['sandboxRequests'] == local['sandboxRequests'] + 7
+        assert txn_program_collector.projection(receipt, table)['kind'] == 'txn-admin-sdk-projection-v1'
+        tampered = copy.deepcopy(receipt)
+        tampered['runtimeManifest']['lockSha256'] = 'changed'
+        with pytest.raises(ValueError, match='digest'): txn_program_collector.projection(tampered, table)
+    else:
+        assert receipt['complete'] is False
+        assert receipt['unrecovered'] is True
+        if fault == 'unknown-commit':
+            assert receipt['unknownCommits']
+            assert receipt['unknownWrites']
+            assert receipt['openTokens']
+        if fault == 'unknown-rollback':
+            assert receipt['unknownRollbacks']
+            assert receipt['openTokens']
+        if fault == 'event-journal-failure': assert receipt['journalFailure'] is True
+    assert json.loads((tmp_path / 'journal-1/sdk-final-receipt.json').read_text()) == receipt
+    events = [json.loads(line) for line in (tmp_path / 'journal-1/sdk-journal.jsonl').read_text().splitlines()]
+    if fault == 'foreign-document': assert not any(event['event'] == 'dispatch' for event in events)
+    if fault == 'forged-status': assert not any(event['event'] == 'status' for event in events)
+    assert events[-1]['event'] == 'final'
+    assert events[-1]['receiptDigest'] == receipt['receiptDigest']
+
+
+def test_sdk_campaign_wall_cap_forbids_second_recording_and_keeps_lock(tmp_path, monkeypatch):
+    from txn_program_cli import table_for
+    table = table_for('p17-admin-sdk-retry')
+    ledger, kwargs = fixture(tmp_path)
+    pins = {**PINS, 'packetName': table['name'], 'project': table['project'], 'envelopeId': table['envelopeId'], 'requestsPerRecording': 98, 'estimatedUsdPerRecording': 0}
+    times = iter([0, 0, 0, 301])
+    monkeypatch.setattr(runner.time, 'monotonic', lambda: next(times))
+    monkeypatch.setattr(runner, 'verify_initial_gates', lambda *_args: None)
+    monkeypatch.setattr(runner, 'authorize', lambda *_args: None)
+    monkeypatch.setattr(runner, 'projection', lambda *_args: {'kind': 'txn-admin-sdk-projection-v1'})
+    calls = []
+    def once(index, *_args):
+        calls.append(index)
+        return {'complete': True, 'sandboxRequests': 74, 'timingMode': 'wall-clock', 'timingSource': 'grpc-js-client-interceptor', 'metadata': {'rules-absent': 'absent'}}
+    kwargs.update(table=table, pins=pins, record_once=once)
+    with pytest.raises(TimeoutError, match='wall cap'): runner.record_twice(**kwargs)
+    assert calls == [0]
+    assert (tmp_path / 'sandbox-locks/fireemu-oracle-txn.lock').exists()
+    assert not list(tmp_path.glob('fs-transaction-*/freeze.json'))

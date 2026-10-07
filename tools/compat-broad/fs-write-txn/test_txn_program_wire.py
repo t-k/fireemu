@@ -35,6 +35,7 @@ def test_actual_node_dependency_trees_and_python_are_bound(runtime):
     verify_runtime(runtime)
     assert runtime['nodeVersion'] == 'v24.14.0'
     assert runtime['pythonVersion'] == '3.12.13'
+    assert runtime['dependencies']['firebase-admin']['version'] == '14.3.0'
     assert runtime['dependencies']['@grpc/grpc-js']['version'] == '1.14.4'
     assert runtime['dependencies']['@google-cloud/firestore']['version'] == '8.7.1'
     assert sum(row['fileCount'] for row in runtime['dependencies'].values()) > 1000

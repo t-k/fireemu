@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { makePlan } from "./pubsub-observation/plan.mjs";
+import { makePlan, CAPS } from "./pubsub-observation/plan.mjs";
 
 test("observation A fixes the adjudicated per-set category and frame ceilings", () => {
   const plan = makePlan();

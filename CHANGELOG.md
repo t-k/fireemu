@@ -8,6 +8,26 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-07
+
+No compatibility parent changed status in this release: 18 of 21 remain `COMPAT_VERIFIED`. The changes below close named differences and add local testing controls; they do not claim a new parent closure.
+
+### Added
+
+- Local testing: an explicit application clock for Node Functions, with independent `real` or `virtual` policies for Date, JavaScript timers and Cloud Tasks. Virtual time requires a pinned `daemon.clockStart`; clock controls acknowledge the current runners before returning, and a bounded timer drain runs due callbacks without moving time. Native application time remains the default.
+- Local testing: `fireemu/testing` provides independent, resettable test worlds for parallel SDK tests. Each world owns its daemon, ports, clock, Rules, Functions and service state; reset starts from its creation snapshot, and disposal stops its owned processes. See [Test clocks and independent worlds](docs/test-worlds.md).
+
+### Changed
+
+- Strict profile: the Eventarc channel surface follows the saved stage B/C recordings for channel creation and deletion while operations are pending, publication before activation, page sizes and tokens, channel id limits, locations, unknown operations and mismatched channel names. A custom-event trigger that filters on `source` is refused with production's HTTP 400 message; a `type` filter alone stays accepted (EVENTARC packet H v4, recorded 2026-10-06). The emulator profile keeps its earlier surface.
+
+### Fixed
+
+- Strict profile: 2nd gen events carry a W3C `traceparent` with flags `01` and fresh ids per delivery, and Firestore events report the configured database location (`firestore.location`, default `nam5`). The comparison now judges traceparent and location, closing the named FE E13 differences; the emulator profile is unchanged.
+- Strict profile: a transaction token issued by another database of the same project answers `ABORTED` with `The referenced transaction has expired or is no longer valid.`, while one from another project answers `INVALID_ARGUMENT` with `Invalid transaction.` (FS-TRANSACTION p16, both saved production recordings). Classification uses the exact issued token bytes and retires the issuance record with the transaction, expiry or issuing database's import/reset.
+- Strict profile: custom Eventarc deliveries carry no `datacontenttype`, even when the publisher supplied one, preserve the publisher's `data` member order including nested objects, and deliver events without `time` and events with `ceBytes` extensions (EVENTARC H1 v5: none of 69 handler frames carried `datacontenttype`, and all seven compared `textData` frames kept the published order). The emulator profile is unchanged.
+- Both profiles: scheduled Functions sweeps are serialized. A trigger received during a sweep requests one more sweep instead of starting a parallel one.
+
 ## [0.13.0] - 2026-10-07
 
 Scheduled functions (SCHEDULED-FUNCTIONS) and Firestore listeners (FS-LISTEN-SDK) are now `COMPAT_VERIFIED`, with independent closure reviews approved on 2026-10-06. Each comparison ran on its closure-base build: `closure-base-0b6d27a96` for SCHEDULED-FUNCTIONS and `closure-base-aad8cee2a` for FS-LISTEN-SDK. v0.13.0 differs from each by the version bump and the other parent's merged changes; these comparisons are not measurements of the v0.13.0 build. Items that cite a recording with a date come from those runs. Each item names the profiles it affects.
@@ -550,7 +570,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/t-k/fireemu/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/t-k/fireemu/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/t-k/fireemu/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/t-k/fireemu/compare/v0.10.0...v0.11.0

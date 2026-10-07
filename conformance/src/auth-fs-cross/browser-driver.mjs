@@ -19,7 +19,13 @@ import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
 
-import { createWireLedger, PRODUCTION_HOSTS } from "./sdk-wire.mjs";
+import {
+  createWireLedger,
+  PRODUCTION_HOSTS,
+  transactionMethod,
+  transactionWireEvidence,
+  TRANSACTION_BODY_LIMIT,
+} from "./sdk-wire.mjs";
 
 const require = createRequire(import.meta.url);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -72,6 +78,9 @@ const FILES = {
 async function main() {
   const config = JSON.parse(process.env.AFC_SDK_CONFIG);
   const tokenOwner = new Map();
+  const capture = config.mode === "local" && config.transactionCapture === true;
+  const capturedRequests = new Map();
+  const pendingCapture = new Set();
   // Replaced once the browser is up; before that there is nothing to close but the process.
   let close = async (code) => process.exit(code);
   const ledger = createWireLedger({
@@ -114,6 +123,7 @@ async function main() {
   close = async (code = 0) => {
     if (closing) return;
     closing = true;
+    await Promise.allSettled(pendingCapture);
     await browser.close().catch(() => {});
     server.close();
     process.exit(code);
@@ -163,21 +173,80 @@ async function main() {
     const headers = request.headers();
     try {
       const body = request.postData();
-      ledger.admit(
+      const record = ledger.admit(
         parsed.host,
         parsed.pathname,
         headers.authorization ?? webChannelBearer(url, body) ?? undefined,
       );
+      if (capture && transactionMethod(parsed.pathname))
+        capturedRequests.set(request, {
+          n: record.n,
+          method: transactionMethod(parsed.pathname),
+          body,
+        });
     } catch {
       // The ledger reported the first refusal and ends the client.
       return route.abort("blockedbyclient");
     }
     return route.continue();
   });
+  page.on("response", (response) => {
+    const request = response.request();
+    const observed = capturedRequests.get(request);
+    if (!observed) return;
+    capturedRequests.delete(request);
+    const task = (async () => {
+      let timer;
+      try {
+        const body = await Promise.race([
+          response.body(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("capture timeout")), 2000);
+          }),
+        ]);
+        if (body.length > TRANSACTION_BODY_LIMIT) throw new Error("capture cap");
+        emit({
+          event: "transaction-wire",
+          n: observed.n,
+          ...transactionWireEvidence(
+            observed.method,
+            observed.body,
+            body.toString("utf8"),
+            response.status(),
+          ),
+        });
+      } catch {
+        emit({
+          event: "transaction-wire",
+          n: observed.n,
+          method: observed.method,
+          complete: false,
+          reason: "capture-failed",
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    })();
+    pendingCapture.add(task);
+    task.finally(() => pendingCapture.delete(task));
+  });
+  page.on("requestfailed", (request) => {
+    const observed = capturedRequests.get(request);
+    if (!observed) return;
+    capturedRequests.delete(request);
+    emit({
+      event: "transaction-wire",
+      n: observed.n,
+      method: observed.method,
+      complete: false,
+      reason: "request-failed",
+    });
+  });
   await page.exposeFunction("afcToken", (hash, uid) => {
     tokenOwner.set(hash, uid);
   });
-  await page.exposeFunction("afcEmit", (event) => {
+  await page.exposeFunction("afcEmit", async (event) => {
+    if (capture && event?.event === "result") await Promise.allSettled(pendingCapture);
     if (event?.event === "page-closed") return close(0);
     return emit(event);
   });

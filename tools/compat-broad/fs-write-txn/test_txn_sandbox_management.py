@@ -246,3 +246,14 @@ def test_rules_release_and_source_mismatch_stop_before_data(monkeypatch):
     )
     with pytest.raises(ValueError, match="ambiguous"):
         session.preflight()
+
+
+def test_the_program_session_of_the_default_project_reports_what_the_shared_session_reports(monkeypatch):
+    import txn_program_management as program_management
+
+    monkeypatch.setattr(management.preflight, "verify_metadata", lambda slot, body, baseline: {"bodyDigest": slot})
+    monkeypatch.setattr(management.preflight, "verify_token", lambda *args, **kwargs: object())
+    session = program_management.MetadataSession(TOKEN, BASELINE, contract.RequestBudget(plan.compile_plan(NONCE, OWNER)), request_fn=lambda slot, token, resource=None: answer(slot))
+    first, second = session.preflight(), session.postflight()
+    assert "databaseSettings" not in first and "databaseSettings" not in second
+    assert first["rulesetName"] == RULESET

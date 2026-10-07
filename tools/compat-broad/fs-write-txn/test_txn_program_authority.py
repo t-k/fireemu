@@ -46,6 +46,42 @@ def test_the_envelope_scope_comes_from_the_table():
     assert authority.envelope_scope(no_writer)["writerDeadlineSeconds"] == "none"
 
 
+def _with_writer_deadlines(*deadlines):
+    """The toy table with its outside writers' deadlines replaced, in order (the toy has two writers)."""
+    steps, queue = [], list(deadlines)
+    for step in support.TABLE["steps"]:
+        steps.append({**step, "deadlineMs": queue.pop(0)} if step["role"] == "outside-writer" else step)
+    return {**support.TABLE, "steps": tuple(steps)}
+
+
+def test_the_envelope_states_the_longest_writer_deadline_the_table_declares():
+    # an approval must not understate how long a writer may stay in flight against production
+    assert authority.envelope_scope(_with_writer_deadlines(30000, 30000))["writerDeadlineSeconds"] == "30"
+    assert authority.envelope_scope(_with_writer_deadlines(30000, 90000))["writerDeadlineSeconds"] == "90"
+    assert authority.envelope_scope(_with_writer_deadlines(90000, 30000))["writerDeadlineSeconds"] == "90"
+    assert authority.envelope_scope(_with_writer_deadlines(45000, 60000))["writerDeadlineSeconds"] == "60"
+    # a deadline that is not a whole second rounds up
+    assert authority.envelope_scope(_with_writer_deadlines(30500, 30000))["writerDeadlineSeconds"] == "31"
+
+
+def test_only_the_outside_writers_deadlines_state_the_writer_deadline():
+    # the other steps' deadline (the 10 s default, longer than these writers') must not leak into the statement
+    table = _with_writer_deadlines(5000, 4000)
+    assert authority.envelope_scope(table)["writerDeadlineSeconds"] == "5"
+
+
+def test_an_envelope_that_states_the_shorter_deadline_does_not_authorize_a_table_with_the_longer_one():
+    scope90 = authority.envelope_scope(_with_writer_deadlines(30000, 90000))
+    assert scope90["writerDeadlineSeconds"] == "90"
+    pins = {**PINS, "scope": scope90}
+    truthful = AUTHORITY + envelope_row(scope=scope90) + approve_row()
+    assert authority.authorize(truthful, pins) == (2 * REQUESTS, 0.04)
+    # the envelope of the 30 s table, offered for the table whose writer waits 90 s, is refused: the line understates how long a writer stays in flight
+    understated = AUTHORITY + envelope_row(scope=SCOPE) + approve_row()
+    with pytest.raises(ValueError):
+        authority.authorize(understated, pins)
+
+
 def test_delegation_with_exact_foundation_envelope_and_version_is_accepted():
     assert authority.authorize(DECISIONS, PINS) == (2 * REQUESTS, 0.04)
     assert authority.verify_initial_gates([LAST], NOW, DECISIONS, PINS) == LAST["ts"]
@@ -164,3 +200,129 @@ def test_sdk_admission_requires_exact_e_and_v_even_for_direct_owner(missing):
     if missing == 'none': assert authority.authorize(text, pins) == (262, 0)
     else:
         with pytest.raises(ValueError): authority.authorize(text, pins)
+
+
+def test_query_is_billed_and_authority_scope_binds_each_declared_database():
+    from txn_program_program import PROJECTS, budget_for
+    assert "fireemu-oracle-query" in PROJECTS
+    assert budget_for("fireemu-oracle-query") == (0.01, 0.04)
+    assert budget_for("fireemu-oracle-txn") == (0.0, 0.0)
+    table = {**support.TABLE, "project": "fireemu-oracle-query", "databases": {"foreign": "projects/fireemu-oracle-txn/databases/(default)", "named": "projects/fireemu-oracle-query/databases/txn-{nonce}"}}
+    scope = authority.envelope_scope(table)
+    assert scope["project"] == "fireemu-oracle-query/(default)+fireemu-oracle-query/txn-{nonce}+fireemu-oracle-txn/(default)"
+    pins = {**PINS, "project": "fireemu-oracle-query", "scope": scope}
+    assert authority.authorize(AUTHORITY + envelope_row(scope=scope) + APPROVE, pins) == (2 * REQUESTS, 0.04)
+    with pytest.raises(ValueError, match="scope"):
+        authority.authorize(AUTHORITY + envelope_row(scope={**scope, "project": "fireemu-oracle-query/(default)"}) + APPROVE, pins)
+    with pytest.raises(ValueError):
+        authority.authorize(DECISIONS, {**PINS, "project": "fireemu-oracle-idp"})
+
+
+@pytest.mark.parametrize("kind", ["secondary-open", "secondary-active", "multi-project-open"])
+def test_initial_gates_check_every_project_in_envelope_scope(kind):
+    pins = {**PINS, "scope": {**SCOPE, "project": "fireemu-oracle-sbx/(default)+fireemu-oracle-txn/(default)"}}
+    decisions = AUTHORITY + envelope_row(scope=pins["scope"]) + approve_row()
+    row = {**LAST, "project": "fireemu-oracle-txn", "taskId": authority.TASK_ID}
+    if kind == "secondary-active": row["ts"] = "2026-09-28T04:59:00Z"
+    else: row.update(outcome="reserved", attemptId="open-secondary")
+    if kind == "multi-project-open": row.update(project="fireemu-oracle-query", projects=["fireemu-oracle-query", "fireemu-oracle-txn"])
+    with pytest.raises(ValueError): authority.verify_initial_gates([LAST, row], NOW, decisions, pins)
+
+
+ACTION = {"command": "recover-database", "packetId": "fs-transaction-p16-recover-unit", "packetSha256": "d" * 64, "packetPath": "docs.local/reviews/recover-unit.json", "originalPacketSha256": PINS["packetSha256"], "envelopeId": "FS-TRANSACTION-p16-recover-unit", "envelopePath": "docs.local/reviews/recover-unit.md", "sourceCommit": PINS["sourceCommit"], "runnerSha256": PINS["runnerSha256"], "maxRequests": 8, "reserveUsd": 0.02, "resources": "projects/fireemu-oracle-query/databases/txn-" + "a" * 32}
+
+
+def action_decisions(action=ACTION):
+    fields = {key: action[key] for key in ("command", "originalPacketSha256", "sourceCommit", "runnerSha256", "envelopeId", "maxRequests", "reserveUsd", "resources")}
+    fields.update(retries="none", onStop="lock-held", writes="none" if action["command"] == "readback-a2" else "one-owned-database-delete")
+    text = "; ".join(f"{key}={value}" for key, value in fields.items())
+    approve = f"- 2026-10-06 | FS-TRANSACTION p16 database action | decision=APPROVE; packetSha256={action['packetSha256']}; {text} | オーナー（直接） | {action['packetPath']}\n"
+    envelope = f"- 2026-10-06 | FS-TRANSACTION p16 database action envelope | {text} | オーナー（直接） | {action['envelopePath']}\n"
+    return approve + envelope
+
+
+@pytest.mark.parametrize("change", [None, "approval", "envelope", "revoked", "resource", "command", "reserve"])
+def test_database_action_requires_its_own_exact_approval_and_envelope(change):
+    text = action_decisions()
+    if change == "approval": text = text.splitlines(keepends=True)[1]
+    elif change == "envelope": text = text.splitlines(keepends=True)[0]
+    elif change == "revoked": text += f"- 2026-10-06 | FS-TRANSACTION p16 database action | REVOKED packetSha256={ACTION['packetSha256']} | オーナー（直接） | unit\n"
+    elif change == "resource": text = text.replace(ACTION["resources"], "foreign")
+    elif change == "command": text = text.replace("recover-database", "readback-a2")
+    elif change == "reserve": text = text.replace("reserveUsd=0.02", "reserveUsd=0")
+    if change is None: assert authority.authorize_database_action(text, ACTION) == (8, 0.02)
+    else:
+        with pytest.raises(ValueError): authority.authorize_database_action(text, ACTION)
+
+
+@pytest.mark.parametrize("identity", ["packetSha256", "envelopeId", "sourceCommit", "runnerSha256"])
+def test_database_action_rejects_revocation_outside_its_approval_topic(identity):
+    text = action_decisions() + f"- 2026-10-06 | Other authority | REVOKED {identity}={ACTION[identity]} | オーナー（直接） | unit\n"
+    with pytest.raises(ValueError, match="revoked"):
+        authority.authorize_database_action(text, ACTION)
+
+
+@pytest.mark.parametrize("source", ["fixture", "live"])
+def test_initial_gates_accept_real_project_history_read_only(source):
+    import json
+    from pathlib import Path
+    if source == "fixture":
+        path = Path(__file__).with_name("fixtures") / "p16-project-history-masked.jsonl"
+    else:
+        path = next((parent / "docs.local/runs/sandbox-ledger.jsonl" for parent in Path(__file__).resolve().parents if (parent / "docs.local/runs/sandbox-ledger.jsonl").is_file()), None)
+        if path is None:
+            pytest.skip("real sandbox ledger is absent")
+    original = path.read_bytes()
+    rows = [json.loads(line) for line in original.splitlines() if line.strip()]
+    scope = {**SCOPE, "project": "fireemu-oracle-query/(default)+fireemu-oracle-query/txn-{nonce}+fireemu-oracle-txn/(default)"}
+    pins = {**PINS, "project": "fireemu-oracle-query", "scope": scope}
+    decisions = AUTHORITY + envelope_row(scope=scope) + approve_row()
+    now = datetime(2026, 10, 7, tzinfo=timezone.utc)
+    assert authority.verify_initial_gates(rows, now, decisions, pins)
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("project", ["fireemu-oracle-query", "fireemu-oracle-txn"])
+@pytest.mark.parametrize("identity", ["taskId", "task-alias", "packetId", "envelopeId"])
+def test_history_excludes_other_tasks_but_never_an_open_current_attempt(project, identity):
+    scope = {**SCOPE, "project": "fireemu-oracle-query/(default)+fireemu-oracle-txn/(default)"}
+    pins = {**PINS, "project": "fireemu-oracle-query", "scope": scope}
+    decisions = AUTHORITY + envelope_row(scope=scope) + approve_row()
+    row = {"ts": LAST["ts"], "project": project, "taskId": "OTHER", "event": "started", "run": "historical"}
+    assert authority.verify_initial_gates([row], NOW, decisions, pins) == (row["ts"] if project == "fireemu-oracle-query" else None)
+    if identity == "task-alias":
+        row["taskId"] = "FS-TRANSACTION"
+    else:
+        row[identity] = authority.TASK_ID if identity == "taskId" else pins[identity]
+    with pytest.raises(ValueError):
+        authority.verify_initial_gates([row], NOW, decisions, pins)
+
+
+@pytest.mark.parametrize("identity", ["taskId", "task-alias", "sdk-packet"])
+@pytest.mark.parametrize("outcome", ["reserved", "stopped-needs-review"])
+def test_p16_admission_keeps_prior_sdk_responsibility_open(identity, outcome):
+    scope = {**SCOPE, "project": "fireemu-oracle-query/(default)+fireemu-oracle-txn/(default)"}
+    pins = {**PINS, "project": "fireemu-oracle-query", "scope": scope}
+    decisions = AUTHORITY + envelope_row(scope=scope) + approve_row()
+    row = {"ts": LAST["ts"], "project": "fireemu-oracle-txn", "taskId": "OTHER", "packetId": "fs-transaction-p17-admin-sdk-retry-prior", "attemptId": "sdk-prior", "outcome": outcome, "estimatedUsd": 0}
+    if identity == "taskId": row["taskId"] = authority.TASK_ID
+    elif identity == "task-alias": row["taskId"] = "FS-TRANSACTION"
+    with pytest.raises(ValueError):
+        authority.verify_initial_gates([row], NOW, decisions, pins)
+    row["outcome"] = "recorded"
+    assert authority.verify_initial_gates([row], NOW, decisions, pins) is None
+
+
+@pytest.mark.parametrize("event,outcome", [("started", None), (None, "reserved"), (None, "recorded")])
+@pytest.mark.parametrize("seconds", [1799, 1800])
+def test_spacing_uses_last_project_row_of_any_task(event, outcome, seconds):
+    from datetime import timedelta
+    scope = {**SCOPE, "project": "fireemu-oracle-query/(default)+fireemu-oracle-txn/(default)"}
+    pins = {**PINS, "project": "fireemu-oracle-query", "scope": scope}
+    decisions = AUTHORITY + envelope_row(scope=scope) + approve_row()
+    row = {"ts": (NOW - timedelta(seconds=seconds)).isoformat(), "project": "fireemu-oracle-txn", "taskId": "OTHER", "event": event, "outcome": outcome}
+    if seconds == 1799:
+        with pytest.raises(ValueError, match="30 minutes"):
+            authority.verify_initial_gates([row], NOW, decisions, pins)
+    else:
+        authority.verify_initial_gates([row], NOW, decisions, pins)

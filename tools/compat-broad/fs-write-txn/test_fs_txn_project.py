@@ -1,4 +1,4 @@
-"""The sandbox project a program table targets: fireemu-oracle-sbx by default (every earlier digest unchanged), fireemu-oracle-txn on request, any other refused."""
+"""Program tables keep the shared project by default and admit the txn and query projects explicitly."""
 
 import pytest
 
@@ -21,20 +21,21 @@ def test_the_default_project_is_unchanged_and_its_digest_does_not_move():
     assert corpus_digest(with_project(p13a.TABLE, PROJECT)) == corpus_digest(p13a.TABLE) == "8ef5cfc17df36c81844790b92d1439654d12e084f8b9323342eec3a6273be77e"
 
 
-def test_the_txn_project_changes_the_plan_the_documents_and_the_digest():
-    table = with_project(p13a.TABLE, TXN)
+@pytest.mark.parametrize("project", [TXN, "fireemu-oracle-query"])
+def test_an_explicit_project_changes_the_plan_the_documents_and_the_digest(project):
+    table = with_project(p13a.TABLE, project)
     plan = compile_plan(table, NONCE, OWNER)
-    assert plan["project"] == TXN
-    assert plan["database"] == f"projects/{TXN}/databases/(default)"
-    assert all(name.startswith(f"projects/{TXN}/databases/(default)/documents/oracle/") for name in plan["documents"].values())
+    assert plan["project"] == project
+    assert plan["database"] == f"projects/{project}/databases/(default)"
+    assert all(name.startswith(f"projects/{project}/databases/(default)/documents/oracle/") for name in plan["documents"].values())
     assert corpus_digest(table) != corpus_digest(p13a.TABLE)
     # a request names the project's documents
     read = next(step for step in plan["steps"] if step["id"] == "rest/uc/read-a")
     request = request_for_step(plan, read, {"rest-uc": "aXNzdWVk"}, table)
-    assert request["name"].startswith(f"projects/{TXN}/")
+    assert request["name"].startswith(f"projects/{project}/")
 
 
-@pytest.mark.parametrize("project", ["fireemu-oracle-idp", "fireemu-oracle-query", "fireemu-35fe6", "demo-program", "", None, 7, "fireemu-oracle-txn ", "FIREEMU-ORACLE-TXN"])
+@pytest.mark.parametrize("project", ["fireemu-oracle-idp", "fireemu-oracle-query2", "fireemu-35fe6", "demo-program", "", None, 7, "fireemu-oracle-txn ", "FIREEMU-ORACLE-TXN"])
 def test_any_other_project_is_refused(project):
     with pytest.raises(ValueError, match="txn-program table"):
         compile_plan(with_project(p13a.TABLE, project), NONCE, OWNER)
@@ -100,7 +101,7 @@ def test_the_txn_project_session_uses_five_slots_and_proves_there_is_no_rules_re
     assert seen == [("oauth-tokeninfo", None), ("project", None), ("database", None), ("rules-release", None), ("project", None), ("database", None)]
     assert budget.management == 6
     assert first["rules-absent"] == "absent" and "rulesSourceSha256" not in first and "rulesetName" not in first
-    assert set(second) == {"project", "database"}
+    assert set(second) == {"project", "database", "databaseSettings"}
     assert TOKEN not in repr(first) + repr(second)
 
 
@@ -192,7 +193,7 @@ def capture_worker(monkeypatch, project=None, slot="database", resource=None):
     return events
 
 
-@pytest.mark.parametrize("project,expected", [(None, "fireemu-oracle-sbx"), ("fireemu-oracle-sbx", "fireemu-oracle-sbx"), ("fireemu-oracle-txn", "fireemu-oracle-txn")])
+@pytest.mark.parametrize("project,expected", [(None, "fireemu-oracle-sbx"), ("fireemu-oracle-sbx", "fireemu-oracle-sbx"), ("fireemu-oracle-txn", "fireemu-oracle-txn"), ("fireemu-oracle-query", "fireemu-oracle-query")])
 def test_the_rest_worker_names_the_project_in_its_paths_and_user_project_header(monkeypatch, project, expected):
     for slot, path in (("project", f"/v1/projects/{expected}"), ("database", f"/v1/projects/{expected}/databases/(default)"), ("rules-release", f"/v1/projects/{expected}/releases/cloud.firestore")):
         events = capture_worker(monkeypatch, project, slot)
@@ -228,7 +229,9 @@ def test_the_request_payload_carries_the_project_only_when_it_is_not_the_shared_
     monkeypatch.setattr(http_module.subprocess, "Popen", lambda *a, **k: Worker())
     http_module.request_once("project", "ya29.token-value")
     http_module.request_once("project", "ya29.token-value", project="fireemu-oracle-txn")
+    http_module.request_once("project", "ya29.token-value", project="fireemu-oracle-query")
     assert "project" not in sent[0] and sent[1]["project"] == "fireemu-oracle-txn"
+    assert sent[2]["project"] == "fireemu-oracle-query"
 
 
 # --- authority, packet and budget follow the packet's project ---
@@ -486,3 +489,164 @@ def test_two_txn_recordings_that_agree_without_proving_the_absence_of_a_rules_re
         runner.record_twice(**kwargs)
     assert (tmp_path / TXN_LOCK).exists()
     assert json.loads(ledger.read_text().splitlines()[-1])["outcome"] == "stopped-needs-review"
+
+
+# --- the database settings the read-time retention condition compares: stored from the database GET, in the receipt's metadata ---
+
+PITR, RETENTION = "POINT_IN_TIME_RECOVERY_DISABLED", "3600s"
+
+
+def with_settings(pitr=PITR, retention=RETENTION, *, change_after=None):
+    calls = {"database": 0}
+
+    def request(slot, token, resource=None):
+        answer = txn_answer(slot)
+        if slot == "database":
+            calls["database"] += 1
+            body = dict(answer["body"])
+            changed = change_after is not None and calls["database"] > change_after
+            if pitr is not None:
+                body["pointInTimeRecoveryEnablement"] = "POINT_IN_TIME_RECOVERY_ENABLED" if changed else pitr
+            if retention is not None:
+                body["versionRetentionPeriod"] = retention
+            answer["body"] = body
+        return answer
+    return request
+
+
+def test_the_database_settings_the_retention_condition_compares_are_stored_before_and_after(monkeypatch):
+    run, _seen, _budget = session(monkeypatch, request=with_settings())
+    first, second = run.preflight(), run.postflight()
+    expected = {"pointInTimeRecoveryEnablement": PITR, "versionRetentionPeriod": RETENTION}
+    assert first["databaseSettings"] == expected and second["databaseSettings"] == expected
+    # nothing but those two values: the digest and the slots are as before
+    assert set(first) == {"oauth-tokeninfo", "project", "database", "rules-absent", "databaseSettings"} and set(second) == {"project", "database", "databaseSettings"}
+    assert first["database"] == second["database"]
+
+
+def test_a_database_that_reports_no_settings_stores_them_as_not_reported(monkeypatch):
+    run, _seen, _budget = session(monkeypatch)
+    assert run.preflight()["databaseSettings"] == {"pointInTimeRecoveryEnablement": None, "versionRetentionPeriod": None}
+
+
+@pytest.mark.parametrize("pitr,retention", [(7, RETENTION), (PITR, ["3600s"]), ({"x": 1}, RETENTION), (PITR, 3600)])
+def test_a_setting_that_is_not_a_string_refuses_the_run(monkeypatch, pitr, retention):
+    run, _seen, _budget = session(monkeypatch, request=with_settings(pitr, retention))
+    with pytest.raises(ValueError, match="database settings"):
+        run.preflight()
+
+
+def test_settings_that_change_between_the_preflight_and_the_postflight_refuse_the_run(monkeypatch):
+    run, _seen, _budget = session(monkeypatch, request=with_settings(change_after=1))
+    run.preflight()
+    with pytest.raises(ValueError, match="changed after observation"):
+        run.postflight()
+
+
+
+@pytest.mark.parametrize("slot,method,suffix", [("named-database", "GET", ""), ("create-database", "POST", ""), ("delete-database", "DELETE", ""), ("database-operation", "GET", "/operations/create-1")])
+def test_query_management_worker_authorizes_exact_named_database_paths(monkeypatch, slot, method, suffix):
+    resource = "projects/fireemu-oracle-query/databases/txn-" + "a" * 32
+    requests = []
+    class Response:
+        status = 404 if slot == "named-database" else 200
+        def read(self, limit): return json.dumps({"error": {"status": "NOT_FOUND"}} if self.status == 404 else {}).encode()
+        def getheader(self, name): return "application/json"
+    class Connection:
+        def __init__(self, host, timeout): assert host == "firestore.googleapis.com"
+        def request(self, method, path, body=None, headers=None): requests.append((method, path, body, headers))
+        def getresponse(self): return Response()
+        def close(self): pass
+    monkeypatch.setattr(http_module.http.client, "HTTPSConnection", Connection)
+    result = http_module.worker_call({"slot": slot, "secret": "synthetic-token", "resource": resource + suffix, "project": "fireemu-oracle-query"})
+    sent_method, path, body, headers = requests[0]
+    assert sent_method == method
+    assert headers["Authorization"] == "Bearer synthetic-token"
+    assert headers["x-goog-user-project"] == "fireemu-oracle-query"
+    if slot == "create-database":
+        assert path == "/v1/projects/fireemu-oracle-query/databases?databaseId=txn-" + "a" * 32
+        assert json.loads(body) == {"locationId": "us-central1", "type": "FIRESTORE_NATIVE"}
+        assert headers["Content-Type"] == "application/json"
+    else:
+        assert path == "/v1/" + resource + suffix
+        assert body is None
+    assert result["complete"] is True
+    assert result["status"] == Response.status
+    if slot == "named-database": assert result["body"]["error"]["status"] == "NOT_FOUND"
+
+
+@pytest.mark.parametrize("slot", ["named-database", "create-database", "delete-database", "database-operation"])
+@pytest.mark.parametrize("change", ["foreign", "shared", "default", "prefix", "suffix", "uppercase", "encoded", "template", "operation", "short", "foreign-project-only"])
+def test_query_management_worker_refuses_resource_near_misses_before_connect(monkeypatch, slot, change):
+    resource = "projects/fireemu-oracle-query/databases/txn-" + "a" * 32
+    project = "fireemu-oracle-query"
+    if change in ("foreign", "shared"):
+        project = "fireemu-oracle-txn" if change == "foreign" else "fireemu-oracle-sbx"
+        resource = resource.replace("fireemu-oracle-query", project)
+    elif change == "default": resource = resource.replace("txn-" + "a" * 32, "(default)")
+    elif change == "prefix": resource = "other/" + resource
+    elif change == "suffix": resource += "/extra"
+    elif change == "uppercase": resource = resource.replace("a" * 32, "A" * 32)
+    elif change == "encoded": resource = resource.replace("txn-", "%74xn-")
+    elif change == "template": resource = resource.replace("a" * 32, "{nonce}")
+    elif change == "operation": resource += "/operations/other"
+    elif change == "short": resource = resource.replace("a" * 32, "a" * 31)
+    elif change == "foreign-project-only": project = "fireemu-oracle-txn"
+    if slot == "database-operation": resource += "/operations/create-1"
+    monkeypatch.setattr(http_module.http.client, "HTTPSConnection", lambda *args, **kwargs: pytest.fail("invalid resource reached the network"))
+    with pytest.raises(ValueError):
+        http_module.worker_call({"slot": slot, "secret": "synthetic-token", "resource": resource, "project": project})
+
+
+@pytest.mark.parametrize("failure", [None, "project", "database", "settings", "missing-project", "missing-database", "missing-databaseSettings", "oauth", "both-missing-project", "both-missing-database", "both-missing-databaseSettings", "both-oauth"])
+def test_query_freeze_compares_metadata_without_assuming_an_absent_rules_release(tmp_path, failure):
+    import test_txn_program_runner as runner_tests
+    ledger, kwargs = runner_tests.fixture(tmp_path)
+    project = "fireemu-oracle-query"
+    table = with_project(runner_tests.TABLE, project)
+    scope = {**SCOPE, "project": project + "/(default)"}
+    kwargs.update(table=table, pins={**PINS, "project": project, "scope": scope}, decisions=lambda: AUTHORITY + envelope_row(scope=scope) + approve_row())
+    inner = txn_record(table)
+    def once(index, nonce, owner, directory):
+        receipt = inner(index, nonce, owner, directory)
+        receipt["metadata"].pop("rules-absent")
+        receipt["metadata"]["databaseSettings"] = {"pointInTimeRecoveryEnablement": None, "versionRetentionPeriod": "3600s"}
+        if failure and (index == 1 or failure.startswith("both-")):
+            change = failure.removeprefix("both-")
+            if change in ("project", "database"): receipt["metadata"][change] = "c" * 64
+            elif change == "settings": receipt["metadata"]["databaseSettings"]["versionRetentionPeriod"] = "7200s"
+            elif change.startswith("missing-"): receipt["metadata"].pop(change[8:])
+            elif change == "oauth": receipt["metadata"]["oauth-tokeninfo"]["verified"] = False
+        return receipt
+    kwargs["record_once"] = once
+    lock = tmp_path / "sandbox-locks/fireemu-oracle-query.lock"
+    if failure:
+        with pytest.raises(ValueError, match="differ"): runner.record_twice(**kwargs)
+        assert lock.exists()
+        assert not list(tmp_path.glob("fs-transaction-*/freeze.json"))
+        assert json.loads(ledger.read_text().splitlines()[-1])["outcome"] == "stopped-needs-review"
+    else:
+        result = runner.record_twice(**kwargs)
+        frozen = json.loads(result["freezePath"].read_text())
+        assert frozen["rules"] == {"project": "a" * 64, "database": "b" * 64, "databaseSettings": {"pointInTimeRecoveryEnablement": None, "versionRetentionPeriod": "3600s"}}
+        assert frozen["authorizesProduction"] is False
+        assert not lock.exists()
+
+
+@pytest.mark.parametrize("status", [400, 409, 429, 503])
+def test_create_worker_preserves_complete_4xx_json_for_management_judgment(monkeypatch, status):
+    resource = "projects/fireemu-oracle-query/databases/txn-" + "a" * 32
+    body = {"error": {"code": status, "message": "Synthetic refusal", "status": "INVALID_ARGUMENT"}}
+    class Response:
+        def read(self, limit): return json.dumps(body).encode()
+        def getheader(self, name): return "application/json"
+    response = Response(); response.status = status
+    class Connection:
+        def __init__(self, *args, **kwargs): pass
+        def request(self, *args, **kwargs): pass
+        def getresponse(self): return response
+        def close(self): pass
+    monkeypatch.setattr(http_module.http.client, "HTTPSConnection", Connection)
+    result = http_module.worker_call({"slot": "create-database", "secret": "synthetic-token", "resource": resource, "project": "fireemu-oracle-query"})
+    assert result["complete"] is (status < 500)
+    assert result["body"] == (body if status < 500 else None)

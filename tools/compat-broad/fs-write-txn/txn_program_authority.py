@@ -20,8 +20,10 @@ def envelope_scope(table):
     plan = compile_plan(table, 'a' * 32, 'b' * 32)
     if table['name'] == 'p17-admin-sdk-retry':
         return {'project': 'fireemu-oracle-txn/(default)', 'writes': 'owned-12-documents', 'iamConfig': 'none', 'retries': 'sdk-aborted-callback-only-max-two', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': '180', 'recoverySeconds': '120', 'maxTokens': '9', 'maxUnresolvedTokens': '9', 'releasePolicy': 'sdk-rollback-definite-before-next-case', 'timing': 'wall-clock', 'timingSource': 'grpc-js-client-interceptor', 'transports': 'grpc', 'writerDeadlineSeconds': '30'}
+    resources = [plan['database'], *table.get('databases', {}).values()]
+    project_scope = '+'.join(sorted(resource.removeprefix('projects/').replace('/databases/', '/') for resource in resources))
     writer = any(step['role'] == 'outside-writer' for step in plan['steps'])
-    return {'project': f"{plan['project']}/(default)", 'writes': f"owned-{len(plan['documents'])}-documents", 'iamConfig': 'none', 'retries': 'none', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': str(plan['observationSeconds']), 'recoverySeconds': str(plan['recoverySeconds']), 'maxTokens': str(plan['maxTokens']), 'maxUnresolvedTokens': str(plan['maxUnresolvedTokens']), 'releasePolicy': plan['releasePolicy'], 'timing': plan['timing'], 'timingSource': 'parent-wire-envelope', 'transports': '+'.join(sorted({step['transport'] for step in plan['steps']})), 'writerDeadlineSeconds': '30' if writer else 'none'}
+    return {'project': project_scope, 'writes': f"owned-{len(plan['documents'])}-documents", 'iamConfig': 'none', 'retries': 'none', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': str(plan['observationSeconds']), 'recoverySeconds': str(plan['recoverySeconds']), 'maxTokens': str(plan['maxTokens']), 'maxUnresolvedTokens': str(plan['maxUnresolvedTokens']), 'releasePolicy': plan['releasePolicy'], 'timing': plan['timing'], 'timingSource': 'parent-wire-envelope', 'transports': '+'.join(sorted({step['transport'] for step in plan['steps']})), 'writerDeadlineSeconds': str(-(-max(step['deadlineMs'] for step in plan['steps'] if step['role'] == 'outside-writer') // 1000)) if writer else 'none'}
 
 
 def _values(columns):
@@ -130,20 +132,52 @@ def verify_initial_gates(rows, now, decisions, pins):
         raise ValueError('timezone-aware program admission time required')
     if any(row.get('envelopeId') == pins['envelopeId'] for row in rows) or any(row.get('packetId') == pins['packetId'] and row.get('outcome') == 'reserved' for row in rows):
         raise ValueError('program packet or envelope already consumed')
-    project = pins.get('project', PROJECT)
-    sandbox = [row for row in rows if row.get('project') == project or project in row.get('projects', [])]
-    for index, row in enumerate(sandbox):
-        shared._instant(row.get('ts'))
-        if (row.get('taskId') in (TASK_ID, 'FS-TRANSACTION') or row.get('packetId') == pins['packetId'] or row.get('envelopeId') == pins['envelopeId']) and (row.get('outcome') == 'reserved' or row.get('event') == 'started'):
-            key = next((name for name in ('attemptId', 'runId', 'runDir') if row.get(name)), None)
-            if key is None or not shared._closed_attempt(row, key, sandbox[index + 1:]):
-                raise ValueError(f'{project} has an open attempt')
-    task = [row for row in sandbox if row.get('taskId') == TASK_ID]
-    if task and not shared._terminal(max(reversed(task), key=lambda row: shared._instant(row['ts']))):
-        raise ValueError('FS-TRANSACTION requires recovery')
-    activity = sandbox
-    latest = max(activity, key=lambda row: shared._instant(row['ts'])) if activity else None
-    if latest and now - shared._instant(latest['ts']) < shared.IDLE_GAP:
-        raise ValueError(f'{project} needs 30 minutes since last activity')
-    remaining_task_budget(rows, budget_for(project)[1])
-    return latest['ts'] if latest else None
+    latest_primary = None
+    for project in sorted({resource.split('/')[0] for resource in pins['scope']['project'].split('+')}):
+        sandbox = [row for row in rows if row.get('project') == project or project in row.get('projects', [])]
+        task = []
+        for index, row in enumerate(sandbox):
+            shared._instant(row.get('ts'))
+            own = row.get('taskId') in (TASK_ID, 'FS-TRANSACTION') or row.get('packetId') == pins['packetId'] or row.get('envelopeId') == pins['envelopeId'] or isinstance(row.get('packetId'), str) and re.fullmatch(r'fs-transaction-p17-admin-sdk-retry-[A-Za-z0-9_-]{4,64}', row['packetId'])
+            if own: task.append(row)
+            if own and (row.get('outcome') == 'reserved' or row.get('event') == 'started'):
+                key = next((name for name in ('attemptId', 'runId', 'runDir') if row.get(name)), None)
+                if key is None or not shared._closed_attempt(row, key, sandbox[index + 1:]):
+                    raise ValueError(f'{project} has an open attempt')
+        if task and not shared._terminal(max(reversed(task), key=lambda row: shared._instant(row['ts']))):
+            raise ValueError('FS-TRANSACTION requires recovery')
+        latest = max(sandbox, key=lambda row: shared._instant(row['ts'])) if sandbox else None
+        if latest and now - shared._instant(latest['ts']) < shared.IDLE_GAP:
+            raise ValueError(f'{project} needs 30 minutes since last activity')
+        if project == pins.get('project', PROJECT):
+            latest_primary = latest
+    remaining_task_budget(rows, budget_for(pins.get('project', PROJECT))[1])
+    return latest_primary['ts'] if latest_primary else None
+
+
+def authorize_database_action(decisions, pins):
+    """An A2 or recovery packet needs a distinct exact approval and envelope."""
+    shared.reject_revocations(decisions, pins)
+    entries = shared._decision_entries(decisions)
+    name = "FS-TRANSACTION p16 database action"
+    expected = {key: str(pins[key]) for key in ("command", "originalPacketSha256", "sourceCommit", "runnerSha256", "envelopeId", "maxRequests", "reserveUsd", "resources")}
+    expected.update(retries="none", onStop="lock-held", writes="none" if pins["command"] == "readback-a2" else "one-owned-database-delete")
+    for topic, path, values in ((name, pins["packetPath"], {**expected, "decision": "APPROVE", "packetSha256": pins["packetSha256"]}), (name + " envelope", pins["envelopePath"], expected)):
+        matches = []
+        for columns, _tokens in entries:
+            if shared.normalize_authority(columns[1]) != shared.normalize_authority(topic):
+                continue
+            if shared._revoked_packet(columns[2], pins["packetSha256"], pins["envelopeId"]):
+                raise ValueError("database action packet or envelope is REVOKED")
+            if columns[4] != path:
+                continue
+            actual = _values(columns)
+            actor = shared.normalize_authority(columns[3]).startswith(shared.normalize_authority("オーナー"))
+            delegated = shared._delegated_actor(columns[3], entries, decisions, allow_within_envelope=topic == name)
+            if delegated and topic != name:
+                delegated = actual.get(shared.normalize_authority("根拠")) == shared.normalize_authority("2026-09-28 調整役への委任（本番の送信）")
+            if (actor or delegated) and all(actual.get(shared.normalize_authority(key)) == shared.normalize_authority(value) for key, value in values.items()):
+                matches.append(columns)
+        if len(matches) != 1:
+            raise ValueError("one exact database action approval and its own envelope required")
+    return pins["maxRequests"], pins["reserveUsd"]

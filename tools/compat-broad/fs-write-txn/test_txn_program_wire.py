@@ -86,8 +86,11 @@ def test_the_ipc_deadline_follows_the_step_deadline(runtime, monkeypatch):
     rollback(wire)
     wire.send('grpc', 'Commit', writer, nonce=NONCE, owner_id=OWNER, bearer='private-credential', deadline_ms=30000)
     assert seen[0] < seen[1] and seen[1] >= 30 + 2
+    # an outside writer held by a lock may wait up to 90 s (P06 stopped at 30 s on its second recording)
+    wire.send('grpc', 'Commit', writer, nonce=NONCE, owner_id=OWNER, bearer='private-credential', deadline_ms=90000)
+    assert seen[-1] >= 90 + 2
     with pytest.raises(ValueError, match='deadline'):
-        wire.send('grpc', 'Commit', writer, nonce=NONCE, owner_id=OWNER, bearer='private-credential', deadline_ms=30001)
+        wire.send('grpc', 'Commit', writer, nonce=NONCE, owner_id=OWNER, bearer='private-credential', deadline_ms=90001)
     with pytest.raises(ValueError, match='deadline'):
         rollback(wire, deadline_ms=0)
     with pytest.raises(ValueError, match='deadline'):
@@ -214,3 +217,97 @@ def test_a_dependency_root_of_another_checkout_names_the_root_the_packet_holds_a
     changed['dependencies'][key]['root'] = f"/elsewhere/conformance/node_modules/{key}"
     with pytest.raises(ValueError, match=r"the packet names /elsewhere/conformance/node_modules/.*this checkout's is .*conformance/node_modules/"):
         module._verify_runtime_full(changed)
+
+
+PARENT = f'{DATABASE}/documents/oracle/{NONCE}'
+QUERY = {'parent': PARENT, 'structuredQuery': {'from': [{'collectionId': 'txn-toy'}]}, 'transaction': 'aXNzdWVk'}
+CANCELLED = 'cancelled by the client after 1 frame(s)'
+
+
+def test_a_cancelled_native_query_stream_is_carried_and_accepted_only_as_a_definite_client_cancel(runtime, monkeypatch):
+    wire = NodeWire(runtime, SCOPE)
+    seen = []
+    answers = iter([receipt(code=1, details=CANCELLED, response={'responses': [{}]})])
+    monkeypatch.setattr(wire, '_child', lambda spec, timeout: (seen.append(spec) or next(answers), {'childReaped': True}))
+    result = wire.send('grpc', 'RunQuery', QUERY, nonce=NONCE, owner_id=OWNER, bearer='private-credential', cancel_after=1)
+    assert seen[0]['cancelAfter'] == 1 and result['code'] == 1 and result['complete'] is True
+    # without a cancel asked for, a complete code 1 is an unknown outcome claimed complete
+    monkeypatch.setattr(wire, '_child', lambda spec, timeout: (receipt(code=1, details=CANCELLED, response={'responses': []}), {'childReaped': True}))
+    with pytest.raises(ValueError, match='indeterminate'):
+        wire.send('grpc', 'RunQuery', QUERY, nonce=NONCE, owner_id=OWNER, bearer='private-credential')
+    # with a cancel asked for, a code 1 that does not say it was the client's cancel is still unknown
+    monkeypatch.setattr(wire, '_child', lambda spec, timeout: (receipt(code=1, details='Cancelled on client', response={'responses': []}), {'childReaped': True}))
+    with pytest.raises(ValueError, match='indeterminate'):
+        wire.send('grpc', 'RunQuery', QUERY, nonce=NONCE, owner_id=OWNER, bearer='private-credential', cancel_after=1)
+    # and one that carries no frames list is not a cancel of a stream
+    monkeypatch.setattr(wire, '_child', lambda spec, timeout: (receipt(code=1, details=CANCELLED, response=None), {'childReaped': True}))
+    with pytest.raises(ValueError):
+        wire.send('grpc', 'RunQuery', QUERY, nonce=NONCE, owner_id=OWNER, bearer='private-credential', cancel_after=1)
+
+
+def test_a_cancel_belongs_to_a_native_query_stream_alone(runtime, monkeypatch):
+    wire = NodeWire(runtime, SCOPE)
+    monkeypatch.setattr(wire, '_child', lambda spec, timeout: (receipt(), {'childReaped': True}))
+    for transport, method, request in [('rest', 'RunQuery', QUERY), ('grpc', 'Rollback', {'database': DATABASE, 'transaction': 'aXNzdWVk'}), ('grpc', 'GetDocument', {'name': f'{PARENT}/txn-toy/a'})]:
+        with pytest.raises(ValueError, match='cancel'):
+            wire.send(transport, method, request, nonce=NONCE, owner_id=OWNER, bearer='private-credential', cancel_after=1)
+    for bad in (0, 17, 1.5, '1', True):
+        with pytest.raises(ValueError, match='cancel'):
+            wire.send('grpc', 'RunQuery', QUERY, nonce=NONCE, owner_id=OWNER, bearer='private-credential', cancel_after=bad)
+
+
+def test_a_local_query_is_rebased_to_the_local_project_and_its_frames_are_named_as_production_would(runtime, monkeypatch):
+    wire = NodeWire(runtime, SCOPE, target={'kind': 'local', 'host': '127.0.0.1', 'port': 1})
+    seen = []
+    local_name = f'projects/demo-program/databases/(default)/documents/oracle/{NONCE}/txn-toy/a'
+    frames = {'responses': [{'document': {'name': local_name, 'fields': {}}}, {'readTime': {'seconds': '1', 'nanos': 0}}]}
+    monkeypatch.setattr(wire, '_child', lambda spec, timeout: (seen.append(spec) or receipt(response=frames), {'childReaped': True}))
+    result = wire.send('grpc', 'RunQuery', QUERY, nonce=NONCE, owner_id=OWNER, bearer='private-credential')
+    assert seen[0]['request']['parent'].startswith('projects/demo-program/databases/(default)/documents/oracle/')
+    assert result['response']['responses'][0]['document']['name'] == f'{PARENT}/txn-toy/a'
+    assert result['localWireResponse']['responses'][0]['document']['name'] == local_name
+    assert result['response']['responses'][1] == {'readTime': {'seconds': '1', 'nanos': 0}}
+
+
+def test_only_a_code_1_cancel_is_a_complete_cancel(runtime, monkeypatch):
+    wire = NodeWire(runtime, SCOPE)
+    # a deadline (4) that says it is a cancel is still an unknown outcome claimed complete
+    monkeypatch.setattr(wire, '_child', lambda spec, timeout: (receipt(code=4, details=CANCELLED, response={'responses': []}), {'childReaped': True}))
+    with pytest.raises(ValueError, match='indeterminate'):
+        wire.send('grpc', 'RunQuery', QUERY, nonce=NONCE, owner_id=OWNER, bearer='private-credential', cancel_after=1)
+
+
+def test_the_frames_of_a_local_cancel_are_named_as_production_would(runtime, monkeypatch):
+    wire = NodeWire(runtime, SCOPE, target={'kind': 'local', 'host': '127.0.0.1', 'port': 1})
+    local_name = f'projects/demo-program/databases/(default)/documents/oracle/{NONCE}/txn-toy/a'
+    frames = {'responses': [{'document': {'name': local_name, 'fields': {}}}]}
+    monkeypatch.setattr(wire, '_child', lambda spec, timeout: (receipt(code=1, details=CANCELLED, response=frames), {'childReaped': True}))
+    result = wire.send('grpc', 'RunQuery', QUERY, nonce=NONCE, owner_id=OWNER, bearer='private-credential', cancel_after=1)
+    assert result['code'] == 1 and result['response']['responses'][0]['document']['name'] == f'{PARENT}/txn-toy/a'
+    assert result['localWireResponse']['responses'][0]['document']['name'] == local_name
+
+
+@pytest.mark.parametrize("origin", ["projects/fireemu-oracle-query/databases/txn-" + NONCE, "projects/fireemu-oracle-txn/databases/(default)"])
+def test_each_declared_database_is_rebased_and_response_names_return_to_their_origin(runtime, monkeypatch, origin):
+    scope = {**SCOPE, "databases": {"other": origin}, "placements": {"a": "other"}}
+    wire = NodeWire(runtime, scope, project="fireemu-oracle-query", target={"kind": "local", "host": "127.0.0.1", "port": 12345})
+    local = origin.replace("fireemu-oracle-query", "demo-program").replace("fireemu-oracle-txn", "demo-fireemu-oracle-txn")
+    logical_name = f"{origin}/documents/oracle/{NONCE}/txn-toy/a"
+    local_name = logical_name.replace(origin, local, 1)
+    def child(spec, _timeout):
+        assert spec["request"] == {"database": local, "documents": [local_name]}
+        assert spec["databases"]["other"] == local
+        return receipt(response={"responses": [{"found": {"name": local_name, "fields": {}}}]}), {"childReaped": True}
+    monkeypatch.setattr(wire, "_child", child)
+    result = wire.send("grpc", "BatchGetDocuments", {"database": origin, "documents": [logical_name]}, nonce=NONCE, owner_id=OWNER, bearer="owner")
+    assert result["response"]["responses"][0]["found"]["name"] == logical_name
+    assert result["localWireResponse"]["responses"][0]["found"]["name"] == local_name
+
+
+def test_local_rebase_does_not_convert_undeclared_database_prefixes(runtime, monkeypatch):
+    wire = NodeWire(runtime, SCOPE, target={"kind": "local", "host": "127.0.0.1", "port": 12345})
+    foreign = DATABASE + "-near-miss"
+    seen = []
+    monkeypatch.setattr(wire, "_child", lambda spec, timeout: (seen.append(spec) or receipt(), {"childReaped": True}))
+    wire.send("grpc", "Rollback", {"database": foreign, "transaction": "aXNzdWVk"}, nonce=NONCE, owner_id=OWNER, bearer="owner")
+    assert seen[0]["request"]["database"] == foreign

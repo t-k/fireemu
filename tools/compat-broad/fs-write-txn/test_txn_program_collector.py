@@ -586,3 +586,84 @@ def test_projection_binds_the_receipt_to_its_table():
     changed["steps"] = tuple(dict(step, allow=(0, 5, 9, 10)) if step["id"] == "r/fail-commit" else step for step in changed["steps"])
     with pytest.raises(ValueError, match="source binding"):
         collector_module.projection(receipt, changed)
+
+
+@pytest.mark.parametrize("fail_at", [None, 5])
+def test_cleanup_owns_the_exact_full_name_and_token_origin_in_another_database(fail_at):
+    table = copy.deepcopy(support.TABLE)
+    table["project"] = "fireemu-oracle-query"
+    table["databases"] = {"named": "projects/fireemu-oracle-query/databases/txn-{nonce}"}
+    table["placements"] = {"a": "named", "m": "named"}
+    for row in table["steps"]:
+        row["onDatabase"] = "named"
+    collector, service, _budget, _journal, _clock, plan = fixture(table=table, fail_at=fail_at)
+    receipt = collector.run()
+    assert receipt["complete"] is (fail_at is None)
+    assert receipt["unrecovered"] is False
+    if fail_at is None:
+        collector_module.projection(receipt, table)
+    cleanup = receipt["cleanupSteps"]
+    assert [row["request"]["name"] for row in cleanup if row["rpc"] == "DeleteDocument"] == [plan["documents"]["a"]]
+    assert service.documents == {}
+    for row in receipt["steps"] + cleanup:
+        if row["rpc"] == "Rollback":
+            assert row["request"]["database"] == plan["databases"]["named"]
+    if fail_at is not None:
+        assert any(row["phase"] == "tokenCleanup" for row in cleanup)
+
+
+def test_foreign_rollback_refusal_cannot_release_a_token_in_its_origin_database():
+    plan = program.compile_plan(support.TABLE, NONCE, OWNER)
+    ledger = collector_module.Ledger(plan)
+    step = plan["steps"][3]
+    timing = {"dispatchMonotonic": 1.0, "completionMonotonic": 2.0}
+    request = program.request_for_step(plan, step, {}, support.TABLE)
+    clock = Clock()
+    service = Service(clock)
+    ledger.before(step["id"], "rest", "BeginTransaction", request, step)
+    ledger.after(step["id"], "rest", "BeginTransaction", request, step, service._receipt("rest", 0, response={"transaction": "dG9rZW4="}), timing)
+    role = step["tokenOutput"]
+    foreign = {"database": "projects/fireemu-oracle-txn/databases/(default)", "transaction": "dG9rZW4="}
+    probe = {**plan["steps"][8], "onDatabase": "foreign"}
+    ledger.before("foreign/rollback", "rest", "Rollback", foreign, probe)
+    ledger.after("foreign/rollback", "rest", "Rollback", foreign, probe, service._receipt("rest", 10, details=collector_module.GONE_DETAILS), timing)
+    assert role in ledger.unresolved_tokens()
+    assert ledger.release_request(role)["database"] == plan["database"]
+
+
+@pytest.mark.parametrize("method", ["GetDocument", "Commit"])
+def test_foreign_expiry_and_successful_commit_leave_the_origin_token_unresolved(method):
+    plan, ledger = _expired_ledger()
+    foreign = "projects/fireemu-oracle-query/databases/(default)"
+    request = {"database": foreign, "transaction": "dG9rZW4="}
+    if method == "GetDocument":
+        plan["documents"]["m"] = foreign + "/documents/oracle/foreign/m"
+        request = {"name": plan["documents"]["m"], "transaction": "dG9rZW4="}
+        ledger._apply("foreign/read", "rest", method, request, None, _answer(10, collector_module.GONE_DETAILS, 409), timing(), 10)
+        assert "rest-k" not in ledger.gone_seen
+    else:
+        request["writes"] = []
+        step = {"writes": [], "allow": [0]}
+        ledger.before("foreign/commit", "rest", method, request, step)
+        ledger.after("foreign/commit", "rest", method, request, step, Service(Clock())._receipt("rest", 0, response={}), timing())
+    assert "rest-k" in ledger.unresolved_tokens()
+    assert ledger.release_request("rest-k")["database"] == plan["database"]
+
+
+def test_a_batch_minted_token_remembers_its_named_database_before_entries_are_judged():
+    table = copy.deepcopy(support.TABLE)
+    table["project"] = "fireemu-oracle-query"
+    table["databases"] = {"named": "projects/fireemu-oracle-query/databases/txn-{nonce}"}
+    table["placements"] = {"a": "named", "m": "named"}
+    for row in table["steps"]:
+        row["onDatabase"] = "named"
+    plan = program.compile_plan(table, NONCE, OWNER)
+    ledger = collector_module.Ledger(plan)
+    request = {"database": plan["databases"]["named"], "documents": [plan["documents"]["a"]], "newTransaction": {"readWrite": {}}}
+    step = {"id": "batch/begin", "tokenOutput": "batch-token", "newTransaction": "readWrite"}
+    ledger.before(step["id"], "rest", "BatchGetDocuments", request, step)
+    result = Service(Clock())._receipt("rest", 0, response={"responses": [{"transaction": "dG9rZW4="}]})
+    with pytest.raises(ValueError, match="one entry"):
+        ledger.after(step["id"], "rest", "BatchGetDocuments", request, step, result, timing())
+    assert ledger.release_request("batch-token")["database"] == plan["databases"]["named"]
+    assert "batch-token" in ledger.unresolved_tokens()

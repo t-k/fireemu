@@ -96,6 +96,95 @@ def test_the_bound_on_a_wait_is_inclusive():
         clock.paced_wait(declared=24, production_step=clock.MAX_WAIT_SECONDS + 0.01, local_duration=0.0)
 
 
+class Control:
+    """The emulator's control endpoint: every clock advance it was asked for."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, request, timeout=None):
+        import json as _json
+
+        self.calls.append((request.full_url, _json.loads(request.data), request.get_header("Authorization")))
+
+        class Answer:
+            @staticmethod
+            def read():
+                return b"{}"
+
+        return Answer()
+
+
+@pytest.fixture
+def control(monkeypatch):
+    fake = Control()
+    monkeypatch.setattr(clock.urllib.request, "urlopen", fake)
+    return fake
+
+
+def test_a_clock_without_a_start_is_real_time_plus_every_advance(control):
+    virtual = clock.VirtualClock("http://127.0.0.1:1/v1/", "tok")
+    before = virtual.now()
+    virtual.sleep(2.4)
+    virtual.sleep(0.2)
+    virtual.sleep(2.6)
+    # a wait advances by its exact milliseconds, and the clock reads that much later
+    assert [call[1] for call in control.calls] == [{"millis": 2400}, {"millis": 200}, {"millis": 2600}]
+    assert control.calls[0][0] == "http://127.0.0.1:1/v1/sessions/default/clock:advance" and control.calls[0][2] == "Bearer tok"
+    assert 5.2 <= virtual.now() - before < 6.2
+    assert virtual.utc().endswith("Z") and len(virtual.utc()) == 27
+
+
+def test_a_clock_with_a_start_moves_only_when_it_is_advanced(control):
+    import datetime
+
+    start = datetime.datetime(2026, 10, 4, tzinfo=datetime.timezone.utc)
+    virtual = clock.VirtualClock("http://c", "tok", start)
+    assert virtual.now() == virtual.now() == 1000.0 and virtual.utc() == "2026-10-04T00:00:00.000000Z"
+    virtual.sleep(5)
+    assert virtual.now() == 1005.0 and virtual.utc() == "2026-10-04T00:00:05.000000Z"
+    # a hidden advance moves the emulator's clock and what the recording writes as the time now, not the recording's own monotonic clock (its deadlines)
+    virtual.advance(3700, hidden=True)
+    assert virtual.now() == 1005.0 and virtual.utc() == "2026-10-04T01:01:45.000000Z"
+    assert [call[1] for call in control.calls] == [{"millis": 5000}, {"millis": 3_700_000}]
+    virtual.advance(10)
+    assert virtual.now() == 1015.0 and virtual.utc() == "2026-10-04T01:01:55.000000Z"
+
+
+def test_a_collector_that_advances_the_clock_once_after_a_named_step(control):
+    import datetime
+
+    class Base:
+        def __init__(self):
+            self.sites = []
+            self.advances_seen = {}
+
+        def _rpc(self, site, *args, **kwargs):
+            self.sites.append(site)
+            self.advances_seen.setdefault(site, len(control.calls))   # what the emulator's clock had been asked for when this step's request went out
+            return f"answer {site}"
+
+    virtual = clock.VirtualClock("http://c", "tok", datetime.datetime(2026, 10, 4, tzinfo=datetime.timezone.utc))
+    collector = clock.advancing(Base, virtual, 3700, "b")()
+    after = []
+    for site in ("a", "b", "c", "b"):
+        assert collector._rpc(site) == f"answer {site}"
+        after.append(len(control.calls))
+    assert collector.sites == ["a", "b", "c", "b"]
+    # the clock moves once, hidden, after the answer to the named step: not before its request, and not after another step's
+    assert collector.advances_seen["b"] == 0 and after == [0, 1, 1, 1]
+    assert [call[1] for call in control.calls] == [{"millis": 3_700_000}] and virtual.now() == 1000.0 and virtual.utc() == "2026-10-04T01:01:40.000000Z"
+
+
+def test_no_advance_is_asked_for_without_both_a_step_and_a_length(control):
+    class Base:
+        def _rpc(self, site, *args, **kwargs):
+            return site
+
+    virtual = clock.VirtualClock("http://c", "tok")
+    assert clock.advancing(Base, virtual, 0, "b") is Base and clock.advancing(Base, virtual, 3700, None) is Base
+
+
 # --- the virtual clock advances exactly what a wait asks for (the control API takes whole milliseconds), so token ages do not drift one second per wait ---
 
 class Posts:
@@ -381,3 +470,71 @@ def test_applying_the_age_rows_stores_them_and_counts_every_failed_row_as_a_mism
     clean = {"mismatches": 0}
     clock.apply_age_rows(clean, [])
     assert clean == {"mismatches": 0, "tokenAges": []}   # a replay with no long-lived token still says it checked
+
+
+# --- a concurrent writer is given real time to reach the emulator before the frozen clock moves ---
+
+def test_a_settling_collector_gives_a_concurrent_writer_real_time_after_it_starts_and_not_before():
+    events = []
+
+    class Base:
+        def _start_concurrent(self, step):
+            events.append(("start", step))
+
+        def _rpc(self, site):
+            events.append(("rpc", site))
+
+    collector = clock.settling(Base, 3.5, sleep=lambda seconds: events.append(("sleep", seconds)))()
+    collector._rpc("a")
+    collector._start_concurrent("writer")
+    collector._rpc("release")
+    assert events == [("rpc", "a"), ("start", "writer"), ("sleep", 3.5), ("rpc", "release")]
+
+
+def test_a_collector_that_settles_for_no_time_is_the_base_itself():
+    class Base:
+        pass
+
+    assert clock.settling(Base, 0, slice_yield=0) is Base
+
+
+def test_a_wait_gives_a_writer_in_flight_real_time_after_each_slice_and_one_with_no_writer_none():
+    events = []
+
+    class Thread:
+        def __init__(self, alive):
+            self.alive = alive
+
+        def is_alive(self):
+            return self.alive
+
+    class Base:
+        started = None
+
+        def __init__(self):
+            self.sleep = lambda seconds: events.append(("advance", seconds))
+
+        def _wait(self, step):
+            for _slice in range(3):
+                self.sleep(1)
+                if _slice == 1 and self.started is not None:
+                    self.started["thread"].alive = False   # the writer answers while the second slice is being advanced
+
+    collector = clock.settling(Base, 0, sleep=lambda seconds: events.append(("real", seconds)), slice_yield=0.25)()
+    collector.started = {"thread": Thread(True)}
+    collector._wait({})
+    assert events == [("advance", 1), ("real", 0.25), ("advance", 1), ("real", 0.25), ("advance", 1)]
+    assert collector.sleep.__name__ != "slice_then_yield"   # the wait restores the collector's own sleep
+
+    events.clear()
+    other = clock.settling(Base, 0, sleep=lambda seconds: events.append(("real", seconds)), slice_yield=0.25)()
+    other.started = None
+    other._wait({})
+    assert [event for event in events if event[0] == "real"] == []
+
+
+def test_a_collector_with_no_settle_and_no_yield_is_the_base_itself():
+    class Base:
+        pass
+
+    assert clock.settling(Base, 0, slice_yield=0) is Base

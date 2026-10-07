@@ -227,12 +227,12 @@ test('production is the sandbox project alone, and a local target must be a demo
   assert.throws(() => validateCall({ ...spec('GetDocument', { name: name('a') }), bearer: 'not-owner' }));
 });
 
-test('production admits the two sandbox projects only, each with its own documents', async () => {
+test('production admits the sandbox allow-list only, each with its own documents', async () => {
   const { validateCall, SANDBOX_PROJECTS } = await module();
-  assert.deepEqual([...SANDBOX_PROJECTS], ['fireemu-oracle-sbx', 'fireemu-oracle-txn']);
+  assert.deepEqual([...SANDBOX_PROJECTS], ['fireemu-oracle-sbx', 'fireemu-oracle-txn', 'fireemu-oracle-query']);
   const production = (projectId, documentProject = projectId, transport = 'rest') => ({ ...spec('GetDocument', { name: `projects/${documentProject}/databases/(default)/documents/oracle/${nonce}/txn-toy/a` }, transport), target: { kind: 'production' }, projectId, bearer: 'ya29.token-value_1' });
   for (const transport of ['rest', 'grpc']) for (const projectId of SANDBOX_PROJECTS) validateCall(production(projectId, projectId, transport));
-  for (const projectId of ['fireemu-oracle-idp', 'fireemu-oracle-query', 'fireemu-35fe6', 'demo-toy', 'fireemu-oracle-txn2', '']) assert.throws(() => validateCall(production(projectId)), undefined, projectId);
+  for (const projectId of ['fireemu-oracle-idp', 'fireemu-oracle-query2', 'fireemu-35fe6', 'demo-toy', 'fireemu-oracle-txn2', '']) assert.throws(() => validateCall(production(projectId)), undefined, projectId);
   // a call for one project cannot name the other's documents
   assert.throws(() => validateCall(production('fireemu-oracle-txn', 'fireemu-oracle-sbx')));
   assert.throws(() => validateCall(production('fireemu-oracle-sbx', 'fireemu-oracle-txn')));
@@ -247,11 +247,12 @@ test('a native version delete is admitted over gRPC only', async () => {
   assert.throws(() => validateCall(spec('ListDocuments', { name: name('a') }, 'grpc')));
 });
 
-test('a 30 second deadline is admitted for an outside writer alone and nothing longer', async () => {
+test('a 90 second deadline is admitted for an outside writer alone and nothing longer', async () => {
   const { validateCall } = await module();
   for (const transport of ['rest', 'grpc']) {
     validateCall(spec('Commit', commit([write('a', 'moved')], false), transport, { deadlineMs: 30000 }));
-    assert.throws(() => validateCall(spec('Commit', commit([write('a', 'moved')], false), transport, { deadlineMs: 30001 })));
+    validateCall(spec('Commit', commit([write('a', 'moved')], false), transport, { deadlineMs: 90000 }));
+    assert.throws(() => validateCall(spec('Commit', commit([write('a', 'moved')], false), transport, { deadlineMs: 90001 })));
     // A transactional commit and every other call stop at 10 s.
     assert.throws(() => validateCall(spec('Commit', commit([write('a', 'moved')], true), transport, { deadlineMs: 30000 })));
     assert.throws(() => validateCall(spec('Rollback', { database, transaction: token }, transport, { deadlineMs: 30000 })));
@@ -449,3 +450,197 @@ test('the real REST exchange makes one bounded request with the credential and n
     assert.equal(seen.body, JSON.stringify({ options: { readWrite: {} } }));
   } finally { server.close(); }
 });
+
+const MALFORMED = 'not base64!';
+const UNKNOWN = 'ZmlyZWVtdS11bmlzc3VlZC10eG4tdG9rZW4=';
+
+for (const transport of ['rest', 'grpc']) {
+  test(`${transport}: an unknown (well-formed, never issued) token is admitted on a read, a batch read, a commit and a rollback`, async () => {
+    const { validateCall } = await module();
+    validateCall(spec('GetDocument', { name: name('a'), transaction: UNKNOWN }, transport));
+    validateCall(spec('BatchGetDocuments', { database, documents: [name('a')], transaction: UNKNOWN }, transport));
+    validateCall(spec('Commit', { database, writes: [write('a', 'held')], transaction: UNKNOWN }, transport));
+    validateCall(spec('Rollback', { database, transaction: UNKNOWN }, transport));
+  });
+
+  test(`${transport}: a token that is neither issued-looking nor one of the two declared literals is still refused`, async () => {
+    const { validateCall } = await module();
+    for (const bad of ['not canonical', 'AAAA=', '', 'not base64', MALFORMED + ' ']) {
+      assert.throws(() => validateCall(spec('GetDocument', { name: name('a'), transaction: bad }, transport)), undefined, JSON.stringify(bad));
+    }
+  });
+}
+
+test('rest: the malformed literal is admitted on every call that names a token', async () => {
+  const { validateCall } = await module();
+  validateCall(spec('GetDocument', { name: name('a'), transaction: MALFORMED }, 'rest'));
+  validateCall(spec('BatchGetDocuments', { database, documents: [name('a')], transaction: MALFORMED }, 'rest'));
+  validateCall(spec('Commit', { database, writes: [write('a', 'held')], transaction: MALFORMED }, 'rest'));
+  validateCall(spec('Rollback', { database, transaction: MALFORMED }, 'rest'));
+});
+
+test('grpc: the malformed literal is refused, a native client cannot send bytes that do not decode', async () => {
+  const { validateCall } = await module();
+  assert.throws(() => validateCall(spec('GetDocument', { name: name('a'), transaction: MALFORMED }, 'grpc')));
+  assert.throws(() => validateCall(spec('Rollback', { database, transaction: MALFORMED }, 'grpc')));
+});
+
+test('rest: the malformed literal travels in the request body as the plain string', async () => {
+  const { restRequest } = await module();
+  const prepared = restRequest(spec('Rollback', { database, transaction: MALFORMED }, 'rest'));
+  assert.equal(prepared.body.transaction, MALFORMED);
+  const read = restRequest(spec('GetDocument', { name: name('a'), transaction: MALFORMED }, 'rest'));
+  assert.ok(read.path.includes(encodeURIComponent(MALFORMED)));
+});
+
+// RunQuery: a query over the run's own collection, in a transaction or not; over gRPC the call may cancel its own stream after N frames.
+const parent = `${database}/documents/oracle/${nonce}`;
+const stateFilter = state => ({ fieldFilter: { field: { fieldPath: 'state' }, op: 'EQUAL', value: { stringValue: state } } });
+const queryRequest = (extra = {}, where) => ({ parent, structuredQuery: { from: [{ collectionId: 'txn-toy' }], ...(where ? { where } : {}) }, ...extra });
+
+for (const transport of ['rest', 'grpc']) {
+  test(`${transport}: a query over the run's collection is admitted, with or without a transaction and a state filter`, async () => {
+    const { validateCall } = await module();
+    validateCall(spec('RunQuery', queryRequest(), transport));
+    validateCall(spec('RunQuery', queryRequest({ transaction: token }), transport));
+    validateCall(spec('RunQuery', queryRequest({}, stateFilter('held')), transport));
+    validateCall(spec('RunQuery', queryRequest({ transaction: UNKNOWN }, stateFilter('moved')), transport));
+  });
+
+  test(`${transport}: a query that leaves the run's collection or the closed shape is refused before dispatch`, async () => {
+    const { validateCall } = await module();
+    const refused = [
+      queryRequest({ parent: parent.replace(nonce, 'c'.repeat(32)) }),
+      queryRequest({ parent: `${database}/documents/oracle` }),
+      { ...queryRequest(), structuredQuery: { from: [{ collectionId: 'txn-other' }] } },
+      { ...queryRequest(), structuredQuery: { from: [{ collectionId: 'txn-toy' }, { collectionId: 'txn-toy' }] } },
+      { ...queryRequest(), structuredQuery: { from: [{ collectionId: 'txn-toy', allDescendants: true }] } },
+      { ...queryRequest(), structuredQuery: { from: [{ collectionId: 'txn-toy' }], limit: 3 } },
+      { ...queryRequest(), structuredQuery: { from: [{ collectionId: 'txn-toy' }], orderBy: [] } },
+      queryRequest({}, stateFilter('elsewhere')),
+      queryRequest({}, { fieldFilter: { field: { fieldPath: 'owner' }, op: 'EQUAL', value: { stringValue: 'x' } } }),
+      queryRequest({}, { fieldFilter: { field: { fieldPath: 'state' }, op: 'NOT_EQUAL', value: { stringValue: 'held' } } }),
+      queryRequest({}, { fieldFilter: { field: { fieldPath: 'state' }, op: 'EQUAL', value: { integerValue: '1' } } }),
+      queryRequest({}, { compositeFilter: { op: 'AND', filters: [] } }),
+      queryRequest({ transaction: 'not canonical' }),
+      queryRequest({ readTime: at }),
+      queryRequest({ newTransaction: { readOnly: {} } }),
+      { structuredQuery: queryRequest().structuredQuery },
+    ];
+    for (const request of refused) assert.throws(() => validateCall(spec('RunQuery', request, transport)), undefined, JSON.stringify(request).slice(0, 120));
+  });
+}
+
+test('rest: the malformed token literal is admitted on a query too', async () => {
+  const { validateCall } = await module();
+  validateCall(spec('RunQuery', queryRequest({ transaction: MALFORMED }), 'rest'));
+  assert.throws(() => validateCall(spec('RunQuery', queryRequest({ transaction: MALFORMED }), 'grpc')));
+});
+
+test('rest: a query is one runQuery request on the run\'s parent document', async () => {
+  const { restRequest, runUnary } = await module();
+  const call = spec('RunQuery', queryRequest({ transaction: token }, stateFilter('held')), 'rest');
+  assert.deepEqual(restRequest(call), { method: 'POST', path: `/v1/${parent}:runQuery`, body: { structuredQuery: queryRequest({}, stateFilter('held')).structuredQuery, transaction: token } });
+  const frames = [{ document: { name: name('a'), fields: {}, updateTime: '2026-09-30T00:00:00.000000001Z' }, readTime: '2026-09-30T00:00:01Z' }, { readTime: '2026-09-30T00:00:01Z' }];
+  const result = await runUnary(call, exchange([{ status: 200, text: JSON.stringify(frames) }]).run);
+  assert.deepEqual([result.code, result.complete, result.http, result.response], [0, true, 200, { responses: frames }]);
+  const refused = await runUnary(call, exchange([{ status: 409, text: JSON.stringify([{ error: { code: 409, message: 'contended', status: 'ABORTED' } }]) }]).run);
+  assert.deepEqual([refused.code, refused.complete], [10, true]);
+  const flood = await runUnary(call, exchange([{ status: 200, text: JSON.stringify(Array.from({ length: 17 }, () => ({ readTime: '2026-09-30T00:00:01Z' }))) }]).run);
+  assert.deepEqual([flood.code, flood.complete], [2, false]);
+});
+
+function queryClient(events) {
+  const handlers = {};
+  const call = { on(name, handler) { handlers[name] = handler; return call; }, cancel() { call.cancelled = true; } };
+  return { call, factory: () => ({
+    makeServerStreamRequest(path, serialize, _deserialize, request, metadata, options) {
+      assert.equal(path, '/google.firestore.v1.Firestore/RunQuery');
+      assert.ok(serialize(request).length > 0); assert.deepEqual(metadata.get('x-goog-request-params'), [`parent=${encodeURIComponent(parent)}`]); assert.ok(options.deadline instanceof Date);
+      queueMicrotask(() => events(handlers));
+      return call;
+    },
+    close() {},
+  }) };
+}
+
+test('gRPC: a query is one server stream whose frames are collected', async () => {
+  const { runUnary } = await module();
+  const frame = { document: { name: name('a'), fields: {}, updateTime: { seconds: '1', nanos: 1 } }, readTime: { seconds: '2', nanos: 0 } };
+  const stream = queryClient(handlers => { handlers.data(frame); handlers.data({ readTime: { seconds: '2', nanos: 0 } }); handlers.end(); });
+  const result = await runUnary(spec('RunQuery', queryRequest({ transaction: token })), stream.factory);
+  assert.deepEqual([result.code, result.complete, result.http], [0, true, null]);
+  assert.equal(result.response.responses.length, 2);
+  const refused = queryClient(handlers => handlers.error({ code: 10, details: 'contention' }));
+  assert.deepEqual([(await runUnary(spec('RunQuery', queryRequest()), refused.factory)).code], [10]);
+  const failing = queryClient(handlers => handlers.error({ code: 14, details: 'unavailable' }));
+  const failed = await runUnary(spec('RunQuery', queryRequest()), failing.factory);
+  assert.deepEqual([failed.code, failed.complete], [14, false]);
+  const flood = queryClient(handlers => { for (let index = 0; index < 20; index += 1) handlers.data({ readTime: { seconds: '2', nanos: 0 } }); handlers.end(); });
+  const over = await runUnary(spec('RunQuery', queryRequest()), flood.factory);
+  assert.deepEqual([over.code, over.complete, over.response], [2, false, null]);
+});
+
+test('gRPC: a stream the call cancels itself after N frames is a definite client cancel with the frames it got', async () => {
+  const { runUnary } = await module();
+  const frame = index => ({ document: { name: name('a'), fields: {}, updateTime: { seconds: '1', nanos: index } }, readTime: { seconds: '2', nanos: 0 } });
+  const stream = queryClient(handlers => { handlers.data(frame(1)); handlers.data(frame(2)); handlers.error({ code: 1, details: 'Cancelled on client' }); });
+  const result = await runUnary(spec('RunQuery', queryRequest({ transaction: token }), 'grpc', { cancelAfter: 1 }), stream.factory);
+  assert.deepEqual([result.code, result.complete, result.http], [1, true, null]);
+  assert.equal(result.details, 'cancelled by the client after 1 frame(s)');
+  assert.equal(result.response.responses.length, 1, 'the frames after the cancel are not kept');
+  assert.equal(stream.call.cancelled, true);
+  // a stream that ends before the cancel was reached is a plain success: nothing was cancelled
+  const short = queryClient(handlers => { handlers.data(frame(1)); handlers.end(); });
+  const plain = await runUnary(spec('RunQuery', queryRequest(), 'grpc', { cancelAfter: 2 }), short.factory);
+  assert.deepEqual([plain.code, plain.complete, plain.response.responses.length], [0, true, 1]);
+  assert.notEqual(short.call.cancelled, true);
+  // an error before the cancel was reached keeps its own status
+  const early = queryClient(handlers => handlers.error({ code: 10, details: 'contention' }));
+  assert.deepEqual([(await runUnary(spec('RunQuery', queryRequest(), 'grpc', { cancelAfter: 1 }), early.factory)).code], [10]);
+});
+
+test('a cancel is a gRPC query call\'s alone and stays within the frame cap', async () => {
+  const { validateCall } = await module();
+  validateCall(spec('RunQuery', queryRequest(), 'grpc', { cancelAfter: 16 }));
+  for (const extra of [{ cancelAfter: 0 }, { cancelAfter: 17 }, { cancelAfter: 1.5 }, { cancelAfter: '1' }, { cancelAfter: null }]) assert.throws(() => validateCall(spec('RunQuery', queryRequest(), 'grpc', extra)), undefined, JSON.stringify(extra));
+  assert.throws(() => validateCall(spec('RunQuery', queryRequest(), 'rest', { cancelAfter: 1 })));
+  assert.throws(() => validateCall(spec('GetDocument', { name: name('a') }, 'grpc', { cancelAfter: 1 })));
+  assert.throws(() => validateCall(spec('BatchGetDocuments', { database, documents: [name('a')] }, 'grpc', { cancelAfter: 1 })));
+});
+
+
+for (const transport of ['rest', 'grpc']) {
+  test(`${transport}: declared databases and projects are accepted, undeclared near misses are refused`, async () => {
+    const { validateCall, restRequest } = await module();
+    const primary = 'projects/fireemu-oracle-query/databases/(default)';
+    const named = `projects/fireemu-oracle-query/databases/txn-${nonce}`;
+    const foreign = 'projects/fireemu-oracle-txn/databases/(default)';
+    const extra = { target: { kind: 'production' }, projectId: 'fireemu-oracle-query', databases: { named, foreign }, placements: { a: 'named', m: 'foreign' }, bearer: 'synthetic-token' };
+    for (const db of [primary, named, foreign]) {
+      const call = spec('Rollback', { database: db, transaction: token }, transport, extra);
+      validateCall(call);
+      assert.equal(restRequest(call).path, `/v1/${db}/documents:rollback`);
+    }
+    const placed = (db, role) => `${db}/documents/oracle/${nonce}/txn-toy/${role}`;
+    validateCall(spec('GetDocument', { name: placed(named, 'a') }, transport, extra));
+    validateCall(spec('DeleteDocument', { name: placed(named, 'a'), currentDocument: { updateTime: { seconds: '1', nanos: 0 } } }, 'grpc', extra));
+    validateCall(spec('BatchGetDocuments', { database: foreign, documents: [placed(foreign, 'm')] }, transport, extra));
+    const update = { update: { name: placed(named, 'a'), fields: fields('a', 'held') }, currentDocument: { exists: true } };
+    validateCall(spec('Commit', { database: named, writes: [update], transaction: token }, transport, extra));
+    for (const db of [named + '-other', 'projects/fireemu-oracle-idp/databases/(default)']) {
+      assert.throws(() => validateCall(spec('Rollback', { database: db, transaction: token }, transport, extra)));
+      if (db.includes('fireemu-oracle-idp')) assert.throws(() => validateCall(spec('Rollback', { database: db, transaction: token }, transport, { ...extra, databases: { wrong: db }, placements: {} })));
+    }
+    assert.throws(() => validateCall(spec('GetDocument', { name: placed(primary, 'a') }, transport, extra)));
+    assert.throws(() => validateCall(spec('BatchGetDocuments', { database: named, documents: [placed(foreign, 'm')] }, transport, extra)));
+    assert.throws(() => validateCall(spec('Commit', { database: foreign, writes: [update] }, transport, extra)));
+    assert.throws(() => validateCall(spec('GetDocument', { name: placed(named, 'a') }, transport, { ...extra, placements: { a: 'undeclared' } })));
+    assert.throws(() => validateCall(spec('Rollback', { database: named, transaction: token }, transport, { ...extra, placements: { a: 'undeclared' } })));
+    assert.throws(() => validateCall(spec('Rollback', { database: named, transaction: token }, transport, { ...extra, databases: { ...extra.databases, duplicate: named } })));
+    assert.throws(() => validateCall(spec('Rollback', { database: named, transaction: token }, transport, { ...extra, placements: { unknown: 'named' } })));
+    assert.throws(() => validateCall(spec('Rollback', { database: named, transaction: token }, transport, { ...extra, placements: { a: 1 } })));
+    assert.throws(() => validateCall(spec('Rollback', { database: named, transaction: token }, transport, { ...extra, databases: { true: named, foreign }, placements: { a: true } })));
+    assert.throws(() => validateCall(spec('Rollback', { database: named, transaction: token }, transport, { ...extra, databases: undefined, placements: undefined })));
+  });
+}

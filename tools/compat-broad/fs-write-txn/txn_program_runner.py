@@ -11,6 +11,7 @@ import json
 import os
 import selectors
 import subprocess
+import re
 import secrets
 import time
 from pathlib import Path
@@ -26,7 +27,7 @@ from txn_program_management import MetadataSession
 
 
 def wire_scope(table):
-    return {'slug': table['slug'], 'documents': list(table['documents']), 'states': list(table['states'])}
+    return {'slug': table['slug'], 'documents': list(table['documents']), 'states': list(table['states']), **{key: copy.deepcopy(table[key]) for key in ('databases', 'placements') if key in table}}
 
 
 class SessionBudget(RequestBudget):
@@ -91,6 +92,7 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
     dispatched = {}
     documents = {}
     metadata = None
+    collector = None
     try:
         check()
         project = table.get('project', PROJECT)
@@ -215,18 +217,26 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
                         child.kill(); child.wait(timeout=2)
                 for pipe in (child.stdin, child.stdout): pipe.close()
         else:
-            wire = NodeWire(runtime, wire_scope(table), **({} if project == PROJECT else {'project': project}))
+            if table['name'] == 'p16-foreign-tokens':
+                metadata.create_named_database(plan['databases']['named'], journal)
+            wire = NodeWire(runtime, wire_scope({**table, **plan}), **({} if project == PROJECT else {'project': project}))
             collector = Collector(plan, table, budget, wire, bearer, save=journal, before_send=check, observation_deadline=budget.observation_deadline)
             receipt = collector.run()
             receipt['metadata'] = preflight
             if receipt.get('journalFailure') or budget.failed:
                 raise ValueError('program journal failed; metadata postflight is forbidden')
             budget.begin_recovery()
+            if table['name'] == 'p16-foreign-tokens':
+                named = plan['databases']['named']
+                if any(receipt.get('tokens', {}).get(role, {}).get('database', plan['database']) == named for role in receipt.get('openTokens', []) + receipt.get('unknownRollbacks', [])) or any(plan['documents'][role].split('/documents/')[0] == named and document['status'] in ('possibly-owned', 'created') for role, document in receipt.get('documents', {}).items()) or any(step['id'] in receipt.get('unknownStarts', []) + receipt.get('unknownCommits', []) and plan['databases'].get(step.get('onDatabase'), plan['database']) == named for step in plan['steps']):
+                    raise ValueError('named database retained while its resources are unrecovered')
+                if not metadata.delete_named_database(journal)['closureReady']:
+                    raise ValueError('named database deletion requires A2 readback')
             receipt['postflight'] = metadata.postflight()
             check()
     except (Exception, KeyboardInterrupt) as error:
         if receipt is None:
-            receipt = {'kind': 'txn-program-recording-v1', 'complete': False, 'graphComplete': False, 'program': plan['program'], 'packetName': plan['packetName'], 'sourceDigest': plan['sourceDigest'], 'corpusDigest': plan['corpusDigest'], 'nonce': nonce, 'ownerId': owner_id, 'unknownStarts': [], 'openTokens': [], 'cleanup': {'absent': None}, 'unrecovered': True}
+            receipt = {'kind': 'txn-program-recording-v1', 'complete': False, 'graphComplete': False, 'program': plan['program'], 'packetName': plan['packetName'], 'sourceDigest': plan['sourceDigest'], 'corpusDigest': plan['corpusDigest'], 'nonce': nonce, 'ownerId': owner_id, 'unknownStarts': [], 'openTokens': [], 'cleanup': {'absent': None}, 'unrecovered': not (table['name'] == 'p16-foreign-tokens' and collector is None and metadata is not None and hasattr(metadata, 'named_database'))}
         receipt['complete'] = False
         receipt['failureType'] = type(error).__name__
         if table['name'] == 'p17-admin-sdk-retry':
@@ -241,6 +251,11 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
             receipt['unknownRollbacks'] = [seq for seq, row in dispatched.items() if row['rpc'] == 'Rollback' and (not row.get('result') or row.get('outcomeClass') == 'UNKNOWN')]
             receipt['unknownWrites'] = [seq for seq, row in dispatched.items() if row['rpc'] in ('Commit', 'DeleteDocument') and (not row.get('result') or row.get('outcomeClass') == 'UNKNOWN')]
             receipt['journalFailure'] = budget.failed
+    if metadata is not None and hasattr(metadata, 'named_database'):
+        receipt['namedDatabase'] = copy.deepcopy(metadata.named_database)
+        receipt['closureReady'] = metadata.named_database['closureReady']
+        if not receipt['closureReady']:
+            receipt['complete'] = False
     receipt['sandboxRequests'] = budget.total
     receipt['phaseRequests'] = dict(budget.used)
     if table['name'] == 'p17-admin-sdk-retry':
@@ -364,14 +379,14 @@ def record_sdk_action(*, table, snapshot, action, directory, baseline, runtime, 
 def _row(pins, attempt, directory, nonce, outcome, requests, now):
     if requests is not None and (type(requests) is not int or not 0 <= requests <= pins['requestsPerRecording']):
         raise ValueError('program charged request count escaped its cap')
-    return {'ts': now.isoformat().replace('+00:00', 'Z'), 'project': pins.get('project', PROJECT), 'database': '(default)', 'taskId': TASK_ID, 'envelopeId': pins['envelopeId'], 'packetId': pins['packetId'], 'gitSha': pins['sourceCommit'], 'runnerSha256': pins['runnerSha256'], 'attemptId': attempt, 'runDir': str(directory), 'nonce': nonce, 'outcome': outcome, 'requests': requests, 'estimatedUsd': pins.get('estimatedUsdPerRecording', 0.01), 'pythonVersion': '3.12.13'}
+    return {'ts': now.isoformat().replace('+00:00', 'Z'), 'project': pins.get('project', PROJECT), 'projects': sorted({resource.split('/')[0] for resource in pins['scope']['project'].split('+')}), 'database': '(default)', 'taskId': TASK_ID, 'envelopeId': pins['envelopeId'], 'packetId': pins['packetId'], 'gitSha': pins['sourceCommit'], 'runnerSha256': pins['runnerSha256'], 'attemptId': attempt, 'runDir': str(directory), 'nonce': nonce, 'outcome': outcome, 'requests': requests, 'estimatedUsd': pins.get('estimatedUsdPerRecording', 0.01), 'pythonVersion': '3.12.13'}
 
 
 def record_twice(*, table, ledger_path, private_dir, pins, decisions, now, record_once, admission_check):
     ledger_path, private_dir = Path(ledger_path), Path(private_dir)
     campaign_deadline = time.monotonic() + 600
     verify_initial_gates(shared.read_ledger(ledger_path), now(), decisions(), pins)
-    held = shared.acquire_project_locks(private_dir, [pins.get('project', PROJECT)], task_id=TASK_ID, packet_id=pins['packetId'], source_commit=pins['sourceCommit'])
+    held = shared.acquire_project_locks(private_dir, sorted({resource.split('/')[0] for resource in pins['scope']['project'].split('+')}), task_id=TASK_ID, packet_id=pins['packetId'], source_commit=pins['sourceCommit'])
     release = False
     reserved = False
     attempt = nonce = directory = None
@@ -406,6 +421,9 @@ def record_twice(*, table, ledger_path, private_dir, pins, decisions, now, recor
         if pins.get('project', PROJECT) == PROJECT:
             metadata = [{key: receipt.get('metadata', {}).get(key) for key in ['rulesetName', 'rulesSourceSha256']} for receipt in receipts]
             rules_ok = all(metadata[0].values())
+        elif pins.get('project') == 'fireemu-oracle-query':
+            metadata = [{key: receipt.get('metadata', {}).get(key) for key in ['project', 'database', 'databaseSettings']} for receipt in receipts]
+            rules_ok = all(row['project'] and row['database'] and isinstance(row['databaseSettings'], dict) for row in metadata) and all(receipt.get('metadata', {}).get('oauth-tokeninfo', {}).get('verified') is True for receipt in receipts)
         else:
             # A project with no Rules release: the session proved the absence before each recording (the rules-absent slot).
             metadata = [{'rulesRelease': receipt.get('metadata', {}).get('rules-absent')} for receipt in receipts]
@@ -429,3 +447,53 @@ def record_twice(*, table, ledger_path, private_dir, pins, decisions, now, recor
         raise
     finally:
         if release or not reserved: shared.release_project_locks(held)
+
+
+def recover_named_databases(command, table, runs, directory, *, baseline, check):
+    """One separately pinned A2 read or owned delete per journaled run; never resume the graph."""
+    if command not in ("readback-a2", "recover-database") or table["name"] != "p16-foreign-tokens" or not 1 <= len(runs) <= 2 or len({run["nonce"] for run in runs}) != len(runs):
+        raise ValueError("one or two distinct p16 journal nonces required")
+    epoch = time.time()
+    for run in runs:
+        state = run["state"]
+        nonce = run["nonce"]
+        if not isinstance(nonce, str) or not re.fullmatch(r"[a-f0-9]{32}", nonce) or state.get("database") != "projects/fireemu-oracle-query/databases/txn-" + nonce or type(state.get("lastRequestEpoch")) not in (int, float) or not math.isfinite(state["lastRequestEpoch"]):
+            raise ValueError("named database journal identity differs")
+        if not 600 <= epoch - state["lastRequestEpoch"] < float("inf"):
+            raise ValueError("database action requires at least ten minutes after the last request")
+        if command == "recover-database" and (state.get("createConfirmed") is not True or state.get("unknownCreate") is not False or state.get("deleteAttempted") is not False):
+            raise ValueError("recovery delete requires a confirmed database; unknown deletes are sticky")
+    check()
+    directory = Path(directory)
+    directory.mkdir(mode=0o700)
+    sequence = 0
+    def journal(value):
+        nonlocal sequence
+        sequence += 1
+        save_private(directory / f"{sequence:04d}.json", value)
+    plan = compile_plan(table, runs[0]["nonce"], "b" * 32)
+    budget = SessionBudget(plan, table, check, journal)
+    budget._caps = {**budget._caps, "management": 5 + len(runs) * (2 if command == "recover-database" else 1), "credential": 1}
+    budget._max = budget._caps["management"] + 1
+    budget.begin_recovery()
+    result = {"command": command, "runs": [], "complete": False, "settlesDocumentOrTokenObservations": False}
+    metadata = None
+    try:
+        bearer = refresh(baseline, budget, before_send=check)
+        metadata = MetadataSession(bearer, baseline, budget, project="fireemu-oracle-query", request_fn=functools.partial(request_once, project="fireemu-oracle-query"))
+        result["preflight"] = metadata.preflight()
+        for run in runs:
+            budget._caps["management"] = 5 + (len(result["runs"]) + 1) * (2 if command == "recover-database" else 1)
+            metadata.named_database = copy.deepcopy(run["state"])
+            state = metadata.readback_named_database(time.time(), journal) if command == "readback-a2" else metadata.delete_named_database(journal)
+            result["runs"].append(state)
+        result["postflight"] = metadata.postflight()
+        result["complete"] = True
+    except (Exception, KeyboardInterrupt) as error:
+        result["failureType"] = type(error).__name__
+        if metadata is not None and hasattr(metadata, "named_database"):
+            result["runs"].append(copy.deepcopy(metadata.named_database))
+    result["requests"] = budget.total
+    result["phaseRequests"] = dict(budget.used)
+    save_private(directory / "result.json", result)
+    return result

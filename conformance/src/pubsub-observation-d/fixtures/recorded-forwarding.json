@@ -1,0 +1,73 @@
+{
+  "schema": 1,
+  "rows": [
+    {
+      "runId": "1c4d32925e36",
+      "n": 114,
+      "route": "pull",
+      "response": {
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB",
+              "message": {
+                "data": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==",
+                "attributes": {
+                  "recorderRun": "0123456789ab",
+                  "CloudPubSubDeadLetterSourceSubscription": "xxxxxxxxxxxxxxxxxxxxxxxxxx",
+                  "CloudPubSubDeadLetterSourceTopicPublishTime": "2026-10-06T11:32:55.259+00:00",
+                  "CloudPubSubDeadLetterSourceSubscriptionProject": "fireemu-oracle-idp",
+                  "CloudPubSubDeadLetterSourceDeliveryCount": "5"
+                },
+                "messageId": "11111111111111111",
+                "publishTime": "2026-10-06T11:33:07.886Z"
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "data": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==",
+        "attributes": {
+          "recorderRun": "0123456789ab"
+        }
+      },
+      "source": "projects/fireemu-oracle-idp/subscriptions/xxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "layoutVerdict": "NOT_COMPARABLE legacy physical bytes not captured"
+    },
+    {
+      "runId": "a9232e061896",
+      "n": 114,
+      "route": "pull",
+      "response": {
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB",
+              "message": {
+                "data": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==",
+                "attributes": {
+                  "CloudPubSubDeadLetterSourceSubscription": "xxxxxxxxxxxxxxxxxxxxxxxxxx",
+                  "CloudPubSubDeadLetterSourceTopicPublishTime": "2026-10-06T13:14:39.599+00:00",
+                  "recorderRun": "0123456789ab",
+                  "CloudPubSubDeadLetterSourceDeliveryCount": "5",
+                  "CloudPubSubDeadLetterSourceSubscriptionProject": "fireemu-oracle-idp"
+                },
+                "messageId": "11111111111111111",
+                "publishTime": "2026-10-06T13:14:52.587Z"
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "data": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQ==",
+        "attributes": {
+          "recorderRun": "0123456789ab"
+        }
+      },
+      "source": "projects/fireemu-oracle-idp/subscriptions/xxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "layoutVerdict": "NOT_COMPARABLE legacy physical bytes not captured"
+    }
+  ]
+}

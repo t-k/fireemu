@@ -389,7 +389,7 @@ export function createWire({
         clearTimeout(requestTimer);
         controllers.delete(controller);
       }
-      reply = normalizeOutcome(reply);
+      reply = normalizeOutcome(reply, { method, request });
       if (reply.unknown && !maintenance) sourceStopped = true;
       reply.durationMs = meter.clock() - monotonicStarted;
       journal.write({

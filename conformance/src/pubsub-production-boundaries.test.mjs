@@ -100,7 +100,7 @@ test("the project of a run is an ID of 6 to 30 characters", () => {
 });
 
 test("the token is cached for 40 minutes, gcloud is given a bounded output, and a refresh restarts the clock", async () => {
-  const TOKEN = "ya29.a0AfH6SMBsecretsecretsecretsecretsecret";
+  const TOKEN = "synthetic-access-token-for-tests-only";
   const options = [];
   let clock = 5_000_000;
   const provider = createTokenProvider({

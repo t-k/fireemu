@@ -557,3 +557,52 @@ test("Task24 each recorder closes journals and listeners after reporting and wir
   assert.ok(Array.isArray(recovery.at(-1).obligations));
   assert.ok(w.calls.some((call) => call.method === "DeleteTopic"));
 });
+
+test("Task24 each packet never treats unknown NOT_FOUND as permission to suppress confirmed cleanup", async () => {
+  const family = process.env.OBSERVATION_PACKET ?? "A";
+  const namespace =
+    family === "A" ? "pubsub-observation" : `pubsub-observation-${family.toLowerCase()}`;
+  const { makePlan: familyPlan } = await import(`./${namespace}/plan.mjs`);
+  const { runCell: familyRun } = await import(`./${namespace}/scenarios.mjs`);
+  const cell = familyPlan().cells.find((c) => !c.reserve && c.group !== "G4"),
+    w = world();
+  const original = w.wire.call;
+  let injectedName;
+  w.wire.call = async (call) => {
+    if (
+      !injectedName &&
+      call.method === "GetTopic" &&
+      !call.category.startsWith("cleanup") &&
+      w.resources.has(call.request.name)
+    ) {
+      injectedName = call.request.name;
+      return {
+        ok: false,
+        status: 418,
+        code: "NOT_FOUND",
+        unknown: false,
+        body: { error: { status: "NOT_FOUND" } },
+      };
+    }
+    return original(call);
+  };
+  const result = await familyRun({
+    cell,
+    meter,
+    ledger: createLedger(),
+    runId,
+    wire: w.wire,
+    journal: w.journal,
+    sleep: async () => {},
+    iamJournal: { write() {} },
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.cleanupClosed, true, family);
+  assert.ok(injectedName, `post-CREATE stimulus reached: ${family}`);
+  assert.equal(
+    w.calls.filter((c) => c.method === "DeleteTopic" && c.request.name === injectedName).length,
+    1,
+    family,
+  );
+  assert.equal(w.resources.size, 0, family);
+});

@@ -109,7 +109,8 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
       });
     if (method.startsWith("Get")) {
       ledger.observeRead(name, reply);
-      if (reply.code === "NOT_FOUND" && !settled(ledger, name)) absentSeen.add(name);
+      if (kind === "error" && reply.code === "NOT_FOUND" && !settled(ledger, name))
+        absentSeen.add(name);
     }
     if (kind === "unknown" || kind === "pending") throw new Error("unknown answer stops the cell");
     if (reply.budgetOverrun) budgetOverrun = true;

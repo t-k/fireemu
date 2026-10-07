@@ -129,6 +129,21 @@ export function verifyProof(row, line, scope, kind) {
   )
     throw new Error("ledger does not approve exact scope");
 }
+export function verifyPreviousAttempt(previous, scope, descriptor) {
+  if (
+    previous.sha256 !== scope.previousAttempt?.sha256 ||
+    previous.value.runId !== scope.runIds[0] ||
+    previous.value.suite !== SUITE ||
+    previous.value.project !== PROJECT ||
+    previous.value.a2 !== false ||
+    previous.value.sourceHead !== descriptor.head ||
+    previous.value.envelopeId !== scope.envelopeId ||
+    previous.value.packetSha256 !== scope.packetSha256 ||
+    previous.value.resourcesClosed !== true ||
+    previous.value.recordingComplete !== true
+  )
+    throw new Error("run2 requires complete closed run1");
+}
 export function readJson(path) {
   const bytes = readFileSync(path);
   if (bytes.length > 4194304) throw new Error("admission file byte cap");
@@ -240,16 +255,7 @@ export function admit(options, now = Date.now()) {
     )
       throw new Error("run2 prior summary path mismatch");
     const previous = readJson(scope.previousAttempt?.path);
-    if (
-      previous.sha256 !== scope.previousAttempt?.sha256 ||
-      previous.value.runId !== scope.runIds[0] ||
-      previous.value.sourceHead !== descriptor.head ||
-      previous.value.envelopeId !== scope.envelopeId ||
-      previous.value.packetSha256 !== scope.packetSha256 ||
-      previous.value.resourcesClosed !== true ||
-      previous.value.recordingComplete !== true
-    )
-      throw new Error("run2 requires complete closed run1");
+    verifyPreviousAttempt(previous, scope, descriptor);
   }
   return { scope, descriptor, descriptorSha256: descriptorFile.sha256, check, plan: makePlan() };
 }

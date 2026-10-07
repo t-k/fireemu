@@ -1,5 +1,6 @@
 import {
   verifyPriorPacket,
+  verifyPreviousAttempt,
   scopeDigest,
   verifyScope,
   verifyProof,
@@ -405,6 +406,87 @@ test("C every declared baseline graph runs through actual REST and native reques
   }
 });
 
+test("C native both-target Seek persists exact protobuf bytes for both stimuli", async () => {
+  const cell = makePlan().cells.find(
+    (c) => c.transport === "grpc" && c.variant === "reverse-seek-members",
+  );
+  const meter = createMeter({ now: () => 0 }),
+    world = referenceWorld(),
+    ledger = createLedger(),
+    capture = [];
+  const journal = {
+    write(row) {
+      capture.push(row);
+    },
+  };
+  meter.enter(cell);
+  const wire = referenceWire(meter, world, journal);
+  try {
+    const result = await scenarios.runCell({
+      cell,
+      meter,
+      wire,
+      ledger,
+      runId: "123456abcdef",
+      journal,
+      sleep: async () => {},
+    });
+    assert.equal(result.complete, true);
+    const rows = capture.filter((r) => r.event === "request-dispatch" && r.method === "Seek");
+    assert.equal(rows.length, 2);
+    for (const row of rows) {
+      assert.equal(typeof row.requestBodyBase64, "string");
+      const raw = Buffer.from(row.requestBodyBase64, "base64");
+      assert.equal(raw.length, row.requestBodyBytes);
+      assert.equal(sha256(raw), row.requestSha256);
+      assert.deepEqual(raw, encodeRequest("Subscriber", "Seek", row.request));
+      const decoded = typeOf("SeekRequest").decode(raw);
+      assert.equal(decoded.subscription, row.request.subscription);
+      assert.equal(decoded.snapshot, row.request.snapshot);
+      assert.ok(decoded.time);
+    }
+    assert.equal(
+      result.observations.find((r) => r.stage === "native-member-order-scope")
+        .inferredOneofSelection,
+      false,
+    );
+  } finally {
+    wire.close();
+  }
+});
+test("C record2 rejects a different suite, project or an A2-only prior summary", () => {
+  const scope = {
+    runIds: ["123456abcdef", "abcdef123456"],
+    sourceHead: "a".repeat(40),
+    envelopeId: "PUBSUB-OBSERVATION-C-FIXED",
+    packetSha256: "b".repeat(64),
+    previousAttempt: { sha256: "c".repeat(64) },
+  };
+  const previous = {
+    sha256: scope.previousAttempt.sha256,
+    value: {
+      runId: scope.runIds[0],
+      sourceHead: scope.sourceHead,
+      envelopeId: scope.envelopeId,
+      packetSha256: scope.packetSha256,
+      resourcesClosed: true,
+      recordingComplete: true,
+      suite: "pubsub-observation-c-v1",
+      project: "fireemu-oracle-idp",
+      a2: false,
+    },
+  };
+  verifyPreviousAttempt(previous, scope, { head: scope.sourceHead });
+  for (const [field, value] of [
+    ["suite", "other"],
+    ["project", "foreign"],
+    ["a2", true],
+  ]) {
+    const changed = structuredClone(previous);
+    changed.value[field] = value;
+    assert.throws(() => verifyPreviousAttempt(changed, scope, { head: scope.sourceHead }), /run2/);
+  }
+});
 test("C delivery controls retain selectors and REST Seek member order", () => {
   const subscription = "projects/fixture/subscriptions/own";
   for (const [method, body] of [

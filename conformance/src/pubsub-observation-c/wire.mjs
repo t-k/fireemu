@@ -228,6 +228,7 @@ export function createWire({
         request,
         ...(routeName ? { routeName } : {}),
         requestBodyBytes: raw.length,
+        ...(transport === "grpc" ? { requestBodyBase64: raw.toString("base64") } : {}),
         ...(address ? { url: address.url, verb: address.verb } : {}),
         metadataBytesOut,
         requestSha256: sha256(raw),

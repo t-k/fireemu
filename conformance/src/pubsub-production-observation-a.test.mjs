@@ -1082,7 +1082,7 @@ test("durable dispatch time is charged before a request can enter the wire", asy
     meter,
     journal: {
       write(row) {
-        if (row.event === "request-dispatch") clock = 80000;
+        if (row.event === "request-dispatch") clock = 50000;
       },
     },
     getToken: async () => "fake",
@@ -1306,4 +1306,54 @@ test("owned delivery selection properties exclude missing data and unknown ident
     ];
     assert.deepEqual(selectOwn({ receivedMessages: messages }, published), [messages[0]]);
   }
+});
+
+test("REST cancellation uses the absolute remaining deadline after durable persistence", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  let clock = 0,
+    dispatched = false,
+    aborted = false;
+  const meter = createMeter({ now: () => clock });
+  meter.enter(makePlan().cells.find((item) => item.id === "R3"));
+  const wire = createWire({
+    meter,
+    now: () => 1000000 + clock,
+    journal: {
+      write(row) {
+        if (row.event === "request-dispatch") clock += 5000;
+      },
+    },
+    getToken: async () => "fake",
+    client: { close() {} },
+    fetch: async (_, options) => {
+      dispatched = true;
+      return new Promise((_, reject) =>
+        options.signal.addEventListener(
+          "abort",
+          () => {
+            aborted = true;
+            reject(new Error("deadline reached"));
+          },
+          { once: true },
+        ),
+      );
+    },
+  });
+  const pending = wire.call({
+    category: "get",
+    transport: "rest",
+    service: "Publisher",
+    method: "GetTopic",
+    request: { name: "projects/fixture/topics/fe123456abcdef-a" },
+  });
+  while (!dispatched) await new Promise((done) => setImmediate(done));
+  context.mock.timers.tick(24999);
+  assert.equal(aborted, false);
+  clock += 25000;
+  context.mock.timers.tick(1);
+  const reply = await pending;
+  assert.equal(aborted, true);
+  assert.equal(reply.unknown, true);
+  assert.equal(reply.durationMs, 30000);
+  wire.close();
 });

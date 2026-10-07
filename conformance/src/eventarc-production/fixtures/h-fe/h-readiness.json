@@ -379,5 +379,428 @@
     },
     "bodyBytes": 5072,
     "nativeBytesEvidence": "inferred pretty JSON plus newline; parsed real CLI production body"
+  },
+  {
+    "run": "H1-v5",
+    "case": "before-control",
+    "sequence": 42,
+    "method": "POST",
+    "url": "https://eventarcpublishing.googleapis.com/v1/projects/fireemu-oracle-events/locations/us-central1/channels/firebase:publishEvents",
+    "status": 200,
+    "body": {},
+    "bodyBytes": 3,
+    "bodyBase64": "e30K",
+    "latencyMs": 1305
+  },
+  {
+    "run": "H1-v5",
+    "case": "object",
+    "sequence": 44,
+    "method": "POST",
+    "url": "https://eventarcpublishing.googleapis.com/v1/projects/fireemu-oracle-events/locations/us-central1/channels/firebase:publishEvents",
+    "status": 200,
+    "body": {},
+    "bodyBytes": 3,
+    "bodyBase64": "e30K",
+    "latencyMs": 1275,
+    "handlerFrames": [
+      {
+        "insertId": "6ac4b12345678901d52d1f78",
+        "logTimestamp": "2026-10-06T08:42:33.530502Z",
+        "executionId": "wfklvdycw8ro",
+        "readAt": "2026-10-06T08:44:41.016Z",
+        "text": "FE_EVENTS_FRAME {\"handler\":\"fe2ad53563e61cHObserve\",\"generation\":2,\"run\":\"2ad53563e61c\",\"recording\":\"h1\",\"case\":\"object\",\"correlation\":{\"id\":\"fe2ad53563e61c-h-object-3\",\"source\":\"//fireemu/handler/2ad53563e61c\"},\"invocationId\":\"3419da42-f57b-4a92-9883-856915b2ecb9\",\"attempt\":\"succeeded\",\"eventKeys\":[\"id\",\"specversion\",\"tenant\",\"type\",\"time\",\"subject\",\"source\",\"data\",\"traceparent\"],\"event\":{\"id\":\"fe2ad53563e61c-h-object-3\",\"specversion\":\"1.0\",\"tenant\":\"h2ad53563e61c\",\"type\":\"fireemu.h.2ad53563e61c\",\"time\":\"2026-10-06T00:00:00.123456789Z\",\"subject\":\"object\",\"source\":\"//fireemu/handler/2ad53563e61c\",\"data\":{\"a\":1,\"b\":[true,null]},\"traceparent\":\"00-7e22c5fec5e123456789a41c2ac990de-4713f7d71aec053e-01\"}}\n",
+        "frame": {
+          "handler": "fe2ad53563e61cHObserve",
+          "generation": 2,
+          "run": "2ad53563e61c",
+          "recording": "h1",
+          "case": "object",
+          "correlation": {
+            "id": "fe2ad53563e61c-h-object-3",
+            "source": "//fireemu/handler/2ad53563e61c"
+          },
+          "invocationId": "3419da42-f57b-4a92-9883-856915b2ecb9",
+          "attempt": "succeeded",
+          "eventKeys": [
+            "id",
+            "specversion",
+            "tenant",
+            "type",
+            "time",
+            "subject",
+            "source",
+            "data",
+            "traceparent"
+          ],
+          "event": {
+            "id": "fe2ad53563e61c-h-object-3",
+            "specversion": "1.0",
+            "tenant": "h2ad53563e61c",
+            "type": "fireemu.h.2ad53563e61c",
+            "time": "2026-10-06T00:00:00.123456789Z",
+            "subject": "object",
+            "source": "//fireemu/handler/2ad53563e61c",
+            "data": {
+              "a": 1,
+              "b": [
+                true,
+                null
+              ]
+            },
+            "traceparent": "00-7e22c5fec5e123456789a41c2ac990de-4713f7d71aec053e-01"
+          }
+        }
+      },
+      {
+        "insertId": "6ac4c2d800090cd35dce49df",
+        "logTimestamp": "2026-10-06T09:43:52.593107Z",
+        "executionId": "whrg6m5xjrvd",
+        "readAt": "2026-10-06T09:45:52.479Z",
+        "text": "FE_EVENTS_FRAME {\"handler\":\"fe2ad53563e61cHObserve\",\"generation\":2,\"run\":\"2ad53563e61c\",\"recording\":\"h1\",\"case\":\"retry\",\"correlation\":{\"id\":\"fe2ad53563e61c-h-retry-172\",\"source\":\"//fireemu/handler/2ad53563e61c\"},\"invocationId\":\"18228975-326c-4cae-be70-f4b996c2ca42\",\"attempt\":\"failed\",\"eventKeys\":[\"tenant\",\"id\",\"subject\",\"specversion\",\"source\",\"type\",\"time\",\"data\",\"traceparent\"],\"event\":{\"tenant\":\"h2ad53563e61c\",\"id\":\"fe2ad53563e61c-h-retry-172\",\"subject\":\"retry\",\"specversion\":\"1.0\",\"source\":\"//fireemu/handler/2ad53563e61c\",\"type\":\"fireemu.h.2ad53563e61c\",\"time\":\"2026-10-06T00:00:00.123456789Z\",\"data\":{\"fixtureKind\":\"retry\",\"run\":\"2ad53563e61c\",\"recording\":\"h1\",\"case\":\"retry\"},\"traceparent\":\"00-f8e5eb1f35acd01c417aec932e13f5d1-a279192c4ff7f239-01\"}}\n",
+        "frame": {
+          "handler": "fe2ad53563e61cHObserve",
+          "generation": 2,
+          "run": "2ad53563e61c",
+          "recording": "h1",
+          "case": "retry",
+          "correlation": {
+            "id": "fe2ad53563e61c-h-retry-172",
+            "source": "//fireemu/handler/2ad53563e61c"
+          },
+          "invocationId": "18228975-326c-4cae-be70-f4b996c2ca42",
+          "attempt": "failed",
+          "eventKeys": [
+            "tenant",
+            "id",
+            "subject",
+            "specversion",
+            "source",
+            "type",
+            "time",
+            "data",
+            "traceparent"
+          ],
+          "event": {
+            "tenant": "h2ad53563e61c",
+            "id": "fe2ad53563e61c-h-retry-172",
+            "subject": "retry",
+            "specversion": "1.0",
+            "source": "//fireemu/handler/2ad53563e61c",
+            "type": "fireemu.h.2ad53563e61c",
+            "time": "2026-10-06T00:00:00.123456789Z",
+            "data": {
+              "fixtureKind": "retry",
+              "run": "2ad53563e61c",
+              "recording": "h1",
+              "case": "retry"
+            },
+            "traceparent": "00-f8e5eb1f35acd01c417aec932e13f5d1-a279192c4ff7f239-01"
+          }
+        }
+      },
+      {
+        "insertId": "6ac4c2e7000a8d123456789d",
+        "logTimestamp": "2026-10-06T09:44:07.691465Z",
+        "executionId": "whrs59ygtb1g",
+        "readAt": "2026-10-06T09:45:52.479Z",
+        "text": "FE_EVENTS_FRAME {\"handler\":\"fe2ad53563e61cHObserve\",\"generation\":2,\"run\":\"2ad53563e61c\",\"recording\":\"h1\",\"case\":\"retry\",\"correlation\":{\"id\":\"fe2ad53563e61c-h-retry-172\",\"source\":\"//fireemu/handler/2ad53563e61c\"},\"invocationId\":\"bd3d1b03-85e3-4bd7-a5a0-fc8b38f086c4\",\"attempt\":\"succeeded\",\"eventKeys\":[\"id\",\"source\",\"subject\",\"specversion\",\"tenant\",\"type\",\"time\",\"data\",\"traceparent\"],\"event\":{\"id\":\"fe2ad53563e61c-h-retry-172\",\"source\":\"//fireemu/handler/2ad53563e61c\",\"subject\":\"retry\",\"specversion\":\"1.0\",\"tenant\":\"h2ad53563e61c\",\"type\":\"fireemu.h.2ad53563e61c\",\"time\":\"2026-10-06T00:00:00.123456789Z\",\"data\":{\"fixtureKind\":\"retry\",\"run\":\"2ad53563e61c\",\"recording\":\"h1\",\"case\":\"retry\"},\"traceparent\":\"00-aaf445955fc02a9f7e1e8f727e05b654-8b514a2357213cc2-01\"}}\n",
+        "frame": {
+          "handler": "fe2ad53563e61cHObserve",
+          "generation": 2,
+          "run": "2ad53563e61c",
+          "recording": "h1",
+          "case": "retry",
+          "correlation": {
+            "id": "fe2ad53563e61c-h-retry-172",
+            "source": "//fireemu/handler/2ad53563e61c"
+          },
+          "invocationId": "bd3d1b03-85e3-4bd7-a5a0-fc8b38f086c4",
+          "attempt": "succeeded",
+          "eventKeys": [
+            "id",
+            "source",
+            "subject",
+            "specversion",
+            "tenant",
+            "type",
+            "time",
+            "data",
+            "traceparent"
+          ],
+          "event": {
+            "id": "fe2ad53563e61c-h-retry-172",
+            "source": "//fireemu/handler/2ad53563e61c",
+            "subject": "retry",
+            "specversion": "1.0",
+            "tenant": "h2ad53563e61c",
+            "type": "fireemu.h.2ad53563e61c",
+            "time": "2026-10-06T00:00:00.123456789Z",
+            "data": {
+              "fixtureKind": "retry",
+              "run": "2ad53563e61c",
+              "recording": "h1",
+              "case": "retry"
+            },
+            "traceparent": "00-aaf445955fc02a9f7e1e8f727e05b654-8b514a2357213cc2-01"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "run": "H1-v5",
+    "case": "scalar",
+    "sequence": 45,
+    "method": "POST",
+    "url": "https://eventarcpublishing.googleapis.com/v1/projects/fireemu-oracle-events/locations/us-central1/channels/firebase:publishEvents",
+    "status": 200,
+    "body": {},
+    "bodyBytes": 3,
+    "bodyBase64": "e30K",
+    "latencyMs": 1208
+  },
+  {
+    "run": "H1-v5",
+    "case": "null",
+    "sequence": 46,
+    "method": "POST",
+    "url": "https://eventarcpublishing.googleapis.com/v1/projects/fireemu-oracle-events/locations/us-central1/channels/firebase:publishEvents",
+    "status": 200,
+    "body": {},
+    "bodyBytes": 3,
+    "bodyBase64": "e30K",
+    "latencyMs": 1197
+  },
+  {
+    "run": "H1-v5",
+    "case": "binary",
+    "sequence": 48,
+    "method": "POST",
+    "url": "https://eventarcpublishing.googleapis.com/v1/projects/fireemu-oracle-events/locations/us-central1/channels/firebase:publishEvents",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "CloudEvent attribute `datacontenttype' must have mime-type `application/json'.",
+        "status": "INVALID_ARGUMENT",
+        "details": [
+          {
+            "@type": "type.googleapis.com/google.rpc.BadRequest",
+            "fieldViolations": [
+              {
+                "field": "events[0].datacontenttype",
+                "description": "CloudEvent attribute `datacontenttype' must have mime-type `application/json'."
+              },
+              {
+                "field": "events[0]",
+                "description": "The provided data needs to be in text format. Please set `text_data` in the CloudEvent."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "bodyBytes": 667,
+    "bodyBase64": "ewogICJlcnJvciI6IHsKICAgICJjb2RlIjogNDAwLAogICAgIm1lc3NhZ2UiOiAiQ2xvdWRFdmVudCBhdHRyaWJ1dGUgYGRhdGFjb250ZW50dHlwZScgbXVzdCBoYXZlIG1pbWUtdHlwZSBgYXBwbGljYXRpb24vanNvbicuIiwKICAgICJzdGF0dXMiOiAiSU5WQUxJRF9BUkdVTUVOVCIsCiAgICAiZGV0YWlscyI6IFsKICAgICAgewogICAgICAgICJAdHlwZSI6ICJ0eXBlLmdvb2dsZWFwaXMuY29tL2dvb2dsZS5ycGMuQmFkUmVxdWVzdCIsCiAgICAgICAgImZpZWxkVmlvbGF0aW9ucyI6IFsKICAgICAgICAgIHsKICAgICAgICAgICAgImZpZWxkIjogImV2ZW50c1swXS5kYXRhY29udGVudHR5cGUiLAogICAgICAgICAgICAiZGVzY3JpcHRpb24iOiAiQ2xvdWRFdmVudCBhdHRyaWJ1dGUgYGRhdGFjb250ZW50dHlwZScgbXVzdCBoYXZlIG1pbWUtdHlwZSBgYXBwbGljYXRpb24vanNvbicuIgogICAgICAgICAgfSwKICAgICAgICAgIHsKICAgICAgICAgICAgImZpZWxkIjogImV2ZW50c1swXSIsCiAgICAgICAgICAgICJkZXNjcmlwdGlvbiI6ICJUaGUgcHJvdmlkZWQgZGF0YSBuZWVkcyB0byBiZSBpbiB0ZXh0IGZvcm1hdC4gUGxlYXNlIHNldCBgdGV4dF9kYXRhYCBpbiB0aGUgQ2xvdWRFdmVudC4iCiAgICAgICAgICB9CiAgICAgICAgXQogICAgICB9CiAgICBdCiAgfQp9Cg==",
+    "latencyMs": 1132
+  },
+  {
+    "run": "H1-v5",
+    "case": "refused-101",
+    "sequence": 93,
+    "method": "POST",
+    "url": "https://eventarcpublishing.googleapis.com/v1/projects/fireemu-oracle-events/locations/us-central1/channels/firebase:publishEvents",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "Too many events.",
+        "status": "OUT_OF_RANGE",
+        "details": [
+          {
+            "@type": "type.googleapis.com/google.rpc.BadRequest",
+            "fieldViolations": [
+              {
+                "field": "events",
+                "description": "Too many events."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "bodyBytes": 344,
+    "bodyBase64": "ewogICJlcnJvciI6IHsKICAgICJjb2RlIjogNDAwLAogICAgIm1lc3NhZ2UiOiAiVG9vIG1hbnkgZXZlbnRzLiIsCiAgICAic3RhdHVzIjogIk9VVF9PRl9SQU5HRSIsCiAgICAiZGV0YWlscyI6IFsKICAgICAgewogICAgICAgICJAdHlwZSI6ICJ0eXBlLmdvb2dsZWFwaXMuY29tL2dvb2dsZS5ycGMuQmFkUmVxdWVzdCIsCiAgICAgICAgImZpZWxkVmlvbGF0aW9ucyI6IFsKICAgICAgICAgIHsKICAgICAgICAgICAgImZpZWxkIjogImV2ZW50cyIsCiAgICAgICAgICAgICJkZXNjcmlwdGlvbiI6ICJUb28gbWFueSBldmVudHMuIgogICAgICAgICAgfQogICAgICAgIF0KICAgICAgfQogICAgXQogIH0KfQo=",
+    "latencyMs": 1248
+  },
+  {
+    "run": "H1-v5",
+    "case": "refused-middle",
+    "sequence": 99,
+    "method": "POST",
+    "url": "https://eventarcpublishing.googleapis.com/v1/projects/fireemu-oracle-events/locations/us-central1/channels/firebase:publishEvents",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "Attribute 'type' cannot be empty.",
+        "status": "INVALID_ARGUMENT",
+        "details": [
+          {
+            "@type": "type.googleapis.com/google.rpc.BadRequest",
+            "fieldViolations": [
+              {
+                "field": "events[1]",
+                "description": "Attribute 'type' cannot be empty."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "bodyBytes": 385,
+    "bodyBase64": "ewogICJlcnJvciI6IHsKICAgICJjb2RlIjogNDAwLAogICAgIm1lc3NhZ2UiOiAiQXR0cmlidXRlICd0eXBlJyBjYW5ub3QgYmUgZW1wdHkuIiwKICAgICJzdGF0dXMiOiAiSU5WQUxJRF9BUkdVTUVOVCIsCiAgICAiZGV0YWlscyI6IFsKICAgICAgewogICAgICAgICJAdHlwZSI6ICJ0eXBlLmdvb2dsZWFwaXMuY29tL2dvb2dsZS5ycGMuQmFkUmVxdWVzdCIsCiAgICAgICAgImZpZWxkVmlvbGF0aW9ucyI6IFsKICAgICAgICAgIHsKICAgICAgICAgICAgImZpZWxkIjogImV2ZW50c1sxXSIsCiAgICAgICAgICAgICJkZXNjcmlwdGlvbiI6ICJBdHRyaWJ1dGUgJ3R5cGUnIGNhbm5vdCBiZSBlbXB0eS4iCiAgICAgICAgICB9CiAgICAgICAgXQogICAgICB9CiAgICBdCiAgfQp9Cg==",
+    "latencyMs": 1186
+  },
+  {
+    "run": "H1-v5",
+    "case": "refused-first",
+    "sequence": 105,
+    "method": "POST",
+    "url": "https://eventarcpublishing.googleapis.com/v1/projects/fireemu-oracle-events/locations/us-central1/channels/firebase:publishEvents",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "Attribute 'type' cannot be empty.",
+        "status": "INVALID_ARGUMENT",
+        "details": [
+          {
+            "@type": "type.googleapis.com/google.rpc.BadRequest",
+            "fieldViolations": [
+              {
+                "field": "events[0]",
+                "description": "Attribute 'type' cannot be empty."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "bodyBytes": 385,
+    "bodyBase64": "ewogICJlcnJvciI6IHsKICAgICJjb2RlIjogNDAwLAogICAgIm1lc3NhZ2UiOiAiQXR0cmlidXRlICd0eXBlJyBjYW5ub3QgYmUgZW1wdHkuIiwKICAgICJzdGF0dXMiOiAiSU5WQUxJRF9BUkdVTUVOVCIsCiAgICAiZGV0YWlscyI6IFsKICAgICAgewogICAgICAgICJAdHlwZSI6ICJ0eXBlLmdvb2dsZWFwaXMuY29tL2dvb2dsZS5ycGMuQmFkUmVxdWVzdCIsCiAgICAgICAgImZpZWxkVmlvbGF0aW9ucyI6IFsKICAgICAgICAgIHsKICAgICAgICAgICAgImZpZWxkIjogImV2ZW50c1swXSIsCiAgICAgICAgICAgICJkZXNjcmlwdGlvbiI6ICJBdHRyaWJ1dGUgJ3R5cGUnIGNhbm5vdCBiZSBlbXB0eS4iCiAgICAgICAgICB9CiAgICAgICAgXQogICAgICB9CiAgICBdCiAgfQp9Cg==",
+    "latencyMs": 1195
+  },
+  {
+    "run": "H1-v5",
+    "case": "refused-last",
+    "sequence": 111,
+    "method": "POST",
+    "url": "https://eventarcpublishing.googleapis.com/v1/projects/fireemu-oracle-events/locations/us-central1/channels/firebase:publishEvents",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "Attribute 'type' cannot be empty.",
+        "status": "INVALID_ARGUMENT",
+        "details": [
+          {
+            "@type": "type.googleapis.com/google.rpc.BadRequest",
+            "fieldViolations": [
+              {
+                "field": "events[2]",
+                "description": "Attribute 'type' cannot be empty."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "bodyBytes": 385,
+    "bodyBase64": "ewogICJlcnJvciI6IHsKICAgICJjb2RlIjogNDAwLAogICAgIm1lc3NhZ2UiOiAiQXR0cmlidXRlICd0eXBlJyBjYW5ub3QgYmUgZW1wdHkuIiwKICAgICJzdGF0dXMiOiAiSU5WQUxJRF9BUkdVTUVOVCIsCiAgICAiZGV0YWlscyI6IFsKICAgICAgewogICAgICAgICJAdHlwZSI6ICJ0eXBlLmdvb2dsZWFwaXMuY29tL2dvb2dsZS5ycGMuQmFkUmVxdWVzdCIsCiAgICAgICAgImZpZWxkVmlvbGF0aW9ucyI6IFsKICAgICAgICAgIHsKICAgICAgICAgICAgImZpZWxkIjogImV2ZW50c1syXSIsCiAgICAgICAgICAgICJkZXNjcmlwdGlvbiI6ICJBdHRyaWJ1dGUgJ3R5cGUnIGNhbm5vdCBiZSBlbXB0eS4iCiAgICAgICAgICB9CiAgICAgICAgXQogICAgICB9CiAgICBdCiAgfQp9Cg==",
+    "latencyMs": 1178
+  },
+  {
+    "run": "H1-v4",
+    "case": "source-refusal",
+    "method": "POST",
+    "url": "https://cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-events/locations/us-central1/functions",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "Validation failed for trigger projects/fireemu-oracle-events/locations/us-central1/triggers/fea4b6c8d0e2f4hfiltered-204281: The request was invalid: invalid filter 'source' in trigger.event_filters: filter 'source' is not allowed for this trigger",
+        "status": "INVALID_ARGUMENT"
+      }
+    },
+    "bodyBytes": 336,
+    "bodyBase64": "ewogICJlcnJvciI6IHsKICAgICJjb2RlIjogNDAwLAogICAgIm1lc3NhZ2UiOiAiVmFsaWRhdGlvbiBmYWlsZWQgZm9yIHRyaWdnZXIgcHJvamVjdHMvZmlyZWVtdS1vcmFjbGUtZXZlbnRzL2xvY2F0aW9ucy91cy1jZW50cmFsMS90cmlnZ2Vycy9mZWE0YjZjOGQwZTJmNGhmaWx0ZXJlZC0yMDQyODE6IFRoZSByZXF1ZXN0IHdhcyBpbnZhbGlkOiBpbnZhbGlkIGZpbHRlciAnc291cmNlJyBpbiB0cmlnZ2VyLmV2ZW50X2ZpbHRlcnM6IGZpbHRlciAnc291cmNlJyBpcyBub3QgYWxsb3dlZCBmb3IgdGhpcyB0cmlnZ2VyIiwKICAgICJzdGF0dXMiOiAiSU5WQUxJRF9BUkdVTUVOVCIKICB9Cn0K"
+  },
+  {
+    "run": "H1-v5",
+    "case": "empty-logging",
+    "sequence": 39,
+    "method": "POST",
+    "url": "https://logging.googleapis.com/v2/entries:list",
+    "status": 200,
+    "body": {},
+    "bodyBytes": 3,
+    "bodyBase64": "e30K",
+    "latencyMs": 803
+  },
+  {
+    "run": "stage-b-r1",
+    "case": "text-refusal",
+    "sequence": 113,
+    "method": "POST",
+    "url": "https://eventarcpublishing.googleapis.com/v1/projects/fireemu-oracle-idp/locations/us-central1/channels/fe43a83839852f-pc-content:publishEvents",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "CloudEvent attribute `datacontenttype' must have mime-type `application/json'.",
+        "status": "INVALID_ARGUMENT",
+        "details": [
+          {
+            "@type": "type.googleapis.com/google.rpc.BadRequest",
+            "fieldViolations": [
+              {
+                "field": "events[0].datacontenttype",
+                "description": "CloudEvent attribute `datacontenttype' must have mime-type `application/json'."
+              },
+              {
+                "field": "events[0]",
+                "description": "Provided CloudEvent data is not a valid json object."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "bodyBytes": 632,
+    "bodyBase64": "ewogICJlcnJvciI6IHsKICAgICJjb2RlIjogNDAwLAogICAgIm1lc3NhZ2UiOiAiQ2xvdWRFdmVudCBhdHRyaWJ1dGUgYGRhdGFjb250ZW50dHlwZScgbXVzdCBoYXZlIG1pbWUtdHlwZSBgYXBwbGljYXRpb24vanNvbicuIiwKICAgICJzdGF0dXMiOiAiSU5WQUxJRF9BUkdVTUVOVCIsCiAgICAiZGV0YWlscyI6IFsKICAgICAgewogICAgICAgICJAdHlwZSI6ICJ0eXBlLmdvb2dsZWFwaXMuY29tL2dvb2dsZS5ycGMuQmFkUmVxdWVzdCIsCiAgICAgICAgImZpZWxkVmlvbGF0aW9ucyI6IFsKICAgICAgICAgIHsKICAgICAgICAgICAgImZpZWxkIjogImV2ZW50c1swXS5kYXRhY29udGVudHR5cGUiLAogICAgICAgICAgICAiZGVzY3JpcHRpb24iOiAiQ2xvdWRFdmVudCBhdHRyaWJ1dGUgYGRhdGFjb250ZW50dHlwZScgbXVzdCBoYXZlIG1pbWUtdHlwZSBgYXBwbGljYXRpb24vanNvbicuIgogICAgICAgICAgfSwKICAgICAgICAgIHsKICAgICAgICAgICAgImZpZWxkIjogImV2ZW50c1swXSIsCiAgICAgICAgICAgICJkZXNjcmlwdGlvbiI6ICJQcm92aWRlZCBDbG91ZEV2ZW50IGRhdGEgaXMgbm90IGEgdmFsaWQganNvbiBvYmplY3QuIgogICAgICAgICAgfQogICAgICAgIF0KICAgICAgfQogICAgXQogIH0KfQo=",
+    "latencyMs": 1045
+  },
+  {
+    "run": "H1-v5",
+    "case": "function-create",
+    "method": "POST",
+    "url": "https://cloudfunctions.googleapis.com/v2/projects/fireemu-oracle-events/locations/us-central1/functions",
+    "status": 200,
+    "body": {
+      "name": "projects/fireemu-oracle-events/locations/us-central1/operations/operation-aaaaaaaaaaaaa-65d27d4ca0350-38b24aa0-b5a926de",
+      "metadata": {
+        "@type": "type.googleapis.com/google.cloud.functions.v2.OperationMetadata",
+        "createTime": "2026-10-06T08:31:56.123456789Z",
+        "target": "projects/fireemu-oracle-events/locations/us-central1/functions/fe2ad53563e61cHObserve",
+        "verb": "create",
+        "cancelRequested": false,
+        "apiVersion": "v2"
+      },
+      "done": false
+    },
+    "bodyBytes": 484,
+    "bodyBase64": "ewogICJuYW1lIjogInByb2plY3RzL2ZpcmVlbXUtb3JhY2xlLWV2ZW50cy9sb2NhdGlvbnMvdXMtY2VudHJhbDEvb3BlcmF0aW9ucy9vcGVyYXRpb24tYWFhYWFhYWFhYWFhYS02NWQyN2Q0Y2EwMzUwLTM4YjI0YWEwLWI1YTkyNmRlIiwKICAibWV0YWRhdGEiOiB7CiAgICAiQHR5cGUiOiAidHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUuY2xvdWQuZnVuY3Rpb25zLnYyLk9wZXJhdGlvbk1ldGFkYXRhIiwKICAgICJjcmVhdGVUaW1lIjogIjIwMjYtMTAtMDZUMDg6MzE6NTYuMTIzNDU2Nzg5WiIsCiAgICAidGFyZ2V0IjogInByb2plY3RzL2ZpcmVlbXUtb3JhY2xlLWV2ZW50cy9sb2NhdGlvbnMvdXMtY2VudHJhbDEvZnVuY3Rpb25zL2ZlMmFkNTM1NjNlNjFjSE9ic2VydmUiLAogICAgInZlcmIiOiAiY3JlYXRlIiwKICAgICJjYW5jZWxSZXF1ZXN0ZWQiOiBmYWxzZSwKICAgICJhcGlWZXJzaW9uIjogInYyIgogIH0sCiAgImRvbmUiOiBmYWxzZQp9Cg=="
   }
 ]

@@ -28,6 +28,11 @@ import { hProductionEvidence } from "./h-production.mjs";
 export const H_A2_RULING =
   "- 2026-10-06 | EVENTARC-H A2 list settlement | decision=APPROVE; for EVENTARC packet H recordings on fireemu-oracle-events, a separate coordinator A2 may use a fresh complete 2xx list (every page, nextPageToken exhausted, page cap not reached, envelope judged against the recorded shape) that omits an exact name, read at least 600 seconds after the recording's latest request, as the absence read in place of a 404, only in five collections: Cloud Functions v2 functions in us-central1, Cloud Run v2 services in us-central1, Eventarc triggers in us-central1, Pub/Sub topics (global) and Pub/Sub subscriptions (global); it closes only a create the run confirmed by its own complete positive list or its own done operation, or that name's own unknown or not-done DELETE; an unknown or operation-pending CREATE is never closed by absence; a managed Run service, trigger, topic or subscription closes only after its function closed; A2 may send one DELETE each for the exact run-owned confirmed retry marker and baseline-absent confirmed firebase channel, only after functions and cascades close, with a complete judged trigger list showing no channel dependents and exact-name read-backs; never resend a prior DELETE; the firebase channel and the retry marker keep their exact-name recorded GET and 404 routes | Claude（委任。オーナーの裁量の委任 2026-09-28） | docs.local/reviews/2026-10-06-eventarc-packet-h-v1-presend-review.md";
 
+export const H2_A2_RULING = H_A2_RULING.replace("EVENTARC-H A2", "EVENTARC-H2 A2")
+  .replace("packet H recordings", "packet H2 recordings")
+  .replace("confirmed firebase channel", "confirmed firebase and run-owned named channels")
+  .replace("the firebase channel and the retry marker", "both channels and the retry marker");
+
 /** Replay checkpoints and unanswered intents; never infer ownership from absence or CLI exit. */
 export function readHJournal(path) {
   let recording;
@@ -66,6 +71,7 @@ export function readHJournal(path) {
         row.kind === "cli-issued" ||
         row.kind === "cli-answer" ||
         row.kind === "cli-native-issued" ||
+        row.kind === "cli-native-body" ||
         row.kind === "cli-native-answer"
       )
         lastRequestAt = Math.max(lastRequestAt, row.at);
@@ -96,7 +102,14 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
       !/^[a-f0-9]{40}$/.test(config.sourceCommit ?? "")
     )
       throw new Error("H requires the reviewed events project and source commit");
-    hManifest(config);
+    const manifest = hManifest(config);
+    if (
+      manifest.functions &&
+      (config.reserveUsd !== manifest.reserveUsd || config.parentBudgetUsd !== 14)
+    )
+      throw new Error(
+        "H2 requires the reviewed thirteen dollar packet reserve within the fourteen dollar parent budget",
+      );
     for (const key of [
       "out",
       "sandboxLedger",
@@ -108,13 +121,18 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
       "firebaseJs",
     ])
       if (typeof config[key] !== "string" || !config[key]) throw new Error(`H requires ${key}`);
-    if (!readFileSync(config.ownerLedger, "utf8").split("\n").includes(H_A2_RULING))
+    if (
+      !readFileSync(config.ownerLedger, "utf8")
+        .split("\n")
+        .includes(manifest.functions ? H2_A2_RULING : H_A2_RULING)
+    )
       throw new Error("H requires the exact A2 RULING line before H1 or A2");
   } catch (error) {
     io.stderr.write(`${error.message}\n`);
     return 2;
   }
   const m = hManifest(config);
+  const limits = m.limits ?? H_LIMITS;
   const issuedPath = join(config.out, `issued-${m.runId}.jsonl`);
   let recording;
   let exitCode = 1;
@@ -197,7 +215,7 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
         const row = (event, extra = {}) => {
           appendFileSync(
             ledgerFd,
-            `${JSON.stringify({ ts: new Date(now()).toISOString(), taskId: "PUBSUB-EVENTARC", project: m.project, packetId: `EVENTARC-H-${m.runId}`, envelopeId: `EVENTARC-H-${m.runId}`, estimatedUsd: a2 ? 0 : 1, lockRetained: true, runId: m.runId, mode: a2 ? "a2" : "h1", event, ...extra })}\n`,
+            `${JSON.stringify({ ts: new Date(now()).toISOString(), taskId: "PUBSUB-EVENTARC", project: m.project, packetId: `EVENTARC-H-${m.runId}`, envelopeId: `EVENTARC-H-${m.runId}`, estimatedUsd: a2 ? 0 : (m.estimatedUsd ?? 1), lockRetained: true, runId: m.runId, mode: a2 ? "a2" : "h1", event, ...extra })}\n`,
           );
           fsyncSync(ledgerFd);
         };
@@ -205,7 +223,8 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
         const token = createTokenProvider({
           now,
           execFile: async (...args) => {
-            if (++credentialCalls > 4) throw new Error("H token invocation ceiling");
+            if (++credentialCalls > (m.functions ? 12 : 4))
+              throw new Error("H token invocation ceiling");
             if (deps.execToken) return deps.execToken(...args);
             return new Promise((resolve, reject) =>
               execFile(...args, (error, stdout) => (error ? reject(error) : resolve(stdout))),
@@ -225,7 +244,7 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
           publishing: "eventarcpublishing",
         };
         const budget = createBudget(
-          a2 ? H_LIMITS.a2 : Object.values(H_LIMITS).reduce((a, b) => a + b, 0) - H_LIMITS.a2,
+          a2 ? limits.a2 : Object.values(limits).reduce((a, b) => a + b, 0) - limits.a2,
         );
         const transports = Object.fromEntries(
           Object.entries(hosts).map(([host, service]) => {
@@ -253,36 +272,81 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
         );
         let result;
         try {
-          row("started", { reserveUsd: a2 ? 0 : 2 });
-          const evidence = { ...(deps.evidence ?? hProductionEvidence), a2ListRuling: true };
+          row("started", { reserveUsd: a2 ? 0 : (m.reserveUsd ?? 2) });
+          const evidence = {
+            ...(deps.evidence ?? hProductionEvidence),
+            a2ListRuling: true,
+            ...(m.functions ? { a2ChannelRuling: true } : {}),
+          };
+          if (m.functions)
+            evidence.admitSegment ??= async ({ segment, result, settlement }) => {
+              // Each admission binds the live checkpoint; a blanket pre-admission cannot continue a stopped probe.
+              const digest = (await import("node:crypto"))
+                .createHash("sha256")
+                .update(JSON.stringify(result))
+                .digest("hex");
+              const line = `EVENTARC-H2 segment ${settlement ? `settlement (${settlement}) and ` : ""}admission | run=${m.runId}; source=${config.sourceCommit}; segment=${segment}; checkpoint=${digest}; decision=APPROVE`;
+              note("h-segment-admission-required", { segment, line });
+              while (
+                !controller.signal.aborted &&
+                now() + 21 * 60_000 <= result.startedAt + m.wallMs - m.cleanupReserveMs
+              ) {
+                if (readFileSync(config.ownerLedger, "utf8").split("\n").includes(line))
+                  return true;
+                await sleep(5000);
+              }
+              return false;
+            };
           const sleep = deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
           if (a2) result = await hA2({ recording, transports, evidence, now, note, sleep });
           else {
-            const prepared = (deps.prepare ?? prepareHSource)({
-              manifest: m,
-              source: fileURLToPath(new URL("../../eventarc-functions/", import.meta.url)),
-              target: join(config.out, "source"),
-              depsDir: config.depsDir,
-            });
-            const endpoints = (deps.discover ?? discoverH)({
-              manifest: m,
-              ...prepared,
-              node: process.execPath,
-              directory: join(config.out, "discovery"),
-            });
-            if (
-              !isDeepStrictEqual(
-                endpoints,
-                JSON.parse(readFileSync(config.frozenManifest, "utf8")).endpoints,
-              ) ||
-              !isDeepStrictEqual(
-                JSON.parse(
-                  readFileSync(join(config.out, "discovery/functions-manifest.json"), "utf8"),
-                ),
-                JSON.parse(readFileSync(config.frozenManifest, "utf8")),
+            const sources = {};
+            const manifests = {};
+            for (const segment of m.functions
+              ? ["core", "extension", "multi", ...(m.recording === "h2-a" ? ["source"] : [])]
+              : ["core"]) {
+              const selected = m.functions ? { ...m, segment } : m;
+              const prepared = (deps.prepare ?? prepareHSource)({
+                manifest: selected,
+                source: fileURLToPath(new URL("../../eventarc-functions/", import.meta.url)),
+                target: join(config.out, m.functions ? `source-${segment}` : "source"),
+                depsDir: config.depsDir,
+              });
+              const endpoints = (deps.discover ?? discoverH)({
+                manifest: selected,
+                ...prepared,
+                node: process.execPath,
+                directory: join(config.out, m.functions ? `discovery-${segment}` : "discovery"),
+              });
+              if (
+                !isDeepStrictEqual(
+                  endpoints,
+                  (m.functions
+                    ? JSON.parse(readFileSync(config.frozenManifest, "utf8"))[segment]
+                    : JSON.parse(readFileSync(config.frozenManifest, "utf8"))
+                  ).endpoints,
+                ) ||
+                !isDeepStrictEqual(
+                  JSON.parse(
+                    readFileSync(
+                      join(
+                        config.out,
+                        m.functions
+                          ? `discovery-${segment}/functions-manifest.json`
+                          : "discovery/functions-manifest.json",
+                      ),
+                      "utf8",
+                    ),
+                  ),
+                  m.functions
+                    ? JSON.parse(readFileSync(config.frozenManifest, "utf8"))[segment]
+                    : JSON.parse(readFileSync(config.frozenManifest, "utf8")),
+                )
               )
-            )
-              throw new Error("H discovery differs from frozen functions manifest");
+                throw new Error("H discovery differs from frozen functions manifest");
+              sources[segment] = prepared;
+              manifests[segment] = selected;
+            }
             result = await recordH({
               manifest: m,
               transports,
@@ -295,6 +359,14 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
               makeSdk: deps.makeSdk,
               saveFrame: (frame) => note("h-frame", frame),
               cli: async (name) => {
+                const segment = m.functions?.find((f) => f.name === name)?.segment ?? "core";
+                const prepared = sources[segment];
+                const selected = manifests[segment];
+                const nativeStart = existsSync(join(config.out, `issued-${m.runId}${suffix}.jsonl`))
+                  ? readFileSync(join(config.out, `issued-${m.runId}${suffix}.jsonl`), "utf8")
+                      .split("\n")
+                      .filter(Boolean).length
+                  : 0;
                 // Reserve the entire declared CLI write set before spawn; native debug bytes are fsynced as received.
                 note("cli-issued", {
                   name,
@@ -312,11 +384,12 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
                   const home = join(config.out, "cli-home");
                   mkdirSync(home, { recursive: true, mode: 0o700 });
                   const plan = hCliPlan({
-                    manifest: m,
+                    manifest: selected,
                     name,
                     ...prepared,
                     env: {
                       ...env,
+                      ...(m.functions ? { EVENTARC_H_RECORDING: m.recording } : {}),
                       HOME: env.HOME,
                       GOOGLE_CLOUD_QUOTA_PROJECT: m.project,
                       XDG_CONFIG_HOME: join(home, ".config"),
@@ -335,6 +408,20 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
                       fsyncSync(fds[stream]);
                     },
                   });
+                  if (m.functions)
+                    answer.native = readFileSync(
+                      join(config.out, `issued-${m.runId}${suffix}.jsonl`),
+                      "utf8",
+                    )
+                      .split("\n")
+                      .filter(Boolean)
+                      .slice(nativeStart)
+                      .map((line) => JSON.parse(line))
+                      .filter((row) =>
+                        ["cli-native-issued", "cli-native-body", "cli-native-answer"].includes(
+                          row.kind,
+                        ),
+                      );
                   note("cli-answer", { name, exitCode: answer.exitCode });
                   return answer;
                 } finally {

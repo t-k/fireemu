@@ -163,11 +163,35 @@ export function hProductionAnswer(reply, spec) {
         );
       });
     }
+    if (
+      recorded.run === "H1-v4" &&
+      recorded.case === "source-refusal" &&
+      spec.host === "functions" &&
+      spec.method === "POST" &&
+      reply.status === 400 &&
+      route(url) === route(actual)
+    ) {
+      const normalized = (body) =>
+        JSON.stringify(body)
+          .replace(/projects\/[^/]+/g, "projects/<project>")
+          .replace(/triggers\/[A-Za-z0-9._~-]+/g, "triggers/<name>");
+      const expected = normalized(recorded.body).replaceAll(
+        "'source'",
+        `'${spec.refusalAttribute ?? "source"}'`,
+      );
+      return (
+        reply.body.error?.message?.startsWith(
+          `Validation failed for trigger ${actual.pathname.slice(4).replace(/\/functions$/, "/triggers/")}`,
+        ) &&
+        ["source", "tenant", "subject"].includes(spec.refusalAttribute ?? "source") &&
+        expected === normalized(reply.body)
+      );
+    }
     const envelope =
       ["usage", "firestore", "logging"].includes(spec.host) ||
       (spec.host === "artifact" && actual.pathname.endsWith("/repositories/gcf-artifacts")) ||
       /\/(operations|channels)\//.test(actual.pathname) ||
-      (spec.host === "functions" && spec.method === "DELETE");
+      (spec.host === "functions" && ["POST", "DELETE"].includes(spec.method));
     const shape =
       envelope &&
       JSON.stringify(Object.keys(recorded.body)) === JSON.stringify(Object.keys(reply.body)) &&
@@ -183,7 +207,13 @@ export function hProductionAnswer(reply, spec) {
     return (
       recorded.method === spec.method &&
       route(url) === route(actual) &&
-      url.search === actual.search &&
+      (url.search === actual.search ||
+        (spec.host === "eventarc" &&
+          spec.method === "POST" &&
+          actual.pathname.endsWith("/channels") &&
+          [...actual.searchParams.keys()].length === 1 &&
+          actual.searchParams.get("channelId") === spec.body?.name?.split("/").at(-1) &&
+          url.searchParams.has("channelId"))) &&
       recorded.status === reply.status &&
       (shape ||
         (isDeepStrictEqual(recorded.body, reply.body) &&
@@ -208,6 +238,8 @@ export const hProductionEvidence = Object.freeze({
     typeof reply?.body?.done === "boolean" &&
     hProductionAnswer(reply, spec),
   notFound: (reply, spec) => reply?.status === 404 && hProductionAnswer(reply, spec),
+  publish: (reply, spec) =>
+    spec?.host === "publishing" && spec.method === "POST" && hProductionAnswer(reply, spec),
   logging: (reply, spec) =>
     spec?.host === "logging" &&
     spec.method === "POST" &&
@@ -236,6 +268,73 @@ export const hProductionEvidence = Object.freeze({
         bodies.push({ direction, method, url: new URL(address), body: JSON.parse(raw) });
       } catch {
         return { complete: false, resources, reason: "H unreadable CLI write body" };
+      }
+    }
+    const descriptor = m.functions?.find((f) => f.name === name);
+    const nativeRequest = bodies.find(
+      (b) =>
+        b.direction === ">>>" &&
+        b.method === "POST" &&
+        b.url.hostname === "cloudfunctions.googleapis.com" &&
+        b.url.pathname.endsWith("/functions"),
+    );
+    let native;
+    if (m.functions) {
+      const request = nativeRequest?.body;
+      const filters = Object.entries(descriptor?.filters ?? {}).map(([attribute, value]) => ({
+        attribute,
+        value,
+      }));
+      if (
+        !descriptor ||
+        request?.buildConfig?.runtime !== "nodejs22" ||
+        request?.serviceConfig?.minInstanceCount !== 0 ||
+        request?.serviceConfig?.maxInstanceCount !== 2 ||
+        request?.name !== full ||
+        request.eventTrigger?.eventType !== descriptor.type ||
+        request.eventTrigger?.channel !== descriptor.channel ||
+        request.eventTrigger?.retryPolicy !==
+          (descriptor.retry ? "RETRY_POLICY_RETRY" : "RETRY_POLICY_DO_NOT_RETRY") ||
+        !isDeepStrictEqual(request.eventTrigger?.eventFilters ?? [], filters)
+      )
+        return {
+          complete: false,
+          resources,
+          reason: "H2 native filter/channel construction differs",
+        };
+      const issued = deployed.native?.filter(
+        (r) =>
+          r.kind === "cli-native-issued" &&
+          r.value.host === "cloudfunctions.googleapis.com" &&
+          r.value.method === "POST" &&
+          r.value.path === `/v2/projects/${m.project}/locations/us-central1/functions`,
+      );
+      if (issued?.length !== 1)
+        return { complete: false, resources, reason: "H2 requires one durable native CREATE" };
+      const rows = deployed.native.filter(
+        (r) => r.kind === "cli-native-answer" && r.value.id === issued[0].value.id,
+      );
+      const sent = deployed.native.find(
+        (r) => r.kind === "cli-native-body" && r.value.id === issued[0].value.id,
+      );
+      if (rows.length !== 1 || !sent)
+        return { complete: false, resources, reason: "H2 incomplete native CREATE capture" };
+      const answer = rows[0].value;
+      try {
+        if (!isDeepStrictEqual(JSON.parse(Buffer.from(sent.value.bodyBase64, "base64")), request))
+          return { complete: false, resources, reason: "H2 emitted request differs" };
+        const bytes = Buffer.from(answer.bodyBase64, "base64");
+        native = {
+          status: answer.status,
+          body: JSON.parse(bytes),
+          bodyBase64: answer.bodyBase64,
+          bodyBytes: bytes.length,
+          request,
+          requestBase64: sent.value.bodyBase64,
+          requestBytes: Buffer.from(sent.value.bodyBase64, "base64").length,
+        };
+      } catch {
+        return { complete: false, resources, reason: "H2 unreadable native answer" };
       }
     }
     const policies = new Set();
@@ -352,9 +451,43 @@ export const hProductionEvidence = Object.freeze({
         continue;
       return { complete: false, resources, reason: "H undeclared CLI write" };
     }
+    const refusal =
+      native?.status === 400 &&
+      Object.keys(descriptor?.filters ?? {}).some((refusalAttribute) =>
+        hProductionAnswer(native, {
+          host: "functions",
+          method: "POST",
+          path: `/v2/projects/${m.project}/locations/us-central1/functions`,
+          refusalAttribute,
+        }),
+      );
+    if (
+      m.functions &&
+      !refusal &&
+      !hProductionAnswer(native, {
+        host: "functions",
+        method: "POST",
+        path: `/v2/projects/${m.project}/locations/us-central1/functions`,
+      })
+    )
+      return { complete: false, resources, native, reason: "H2 unadmitted native CREATE answer" };
+    if (
+      m.functions &&
+      native.status >= 200 &&
+      native.status < 300 &&
+      (typeof native.body.name !== "string" ||
+        !native.body.name.startsWith(`projects/${m.project}/locations/${m.location}/operations/`) ||
+        native.body.metadata?.target !== full)
+    )
+      return { complete: false, resources, native, reason: "H2 CREATE operation target differs" };
     return {
+      ...(m.functions ? { native, refusal } : {}),
       complete: ownCreate,
-      function: { state: "unknown", name: full },
+      function: {
+        state: m.functions && !refusal ? "pending" : "unknown",
+        name: full,
+        ...(m.functions && !refusal ? { operation: native.body.name } : {}),
+      },
       resources,
       reason: ownCreate ? "declared FE-style write allowance" : "H missing native CLI CREATE",
     };

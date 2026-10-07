@@ -10,13 +10,22 @@ export const H_LIMITS = Object.freeze({
   a2: 62,
 });
 
-export function hManifest({ project, runId = randomBytes(6).toString("hex") }) {
-  if (!/^[a-f0-9]{12}$/.test(runId) || !/^[a-z][a-z0-9-]{4,62}$/.test(project))
+export function hManifest({
+  project,
+  runId = randomBytes(6).toString("hex"),
+  recording = "h1",
+  segment = "core",
+}) {
+  if (
+    !/^[a-f0-9]{12}$/.test(runId) ||
+    !/^[a-z][a-z0-9-]{4,62}$/.test(project) ||
+    !["h1", "h2-a", "h2-b"].includes(recording)
+  )
     throw new Error("invalid H project or run ID");
-  return {
+  const m = {
     project,
     runId,
-    recording: "h1",
+    recording,
     location: "us-central1",
     observe: `fe${runId}HObserve`,
     filtered: `fe${runId}HFiltered`,
@@ -28,6 +37,97 @@ export function hManifest({ project, runId = randomBytes(6).toString("hex") }) {
     markerCollection: `fe_h_${runId}`,
     propagationMs: 300_000,
   };
+  if (recording !== "h1") {
+    Object.assign(m, {
+      segment,
+      fanout: `fe${runId}HFanout`,
+      named: `fe${runId}HNamed`,
+      extension: `fe${runId}HExtension`,
+      multi: `fe${runId}HMulti`,
+      sourceProbe: `fe${runId}HSource`,
+      namedChannelId: `fe${runId}-h-named`,
+      namedChannel: `projects/${project}/locations/us-central1/channels/fe${runId}-h-named`,
+      subject: `h${runId}-subject`,
+      reserveUsd: recording === "h2-a" ? 7 : 6,
+      estimatedUsd: recording === "h2-a" ? 3.5 : 3,
+      wallMs: 9 * 60 * 60_000,
+      // Reserve thirty minutes for cleanup, bounded operation waits and separately admitted A2.
+      cleanupReserveMs: 30 * 60_000,
+      limits: {
+        preflight: 69,
+        readiness: recording === "h2-a" ? 7210 : 6165,
+        publish: 97,
+        capture: 500,
+        cleanup: recording === "h2-a" ? 672 : 591,
+        a2: 105,
+      },
+    });
+    m.functions = [
+      {
+        name: m.observe,
+        type: m.type,
+        filters: {},
+        channel: m.channel,
+        retry: true,
+        segment: "core",
+      },
+      {
+        name: m.filtered,
+        type: m.filteredType,
+        filters: {},
+        channel: m.channel,
+        retry: false,
+        segment: "core",
+      },
+      {
+        name: m.fanout,
+        type: m.type,
+        filters: {},
+        channel: m.channel,
+        retry: false,
+        segment: "core",
+      },
+      {
+        name: m.named,
+        type: m.type,
+        filters: {},
+        channel: m.namedChannel,
+        retry: false,
+        segment: "core",
+      },
+      {
+        name: m.extension,
+        type: `${m.type}.extension`,
+        filters: { tenant: m.tenant },
+        channel: m.channel,
+        retry: false,
+        segment: "extension",
+      },
+      {
+        name: m.multi,
+        type: `${m.type}.multi`,
+        filters: { tenant: m.tenant, subject: m.subject },
+        channel: m.channel,
+        retry: false,
+        segment: "multi",
+      },
+      // The coordinator binds the complete recorded v4 type/source/tenant construction.
+      ...(recording === "h2-a"
+        ? [
+            {
+              name: m.sourceProbe,
+              type: m.type,
+              filters: { source: m.source, tenant: m.tenant },
+              channel: m.channel,
+              retry: false,
+              segment: "source",
+            },
+          ]
+        : []),
+    ];
+    if (!m.functions.some((f) => f.segment === segment)) throw new Error("invalid H2 segment");
+  }
+  return m;
 }
 
 /** The frozen H table: no searches, replayed IDs or adaptive extra requests. */
@@ -64,11 +164,14 @@ export function hPublishes(m) {
     ["null", "null"],
     ["array", "[1,2,3]"],
   ])
-    add(name, [event(name, { textData })]);
+    if (m.functions && ["scalar", "null"].includes(name))
+      bracket(name, [event(name, { textData })], { shape: true });
+    else add(name, [event(name, { textData })]);
   const binary = event("binary", { binaryData: "AAEC/w==" });
   delete binary.textData;
   binary.attributes.datacontenttype = { ceString: "application/octet-stream" };
-  add("binary", [binary]);
+  if (m.functions) bracket("binary", [binary], { shape: true });
+  else add("binary", [binary]);
   const mixed = [
     event("multi-match", { type: m.filteredType }),
     event("multi-source-miss", { source: `${m.source}/miss` }),
@@ -97,7 +200,7 @@ export function hPublishes(m) {
       time: "2026-10-06T00:00:00.123Z",
       subject: caseId,
       tenant: m.tenant,
-      data: { run: m.runId, recording: "h1", case: caseId },
+      data: { run: m.runId, recording: m.recording, case: caseId },
     };
     if (generated) {
       delete sdkEvent.id;
@@ -138,7 +241,7 @@ export function hPublishes(m) {
         textData: JSON.stringify({
           fixtureKind: "retry",
           run: m.runId,
-          recording: "h1",
+          recording: m.recording,
           case: "retry",
         }),
       }),
@@ -147,5 +250,91 @@ export function hPublishes(m) {
   );
   for (let i = 1; i <= 4; i++) control(`fresh-control-${i}`);
   control("after-control");
+  if (m.functions) {
+    const text = event("text", { textData: "H2 text bytes\n" });
+    text.attributes.datacontenttype = { ceString: "text/plain" };
+    bracket("text", [text], { shape: true });
+    for (const channel of [m.channel, m.namedChannel]) {
+      const name = channel === m.channel ? "isolation-default" : "isolation-named";
+      for (const position of ["before", "after"]) {
+        for (const [index, target] of [m.channel, m.namedChannel].entries()) {
+          const caseId = `${name}-${position}-${index === 0 ? "default" : "named"}`;
+          control(caseId);
+          Object.assign(requests.at(-1), {
+            channel: target,
+            bracket: name,
+            position,
+            controlWaitMs: index === 0 ? 0 : 120_000,
+          });
+        }
+        if (position === "before")
+          add(name, [event(name)], { channel, bracket: name, windowMs: 120_000 });
+      }
+    }
+    for (const segment of ["extension", "multi"]) {
+      const f = m.functions.find((f) => f.segment === segment);
+      for (const variant of [
+        "match",
+        "wrong-type",
+        "wrong-tenant",
+        "missing-tenant",
+        ...(segment === "multi" ? ["wrong-subject", "missing-subject"] : []),
+      ]) {
+        const name = `${segment}-${variant}`;
+        for (const position of ["before", "after"]) {
+          const caseId = `${name}-${position}`;
+          control(caseId);
+          const positive = event(caseId, { type: f.type });
+          if (segment === "multi") positive.attributes.subject.ceString = m.subject;
+          requests.at(-1).body.events.push(positive);
+          Object.assign(requests.at(-1), { segment, bracket: name, position });
+          if (position === "before") {
+            const subject = event(name, { type: f.type });
+            if (segment === "multi") subject.attributes.subject.ceString = m.subject;
+            if (variant === "wrong-type") subject.type += ".miss";
+            if (variant === "wrong-tenant") subject.attributes.tenant.ceString += "-miss";
+            if (variant === "missing-tenant") delete subject.attributes.tenant;
+            if (variant === "wrong-subject") subject.attributes.subject.ceString += "-miss";
+            if (variant === "missing-subject") delete subject.attributes.subject;
+            add(name, [subject], { segment, bracket: name, windowMs: 120_000 });
+          }
+        }
+      }
+    }
+    for (const p of requests) {
+      p.segment ??= "core";
+      if (!p.sdk) p.channel ??= m.channel;
+      if (p.control) p.controlWaitMs ??= 120_000;
+      if (!p.bracket && /-(before|after)$/.test(p.case)) {
+        p.bracket = p.case.replace(/-(before|after)$/, "");
+        p.position = p.case.endsWith("-before") ? "before" : "after";
+      }
+      if (p.windowMs && !p.retry) p.bracket ??= p.case;
+      const forbidden = p.negativeHandlers?.length || p.refused;
+      const recipients = (p.body?.events ?? []).flatMap((e) =>
+        m.functions
+          .filter(
+            (f) =>
+              f.segment !== "source" &&
+              (f.segment === "core" || f.segment === p.segment) &&
+              f.channel === p.channel &&
+              f.type === e.type &&
+              Object.entries(f.filters).every(
+                ([key, value]) =>
+                  (key === "source" ? e.source : e.attributes[key]?.ceString) === value,
+              ),
+          )
+          .filter(
+            (f) =>
+              !forbidden ||
+              p.positiveHandlers?.includes(f.name) ||
+              (f.name === m.fanout && p.positiveHandlers?.includes(m.observe)),
+          )
+          .map((f) => ({ handler: f.name, id: e.id, source: e.source })),
+      );
+      p.expectedRecipients = recipients;
+      if (p.negativeHandlers?.includes(m.observe)) p.negativeHandlers.push(m.fanout);
+    }
+  }
   return requests.map((request, i) => ({ sequence: i + 1, ...request }));
 }

@@ -66,8 +66,10 @@ export async function recordH({
   makeSdk = createSdk,
 }) {
   const m = hManifest(input);
-  const counts = Object.fromEntries(Object.keys(H_LIMITS).map((k) => [k, 0]));
+  const limits = m.limits ?? H_LIMITS;
+  const counts = Object.fromEntries(Object.keys(limits).map((k) => [k, 0]));
   const result = {
+    ...(m.functions ? { startedAt: now(), channelTopics: {}, segments: [] } : {}),
     runId: m.runId,
     manifest: m,
     stopped: null,
@@ -91,7 +93,14 @@ export async function recordH({
   if (!evidence || required.some((key) => typeof evidence[key] !== "function"))
     return { ...result, stopped: "needs-review: frozen production shape evidence is required" };
   const meter = (phase) => {
-    if (++counts[phase] > H_LIMITS[phase]) throw new Error(`H ${phase} ceiling`);
+    if (
+      m.functions &&
+      now() + 30_000 >
+        result.startedAt + m.wallMs - (["cleanup", "a2"].includes(phase) ? 0 : m.cleanupReserveMs)
+    )
+      throw new Error(`H2 ${phase} wall cap; cleanup reserved`);
+    if (counts[phase] >= limits[phase]) throw new Error(`H ${phase} ceiling`);
+    counts[phase]++;
   };
   const request = async (host, spec, phase, judge) => {
     meter(phase);
@@ -113,6 +122,7 @@ export async function recordH({
   const origins = [];
   const ownership = createOwnership(m);
   ownership.allowPublish(m.channel);
+  if (m.namedChannel) ownership.allowPublish(m.namedChannel);
   const client = createClient({
     transports,
     ownership,
@@ -122,8 +132,12 @@ export async function recordH({
   const settle = async (write, phase) => {
     if (!write.operation || !["pending", "unknown"].includes(write.state)) return;
     const deleting = write.action === "delete";
+    const pollStarted = now();
     for (let poll = 0; poll < (deleting ? 25 : 10); poll++) {
-      if (poll > 0) await sleep(deleting ? 5000 : 2000);
+      if (m.functions && deleting) {
+        if (now() > pollStarted + 120_000) return;
+        await sleep(Math.max(0, pollStarted + poll * 5000 - now()));
+      } else if (poll > 0) await sleep(deleting ? 5000 : 2000);
       const reply = await get(
         write.host,
         `/${write.host === "eventarc" ? "v1" : "v2"}/${write.operation}`,
@@ -174,6 +188,8 @@ export async function recordH({
     const end = now() + ms;
     while (now() < end) {
       if (shouldStop()) throw new Error("H signal");
+      if (m.functions && end > result.startedAt + m.wallMs - m.cleanupReserveMs)
+        throw new Error("H2 observation wall cap; cleanup reserved");
       await sleep(Math.min(60_000, end - now()));
       if (capture && now() - lastPollAt >= 120_000) {
         await capture.poll();
@@ -312,9 +328,54 @@ export async function recordH({
     const initial = await lists("preflight");
     result.baselineLists = initial;
     note("h-preflight-lists", initial);
-    for (const name of [m.observe, m.filtered])
+    for (const name of m.functions?.map((f) => f.name) ?? [m.observe, m.filtered])
       if (initial.functions.some((f) => f.name === `${parent}/functions/${name}`))
         throw new Error("H export already exists");
+    if (m.functions) {
+      result.namedBaseline = await get(
+        "eventarc",
+        `/v1/${m.namedChannel}`,
+        "preflight",
+        (r, spec) => evidence.preflight(r, spec) || evidence.notFound(r, spec),
+      );
+      if (result.namedBaseline.status !== 404)
+        throw new Error("H2 named channel already exists; never adopt");
+      const write = {
+        name: m.namedChannel,
+        host: "eventarc",
+        kind: "channel",
+        action: "create",
+        state: "unknown",
+      };
+      result.writes.push(write);
+      note("h-write-issued", write);
+      const spec = {
+        method: "POST",
+        path: `/v1/${parent}/channels?channelId=${m.namedChannelId}`,
+        body: { name: m.namedChannel },
+        op: "h.channel.create",
+      };
+      const answer = await request("eventarc", spec, "preflight", evidence.operation);
+      if (
+        answer.status < 200 ||
+        answer.status >= 300 ||
+        answer.body.metadata?.target !== write.name
+      )
+        throw new Error("H2 named channel CREATE unknown");
+      write.operation = answer.body.name;
+      write.state = answer.body.done ? (answer.body.error ? "failed" : "confirmed") : "pending";
+      await settle(write, "preflight");
+      if (write.state !== "confirmed") throw new Error("H2 named channel CREATE not done");
+      const ready = await get("eventarc", `/v1/${m.namedChannel}`, "preflight", evidence.readiness);
+      if (
+        ready.status !== 200 ||
+        ready.body.name !== m.namedChannel ||
+        ready.body.state !== "ACTIVE" ||
+        !ready.body.pubsubTopic?.startsWith(`projects/${m.project}/topics/`)
+      )
+        throw new Error("H2 named channel not ACTIVE or topic unknown");
+      result.channelTopics[m.namedChannel] = ready.body.pubsubTopic;
+    }
     const retrySubject = hPublishes(m).find((p) => p.retry).body.events[0];
     const markerId = createHash("sha256")
       .update(JSON.stringify([retrySubject.source, retrySubject.id]))
@@ -322,201 +383,334 @@ export async function recordH({
     result.marker = `projects/${m.project}/databases/(default)/documents/${m.markerCollection}/${markerId}`;
     await get("firestore", `/v1/${result.marker}`, "preflight", evidence.notFound);
     note("h-state", result);
-    // Reserve each possibly created function before launching its official CLI request.
-    for (const name of [m.observe, m.filtered]) {
-      if (shouldStop()) throw new Error("H signal");
-      attempted.push(name);
-      const write = {
-        kind: "function",
-        action: "create",
-        name: `${parent}/functions/${name}`,
-        host: "functions",
-        state: "unknown",
-      };
-      result.writes.push(write);
-      note("h-write-issued", write);
-      note("h-state", result);
-      const deployed = await cli(name);
-      let writes;
-      try {
-        writes = evidence.cliWrites(deployed, m, name);
-      } catch {
-        result.cleanup.unconfirmed.push(`cli:${name}:unreadable-writes`);
-        throw new Error("needs-review: H CLI output");
-      }
-      // The native CLI requests/operations account for every build/upload/IAM/managed write.
-      result.writes.push(...(writes?.resources ?? []));
-      note("h-state", result);
-      if (!writes || !writes.complete) {
-        result.cleanup.unconfirmed.push(`cli:${name}:write-inventory`);
-        throw new Error("needs-review: H CLI write inventory");
-      }
-      Object.assign(write, writes.function);
-      note("h-cli-answer", { name, exitCode: deployed.exitCode, timedOut: deployed.timedOut });
-      if (hCliFailed(deployed)) throw new Error("H deploy failed; no redeploy");
-      await settle(write, "readiness");
-      let readiness;
-      for (let poll = 0; poll < 40; poll++) {
-        const inventory = await lists("readiness");
-        note("h-readiness-lists", inventory);
-        readiness = hReady({ manifest: m, ...inventory, names: attempted });
-        if (readiness.ready) break;
-        await sleep(30_000);
-      }
-      if (!readiness?.ready) throw new Error("H readiness incomplete");
-      result.identities = readiness.identities;
-      // H1 exact-name GETs are raw observations, including errors; they settle nothing.
-      for (const identity of readiness.identities)
-        for (const [host, version, resource] of [
-          ["functions", "v2", identity.function],
-          ["run", "v2", identity.service],
-          ["eventarc", "v1", identity.trigger],
-          ["pubsub", "v1", identity.topic],
-          ["pubsub", "v1", identity.subscription],
-        ]) {
-          meter("readiness");
-          try {
-            const reply = await transports[host].request({
-              method: "GET",
-              path: `/${version}/${resource}`,
-              op: "h.observeOnly",
-              label: { case: "h-observeOnly" },
-            });
-            note("h-observeOnly", { host, resource, reply });
-          } catch {
-            note("h-observeOnly", { host, resource, unknown: true });
-          }
+    segments: for (const segment of m.functions
+      ? ["core", "extension", "multi", ...(m.recording === "h2-a" ? ["source"] : [])]
+      : ["core"]) {
+      if (m.functions) {
+        if (capture) {
+          counts.capture = capture.result().requests;
+          result.capture = capture.result();
         }
-      for (const identity of readiness.identities) {
-        const own = result.writes.find(
-          (w) => w.name === identity.function && w.action === "create",
-        );
-        // Complete positive readbacks, not the CLI summary, confirm creation.
-        if (own) own.state = "confirmed";
+        note("h-state", result);
+        note("h-segment-gate", { segment, runId: m.runId, counts });
+        if (
+          segment !== "core" &&
+          (typeof evidence.admitSegment !== "function" ||
+            (await evidence.admitSegment({
+              segment,
+              result,
+              settlement:
+                result.segments.at(-1)?.status === "native-refusal"
+                  ? result.segments.at(-1).segment
+                  : null,
+            })) !== true)
+        )
+          throw new Error(`H2 ${segment} needs coordinator admission`);
+        result.segments.push({ segment, status: "started" });
       }
-    }
-    for (const identity of result.identities)
-      origins.push({
-        handler: identity.handler,
-        service: identity.service.split("/").at(-1),
-        location: m.location,
-      });
-    capture = hCapture({
-      manifest: m,
-      origins,
-      now,
-      startedAt: now(),
-      saveFrame,
-      transport: {
-        request: async (spec) => {
-          const reply = await transports.logging.request(spec);
-          if (!evidence.logging(reply, { ...spec, host: "logging" }))
-            throw new Error("needs-review: H Logging shape");
-          return reply;
-        },
-      },
-    });
-    await capture.poll();
-    lastPollAt = now();
-    await pause(m.propagationMs);
-    const meteredPublishing = {
-      ...transports.publishing,
-      request: async (spec) => {
-        meter("publish");
-        const events = spec.body?.events;
-        if (events)
-          note("h-sdk-emitted", { sequence: publishNumber, path: spec.path, body: spec.body });
-        const reply = await transports.publishing.request(spec);
-        if (result.publishes.at(-1)?.sdk) {
-          Object.assign(result.publishes.at(-1), {
-            body: spec.body,
-            known: !hUnknown(reply),
-            status: reply.status,
-            candidates: (events ?? []).map((e) => ({ id: e.id, source: e.source, type: e.type })),
-          });
-        }
-        return reply;
-      },
-    };
-    sdk = await makeSdk({
-      project: m.project,
-      runId: m.runId,
-      caseId: "h-publish",
-      getToken,
-      transport: meteredPublishing,
-      ownership,
-      publishPrefix: "/v1",
-      note,
-    });
-    const plan = hPublishes(m);
-    for (const p of plan) {
-      if (shouldStop()) throw new Error("H signal");
-      publishNumber = p.sequence;
-      if (p.retry) {
+      // Reserve each possibly created function before launching its official CLI request.
+      for (const name of m.functions?.filter((f) => f.segment === segment).map((f) => f.name) ?? [
+        m.observe,
+        m.filtered,
+      ]) {
+        if (shouldStop()) throw new Error("H signal");
+        if (m.functions && now() + 21 * 60_000 > result.startedAt + m.wallMs - m.cleanupReserveMs)
+          throw new Error("H2 CLI wall cap; cleanup reserved");
+        attempted.push(name);
         const write = {
-          name: result.marker,
-          host: "firestore",
-          kind: "marker",
+          kind: "function",
           action: "create",
+          name: `${parent}/functions/${name}`,
+          host: "functions",
           state: "unknown",
         };
         result.writes.push(write);
         note("h-write-issued", write);
+        note("h-state", result);
+        const deployed = await cli(name);
+        let writes;
+        try {
+          writes = evidence.cliWrites(deployed, m, name);
+        } catch {
+          result.cleanup.unconfirmed.push(`cli:${name}:unreadable-writes`);
+          throw new Error("needs-review: H CLI output");
+        }
+        // The native CLI requests/operations account for every build/upload/IAM/managed write.
+        result.writes.push(...(writes?.resources ?? []));
+        note("h-state", result);
+        if (!writes || !writes.complete) {
+          result.cleanup.unconfirmed.push(`cli:${name}:write-inventory`);
+          throw new Error("needs-review: H CLI write inventory");
+        }
+        Object.assign(write, writes.function);
+        note("h-cli-answer", { name, exitCode: deployed.exitCode, timedOut: deployed.timedOut });
+        if (m.functions) {
+          result.segments.at(-1).native = writes.native;
+          note("h-capability-native", {
+            segment,
+            name,
+            native: writes.native,
+            refusal: writes.refusal === true,
+          });
+          if (writes.refusal === true) {
+            result.segments.at(-1).status = "native-refusal";
+            const partial = await lists("readiness");
+            note("h-partial-deploy-lists", partial);
+            note("h-state", result);
+            // No delivery table for a refused capability. The next iteration requires a checkpoint-bound settlement/admission.
+            continue segments;
+          }
+        }
+        if (hCliFailed(deployed)) throw new Error("H deploy failed; no redeploy");
+        await settle(write, "readiness");
+        let readiness;
+        for (let poll = 0; poll < 40; poll++) {
+          const inventory = await lists("readiness");
+          note("h-readiness-lists", inventory);
+          readiness = hReady({
+            manifest: m,
+            ...inventory,
+            names: attempted.filter(
+              (name) =>
+                !m.functions ||
+                !result.segments.some(
+                  (segment) =>
+                    segment.status === "native-refusal" &&
+                    m.functions.some((f) => f.name === name && f.segment === segment.segment),
+                ),
+            ),
+          });
+          if (readiness.ready) break;
+          if (!m.functions || poll < 39) await sleep(30_000);
+        }
+        if (!readiness?.ready) throw new Error("H readiness incomplete");
+        result.identities = readiness.identities;
+        // H1 exact-name GETs are raw observations, including errors; they settle nothing.
+        for (const identity of readiness.identities)
+          for (const [host, version, resource] of [
+            ["functions", "v2", identity.function],
+            ["run", "v2", identity.service],
+            ["eventarc", "v1", identity.trigger],
+            ["pubsub", "v1", identity.topic],
+            ["pubsub", "v1", identity.subscription],
+          ]) {
+            meter("readiness");
+            try {
+              const reply = await transports[host].request({
+                method: "GET",
+                path: `/${version}/${resource}`,
+                op: "h.observeOnly",
+                label: { case: "h-observeOnly" },
+              });
+              note("h-observeOnly", { host, resource, reply });
+            } catch {
+              note("h-observeOnly", { host, resource, unknown: true });
+            }
+          }
+        for (const identity of readiness.identities) {
+          const own = result.writes.find(
+            (w) => w.name === identity.function && w.action === "create",
+          );
+          // Complete positive readbacks, not the CLI summary, confirm creation.
+          if (own) own.state = "confirmed";
+        }
       }
-      const observation = {
-        ...p,
-        sentAt: now(),
-        known: false,
-        candidates: (p.body?.events ?? []).map((e) => ({
-          id: e.id,
-          source: e.source,
-          type: e.type,
-        })),
-        ...(p.retry ? { retryHandler: m.observe } : {}),
+      if (m.functions && segment === "core") {
+        const channel = await get("eventarc", `/v1/${m.channel}`, "readiness", evidence.readiness);
+        if (
+          channel.status !== 200 ||
+          channel.body.name !== m.channel ||
+          !channel.body.pubsubTopic?.startsWith(`projects/${m.project}/topics/`)
+        )
+          throw new Error("H2 default channel topic unknown");
+        result.channelTopics[m.channel] = channel.body.pubsubTopic;
+        const creation = result.writes.find((w) => w.name === m.channel && w.action === "create");
+        if (creation) creation.state = "confirmed";
+      }
+      if (m.functions && segment === "source") {
+        result.segments.at(-1).status = "unexpected-acceptance";
+        throw new Error("H2 source unexpectedly accepted; review without source publications");
+      }
+      for (const identity of result.identities)
+        if (!origins.some((o) => o.handler === identity.handler))
+          origins.push({
+            handler: identity.handler,
+            service: identity.service.split("/").at(-1),
+            location: m.location,
+          });
+      capture ??= hCapture({
+        manifest: m,
+        origins,
+        now,
+        startedAt: now(),
+        saveFrame,
+        transport: {
+          request: async (spec) => {
+            if (m.functions && now() + 30_000 > result.startedAt + m.wallMs - m.cleanupReserveMs)
+              throw new Error("H2 capture wall cap; cleanup reserved");
+            const reply = await transports.logging.request(spec);
+            if (!evidence.logging(reply, { ...spec, host: "logging" }))
+              throw new Error("needs-review: H Logging shape");
+            return reply;
+          },
+        },
+      });
+      await capture.poll();
+      lastPollAt = now();
+      if (segment === "core") await pause(m.propagationMs);
+      const meteredPublishing = {
+        ...transports.publishing,
+        request: async (spec) => {
+          meter("publish");
+          const events = spec.body?.events;
+          if (events)
+            note("h-sdk-emitted", { sequence: publishNumber, path: spec.path, body: spec.body });
+          const reply = await transports.publishing.request(spec);
+          if (result.publishes.at(-1)?.sdk) {
+            Object.assign(result.publishes.at(-1), {
+              body: spec.body,
+              ...(m.functions
+                ? { channel: spec.path.replace(/^\/v1\//, "").replace(/:publishEvents$/, "") }
+                : {}),
+              known:
+                !hUnknown(reply) &&
+                (!m.functions ||
+                  evidence.publish?.(reply, { ...spec, host: "publishing" }) === true),
+              status: reply.status,
+              candidates: (events ?? []).map((e) => ({ id: e.id, source: e.source, type: e.type })),
+            });
+          }
+          return reply;
+        },
       };
-      result.publishes.push(observation);
-      if (p.sdk) {
-        observation.sdkResult = await sdk.publish(p);
-      } else {
-        meter("publish");
-        const reply = await client.publishEvents(m.channel, p.body);
-        Object.assign(observation, { status: reply.status, known: !hUnknown(reply) });
-      }
-      if (!p.refused && !p.negativeHandlers?.length) {
-        observation.expectedRecipients = (observation.body?.events ?? []).flatMap((e) => {
-          const handlers =
-            e.type === m.type ? [m.observe] : e.type === m.filteredType ? [m.filtered] : [];
-          return handlers.map((handler) => ({ handler, id: e.id, source: e.source }));
-        });
-      }
-      note("h-publish-answer", observation);
-      if (!observation.known) throw new Error("H unknown publish; never replay");
-      if (p.control && !(observation.status >= 200 && observation.status < 300))
-        throw new Error("H control refused");
-      await pause(p.windowMs ?? (p.control ? 120_000 : 0));
-      observation.endedAt = now();
-      const both = [m.observe, m.filtered];
-      const receivedBoth = (o) =>
-        both.every((handler) =>
-          o.candidates.some(
-            (e) =>
-              e.type === (handler === m.observe ? m.type : m.filteredType) &&
+      sdk ??= await makeSdk({
+        project: m.project,
+        runId: m.runId,
+        caseId: "h-publish",
+        getToken,
+        transport: meteredPublishing,
+        ownership,
+        publishPrefix: "/v1",
+        note,
+      });
+      const plan = hPublishes(m).filter((p) => !m.functions || p.segment === segment);
+      for (const p of plan) {
+        if (shouldStop()) throw new Error("H signal");
+        publishNumber = p.sequence;
+        if (p.retry) {
+          const write = {
+            name: result.marker,
+            host: "firestore",
+            kind: "marker",
+            action: "create",
+            state: "unknown",
+          };
+          result.writes.push(write);
+          note("h-write-issued", write);
+        }
+        const observation = {
+          ...p,
+          sentAt: now(),
+          known: false,
+          candidates: (p.body?.events ?? []).map((e) => ({
+            id: e.id,
+            source: e.source,
+            type: e.type,
+          })),
+          ...(p.retry ? { retryHandler: m.observe } : {}),
+        };
+        result.publishes.push(observation);
+        if (p.sdk) {
+          observation.sdkResult = await sdk.publish(p);
+        } else {
+          meter("publish");
+          const channel = p.channel ?? m.channel;
+          const reply = await client.publishEvents(channel, p.body);
+          Object.assign(observation, {
+            status: reply.status,
+            known:
+              !hUnknown(reply) &&
+              (!m.functions ||
+                evidence.publish?.(reply, {
+                  host: "publishing",
+                  method: "POST",
+                  path: `/v1/${channel}:publishEvents`,
+                  body: p.body,
+                }) === true),
+          });
+        }
+        if (!m.functions && !p.refused && !p.negativeHandlers?.length) {
+          observation.expectedRecipients = (observation.body?.events ?? []).flatMap((e) => {
+            const handlers =
+              e.type === m.type ? [m.observe] : e.type === m.filteredType ? [m.filtered] : [];
+            return handlers.map((handler) => ({ handler, id: e.id, source: e.source }));
+          });
+        }
+        note("h-publish-answer", observation);
+        if (!observation.known) throw new Error("H unknown publish; never replay");
+        if (p.control && !(observation.status >= 200 && observation.status < 300))
+          throw new Error("H control refused");
+        if (m.functions && p.sdk)
+          observation.expectedRecipients = (observation.body?.events ?? []).flatMap((e) =>
+            [m.observe, m.fanout].map((handler) => ({ handler, id: e.id, source: e.source })),
+          );
+        await pause(p.windowMs ?? (p.control ? (p.controlWaitMs ?? 120_000) : 0));
+        observation.endedAt = now();
+        if (m.functions) {
+          const controlComplete = (o) =>
+            o.expectedRecipients?.length &&
+            o.expectedRecipients.every((r) =>
               capture
                 .result()
                 .frames.some(
-                  (f) =>
-                    f.frame.handler === handler &&
-                    f.frame.event.id === e.id &&
-                    f.frame.event.source === e.source,
+                  ({ frame }) =>
+                    frame.handler === r.handler &&
+                    frame.event.id === r.id &&
+                    frame.event.source === r.source,
                 ),
-          ),
-        );
-      if (p.control && !receivedBoth(observation)) throw new Error("H control missing");
-      if (p.windowMs)
-        observation.before =
-          result.publishes.at(-2)?.control === true && receivedBoth(result.publishes.at(-2));
-      const previous = result.publishes.at(-2);
-      if (p.control && previous?.windowMs) previous.after = receivedBoth(observation);
+            );
+          if (p.control && p.controlWaitMs !== 0) {
+            const group = p.bracket
+              ? result.publishes.filter(
+                  (o) => o.control && o.bracket === p.bracket && o.position === p.position,
+                )
+              : [observation];
+            if (!group.every(controlComplete)) throw new Error("H2 control missing");
+            if (p.position === "after") {
+              const subject = result.publishes.find((o) => !o.control && o.bracket === p.bracket);
+              if (subject) subject.after = true;
+            }
+          }
+          if (p.windowMs && !p.retry)
+            observation.before = result.publishes
+              .filter((o) => o.control && o.bracket === p.bracket && o.position === "before")
+              .every(controlComplete);
+          continue;
+        }
+        const both = [m.observe, m.filtered];
+        const receivedBoth = (o) =>
+          both.every((handler) =>
+            o.candidates.some(
+              (e) =>
+                e.type === (handler === m.observe ? m.type : m.filteredType) &&
+                capture
+                  .result()
+                  .frames.some(
+                    (f) =>
+                      f.frame.handler === handler &&
+                      f.frame.event.id === e.id &&
+                      f.frame.event.source === e.source,
+                  ),
+            ),
+          );
+        if (p.control && !receivedBoth(observation)) throw new Error("H control missing");
+        if (p.windowMs)
+          observation.before =
+            result.publishes.at(-2)?.control === true && receivedBoth(result.publishes.at(-2));
+        const previous = result.publishes.at(-2);
+        if (p.control && previous?.windowMs) previous.after = receivedBoth(observation);
+      }
+      if (m.functions) result.segments.at(-1).status = "observed";
     }
     await pause(120_000);
     await capture.finish();
@@ -533,6 +727,11 @@ export async function recordH({
         await capture.finish();
       } catch {}
       result.capture = capture.result();
+      result.evidence = judgeH({
+        manifest: m,
+        observations: result.publishes,
+        capture: result.capture,
+      });
     }
   }
   {
@@ -639,6 +838,7 @@ export async function recordH({
           for (const item of remaining[key])
             if (
               !result.baselineLists[key].some((before) => before.name === item.name) &&
+              !(m.functions && Object.values(result.channelTopics).includes(item.name)) &&
               !result.cleanup.unsettled.includes(item.name) &&
               !result.cleanup.unconfirmed.includes(item.name)
             )
@@ -652,10 +852,10 @@ export async function recordH({
       result.marker &&
       result.cleanup.unsettled.length === 0 &&
       result.cleanup.unconfirmed.length === 0 &&
-      attempted.length === 2 &&
+      attempted.length === (m.functions ? attempted.length : 2) &&
       result.writes.filter(
         (w) => w.kind === "function" && w.action === "create" && w.state === "confirmed",
-      ).length === 2
+      ).length === (m.functions ? attempted.length : 2)
     ) {
       try {
         const marker = await get(
@@ -668,6 +868,16 @@ export async function recordH({
           const creation = result.writes.find(
             (w) => w.name === result.marker && w.action === "create",
           );
+          if (
+            m.functions &&
+            (!creation ||
+              marker.body.name !== result.marker ||
+              marker.body.fields?.run?.stringValue !== m.runId ||
+              marker.body.fields?.source?.stringValue !== m.source ||
+              marker.body.fields?.eventId?.stringValue !==
+                hPublishes(m).find((p) => p.retry).body.events[0].id)
+          )
+            throw new Error("H2 marker ownership mismatch");
           if (creation) creation.state = "confirmed";
           const write = {
             action: "delete",
@@ -693,85 +903,104 @@ export async function recordH({
       }
     }
     // Shared/default channel and retained build/upload/AR/IAM/API resources require baseline-aware evidence.
-    if (baseline?.status === 404 && attempted.length) {
-      const creation = result.writes.find((w) => w.name === m.channel && w.action === "create");
-      try {
-        if (!creation) throw new Error("H default channel has no own CREATE evidence");
-        const current = await get(
-          "eventarc",
-          `/v1/${m.channel}`,
-          "cleanup",
-          (r, spec) => evidence.readiness(r, spec) || evidence.notFound(r, spec),
-        );
-        const read =
-          current.status === 200 && current.body.name === m.channel
-            ? "present"
-            : current.status === 404
-              ? "absent"
-              : "unknown";
-        const facts = hDisposition({ create: creation.state, read });
-        if (facts.confirmed) creation.state = "confirmed";
-        if (!facts.canDelete) throw new Error("H default channel creation remains unsettled");
-        const remaining = await hReadList(
-          {
-            request: async (spec) => {
-              const answer = await transports.eventarc.request(spec);
-              if (!evidence.readiness(answer, { ...spec, host: "eventarc" }))
-                throw new Error("H trigger cleanup shape");
-              return answer;
+    for (const channel of m.functions ? [m.namedChannel, m.channel] : [m.channel]) {
+      const channelBaseline = channel === m.channel ? baseline : result.namedBaseline;
+      if (
+        channelBaseline?.status === 404 &&
+        (attempted.length || (m.functions && result.writes.some((w) => w.name === channel)))
+      ) {
+        const creation = result.writes.find((w) => w.name === channel && w.action === "create");
+        try {
+          if (!creation) throw new Error("H default channel has no own CREATE evidence");
+          const current = await get(
+            "eventarc",
+            `/v1/${channel}`,
+            "cleanup",
+            (r, spec) => evidence.readiness(r, spec) || evidence.notFound(r, spec),
+          );
+          if (
+            m.functions &&
+            current.status === 200 &&
+            current.body.pubsubTopic?.startsWith(`projects/${m.project}/topics/`)
+          )
+            result.channelTopics[channel] = current.body.pubsubTopic;
+          const read =
+            current.status === 200 && current.body.name === channel
+              ? "present"
+              : current.status === 404
+                ? "absent"
+                : "unknown";
+          const facts = hDisposition({ create: creation.state, read });
+          if (facts.confirmed) creation.state = "confirmed";
+          if (!facts.canDelete) throw new Error("H default channel creation remains unsettled");
+          const remaining = await hReadList(
+            {
+              request: async (spec) => {
+                const answer = await transports.eventarc.request(spec);
+                if (!evidence.readiness(answer, { ...spec, host: "eventarc" }))
+                  throw new Error("H trigger cleanup shape");
+                return answer;
+              },
             },
-          },
-          { path: `/v1/${parent}/triggers`, key: "triggers", phase: "cleanup" },
-          () => meter("cleanup"),
-        );
-        if (
-          remaining.some((t) => t.channel === m.channel) ||
-          result.cleanup.unconfirmed.length ||
-          result.cleanup.unsettled.length
-        )
-          throw new Error("H channel still has possible dependents");
-        const deletion = {
-          name: m.channel,
-          host: "eventarc",
-          kind: "channel",
-          action: "delete",
-          state: "unknown",
-        };
-        result.writes.push(deletion);
-        note("h-write-issued", deletion);
-        meter("cleanup");
-        const answer = await transports.eventarc.request({
-          method: "DELETE",
-          path: `/v1/${m.channel}`,
-          op: "h.channel.delete",
-          label: { case: "h-cleanup" },
-        });
-        if (
-          !hUnknown(answer) &&
-          evidence.operation(answer, {
+            { path: `/v1/${parent}/triggers`, key: "triggers", phase: "cleanup" },
+            () => meter("cleanup"),
+          );
+          if (
+            remaining.some((t) => t.channel === channel) ||
+            result.cleanup.unconfirmed.length ||
+            result.cleanup.unsettled.length
+          )
+            throw new Error("H channel still has possible dependents");
+          const deletion = {
+            name: channel,
             host: "eventarc",
+            kind: "channel",
+            action: "delete",
+            state: "unknown",
+          };
+          result.writes.push(deletion);
+          note("h-write-issued", deletion);
+          meter("cleanup");
+          const answer = await transports.eventarc.request({
             method: "DELETE",
-            path: `/v1/${m.channel}`,
-          }) &&
-          answer.status >= 200 &&
-          answer.status < 300
-        ) {
-          deletion.operation = answer.body.name;
-          deletion.state =
-            answer.body.done === true ? (answer.body.error ? "failed" : "confirmed") : "pending";
-          await settle(deletion, "cleanup");
+            path: `/v1/${channel}`,
+            op: "h.channel.delete",
+            label: { case: "h-cleanup" },
+          });
+          if (
+            !hUnknown(answer) &&
+            evidence.operation(answer, {
+              host: "eventarc",
+              method: "DELETE",
+              path: `/v1/${channel}`,
+            }) &&
+            answer.status >= 200 &&
+            answer.status < 300 &&
+            (!m.functions || answer.body.metadata?.target === channel)
+          ) {
+            deletion.operation = answer.body.name;
+            deletion.state =
+              answer.body.done === true ? (answer.body.error ? "failed" : "confirmed") : "pending";
+            await settle(deletion, "cleanup");
+          }
+          const absent = await get("eventarc", `/v1/${channel}`, "cleanup", evidence.notFound);
+          if (
+            !hDisposition({
+              create: creation.state,
+              deletion: deletion.state,
+              read: absent.status === 404 ? "absent" : "unknown",
+            }).closed
+          )
+            result.cleanup.unsettled.push(channel);
+          if (m.functions) {
+            const topics = await readList("cleanup", "pubsub", "v1", "topics");
+            const topic = result.channelTopics[channel];
+            if (!topic || deletion.state !== "confirmed" || topics.some((t) => t.name === topic))
+              result.cleanup.unsettled.push(topic ?? `${channel}:topic-unknown`);
+          }
+        } catch {
+          result.cleanup.unconfirmed.push(channel);
         }
-        const absent = await get("eventarc", `/v1/${m.channel}`, "cleanup", evidence.notFound);
-        if (
-          !hDisposition({
-            create: creation.state,
-            deletion: deletion.state,
-            read: absent.status === 404 ? "absent" : "unknown",
-          }).closed
-        )
-          result.cleanup.unsettled.push(m.channel);
-      } catch {
-        result.cleanup.unconfirmed.push(m.channel);
       }
     }
     if (baseline && attempted.length) {
@@ -792,6 +1021,12 @@ export async function recordH({
   }
   result.lastRequestAt = now();
   counts.capture = result.capture?.requests ?? 0;
+  if (m.functions)
+    result.cleanupReady =
+      result.retentionVerified === true &&
+      result.cleanup.unsettled.length === 0 &&
+      result.cleanup.unconfirmed.length === 0 &&
+      result.writes.every((w) => w.state === "confirmed" || w.state === "failed");
   result.closureReady =
     result.stopped === null &&
     result.evidence?.complete === true &&
@@ -814,6 +1049,22 @@ export async function hA2({
 }) {
   if (!Number.isFinite(recording.lastRequestAt) || now() - recording.lastRequestAt < 600_000)
     throw new Error("H A2 must wait ten minutes after the latest request");
+  const m = recording.manifest ?? {};
+  const limits = m.limits ?? H_LIMITS;
+  if (
+    m.functions &&
+    (evidence.a2ChannelRuling !== true ||
+      !Number.isFinite(recording.startedAt) ||
+      now() + 30_000 > recording.startedAt + m.wallMs)
+  )
+    return {
+      requests: 0,
+      lastRequestAt: recording.lastRequestAt,
+      cleanupReady: false,
+      closureReady: false,
+      unresolvedInventory: ["H2 A2 ruling or wall cap"],
+      facts: [],
+    };
   const names = new Map();
   for (const write of recording.writes) {
     if (write.name && write.host && ["create", "delete"].includes(write.action))
@@ -835,19 +1086,63 @@ export async function hA2({
     ])
       if (name)
         names.set(name, { host, version: ["functions", "run"].includes(host) ? "v2" : "v1" });
+  for (const topic of Object.values(recording.channelTopics ?? {}))
+    names.set(topic, { host: "pubsub", version: "v1" });
+  const channels = m.functions ? [m.namedChannel, m.channel] : [m.channel];
   const facts = [];
+  const inventoryUnknown = [];
   let channelTopic;
   let requests = 0;
   const collections = new Map();
+  if (m.functions) {
+    for (const [host, version, key] of [
+      ["functions", "v2", "functions"],
+      ["run", "v2", "services"],
+      ["eventarc", "v1", "triggers"],
+      ["pubsub", "v1", "topics"],
+      ["pubsub", "v1", "subscriptions"],
+    ]) {
+      const path = `/${version}/projects/${m.project}${host === "pubsub" ? "" : `/locations/${m.location}`}/${key}${host === "pubsub" ? "?pageSize=100" : ""}`;
+      try {
+        const items = await hReadList(
+          {
+            request: async (spec) => {
+              const reply = await transports[host].request(spec);
+              if (!evidence.readiness(reply, { ...spec, host }))
+                throw new Error("H2 A2 inventory shape");
+              return reply;
+            },
+          },
+          { path, key, phase: "a2" },
+          () => {
+            if (requests >= limits.a2 || now() + 30_000 > recording.startedAt + m.wallMs)
+              throw new Error("H2 A2 ceiling");
+            requests++;
+          },
+        );
+        collections.set(path, items);
+        for (const item of items)
+          if (
+            !names.has(item.name) &&
+            !recording.baselineLists?.[key]?.some((before) => before.name === item.name)
+          )
+            inventoryUnknown.push(item.name);
+      } catch {
+        inventoryUnknown.push(`incomplete-${key}`);
+        collections.set(path, null);
+      }
+    }
+  }
   const order = (name) =>
     name.includes("/functions/")
       ? 0
-      : name === recording.manifest?.channel
+      : channels.includes(name)
         ? 2
         : name === recording.marker
           ? 3
           : 1;
   for (const [name, { host, version }] of [...names].sort(([a], [b]) => order(a) - order(b))) {
+    channelTopic = recording.channelTopics?.[name];
     let read = "unknown";
     const collection = name.match(
       /^(projects\/[^/]+(?:\/locations\/[^/]+)?\/(functions|services|triggers|topics|subscriptions))\/[^/]+$/,
@@ -867,7 +1162,12 @@ export async function hA2({
             },
             { path, key: collection[2], phase: "a2" },
             () => {
-              if (++requests > H_LIMITS.a2) throw new Error("H A2 ceiling");
+              if (
+                requests >= limits.a2 ||
+                (m.functions && now() + 30_000 > recording.startedAt + m.wallMs)
+              )
+                throw new Error("H A2 ceiling");
+              requests++;
             },
           );
           collections.set(path, items);
@@ -879,7 +1179,9 @@ export async function hA2({
       const items = collections.get(path);
       if (items) read = items.some((item) => item.name === name) ? "present" : "absent";
     } else if (!collection) {
-      if (++requests > H_LIMITS.a2) throw new Error("H A2 ceiling");
+      if (requests >= limits.a2 || (m.functions && now() + 30_000 > recording.startedAt + m.wallMs))
+        throw new Error("H A2 ceiling");
+      requests++;
       const path = `/${version}/${name}`;
       const reply = await transports[host].request({
         method: "GET",
@@ -898,17 +1200,35 @@ export async function hA2({
               reply.body.name === name
             ? "present"
             : "unknown";
+      if (m.functions && name === recording.marker && read === "present") {
+        const retryId = recording.publishes?.find((p) => p.retry)?.body?.events?.[0]?.id;
+        if (
+          !retryId ||
+          reply.body.fields?.run?.stringValue !== m.runId ||
+          reply.body.fields?.source?.stringValue !== m.source ||
+          reply.body.fields?.eventId?.stringValue !== retryId
+        )
+          read = "unknown";
+      }
       if (
-        name === recording.manifest?.channel &&
+        channels.includes(name) &&
         host === "eventarc" &&
         read === "present" &&
         typeof reply.body.pubsubTopic === "string" &&
         reply.body.pubsubTopic.startsWith(`projects/${recording.manifest.project}/topics/`)
-      )
+      ) {
         channelTopic = reply.body.pubsubTopic;
+        if (m.functions) recording.channelTopics[name] = channelTopic;
+      }
     }
     const creation = recording.writes.find((w) => w.name === name && w.action === "create");
     const deletion = recording.writes.find((w) => w.name === name && w.action === "delete");
+    const channelOwner = Object.entries(recording.channelTopics ?? {}).find(
+      ([, topic]) => topic === name,
+    )?.[0];
+    const channelCreation =
+      channelOwner &&
+      recording.writes.find((w) => w.name === channelOwner && w.action === "create");
     // Managed children whose function DELETE completed use that cascade's own disposition.
     const owner = recording.identities.find((i) =>
       [i.service, i.trigger, i.topic, i.subscription].includes(name),
@@ -931,26 +1251,34 @@ export async function hA2({
       facts.every(
         (f) =>
           f.closed ||
-          (name === recording.manifest?.channel && f.name === channelTopic && f.confirmed),
+          (channels.includes(name) && f.name === channelTopic && f.confirmed) ||
+          (m.functions &&
+            (channels.includes(f.name) ||
+              Object.entries(recording.channelTopics).some(
+                ([channel, topic]) =>
+                  topic === f.name &&
+                  recording.writes.some(
+                    (w) => w.name === channel && w.action === "create" && w.state === "confirmed",
+                  ),
+              ))),
       ) &&
       [...(recording.cleanup.unconfirmed ?? []), ...(recording.cleanup.unsettled ?? [])].every(
         (n) =>
           n === recording.marker ||
-          n === recording.manifest?.channel ||
+          channels.includes(n) ||
           facts.some(
             (f) =>
               f.name === n &&
-              (f.closed ||
-                (name === recording.manifest?.channel && n === channelTopic && f.confirmed)),
+              (f.closed || (channels.includes(name) && n === channelTopic && f.confirmed)),
           ),
       ) &&
       ((host === "firestore" && name === recording.marker && creation?.state === "confirmed") ||
         (host === "eventarc" &&
-          name === recording.manifest?.channel &&
-          recording.baseline?.status === 404 &&
+          channels.includes(name) &&
+          (name === m.channel ? recording.baseline : recording.namedBaseline)?.status === 404 &&
           creation?.state === "confirmed"))
     ) {
-      let dependents = false;
+      let dependents = inventoryUnknown.length > 0;
       if (host === "eventarc") {
         const items = await hReadList(
           {
@@ -967,17 +1295,27 @@ export async function hA2({
             phase: "a2",
           },
           () => {
-            if (++requests > H_LIMITS.a2) throw new Error("H A2 ceiling");
+            if (
+              requests >= limits.a2 ||
+              (m.functions && now() + 30_000 > recording.startedAt + m.wallMs)
+            )
+              throw new Error("H A2 ceiling");
+            requests++;
           },
         );
-        dependents = items.some((t) => t.channel === name);
+        dependents ||= items.some((t) => t.channel === name);
       }
       if (!dependents) {
         const write = { name, host, action: "delete", state: "unknown" };
         recording.writes.push(write);
         note("h-state", recording);
         note("h-write-issued", write);
-        if (++requests > H_LIMITS.a2) throw new Error("H A2 ceiling");
+        if (
+          requests >= limits.a2 ||
+          (m.functions && now() + 30_000 > recording.startedAt + m.wallMs)
+        )
+          throw new Error("H A2 ceiling");
+        requests++;
         const path = `/${version}/${name}`;
         const answer = await transports[host].request({
           method: "DELETE",
@@ -995,9 +1333,18 @@ export async function hA2({
           else if (answer.body?.name && answer.body.metadata?.target === name) {
             write.operation = answer.body.name;
             if (answer.body.done === true) write.state = answer.body.error ? "failed" : "confirmed";
+            const pollStarted = now();
             for (let poll = 0; answer.body.done !== true && poll < 25; poll++) {
-              if (poll) await sleep(5000);
-              if (++requests > H_LIMITS.a2) throw new Error("H A2 ceiling");
+              if (m.functions) {
+                if (now() > pollStarted + 120_000) break;
+                await sleep(Math.max(0, pollStarted + poll * 5000 - now()));
+              } else if (poll) await sleep(5000);
+              if (
+                requests >= limits.a2 ||
+                (m.functions && now() + 30_000 > recording.startedAt + m.wallMs)
+              )
+                throw new Error("H A2 ceiling");
+              requests++;
               const spec = { host, method: "GET", path: `/v1/${write.operation}` };
               const operation = await transports[host].request(spec);
               if (
@@ -1015,7 +1362,12 @@ export async function hA2({
           }
         }
         note("h-state", recording);
-        if (++requests > H_LIMITS.a2) throw new Error("H A2 ceiling");
+        if (
+          requests >= limits.a2 ||
+          (m.functions && now() + 30_000 > recording.startedAt + m.wallMs)
+        )
+          throw new Error("H A2 ceiling");
+        requests++;
         const absent = await transports[host].request({
           method: "GET",
           path,
@@ -1046,7 +1398,12 @@ export async function hA2({
                 phase: "a2",
               },
               () => {
-                if (++requests > H_LIMITS.a2) throw new Error("H A2 ceiling");
+                if (
+                  requests >= limits.a2 ||
+                  (m.functions && now() + 30_000 > recording.startedAt + m.wallMs)
+                )
+                  throw new Error("H A2 ceiling");
+                requests++;
               },
             );
             topicRead = items.some((t) => t.name === channelTopic) ? "present" : "absent";
@@ -1061,7 +1418,7 @@ export async function hA2({
               mode: "run",
             }),
           );
-          if (read !== "absent") topicFact.closed = false;
+          if (read !== "absent" || write.state !== "confirmed") topicFact.closed = false;
           note("h-a2-read", topicFact);
         }
       }
@@ -1070,18 +1427,32 @@ export async function hA2({
       (w) => w.name === name && w.action === "delete",
     );
     const disposition = hDisposition({
-      create: creation?.state ?? (owner ? "confirmed" : "unknown"),
+      create: creation?.state ?? (owner ? "confirmed" : (channelCreation?.state ?? "unknown")),
       deletion: latestDeletion?.state ?? ownerDeletion?.state,
       read,
       mode: latestDeletion && latestDeletion !== deletion ? "run" : "a2",
       ageMs: now() - recording.lastRequestAt,
     });
-    if (owner && !facts.some((fact) => fact.name === owner.function && fact.closed))
+    if (
+      (owner && !facts.some((fact) => fact.name === owner.function && fact.closed)) ||
+      (channelOwner && !facts.some((fact) => fact.name === channelOwner && fact.closed))
+    )
+      disposition.closed = false;
+    if (m.functions && channels.includes(name) && latestDeletion?.state !== "confirmed")
       disposition.closed = false;
     facts.push({ name, read, ...disposition });
     note("h-a2-read", facts.at(-1));
   }
+  if (m.functions)
+    for (const [channel, topic] of Object.entries(recording.channelTopics)) {
+      const topicFact = facts.find((f) => f.name === topic);
+      const channelFact = facts.find((f) => f.name === channel);
+      const deletion = recording.writes.find((w) => w.name === channel && w.action === "delete");
+      if (topicFact?.read === "absent" && channelFact?.closed && deletion?.state === "confirmed")
+        topicFact.closed = true;
+    }
   const unresolvedInventory = [
+    ...inventoryUnknown,
     ...(recording.cleanup.unconfirmed ?? []),
     ...(recording.cleanup.unsettled ?? []),
   ].filter((name) => !facts.some((f) => f.name === name && f.closed));
@@ -1096,7 +1467,12 @@ export async function hA2({
         manifest: recording.manifest,
         baseline: recording.baseline,
         get: async (host, path, judge) => {
-          if (++requests > H_LIMITS.a2) throw new Error("H A2 ceiling");
+          if (
+            requests >= limits.a2 ||
+            (m.functions && now() + 30_000 > recording.startedAt + m.wallMs)
+          )
+            throw new Error("H A2 ceiling");
+          requests++;
           const reply = await transports[host].request({
             method: "GET",
             path,

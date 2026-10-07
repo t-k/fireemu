@@ -76,6 +76,13 @@ if (process.env.EVENTARC_H_ISSUED_JOURNAL) {
       method: options.method,
       path: address.pathname,
     });
+    if (
+      process.env.EVENTARC_H_RECORDING?.startsWith("h2-") &&
+      address.hostname === "cloudfunctions.googleapis.com" &&
+      address.pathname.endsWith("/functions") &&
+      options.body !== undefined
+    )
+      append("cli-native-body", { id, bodyBase64: Buffer.from(options.body).toString("base64") });
     try {
       const reply = await originalFetch(url, options);
       append("cli-native-answer", {
@@ -106,6 +113,13 @@ if (process.env.EVENTARC_H_ISSUED_JOURNAL) {
         method: options.method,
         path: address.pathname,
       });
+      if (
+        process.env.EVENTARC_H_RECORDING?.startsWith("h2-") &&
+        address.hostname === "cloudfunctions.googleapis.com" &&
+        address.pathname.endsWith("/functions") &&
+        options.body !== undefined
+      )
+        append("cli-native-body", { id, bodyBase64: Buffer.from(options.body).toString("base64") });
       try {
         const reply = await request(url, options);
         const chunks = [];
@@ -136,10 +150,29 @@ if (process.env.EVENTARC_H_ISSUED_JOURNAL) {
         issued = true;
       }
     };
+    const bodyChunks = [];
     for (const action of ["write", "end", "flushHeaders"]) {
       const originalAction = req[action];
       req[action] = function (...parts) {
         send();
+        if (
+          process.env.EVENTARC_H_RECORDING?.startsWith("h2-") &&
+          host === "cloudfunctions.googleapis.com" &&
+          req.path.split("?")[0].endsWith("/functions")
+        ) {
+          if (
+            ["write", "end"].includes(action) &&
+            (typeof parts[0] === "string" || Buffer.isBuffer(parts[0]))
+          )
+            bodyChunks.push(
+              Buffer.from(parts[0], typeof parts[1] === "string" ? parts[1] : undefined),
+            );
+          if (action === "end")
+            append("cli-native-body", {
+              id,
+              bodyBase64: Buffer.concat(bodyChunks).toString("base64"),
+            });
+        }
         return originalAction.apply(this, parts);
       };
     }
@@ -168,10 +201,14 @@ export function prepareHSource({ manifest: m, source, target, depsDir }) {
   mkdirSync(target, { recursive: true, mode: 0o700 });
   for (const name of ["package.json", "index.js", "firebase.json"])
     cpSync(join(source, name), join(target, name));
-  writeFileSync(join(target, `.env.${m.project}`), `EVENTARC_H_RUN_ID=${m.runId}\n`, {
-    mode: 0o600,
-    flag: "wx",
-  });
+  writeFileSync(
+    join(target, `.env.${m.project}`),
+    `EVENTARC_H_RUN_ID=${m.runId}\n${m.functions ? `EVENTARC_H_RECORDING=${m.recording}\nEVENTARC_H_SEGMENT=${m.segment}\n` : ""}`,
+    {
+      mode: 0o600,
+      flag: "wx",
+    },
+  );
   cpSync(realpathSync(depsDir), join(target, "node_modules"), {
     recursive: true,
     verbatimSymlinks: true,
@@ -215,6 +252,9 @@ export function discoverH({ manifest: m, fixtureDir, node, directory }) {
         PATH: dirname(node),
         HOME: directory,
         EVENTARC_H_RUN_ID: m.runId,
+        ...(m.functions
+          ? { EVENTARC_H_RECORDING: m.recording, EVENTARC_H_SEGMENT: m.segment }
+          : {}),
         GCLOUD_PROJECT: m.project,
         FIREBASE_CONFIG: JSON.stringify({ projectId: m.project }),
         FUNCTIONS_MANIFEST_OUTPUT_PATH: output,
@@ -228,23 +268,32 @@ export function discoverH({ manifest: m, fixtureDir, node, directory }) {
 }
 
 export function hManifestProblems(endpoints, m) {
+  const selected = m.functions?.filter((f) => f.segment === m.segment);
+  const names = selected?.map((f) => f.name) ?? [m.observe, m.filtered];
   if (
     !endpoints ||
-    JSON.stringify(Object.keys(endpoints).toSorted()) !==
-      JSON.stringify([m.observe, m.filtered].toSorted())
+    JSON.stringify(Object.keys(endpoints).toSorted()) !== JSON.stringify(names.toSorted())
   )
-    return ["H discovery must contain exactly the two exports"];
+    return [
+      m.functions
+        ? "H2 discovery must contain exactly the selected segment"
+        : "H discovery must contain exactly the two exports",
+    ];
   const problems = [];
-  for (const name of [m.observe, m.filtered]) {
+  for (const name of names) {
+    const expected = selected?.find((f) => f.name === name);
     const e = endpoints[name];
     const t = e.eventTrigger;
     if (
       e.platform !== "gcfv2" ||
       JSON.stringify(e.region) !== '["us-central1"]' ||
-      t?.eventType !== (name === m.observe ? m.type : m.filteredType) ||
-      t?.channel !== "locations/us-central1/channels/firebase" ||
+      t?.eventType !== (expected?.type ?? (name === m.observe ? m.type : m.filteredType)) ||
+      t?.channel !==
+        (expected && expected.name === m.named
+          ? m.namedChannel
+          : "locations/us-central1/channels/firebase") ||
       t?.retry !== (name === m.observe) ||
-      JSON.stringify(t?.eventFilters) !== "{}" ||
+      JSON.stringify(t?.eventFilters) !== JSON.stringify(expected?.filters ?? {}) ||
       e.minInstances !== 0 ||
       e.maxInstances !== 2
     )
@@ -255,7 +304,15 @@ export function hManifestProblems(endpoints, m) {
 
 /** The FE invocation pattern: one selected export, --force, --debug, no interactive fallback. */
 export function hCliPlan({ manifest: m, name, fixtureDir, configPath, env }) {
-  if (![m.observe, m.filtered].includes(name)) throw new Error("not an H export");
+  if (
+    !(
+      m.functions?.filter((f) => f.segment === m.segment).map((f) => f.name) ?? [
+        m.observe,
+        m.filtered,
+      ]
+    ).includes(name)
+  )
+    throw new Error("not an H export");
   return {
     cwd: fixtureDir,
     env,
@@ -434,6 +491,50 @@ export function hReady({
       trigger.destination?.cloudFunction !== full
     )
       return { ready: false, identities };
+    if (m.functions) {
+      const expected = m.functions.find((item) => item.name === name);
+      const filters = [
+        { attribute: "type", value: expected?.type },
+        ...Object.entries(expected?.filters ?? {}).map(([attribute, value]) => ({
+          attribute,
+          value,
+        })),
+      ];
+      if (
+        !expected ||
+        f.buildConfig?.runtime !== "nodejs22" ||
+        (f.serviceConfig?.minInstanceCount ?? 0) !== 0 ||
+        f.serviceConfig?.maxInstanceCount !== 2 ||
+        !Array.isArray(f.eventTrigger.eventFilters ?? []) ||
+        (f.eventTrigger.eventFilters ?? []).length !== filters.length - 1 ||
+        !filters
+          .slice(1)
+          .every((filter) =>
+            (f.eventTrigger.eventFilters ?? []).some(
+              (actual) =>
+                actual.attribute === filter.attribute &&
+                actual.value === filter.value &&
+                !actual.operator,
+            ),
+          ) ||
+        f.eventTrigger.channel !== expected.channel ||
+        f.eventTrigger.eventType !== expected.type ||
+        f.eventTrigger.retryPolicy !==
+          (expected.retry ? "RETRY_POLICY_RETRY" : "RETRY_POLICY_DO_NOT_RETRY") ||
+        trigger.channel !== expected.channel ||
+        !Array.isArray(trigger.eventFilters) ||
+        trigger.eventFilters.length !== filters.length ||
+        !filters.every((filter) =>
+          trigger.eventFilters.some(
+            (actual) =>
+              actual.attribute === filter.attribute &&
+              actual.value === filter.value &&
+              !actual.operator,
+          ),
+        )
+      )
+        return { ready: false, identities };
+    }
     // Explicit declared placement, including source/build/AR and global managed Pub/Sub names.
     if (
       !service.name.startsWith(`projects/${m.project}/locations/us-central1/services/`) ||

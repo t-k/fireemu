@@ -1121,6 +1121,7 @@ pub struct FunctionsRuntime {
     /// The union of every codebase's manifest.
     manifest: FunctionManifest,
     config: FunctionsConfig,
+    profile: FunctionsHttpProfile,
     clock: Arc<Mutex<VirtualClock>>,
     /// The codebases, in configuration order.
     codebases: Vec<Codebase>,
@@ -1357,6 +1358,7 @@ impl FunctionsRuntime {
         Arc::new(Self {
             manifest,
             config,
+            profile,
             clock,
             codebases: codebases
                 .into_iter()
@@ -5082,8 +5084,16 @@ impl FunctionsRuntime {
                         runtime.release(&key);
                         return;
                     }
-                    None if runtime.config.debug_mode => runner.invoke_unbounded(request).await,
-                    None => runner.invoke(request, timeout).await,
+                    None => match request {
+                        Ok(request) if runtime.config.debug_mode => {
+                            runner.invoke_unbounded(request).await
+                        }
+                        Ok(request) => runner.invoke(request, timeout).await,
+                        Err(error) => Invocation {
+                            outcome: InvokeOutcome::Failed(error.to_string()),
+                            late: None,
+                        },
+                    },
                 };
                 let disposition = if crash {
                     RunnerGoneDisposition::FaultInterrupted
@@ -5121,7 +5131,7 @@ impl FunctionsRuntime {
         epoch: Epoch,
         event: &Value,
         admitted_at: LogicalInstant,
-    ) -> Value {
+    ) -> Result<Value, fireemu_adapter_support::entropy::EntropyUnavailable> {
         let now = self.now();
         let deadline = now
             .checked_add(LogicalDuration::from_seconds(i64::from(
@@ -5139,7 +5149,25 @@ impl FunctionsRuntime {
             Trigger::Eventarc { .. } => "eventarc",
             Trigger::TaskQueue { .. } => "tasks",
         };
-        json!({
+        let mut event = event.clone();
+        if self.profile == FunctionsHttpProfile::Strict
+            && spec.generation == fireemu_core_functions::manifest::FunctionGeneration::Second
+        {
+            // FE v5/v7 retry frames use fresh trace and parent ids for every delivery.
+            // Both sampled (01) and unsampled (00) occur; use the recorded sampled form.
+            let mut trace_id = fireemu_adapter_support::entropy::hex_128()?;
+            while trace_id.bytes().all(|b| b == b'0') {
+                trace_id = fireemu_adapter_support::entropy::hex_128()?;
+            }
+            let mut parent_id = fireemu_adapter_support::entropy::hex_128()?;
+            parent_id.truncate(16);
+            while parent_id.bytes().all(|b| b == b'0') {
+                parent_id = fireemu_adapter_support::entropy::hex_128()?;
+                parent_id.truncate(16);
+            }
+            event["traceparent"] = json!(format!("00-{trace_id}-{parent_id}-01"));
+        }
+        Ok(json!({
             "invocationId": format!("{}-{attempt}", id.value()),
             "function": spec.name,
             "entryPoint": spec.entry_point,
@@ -5150,7 +5178,7 @@ impl FunctionsRuntime {
             "attempt": attempt,
             "session": self.config.session.value().to_string(),
             "epoch": epoch.value(),
-        })
+        }))
     }
 
     /// Frees an invocation slot.
@@ -5491,6 +5519,96 @@ mod task_completion_tests {
             Arc::new(runner),
             Some(spec),
         )
+    }
+
+    #[tokio::test]
+    async fn strict_second_gen_deliveries_have_fresh_sampled_traceparents_including_retries() {
+        use super::{CodebaseSpec, FunctionsHttpProfile};
+        use fireemu_core_functions::manifest::FunctionGeneration;
+        use fireemu_core_types::ids::{Epoch, EventId};
+
+        let base = runtime().await;
+        let mut spec = base.manifest.get("ok").unwrap().clone();
+        spec.generation = FunctionGeneration::Second;
+        let mut traces = std::collections::BTreeSet::new();
+        let mut trace_ids = std::collections::BTreeSet::new();
+        let mut parent_ids = std::collections::BTreeSet::new();
+        for profile in [FunctionsHttpProfile::Strict, FunctionsHttpProfile::Emulator] {
+            let runtime = FunctionsRuntime::with_codebases(
+                vec![CodebaseSpec {
+                    name: "default".to_owned(),
+                    manifest: base.manifest.clone(),
+                    runner: base.runner(),
+                    spawn: None,
+                    cleanup_dir: None,
+                }],
+                base.config.clone(),
+                base.clock.clone(),
+                profile,
+            )
+            .unwrap();
+            for trigger in [
+                base.manifest.get("ok").unwrap().trigger.clone(),
+                Trigger::Storage {
+                    event: fireemu_core_functions::manifest::ObjectEvent::Finalized,
+                    bucket: None,
+                },
+                Trigger::PubSub {
+                    topic: "jobs".to_owned(),
+                },
+                Trigger::Eventarc {
+                    event_type: "example.event".to_owned(),
+                    channel: "google".to_owned(),
+                    filters: std::collections::BTreeMap::default(),
+                },
+            ] {
+                spec.trigger = trigger;
+                for generation in [FunctionGeneration::First, FunctionGeneration::Second] {
+                    spec.generation = generation;
+                    // FE v5/v7 retry frames have the same event id and different trace and parent ids.
+                    for (event_id, attempt) in [(1, 1), (1, 2), (2, 1), (2, 2)] {
+                        let event = json!({"id": format!("event-{event_id}"), "specversion": "1.0", "data": {}});
+                        let request = runtime
+                            .invoke_request(
+                                EventId::new(event_id),
+                                &spec,
+                                attempt,
+                                Epoch::initial(),
+                                &event,
+                                runtime.now(),
+                            )
+                            .unwrap();
+                        let delivered = &request["event"];
+                        if profile == FunctionsHttpProfile::Strict
+                            && generation == FunctionGeneration::Second
+                        {
+                            let trace = delivered["traceparent"]
+                                .as_str()
+                                .expect("traceparent extension");
+                            let parts: Vec<_> = trace.split('-').collect();
+                            assert_eq!(parts.len(), 4);
+                            assert_eq!(parts[0], "00");
+                            assert_eq!(parts[3], "01");
+                            for (part, length) in [(parts[1], 32), (parts[2], 16)] {
+                                assert_eq!(part.len(), length);
+                                assert!(part
+                                    .bytes()
+                                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+                                assert!(part.bytes().any(|b| b != b'0'));
+                            }
+                            assert!(traces.insert(trace.to_owned()));
+                            assert!(trace_ids.insert(parts[1].to_owned()));
+                            assert!(parent_ids.insert(parts[2].to_owned()));
+                            assert_eq!(delivered["id"], event["id"]);
+                        } else {
+                            assert_eq!(delivered, &event);
+                        }
+                        assert!(event.get("traceparent").is_none());
+                    }
+                }
+            }
+        }
+        base.shutdown().await;
     }
 
     #[tokio::test]

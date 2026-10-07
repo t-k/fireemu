@@ -79,6 +79,13 @@
       "properties": {
         "edition": { "enum": ["standard", "enterprise"] },
         "apiMode": { "enum": ["native", "mongodb-compatible"] },
+        "location": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\u0000-\\u0020\\u007f-\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+(?![\\s\\S])",
+          "default": "nam5",
+          "description": "Database location used in strict second-generation Firestore event attributes. Defaults to nam5; the emulator profile always emits nam5 regardless of this setting. Locations are opaque identifiers: unknown non-empty strings are accepted verbatim, but whitespace and control characters are rejected anywhere. This setting does not control routing or perform a location lookup."
+        },
         "indexFile": { "type": "string" },
         "textIndexDefinitionFile": { "type": "string" },
         "enforceLimits": { "type": "boolean" },

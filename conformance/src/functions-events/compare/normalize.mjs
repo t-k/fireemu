@@ -91,7 +91,8 @@ function listingNames(value) {
 
 /**
  * Remove the production-only listing members from a frame (copy) and return their member names.
- * Only names are kept: the listing values can hold trace ids, which never leave the private record.
+ * Gen2 traceparents are validated before their IDs are masked; locations are kept for exact comparison.
+ * Other listing values remain private; only their names are kept.
  */
 export function splitProductionOnly(frame) {
   const copy = structuredClone(frame);
@@ -105,6 +106,24 @@ export function splitProductionOnly(frame) {
     if (parent !== null && typeof parent === "object" && !Array.isArray(parent) && last in parent) {
       listing[pathText(segments)] = listingNames(parent[last]);
       delete parent[last];
+    }
+  }
+  if (copy.generation === 2) {
+    const extensions = frame.event?.extensionAttributes;
+    if (extensions !== null && typeof extensions === "object" && !Array.isArray(extensions)) {
+      if (Object.hasOwn(extensions, "traceparent")) {
+        const trace = extensions.traceparent;
+        if (
+          typeof trace !== "string" ||
+          trace.length !== 55 ||
+          !/^00-(?!0{32}-)[0-9a-f]{32}-(?!0{16}-)[0-9a-f]{16}-0[01]$/.test(trace)
+        ) {
+          throw new TypeError("invalid Gen2 traceparent extension");
+        }
+        // Both sampled and unsampled flags occur in recordings; compare validity, not their random distribution.
+        copy.event.traceparent = "00-<trace-id>-<parent-id>-<flags>";
+      }
+      if (Object.hasOwn(extensions, "location")) copy.event.location = extensions.location;
     }
   }
   return {

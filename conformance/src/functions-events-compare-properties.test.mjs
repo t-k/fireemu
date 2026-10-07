@@ -81,7 +81,10 @@ function randomFrame(random) {
     event: { id: randomString(random, ids), data: randomValue(random, ids, 0) },
   };
   if (random() < 0.5) frame.event.eventKeys = ["data", "id"];
-  if (random() < 0.5) frame.event.extensionAttributes = { traceparent: "00-ab" };
+  if (random() < 0.5)
+    frame.event.extensionAttributes = {
+      traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+    };
   if (random() < 0.3) frame.event.context = { contextKeys: ["eventId"], contextExtras: {} };
   return { frame, table: placeholderTable({ matchKey, project: ids[1] }) };
 }
@@ -153,7 +156,7 @@ test("property: placeholder replacement never hides, adds or retypes a field", (
   });
 });
 
-test("property: splitting the listing removes exactly the listing subtrees", () => {
+test("property: splitting the listing removes listing subtrees and retains masked Gen2 traceparents", () => {
   const listingRoots = PRODUCTION_ONLY_PATHS.map((segments) => `$.${segments.join(".")}`);
   const underListing = (path) =>
     listingRoots.some(
@@ -163,10 +166,10 @@ test("property: splitting the listing removes exactly the listing subtrees", () 
     const { frame } = randomFrame(random);
     const all = [...flatten(frame).keys()];
     const kept = [...flatten(splitProductionOnly(frame).frame).keys()];
-    assert.deepEqual(
-      kept,
-      all.filter((path) => !underListing(path)),
-    );
+    assert.deepEqual(kept, [
+      ...all.filter((path) => !underListing(path)),
+      ...(frame.event.extensionAttributes ? ["$.event.traceparent"] : []),
+    ]);
   });
 });
 

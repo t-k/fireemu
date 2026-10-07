@@ -973,6 +973,8 @@ pub struct RuntimeConfig {
     pub edition: FirestoreEdition,
     /// API mode.
     pub api_mode: FirestoreApiMode,
+    /// `firestore.location`: opaque database location used by strict second-generation Firestore events. Defaults to `nam5`; the emulator profile keeps `nam5`. Unknown identifiers are accepted, but whitespace and control characters are refused; this value does not control routing.
+    pub firestore_location: String,
     /// Index validation policy, derived from the profile (no key of its own).
     pub index_policy: IndexValidationPolicy,
     /// Whether a Standard query limit violation refuses the query
@@ -1365,6 +1367,7 @@ impl Default for RuntimeConfig {
             storage_addr: "127.0.0.1:9199".to_owned(),
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
+            firestore_location: "nam5".to_owned(),
             index_policy: profile.index_policy(),
             enforce_limits: profile.enforce_limits(),
             token_acceptance: profile.token_acceptance(),
@@ -3503,6 +3506,18 @@ impl RuntimeConfig {
             loopback_host(bind, "bind")?;
         }
         if let Some(fs) = obj.get("firestore").and_then(Value::as_object) {
+            if let Some(value) = fs.get("location") {
+                value
+                    .as_str()
+                    .filter(|location| {
+                        !location.is_empty()
+                            && !location.chars().any(|c| c.is_whitespace() || c.is_control())
+                    })
+                    .ok_or_else(|| {
+                        ConfigError("firestore.location must be a non-empty string without whitespace or control characters".to_owned())
+                    })?
+                    .clone_into(&mut cfg.firestore_location);
+            }
             if let Some(e) = fs.get("edition").and_then(Value::as_str) {
                 cfg.edition = FirestoreEdition::parse_config_str(e)
                     .ok_or_else(|| ConfigError(format!("unknown firestore.edition {e:?}")))?;
@@ -4000,6 +4015,83 @@ mod tests {
             base.insert(k, v);
         }
         RuntimeConfig::from_json(&json)
+    }
+
+    #[test]
+    fn firestore_event_location_defaults_to_nam5_and_accepts_configuration() {
+        for profile in ["strict", "emulator"] {
+            for (firestore, expected) in [
+                (json!({}), "nam5"),
+                (json!({"location": "us-central1"}), "us-central1"),
+                (json!({"location": "unknown-location"}), "unknown-location"),
+            ] {
+                let cfg = RuntimeConfig::from_json(&json!({
+                    "schemaVersion": 1, "profile": profile, "firestore": firestore
+                }))
+                .unwrap();
+                assert_eq!(cfg.firestore_location, expected);
+            }
+        }
+        for bad in [
+            json!(null),
+            json!(1),
+            json!(true),
+            json!([]),
+            json!({}),
+            json!(""),
+            json!(" us-central1 "),
+            json!("us central1"),
+            json!("us\tcentral1"),
+            json!("us\ncentral1"),
+            json!("us\0central1"),
+            json!("us\u{7f}central1"),
+            json!("us\u{85}central1"),
+            json!("us\u{a0}central1"),
+            json!("us\u{2003}central1"),
+        ] {
+            let error = RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1, "firestore": {"location": bad}
+            }))
+            .unwrap_err();
+            assert!(error.0.contains("firestore.location"), "{error}");
+        }
+    }
+
+    #[test]
+    fn firestore_location_schema_and_example_match_the_loader_contract() {
+        let schema: Value =
+            serde_json::from_str(include_str!("../../../spec/config/fireemu.schema.json")).unwrap();
+        let location = &schema["properties"]["firestore"]["properties"]["location"];
+        assert_eq!(location["type"], "string");
+        assert_eq!(
+            location["default"],
+            RuntimeConfig::default().firestore_location
+        );
+        assert_eq!(location["minLength"], 1);
+        assert!(location["pattern"].as_str().is_some());
+        let description = location["description"].as_str().unwrap();
+        for policy in [
+            "strict",
+            "emulator",
+            "nam5",
+            "opaque",
+            "whitespace",
+            "control",
+            "routing",
+        ] {
+            assert!(description.contains(policy), "missing {policy}");
+        }
+        let example: Value = serde_json::from_str(include_str!(
+            "../../../spec/config/examples/standard-minimal.json"
+        ))
+        .unwrap();
+        assert_eq!(example["firestore"]["location"], "us-central1");
+        assert_eq!(
+            RuntimeConfig::from_json(&example)
+                .unwrap()
+                .firestore_location,
+            "us-central1"
+        );
     }
 
     #[test]

@@ -1759,6 +1759,114 @@ async fn max_instances_caps_http_admission_before_the_global_limit() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn strict_second_gen_retry_deliveries_renew_both_trace_ids_at_the_runner() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile;
+    let log = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../target/codex-out/retry-frames-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+    let spec = SpawnSpec {
+        command: vec![
+            "python3".to_owned(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+        ],
+        cwd: None,
+        env: vec![(
+            "FIREEMU_FAKE_FRAME_LOG".to_owned(),
+            log.display().to_string(),
+        )],
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    };
+    let runner = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+    let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+    manifest
+        .functions
+        .retain(|function| function.name == "fail");
+    manifest.functions[0].generation = FunctionGeneration::Second;
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let runtime = FunctionsRuntime::with_codebases(
+        vec![CodebaseSpec {
+            name: "default".to_owned(),
+            manifest,
+            runner,
+            spawn: None,
+            cleanup_dir: None,
+        }],
+        FunctionsConfig {
+            retry_attempts: 2,
+            ..FunctionsConfig::for_tests(1, "s".into())
+        },
+        clock.clone(),
+        FunctionsHttpProfile::Strict,
+    )
+    .unwrap();
+    let dispatch = tokio::spawn(runtime.clone().dispatch_loop());
+    runtime.on_commit(&commit(vec![DocumentChange {
+        path: doc("items/retry-trace", 1).path,
+        before: None,
+        after: Some(doc("items/retry-trace", 1).into()),
+    }]));
+    let first = tokio::time::timeout(Duration::from_secs(5), async {
+        while runtime.history().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(60))
+        .unwrap();
+    runtime.on_clock_changed();
+    let idle = runtime.await_idle(Duration::from_secs(5)).await;
+    runtime.shutdown().await;
+    dispatch.await.unwrap();
+    let frames: Vec<serde_json::Value> = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    std::fs::remove_file(&log).unwrap();
+    assert!(first.is_ok(), "first runner failure was not recorded");
+    assert!(idle.is_ok(), "retry did not exhaust its attempt budget");
+    assert_eq!(frames.len(), 2);
+    assert_eq!(runtime.dead_letters().len(), 1);
+    assert_eq!(
+        runtime
+            .history()
+            .iter()
+            .map(|record| record.attempt)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    assert!(runtime
+        .history()
+        .iter()
+        .all(|record| record.outcome.starts_with("failed")));
+    assert_eq!(frames[0]["event"]["id"], frames[1]["event"]["id"]);
+    let mut parts = Vec::new();
+    for frame in &frames {
+        let trace = frame["event"]["traceparent"].as_str().unwrap();
+        let fields: Vec<_> = trace.split('-').collect();
+        assert_eq!(fields.len(), 4);
+        assert_eq!(fields[0], "00");
+        assert_eq!(fields[3], "01");
+        for (id, length) in [(fields[1], 32), (fields[2], 16)] {
+            assert_eq!(id.len(), length);
+            assert!(id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+            assert!(id.bytes().any(|byte| byte != b'0'));
+        }
+        parts.push(fields);
+    }
+    assert_ne!(parts[0][1], parts[1][1]);
+    assert_ne!(parts[0][2], parts[1][2]);
+}
+
+#[tokio::test]
 async fn events_are_dispatched_and_retried_in_virtual_time() {
     let (runtime, clock) = start().await;
     assert!(runtime.is_idle());

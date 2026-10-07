@@ -680,6 +680,7 @@ fn build_functions_runtime(executor: &tokio::runtime::Runtime) -> Arc<FunctionsR
             project: "quint-connect".to_owned(),
             default_bucket: "quint-connect.appspot.com".to_owned(),
             location: "nam5".to_owned(),
+            clock_start_pinned: false,
             session: SessionId::new(1),
             max_running: 4,
             debug_mode: false,

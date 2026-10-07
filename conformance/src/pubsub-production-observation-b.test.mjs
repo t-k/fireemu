@@ -1044,3 +1044,62 @@ test("B actual main connects the counted baseline to exclusive journals and pres
     }
   }
 });
+
+test("B monotonic clock translation preserves window decisions even on an aged process", () => {
+  const offset = Number(process.env.OBSERVATION_TEST_CLOCK_MS ?? 0);
+  for (let seed = 0; seed < 200; seed++) {
+    const begun = offset + seed * 987654321;
+    let clock = begun;
+    const meter = createMeter({ now: () => clock });
+    meter.enter(makePlan().cells[0]);
+    clock += 79999;
+    assert.equal(meter.remaining(), 1);
+    clock++;
+    assert.throws(() => meter.remaining(), /time/);
+    assert.equal(meter.remaining(true), 40000);
+    clock += 40000;
+    assert.throws(() => meter.remaining(true), /time/);
+  }
+});
+test("B native uncertain statuses and aggregate trailers cannot confirm a remote CREATE", async () => {
+  for (const code of [8, 15]) {
+    const meter = createMeter({ now: () => 0 });
+    meter.enter(makePlan().cells.find((c) => c.transport === "grpc"));
+    const client = {
+      close() {},
+      makeUnaryRequest(_path, _e, _d, _raw, _metadata, _options, callback) {
+        const rpc = new EventEmitter();
+        rpc.cancel = () => {};
+        queueMicrotask(() => {
+          callback({ code, details: "remote answer not confirmed" });
+          rpc.emit("status", {
+            code,
+            details: "remote answer not confirmed",
+            metadata: { getMap: () => ({}), get: () => [] },
+          });
+        });
+        return rpc;
+      },
+    };
+    const wire = createWire({
+      meter,
+      client,
+      journal: { write() {} },
+      getToken: async () => "fake",
+    });
+    try {
+      const reply = await wire.call({
+        category: "create",
+        transport: "grpc",
+        service: "Publisher",
+        method: "CreateTopic",
+        request: { name: "projects/fixture-project/topics/fe123456abcdef-x" },
+      });
+      assert.equal(reply.unknown, true);
+      assert.equal(reply.bodyBytes, null);
+      assert.equal(reply.layoutVerdict, "NOT_COMPARABLE_NATIVE_ERROR_BODY_NOT_CAPTURED");
+    } finally {
+      wire.close();
+    }
+  }
+});

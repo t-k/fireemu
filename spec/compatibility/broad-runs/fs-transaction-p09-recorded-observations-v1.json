@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-observations-v1",
+  "parent": "FS-TRANSACTION",
+  "condition": [
+    "FS-TRANSACTION/failed-commit-and-rollback",
+    "FS-TRANSACTION/retry-token-lifecycle"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "decodedSemanticsValidated": true,
+  "rawRestWireLayoutValidated": false,
+  "normalization": "Only the declared run identities (nonce, owner marker, issued token values, project number) are replaced by roles; codes, diagnostics, read states, token ends and cleanup are the program's own projection.",
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open."
+  ],
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P09-GRPC-RETRY",
+      "packetName": null,
+      "corpusDigest": "99a5eab1b300bf2f88a42926897505aeeab98de068d22121cbbfba28bb013fd3",
+      "recordings": 2,
+      "agree": true,
+      "productionFileSha256": [
+        "b129f425d3b8ac8cb3e7d40654b4e68f57172d9973a8406518fb81764bcc2e84",
+        "d6d8fd9c1a793a34f61eeab9389bf6cbbf085348df2f2f6e6f995c0ab68e9506"
+      ],
+      "projection": {
+        "program": "FS-TRANSACTION-P09-GRPC-RETRY",
+        "corpusDigest": "99a5eab1b300bf2f88a42926897505aeeab98de068d22121cbbfba28bb013fd3",
+        "cases": [
+          {
+            "caseId": "grpc/rollback-after-commit",
+            "rpc": "Rollback",
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid.",
+            "issuedToken": false
+          },
+          {
+            "caseId": "grpc/retry-with-committed-previous",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          {
+            "caseId": "grpc/rollback-after-rollback",
+            "rpc": "Rollback",
+            "code": 0,
+            "details": "",
+            "issuedToken": false
+          },
+          {
+            "caseId": "grpc/retry-with-rolled-back-previous",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "details": "",
+            "issuedToken": true
+          },
+          {
+            "caseId": "grpc/retry-with-read-only-previous",
+            "rpc": "BeginTransaction",
+            "code": 3,
+            "details": "Cannot retry a read-only transaction",
+            "issuedToken": false
+          },
+          {
+            "caseId": "grpc/retry-with-unissued-previous",
+            "rpc": "BeginTransaction",
+            "code": 3,
+            "details": "Invalid transaction.",
+            "issuedToken": false
+          }
+        ],
+        "reads": [
+          {
+            "site": "setup/absence",
+            "code": 5,
+            "state": null,
+            "details": "Document \"projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/<nonce>/txn-p09/control\" not found."
+          },
+          {
+            "site": "committed/read",
+            "code": 0,
+            "state": "created",
+            "details": ""
+          },
+          {
+            "site": "committed/snapshot",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          {
+            "site": "rolled-back/read",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          {
+            "site": "rolled-back/snapshot",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          {
+            "site": "read-only/read",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          {
+            "site": "read-only/snapshot",
+            "code": 0,
+            "state": "outside",
+            "details": ""
+          },
+          {
+            "site": "post-state/read",
+            "code": 0,
+            "state": "after-readonly-start",
+            "details": ""
+          }
+        ],
+        "skipped": [],
+        "cleanup": {
+          "absent": true
+        }
+      }
+    }
+  ]
+}

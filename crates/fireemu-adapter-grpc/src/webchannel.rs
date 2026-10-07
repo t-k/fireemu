@@ -910,13 +910,13 @@ impl Session {
             .is_ok_and(|owner| owner.cancel.is_some())
     }
 
-    fn push(&self, payload: &Value) -> Result<u64, ()> {
+    fn push(&self, payload: &str) -> Result<u64, ()> {
         let (aid, bytes, queued_first, queued_last, queued_count) = {
             let Ok(mut delivery) = self.delivery.lock() else {
                 return Err(());
             };
             let aid = delivery.next_aid.checked_add(1).ok_or(())?;
-            let text = json!([aid, payload]).to_string();
+            let text = format!("[{aid},{payload}]");
             let bytes = text.len();
             let retained_bytes = delivery.retained_bytes.checked_add(bytes).ok_or(())?;
             if bytes > MAX_OUTBOUND_ARRAY_BYTES
@@ -1675,6 +1675,7 @@ impl Hub {
         Err(error_chunk(&crate::service::app_check_denied(reason)))
     }
 
+    #[allow(clippy::too_many_lines)]
     fn handshake(&self, req: &ChannelRequest) -> ChannelResponse {
         let form = parse_form(&req.body);
         // Init headers travel in the body (`headers=`) or the query (`$httpHeaders`).
@@ -1705,7 +1706,15 @@ impl Hub {
             },
             None => crate::rules::Principal::Owner,
         };
-        let sid = match random_sid() {
+        let strict = self.enforce_limits();
+        let sid = match if strict && req.kind == StreamKind::Listen {
+            sid_from_entropy(|| {
+                fireemu_adapter_support::entropy::u128_value()
+                    .map(|value| fireemu_core_auth::jwt::base64url_encode(&value.to_be_bytes()))
+            })
+        } else {
+            random_sid()
+        } {
             Ok(sid) => sid,
             Err(e) => return text_response(500, e),
         };
@@ -1766,7 +1775,12 @@ impl Hub {
             self.remove(&sid);
             return error_chunk(&e);
         }
-        let handshake = json!([[0, ["c", sid, "", 8, 12, 30_000]]]).to_string();
+        let scalar = if strict && req.kind == StreamKind::Listen {
+            15
+        } else {
+            12
+        };
+        let handshake = json!([[0, ["c", sid, "", 8, scalar, 30_000]]]).to_string();
         ChannelResponse::Full {
             status: 200,
             headers: vec![
@@ -2186,17 +2200,18 @@ fn spawn_stream(
     ctx: StreamContext,
     inbound_rx: mpsc::Receiver<Result<Value, Status>>,
 ) {
-    let (out_tx, mut out_rx) = mpsc::channel::<Result<Value, Status>>(256);
+    let (out_tx, mut out_rx) = mpsc::channel::<Result<String, Status>>(256);
     let kind = session.kind;
+    let strict = ctx.gateway.enforce_limits;
     // Pump: stream output → numbered arrays on the session.
     let pump_session = session.clone();
     tokio::spawn(async move {
         while let Some(item) = out_rx.recv().await {
             let pushed = match item {
-                Ok(v) => pump_session.push(&json!([v])),
+                Ok(v) => pump_session.push(&format!("[{v}]")),
                 Err(e) => {
                     let envelope = error_response(&e).body;
-                    let _ = pump_session.push(&json!([envelope]));
+                    let _ = pump_session.push(&json!([envelope]).to_string());
                     break;
                 }
             };
@@ -2220,7 +2235,7 @@ fn spawn_stream(
             let (tx, mut rx) = mpsc::channel::<Result<pb::ListenResponse, Status>>(256);
             tokio::spawn(async move {
                 while let Some(item) = rx.recv().await {
-                    let forwarded = item.map(|response| listen_response_to_json(&response));
+                    let forwarded = item.map(|response| listen_response_to_json(&response, strict));
                     if out_tx.send(forwarded).await.is_err() {
                         break;
                     }
@@ -2250,7 +2265,7 @@ fn spawn_stream(
             let (tx, mut rx) = mpsc::channel::<Result<pb::WriteResponse, Status>>(256);
             tokio::spawn(async move {
                 while let Some(item) = rx.recv().await {
-                    let forwarded = item.map(|r| write_response_to_json(&r));
+                    let forwarded = item.map(|r| write_response_to_json(&r).to_string());
                     if out_tx.send(forwarded).await.is_err() {
                         break;
                     }
@@ -2633,7 +2648,7 @@ mod tests {
         };
 
         assert!(session
-            .push(&json!({"value": "x".repeat(MAX_OUTBOUND_ARRAY_BYTES)}))
+            .push(&json!({"value": "x".repeat(MAX_OUTBOUND_ARRAY_BYTES)}).to_string())
             .is_err());
         {
             let delivery = session.delivery.lock().unwrap();
@@ -2642,8 +2657,12 @@ mod tests {
             assert!(delivery.outbound.is_empty());
         }
 
-        session.push(&json!({"value": "first"})).unwrap();
-        session.push(&json!({"value": "second"})).unwrap();
+        session
+            .push(&json!({"value": "first"}).to_string())
+            .unwrap();
+        session
+            .push(&json!({"value": "second"}).to_string())
+            .unwrap();
         let second_bytes = {
             let mut delivery = session.delivery.lock().unwrap();
             delivery.committed_aid = 2;
@@ -2659,7 +2678,7 @@ mod tests {
 
         let large = json!({"value": "x".repeat(MAX_OUTBOUND_ARRAY_BYTES / 2)});
         let mut accepted = 0usize;
-        while session.push(&large).is_ok() {
+        while session.push(&large.to_string()).is_ok() {
             accepted += 1;
         }
         let before = {
@@ -2672,7 +2691,7 @@ mod tests {
                 delivery.outbound.len(),
             )
         };
-        assert!(session.push(&large).is_err());
+        assert!(session.push(&large.to_string()).is_err());
         let delivery = session.delivery.lock().unwrap();
         assert_eq!(
             (
@@ -2696,14 +2715,14 @@ mod tests {
         let first = test_session("global-first", DeliveryState::with_budgets(&budgets));
         let second = test_session("global-second", DeliveryState::with_budgets(&budgets));
 
-        assert_eq!(first.push(&payload), Ok(1));
-        assert!(second.push(&payload).is_err());
+        assert_eq!(first.push(&payload.to_string()), Ok(1));
+        assert!(second.push(&payload.to_string()).is_err());
         assert!(!second.is_terminated());
         assert!(second.delivery.lock().unwrap().outbound.is_empty());
 
         first.delivery.lock().unwrap().committed_aid = 1;
         first.acknowledge(1).unwrap();
-        assert_eq!(second.push(&payload), Ok(1));
+        assert_eq!(second.push(&payload.to_string()), Ok(1));
         assert!(first.delivery.lock().unwrap().outbound.is_empty());
     }
 
@@ -2976,7 +2995,7 @@ mod tests {
         session.backchannel_owner.lock().unwrap().generation = 1;
         let cursor = 0;
         assert!(session.pending_batch_plan_after(cursor).is_none());
-        assert_eq!(session.push(&json!({"value": "late"})), Ok(1));
+        assert_eq!(session.push(&json!({"value": "late"}).to_string()), Ok(1));
         let noop = json!([[cursor, ["noop"]]]).to_string();
         let (tx, mut rx) = mpsc::channel(1);
         let permit = tx.reserve().await.unwrap();

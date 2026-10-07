@@ -113,6 +113,7 @@ struct TopicEntry {
     name: TopicName,
     labels: BTreeMap<String, String>,
     incarnation: u64,
+    message_retention_duration: Option<LogicalDuration>,
 }
 
 /// The whole Pub/Sub state for one daemon (all projects share one registry; names are
@@ -287,8 +288,7 @@ impl PubSubState {
         }
     }
 
-    /// Drops every topic and subscription (session reset). The seed and counters are reset so
-    /// that a fresh run after a reset reproduces the same identifiers.
+    /// Drops every topic and subscription (session reset). Identifier generators reset for deterministic fresh runs; topic incarnations remain monotonic to reject stale preparations.
     pub fn clear(&mut self) {
         self.topics.clear();
         self.subscriptions.clear();
@@ -301,7 +301,7 @@ impl PubSubState {
         self.message_counter = 0;
         self.ack_rng = SplitMix64::new(self.seed ^ 0x5053_5542_4143_4b5f);
         self.snapshot_counter = 0;
-        self.topic_counter = 0;
+        // Incarnations stay monotonic so reset cannot revive a prepared publication.
     }
 
     /// Drops one project's topics and subscriptions without disturbing other sessions.
@@ -366,6 +366,19 @@ impl PubSubState {
         name: TopicName,
         labels: BTreeMap<String, String>,
     ) -> Result<()> {
+        self.create_topic_with_retention(name, labels, None)
+    }
+
+    /// Creates a topic with persisted retention configuration; this does not enforce replay expiry.
+    pub fn create_topic_with_retention(
+        &mut self,
+        name: TopicName,
+        labels: BTreeMap<String, String>,
+        message_retention_duration: Option<LogicalDuration>,
+    ) -> Result<()> {
+        if let Some(duration) = message_retention_duration {
+            crate::configuration::validate_retention(duration)?;
+        }
         let key = name.to_full();
         if self.topics.contains_key(&key) {
             return Err(PubSubError::already_exists(format!(
@@ -388,6 +401,7 @@ impl PubSubState {
                 name,
                 labels,
                 incarnation: self.topic_counter,
+                message_retention_duration,
             },
         );
         Ok(())
@@ -404,6 +418,14 @@ impl PubSubState {
         self.topics
             .get(&name.to_full())
             .map(|t| &t.labels)
+            .ok_or_else(|| PubSubError::not_found(format!("topic {} not found", name.to_full())))
+    }
+
+    /// The explicitly requested topic retention configuration, or `NOT_FOUND`.
+    pub fn topic_retention(&self, name: &TopicName) -> Result<Option<LogicalDuration>> {
+        self.topics
+            .get(&name.to_full())
+            .map(|topic| topic.message_retention_duration)
             .ok_or_else(|| PubSubError::not_found(format!("topic {} not found", name.to_full())))
     }
 
@@ -590,22 +612,54 @@ impl PubSubState {
         ack_deadline_seconds: Option<u32>,
         push_config: Option<PushConfig>,
     ) -> Result<()> {
+        self.update_subscription_configuration(
+            name,
+            crate::SubscriptionUpdate {
+                ack_deadline_seconds,
+                push_config,
+                ..Default::default()
+            },
+            true,
+        )
+    }
+
+    /// Validates all selected fields on a candidate, then commits them together.
+    pub fn update_subscription_configuration(
+        &mut self,
+        name: &SubscriptionName,
+        update: crate::SubscriptionUpdate,
+        strict: bool,
+    ) -> Result<()> {
         let mut candidate = self.subscription_config(name)?.clone();
-        if let Some(seconds) = ack_deadline_seconds {
-            candidate.ack_deadline_seconds = seconds;
+        if let Some(value) = update.ack_deadline_seconds {
+            candidate.ack_deadline_seconds = value;
         }
-        if let Some(push_config) = &push_config {
-            candidate.push_config = push_config.clone();
+        if let Some(value) = update.labels {
+            candidate.labels = value;
+        }
+        if let Some(value) = update.retain_acked_messages {
+            candidate.retain_acked_messages = value;
+        }
+        if let Some(value) = update.message_retention_duration {
+            candidate.message_retention_duration = value;
+        }
+        if let Some(value) = update.expiration_policy {
+            candidate.expiration_policy = value;
+        }
+        if let Some(value) = update.retry_policy {
+            candidate.retry_policy = value;
+        }
+        if let Some(value) = update.dead_letter_policy {
+            candidate.dead_letter_policy = value;
+        }
+        if let Some(value) = update.push_config {
+            candidate.push_config = value;
         }
         candidate.validate()?;
-
-        let subscription = self.sub_mut(name)?;
-        if let Some(seconds) = ack_deadline_seconds {
-            subscription.set_ack_deadline(seconds);
+        if strict {
+            candidate.validate_production_configuration()?;
         }
-        if let Some(push_config) = push_config {
-            subscription.set_push_config(push_config);
-        }
+        self.sub_mut(name)?.replace_config(candidate);
         Ok(())
     }
 
@@ -1047,6 +1101,43 @@ impl PubSubState {
         messages: Vec<PubsubMessage>,
         now: LogicalInstant,
     ) -> Result<PreparedPublication> {
+        self.prepare_publish_numbered(
+            topic,
+            messages.into_iter().map(|m| (m, None)).collect(),
+            now,
+        )
+    }
+
+    /// Like [`Self::prepare_publish`], but every message carries the identifier the caller chose (the one a service that
+    /// publishes on its own behalf, such as Cloud Scheduler for a first-generation schedule, stamps on its message). The
+    /// counter that numbers ordinary publishes is not used, so it does not move.
+    pub fn prepare_publish_with_message_ids(
+        &mut self,
+        topic: &TopicName,
+        messages: Vec<(PubsubMessage, String)>,
+        now: LogicalInstant,
+    ) -> Result<PreparedPublication> {
+        let mut seen = BTreeSet::new();
+        for (_, id) in &messages {
+            if id.is_empty() || !seen.insert(id.as_str()) {
+                return Err(PubSubError::invalid_argument(
+                    "a message identifier must be non-empty and unique within one publication",
+                ));
+            }
+        }
+        self.prepare_publish_numbered(
+            topic,
+            messages.into_iter().map(|(m, id)| (m, Some(id))).collect(),
+            now,
+        )
+    }
+
+    fn prepare_publish_numbered(
+        &mut self,
+        topic: &TopicName,
+        messages: Vec<(PubsubMessage, Option<String>)>,
+        now: LogicalInstant,
+    ) -> Result<PreparedPublication> {
         let topic_key = topic.to_full();
         let topic_incarnation = self
             .topics
@@ -1058,7 +1149,7 @@ impl PubSubState {
                 "a publish request carries at most {MAX_MESSAGES_PER_PUBLISH} messages"
             )));
         }
-        for message in &messages {
+        for (message, _) in &messages {
             message.validate()?;
         }
         self.remove_expired_snapshots(now);
@@ -1066,11 +1157,21 @@ impl PubSubState {
         let initial_message_counter = self.message_counter;
         let mut next_message_counter = initial_message_counter;
         let mut published = Vec::with_capacity(messages.len());
-        for message in messages {
-            next_message_counter = next_message_counter.checked_add(1).ok_or_else(|| {
-                PubSubError::resource_exhausted("Pub/Sub message identifier space exhausted")
-            })?;
-            let message_id = next_message_counter.to_string();
+        for (message, chosen) in messages {
+            let message_id = if let Some(id) = chosen {
+                id
+            } else {
+                // The broker owns half of the id space (the runtime's own publishes the other half), and the ids repeat after it, so its space ends there
+                next_message_counter = next_message_counter
+                    .checked_add(1)
+                    .filter(|counter| *counter <= crate::MESSAGE_ID_SPAN)
+                    .ok_or_else(|| {
+                        PubSubError::resource_exhausted(
+                            "Pub/Sub message identifier space exhausted",
+                        )
+                    })?;
+                crate::pubsub_message_id(next_message_counter)
+            };
             published.push(Arc::new(StoredMessage {
                 message_id,
                 publish_time: now,
@@ -1241,6 +1342,18 @@ impl PubSubState {
                 .map(|message| message.message_id.clone())
                 .collect()
         })
+    }
+
+    /// Publishes messages that carry the identifier the caller chose, at `now`, fanning them out like
+    /// [`Self::publish`]. The ordinary message counter is left alone.
+    pub fn publish_with_message_ids(
+        &mut self,
+        topic: &TopicName,
+        messages: Vec<(PubsubMessage, String)>,
+        now: LogicalInstant,
+    ) -> Result<Vec<Arc<StoredMessage>>> {
+        let prepared = self.prepare_publish_with_message_ids(topic, messages, now)?;
+        self.commit_prepared(prepared, now)
     }
 
     /// Publishes messages and returns the shared stored records used by every subscription.
@@ -1453,6 +1566,10 @@ mod tests {
 
     fn sub_cfg(p: &str, s: &str, t: &str, filter: Filter) -> SubscriptionConfig {
         SubscriptionConfig {
+            labels: std::collections::BTreeMap::new(),
+            expiration_policy: None,
+            retain_acked_messages: false,
+            message_retention_duration: None,
             name: SubscriptionName::new(p, s).unwrap(),
             topic: TopicName::new(p, t).unwrap(),
             ack_deadline_seconds: DEFAULT_ACK_DEADLINE_SECONDS,
@@ -1464,11 +1581,326 @@ mod tests {
         }
     }
 
+    proptest::proptest! {
+        #[test]
+        fn configuration_updates_match_reference_model(steps in proptest::collection::vec((0_u8..5,0_u32..=601,proptest::bool::ANY,"[a-z]{1,12}",600_i64..=2_678_401,0_i64..=2_678_401),1..40)) {
+            let mut state=PubSubState::new(42);
+            let topic=topic("demo-model","events");
+            state.create_topic(topic.clone(),BTreeMap::new()).unwrap();
+            let mut expected=sub_cfg("demo-model","configured","events",Filter::always());
+            expected.message_retention_duration=Some(LogicalDuration::from_seconds(604_800));
+            let name=expected.name.clone();
+            state.create_subscription(expected.clone()).unwrap();
+            let now=LogicalInstant::from_unix_seconds(1_700_000_000);
+            state.publish(&topic,vec![data(b"preserved")],now).unwrap();
+            for (operation,ack,retain,label,retention,ttl) in steps {
+                if operation==4 {
+                    state.delete_subscription(&name).unwrap();
+                    expected=sub_cfg("demo-model","configured","events",Filter::always());
+                    expected.message_retention_duration=Some(LogicalDuration::from_seconds(604_800));
+                    state.create_subscription(expected.clone()).unwrap();
+                    state.publish(&topic,vec![data(b"preserved")],now).unwrap();
+                    continue;
+                }
+                let mut update=crate::SubscriptionUpdate::default();
+                let mut candidate=expected.clone();
+                match operation {
+                    0 => { let labels=BTreeMap::from([("env".to_owned(),label)]);candidate.labels=labels.clone(); update.labels=Some(labels); }
+                    1 => { candidate.ack_deadline_seconds=ack; candidate.labels=BTreeMap::from([("atomic".to_owned(),label)]); update.ack_deadline_seconds=Some(ack);update.labels=Some(candidate.labels.clone()); }
+                    2 => { let policy=crate::ExpirationPolicy {ttl:if retain {None} else {Some(LogicalDuration::from_seconds(ttl))}};candidate.expiration_policy=Some(policy);update.expiration_policy=Some(Some(policy)); }
+                    _ => { candidate.retain_acked_messages=retain;candidate.message_retention_duration=Some(LogicalDuration::from_seconds(retention));update.retain_acked_messages=Some(retain);update.message_retention_duration=Some(candidate.message_retention_duration); }
+                }
+                let ttl=candidate.expiration_policy.map_or(Some(2_678_400_i128*1_000_000_000),|policy|policy.ttl.map(LogicalDuration::as_nanos));
+                let retention=candidate.message_retention_duration.unwrap().as_nanos();
+                let admitted=(10..=600).contains(&candidate.ack_deadline_seconds) && (600_000_000_000..=2_678_400_000_000_000).contains(&retention) && ttl.is_none_or(|ttl|ttl>=86_400_000_000_000 && retention<=ttl);
+                proptest::prop_assert_eq!(state.update_subscription_configuration(&name,update,true).is_ok(),admitted);
+                if admitted {expected=candidate;}
+                proptest::prop_assert_eq!(state.subscription_config(&name).unwrap(),&expected);
+            }
+            let messages=state.pull(&name,10,now).unwrap();
+            proptest::prop_assert_eq!(messages.len(),1);
+            proptest::prop_assert_eq!(&messages[0].message.message.data,b"preserved");
+        }
+
+        #[test]
+        fn topic_retention_lifecycle_matches_reference_model(nanos in 600_000_000_000_i128..=2_678_400_000_000_000_i128) {
+            let mut state=PubSubState::new(42);
+            let name=topic("demo-model","retained");
+            let duration=LogicalDuration::from_nanos(nanos);
+            state.create_topic_with_retention(name.clone(),BTreeMap::new(),Some(duration)).unwrap();
+            proptest::prop_assert_eq!(state.topic_retention(&name).unwrap(),Some(duration));
+            proptest::prop_assert!(state.create_topic_with_retention(name.clone(),BTreeMap::new(),None).is_err());
+            proptest::prop_assert_eq!(state.topic_retention(&name).unwrap(),Some(duration));
+            state.delete_topic(&name).unwrap();
+            state.create_topic(name.clone(),BTreeMap::new()).unwrap();
+            proptest::prop_assert_eq!(state.topic_retention(&name).unwrap(),None);
+        }
+    }
+
+    // A finite configuration model: requests determine expected values; state operations must preserve those values until deletion/reset. This makes no message-expiry claim.
+    fn exercise_retention_config_model(retain: bool, nanos: Option<i128>) {
+        let mut state = PubSubState::new(42);
+        for project in ["demo-a", "demo-b"] {
+            state
+                .create_topic(topic(project, "events"), BTreeMap::new())
+                .unwrap();
+        }
+        let mut config = sub_cfg("demo-a", "retention", "events", Filter::always());
+        let name = config.name.clone();
+        config.retain_acked_messages = retain;
+        config.message_retention_duration = nanos.map(LogicalDuration::from_nanos);
+        state.create_subscription(config).unwrap();
+        let other = sub_cfg("demo-b", "retention", "events", Filter::always());
+        let other_name = other.name.clone();
+        state.create_subscription(other).unwrap();
+        let assert_model = |state: &PubSubState, expected_retain, expected_nanos, ack| {
+            let config = state.subscription_config(&name).unwrap();
+            assert_eq!(config.retain_acked_messages, expected_retain);
+            assert_eq!(
+                config
+                    .message_retention_duration
+                    .map(LogicalDuration::as_nanos),
+                expected_nanos
+            );
+            assert_eq!(config.ack_deadline_seconds, ack);
+            assert_eq!(state.list_subscriptions("demo-a"), vec![config.clone()]);
+            let other = state.subscription_config(&other_name).unwrap();
+            assert!(!other.retain_acked_messages);
+            assert_eq!(other.message_retention_duration, None);
+            assert_eq!(state.list_subscriptions("demo-b"), vec![other.clone()]);
+        };
+        assert_model(&state, retain, nanos, 10);
+        state
+            .update_subscription(
+                &name,
+                Some(30),
+                Some(PushConfig {
+                    attributes: std::collections::BTreeMap::new(),
+                    push_endpoint: "http://127.0.0.1:1/push".into(),
+                }),
+            )
+            .unwrap();
+        assert_model(&state, retain, nanos, 30);
+        assert!(state.update_subscription(&name, Some(1), None).is_err());
+        assert_model(&state, retain, nanos, 30);
+        state.delete_subscription(&name).unwrap();
+        assert!(state.subscription_config(&name).is_err());
+        assert!(state.list_subscriptions("demo-a").is_empty());
+        state
+            .create_subscription(sub_cfg("demo-a", "retention", "events", Filter::always()))
+            .unwrap();
+        assert_model(&state, false, None, 10);
+        state.clear_project("demo-a");
+        assert!(state.subscription_config(&name).is_err());
+        assert!(state.list_subscriptions("demo-a").is_empty());
+        assert!(state.subscription_config(&other_name).is_ok());
+        state.clear();
+        assert!(state.subscription_config(&other_name).is_err());
+    }
+
+    #[test]
+    fn retention_config_finite_lifecycle_model() {
+        for retain in [false, true] {
+            for nanos in [
+                None,
+                Some(600_000_000_000),
+                Some(601_000_000_001),
+                Some(2_678_400_000_000_000),
+            ] {
+                exercise_retention_config_model(retain, nanos);
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn retention_config_property_matches_lifecycle_model(retain in proptest::bool::ANY, nanos in proptest::option::of(600_000_000_000_i128..=2_678_400_000_000_000_i128)) {
+            exercise_retention_config_model(retain, nanos);
+        }
+
+        #[test]
+        fn retention_config_validation_matches_schema_domain(nanos in -1_i128..=2_678_401_000_000_000_i128) {
+            let mut config = sub_cfg("demo-a", "validation", "events", Filter::always());
+            config.message_retention_duration = Some(LogicalDuration::from_nanos(nanos));
+            proptest::prop_assert_eq!(config.validate().is_ok(), (600_000_000_000..=2_678_400_000_000_000).contains(&nanos));
+            let mut state = PubSubState::new(42);
+            state.create_topic(topic("demo-a", "events"), BTreeMap::new()).unwrap();
+            let name = config.name.clone();
+            let result = state.create_subscription(config);
+            proptest::prop_assert_eq!(result.is_ok(), (600_000_000_000..=2_678_400_000_000_000).contains(&nanos));
+            proptest::prop_assert_eq!(state.subscription_config(&name).is_ok(), result.is_ok());
+            proptest::prop_assert_eq!(state.topic_subscriptions(&topic("demo-a", "events")).len(), usize::from(result.is_ok()));
+        }
+    }
+
+    proptest::proptest! {
+        /// Whatever the interleaving of ordinary publishes and publishes with chosen identifiers, the ordinary ones are
+        /// numbered 1, 2, 3 ... in order (each number is spelled by `pubsub_message_id`) (the chosen ones never use up a number) and a chosen identifier is kept.
+        #[test]
+        fn chosen_identifiers_never_disturb_the_ordinary_numbering(
+            steps in proptest::collection::vec(proptest::bool::ANY, 1..40)
+        ) {
+            let mut s = PubSubState::new(7);
+            let now = LogicalInstant::from_unix_seconds(10);
+            s.create_topic(topic("demo-app", "jobs"), BTreeMap::new()).unwrap();
+            let mut ordinary = 0_u64;
+            for (index, chosen) in steps.into_iter().enumerate() {
+                if chosen {
+                    let id = format!("2{:016}", index as u64 * 7919);
+                    let message = PubsubMessage {
+                        attributes: BTreeMap::from([("scheduled".to_owned(), "true".to_owned())]),
+                        ..PubsubMessage::default()
+                    };
+                    let published = s
+                        .publish_with_message_ids(&topic("demo-app", "jobs"), vec![(message, id.clone())], now)
+                        .unwrap();
+                    proptest::prop_assert_eq!(&published[0].message_id, &id);
+                } else {
+                    ordinary += 1;
+                    let ids = s.publish(&topic("demo-app", "jobs"), vec![data(b"x")], now).unwrap();
+                    proptest::prop_assert_eq!(ids, vec![crate::pubsub_message_id(ordinary)]);
+                }
+            }
+        }
+    }
+
     fn data(d: &[u8]) -> PubsubMessage {
         PubsubMessage {
             data: d.to_vec(),
             ..PubsubMessage::default()
         }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn produced_message_ids_are_decimal_unique_and_disjoint_from_runtime(
+            count in 1usize..64,
+            seed in proptest::prelude::any::<u64>(),
+            runtime_counter in proptest::prelude::any::<u64>(),
+        ) {
+            let mut state = PubSubState::new(seed);
+            let name = topic("demo-app", "production-ids");
+            let runtime_id = fireemu_core_types::pubsub_message_id::runtime_message_id(runtime_counter);
+            for _ in 0..2 {
+                state.create_topic(name.clone(), BTreeMap::new()).unwrap();
+                let published = state.publish_shared(&name, vec![data(b"x"); count], LogicalInstant::from_unix_seconds(0)).unwrap();
+                let mut seen = std::collections::BTreeSet::new();
+                for (index, message) in published.iter().enumerate() {
+                    let id = &message.message_id;
+                    proptest::prop_assert!((16..=17).contains(&id.len()));
+                    proptest::prop_assert!(id.bytes().all(|byte| byte.is_ascii_digit()));
+                    proptest::prop_assert!(seen.insert(id.clone()));
+                    proptest::prop_assert_ne!(id, &runtime_id);
+                    proptest::prop_assert_eq!(id, &crate::pubsub_message_id(u64::try_from(index).unwrap() + 1));
+                }
+                state.clear();
+            }
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn reset_refuses_prepared_publications_from_previous_topic_incarnations(resets in 1usize..8, seed in proptest::prelude::any::<u64>()) {
+            let mut state=PubSubState::new(seed);let name=topic("demo-app","reset-publication");
+            let now=LogicalInstant::from_unix_seconds(100);
+            for _ in 0..resets {
+                state.create_topic(name.clone(),BTreeMap::new()).unwrap();
+                let config=sub_cfg("demo-app","reset-sub","reset-publication",Filter::always());let subscription=config.name.clone();
+                state.create_subscription(config.clone()).unwrap();
+                let prepared=state.prepare_publish(&name,vec![data(b"old")],now).unwrap();
+                state.clear();state.create_topic(name.clone(),BTreeMap::new()).unwrap();state.create_subscription(config).unwrap();
+                let error=state.commit_prepared(prepared,now).unwrap_err();
+                proptest::prop_assert_eq!(error.code(),crate::Code::FailedPrecondition);
+                proptest::prop_assert!(state.pull(&subscription,10,now).unwrap().is_empty());
+                let ids=state.publish(&name,vec![data(b"new")],now).unwrap();
+                proptest::prop_assert_eq!(ids,vec![crate::pubsub_message_id(1)]);
+                state.clear();
+            }
+        }
+    }
+
+    /// A message published with a caller-chosen id (the one Cloud Scheduler's Gen1 publish carries) keeps that id and
+    /// the given publish time, is seen by every subscription, and leaves the counter that numbers ordinary publishes
+    /// alone, so the next ordinary message still gets the next number.
+    #[test]
+    fn publish_with_message_ids_keeps_the_id_and_the_time_and_leaves_the_counter() {
+        let mut s = PubSubState::new(42);
+        let at = LogicalInstant::from_unix_seconds(1000);
+        s.create_topic(topic("demo-app", "jobs"), BTreeMap::new())
+            .unwrap();
+        s.create_subscription(sub_cfg("demo-app", "jobs-sub", "jobs", Filter::always()))
+            .unwrap();
+        let attributes = BTreeMap::from([("scheduled".to_owned(), "true".to_owned())]);
+        let message = PubsubMessage {
+            attributes: attributes.clone(),
+            ..PubsubMessage::default()
+        };
+        let published = s
+            .publish_with_message_ids(
+                &topic("demo-app", "jobs"),
+                vec![(message, "21339796619509982".to_owned())],
+                at,
+            )
+            .unwrap();
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0].message_id, "21339796619509982");
+        assert_eq!(published[0].publish_time, at);
+        let subscription = SubscriptionName::new("demo-app", "jobs-sub").unwrap();
+        let later = LogicalInstant::from_unix_seconds(2000);
+        let pulled = s.pull(&subscription, 10, later).unwrap();
+        assert_eq!(pulled.len(), 1);
+        assert_eq!(pulled[0].message.message_id, "21339796619509982");
+        assert_eq!(pulled[0].message.publish_time, at);
+        assert!(pulled[0].message.message.data.is_empty());
+        assert_eq!(pulled[0].message.message.attributes, attributes);
+        // the counter of ordinary publishes did not move
+        let ids = s
+            .publish(&topic("demo-app", "jobs"), vec![data(b"x")], later)
+            .unwrap();
+        assert_eq!(ids, vec![crate::pubsub_message_id(1)]);
+    }
+
+    /// An explicit id is refused when it is empty or already names a message the topic's snapshots or subscriptions may
+    /// hold (a duplicate within one call), and an unknown topic is still not found: nothing is published then.
+    #[test]
+    fn publish_with_message_ids_refuses_what_publish_refuses_and_a_bad_id() {
+        let mut s = PubSubState::new(42);
+        let at = LogicalInstant::from_unix_seconds(1000);
+        let attrs = || PubsubMessage {
+            attributes: BTreeMap::from([("scheduled".to_owned(), "true".to_owned())]),
+            ..PubsubMessage::default()
+        };
+        assert!(s
+            .publish_with_message_ids(
+                &topic("demo-app", "missing"),
+                vec![(attrs(), "2111".to_owned())],
+                at
+            )
+            .is_err());
+        s.create_topic(topic("demo-app", "jobs"), BTreeMap::new())
+            .unwrap();
+        assert!(s
+            .publish_with_message_ids(
+                &topic("demo-app", "jobs"),
+                vec![(attrs(), String::new())],
+                at
+            )
+            .is_err());
+        assert!(s
+            .publish_with_message_ids(
+                &topic("demo-app", "jobs"),
+                vec![(attrs(), "2111".to_owned()), (attrs(), "2111".to_owned())],
+                at
+            )
+            .is_err());
+        // a message with neither data nor attributes is refused as in an ordinary publish
+        assert!(s
+            .publish_with_message_ids(
+                &topic("demo-app", "jobs"),
+                vec![(PubsubMessage::default(), "2111".to_owned())],
+                at
+            )
+            .is_err());
     }
 
     #[test]
@@ -1682,6 +2114,7 @@ mod tests {
                 &subscription,
                 Some(1),
                 Some(PushConfig {
+                    attributes: std::collections::BTreeMap::new(),
                     push_endpoint: "http://127.0.0.1:8080/candidate".to_owned(),
                 }),
             )
@@ -2323,12 +2756,69 @@ mod tests {
         let published = state
             .publish_shared(&topic_name, vec![data(b"accepted")], now)
             .unwrap();
-        assert_eq!(published[0].message_id, "2");
+        assert_eq!(published[0].message_id, crate::pubsub_message_id(2));
         for observer in &observers {
             let received = state.pull(observer, 10, now).unwrap();
             assert_eq!(received.len(), 1);
             assert_eq!(received[0].message.message.data, b"accepted");
         }
+    }
+
+    #[test]
+    fn published_messages_get_the_seventeen_digit_ids_production_gives() {
+        // Production ids are seventeen-digit decimal strings, not a count (FUNCTIONS-EVENTS formal
+        // record 2026-10-04, `messageId` of frames 6ac2a47f0000967f445e8b09 and 6ac2a51c000844422b7986d1:
+        // 22254343790642112 and 22256683947060623).
+        let mut state = PubSubState::new(5);
+        let topic_name = topic("p", "events");
+        state
+            .create_topic(topic_name.clone(), BTreeMap::default())
+            .unwrap();
+        let now = LogicalInstant::from_unix_seconds(10);
+        let published = state
+            .publish_shared(&topic_name, vec![data(b"a"), data(b"b"), data(b"c")], now)
+            .unwrap();
+        let ids: Vec<&str> = published.iter().map(|m| m.message_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                crate::pubsub_message_id(1),
+                crate::pubsub_message_id(2),
+                crate::pubsub_message_id(3)
+            ]
+        );
+        for id in ids {
+            assert_eq!(id.len(), 17);
+            assert!(id.bytes().all(|byte| byte.is_ascii_digit()));
+        }
+    }
+
+    #[test]
+    fn the_id_space_ends_before_two_messages_could_share_an_id() {
+        let mut state = PubSubState::new(5);
+        let topic_name = topic("p", "events");
+        state
+            .create_topic(topic_name.clone(), BTreeMap::default())
+            .unwrap();
+        let now = LogicalInstant::from_unix_seconds(10);
+        // The broker owns the first half of the id space; the Functions runtime's own publish path
+        // draws from the second half, so the two never share an id.
+        assert_eq!(
+            crate::MESSAGE_ID_SPAN,
+            fireemu_core_types::pubsub_message_id::SPAN / 2
+        );
+        state.message_counter = crate::MESSAGE_ID_SPAN - 1;
+        let last = state
+            .publish_shared(&topic_name, vec![data(b"a")], now)
+            .unwrap();
+        assert_eq!(
+            last[0].message_id,
+            crate::pubsub_message_id(crate::MESSAGE_ID_SPAN - 1 + 1)
+        );
+        let error = state
+            .publish_shared(&topic_name, vec![data(b"b")], now)
+            .unwrap_err();
+        assert_eq!(error.code(), crate::error::Code::ResourceExhausted);
     }
 
     #[test]
@@ -2528,6 +3018,7 @@ mod tests {
         let now = LogicalInstant::from_unix_seconds(1000);
         let interval = LogicalDuration::from_millis(250);
         let push_config = || PushConfig {
+            attributes: std::collections::BTreeMap::new(),
             push_endpoint: "http://127.0.0.1:1/push".to_owned(),
         };
         state
@@ -2573,6 +3064,7 @@ mod tests {
             .unwrap();
         let mut config = sub_cfg("demo-app", "after-reset", "push", Filter::always());
         config.push_config = PushConfig {
+            attributes: std::collections::BTreeMap::new(),
             push_endpoint: "http://127.0.0.1:1/push".to_owned(),
         };
         state.create_subscription(config).unwrap();
@@ -2608,6 +3100,7 @@ mod tests {
             .unwrap();
         let mut config = sub_cfg("demo-app", "immediate", "push", Filter::always());
         config.push_config = PushConfig {
+            attributes: std::collections::BTreeMap::new(),
             push_endpoint: "http://127.0.0.1:1/push".to_owned(),
         };
         state.create_subscription(config).unwrap();

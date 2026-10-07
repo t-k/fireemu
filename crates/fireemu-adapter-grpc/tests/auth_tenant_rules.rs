@@ -482,7 +482,7 @@ mod listeners {
                             let expected = if initial {
                                 vec!["add", "document", "current"]
                             } else {
-                                vec!["document", "no-change"]
+                                vec!["document"]
                             };
                             assert_eq!(trace, expected);
                             return;

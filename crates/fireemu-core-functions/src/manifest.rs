@@ -586,6 +586,36 @@ impl Default for ScheduleRetryConfig {
     }
 }
 
+/// What production Cloud Scheduler answers (HTTP 400, status `INVALID_ARGUMENT`) when a job is created with a
+/// `retryCount` of 6 or more.
+///
+/// Recorded: the production deploy `e0ec2f416f5ea7e8` (2026-10-05, SCHEDULED-FUNCTIONS delivery recording, run 1)
+/// created the job of a function declared with `retryCount: 6`; Cloud Scheduler refused it with this message. The
+/// message says "less than 5", but production's own answers contradict it at 5: the second delivery recording (run
+/// `156715222b86ea44`, same day) created a job with `retryCount: 5` and got a 200, and the deploy of a job with
+/// `retryCount: 4` and one with 0 (run 1, `schedSlowV2`) were accepted too. So the refusal starts at 6, and the text is
+/// kept as recorded even though it understates the limit.
+pub const SCHEDULER_RETRY_COUNT_REFUSAL: &str =
+    "invalid retry count. The retry_count must be a positive integer less than 5: invalid argument";
+
+/// The smallest `retryCount` recorded as refused (6). 0 to 5 are recorded as accepted.
+pub const SCHEDULER_RECORDED_REFUSED_RETRY_COUNT: u32 = 6;
+
+impl ScheduleRetryConfig {
+    /// Why production Cloud Scheduler would refuse a job with this retry configuration, or `None`.
+    ///
+    /// Only the retry count is judged: 0 (run 1) through 5 (run 2) are recorded as accepted, 6 as refused. Counts
+    /// above 6 are refused by extension of the same rule; no other value was sent.
+    #[must_use]
+    pub const fn scheduler_refusal(&self) -> Option<&'static str> {
+        if self.retry_count >= SCHEDULER_RECORDED_REFUSED_RETRY_COUNT {
+            Some(SCHEDULER_RETRY_COUNT_REFUSAL)
+        } else {
+            None
+        }
+    }
+}
+
 impl TaskRetryConfig {
     /// The backoff before attempt `attempt` (1-based), by the official formula
     /// (`taskQueue.js:263`).
@@ -745,6 +775,17 @@ pub struct FunctionSpec {
 }
 
 impl FunctionSpec {
+    /// The Pub/Sub topic Cloud Scheduler publishes to for this function, when it has one: a first-generation schedule
+    /// (`pubsub.schedule`) has a job `firebase-schedule-<name>-<region>` whose target is a topic of the same id; a
+    /// second-generation schedule has a job that calls its HTTP URL and no topic. Recorded in production (runs
+    /// `156715222b86ea44` and `f123d4fa2d61c5f5`, us-central1).
+    #[must_use]
+    pub fn schedule_topic(&self) -> Option<String> {
+        (matches!(self.trigger, Trigger::Schedule { .. })
+            && self.generation == FunctionGeneration::First)
+            .then(|| format!("firebase-schedule-{}-{}", self.name, self.region))
+    }
+
     fn validate_task_queue_options(&self) -> Result<(), ManifestError> {
         let Trigger::TaskQueue { rate_limits, .. } = self.trigger else {
             return Ok(());
@@ -1236,6 +1277,21 @@ impl FunctionManifest {
                 Ok(Some(candidate))
             }
         }
+    }
+
+    /// The scheduled functions whose job production Cloud Scheduler would refuse to create, with its message
+    /// (both generations: the job is created through the same API).
+    #[must_use]
+    pub fn scheduler_refusals(&self) -> Vec<(&str, &'static str)> {
+        self.functions
+            .iter()
+            .filter_map(|f| match &f.trigger {
+                Trigger::Schedule { retry, .. } => {
+                    retry.scheduler_refusal().map(|why| (f.name.as_str(), why))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Scheduled functions.

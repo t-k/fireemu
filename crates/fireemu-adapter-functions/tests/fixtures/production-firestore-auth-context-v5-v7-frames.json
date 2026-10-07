@@ -1,0 +1,133 @@
+{
+ "_comment": "Gen2 Firestore events with auth context (handler fsWrittenWithAuthContextV2) of two FE production recordings (project fireemu-oracle-events): v5 = run functions-events-formal-20261004T182904Z-a9621bfae74fe9bc (2026-10-04), v7 = run functions-events-formal-20261005T041505Z-d3fd3faa3e0dc702 (2026-10-05). Each entry names the run, the index of the frame in that run's production-run.json `frames` array, the Cloud Logging insertId, the scenario (fs-auth-admin: an Admin SDK write by the recorder's user credential; fs-auth-client: a REST write with the Firebase ID token of a user signed up for the run) and the event's authType and authId as the handler printed them. The authId of an admin write is the recorder operator's email and is replaced by `<operator email>`; every other value is verbatim. Used by tests/fe_auth_context_frames.rs.",
+ "frames": [
+  {
+   "run": "v5",
+   "index": 48,
+   "insertId": "6ac29e6e0005da8f1a74a4ec",
+   "scenario": "fs-auth-admin",
+   "authType": "unknown",
+   "authId": "<operator email>"
+  },
+  {
+   "run": "v5",
+   "index": 52,
+   "insertId": "6ac29e8c000f32be5591401d",
+   "scenario": "fs-auth-admin",
+   "authType": "unknown",
+   "authId": "<operator email>"
+  },
+  {
+   "run": "v5",
+   "index": 56,
+   "insertId": "6ac29e93000a2f6900566031",
+   "scenario": "fs-auth-client",
+   "authType": "api_key",
+   "authId": "Mw39BUiBmgXKwPUHFjsCEJSwPws2"
+  },
+  {
+   "run": "v5",
+   "index": 65,
+   "insertId": "6ac29eb600001c6f5f8f3258",
+   "scenario": "fs-auth-client",
+   "authType": "unknown",
+   "authId": "<operator email>"
+  },
+  {
+   "run": "v5",
+   "index": 186,
+   "insertId": "6ac2a6f30007553874f11705",
+   "scenario": "fs-auth-admin",
+   "authType": "unknown",
+   "authId": "<operator email>"
+  },
+  {
+   "run": "v5",
+   "index": 189,
+   "insertId": "6ac2a713000094602b718a22",
+   "scenario": "fs-auth-admin",
+   "authType": "unknown",
+   "authId": "<operator email>"
+  },
+  {
+   "run": "v5",
+   "index": 195,
+   "insertId": "6ac2a7190003961a3aa9a19f",
+   "scenario": "fs-auth-client",
+   "authType": "api_key",
+   "authId": "Zx9wbi0mqRYIlIRjGdjDGZplVvx2"
+  },
+  {
+   "run": "v5",
+   "index": 200,
+   "insertId": "6ac2a7380006478ac0dbfbc7",
+   "scenario": "fs-auth-client",
+   "authType": "unknown",
+   "authId": "<operator email>"
+  },
+  {
+   "run": "v7",
+   "index": 47,
+   "insertId": "6ac329590002861fd57054a0",
+   "scenario": "fs-auth-admin",
+   "authType": "unknown",
+   "authId": "<operator email>"
+  },
+  {
+   "run": "v7",
+   "index": 52,
+   "insertId": "6ac32978000432cfd98f1215",
+   "scenario": "fs-auth-admin",
+   "authType": "unknown",
+   "authId": "<operator email>"
+  },
+  {
+   "run": "v7",
+   "index": 58,
+   "insertId": "6ac3297e000e4a9616359164",
+   "scenario": "fs-auth-client",
+   "authType": "api_key",
+   "authId": "kMKN7wE0jQWMRPzhQtPU9nFYJ6d2"
+  },
+  {
+   "run": "v7",
+   "index": 63,
+   "insertId": "6ac3299e00025d2ad95b7807",
+   "scenario": "fs-auth-client",
+   "authType": "unknown",
+   "authId": "<operator email>"
+  },
+  {
+   "run": "v7",
+   "index": 187,
+   "insertId": "6ac331f70007cc144f42bd3e",
+   "scenario": "fs-auth-admin",
+   "authType": "unknown",
+   "authId": "<operator email>"
+  },
+  {
+   "run": "v7",
+   "index": 191,
+   "insertId": "6ac3321600013846f6427923",
+   "scenario": "fs-auth-admin",
+   "authType": "unknown",
+   "authId": "<operator email>"
+  },
+  {
+   "run": "v7",
+   "index": 196,
+   "insertId": "6ac3321c000e5781f629ae1e",
+   "scenario": "fs-auth-client",
+   "authType": "api_key",
+   "authId": "XHBSe2xzU5haKin4HGPHzZk3hFi1"
+  },
+  {
+   "run": "v7",
+   "index": 202,
+   "insertId": "6ac3323c00042cc1f298b95b",
+   "scenario": "fs-auth-client",
+   "authType": "unknown",
+   "authId": "<operator email>"
+  }
+ ]
+}

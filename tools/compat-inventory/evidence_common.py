@@ -156,6 +156,227 @@ def runtime_inputs_at_commit(commit: str, root: Path = ROOT) -> dict:
     return result
 
 
+#: The definition of `binary_inputs`, recorded beside a digest of them so a reader knows which set it describes.
+BINARY_INPUTS_SCHEME = "binary-v1"
+
+#: Directories directly under a crate that no build of the crate's library or binary reads: integration tests (and their
+#: fixtures), benchmarks, examples and proptest regression files.
+_TEST_ONLY_TREES = ("tests", "benches", "examples", "proptest-regressions")
+_TEST_ONLY_PATH = re.compile(r"^crates/[^/]+/(?:" + "|".join(_TEST_ONLY_TREES) + r")/")
+def _binary_input(name: str) -> bool:
+    return _TEST_ONLY_PATH.match(name) is None
+
+
+def binary_inputs(root: Path) -> dict:
+    """What a debug build of `fireemu` is made from: the runtime inputs without the test-only trees of the crates (see
+    `_TEST_ONLY_TREES`). A change to an integration test cannot change the binary, so it must not move this set; any other
+    change to the crates, the manifests, the lock, the toolchain or `.cargo` does. `source_files_including_test_only_trees`
+    proves that no source file reaches into the excluded trees."""
+    return {name: value for name, value in runtime_inputs(root).items() if _binary_input(name)}
+
+
+def binary_inputs_at_commit(commit: str, root: Path = ROOT) -> dict:
+    return {name: value for name, value in runtime_inputs_at_commit(commit, root).items() if _binary_input(name)}
+
+
+_TREE_WORDS = "|".join(re.escape(tree) for tree in _TEST_ONLY_TREES)
+#: A path or a string that names one of the excluded trees as a path segment (also inside `concat!(env!(...), "/tests/x.rs")` or `"$CARGO_MANIFEST_DIR/tests"`).
+_NAMES_TREE = re.compile(rf"(?:^|[/\"'\s])(?:{_TREE_WORDS})(?:[/\"'\s]|$)")
+#: An invocation that reads a file or a directory into a build.
+_EMBEDDING = re.compile(r"\b(?:include_str|include_bytes|include|include_dir|include_flate|embed_dir|embed_file|embed_str)\s*!\s*[(\[{]")
+_PAIRS = {"(": ")", "[": "]", "{": "}"}
+
+
+def _masked(text: str) -> str:
+    """The source with comments and the contents of string and character literals blanked (same length), so brackets can be matched."""
+    out, index, size = [], 0, len(text)
+    while index < size:
+        two = text[index:index + 2]
+        if two == "//":
+            end = text.find("\n", index)
+            end = size if end < 0 else end
+            out.append(" " * (end - index))
+            index = end
+        elif two == "/*":
+            end = text.find("*/", index + 2)
+            end = size if end < 0 else end + 2
+            out.append(re.sub(r"[^\n]", " ", text[index:end]))
+            index = end
+        elif (raw := re.compile(r'r(#*)"').match(text, index)) and (index == 0 or not (text[index - 1].isalnum() or text[index - 1] == "_")):
+            close = '"' + raw.group(1)
+            end = text.find(close, raw.end())
+            end = size if end < 0 else end + len(close)
+            out.append(re.sub(r"[^\n]", " ", text[index:end]))
+            index = end
+        elif text[index] == '"':
+            end = index + 1
+            while end < size and text[end] != '"':
+                end += 2 if text[end] == "\\" else 1
+            end = min(size, end + 1)
+            out.append(re.sub(r"[^\n]", " ", text[index:end]))
+            index = end
+        elif text[index] == "'" and (char := re.compile(r"'(?:\\.[^']*|[^'\\])'").match(text, index)):
+            out.append(" " * (char.end() - index))
+            index = char.end()
+        else:
+            out.append(text[index])
+            index += 1
+    return "".join(out)
+
+
+def _closing(masked: str, start: int) -> int:
+    """The index just past the bracket that closes the one at `start`, or the end of the text."""
+    opener = masked[start]
+    depth = 0
+    for index in range(start, len(masked)):
+        if masked[index] == opener:
+            depth += 1
+        elif masked[index] == _PAIRS[opener]:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return len(masked)
+
+
+def _positive_test_gate(expression: str) -> bool:
+    """Whether a `cfg(...)` expression holds only in a test build: `test`, or an `all(...)` with such a term. `not(...)`, `any(...)` and anything else do not."""
+    expression = expression.strip()
+    if expression == "test":
+        return True
+    match = re.fullmatch(r"all\s*\((.*)\)", expression, re.S)
+    if not match:
+        return False
+    terms, depth, current = [], 0, ""
+    for char in match.group(1):
+        if char == "," and depth == 0:
+            terms.append(current)
+            current = ""
+            continue
+        depth += (char == "(") - (char == ")")
+        current += char
+    terms.append(current)
+    return any(_positive_test_gate(term) for term in terms)
+
+
+def _attributes(masked: str) -> list:
+    """Every outer attribute as (start, end, text of the cfg expression or None)."""
+    found = []
+    for match in re.finditer(r"#\s*\[", masked):
+        end = _closing(masked, match.end() - 1)
+        cfg = re.fullmatch(r"\s*cfg\s*\((.*)\)\s*", masked[match.end():end - 1], re.S)
+        found.append((match.start(), end, cfg.group(1) if cfg else None))
+    return found
+
+
+def _test_gated_after(masked: str, attributes: list, position: int) -> bool:
+    """Whether the item that starts at `position` is preceded, attribute after attribute with only blanks between, by a positive test gate."""
+    cursor = position
+    for start, end, cfg in reversed([a for a in attributes if a[1] <= position]):
+        if masked[end:cursor].strip():
+            break
+        if cfg is not None and _positive_test_gate(cfg):
+            return True
+        cursor = start
+    return False
+
+
+def _test_regions(masked: str, attributes: list) -> list:
+    """The spans of the modules (`mod name { ... }`) that a positive test gate precedes."""
+    regions = []
+    for match in re.finditer(r"\bmod\s+\w+\s*\{", masked):
+        if _test_gated_after(masked, attributes, match.start()):
+            regions.append((match.start(), _closing(masked, match.end() - 1)))
+    return regions
+
+
+def _reaches_test_tree(text: str) -> bool:
+    masked = _masked(text)
+    attributes = _attributes(masked)
+    regions = _test_regions(masked, attributes)
+    spans = []
+    for match in _EMBEDDING.finditer(masked):
+        spans.append((match.start(), _closing(masked, match.end() - 1)))
+    for start, end, _cfg in attributes:
+        if re.search(r"\b(?:path|folder)\s*=", masked[start:end]):
+            spans.append((start, end))
+    for start, end in spans:
+        if not _NAMES_TREE.search(text[start:end]):
+            continue
+        if any(low <= start < high for low, high in regions):
+            continue
+        if text[start:start + 2] == "#[" or masked[start] == "#":
+            # a module path: excused by the positive test gate on the module it names (the attributes just before it, or this attribute's own cfg_attr is not a gate)
+            if _test_gated_after(masked, attributes, start) or any(a[0] != start and a[1] <= start and not masked[a[1]:start].strip() and a[2] is not None and _positive_test_gate(a[2]) for a in attributes):
+                continue
+        return True
+    return False
+
+
+def _manifest_reaches_test_tree(text: str, crate: str) -> bool:
+    """Whether a crate manifest points its library, a binary or its build script into an excluded tree (the test, bench and example targets are those trees)."""
+    import posixpath
+    import tomllib
+
+    try:
+        manifest = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return True
+    paths = [manifest.get("package", {}).get("build"), manifest.get("lib", {}).get("path")]
+    paths += [entry.get("path") for entry in manifest.get("bin", []) if isinstance(entry, dict)]
+    for value in paths:
+        if isinstance(value, str) and _TEST_ONLY_PATH.match(posixpath.normpath(posixpath.join(crate, value))):
+            return True
+    return False
+
+
+def source_files_including_test_only_trees(root: Path) -> list:
+    """The bound files that could pull a file of an excluded tree into a build, sorted:
+    - sources and build scripts with an include or embedding macro (read across lines) or a module path whose text names an excluded tree, unless a positive test
+      gate (`cfg(test)`, `cfg(all(.., test, ..))`; never `not` or `any`) excuses it, on the attribute or on the enclosing module;
+    - build scripts that name an excluded tree anywhere (they read files with plain `std::fs`);
+    - crate manifests whose library, binary or build-script path lies in an excluded tree."""
+    found = []
+    for name in sorted(runtime_inputs(root)):
+        if not _binary_input(name):
+            continue
+        text = (root / name).read_text(errors="replace")
+        if name.endswith("/build.rs"):
+            if _NAMES_TREE.search(text):
+                found.append(name)
+        elif name.endswith(".rs"):
+            if _reaches_test_tree(text):
+                found.append(name)
+        elif name.endswith("/Cargo.toml") and name.startswith("crates/"):
+            if _manifest_reaches_test_tree(text, name.rsplit("/", 1)[0]):
+                found.append(name)
+    return found
+
+
+def dependency_info_paths(info: str, root: Path) -> list:
+    """The files under `root` that a cargo dependency-info file (`target/debug/fireemu.d`) lists, relative and normalized, sorted: what a build actually read."""
+    import posixpath
+
+    listed = info.split(": ", 1)[-1]
+    prefix = str(root).rstrip("/") + "/"
+    found = set()
+    for token in re.split(r"(?<!\\)\s+", listed.strip()):
+        token = token.replace("\\ ", " ")
+        if token.startswith(prefix):
+            found.add(posixpath.normpath(token[len(prefix):]))
+    return sorted(found)
+
+
+def dependency_info_in_test_only_trees(info: str, root: Path) -> list:
+    """The listed files that lie in an excluded tree of a crate: a build that read one must not be pinned under `binary_inputs`."""
+    return [path for path in dependency_info_paths(info, root) if _TEST_ONLY_PATH.match(path)]
+
+
+def ui_bundled(root: Path) -> bool:
+    """Whether a build in `root` would embed the user interface: `crates/fireemu-adapter-ui/build.rs` bundles `ui/dist` when its entry page exists. The directory is
+    git-ignored build output that neither input definition binds, so a build that is to be pinned must be made without it."""
+    return (root / "ui" / "dist" / "index.html").is_file()
+
+
 def _current_commit(root: Path) -> str:
     return subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True

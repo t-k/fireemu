@@ -1,0 +1,1499 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-comparison-v1",
+  "parent": "FS-TRANSACTION",
+  "program": "FS-TRANSACTION-P12-FIRST-REQUEST",
+  "condition": [
+    "FS-TRANSACTION/total-lifetime-expiry"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "productionRequests": 0,
+  "profile": "strict",
+  "artifact": {
+    "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+    "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888"
+  },
+  "comparer": {
+    "sha256": "7b360afde62c053ae359bc786812b65578b5ef544ef8c521e21f3cf41eb4de8c",
+    "replayClock": "virtual"
+  },
+  "asRecorded": [
+    {
+      "path": "tools/compat-broad/fs-write-txn/fs_txn_table_p12.py",
+      "commit": "65726e17ed81b6f87d8eda929c9ac9edff092d4b",
+      "blob": "acc3128e69db13547c9bca767e17dd7f824fc9e1",
+      "sha256": "a1716bebb46fc407bdcaff0a1453551e06bf7d778d0848f40375d59d5d4de043"
+    }
+  ],
+  "recordings": [
+    {
+      "recording": 1,
+      "productionFileSha256": "682409fff83d58ed64cf3354c977f380db934d8e4f78c49e735b4cecb0a1a922",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/c-commit-first",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-read-after",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-read-again",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-rollback-last",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-rollback-first",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-read-after",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-commit-last",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-1",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-2",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-3",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-4",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-5",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-6",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-7",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-8",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-9",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/read-after",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/read-again",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-1",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-2",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-3",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-4",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-5",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-6",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-7",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-8",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-9",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/read-after",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        }
+      ],
+      "achievedAges": [
+        {
+          "site": "rest/c/keepalive-1",
+          "production": 25.88109895819798,
+          "local": 25.881999999750406,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/c/keepalive-2",
+          "production": 25.151395332999527,
+          "local": 25.152000000234693,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/c/keepalive-3",
+          "production": 25.81810220889747,
+          "local": 25.81899999966845,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/c/keepalive-4",
+          "production": 25.861122041009367,
+          "local": 25.86200000019744,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/c/keepalive-5",
+          "production": 25.751461000181735,
+          "local": 25.751999999862164,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/c/keepalive-6",
+          "production": 25.795254374854267,
+          "local": 25.796000000089407,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/c/keepalive-7",
+          "production": 26.364711333997548,
+          "local": 26.365000000223517,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/c/keepalive-8",
+          "production": 26.25701554119587,
+          "local": 26.25799999991432,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/c/keepalive-9",
+          "production": 25.87387766689062,
+          "local": 25.873999999836087,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/c/commit-first",
+          "production": 91.91246891673654,
+          "local": 91.91300000017509,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/r/keepalive-1",
+          "production": 25.71184145892039,
+          "local": 25.71199999982491,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/r/keepalive-2",
+          "production": 26.23688641609624,
+          "local": 26.23699999973178,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/r/keepalive-3",
+          "production": 25.805519208777696,
+          "local": 25.80600000033155,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/r/keepalive-4",
+          "production": 26.013070416171104,
+          "local": 26.013999999966472,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/r/keepalive-5",
+          "production": 26.694775249809027,
+          "local": 26.694999999832362,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/r/keepalive-6",
+          "production": 26.067193417344242,
+          "local": 26.067999999970198,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/r/keepalive-7",
+          "production": 26.010116667021066,
+          "local": 26.010999999940395,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/r/keepalive-8",
+          "production": 26.234803332947195,
+          "local": 26.235000000335276,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/r/keepalive-9",
+          "production": 26.070081332698464,
+          "local": 26.070999999996275,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/r/rollback-first",
+          "production": 92.02052054228261,
+          "local": 92.02099999971688,
+          "difference": 0.0
+        }
+      ],
+      "tokenAges": [
+        {
+          "site": "rest/c/keepalive-4",
+          "production": 103.4251057500951,
+          "emulator": 105.49200010299683,
+          "difference": 2.067,
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-5",
+          "production": 129.17656675027683,
+          "emulator": 131.2440001964569,
+          "difference": 2.067,
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-6",
+          "production": 154.9718211251311,
+          "emulator": 157.0400002002716,
+          "difference": 2.068,
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-7",
+          "production": 181.33653245912865,
+          "emulator": 183.40499997138977,
+          "difference": 2.068,
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-8",
+          "production": 207.59354800032452,
+          "emulator": 209.66300010681152,
+          "difference": 2.069,
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-9",
+          "production": 233.46742566721514,
+          "emulator": 235.53700017929077,
+          "difference": 2.07,
+          "match": true
+        },
+        {
+          "site": "rest/c/commit-first",
+          "production": 325.3798945839517,
+          "emulator": 327.4500000476837,
+          "difference": 2.07,
+          "match": true
+        },
+        {
+          "site": "rest/c/read-after",
+          "production": 327.2114165420644,
+          "emulator": 329.28200006484985,
+          "difference": 2.071,
+          "match": true
+        },
+        {
+          "site": "rest/c/read-again",
+          "production": 329.2975550419651,
+          "emulator": 331.3680000305176,
+          "difference": 2.07,
+          "match": true
+        },
+        {
+          "site": "rest/c/rollback-last",
+          "production": 331.0169224999845,
+          "emulator": 333.08700013160706,
+          "difference": 2.07,
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-4",
+          "production": 104.38098508305848,
+          "emulator": 105.73199987411499,
+          "difference": 1.351,
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-5",
+          "production": 131.0757603328675,
+          "emulator": 132.42700004577637,
+          "difference": 1.351,
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-6",
+          "production": 157.14295375021175,
+          "emulator": 158.49499988555908,
+          "difference": 1.352,
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-7",
+          "production": 183.1530704172328,
+          "emulator": 184.50600004196167,
+          "difference": 1.353,
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-8",
+          "production": 209.38787375018,
+          "emulator": 210.7409999370575,
+          "difference": 1.353,
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-9",
+          "production": 235.45795508287847,
+          "emulator": 236.81200003623962,
+          "difference": 1.354,
+          "match": true
+        },
+        {
+          "site": "rest/r/rollback-first",
+          "production": 327.4784756251611,
+          "emulator": 328.8329999446869,
+          "difference": 1.355,
+          "match": true
+        },
+        {
+          "site": "rest/r/read-after",
+          "production": 329.27072820812464,
+          "emulator": 330.625,
+          "difference": 1.354,
+          "match": true
+        },
+        {
+          "site": "rest/r/commit-last",
+          "production": 331.1907979999669,
+          "emulator": 332.54499983787537,
+          "difference": 1.354,
+          "match": true
+        }
+      ]
+    },
+    {
+      "recording": 2,
+      "productionFileSha256": "8ebde4df4b3938aedf4c3d4851a33dbd31352eaaceda800290bda80a1444f802",
+      "mismatches": 0,
+      "cases": [
+        {
+          "caseId": "rest/c-commit-first",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-read-after",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-read-again",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/c-rollback-last",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-rollback-first",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-read-after",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/r-commit-last",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        }
+      ],
+      "reads": [
+        {
+          "site": "setup/absence-a",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-1",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-2",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-3",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-4",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-5",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-6",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-7",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-8",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-9",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/read-after",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/read-again",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/c/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-1",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-2",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-3",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-4",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-5",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-6",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-7",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-8",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-9",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/read-after",
+          "production": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 3,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/r/post-read-a",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        }
+      ],
+      "commitTimes": [
+        {
+          "site": "setup/create-a",
+          "production": {
+            "commitTime": true,
+            "relation": null
+          },
+          "local": {
+            "commitTime": true,
+            "relation": null
+          },
+          "match": true
+        }
+      ],
+      "achievedAges": [
+        {
+          "site": "rest/c/keepalive-1",
+          "production": 26.037535124924034,
+          "local": 26.03800000017509,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/c/keepalive-2",
+          "production": 25.78233362501487,
+          "local": 25.782999999821186,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/c/keepalive-3",
+          "production": 25.039890500251204,
+          "local": 25.040000000037253,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/c/keepalive-4",
+          "production": 25.788630709052086,
+          "local": 25.78899999987334,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/c/keepalive-5",
+          "production": 26.290737790986896,
+          "local": 26.291000000201166,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/c/keepalive-6",
+          "production": 25.861755999736488,
+          "local": 25.86199999973178,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/c/keepalive-7",
+          "production": 25.73411375004798,
+          "local": 25.735000000335276,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/c/keepalive-8",
+          "production": 26.099385417066514,
+          "local": 26.09999999962747,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/c/keepalive-9",
+          "production": 25.800332417245954,
+          "local": 25.80100000044331,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/c/commit-first",
+          "production": 91.74339045770466,
+          "local": 91.74399999994785,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/r/keepalive-1",
+          "production": 25.940906709060073,
+          "local": 25.941000000108033,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/r/keepalive-2",
+          "production": 25.9956391248852,
+          "local": 25.99599999981001,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/r/keepalive-3",
+          "production": 25.85395475011319,
+          "local": 25.85399999981746,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/r/keepalive-4",
+          "production": 25.848035499919206,
+          "local": 25.84900000039488,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/r/keepalive-5",
+          "production": 25.996569707989693,
+          "local": 25.996999999973923,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/r/keepalive-6",
+          "production": 25.80501208314672,
+          "local": 25.80599999986589,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/r/keepalive-7",
+          "production": 25.919587042182684,
+          "local": 25.919999999925494,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/r/keepalive-8",
+          "production": 25.788822332862765,
+          "local": 25.78899999987334,
+          "difference": 0.0
+        },
+        {
+          "site": "rest/r/keepalive-9",
+          "production": 25.822222374845296,
+          "local": 25.8230000003241,
+          "difference": 0.001
+        },
+        {
+          "site": "rest/r/rollback-first",
+          "production": 91.76284466683865,
+          "local": 91.76299999980256,
+          "difference": 0.0
+        }
+      ],
+      "tokenAges": [
+        {
+          "site": "rest/c/keepalive-4",
+          "production": 103.28122441703454,
+          "emulator": 104.39900016784668,
+          "difference": 1.118,
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-5",
+          "production": 129.57196220802143,
+          "emulator": 130.69000005722046,
+          "difference": 1.118,
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-6",
+          "production": 155.43371820775792,
+          "emulator": 156.55200004577637,
+          "difference": 1.118,
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-7",
+          "production": 181.1678319578059,
+          "emulator": 182.28700017929077,
+          "difference": 1.119,
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-8",
+          "production": 207.26721737487242,
+          "emulator": 208.38700008392334,
+          "difference": 1.12,
+          "match": true
+        },
+        {
+          "site": "rest/c/keepalive-9",
+          "production": 233.06754979211837,
+          "emulator": 234.18800020217896,
+          "difference": 1.12,
+          "match": true
+        },
+        {
+          "site": "rest/c/commit-first",
+          "production": 324.81094024982303,
+          "emulator": 325.9320001602173,
+          "difference": 1.121,
+          "match": true
+        },
+        {
+          "site": "rest/c/read-after",
+          "production": 326.84180095791817,
+          "emulator": 327.9630000591278,
+          "difference": 1.121,
+          "match": true
+        },
+        {
+          "site": "rest/c/read-again",
+          "production": 328.506287207827,
+          "emulator": 329.6270000934601,
+          "difference": 1.121,
+          "match": true
+        },
+        {
+          "site": "rest/c/rollback-last",
+          "production": 329.5388477500528,
+          "emulator": 330.6600000858307,
+          "difference": 1.121,
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-4",
+          "production": 104.28068833379075,
+          "emulator": 105.45799994468689,
+          "difference": 1.177,
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-5",
+          "production": 130.27725804178044,
+          "emulator": 131.45499992370605,
+          "difference": 1.178,
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-6",
+          "production": 156.08227012492716,
+          "emulator": 157.260999917984,
+          "difference": 1.179,
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-7",
+          "production": 182.00185716710985,
+          "emulator": 183.18099999427795,
+          "difference": 1.179,
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-8",
+          "production": 207.7906794999726,
+          "emulator": 208.97000002861023,
+          "difference": 1.179,
+          "match": true
+        },
+        {
+          "site": "rest/r/keepalive-9",
+          "production": 233.6129018748179,
+          "emulator": 234.79299998283386,
+          "difference": 1.18,
+          "match": true
+        },
+        {
+          "site": "rest/r/rollback-first",
+          "production": 325.37574654165655,
+          "emulator": 326.55599999427795,
+          "difference": 1.18,
+          "match": true
+        },
+        {
+          "site": "rest/r/read-after",
+          "production": 327.20784566691145,
+          "emulator": 328.3880000114441,
+          "difference": 1.18,
+          "match": true
+        },
+        {
+          "site": "rest/r/commit-last",
+          "production": 328.84933529188856,
+          "emulator": 330.029000043869,
+          "difference": 1.18,
+          "match": true
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "recordings": 2,
+    "rows": 68,
+    "mismatches": 0
+  },
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "The artifact is the strict profile of the commit named; a later source change needs a new replay.",
+    "Idle and lifetime boundaries: the idle threshold is judged by the interval production narrowed, [110.70, 122.96) s (ledger 809 (5)), and strict's 120 s idle limit lies inside it; the age at which an expired token is forgotten is judged by (298.7, 302.2] s, which holds strict's 300 s of memory. Strict's 270 s total lifetime is supported by the rows themselves, not by an interval: live reads at token ages up to 253.3 s answered 0 and the first refusals came at 280.4 s, so production's lifetime lies in about (253.3, 280.4] s and 270 s lies inside it. The replay runs on the emulator's virtual clock, advanced by exactly each wait, and reproduces each recorded idle (the least the production token idled before the request) and each recorded token age; the idle or age each wait reached is published beside the recorded one (achievedAges), so a row at a boundary is compared at the measured production value, not at the nominal wait.",
+    "Replayed with the files named in asRecorded as they were when the recording was made (git show <commit>:<path>); the files in the repository today differ from them."
+  ]
+}

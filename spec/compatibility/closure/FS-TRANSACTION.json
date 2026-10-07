@@ -7,7 +7,7 @@
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
     "decision": "PENDING",
-    "note": "Pending complete frozen conditions and independent closure review. Recorded REST13-case partial evidence does not promote any condition or the parent."
+    "note": "Pending complete frozen conditions and independent closure review. Eight conditions are VERIFIED by the published recordedComparison records; the parent stays IMPLEMENTING until the other conditions, the final-artifact regression and this review are done."
   },
   "scopeDecisions": [
     {
@@ -109,8 +109,8 @@
       "recipeIds": [
         "fs-transaction/read-write-lifecycle"
       ],
-      "recipeStatus": "PROPOSED",
-      "status": "PENDING_RECORDING",
+      "recipeStatus": "RECORDED_COMPARED",
+      "status": "VERIFIED",
       "observation": {
         "method": "REST BeginTransaction, GetDocument, BatchGetDocuments and Commit with read-write controls.",
         "existingCaseOrCampaignRefs": [
@@ -133,8 +133,53 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observations, cited by run-directory name only, no status change: P01 fs-transaction-p01-lifecycle-98a788f2f2a2a5e4 (REST and gRPC, two agreeing recordings): over REST, after a Commit a further Commit, read, batch read and Rollback answer 10 with the expired text, and after an empty Commit or a Rollback a further Commit and read answer 10 with it (and a batch read after a Rollback); over gRPC only a further Commit and read after a Commit, and a further Commit after an empty Commit or after a Rollback, answered 10 with it. A Rollback after an empty Commit or after a Rollback was not recorded on either transport. P02b fs-transaction-p02b-readonly-refused-956ffb458f823440 chain Z (both transports, two agreeing recordings): an outside write acknowledged between a read-write begin and its first read is shown by that first read, the Commit then answers 0, and a later Rollback answers 10. Neither is a published redacted record yet.",
-      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+      "note": "Evidence: two agreeing sandbox recordings of each program below, replayed against strict (the 13-case recorded expiry/retry corpus adds nothing for this condition). Private sandbox observations, cited by run-directory name only, P01 fs-transaction-p01-lifecycle-98a788f2f2a2a5e4 (REST and gRPC, two agreeing recordings): over REST, after a Commit a further Commit, read, batch read and Rollback answer 10 with the expired text, and after an empty Commit or a Rollback a further Commit and read answer 10 with it (and a batch read after a Rollback); over gRPC only a further Commit and read after a Commit, and a further Commit after an empty Commit or after a Rollback, answered 10 with it. A Rollback after an empty Commit or after a Rollback was not recorded on either transport. P02b fs-transaction-p02b-readonly-refused-956ffb458f823440 chain Z (both transports, two agreeing recordings): an outside write acknowledged between a read-write begin and its first read is shown by that first read, the Commit then answers 0, and a later Rollback answers 10. Published redacted records and a strict replay of both recordings cover this condition (recordedComparison): each recording was replayed once against the strict profile of one fixed commit and every row matched, so the condition is VERIFIED on the strict profile. The parent is not COMPAT_VERIFIED until the final-artifact regression and the closure review are done.",
+      "productionObservation": "RECORDED_TWICE_STRICT_COMPARED",
+      "recordedComparison": {
+        "profile": "strict",
+        "recordings": 2,
+        "programs": [
+          {
+            "program": "FS-TRANSACTION-P01-LIFECYCLE",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p01-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p01-recorded-comparison-v1.json",
+            "rows": 90,
+            "mismatches": 0
+          },
+          {
+            "program": "FS-TRANSACTION-P02B-READONLY-REFUSED",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p02b-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p02b-recorded-comparison-v1.json",
+            "rows": 92,
+            "mismatches": 0
+          }
+        ]
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "program": "FS-TRANSACTION-P01-LIFECYCLE",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p01-lifecycle-98a788f2"
+          },
+          {
+            "program": "FS-TRANSACTION-P02B-READONLY-REFUSED",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p02b-readonly-refused-956ffb45"
+          }
+        ],
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+        "comparisonPaths": [
+          "spec/compatibility/broad-runs/fs-transaction-p01-recorded-comparison-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p02b-recorded-comparison-v1.json"
+        ],
+        "rows": {
+          "MATCH": 182
+        }
+      }
     },
     {
       "conditionId": "FS-TRANSACTION/read-only-snapshot",
@@ -142,8 +187,8 @@
       "recipeIds": [
         "fs-transaction/read-only-snapshot"
       ],
-      "recipeStatus": "PROPOSED",
-      "status": "PENDING_RECORDING",
+      "recipeStatus": "RECORDED_COMPARED",
+      "status": "VERIFIED",
       "observation": {
         "method": "REST read-only BeginTransaction, GetDocument and Commit refusal with a read-write control.",
         "existingCaseOrCampaignRefs": [
@@ -166,8 +211,53 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observations, cited by run-directory name only, no status change: P02 fs-transaction-p02-readonly-88511624ef5da4ff (REST and gRPC, two agreeing recordings): a read-only transaction's snapshot is taken at its first read, a second read shows the same state, an empty read-only Commit answers 0, a write Commit answers 3 \"Cannot modify entities in a read-only transaction.\" and a Rollback after it answers 0. P02b fs-transaction-p02b-readonly-refused-956ffb458f823440 chains X and Y (both transports, two agreeing recordings): after that refused write a read and an empty Commit, in either order, answer 3 with the expired text and a Rollback answers 0. Neither is a published redacted record yet.",
-      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+      "note": "Evidence: two agreeing sandbox recordings of each program below, replayed against strict (the 13-case recorded expiry/retry corpus adds nothing for this condition). Private sandbox observations, cited by run-directory name only, P02 fs-transaction-p02-readonly-88511624ef5da4ff (REST and gRPC, two agreeing recordings): a read-only transaction's snapshot is taken at its first read, a second read shows the same state, an empty read-only Commit answers 0, a write Commit answers 3 \"Cannot modify entities in a read-only transaction.\" and a Rollback after it answers 0. P02b fs-transaction-p02b-readonly-refused-956ffb458f823440 chains X and Y (both transports, two agreeing recordings): after that refused write a read and an empty Commit, in either order, answer 3 with the expired text and a Rollback answers 0. Published redacted records and a strict replay of both recordings cover this condition (recordedComparison): each recording was replayed once against the strict profile of one fixed commit and every row matched, so the condition is VERIFIED on the strict profile. The parent is not COMPAT_VERIFIED until the final-artifact regression and the closure review are done.",
+      "productionObservation": "RECORDED_TWICE_STRICT_COMPARED",
+      "recordedComparison": {
+        "profile": "strict",
+        "recordings": 2,
+        "programs": [
+          {
+            "program": "FS-TRANSACTION-P02-READONLY",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p02-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p02-recorded-comparison-v1.json",
+            "rows": 84,
+            "mismatches": 0
+          },
+          {
+            "program": "FS-TRANSACTION-P02B-READONLY-REFUSED",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p02b-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p02b-recorded-comparison-v1.json",
+            "rows": 92,
+            "mismatches": 0
+          }
+        ]
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "program": "FS-TRANSACTION-P02-READONLY",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p02-readonly-88511624"
+          },
+          {
+            "program": "FS-TRANSACTION-P02B-READONLY-REFUSED",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p02b-readonly-refused-956ffb45"
+          }
+        ],
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+        "comparisonPaths": [
+          "spec/compatibility/broad-runs/fs-transaction-p02-recorded-comparison-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p02b-recorded-comparison-v1.json"
+        ],
+        "rows": {
+          "MATCH": 176
+        }
+      }
     },
     {
       "conditionId": "FS-TRANSACTION/read-time-snapshot",
@@ -175,8 +265,8 @@
       "recipeIds": [
         "fs-transaction/read-time-snapshot"
       ],
-      "recipeStatus": "PROPOSED",
-      "status": "PENDING_RECORDING",
+      "recipeStatus": "RECORDED_COMPARED",
+      "status": "VERIFIED",
       "observation": {
         "method": "REST readTime and newTransaction observations with a stable readback control.",
         "existingCaseOrCampaignRefs": [
@@ -200,8 +290,39 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observation, cited by run-directory name only, no status change: P03 fs-transaction-p03-readtime-70b0ae21e52fc135 (REST and gRPC, two agreeing recordings, 15 cases per recording: readTime GetDocument and BatchGetDocuments, read-only reads and an embedded newTransaction batch with its Commit) answered 0 in every case. Not a published redacted record yet.",
-      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+      "note": "Evidence: two agreeing sandbox recordings of the program below, replayed against strict (the 13-case recorded expiry/retry corpus adds nothing for this condition). Private sandbox observation, cited by run-directory name only, P03 fs-transaction-p03-readtime-70b0ae21e52fc135 (REST and gRPC, two agreeing recordings, 15 cases per recording: readTime GetDocument and BatchGetDocuments, read-only reads and an embedded newTransaction batch with its Commit) answered 0 in every case. Published redacted records and a strict replay of both recordings cover this condition (recordedComparison): each recording was replayed once against the strict profile of one fixed commit and every row matched, so the condition is VERIFIED on the strict profile. The parent is not COMPAT_VERIFIED until the final-artifact regression and the closure review are done.",
+      "productionObservation": "RECORDED_TWICE_STRICT_COMPARED",
+      "recordedComparison": {
+        "profile": "strict",
+        "recordings": 2,
+        "programs": [
+          {
+            "program": "FS-TRANSACTION-P03-READTIME",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p03-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p03-recorded-comparison-v1.json",
+            "rows": 74,
+            "mismatches": 0
+          }
+        ]
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "program": "FS-TRANSACTION-P03-READTIME",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p03-readtime-70b0ae21"
+          }
+        ],
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+        "comparisonPaths": [
+          "spec/compatibility/broad-runs/fs-transaction-p03-recorded-comparison-v1.json"
+        ],
+        "rows": {
+          "MATCH": 74
+        }
+      }
     },
     {
       "conditionId": "FS-TRANSACTION/token-validation-and-ownership",
@@ -244,8 +365,8 @@
       "recipeIds": [
         "fs-transaction/read-set-conflict"
       ],
-      "recipeStatus": "PROPOSED",
-      "status": "PENDING_RECORDING",
+      "recipeStatus": "RECORDED_COMPARED",
+      "status": "VERIFIED",
       "observation": {
         "method": "Concurrent read-write transactions with a conflicting document write and a nonconflicting control; compare codes, order and final document. On PESSIMISTIC mode, hold the competing writer in a separate task, release by commit or rollback, then compare outcome and order. A bounded timeout is INDETERMINATE.",
         "existingCaseOrCampaignRefs": [
@@ -270,8 +391,39 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Historical recordings are reference only. Two new sandbox recordings and a final-artifact comparison are required for this condition. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observations, cited by run-directory name only, no status change: P06 fs-transaction-p06-multiwrite-4a0a698be7b88e15 (REST and gRPC): recording 1 refused a multi-document write that met a holder's lock with 10 \"Too much contention on these documents. Please try again.\" after about 21 s; recording 2 was incomplete (the writer was still held at its 30 s deadline and landed about 1.2 s after the recovery released the holder), so the two disagreed. P05 v2 fs-transaction-p05-readlock-66e77ae565076eef (REST and gRPC, two agreeing recordings): with the holder released 5 s in, the outside writer that met its read lock was held and committed 0 after the holder's Commit or Rollback in all four pairs (elapsed 6.8 to 7.5 s), and a read after the Commit pair showed that writer's state. Neither is a published redacted record yet.",
-      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+      "note": "Evidence: two agreeing sandbox recordings of P05 v2, replayed against strict (the 13-case recorded expiry/retry corpus adds nothing for this condition). P06 is history only: its two recordings disagreed and are not bound. Private sandbox observations, cited by run-directory name only, P06 fs-transaction-p06-multiwrite-4a0a698be7b88e15 (REST and gRPC): recording 1 refused a multi-document write that met a holder's lock with 10 \"Too much contention on these documents. Please try again.\" after about 21 s; recording 2 was incomplete (the writer was still held at its 30 s deadline and landed about 1.2 s after the recovery released the holder), so the two disagreed. P05 v2 fs-transaction-p05-readlock-66e77ae565076eef (REST and gRPC, two agreeing recordings): with the holder released 5 s in, the outside writer that met its read lock was held and committed 0 after the holder's Commit or Rollback in all four pairs (elapsed 6.8 to 7.5 s), and a read after the Commit pair showed that writer's state. Published redacted records and a strict replay of both recordings cover this condition (recordedComparison): each recording was replayed once against the strict profile of one fixed commit and every row matched, so the condition is VERIFIED on the strict profile. The parent is not COMPAT_VERIFIED until the final-artifact regression and the closure review are done.",
+      "productionObservation": "RECORDED_TWICE_STRICT_COMPARED",
+      "recordedComparison": {
+        "profile": "strict",
+        "recordings": 2,
+        "programs": [
+          {
+            "program": "FS-TRANSACTION-P05-READLOCK",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p05-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p05-recorded-comparison-v1.json",
+            "rows": 82,
+            "mismatches": 0
+          }
+        ]
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "program": "FS-TRANSACTION-P05-READLOCK",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p05-readlock-66e77ae5"
+          }
+        ],
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+        "comparisonPaths": [
+          "spec/compatibility/broad-runs/fs-transaction-p05-recorded-comparison-v1.json"
+        ],
+        "rows": {
+          "MATCH": 82
+        }
+      }
     },
     {
       "conditionId": "FS-TRANSACTION/write-set-atomicity",
@@ -347,8 +499,8 @@
       "recipeIds": [
         "fs-transaction/failed-commit-and-rollback"
       ],
-      "recipeStatus": "RECORDED_PARTIAL",
-      "status": "PRODUCTION_RECORDED",
+      "recipeStatus": "RECORDED_COMPARED",
+      "status": "VERIFIED",
       "observation": {
         "method": "A refused commit followed by token reuse, explicit rollback, lock-release and post-state readback, with a successful-commit control. Include rollback after commit, rollback after rollback and a fresh rollback control.",
         "existingCaseOrCampaignRefs": [],
@@ -375,7 +527,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Two sandbox recordings and both fireemu profiles agree for this REST subset. The refused-commit, token-reuse, explicit-rollback and lock-release chain is not recorded. Representative gRPC is not recorded. This condition remains open. Private sandbox observation added later, cited by run-directory name only, no status change: P08 fs-transaction-p08-failed-commit-b5da53e6fa1ae0ce (REST and gRPC, two agreeing recordings, 26 cases per recording): a Commit refused by an exists precondition answers 5 and ends the transaction, so a same-token read and the corrected Commit answer 3 with the expired text, a Rollback answers 0 (also when repeated), the lock is gone (an outside writer answers 0), and a Rollback after a successful Commit answers 10. This covers the refused-commit chain named above as not recorded, but it is not a published redacted record yet.",
+      "note": "Evidence: the 13-case REST subset recorded twice (E04, the finished-token cases) replayed on strict, and the programs below. Private sandbox observation, cited by run-directory name only, P08 fs-transaction-p08-failed-commit-b5da53e6fa1ae0ce (REST and gRPC, two agreeing recordings, 26 cases per recording): a Commit refused by an exists precondition answers 5 and ends the transaction, so a same-token read and the corrected Commit answer 3 with the expired text, a Rollback answers 0 (also when repeated), the lock is gone (an outside writer answers 0), and a Rollback after a successful Commit answers 10. It covers the refused-commit, token-reuse, explicit-rollback and lock-release chain, over REST and gRPC. Published redacted records and a strict replay of both recordings cover this condition (recordedComparison): each recording was replayed once against the strict profile of one fixed commit and every row matched, so the condition is VERIFIED on the strict profile. The parent is not COMPAT_VERIFIED until the final-artifact regression and the closure review are done.",
       "partialEvidence": {
         "coverage": "PARTIAL",
         "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
@@ -387,9 +539,70 @@
           "finished-token/rollback-after-rollback"
         ],
         "remainingBoundaries": [
-          "The refused-commit, token-reuse, explicit-rollback and lock-release chain is not recorded.",
-          "Representative gRPC is not recorded."
+          "This 13-case REST subset is the earlier partial evidence; the published recordedComparison records cover the refused-commit chain (P08) and native gRPC (P08, P09) recorded since. Its rows were replayed again on the strict release binary (releaseReplay)."
+        ],
+        "releaseReplay": {
+          "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
+          "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+          "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+          "rows": {
+            "MATCH": 6
+          }
+        }
+      },
+      "productionObservation": "RECORDED_TWICE_STRICT_COMPARED",
+      "recordedComparison": {
+        "profile": "strict",
+        "recordings": 2,
+        "programs": [
+          {
+            "program": "FS-TRANSACTION-P08-FAILED-COMMIT",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p08-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p08-recorded-comparison-v1.json",
+            "rows": 98,
+            "mismatches": 0
+          },
+          {
+            "program": "FS-TRANSACTION-P09-GRPC-RETRY",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p09-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p09-recorded-comparison-v1.json",
+            "rows": 28,
+            "mismatches": 0
+          }
         ]
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "program": "FS-TRANSACTION-P08-FAILED-COMMIT",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p08-failed-commit-b5da53e6"
+          },
+          {
+            "program": "FS-TRANSACTION-P09-GRPC-RETRY",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p09-879d71f8"
+          }
+        ],
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+        "comparisonPaths": [
+          "spec/compatibility/broad-runs/fs-transaction-p08-recorded-comparison-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p09-recorded-comparison-v1.json"
+        ],
+        "rows": {
+          "MATCH": 126
+        },
+        "e04ReleaseReplay": {
+          "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
+          "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+          "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+          "rows": {
+            "MATCH": 6
+          }
+        }
       }
     },
     {
@@ -398,8 +611,8 @@
       "recipeIds": [
         "fs-transaction/retry-token-lifecycle"
       ],
-      "recipeStatus": "RECORDED_PARTIAL",
-      "status": "PRODUCTION_RECORDED",
+      "recipeStatus": "RECORDED_COMPARED",
+      "status": "VERIFIED",
       "observation": {
         "method": "REST retryTransaction after rollback, commit, read-only begin, unissued and malformed tokens; compare diagnostics and post-state. Include a representative gRPC case.",
         "existingCaseOrCampaignRefs": [
@@ -432,7 +645,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Two sandbox recordings and both fireemu profiles agree for this REST subset. Representative gRPC is not recorded. This condition remains open. Inferred, not recorded in production, candidates for a later recording and not COMPAT_VERIFIED: strict reads a retry attempt (retryTransaction) at its begin, while the official emulator reads it at first use (REST measured); and a retry that names an expired token is refused \"Invalid retry transaction.\" unless a Rollback reached the token first (the local contract pins this order dependence), which production has not been asked about.",
+      "note": "Evidence: the 13-case REST subset recorded twice (E04, the retry-token cases) replayed on strict, native gRPC (P09) and the REST retry chains (P13b). Beyond the recorded rows, and not part of this condition's verification (inferred, not recorded in production): strict reads a retry attempt (retryTransaction) at its begin, while the official emulator reads it at first use (REST measured); and a retry that names an expired token is refused \"Invalid retry transaction.\" unless a Rollback reached the token first (the local contract pins this order dependence), which production has not been asked about. Published redacted records and a strict replay of both recordings cover this condition (recordedComparison): each recording was replayed once against the strict profile of one fixed commit and every row matched, so the condition is VERIFIED on the strict profile. The parent is not COMPAT_VERIFIED until the final-artifact regression and the closure review are done.",
       "partialEvidence": {
         "coverage": "PARTIAL",
         "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
@@ -446,8 +659,70 @@
           "retry-token/retry-with-unissued-previous"
         ],
         "remainingBoundaries": [
-          "Representative gRPC is not recorded."
+          "This 13-case REST subset is the earlier partial evidence; native gRPC (P09) and the retry chains over REST (P13b) are published in recordedComparison. Its rows were replayed again on the strict release binary (releaseReplay)."
+        ],
+        "releaseReplay": {
+          "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
+          "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+          "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+          "rows": {
+            "MATCH": 10
+          }
+        }
+      },
+      "productionObservation": "RECORDED_TWICE_STRICT_COMPARED",
+      "recordedComparison": {
+        "profile": "strict",
+        "recordings": 2,
+        "programs": [
+          {
+            "program": "FS-TRANSACTION-P09-GRPC-RETRY",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p09-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p09-recorded-comparison-v1.json",
+            "rows": 28,
+            "mismatches": 0
+          },
+          {
+            "program": "FS-TRANSACTION-P13B-RETRY-ANSWERS",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-comparison-v1.json",
+            "rows": 56,
+            "mismatches": 0
+          }
         ]
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "program": "FS-TRANSACTION-P09-GRPC-RETRY",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p09-879d71f8"
+          },
+          {
+            "program": "FS-TRANSACTION-P13B-RETRY-ANSWERS",
+            "recordings": 2,
+            "project": "fireemu-oracle-txn",
+            "run": "fs-transaction-p13b-retry-answers-e6d6b209"
+          }
+        ],
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+        "comparisonPaths": [
+          "spec/compatibility/broad-runs/fs-transaction-p09-recorded-comparison-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-comparison-v1.json"
+        ],
+        "rows": {
+          "MATCH": 84
+        },
+        "e04ReleaseReplay": {
+          "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
+          "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+          "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+          "rows": {
+            "MATCH": 10
+          }
+        }
       }
     },
     {
@@ -456,8 +731,8 @@
       "recipeIds": [
         "fs-transaction/idle-expiry"
       ],
-      "recipeStatus": "RECORDED_PARTIAL",
-      "status": "PRODUCTION_RECORDED",
+      "recipeStatus": "RECORDED_COMPARED",
+      "status": "VERIFIED",
       "observation": {
         "method": "Wall-clock idle expiry at the declared threshold, with before-threshold and held-lock controls, followed by lock-release and absence readback.",
         "existingCaseOrCampaignRefs": [
@@ -489,7 +764,7 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "Two sandbox recordings and both fireemu profiles agreed for this REST subset when it was recorded; that agreement was measured at strict's old 10 s idle allowance, with 90 s of local idle for idle-expiry/commit-after-idle, so it no longer describes current strict behavior (120 s limit) for three idle rows (commit-after-idle, rollback-after-idle and lock-released-after-idle, each driven at 90 s of local idle) or for the post-state and transaction releases that comparison compares: at 120 s, strict would commit that transaction, not expire it. Native gRPC sweeps (P10-B, nominal idle 65 to 70 s; P10-C, 75 to 120 s; each recorded twice) accepted every Commit through a nominal 110 s idle and refused the 120 s Commit with code 10, expired or no longer valid. The measured idle of the accepted 110 s Commit was [110.58, 113.12] s and of the refused 120 s Commit [120.54, 122.97] s. The REST refusal in the recorded run had idled about 121 s (idleSeconds 121.15 and 120.35), not the nominal 70 s wait. The exact idle threshold is not identified: it lies in [110.70, 122.96) s. Strict takes 120 s as a provisional limit, strict accepts the unobserved 113.12 to 120 s gap and refuses the unobserved 120 to 120.54 s gap. The final source-bound regression redoes the REST comparison with a driver-level override that advances the local control clock to the measured production idle (about 121 s), with new evidence versions (local shadow v5, comparison v2), leaving the recorded plan and the production fixtures untouched. This condition remains open. Private sandbox observation, cited by run-directory name only, no status change: P13a fs-transaction-p13a-inferred-answers-da25f2aa72b95011 (REST, two agreeing recordings): a token that idled out for 130 s answered reads at a token age of 132.4 to 135.1 s and 234.2 to 237.0 s with 10 and the expired text, a Rollback at 286.1 to 289.2 s with 10 and a read after it with 10, and a second such token answered a read at 309.3 to 312.2 s with 3 \"Invalid transaction.\": an idle-expired token is remembered until about 300 s of its token age like a lifetime-expired one, then forgotten (recorded over REST only: over gRPC the same memory is inferred, because the store applies one rule to both transports). Not a published redacted record yet. P13b retry-answers (REST, two agreeing recordings, 2026-10-01, private run directory): a Rollback of a token that had idled out for 130 s answered 0 at about 131 s of idle (twice), and a retry that named it afterwards was accepted; a retry that named an idle-expired token with no Rollback first, and one that named a lifetime-expired token at 280 to 283 s of age, were accepted too, the named lifetime-expired token's chain-end Rollback answering 10 with the expired text; the first read of a retry attempt showed an outside writer committed after the retry's begin. Not a published redacted record yet. Inferred, not recorded in production, candidates for a later recording and not COMPAT_VERIFIED: strict accepts a Rollback of an idle-expired token before 270 s over gRPC (E003 recorded the first request at about 121 s, and P13b recorded REST), including after earlier refused requests; it answers 10 to the Rollback of an idle-expired token that no request noticed once it is past 270 s; the Rollback of a token a retry named (strict answers 10 with the expired text, unrecorded; a candidate row of the next packet), and the retry rules above over gRPC (a candidate row of the next packet; the official emulator accepted the gRPC retry of an idle-expired token, firebase-tools 15.28.2, and both profiles answer a retry that names a token never issued \"Invalid transaction.\", the recorded text).",
+      "note": "REST subset (E04): the three idle observations (commit, rollback and lock release after an idle expiry) were replayed on the strict release binary at 121 s of idle on the control clock. For the commit and the rollback that lies inside the idle production measured in both recordings (120.35 to 121.15 s and 120.60 to 121.06 s); the lock release idled 124.7 to 125.2 s in production, and strict refuses every idle above its 120 s limit, so the replay at 121 s decides the same refusal (a valid sample, not the recorded idle). Every case and post state matches both recordings (record fs-transaction-expiry-retry-04-release-replay-v1). Native gRPC sweeps (P10-B, nominal idle 65 to 70 s; P10-C, 75 to 120 s; each recorded twice) accepted every Commit through a nominal 110 s idle and refused the 120 s Commit with code 10, expired or no longer valid. The measured idle of the accepted 110 s Commit was [110.58, 113.12] s and of the refused 120 s Commit [120.54, 122.97] s. The REST refusal in the recorded run had idled about 121 s (idleSeconds 121.15 and 120.35), not the nominal 70 s wait. The exact idle threshold is not identified: it lies in [110.70, 122.96) s. Strict takes 120 s as a provisional limit, strict accepts the unobserved 113.12 to 120 s gap and refuses the unobserved 120 to 120.54 s gap. Private sandbox observation, cited by run-directory name only: P13a fs-transaction-p13a-inferred-answers-da25f2aa72b95011 (REST, two agreeing recordings): a token that idled out for 130 s answered reads at a token age of 132.4 to 135.1 s and 234.2 to 237.0 s with 10 and the expired text, a Rollback at 286.1 to 289.2 s with 10 and a read after it with 10, and a second such token answered a read at 309.3 to 312.2 s with 3 \"Invalid transaction.\": an idle-expired token is remembered until about 300 s of its token age like a lifetime-expired one, then forgotten (recorded over REST only: over gRPC the same memory is inferred, because the store applies one rule to both transports). P13b retry-answers (REST, two agreeing recordings, 2026-10-01, private run directory): a Rollback of a token that had idled out for 130 s answered 0 at about 131 s of idle (twice), and a retry that named it afterwards was accepted; a retry that named an idle-expired token with no Rollback first, and one that named a lifetime-expired token at 280 to 283 s of age, were accepted too, the named lifetime-expired token's chain-end Rollback answering 10 with the expired text; the first read of a retry attempt showed an outside writer committed after the retry's begin. Beyond the recorded rows, and not part of this condition's verification (inferred, not recorded in production): strict accepts a Rollback of an idle-expired token before 270 s over gRPC (E003 recorded the first request at about 121 s, and P13b recorded REST), including after earlier refused requests; it answers 10 to the Rollback of an idle-expired token that no request noticed once it is past 270 s; the Rollback of a token a retry named (strict answers 10 with the expired text, unrecorded; a candidate row of the next packet), and the retry rules above over gRPC (a candidate row of the next packet; the official emulator accepted the gRPC retry of an idle-expired token, firebase-tools 15.28.2, and both profiles answer a retry that names a token never issued \"Invalid transaction.\", the recorded text). Published redacted records and a strict replay of both recordings cover this condition (recordedComparison): each recording was replayed once against the strict profile of one fixed commit and every row matched, so the condition is VERIFIED on the strict profile. The parent is not COMPAT_VERIFIED until the final-artifact regression and the closure review are done.",
       "partialEvidence": {
         "coverage": "PARTIAL",
         "reference": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
@@ -503,10 +778,100 @@
           "idle-expiry/rollback-after-idle"
         ],
         "remainingBoundaries": [
-          "The exact idle threshold is not identified: it lies between the last accepted measured idle (lower bound 110.70 s) and the first refused one (upper bound 122.96 s). Strict's 120 s limit is provisional: it accepts the unobserved 113.12 to 120 s gap and refuses the unobserved 120 to 120.54 s gap.",
-          "The native gRPC sweeps (P10-B, P10-C) were recorded outside this recipe and are not yet bound to it.",
-          "The recorded REST comparison v1 (its local side is docs.local/runs/fs-transaction-recorded-local-after-strict; the committed local shadow files are separate evidence) describes strict at the old 10 s allowance and 90 s of local idle for the idle rows commit-after-idle, rollback-after-idle and lock-released-after-idle and their post-state; it is historical for them until local shadow v5 and comparison v2 are recorded at the final artifact."
-        ]
+          "The exact idle threshold is not identified: it lies between the last accepted measured idle (lower bound 110.70 s) and the first refused one (upper bound 122.96 s). Strict's 120 s limit lies inside that interval; it accepts the unobserved 113.12 to 120 s gap and refuses the unobserved 120 to 120.54 s gap.",
+          "The native gRPC sweeps (P10-A, P10-B, P10-C) are published and bound to this condition in recordedComparison, and the REST idle rows (E04) were replayed at 121 s of idle on the strict release binary (releaseReplay; the recorded idle for the commit and the rollback, a lower idle with the same outcome for the lock release)."
+        ],
+        "releaseReplay": {
+          "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
+          "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+          "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+          "rows": {
+            "MATCH": 20
+          }
+        }
+      },
+      "productionObservation": "RECORDED_TWICE_STRICT_COMPARED",
+      "recordedComparison": {
+        "profile": "strict",
+        "recordings": 2,
+        "programs": [
+          {
+            "program": "FS-TRANSACTION-P10-A-GRPC-IDLE",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p10a-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p10a-recorded-comparison-v1.json",
+            "rows": 44,
+            "mismatches": 0
+          },
+          {
+            "program": "FS-TRANSACTION-P10-B-GRPC-BOUNDARY",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p10b-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p10b-recorded-comparison-v1.json",
+            "rows": 50,
+            "mismatches": 0
+          },
+          {
+            "program": "FS-TRANSACTION-P10-C-GRPC-BOUNDARY",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p10c-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p10c-recorded-comparison-v1.json",
+            "rows": 50,
+            "mismatches": 0
+          },
+          {
+            "program": "FS-TRANSACTION-P13A-INFERRED-ANSWERS",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p13a-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p13a-recorded-comparison-v1.json",
+            "rows": 86,
+            "mismatches": 0
+          }
+        ],
+        "boundaryRuling": "Idle and lifetime boundaries: the idle threshold is judged by the interval production narrowed, [110.70, 122.96) s (ledger 809 (5)), and strict's 120 s idle limit lies inside it; the age at which an expired token is forgotten is judged by (298.7, 302.2] s, which holds strict's 300 s of memory. Strict's 270 s total lifetime is supported by the rows themselves, not by an interval: live reads at token ages up to 253.3 s answered 0 and the first refusals came at 280.4 s, so production's lifetime lies in about (253.3, 280.4] s and 270 s lies inside it."
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "program": "FS-TRANSACTION-P10-A-GRPC-IDLE",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p10-b6d7f14a"
+          },
+          {
+            "program": "FS-TRANSACTION-P10-B-GRPC-BOUNDARY",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p10b-10a72a47"
+          },
+          {
+            "program": "FS-TRANSACTION-P10-C-GRPC-BOUNDARY",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p10b-2eae6448"
+          },
+          {
+            "program": "FS-TRANSACTION-P13A-INFERRED-ANSWERS",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p13a-inferred-answers-da25f2aa"
+          }
+        ],
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+        "comparisonPaths": [
+          "spec/compatibility/broad-runs/fs-transaction-p10a-recorded-comparison-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p10b-recorded-comparison-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p10c-recorded-comparison-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p13a-recorded-comparison-v1.json"
+        ],
+        "rows": {
+          "MATCH": 230
+        },
+        "e04ReleaseReplay": {
+          "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
+          "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+          "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+          "rows": {
+            "MATCH": 20
+          }
+        }
       }
     },
     {
@@ -515,8 +880,8 @@
       "recipeIds": [
         "fs-transaction/total-lifetime-expiry"
       ],
-      "recipeStatus": "PROPOSED",
-      "status": "PENDING_CORPUS",
+      "recipeStatus": "RECORDED_COMPARED",
+      "status": "VERIFIED",
       "observation": {
         "method": "A separate bounded long-window observation across the total transaction lifetime with a live-before-boundary control.",
         "existingCaseOrCampaignRefs": [],
@@ -538,8 +903,68 @@
         ],
         "recordingsRequired": 2
       },
-      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition. Private sandbox observations, cited by run-directory name only, no status change: P11 fs-transaction-p11-lifetime-0478164e4f3b1948 (REST, recording 1, stopped by the old recorder): a read at 298.7 to 301.0 s answered 10 with the expired text, then a Commit and a Rollback 3 \"Invalid transaction.\". P11 v4 fs-transaction-p11-lifetime-c82deaf32c18e7dd (REST and gRPC, two agreeing recordings): keepalive reads answered 0, the live read 0 at token age 250.6 to 253.3 s (gRPC 248.8 to 251.2), the expiry read 10 with the expired text at 284.8 to 287.9 s (gRPC 282.9 to 285.5), the Commit after it 10 with the same text, an outside writer 0 and the chain-end Rollback 10. Together they fit one model: the token is remembered until about 300 s of its age (every request 10), then forgotten (3). P13a fs-transaction-p13a-inferred-answers-da25f2aa72b95011 (REST, two agreeing recordings): a Commit as the first request at a token age of 281.5 to 284.5 s answered 10 with the expired text, and so did a Rollback as the first request at 280.4 to 283.7 s and a read after it. Inferred, not recorded, a candidate for a later recording and not COMPAT_VERIFIED: the exact forgetting age inside (298.7, 302.2] s (strict takes 300 s). P12 fs-transaction-p12-first-request-6cf142d8830cd02d (REST, two agreeing recordings): with the first request at token age about 325 to 330 s, every request answered 3 \"Invalid transaction.\", whether it was the first request (a Commit or a Rollback) or a later read, Commit or Rollback, so the forgotten token answers 3 including for a first request. Not published redacted records yet.",
-      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+      "note": "Evidence: two agreeing sandbox recordings of each program below with complete cleanup, replayed against strict. Private sandbox observations, cited by run-directory name only: P11 fs-transaction-p11-lifetime-0478164e4f3b1948 (REST, recording 1, stopped by the old recorder): a read at 298.7 to 301.0 s answered 10 with the expired text, then a Commit and a Rollback 3 \"Invalid transaction.\". P11 v4 fs-transaction-p11-lifetime-c82deaf32c18e7dd (REST and gRPC, two agreeing recordings): keepalive reads answered 0, the live read 0 at token age 250.6 to 253.3 s (gRPC 248.8 to 251.2), the expiry read 10 with the expired text at 284.8 to 287.9 s (gRPC 282.9 to 285.5), the Commit after it 10 with the same text, an outside writer 0 and the chain-end Rollback 10. Together they fit one model: the token is remembered until about 300 s of its age (every request 10), then forgotten (3). P13a fs-transaction-p13a-inferred-answers-da25f2aa72b95011 (REST, two agreeing recordings): a Commit as the first request at a token age of 281.5 to 284.5 s answered 10 with the expired text, and so did a Rollback as the first request at 280.4 to 283.7 s and a read after it. The exact forgetting age is not identified: it lies inside (298.7, 302.2] s (strict takes 300 s). P12 fs-transaction-p12-first-request-6cf142d8830cd02d (REST, two agreeing recordings): with the first request at token age about 325 to 330 s, every request answered 3 \"Invalid transaction.\", whether it was the first request (a Commit or a Rollback) or a later read, Commit or Rollback, so the forgotten token answers 3 including for a first request. Published redacted records and a strict replay of both recordings cover this condition (recordedComparison): each recording was replayed once against the strict profile of one fixed commit and every row matched, so the condition is VERIFIED on the strict profile. The parent is not COMPAT_VERIFIED until the final-artifact regression and the closure review are done.",
+      "productionObservation": "RECORDED_TWICE_STRICT_COMPARED",
+      "recordedComparison": {
+        "profile": "strict",
+        "recordings": 2,
+        "programs": [
+          {
+            "program": "FS-TRANSACTION-P11-LIFETIME",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p11-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p11-recorded-comparison-v1.json",
+            "rows": 78,
+            "mismatches": 0
+          },
+          {
+            "program": "FS-TRANSACTION-P12-FIRST-REQUEST",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p12-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p12-recorded-comparison-v1.json",
+            "rows": 68,
+            "mismatches": 0
+          },
+          {
+            "program": "FS-TRANSACTION-P13A-INFERRED-ANSWERS",
+            "observationsPath": "spec/compatibility/broad-runs/fs-transaction-p13a-recorded-observations-v1.json",
+            "comparisonPath": "spec/compatibility/broad-runs/fs-transaction-p13a-recorded-comparison-v1.json",
+            "rows": 86,
+            "mismatches": 0
+          }
+        ],
+        "boundaryRuling": "Idle and lifetime boundaries: the idle threshold is judged by the interval production narrowed, [110.70, 122.96) s (ledger 809 (5)), and strict's 120 s idle limit lies inside it; the age at which an expired token is forgotten is judged by (298.7, 302.2] s, which holds strict's 300 s of memory. Strict's 270 s total lifetime is supported by the rows themselves, not by an interval: live reads at token ages up to 253.3 s answered 0 and the first refusals came at 280.4 s, so production's lifetime lies in about (253.3, 280.4] s and 270 s lies inside it."
+      },
+      "evidence": {
+        "productionRecordings": [
+          {
+            "program": "FS-TRANSACTION-P11-LIFETIME",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p11-lifetime-c82deaf3"
+          },
+          {
+            "program": "FS-TRANSACTION-P12-FIRST-REQUEST",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p12-first-request-6cf142d8"
+          },
+          {
+            "program": "FS-TRANSACTION-P13A-INFERRED-ANSWERS",
+            "recordings": 2,
+            "project": "fireemu-oracle-sbx",
+            "run": "fs-transaction-p13a-inferred-answers-da25f2aa"
+          }
+        ],
+        "finalArtifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+        "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+        "comparisonPaths": [
+          "spec/compatibility/broad-runs/fs-transaction-p11-recorded-comparison-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p12-recorded-comparison-v1.json",
+          "spec/compatibility/broad-runs/fs-transaction-p13a-recorded-comparison-v1.json"
+        ],
+        "rows": {
+          "MATCH": 232
+        }
+      }
     },
     {
       "conditionId": "FS-TRANSACTION/read-time-retention",
@@ -826,11 +1251,12 @@
       "OPTIMISTIC mode follow-up issue"
     ]
   },
-  "note": "The frozen denominator remains 18 behavioral conditions. Two sandbox recordings and source-bound strict/emulator comparisons cover only the 13-case REST subset of three conditions. The other 15 conditions, official emulator gate and parent closure remain open. Inferred strict answers that no recording covers are listed on their conditions (retry snapshot, retry naming an expired token, the forgetting age inside its bracket, a Rollback of an idle-expired token before 270 s or unnoticed past 270 s); each is a candidate for a later recording and none is COMPAT_VERIFIED.",
+  "note": "The frozen denominator remains 18 behavioral conditions. Two sandbox recordings of the 13-case REST subset were compared with strict and the emulator profile (three conditions, partialEvidence). Eight conditions are VERIFIED by published records of two saved recordings per program and a strict replay of both against one fixed artifact (recordedComparison). The other conditions (token-validation-and-ownership, write-set-atomicity, query-range-lock, read-time-retention, web-sdk-optimistic-retry, admin-sdk-server-retry, commit-atomic-visibility, paging-and-cancellation) need new recordings; final-artifact-regression and closure-review are offline and open. The official-emulator-only remnants (profileComparison, the P08 official-emulator gate, the cleanup/token/t4 differences with the emulator) were separated from this production parent's closure into their own track (owner decision, 2026-10-04); the emulator profile still refuses nothing the official emulator completes. Inferred strict answers that no recording covers are listed on their conditions (retry snapshot, retry naming an expired token, the forgetting age inside its bracket, a Rollback of an idle-expired token before 270 s or unnoticed past 270 s); each is a candidate for a later recording and none is COMPAT_VERIFIED.",
   "profileComparison": {
     "profile": "strict",
-    "emulatorCompatibilityCheck": "PENDING_LOCAL_OBSERVATION",
-    "note": "Before closure review, compare official emulator behavior for idle and total expiry, token ownership, and retry-token refusal. The emulator profile must not add refusals absent from the official emulator."
+    "emulatorCompatibilityCheck": "SEPARATE_TRACK",
+    "note": "The strict profile is what this parent verifies. The official-emulator-only comparison (idle and total expiry, token ownership, retry-token refusal against the official emulator) is its own track (owner decision, 2026-10-04); the emulator profile must not add refusals absent from the official emulator.",
+    "track": "The official-emulator-only comparison (idle and total expiry, token ownership, retry-token refusal against the official emulator) is its own track and no condition of this parent waits for it (owner decision, 2026-10-04). The emulator profile must not add refusals absent from the official emulator."
   },
   "configProjections": {
     "databaseConcurrencyMode": "PESSIMISTIC",

@@ -82,6 +82,14 @@ assert(
   release_test_runs.include?("cargo nextest run -p fireemu --test leak_fixture --profile pr"),
   "release test job must run the process leak fixture in isolation"
 )
+# v0.11.0's first tag failed here: the Functions runtime tests need the real SDK from the
+# conformance install, which ci.yml installed and the release test job did not.
+release_sdk_install = release_test_runs.index("pnpm -C conformance install --frozen-lockfile")
+release_workspace_suite = release_test_runs.index("cargo nextest run --workspace")
+assert(
+  release_sdk_install && release_workspace_suite && release_sdk_install < release_workspace_suite,
+  "release test job must install the conformance SDK before the workspace suite"
+)
 strict = release.dig("jobs", "strict-production")
 assert(strict, "release must compare the strict profile of the installed artifact with the committed production recordings")
 assert(strict.fetch("needs").include?("build"), "strict-production must test the built platform package")
@@ -221,8 +229,40 @@ release_source = File.read(File.join(ROOT, ".github", "workflows", "release.yml"
 assert(!release_source.include?("NPM_TOKEN"), "release publish must authenticate through Trusted Publishing")
 assert(!release_source.include?("NODE_AUTH_TOKEN"), "release publish must not inject a registry token")
 
+# The Functions runner's Node tests (the 44-frame Storage member-order test among them) are a gate on
+# every trigger, on Linux and macOS, with the pinned real SDK installed first.
+runner_node = jobs["runner-node"]
+assert(runner_node, "CI must have a runner-node job for the Functions runner Node tests")
+assert(runner_node.dig("strategy", "matrix", "os") == %w[ubuntu-latest macos-latest], "the runner Node tests must run on Linux and macOS")
+runner_steps = runner_node.fetch("steps")
+runner_runs = runner_steps.map { |step| step["run"] }
+runner_install = runner_runs.index("pnpm -C conformance install --frozen-lockfile")
+runner_tests = runner_runs.index("node --test tools/runner-node/*.test.mjs")
+assert(runner_install && runner_tests && runner_install < runner_tests, "the runner Node tests must run after the pinned real SDK install")
+assert(runner_node["runs-on"] == "${{ matrix.os }}", "the runner Node tests must run on the matrix operating system")
+assert(runner_steps.any? { |step| step["uses"]&.start_with?("actions/setup-node@") && step.dig("with", "node-version").to_s == "24" }, "the runner Node tests must run on Node 24")
+# The SDK inventory tests need the sdk-smoke install, and must fail rather than skip without it.
+runner_sdk_install = runner_runs.index("npm ci --prefix tools/sdk-smoke --ignore-scripts")
+assert(runner_sdk_install && runner_sdk_install < runner_tests, "the runner Node tests must run after the sdk-smoke install")
+assert(runner_node["env"] == { "FIREEMU_REQUIRE_SDK" => "1" }, "the runner Node job must require the SDK, so the inventory tests cannot skip")
+# Nothing may make the gate fail open: no continue-on-error, no step-level if, no other working
+# directory, no cache, no defaults. The steps that install and test carry exactly a name and a command.
+assert((runner_node.keys - %w[name runs-on timeout-minutes strategy env steps]).empty?, "the runner Node job may carry only name, runs-on, timeout-minutes, strategy, env and steps")
+assert((runner_node.fetch("strategy").keys - %w[fail-fast matrix]).empty?, "the runner Node strategy may carry only fail-fast and matrix")
+runner_steps.each do |step|
+  if step["run"]
+    assert(step.keys.sort == %w[name run], "runner Node run steps carry exactly a name and a run: #{step['name']}")
+  elsif step["uses"]&.start_with?("actions/setup-node@")
+    assert(step.keys.sort == %w[uses with] && step["with"].keys == %w[node-version], "the runner Node setup-node step sets only node-version (no cache)")
+  elsif step["uses"]&.start_with?("pnpm/action-setup@")
+    assert(step.keys.sort == %w[uses with] && step["with"].keys == %w[version], "the runner Node pnpm step sets only the version")
+  else
+    assert(step.keys == %w[uses] && step["uses"].start_with?("actions/checkout@"), "the runner Node job uses only checkout, pnpm, setup-node and run steps")
+  end
+end
+
 # The full suite runs on every trigger: pull requests, pushes to main and manual dispatch.
-%w[lint test verify platforms package ui].each do |name|
+%w[lint test verify platforms package ui runner-node].each do |name|
   assert(!jobs.fetch(name).key?("if"), "#{name} must run on pull requests and on pushes to main, not only on manual dispatch")
 end
 
@@ -279,7 +319,7 @@ assert(broad_commands.count { |line| line.start_with?(broad_prefix + '-m pytest 
   "required broad pytest must use the reviewed Python 3.12.13 runtime")
 assert(load_workflow("functions-sdk-discovery.yml").dig("jobs", "real-sdk-discovery", "timeout-minutes") == 120, "manual SDK discovery must have a two-hour timeout")
 {
-  "ci.yml" => %w[lint test verify pr platforms package ui],
+  "ci.yml" => %w[lint test verify pr platforms package ui runner-node],
   "compatibility-inventory.yml" => %w[feature-inventory-integrity offline-acquisition-integrity],
   "conformance.yml" => %w[conformance],
   "functions-sdk-discovery.yml" => %w[real-sdk-discovery],

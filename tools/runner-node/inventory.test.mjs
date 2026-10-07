@@ -1,7 +1,10 @@
 // docs/functions-export-inventory.md must name every trigger namespace the installed
 // `firebase-functions` SDK exports, with one of the documented statuses. The SDK is the one
 // the smoke fixture installs (`npm ci --prefix tools/sdk-smoke`); without it the test is
-// skipped with that reason rather than passing on nothing.
+// skipped with that reason rather than passing on nothing. Where the SDK is required
+// (FIREEMU_REQUIRE_SDK=1, set by the CI job that installs it) a missing SDK fails the test instead,
+// so the guard cannot quietly stop running. FIREEMU_SDK_SMOKE_DIR points the test at another install
+// (inventory-require-sdk.test.mjs uses it).
 
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -12,7 +15,9 @@ import test from "node:test";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
-const smoke = resolve(repo, "tools/sdk-smoke");
+const smoke = process.env.FIREEMU_SDK_SMOKE_DIR ? resolve(process.env.FIREEMU_SDK_SMOKE_DIR) : resolve(repo, "tools/sdk-smoke");
+const required = process.env.FIREEMU_REQUIRE_SDK === "1";
+const skipWithoutSdk = sdk => (sdk || required ? false : "firebase-functions is not installed under tools/sdk-smoke");
 const inventory = readFileSync(resolve(repo, "docs/functions-export-inventory.md"), "utf8");
 
 const STATUSES = new Set(["served", "deferred", "not-planned", "unsupported"]);
@@ -67,7 +72,8 @@ test("every row carries a documented status", () => {
   }
 });
 
-test("every v1 trigger namespace the installed SDK exports has a row", { skip: sdk ? false : "firebase-functions is not installed under tools/sdk-smoke" }, () => {
+test("every v1 trigger namespace the installed SDK exports has a row", { skip: skipWithoutSdk(sdk) }, () => {
+  assert.ok(sdk, "firebase-functions is required here (FIREEMU_REQUIRE_SDK=1) but is not installed under tools/sdk-smoke");
   const v1 = sdk("firebase-functions/v1");
   const namespaces = Object.keys(v1).filter(
     (key) => !NON_TRIGGER_V1.has(key) && (typeof v1[key] === "object" || typeof v1[key] === "function"),
@@ -79,7 +85,8 @@ test("every v1 trigger namespace the installed SDK exports has a row", { skip: s
   }
 });
 
-test("every v2 module the installed SDK ships has a row", { skip: sdk ? false : "firebase-functions is not installed under tools/sdk-smoke" }, () => {
+test("every v2 module the installed SDK ships has a row", { skip: skipWithoutSdk(sdk) }, () => {
+  assert.ok(sdk, "firebase-functions is required here (FIREEMU_REQUIRE_SDK=1) but is not installed under tools/sdk-smoke");
   const providers = dirname(sdk.resolve("firebase-functions/v2/https"));
   const modules = readdirSync(providers)
     .map((entry) => entry.replace(/\.js$/, ""))

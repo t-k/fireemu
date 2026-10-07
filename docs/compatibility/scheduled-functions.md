@@ -17,3 +17,7 @@ The approved closure policy retains fail-closed verification after explicit cloc
 ## Checking the closure
 
 Run `node --test conformance/src/scheduled-functions-closure.test.mjs` to check frozen inventory integrity and promotion guards. Run `FIREEMU_REQUIRE_SCHEDULED_CLOSURE=1 node --test conformance/src/scheduled-functions-closure.test.mjs` to require a reviewed COMPAT_VERIFIED parent. The latter intentionally fails while any closure evidence is missing.
+
+## Delivery and retry against production
+
+What the second delivery recording showed, what the strict profile does about it and what still differs: `docs/compatibility/scheduled-functions-delivery.md`.

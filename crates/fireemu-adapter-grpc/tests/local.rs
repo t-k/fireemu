@@ -3130,6 +3130,87 @@ async fn malformed_wire_shapes_are_rejected_before_any_mutation() {
     handle.abort();
 }
 
+#[test]
+fn new_transaction_retry_batch_get_and_run_query_return_documents() {
+    for run_query in [false, true] {
+        let backend = history_budget_backend(u64::MAX, u64::MAX);
+        backend
+            .commit(&pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("retry-snapshot/1", &[("v", i(1))])],
+                ..Default::default()
+            })
+            .unwrap();
+        let previous = backend
+            .begin_transaction(&pb::BeginTransactionRequest {
+                database: DB.to_owned(),
+                ..Default::default()
+            })
+            .unwrap();
+        backend
+            .commit(&pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write("retry-snapshot/1", &[("v", i(2))])],
+                ..Default::default()
+            })
+            .unwrap();
+        let options = pb::TransactionOptions {
+            mode: Some(pb::transaction_options::Mode::ReadWrite(
+                pb::transaction_options::ReadWrite {
+                    retry_transaction: previous.clone(),
+                    ..Default::default()
+                },
+            )),
+        };
+        let (transaction, documents) = if run_query {
+            let mut request = query("retry-snapshot", None);
+            request.consistency_selector = Some(
+                pb::run_query_request::ConsistencySelector::NewTransaction(options),
+            );
+            let (responses, _) = backend
+                .run_query(&request, &fireemu_adapter_grpc::rules::allow_all_reads)
+                .unwrap();
+            let transaction = responses[0].transaction.clone();
+            let documents = responses.into_iter().filter_map(|r| r.document).collect();
+            (transaction, documents)
+        } else {
+            let outcome = backend
+                .batch_get_documents(
+                    &pb::BatchGetDocumentsRequest {
+                        database: DB.to_owned(),
+                        documents: vec![format!("{DOCS}/retry-snapshot/1")],
+                        consistency_selector: Some(
+                            pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
+                                options,
+                            ),
+                        ),
+                        ..Default::default()
+                    },
+                    &fireemu_adapter_grpc::rules::allow_all_reads,
+                )
+                .unwrap();
+            let documents: Vec<_> = outcome
+                .items
+                .iter()
+                .map(|item| {
+                    let pb::batch_get_documents_response::Result::Found(document) =
+                        item.encode(None)
+                    else {
+                        panic!("the retry must return the existing document")
+                    };
+                    document
+                })
+                .collect();
+            (outcome.transaction, documents)
+        };
+        assert!(!transaction.is_empty());
+        assert_ne!(transaction, previous);
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].name, format!("{DOCS}/retry-snapshot/1"));
+        assert_eq!(documents[0].fields.get("v"), Some(&i(2)));
+    }
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn new_transaction_queries_and_aggregations_read_the_snapshot() {

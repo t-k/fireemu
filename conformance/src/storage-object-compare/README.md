@@ -79,3 +79,20 @@ reached are then counted as `NOT_RUN`). The fireemu commit is an operator's stat
 it against the binary.
 
 The recorder checkout and its pinned files are not part of this tool and are not changed by it.
+
+## Closure evidence
+
+`closure-evidence.mjs` turns a finished comparison into the evidence of `spec/compatibility/closure/STORAGE-OBJECT.json`. It needs the compare report (`compare --report`), the rehearsal receipt, the fixture, and the sandbox ledger, which names the two recordings:
+
+```
+node src/storage-object-compare/closure-evidence.mjs --report <report.json> --receipt <receipt.json> \
+  --fixture fixtures/storage-object-production --sandbox-ledger <docs.local/runs/sandbox-ledger.jsonl> \
+  --closure ../spec/compatibility/closure/STORAGE-OBJECT.json \
+  --out ../spec/compatibility/closure/evidence/STORAGE-OBJECT-comparison.json \
+  --comparison-path spec/compatibility/closure/evidence/STORAGE-OBJECT-comparison.json \
+  [--hold STORAGE-OBJECT/<condition>] \\
+  [--build-record <build record.json> --build-record-out ../spec/compatibility/closure/evidence/STORAGE-OBJECT-build.json \\
+   --build-record-path spec/compatibility/closure/evidence/STORAGE-OBJECT-build.json]
+```
+
+It refuses anything but a MATCH of every fixture row, with the report, the receipt and the fixture naming the same binary, commit, recorder and fixture. It writes one evidence row for each compared exchange (bound to the binary's SHA-256) and sets `VERIFIED` and the evidence on every recipe condition that is not held, rewriting only those condition lines of the closure file. The review condition is never touched, and so is the final-artifact condition unless a build record is given: one JSON of the binary's build with `sourceCommit`, `gitStatusOutsideBuildOutput` (a list, empty when the tree was clean outside the build output), `cargoVersion`, `locked` (true) and `binarySha256`. It must name the compared binary and commit. The generator then sets the final-artifact condition from the comparison and the record, copies the record into the repository and cites its SHA-256; it adds no other check. A note on a condition stays, so the command can be run again for another binary: the evidence of every condition moves together. Afterwards run `tools/compat-inventory/closure_records.py --write` and `--check`.

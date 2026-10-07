@@ -10,8 +10,9 @@ use axum::http::{Method, Request, StatusCode};
 use axum::response::Response;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use fireemu_core_pubsub::pagination::paginate;
 use fireemu_core_pubsub::subscription::{
-    DeadLetterPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
+    DeadLetterPolicy, ExpirationPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
     DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS, MAX_RETRY_BACKOFF_SECONDS,
 };
 use fireemu_core_pubsub::{
@@ -25,29 +26,43 @@ use crate::convert::{
     is_declared_subscription_field, is_declared_topic_field, validate_subscription_update_paths,
     validate_topic_options, SUPPORTED_SUBSCRIPTION_FIELDS,
 };
+use crate::rest_json::Schema;
 use crate::{PubSubHandle, MAX_MESSAGE_BYTES};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 
 const MAX_JSON_BYTES: usize = MAX_MESSAGE_BYTES + 1024 * 1024;
 
 #[derive(Debug)]
-struct RestError {
+pub(crate) struct RestError {
     status: StatusCode,
     code: &'static str,
     message: String,
+    details: Option<Value>,
 }
 
 impl RestError {
     fn invalid(message: impl Into<String>) -> Self {
         Self {
+            details: None,
             status: StatusCode::BAD_REQUEST,
             code: "INVALID_ARGUMENT",
             message: message.into(),
         }
     }
 
+    fn unknown_json_field(name: &str) -> Self {
+        let description =
+            format!("Invalid JSON payload received. Unknown name \"{name}\": Cannot find field.");
+        let mut error = Self::invalid(description.clone());
+        error.details = Some(
+            json!([{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"description":description}]}]),
+        );
+        error
+    }
+
     fn method_not_allowed() -> Self {
         Self {
+            details: None,
             status: StatusCode::METHOD_NOT_ALLOWED,
             code: "METHOD_NOT_ALLOWED",
             message: "method is not supported for this Pub/Sub resource".to_owned(),
@@ -56,6 +71,7 @@ impl RestError {
 
     fn not_found(message: impl Into<String>) -> Self {
         Self {
+            details: None,
             status: StatusCode::NOT_FOUND,
             code: "NOT_FOUND",
             message: message.into(),
@@ -64,6 +80,7 @@ impl RestError {
 
     fn unimplemented(message: impl Into<String>) -> Self {
         Self {
+            details: None,
             status: StatusCode::NOT_IMPLEMENTED,
             code: "UNIMPLEMENTED",
             message: message.into(),
@@ -76,15 +93,57 @@ impl RestError {
             Code::InvalidArgument => (StatusCode::BAD_REQUEST, "INVALID_ARGUMENT"),
             Code::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND"),
             Code::AlreadyExists => (StatusCode::CONFLICT, "ALREADY_EXISTS"),
-            Code::FailedPrecondition => (StatusCode::PRECONDITION_FAILED, "FAILED_PRECONDITION"),
+            Code::FailedPrecondition => (StatusCode::BAD_REQUEST, "FAILED_PRECONDITION"),
             Code::ResourceExhausted => (StatusCode::TOO_MANY_REQUESTS, "RESOURCE_EXHAUSTED"),
             Code::Unimplemented => (StatusCode::NOT_IMPLEMENTED, "UNIMPLEMENTED"),
         };
         Self {
+            details: None,
             status,
             code,
-            message: error.message().to_owned(),
+            message: crate::convert::wire_error_message(&error),
         }
+    }
+
+    fn from_resource_get(error: PubSubError, leaf: &str) -> Self {
+        if error.code() == Code::NotFound {
+            Self::not_found(format!("Resource not found (resource={leaf})."))
+        } else {
+            Self::from_core(error)
+        }
+    }
+}
+
+pub(crate) fn unauthenticated(
+    method: &Method,
+    path: &str,
+    policy: crate::PagingPolicy,
+) -> Response {
+    let details = recorded_auth_method(method, path).map(|method| {
+        json!([{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"CREDENTIALS_MISSING","metadata":{"method":format!("google.pubsub.v1.Publisher.{method}"),"service":"pubsub.googleapis.com"}}])
+    });
+    error_response(
+        RestError {
+            status: StatusCode::UNAUTHORIZED,
+            code: "UNAUTHENTICATED",
+            message: crate::authentication::INVALID_CREDENTIAL_MESSAGE.to_owned(),
+            details,
+        },
+        policy,
+    )
+}
+
+fn recorded_auth_method(method: &Method, path: &str) -> Option<&'static str> {
+    let (project, resource) = path.strip_prefix("/v1/projects/")?.split_once('/')?;
+    let leaf = resource.strip_prefix("topics/")?;
+    if project.is_empty() || leaf.is_empty() || leaf.contains('/') {
+        return None;
+    }
+    match (method, leaf.split_once(':')) {
+        (&Method::GET, None) => Some("GetTopic"),
+        (&Method::PUT, None) => Some("CreateTopic"),
+        (&Method::POST, Some((topic, "publish"))) if !topic.is_empty() => Some("Publish"),
+        _ => None,
     }
 }
 
@@ -92,12 +151,23 @@ impl RestError {
 pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
-    let body = match to_bytes(request.into_body(), MAX_JSON_BYTES).await {
+    let query = request.uri().query().unwrap_or_default().to_owned();
+    let limit = if handle.paging_policy == crate::PagingPolicy::Strict {
+        MAX_MESSAGE_BYTES
+    } else {
+        MAX_JSON_BYTES
+    };
+    let body = match to_bytes(request.into_body(), limit).await {
         Ok(body) => body,
         Err(error) => {
-            return error_response(RestError::invalid(format!(
-                "request body is too large: {error}"
-            )))
+            let message = if handle.paging_policy == crate::PagingPolicy::Strict
+                && error.to_string() == "length limit exceeded"
+            {
+                "Request payload size exceeds the limit: 10485760 bytes.".to_owned()
+            } else {
+                format!("request body is too large: {error}")
+            };
+            return error_response(RestError::invalid(message), handle.paging_policy);
         }
     };
     let value = if body.is_empty() {
@@ -106,25 +176,83 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
         match serde_json::from_slice::<Value>(&body) {
             Ok(value) => value,
             Err(error) => {
-                return error_response(RestError::invalid(format!(
-                    "request body is not JSON: {error}"
-                )))
+                return error_response(
+                    RestError::invalid(format!("request body is not JSON: {error}")),
+                    handle.paging_policy,
+                );
             }
         }
     };
 
-    match dispatch(&method, &path, &value, &handle) {
-        Ok((status, response)) => json_response(status, response),
-        Err(error) => error_response(error),
+    match dispatch(&method, &path, &query, &value, &handle) {
+        Ok((status, response, schema)) => {
+            json_response(status, response, handle.paging_policy, schema)
+        }
+        Err(error)
+            if handle.paging_policy == crate::PagingPolicy::Strict
+                && method == Method::GET
+                && matches!(
+                    error.message.as_str(),
+                    "Pub/Sub REST paths must start with /v1/"
+                        | "invalid Pub/Sub REST resource path"
+                        | "unknown Pub/Sub REST resource"
+                ) =>
+        {
+            route_not_found_response(&path)
+        }
+        Err(mut error) => {
+            if handle.paging_policy == crate::PagingPolicy::Strict && error.details.is_none() {
+                error.details = filter_error_details(&error.message);
+            }
+            error_response(error, handle.paging_policy)
+        }
     }
+}
+
+fn filter_error_details(message: &str) -> Option<Value> {
+    let suffix = message
+        .strip_prefix("Invalid filter expression: failed to parse (syntax error at line ")?;
+    let (line, suffix) = suffix.split_once(", column ")?;
+    let (column, suffix) = suffix.split_once(", token '")?;
+    let token = suffix.strip_suffix("').")?;
+    line.parse::<usize>().ok()?;
+    column.parse::<usize>().ok()?;
+    Some(
+        json!([{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"FILTER_EXPRESSION_FAILED_TO_PARSE","domain":"pubsub.googleapis.com","metadata":{"column":column,"line":line,"token":token,"message":"syntax error"}}]),
+    )
+}
+
+fn escape_html_path(path: &str) -> String {
+    path.chars()
+        .map(|character| match character {
+            '&' => "&amp;".to_owned(),
+            '<' => "&lt;".to_owned(),
+            '>' => "&gt;".to_owned(),
+            '"' => "&quot;".to_owned(),
+            '\'' => "&#39;".to_owned(),
+            _ => character.to_string(),
+        })
+        .collect()
+}
+
+fn route_not_found_response(path: &str) -> Response {
+    let body = include_str!("route_not_found.html").replace("{{PATH}}", &escape_html_path(path));
+    let mut response = Response::new(Body::from(body));
+    *response.status_mut() = StatusCode::NOT_FOUND;
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("text/html; charset=UTF-8"),
+    );
+    response
 }
 
 fn dispatch(
     method: &Method,
     path: &str,
+    query: &str,
     body: &Value,
     handle: &PubSubHandle,
-) -> Result<(StatusCode, Value), RestError> {
+) -> Result<(StatusCode, Value, Schema), RestError> {
     let parts = path
         .strip_prefix("/v1/")
         .ok_or_else(|| RestError::not_found("Pub/Sub REST paths must start with /v1/"))?
@@ -135,13 +263,13 @@ fn dispatch(
     }
     let project = parts[1];
     if parts[2] == "topics" {
-        return dispatch_topic(method, &parts[3..], project, body, handle);
+        return dispatch_topic(method, &parts[3..], project, query, body, handle);
     }
     if parts[2] == "subscriptions" {
-        return dispatch_subscription(method, &parts[3..], project, body, handle);
+        return dispatch_subscription(method, &parts[3..], project, query, body, handle);
     }
     if parts[2] == "snapshots" {
-        return dispatch_snapshot(method, &parts[3..], project, body, handle);
+        return dispatch_snapshot(method, &parts[3..], project, query, body, handle);
     }
     Err(RestError::not_found("unknown Pub/Sub REST resource"))
 }
@@ -150,9 +278,10 @@ fn dispatch_topic(
     method: &Method,
     parts: &[&str],
     project: &str,
+    query: &str,
     body: &Value,
     handle: &PubSubHandle,
-) -> Result<(StatusCode, Value), RestError> {
+) -> Result<(StatusCode, Value, Schema), RestError> {
     if parts.is_empty() {
         if *method != Method::GET {
             return Err(RestError::method_not_allowed());
@@ -163,12 +292,52 @@ fn dispatch_topic(
             .into_iter()
             .map(|name| {
                 let labels = state.topic_labels(&name).cloned().unwrap_or_default();
-                topic_json(&name, &labels)
+                topic_json(
+                    &name,
+                    &labels,
+                    state.topic_retention(&name).unwrap_or_default(),
+                )
             })
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
-            json!({"topics": topics, "nextPageToken": ""}),
+            paged_collection_json("topics", topics, query, handle)?,
+            Schema::Topics,
+        ));
+    }
+    if parts.len() == 2
+        && *method == Method::GET
+        && matches!(parts[1], "subscriptions" | "snapshots")
+    {
+        let topic = TopicName::new(project, parts[0]).map_err(RestError::from_core)?;
+        let now = handle.now();
+        let mut state = handle.state();
+        let names = if parts[1] == "subscriptions" {
+            if !state.topic_exists(&topic) && handle.paging_policy == crate::PagingPolicy::Strict {
+                return Err(RestError::not_found(format!(
+                    "Resource not found (resource={}).",
+                    parts[0]
+                )));
+            }
+            state.topic_subscriptions(&topic)
+        } else if !state.topic_exists(&topic)
+            && handle.paging_policy == crate::PagingPolicy::Emulator
+        {
+            Vec::new()
+        } else {
+            state
+                .list_topic_snapshots(&topic, now)
+                .map_err(RestError::from_core)?
+        };
+        let resources = names.into_iter().map(Value::String).collect();
+        return Ok((
+            StatusCode::OK,
+            paged_collection_json(parts[1], resources, query, handle)?,
+            if parts[1] == "subscriptions" {
+                Schema::Subscriptions
+            } else {
+                Schema::Snapshots
+            },
         ));
     }
     if parts.len() != 1 {
@@ -177,31 +346,28 @@ fn dispatch_topic(
 
     let (topic_id, operation) = split_operation(parts);
     let topic = TopicName::new(project, topic_id).map_err(RestError::from_core)?;
+    let schema = if operation == Some("publish") {
+        Schema::Publish
+    } else {
+        Schema::Topic
+    };
     match (method, operation) {
-        (&Method::PUT, None) => {
-            let topic_options = topic_from_json(&topic, body)?;
-            validate_topic_options(&topic_options).map_err(RestError::from_core)?;
-            let labels = topic_options.labels.into_iter().collect();
-            let mut state = handle.state();
-            state
-                .create_topic(topic.clone(), labels)
-                .map_err(RestError::from_core)?;
-            let labels = state
-                .topic_labels(&topic)
-                .cloned()
-                .map_err(RestError::from_core)?;
-            drop(state);
-            handle.retry_pending_dead_letters();
-            Ok((StatusCode::OK, topic_json(&topic, &labels)))
-        }
+        (&Method::PUT, None) => create_topic(&topic, body, handle),
         (&Method::PATCH, None) => update_topic(&topic, body),
         (&Method::GET, None) => {
             let state = handle.state();
             let labels = state
                 .topic_labels(&topic)
                 .cloned()
-                .map_err(RestError::from_core)?;
-            Ok((StatusCode::OK, topic_json(&topic, &labels)))
+                .map_err(|error| RestError::from_resource_get(error, topic.topic()))?;
+            Ok((
+                StatusCode::OK,
+                topic_json(
+                    &topic,
+                    &labels,
+                    state.topic_retention(&topic).unwrap_or_default(),
+                ),
+            ))
         }
         (&Method::DELETE, None) => {
             handle
@@ -214,6 +380,106 @@ fn dispatch_topic(
         (&Method::POST, Some("publish")) => publish(topic, body, handle),
         _ => Err(RestError::method_not_allowed()),
     }
+    .map(|(status, value)| (status, value, schema))
+}
+
+fn create_topic(
+    topic: &TopicName,
+    body: &Value,
+    handle: &PubSubHandle,
+) -> Result<(StatusCode, Value), RestError> {
+    let topic_options = topic_from_json(topic, body)?;
+    validate_topic_options(&topic_options).map_err(RestError::from_core)?;
+    let labels = topic_options.labels.into_iter().collect();
+    if handle.paging_policy == crate::PagingPolicy::Strict {
+        fireemu_core_pubsub::configuration::validate_labels(&labels)
+            .map_err(RestError::from_core)?;
+    }
+    let mut state = handle.state();
+    state
+        .create_topic_with_retention(
+            topic.clone(),
+            labels,
+            topic_options
+                .message_retention_duration
+                .as_ref()
+                .map(crate::convert::duration_from_proto)
+                .transpose()
+                .map_err(RestError::from_core)?,
+        )
+        .map_err(RestError::from_core)?;
+    let labels = state
+        .topic_labels(topic)
+        .cloned()
+        .map_err(RestError::from_core)?;
+    let retention = state.topic_retention(topic).map_err(RestError::from_core)?;
+    drop(state);
+    handle.retry_pending_dead_letters();
+    Ok((StatusCode::OK, topic_json(topic, &labels, retention)))
+}
+
+fn collection_json(field: &str, resources: Vec<Value>) -> Value {
+    let mut response = Map::new();
+    if !resources.is_empty() {
+        response.insert(field.to_owned(), Value::Array(resources));
+    }
+    Value::Object(response)
+}
+
+fn paged_collection_json(
+    field: &str,
+    resources: Vec<Value>,
+    query: &str,
+    handle: &PubSubHandle,
+) -> Result<Value, RestError> {
+    let mut size = 0;
+    let mut token = String::new();
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let decoded =
+            decode_query(key).and_then(|key| decode_query(value).map(|value| (key, value)));
+        let (key, value) = match decoded {
+            Ok(pair) => pair,
+            Err(_) if handle.paging_policy == crate::PagingPolicy::Emulator => continue,
+            Err(error) => return Err(error),
+        };
+        match key.as_str() {
+            "pageSize" | "page_size" => match value.parse::<i32>() {
+                Ok(parsed) => size = parsed,
+                Err(_) if handle.paging_policy == crate::PagingPolicy::Emulator => {}
+                Err(_) => return Err(RestError::invalid("pageSize must be an integer")),
+            },
+            "pageToken" | "page_token" => token = value,
+            _ => {}
+        }
+    }
+    let page = paginate(resources, size, &token, handle.paging_policy, |resource| {
+        resource
+            .as_str()
+            .or_else(|| resource.get("name").and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_owned()
+    })
+    .map_err(RestError::from_core)?;
+    let mut response = collection_json(field, page.resources);
+    if !page.next_page_token.is_empty() {
+        response.as_object_mut().expect("collection object").insert(
+            "nextPageToken".to_owned(),
+            Value::String(page.next_page_token),
+        );
+    }
+    Ok(response)
+}
+
+pub(crate) fn decode_query(value: &str) -> Result<String, RestError> {
+    use fireemu_core_types::codec::{
+        percent_decode_bytes, percent_escapes_are_well_formed, PlusMode,
+    };
+    if !percent_escapes_are_well_formed(value) {
+        return Err(RestError::invalid("invalid percent encoding in query"));
+    }
+    String::from_utf8(percent_decode_bytes(value, PlusMode::Space))
+        .map_err(|_| RestError::invalid("query must be UTF-8"))
 }
 
 fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), RestError> {
@@ -223,7 +489,7 @@ fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), 
         .and_then(Value::as_str)
         .ok_or_else(|| RestError::invalid("updateMask must be a comma-separated string"))?;
     if update_mask.is_empty() {
-        return Err(RestError::invalid("updateMask must not be empty"));
+        validate_subscription_update_paths(&[""]).map_err(RestError::from_core)?;
     }
     let paths = update_mask.split(',').map(snake_case_field).collect();
     let request = pb::UpdateTopicRequest {
@@ -240,9 +506,10 @@ fn dispatch_subscription(
     method: &Method,
     parts: &[&str],
     project: &str,
+    query: &str,
     body: &Value,
     handle: &PubSubHandle,
-) -> Result<(StatusCode, Value), RestError> {
+) -> Result<(StatusCode, Value, Schema), RestError> {
     if parts.is_empty() {
         if *method != Method::GET {
             return Err(RestError::method_not_allowed());
@@ -251,11 +518,12 @@ fn dispatch_subscription(
         let subscriptions = state
             .list_subscriptions(project)
             .into_iter()
-            .map(|config| subscription_json(&state, &config))
+            .map(|config| subscription_json(&state, &config, handle.paging_policy))
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
-            json!({"subscriptions": subscriptions, "nextPageToken": ""}),
+            paged_collection_json("subscriptions", subscriptions, query, handle)?,
+            Schema::Subscriptions,
         ));
     }
     if parts.len() != 1 {
@@ -265,8 +533,13 @@ fn dispatch_subscription(
     let (subscription_id, operation) = split_operation(parts);
     let subscription =
         SubscriptionName::new(project, subscription_id).map_err(RestError::from_core)?;
+    let schema = if operation == Some("pull") {
+        Schema::Pull
+    } else {
+        Schema::Subscription
+    };
     match (method, operation) {
-        (&Method::PUT, None) => create_subscription(subscription, body, handle),
+        (&Method::PUT, None) => create_subscription(&subscription, body, handle),
         (&Method::GET, None) => get_subscription(subscription, handle),
         (&Method::PATCH, None) => update_subscription(subscription, body, handle),
         (&Method::DELETE, None) => {
@@ -283,18 +556,38 @@ fn dispatch_subscription(
         (&Method::POST, Some("modifyAckDeadline")) => {
             modify_ack_deadline(subscription, body, handle)
         }
+        (&Method::POST, Some("modifyPushConfig")) => {
+            let push = field(body, "pushConfig")
+                .map(|value| parse_push_config(value, handle.paging_policy))
+                .transpose()?
+                .unwrap_or_default();
+            handle
+                .state()
+                .update_push_config(&subscription, push)
+                .map_err(RestError::from_core)?;
+            let topic = handle
+                .state()
+                .subscription_config(&subscription)
+                .map_err(RestError::from_core)?
+                .topic
+                .clone();
+            handle.schedule_push(&topic);
+            Ok((StatusCode::OK, json!({})))
+        }
         (&Method::POST, Some("seek")) => seek(subscription, body, handle),
         _ => Err(RestError::method_not_allowed()),
     }
+    .map(|(status, value)| (status, value, schema))
 }
 
 fn dispatch_snapshot(
     method: &Method,
     parts: &[&str],
     project: &str,
+    query: &str,
     body: &Value,
     handle: &PubSubHandle,
-) -> Result<(StatusCode, Value), RestError> {
+) -> Result<(StatusCode, Value, Schema), RestError> {
     if parts.is_empty() {
         if *method != Method::GET {
             return Err(RestError::method_not_allowed());
@@ -307,7 +600,8 @@ fn dispatch_snapshot(
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
-            json!({"snapshots": snapshots, "nextPageToken": ""}),
+            paged_collection_json("snapshots", snapshots, query, handle)?,
+            Schema::Snapshots,
         ));
     }
     if parts.len() != 1 {
@@ -355,7 +649,13 @@ fn dispatch_snapshot(
                     object_strings(body, "labels")?,
                     handle.now(),
                 )
-                .map_err(RestError::from_core)?;
+                .map_err(|error| {
+                    RestError::from_core(crate::admission::snapshot_creation_error(
+                        &name,
+                        error,
+                        handle.paging_policy,
+                    ))
+                })?;
             Ok((StatusCode::OK, snapshot_json(&snapshot)))
         }
         (&Method::GET, None) => {
@@ -374,6 +674,7 @@ fn dispatch_snapshot(
         }
         _ => Err(RestError::method_not_allowed()),
     }
+    .map(|(status, value)| (status, value, Schema::Snapshot))
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -388,6 +689,9 @@ fn publish(
         .iter()
         .map(message_from_json)
         .collect::<Result<Vec<_>, _>>()?;
+    if handle.paging_policy == crate::PagingPolicy::Strict {
+        crate::admission::message_count(messages.len()).map_err(RestError::from_core)?;
+    }
     let published = handle
         .publish(&topic, messages)
         .map_err(RestError::from_core)?;
@@ -399,11 +703,10 @@ fn publish(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn create_subscription(
-    subscription: SubscriptionName,
+fn validate_subscription_body(
+    subscription: &SubscriptionName,
     body: &Value,
-    handle: &PubSubHandle,
-) -> Result<(StatusCode, Value), RestError> {
+) -> Result<(), RestError> {
     let object = body
         .as_object()
         .ok_or_else(|| RestError::invalid("subscription must be an object"))?;
@@ -418,9 +721,7 @@ fn create_subscription(
                 "subscription.{field} is not supported by the Pub/Sub emulator"
             )));
         }
-        return Err(RestError::invalid(format!(
-            "unknown subscription field {key}"
-        )));
+        return Err(RestError::unknown_json_field(key));
     }
     if let Some(name) = json_field(object, "name") {
         let name = name
@@ -432,6 +733,15 @@ fn create_subscription(
             ));
         }
     }
+    Ok(())
+}
+
+fn create_subscription(
+    subscription: &SubscriptionName,
+    body: &Value,
+    handle: &PubSubHandle,
+) -> Result<(StatusCode, Value), RestError> {
+    validate_subscription_body(subscription, body)?;
     let topic = TopicName::parse(string_field(body, "topic")?).map_err(RestError::from_core)?;
     let ack_deadline_seconds = parse_ack_deadline(field(body, "ackDeadlineSeconds"))?;
     let filter_source = field(body, "filter")
@@ -452,7 +762,7 @@ fn create_subscription(
         .transpose()?
         .unwrap_or(false);
     let push_config = field(body, "pushConfig")
-        .map(parse_push_config)
+        .map(|value| parse_push_config(value, handle.paging_policy))
         .transpose()?
         .unwrap_or_default();
     let dead_letter_policy = field(body, "deadLetterPolicy")
@@ -461,7 +771,24 @@ fn create_subscription(
     let retry_policy = field(body, "retryPolicy")
         .map(parse_retry_policy)
         .transpose()?;
-    let config = SubscriptionConfig {
+    let retain_acked_messages = field(body, "retainAckedMessages")
+        .map(|value| {
+            value
+                .as_bool()
+                .ok_or_else(|| RestError::invalid("retainAckedMessages must be a boolean"))
+        })
+        .transpose()?
+        .unwrap_or(false);
+    let message_retention_duration = field(body, "messageRetentionDuration")
+        .map(parse_duration)
+        .transpose()?;
+    let mut config = SubscriptionConfig {
+        labels: object_strings(body, "labels")?,
+        expiration_policy: field(body, "expirationPolicy")
+            .map(parse_expiration_policy)
+            .transpose()?,
+        retain_acked_messages,
+        message_retention_duration,
         name: subscription.clone(),
         topic: topic.clone(),
         ack_deadline_seconds,
@@ -471,15 +798,37 @@ fn create_subscription(
         retry_policy,
         push_config,
     };
+    if handle.paging_policy == crate::PagingPolicy::Strict {
+        crate::convert::validate_strict_ack_deadline(
+            i32::try_from(ack_deadline_seconds).unwrap_or(i32::MAX),
+        )
+        .map_err(RestError::from_core)?;
+        if config.message_retention_duration.is_none() {
+            config.message_retention_duration = Some(
+                config
+                    .expiration_policy
+                    .and_then(|policy| policy.ttl)
+                    .map_or(LogicalDuration::from_seconds(604_800), |ttl| {
+                        ttl.min(LogicalDuration::from_seconds(604_800))
+                    }),
+            );
+        }
+        config
+            .validate_production_configuration()
+            .map_err(RestError::from_core)?;
+    }
     let mut state = handle.state();
     state
         .create_subscription(config)
         .map_err(RestError::from_core)?;
     let config = state
-        .subscription_config(&subscription)
+        .subscription_config(subscription)
         .map_err(RestError::from_core)?
         .clone();
-    let response = subscription_json(&state, &config);
+    let mut response = subscription_json(&state, &config, handle.paging_policy);
+    if config.is_push() && handle.paging_policy == crate::PagingPolicy::Strict {
+        response["pushConfig"]["attributes"]["x-goog-version"] = json!("v1");
+    }
     drop(state);
     handle.retry_pending_dead_letters();
     handle.schedule_push(&topic);
@@ -494,8 +843,11 @@ fn get_subscription(
     let state = handle.state();
     let config = state
         .subscription_config(&subscription)
-        .map_err(RestError::from_core)?;
-    Ok((StatusCode::OK, subscription_json(&state, config)))
+        .map_err(|error| RestError::from_resource_get(error, subscription.subscription()))?;
+    Ok((
+        StatusCode::OK,
+        subscription_json(&state, config, handle.paging_policy),
+    ))
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -522,7 +874,7 @@ fn update_subscription(
         .and_then(Value::as_str)
         .ok_or_else(|| RestError::invalid("updateMask must be a comma-separated string"))?;
     if update_mask.is_empty() {
-        return Err(RestError::invalid("updateMask must not be empty"));
+        return Err(RestError::invalid("The update_mask in the UpdateSubscriptionRequest must be set, and must contain a non-empty paths list."));
     }
     let paths = update_mask
         .split(',')
@@ -537,53 +889,158 @@ fn update_subscription(
     let push_config = if paths.iter().any(|path| path == "push_config") {
         Some(
             json_field(update, "pushConfig")
-                .map(parse_push_config)
+                .map(|value| parse_push_config(value, handle.paging_policy))
                 .transpose()?
                 .unwrap_or_default(),
         )
     } else {
         None
     };
-    let (topic, response) = {
+    let change = parse_subscription_update(update, &paths, ack_deadline_seconds, push_config)?;
+    let strict = handle.paging_policy == crate::PagingPolicy::Strict;
+    if strict {
+        if let Some(ack) = ack_deadline_seconds {
+            crate::convert::validate_strict_ack_deadline(i32::try_from(ack).unwrap_or(i32::MAX))
+                .map_err(RestError::from_core)?;
+        }
+    }
+    let (topic, mut response) = {
         let mut state = handle.state();
         state
-            .update_subscription(&subscription, ack_deadline_seconds, push_config)
+            .update_subscription_configuration(&subscription, change, strict)
             .map_err(RestError::from_core)?;
         let config = state
             .subscription_config(&subscription)
             .map_err(RestError::from_core)?
             .clone();
-        (config.topic.clone(), subscription_json(&state, &config))
+        (
+            config.topic.clone(),
+            subscription_json(&state, &config, handle.paging_policy),
+        )
     };
+    if strict {
+        response["pushConfig"]["attributes"]["x-goog-version"] = json!("v1");
+    }
     handle.schedule_push(&topic);
     Ok((StatusCode::OK, response))
 }
 
-fn parse_push_config(value: &Value) -> Result<PushConfig, RestError> {
-    let push_config = value
+fn parse_subscription_update(
+    update: &Map<String, Value>,
+    paths: &[String],
+    ack_deadline_seconds: Option<u32>,
+    push_config: Option<PushConfig>,
+) -> Result<fireemu_core_pubsub::SubscriptionUpdate, RestError> {
+    let selected = |path: &str| paths.iter().any(|value| value == path);
+    let update_value = Value::Object(update.clone());
+    Ok(fireemu_core_pubsub::SubscriptionUpdate {
+        ack_deadline_seconds,
+        push_config,
+        labels: selected("labels")
+            .then(|| object_strings(&update_value, "labels"))
+            .transpose()?,
+        retain_acked_messages: selected("retain_acked_messages")
+            .then(|| {
+                json_field(update, "retainAckedMessages")
+                    .map(|value| {
+                        value.as_bool().ok_or_else(|| {
+                            RestError::invalid("retainAckedMessages must be a boolean")
+                        })
+                    })
+                    .transpose()
+                    .map(|value| value.unwrap_or(false))
+            })
+            .transpose()?,
+        message_retention_duration: selected("message_retention_duration")
+            .then(|| {
+                json_field(update, "messageRetentionDuration")
+                    .map(parse_duration)
+                    .transpose()
+            })
+            .transpose()?,
+        expiration_policy: selected("expiration_policy")
+            .then(|| {
+                json_field(update, "expirationPolicy")
+                    .map(parse_expiration_policy)
+                    .transpose()
+            })
+            .transpose()?,
+        retry_policy: selected("retry_policy")
+            .then(|| {
+                json_field(update, "retryPolicy")
+                    .map(parse_retry_policy)
+                    .transpose()
+            })
+            .transpose()?,
+        dead_letter_policy: selected("dead_letter_policy")
+            .then(|| {
+                json_field(update, "deadLetterPolicy")
+                    .map(parse_dead_letter_policy)
+                    .transpose()
+            })
+            .transpose()?,
+    })
+}
+
+fn parse_push_config(value: &Value, policy: crate::PagingPolicy) -> Result<PushConfig, RestError> {
+    let object = value
         .as_object()
         .ok_or_else(|| RestError::invalid("pushConfig must be an object"))?;
-    reject_duplicate_spellings("pushConfig", push_config)?;
-    for key in push_config.keys() {
-        let field = snake_case_field(key);
-        if field != "push_endpoint" {
+    reject_duplicate_spellings("pushConfig", object)?;
+    for key in object.keys() {
+        if !["push_endpoint", "attributes", "oidc_token"].contains(&snake_case_field(key).as_str())
+        {
             return Err(RestError::unimplemented(format!(
-                "pushConfig.{field} is not supported by the Pub/Sub emulator"
+                "pushConfig.{key} is not supported by the Pub/Sub emulator"
             )));
         }
     }
-    let endpoint = json_field(push_config, "pushEndpoint")
-        .map(|endpoint| {
-            endpoint
+    let endpoint = json_field(object, "pushEndpoint")
+        .map(|value| {
+            value
                 .as_str()
                 .ok_or_else(|| RestError::invalid("pushConfig.pushEndpoint must be a string"))
         })
         .transpose()?
         .unwrap_or_default()
         .to_owned();
-    crate::push::validate_endpoint(&endpoint).map_err(RestError::invalid)?;
-    Ok(PushConfig {
-        push_endpoint: endpoint,
+    let oidc = json_field(object, "oidcToken")
+        .map(|value| {
+            let object = value
+                .as_object()
+                .ok_or_else(|| RestError::invalid("oidcToken must be an object"))?;
+            if !object.is_empty() {
+                return Err(RestError::unimplemented(
+                    "pushConfig.oidcToken is not supported by the Pub/Sub emulator",
+                ));
+            }
+            Ok(pb::push_config::AuthenticationMethod::OidcToken(
+                pb::push_config::OidcToken::default(),
+            ))
+        })
+        .transpose()?;
+    crate::convert::push_config_from_proto(
+        Some(&pb::PushConfig {
+            push_endpoint: endpoint,
+            attributes: object_strings(value, "attributes")?.into_iter().collect(),
+            authentication_method: oidc,
+            ..Default::default()
+        }),
+        policy,
+    )
+    .map_err(RestError::from_core)
+}
+
+fn parse_expiration_policy(value: &Value) -> Result<ExpirationPolicy, RestError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| RestError::invalid("expirationPolicy must be an object"))?;
+    reject_duplicate_spellings("expirationPolicy", object)?;
+    if object.keys().any(|key| key != "ttl") {
+        return Err(RestError::invalid("unknown expirationPolicy field"));
+    }
+    Ok(ExpirationPolicy {
+        ttl: json_field(object, "ttl").map(parse_duration).transpose()?,
     })
 }
 
@@ -696,19 +1153,46 @@ fn pull(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    let max = field(body, "maxMessages")
-        .map(parse_usize)
-        .transpose()?
-        .unwrap_or(100);
+    if handle.paging_policy == crate::PagingPolicy::Strict
+        && handle
+            .state()
+            .subscription_config(&subscription)
+            .map_err(RestError::from_core)?
+            .is_push()
+    {
+        return Err(RestError::from_core(PubSubError::failed_precondition(
+            "This method is not supported for this subscription type.",
+        )));
+    }
+    let max = if handle.paging_policy == crate::PagingPolicy::Strict {
+        let value = field(body, "maxMessages")
+            .map_or(Some(0), Value::as_i64)
+            .ok_or_else(|| RestError::invalid("maxMessages must be an integer"))?;
+        crate::admission::max_messages(value).map_err(RestError::from_core)?
+    } else {
+        field(body, "maxMessages")
+            .map(parse_usize)
+            .transpose()?
+            .unwrap_or(100)
+    };
+    let report_attempt = handle.paging_policy == crate::PagingPolicy::Emulator
+        || handle
+            .state()
+            .subscription_config(&subscription)
+            .map_err(RestError::from_core)?
+            .dead_letter_policy
+            .is_some();
     let received = handle
         .pull(&subscription, max)
         .map_err(RestError::from_core)?;
-    Ok((
-        StatusCode::OK,
-        json!({
-            "receivedMessages": received.iter().map(received_json).collect::<Vec<_>>()
-        }),
-    ))
+    let mut body = json!({});
+    if !received.is_empty() {
+        body["receivedMessages"] = json!(received
+            .iter()
+            .map(|message| received_json(message, report_attempt, handle.paging_policy))
+            .collect::<Vec<_>>());
+    }
+    Ok((StatusCode::OK, body))
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -717,7 +1201,10 @@ fn acknowledge(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    let ack_ids = string_array(body, "ackIds")?;
+    let mut ack_ids = string_array(body, "ackIds")?;
+    if handle.paging_policy == crate::PagingPolicy::Strict {
+        ack_ids = crate::admission::ack_ids(&ack_ids).map_err(RestError::from_core)?;
+    }
     handle
         .acknowledge(&subscription, &ack_ids)
         .map_err(RestError::from_core)?;
@@ -730,11 +1217,19 @@ fn modify_ack_deadline(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    let ack_ids = string_array(body, "ackIds")?;
-    let seconds = parse_u32(
-        field(body, "ackDeadlineSeconds")
-            .ok_or_else(|| RestError::invalid("modifyAckDeadline requires ackDeadlineSeconds"))?,
-    )?;
+    let mut ack_ids = string_array(body, "ackIds")?;
+    let seconds =
+        if handle.paging_policy == crate::PagingPolicy::Strict {
+            ack_ids = crate::admission::ack_ids(&ack_ids).map_err(RestError::from_core)?;
+            let value = field(body, "ackDeadlineSeconds")
+                .map_or(Some(0), Value::as_i64)
+                .ok_or_else(|| RestError::invalid("ackDeadlineSeconds must be an integer"))?;
+            crate::admission::ack_deadline(value).map_err(RestError::from_core)?
+        } else {
+            parse_u32(field(body, "ackDeadlineSeconds").ok_or_else(|| {
+                RestError::invalid("modifyAckDeadline requires ackDeadlineSeconds")
+            })?)?
+        };
     handle
         .state()
         .modify_ack_deadline(&subscription, &ack_ids, seconds, handle.now())
@@ -750,7 +1245,15 @@ fn seek(
 ) -> Result<(StatusCode, Value), RestError> {
     match (field(body, "snapshot"), field(body, "time")) {
         (Some(_), Some(_)) => {
-            return Err(RestError::invalid("seek takes either a time or a snapshot"))
+            if handle.paging_policy == crate::PagingPolicy::Strict {
+                let descriptions = ["Invalid value (oneof), oneof field 'target' is already set. Cannot set 'time'", "Invalid JSON payload received. Unknown name \"subscription\": Root element must be a message."];
+                let mut error = RestError::invalid(descriptions.join("\n"));
+                error.details = Some(
+                    json!([{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":descriptions.map(|description|json!({"description":description}))}]),
+                );
+                return Err(error);
+            }
+            return Err(RestError::invalid("seek takes either a time or a snapshot"));
         }
         (Some(snapshot), None) => {
             let snapshot = snapshot
@@ -771,7 +1274,9 @@ fn seek(
                 .map_err(RestError::from_core)?;
         }
         (None, None) => {
-            return Err(RestError::invalid("seek requires a time or a snapshot"));
+            return Err(RestError::invalid(crate::admission::missing_seek_target(
+                handle.paging_policy,
+            )));
         }
     }
     Ok((StatusCode::OK, json!({})))
@@ -873,8 +1378,19 @@ fn message_from_json(value: &Value) -> Result<PubsubMessage, RestError> {
     })
 }
 
-fn topic_json(name: &TopicName, labels: &BTreeMap<String, String>) -> Value {
-    json!({"name": name.to_full(), "labels": labels})
+fn topic_json(
+    name: &TopicName,
+    labels: &BTreeMap<String, String>,
+    retention: Option<LogicalDuration>,
+) -> Value {
+    let mut value = json!({"name": name.to_full()});
+    if !labels.is_empty() {
+        value["labels"] = json!(labels);
+    }
+    if let Some(retention) = retention {
+        value["messageRetentionDuration"] = json!(duration_json(retention));
+    }
+    value
 }
 
 fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestError> {
@@ -887,7 +1403,7 @@ fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestErr
         if is_declared_topic_field(&field) {
             continue;
         }
-        return Err(RestError::invalid(format!("unknown topic field {key}")));
+        return Err(RestError::unknown_json_field(key));
     }
     if let Some(name) = json_field(object, "name") {
         let name = name
@@ -905,8 +1421,11 @@ fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestErr
     if json_field(object, "schemaSettings").is_some_and(|value| !value.is_null()) {
         options.schema_settings = Some(pb::SchemaSettings::default());
     }
-    if json_field(object, "messageRetentionDuration").is_some_and(|value| !value.is_null()) {
-        options.message_retention_duration = Some(prost_types::Duration::default());
+    if let Some(value) =
+        json_field(object, "messageRetentionDuration").filter(|value| !value.is_null())
+    {
+        options.message_retention_duration =
+            Some(crate::convert::duration_to_proto(parse_duration(value)?));
     }
     if let Some(value) = json_field(object, "kmsKeyName") {
         if !value.is_null() {
@@ -1002,18 +1521,61 @@ fn snake_case_field(field: &str) -> String {
     normalized
 }
 
-fn subscription_json(state: &PubSubState, config: &SubscriptionConfig) -> Value {
+fn subscription_json(
+    state: &PubSubState,
+    config: &SubscriptionConfig,
+    policy: crate::PagingPolicy,
+) -> Value {
     let topic = state
         .reported_topic(&config.name)
         .unwrap_or_else(|| config.topic.to_full());
+    // The defaults below are the recorded production REST response of a created pull subscription
+    // (capture-only evidence, not closure evidence): fireemu-oracle-idp run
+    // shape-001-6a666e3ffa9444cc80de18944b38ae36, subscription-create.json and subscription-get.json
+    // (recorded 2026-09-30T13:13:53Z, status 200, 372 bytes, sha256
+    // e744f1e67909fc9abd1931ae547e8eb3aecf15dd98184542b884cd8ed086bf8f; docs.local/runs/codex-lane7/),
+    // and fireemu-oracle-sbx, docs.local/runs/codex-lane8/recorded-shape-responses/create-subscription.json
+    // (resource fe-scheduled-shape-96db1cb7ca5fcb35, the same defaults). They apply when the request set
+    // no retention, ordering, retain-acked or push configuration; explicit values override them below.
     let mut value = json!({
         "name": config.name.to_full(),
         "topic": topic,
         "ackDeadlineSeconds": config.ack_deadline_seconds,
-        "enableMessageOrdering": config.enable_message_ordering,
+        "pushConfig": {},
+        "messageRetentionDuration": "604800s",
+        "expirationPolicy": {"ttl": "2678400s"},
+        "state": "ACTIVE",
     });
+    if config.enable_message_ordering {
+        value["enableMessageOrdering"] = json!(true);
+    }
+    if config.retain_acked_messages {
+        value["retainAckedMessages"] = json!(true);
+    }
+    if let Some(duration) = config.message_retention_duration {
+        value["messageRetentionDuration"] = json!(duration_json(duration));
+    }
+    if !config.labels.is_empty() {
+        value["labels"] = json!(config.labels);
+    }
+    if let Some(policy) = config.expiration_policy {
+        value["expirationPolicy"] = policy
+            .ttl
+            .map_or_else(|| json!({}), |ttl| json!({"ttl":duration_json(ttl)}));
+    }
     if !config.push_config.push_endpoint.is_empty() {
         value["pushConfig"] = json!({"pushEndpoint": config.push_config.push_endpoint});
+        let attributes = config
+            .push_config
+            .attributes
+            .iter()
+            .filter(|(key, _)| {
+                policy == crate::PagingPolicy::Emulator || key.as_str() != "x-goog-version"
+            })
+            .collect::<BTreeMap<_, _>>();
+        if !attributes.is_empty() {
+            value["pushConfig"]["attributes"] = json!(attributes);
+        }
     }
     if !config.filter.as_str().is_empty() {
         value["filter"] = json!(config.filter.as_str());
@@ -1051,30 +1613,44 @@ fn duration_json(duration: LogicalDuration) -> String {
 }
 
 fn snapshot_json(snapshot: &Snapshot) -> Value {
-    json!({
+    let mut value = json!({
         "name": snapshot.name,
         "topic": snapshot.topic.to_full(),
         "expireTime": timestamp_json(snapshot.expire_at),
-        "labels": snapshot.labels,
-    })
+    });
+    if !snapshot.labels.is_empty() {
+        value["labels"] = json!(snapshot.labels);
+    }
+    value
 }
 
-fn received_json(received: &ReceivedMessage) -> Value {
-    json!({
-        "ackId": received.ack_id,
-        "message": stored_message_json(&received.message),
-        "deliveryAttempt": received.delivery_attempt,
-    })
+fn received_json(
+    received: &ReceivedMessage,
+    report_attempt: bool,
+    policy: crate::PagingPolicy,
+) -> Value {
+    let mut value = json!({"ackId":crate::ack_token::wire(&received.ack_id,policy),"message":stored_message_json(&received.message)});
+    if report_attempt {
+        value["deliveryAttempt"] = json!(received.delivery_attempt);
+    }
+    value
 }
 
 fn stored_message_json(message: &StoredMessage) -> Value {
-    json!({
-        "data": BASE64.encode(&message.message.data),
-        "attributes": message.message.attributes,
+    let mut value = json!({
         "messageId": message.message_id,
         "publishTime": timestamp_json(message.publish_time),
-        "orderingKey": message.message.ordering_key,
-    })
+    });
+    if !message.message.data.is_empty() {
+        value["data"] = json!(BASE64.encode(&message.message.data));
+    }
+    if !message.message.attributes.is_empty() {
+        value["attributes"] = json!(message.message.attributes);
+    }
+    if !message.message.ordering_key.is_empty() {
+        value["orderingKey"] = json!(message.message.ordering_key);
+    }
+    value
 }
 
 fn timestamp_json(instant: LogicalInstant) -> String {
@@ -1102,13 +1678,28 @@ fn timestamp_json(instant: LogicalInstant) -> String {
     if fraction == 0 {
         format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
     } else {
-        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{fraction:09}Z")
+        let (divisor, width) = if fraction % 1_000_000 == 0 {
+            (1_000_000, 3)
+        } else if fraction % 1_000 == 0 {
+            (1_000, 6)
+        } else {
+            (1, 9)
+        };
+        format!(
+            "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{:0width$}Z",
+            fraction / divisor
+        )
     }
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn json_response(status: StatusCode, value: Value) -> Response {
-    let body = serde_json::to_vec(&value).unwrap_or_else(|_| b"{}".to_vec());
+fn json_response(
+    status: StatusCode,
+    value: Value,
+    policy: crate::PagingPolicy,
+    schema: Schema,
+) -> Response {
+    let body = crate::rest_json::encode(&value, policy, schema);
     Response::builder()
         .status(status)
         .header("content-type", "application/json")
@@ -1117,15 +1708,264 @@ fn json_response(status: StatusCode, value: Value) -> Response {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn error_response(error: RestError) -> Response {
-    json_response(
-        error.status,
-        json!({
-            "error": {
-                "code": error.status.as_u16(),
-                "message": error.message,
-                "status": error.code,
+fn error_response(error: RestError, policy: crate::PagingPolicy) -> Response {
+    let mut body =
+        json!({"error":{"code":error.status.as_u16(),"status":error.code,"message":error.message}});
+    if let Some(details) = error.details {
+        body["error"]["details"] = details;
+    }
+    json_response(error.status, body, policy, Schema::ErrorEnvelope)
+}
+
+#[cfg(test)]
+mod production_shape_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn local_handle(policy: crate::PagingPolicy) -> PubSubHandle {
+        PubSubHandle::new(
+            std::sync::Arc::new(std::sync::Mutex::new(PubSubState::new(1))),
+            std::sync::Arc::new(std::sync::Mutex::new(
+                fireemu_core_session::clock::VirtualClock::new(LogicalInstant::from_unix_seconds(
+                    0,
+                )),
+            )),
+            None,
+        )
+        .with_paging_policy(policy)
+    }
+
+    proptest! {
+        #[test]
+        fn authentication_method_details_match_only_recorded_route_classes(project in "[a-z]{1,20}", leaf in "[a-z]{1,30}") {
+            let resource = format!("/v1/projects/{project}/topics/{leaf}");
+            prop_assert_eq!(recorded_auth_method(&Method::GET, &resource), Some("GetTopic"));
+            prop_assert_eq!(recorded_auth_method(&Method::PUT, &resource), Some("CreateTopic"));
+            prop_assert_eq!(recorded_auth_method(&Method::POST, &format!("{resource}:publish")), Some("Publish"));
+            for (method, path) in [
+                (Method::DELETE, resource.clone()),
+                (Method::POST, resource.clone()),
+                (Method::POST, format!("{resource}:other")),
+                (Method::GET, format!("{resource}:publish")),
+                (Method::GET, format!("{resource}/child")),
+                (Method::GET, format!("/v1/projects//topics/{leaf}")),
+                (Method::GET, format!("/v1/projects/{project}/subscriptions/{leaf}")),
+                (Method::GET, format!("/projects/{project}/topics/{leaf}")),
+                (Method::GET, format!("/v1/projects/{project}/topics/")),
+                (Method::POST, format!("/v1/projects/{project}/topics/:publish")),
+            ] {
+                prop_assert_eq!(recorded_auth_method(&method, &path), None);
             }
-        }),
-    )
+        }
+
+        #[test]
+        fn strict_rest_default_retention_matches_ttl_reference(ttl in 86_400i64..=2_678_400, explicit in any::<bool>()) {
+            let handle = local_handle(crate::PagingPolicy::Strict);
+            let topic = TopicName::new("demo-app", "ttl-property").unwrap();
+            handle.state().create_topic(topic.clone(), BTreeMap::new()).unwrap();
+            let mut body = json!({"topic":topic.to_full(), "expirationPolicy":{"ttl":format!("{ttl}s")}});
+            if explicit { body["messageRetentionDuration"] = json!("600s"); }
+            let subscription = SubscriptionName::new("demo-app", "ttl-property").unwrap();
+            let (_, response) = create_subscription(&subscription, &body, &handle).unwrap();
+            let expected = format!("{}s", if explicit {600} else {ttl.min(604_800)});
+            prop_assert_eq!(response["messageRetentionDuration"].as_str(), Some(expected.as_str()));
+        }
+        #[test]
+        fn rest_snapshot_and_topic_labels_are_present_exactly_when_nonempty(labels in prop::collection::btree_map("[a-z]{1,8}","[a-z0-9]{0,8}",0..4)) {
+            let topic = TopicName::new("demo-app", "label-property").unwrap();
+            let config = crate::convert::subscription_from_proto(&pb::Subscription { name:"projects/demo-app/subscriptions/label-property".into(), topic:topic.to_full(), ..Default::default() }).unwrap();
+            let mut state = PubSubState::new(1);
+            state.create_topic(topic.clone(), labels.clone()).unwrap();
+            state.create_subscription(config.clone()).unwrap();
+            let snapshot = state.create_snapshot("projects/demo-app/snapshots/label-property", &config.name, labels.clone(), LogicalInstant::from_unix_seconds(0)).unwrap();
+            for rendered in [topic_json(&topic, &labels, None), snapshot_json(&snapshot)] {
+                prop_assert_eq!(rendered.get("labels").is_some(), !labels.is_empty());
+                if !labels.is_empty() { prop_assert_eq!(&rendered["labels"], &json!(labels)); }
+            }
+        }
+        #[test]
+        fn rest_delivery_attempt_presence_matches_policy_and_dead_letter_model(attempt in 1u32..100, dead_letter in any::<bool>()) {
+            for policy in [crate::PagingPolicy::Strict, crate::PagingPolicy::Emulator] {
+                let handle = local_handle(policy);
+                let topic = TopicName::new("demo-app", "attempt-property").unwrap();
+                let subscription = SubscriptionName::new("demo-app", "attempt-property").unwrap();
+                let input = pb::Subscription { name:subscription.to_full(), topic:topic.to_full(), dead_letter_policy:dead_letter.then(|| pb::DeadLetterPolicy {dead_letter_topic:"projects/demo-app/topics/attempt-sink".into(),max_delivery_attempts:100}), ..Default::default() };
+                let config = crate::convert::subscription_from_proto_with_policy(&input, policy).unwrap();
+                handle.state().create_topic(topic.clone(), BTreeMap::new()).unwrap();
+                if dead_letter {
+                    handle.state().create_topic(TopicName::new("demo-app", "attempt-sink").unwrap(), BTreeMap::new()).unwrap();
+                }
+                handle.state().create_subscription(config).unwrap();
+                handle.state().publish(&topic, vec![PubsubMessage {data:vec![b'x'], ..Default::default()}], LogicalInstant::from_unix_seconds(0)).unwrap();
+                let (_, response) = pull(subscription, &json!({"maxMessages":1}), &handle).unwrap();
+                let report = policy == crate::PagingPolicy::Emulator || dead_letter;
+                prop_assert_eq!(response["receivedMessages"][0].get("deliveryAttempt").is_some(), report);
+                if report { prop_assert_eq!(&response["receivedMessages"][0]["deliveryAttempt"], &json!(1)); }
+                let received = ReceivedMessage {ack_id:"ack-0000000000000001".into(),message:std::sync::Arc::new(StoredMessage { message:PubsubMessage::default(),message_id:"22254029608272384".into(),publish_time:LogicalInstant::from_unix_seconds(0)}), delivery_attempt:attempt};
+                let rendered = received_json(&received, report, policy);
+                prop_assert_eq!(rendered.get("deliveryAttempt").is_some(), report);
+                if report { prop_assert_eq!(&rendered["deliveryAttempt"], &json!(attempt)); }
+            }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn emulator_invalid_query_pairs_match_absent_pair_reference(size in 1i32..8, count in 2usize..12, invalid in prop::sample::select(vec!["pageSize=abc", "pageSize=99999999999", "pageSize=-99999999999", "pageSize=%", "pageSize=%0", "pageSize=%gg", "pageSize=%FF", "pageToken=%zz", "pageToken=%FF", "%FF=1", "%gg=1"])) {
+            let handle = PubSubHandle::new(
+                std::sync::Arc::new(std::sync::Mutex::new(PubSubState::new(1))),
+                std::sync::Arc::new(std::sync::Mutex::new(fireemu_core_session::clock::VirtualClock::new(LogicalInstant::from_unix_seconds(0)))),
+                None,
+            ).with_paging_policy(crate::PagingPolicy::Emulator);
+            let resources: Vec<_> = (0..count).map(|i| json!({"name":format!("projects/p/topics/query-{i:03}")})).collect();
+            let valid = format!("pageSize={size}&pageToken=projects%2Fp%2Ftopics%2Fquery-001");
+            let expected = paged_collection_json("topics", resources.clone(), &valid, &handle).unwrap();
+            for query in [format!("{valid}&{invalid}"), format!("{invalid}&{valid}")] {
+                let result = paged_collection_json("topics", resources.clone(), &query, &handle);
+                prop_assert!(result.is_ok(), "{}", query);
+                prop_assert_eq!(result.unwrap(), expected.clone());
+            }
+        }
+    }
+
+    #[test]
+    fn emulator_rest_push_get_preserves_version_attributes() {
+        let topic = TopicName::new("demo-app", "push-attributes").unwrap();
+        let config = crate::convert::subscription_from_proto_with_policy(
+            &pb::Subscription {
+                name: "projects/demo-app/subscriptions/push-attributes".to_owned(),
+                topic: topic.to_full(),
+                push_config: Some(pb::PushConfig {
+                    push_endpoint: "https://example.com/push".to_owned(),
+                    attributes: [("x-goog-version".to_owned(), "v1".to_owned())].into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            crate::PagingPolicy::Emulator,
+        )
+        .unwrap();
+        let mut state = PubSubState::new(1);
+        state.create_topic(topic, BTreeMap::new()).unwrap();
+        state.create_subscription(config.clone()).unwrap();
+        assert_eq!(
+            subscription_json(&state, &config, crate::PagingPolicy::Emulator)["pushConfig"]
+                ["attributes"]["x-goog-version"],
+            "v1"
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn push_attributes_serialize_by_profile(version in "[a-z0-9]{1,12}") {
+            let config = crate::convert::subscription_from_proto_with_policy(&pb::Subscription {
+                name:"projects/demo-app/subscriptions/push-property".to_owned(),
+                topic:"projects/demo-app/topics/push-property".to_owned(),
+                push_config:Some(pb::PushConfig {push_endpoint:"https://example.com/push".to_owned(),attributes:[("x-goog-version".to_owned(),version.clone())].into(),..Default::default()}),
+                ..Default::default()
+            },crate::PagingPolicy::Emulator).unwrap();
+            let state = PubSubState::new(1);
+            let permissive = subscription_json(&state,&config,crate::PagingPolicy::Emulator);
+            let strict = subscription_json(&state,&config,crate::PagingPolicy::Strict);
+            prop_assert_eq!(permissive["pushConfig"]["attributes"]["x-goog-version"].as_str(),Some(version.as_str()));
+            prop_assert!(strict["pushConfig"].get("attributes").is_none());
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn canonical_timestamp_round_trips_nanos(seconds in -2_208_988_800i64..4_102_444_800, fraction in 0i128..1_000_000_000) {
+            let instant = LogicalInstant::from_nanos(i128::from(seconds)*1_000_000_000+fraction);
+            let rendered = timestamp_json(instant);
+            prop_assert_eq!(LogicalInstant::parse_rfc3339(&rendered).unwrap(), instant);
+            let width = rendered.split_once('.').map_or(0, |(_,rest)|rest.len()-1);
+            let expected = if fraction == 0 {0} else if fraction % 1_000_000 == 0 {3} else if fraction % 1_000 == 0 {6} else {9};
+            prop_assert_eq!(width, expected);
+        }
+
+        #[test]
+        fn optional_message_fields_round_trip(data in proptest::collection::vec(any::<u8>(),0..100), attributes in proptest::collection::btree_map("[a-z]{1,10}","[a-z0-9]{0,10}",0..5), ordering_key in "[a-z0-9]{0,10}") {
+            let message = PubsubMessage {data,attributes,ordering_key};
+            let stored = StoredMessage {message:message.clone(),message_id:"22254029608272384".to_owned(),publish_time:LogicalInstant::from_unix_seconds(0)};
+            let rendered = stored_message_json(&stored);
+            prop_assert_eq!(rendered.get("data").is_some(),!message.data.is_empty());
+            prop_assert_eq!(rendered.get("attributes").is_some(),!message.attributes.is_empty());
+            prop_assert_eq!(rendered.get("orderingKey").is_some(),!message.ordering_key.is_empty());
+            prop_assert_eq!(message_from_json(&rendered).unwrap(),message);
+        }
+    }
+
+    #[test]
+    fn recorded_json_omits_empty_message_members_and_uses_canonical_timestamp_precision() {
+        let stored = StoredMessage {
+            message: PubsubMessage {
+                data: vec![0, 255],
+                ..Default::default()
+            },
+            message_id: "22254029608272384".to_owned(),
+            publish_time: LogicalInstant::from_nanos(1_700_000_000_123_000_000),
+        };
+        assert_eq!(
+            stored_message_json(&stored),
+            json!({"data":"AP8=","messageId":"22254029608272384","publishTime":"2023-11-14T22:13:20.123Z"})
+        );
+        for (fraction, suffix) in [
+            (0, "Z"),
+            (123_000_000, ".123Z"),
+            (123_456_000, ".123456Z"),
+            (123_456_789, ".123456789Z"),
+        ] {
+            assert_eq!(
+                timestamp_json(LogicalInstant::from_nanos(
+                    1_700_000_000_000_000_000 + fraction
+                )),
+                format!("2023-11-14T22:13:20{suffix}")
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod route_error_tests {
+    use super::escape_html_path;
+
+    #[tokio::test]
+    async fn route_response_escapes_markup_in_the_inserted_path() {
+        let response = super::route_not_found_response("/v1/topics/<&\"'>");
+        let body = axum::body::to_bytes(response.into_body(), 10000)
+            .await
+            .unwrap();
+        let text = std::str::from_utf8(&body).unwrap();
+        assert!(text.contains("<code>/v1/topics/&lt;&amp;&quot;&#39;&gt;</code>"));
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn route_path_escaping_preserves_text_and_never_injects_markup(path in ".{0,200}") {
+            let escaped = escape_html_path(&path);
+            prop_assert!(!escaped.contains(['<', '>', '\'', '"']));
+            let decoded = escaped.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&");
+            prop_assert_eq!(decoded, path);
+        }
+    }
+}
+
+#[cfg(test)]
+mod filter_error_tests {
+    use super::filter_error_details;
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn syntax_metadata_preserves_parser_location(line in 1usize..200,column in 1usize..200,token in "[a-z=]{1,12}") {
+            let message=format!("Invalid filter expression: failed to parse (syntax error at line {line}, column {column}, token '{token}').");
+            let details=filter_error_details(&message).unwrap();
+            let line_text=line.to_string();let column_text=column.to_string();
+            prop_assert_eq!(details[0]["metadata"]["line"].as_str(),Some(line_text.as_str()));
+            prop_assert_eq!(details[0]["metadata"]["column"].as_str(),Some(column_text.as_str()));
+            prop_assert_eq!(details[0]["metadata"]["token"].as_str(),Some(token.as_str()));
+            let unrelated=format!("unrelated {message}");prop_assert!(filter_error_details(&unrelated).is_none());
+        }
+    }
 }

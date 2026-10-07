@@ -1,23 +1,33 @@
 {
   "schemaVersion": 1,
   "kind": "storage-rules-release-artifact",
-  "sourceCommit": "7adbae1a274dd4d2ed1446876be8e8efdae42d27",
+  "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
   "command": [
     "cargo",
     "build",
-    "--release",
     "--locked",
+    "--release",
     "-p",
+    "fireemu",
+    "--bin",
     "fireemu"
   ],
   "binaryPath": "target/release/fireemu",
-  "binarySha256": "075593e8e7f528b2f318fd121f67bf539b4a1f7cf039b3fb9e980b49c9a936f7",
+  "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
   "version": "fireemu 0.10.0",
   "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
   "platform": "Darwin arm64",
   "gitStatusAtBuild": "",
-  "buildPath": ".worktree/storage-rules-into-integration (a git worktree of the repository), built into the shared target directory target/storage-rules-final; the absolute path is embedded in the binary's linker UUID, so a rebuild in another directory differs by those 48 bytes only",
+  "buildPath": "a detached worktree at the source commit, built into its own target directory; the absolute path is embedded in the binary's linker UUID, so a rebuild in another directory differs by those bytes only",
   "uiDist": "absent: ui/dist was not built, so the embedded UI is empty in this binary; no Storage or Auth route reads it",
   "productionRequests": 0,
-  "note": "One release binary built from the clean merge commit (the closure and recorded-shapes branches merged over integration f52e30f61); the strict production comparison (status, content type and error bytes), the 3641-row emulator comparison, the storage probe check and the conformance corpus ran on this exact copy. The one commit that follows the source commit (the rebind of this evidence) changes only spec and evidence; no source compiled into the binary changes."
+  "note": "One release binary built with the command above from the source commit (the closure base head); the strict production comparison against both recordings (3641 rows each), the management comparison of both recordings (406 local rows each), the 8 decided emulator-profile rows, the storage probe check and the conformance corpus ran on this exact copy, whose SHA-256 was recomputed after it was copied.",
+  "buildRecord": {
+    "cargoVersion": "cargo 1.94.0 (85eff7c80 2026-01-15)",
+    "locked": true,
+    "gitStatusOutsideBuildOutput": [],
+    "buildLogSha256": "8cfe910b038683b7a608b22723029e164a31c8efe89ee1176c70132c61ac64d9",
+    "buildJsonSha256": "989011a238b2eb677ba6d9360637799615a8453df11db6b8ee95ff0e3ef2d1bc",
+    "builtBy": "the closure base binary build of the coordinator (a detached worktree at the source commit, one cargo build through heavy-slot)"
+  }
 }

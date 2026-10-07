@@ -79,6 +79,13 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9.143
+      # The Functions runtime tests load the pinned real firebase-functions SDK from the conformance
+      # install (crates/fireemu-adapter-functions/tests/runtime.rs, FE_SOURCE_SDK_ROOT overrides it).
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.32.1"
+      - name: the pinned real SDK for the Functions runtime tests
+        run: pnpm -C conformance install --frozen-lockfile
       - name: tests (profile pr, retries 0)
         run: cargo nextest run --workspace --profile pr
       - name: limit catalog matches generated constants
@@ -169,6 +176,15 @@ jobs:
       - name: fetch locked dependency graph for offline authority checks
         if: runner.os == 'macOS'
         run: cargo fetch --locked
+      # The Functions runtime tests load the pinned real firebase-functions SDK from the conformance
+      # install (crates/fireemu-adapter-functions/tests/runtime.rs); Windows runs the lib tests only.
+      - uses: pnpm/action-setup@v4
+        if: runner.os == 'macOS'
+        with:
+          version: "10.32.1"
+      - name: the pinned real SDK for the Functions runtime tests
+        if: runner.os == 'macOS'
+        run: pnpm -C conformance install --frozen-lockfile
       # The process-census integration suites shell out to `ps` and `kill` to prove that a
       # daemon leaves nothing running; they are POSIX-only by construction, so Windows runs the
       # in-crate unit tests. Making them portable is tracked in the distribution issue.
@@ -183,6 +199,39 @@ jobs:
           else
             cargo nextest run --workspace --profile pr
           fi
+
+  # The Functions runner is Node code that shapes every event the emulator delivers. Its tests
+  # (tools/runner-node/*.test.mjs, including the 44-frame production member-order test that guards the
+  # Storage event shape) load the pinned real firebase-functions SDK from the conformance install.
+  # The waits in the two process-level files follow the child's progress, not a fixed wall clock,
+  # so a busy runner does not fail them (tools/runner-node/load-independent-wait.mjs).
+  runner-node:
+    name: runner node tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      # The SDK inventory tests skip without the sdk-smoke install; here they must fail instead.
+      FIREEMU_REQUIRE_SDK: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.32.1"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: the pinned real SDK for the runner tests
+        run: pnpm -C conformance install --frozen-lockfile
+      # tools/sdk-smoke pins the same firebase-functions 7.3.2 as the conformance install; the SDK
+      # inventory tests (docs/functions-export-inventory.md) read it from here.
+      - name: the SDK fixture for the inventory tests
+        run: npm ci --prefix tools/sdk-smoke --ignore-scripts
+      - name: Functions runner Node tests
+        run: node --test tools/runner-node/*.test.mjs
 
   # The packages a release would publish, built from this commit and installed the way a user
   # installs them: offline, from the packed tarballs, under a path with a space and non-ASCII

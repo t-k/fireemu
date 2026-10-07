@@ -56,7 +56,7 @@ fn captures_share_blobs_with_the_live_store_and_with_each_other() {
     assert_eq!(first.bytes(&meta), payload.as_slice());
 
     // Deleting in the live store releases its reference; the capture still serves the data.
-    live.delete(&bucket(), &name("small.txt"), Precondition::default())
+    live.delete(&bucket(), &name("small.txt"), Precondition::default(), t(0))
         .unwrap();
     assert_eq!(first.blob_bytes_shared_with(&live), 0);
     let small = first.get(&bucket(), &name("small.txt")).unwrap().clone();

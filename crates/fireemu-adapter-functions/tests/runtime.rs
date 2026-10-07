@@ -19,9 +19,9 @@ use fireemu_core_functions::manifest::{
 };
 use fireemu_core_functions::manifest::{DocumentEvent, FunctionGeneration, ObjectEvent};
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_storage::etag::production_etag;
 use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent, StorageState};
-use fireemu_core_types::ids::SessionId;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::json;
 
@@ -49,20 +49,7 @@ fn spawn_spec_debug_redacts_environment_and_command_arguments() {
 #[test]
 fn functions_config_debug_redacts_runner_secret() {
     let config = FunctionsConfig {
-        project: "demo-app".to_owned(),
-        default_bucket: "demo-app.appspot.com".to_owned(),
-        location: "nam5".to_owned(),
-        session: SessionId::new(7),
-        max_running: 4,
-        debug_mode: false,
-        retry_attempts: 4,
-        max_catch_up_runs: 10,
-        runner_secret: "runtime-sentinel-49".to_owned(),
-        overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-        catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-        functions_host: None,
-        clock_policy: fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(
-        ),
+        ..FunctionsConfig::for_tests(10, "runtime-sentinel-49".to_owned())
     };
 
     let config_debug = format!("{config:?}");
@@ -250,20 +237,10 @@ async fn start_runtime(
     let runtime = FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
             max_running,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs,
-            runner_secret: "s".into(),
             overlap,
             catch_up,
-            functions_host: None,
-            clock_policy:
-                fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
+            ..FunctionsConfig::for_tests(max_catch_up_runs, "s".into())
         },
         clock.clone(),
         Arc::new(runner),
@@ -681,19 +658,11 @@ async fn start_task_runtime_using_clock(
     let runtime = FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
             max_running,
-            debug_mode: false,
             retry_attempts: 1,
-            max_catch_up_runs: 1,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
             functions_host: Some("127.0.0.1:5001".into()),
             clock_policy,
+            ..FunctionsConfig::for_tests(1, "s".into())
         },
         clock,
         Arc::new(runner),
@@ -874,6 +843,31 @@ async fn shutdown_cancels_pending_tasks_and_closes_admission() {
     assert!(refusal.body.contains("shutting down"));
     assert!(!probe.exists());
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn shutdown_closes_the_manual_and_the_clock_driven_schedule_paths() {
+    use fireemu_adapter_functions::runtime::ScheduleRunError;
+    let (runtime, clock) = start().await;
+    runtime.shutdown().await;
+    assert!(runtime.is_idle());
+
+    // A manual run is refused like every other admission after shutdown began.
+    let refused = runtime.run_schedule("tick");
+    assert!(
+        matches!(&refused, Err(ScheduleRunError::Refused(m)) if m.contains("shutting down")),
+        "{refused:?}"
+    );
+
+    // A clock change enqueues no schedule run into a dispatcher that has stopped.
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(15 * 60))
+        .unwrap();
+    runtime.on_clock_changed();
+    assert!(runtime.is_idle(), "{}", runtime.status());
+    assert!(runtime.history().is_empty());
 }
 
 #[tokio::test]
@@ -1085,22 +1079,11 @@ async fn multi_codebase_runtime_exposes_and_stops_every_current_runner() {
             },
         ],
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
             retry_attempts: 1,
-            max_catch_up_runs: 1,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            clock_policy:
-                fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
+            ..FunctionsConfig::for_tests(1, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
     )
     .unwrap();
 
@@ -1561,20 +1544,7 @@ async fn failed_blocking_auth_respawn_releases_recovery_ownership() {
     let runtime = FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            clock_policy:
-                fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         runner,
@@ -1720,20 +1690,9 @@ async fn a_blocking_restart_cannot_replace_a_newer_hot_reload_generation() {
     let runtime = FunctionsRuntime::new(
         manifest.clone(),
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
             max_running: 1,
-            debug_mode: false,
             retry_attempts: 1,
-            max_catch_up_runs: 1,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            clock_policy:
-                fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
+            ..FunctionsConfig::for_tests(1, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         Arc::new(initial),
@@ -2225,20 +2184,7 @@ async fn a_spontaneous_recovery_cannot_replace_a_newer_reload() {
     let runtime = FunctionsRuntime::new(
         manifest.clone(),
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            clock_policy:
-                fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         initial.clone(),
@@ -2362,20 +2308,7 @@ async fn reload_generation_wins_over_an_older_reset_respawn() {
     let runtime = FunctionsRuntime::new(
         manifest.clone(),
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            clock_policy:
-                fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         clock,
         Arc::new(initial),
@@ -2417,20 +2350,7 @@ async fn a_crash_fault_still_kills_a_runner_that_cannot_be_respawned() {
     let runtime = FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            clock_policy:
-                fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         Arc::new(runner),
@@ -2467,7 +2387,30 @@ async fn a_crash_fault_still_kills_a_runner_that_cannot_be_respawned() {
 
 #[tokio::test]
 async fn schedule_retry_options_control_attempts_and_logical_backoff() {
-    let (runtime, clock) = start().await;
+    // a second-generation schedule: a first-generation handler is never retried. The window of the fake manifest's job
+    // is taken off: with a count and a window the chain goes on until both are used up (the test after the next one).
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            let spec = manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap();
+            spec.generation = FunctionGeneration::Second;
+            if let fireemu_core_functions::manifest::Trigger::Schedule { retry, .. } =
+                &mut spec.trigger
+            {
+                retry.max_retry_seconds = 0;
+            }
+        },
+    )
+    .await;
     runtime.run_schedule("failSchedule").unwrap();
     let _ = runtime.await_idle(Duration::from_millis(200)).await;
     assert_eq!(
@@ -2513,6 +2456,450 @@ async fn schedule_retry_options_control_attempts_and_logical_backoff() {
         .dead_letters()
         .iter()
         .any(|record| record.function == "failSchedule" && record.attempt == 3));
+    runtime.runner().shutdown().await;
+}
+
+/// Recorded (run `156715222b86ea44`): a job with `maxRetryDuration: 30s`, no retry count, `minBackoff 4s` and
+/// `maxBackoff 10s` was attempted at 0, 4.6, 13.2 and 23.7 seconds and then stopped, the next attempt being past the
+/// window. That job targeted HTTP (second generation). The logical clock has no dispatch latency, so the attempts
+/// are at 0, 4, 12 and 22.
+#[tokio::test]
+async fn a_second_generation_retry_window_without_a_count_retries_until_the_window_ends() {
+    use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            let spec = manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap();
+            let Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = spec.trigger.clone()
+            else {
+                panic!("failSchedule is scheduled");
+            };
+            spec.trigger = Trigger::Schedule {
+                schedule,
+                time_zone,
+                retry: ScheduleRetryConfig {
+                    retry_count: 0,
+                    max_retry_seconds: 30,
+                    max_backoff_seconds: 10,
+                    max_doublings: 5,
+                    min_backoff_seconds: 4,
+                },
+            };
+            spec.retry = true;
+            spec.generation = FunctionGeneration::Second;
+        },
+    )
+    .await;
+    let attempts = |runtime: &FunctionsRuntime| -> Vec<u32> {
+        runtime
+            .history()
+            .iter()
+            .filter(|record| record.function == "failSchedule")
+            .map(|record| record.attempt)
+            .collect()
+    };
+    runtime.run_schedule("failSchedule").unwrap();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), vec![1]);
+    // 4, 8 and then the 10 s cap: attempts 2, 3 and 4 at 4, 12 and 22 seconds.
+    for (advance, expected) in [(3, 1), (1, 2), (7, 2), (1, 3), (9, 3), (1, 4)] {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(advance))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+        assert_eq!(attempts(&runtime).len(), expected, "after +{advance}s");
+    }
+    // The fifth attempt would be at 32 seconds, past the 30 second window: none, however far the clock goes.
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(600))
+        .unwrap();
+    runtime.on_clock_changed();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), vec![1, 2, 3, 4]);
+    assert!(runtime
+        .dead_letters()
+        .iter()
+        .any(|record| record.function == "failSchedule" && record.attempt == 4));
+    runtime.runner().shutdown().await;
+}
+
+/// Recorded (run `f123d4fa2d61c5f5`, the REST job `count`): `retryCount 3`, `maxRetryDuration 20s`, `minBackoff 4s`,
+/// `maxBackoff 10s` was attempted four times in both passes, at 0, 4.65, 13.26 and 23.88 s: the window of 20 s did not stop
+/// the fourth attempt (the count was used up there). On the logical clock the attempts are at 0, 4, 12 and 22.
+#[tokio::test]
+async fn a_second_generation_count_and_window_retry_until_both_are_used_up() {
+    use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            let spec = manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap();
+            let Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = spec.trigger.clone()
+            else {
+                panic!("failSchedule is scheduled");
+            };
+            spec.trigger = Trigger::Schedule {
+                schedule,
+                time_zone,
+                retry: ScheduleRetryConfig {
+                    retry_count: 3,
+                    max_retry_seconds: 20,
+                    max_backoff_seconds: 10,
+                    max_doublings: 5,
+                    min_backoff_seconds: 4,
+                },
+            };
+            spec.retry = true;
+            spec.generation = FunctionGeneration::Second;
+        },
+    )
+    .await;
+    let attempts = |runtime: &FunctionsRuntime| -> Vec<u32> {
+        runtime
+            .history()
+            .iter()
+            .filter(|record| record.function == "failSchedule")
+            .map(|record| record.attempt)
+            .collect()
+    };
+    runtime.run_schedule("failSchedule").unwrap();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), vec![1]);
+    // 4, 8 and the 10 s cap: attempts 2, 3 and 4 at 4, 12 and 22 seconds; the last is past the window.
+    for (advance, expected) in [(3, 1), (1, 2), (7, 2), (1, 3), (9, 3), (1, 4)] {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(advance))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+        assert_eq!(attempts(&runtime).len(), expected, "after +{advance}s");
+    }
+    // the count is used up and the next attempt, at 32 s, is past the window: no fifth attempt
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(600))
+        .unwrap();
+    runtime.on_clock_changed();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), vec![1, 2, 3, 4]);
+    runtime.runner().shutdown().await;
+}
+
+/// Recorded (run `ecef353d18975246`, the REST job `double1`): `retryCount 5`, `minBackoff 4s`, `maxBackoff 100s`,
+/// `maxDoublings 1` was attempted six times, the gaps 4, 8, 10, 12 and 14 s (latency taken off): one doubling, then 2 s more
+/// each time. On the logical clock the attempts are at 0, 4, 12, 22, 34 and 48.
+#[tokio::test]
+async fn a_second_generation_chain_grows_by_two_seconds_after_its_doublings() {
+    use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            let spec = manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap();
+            let Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = spec.trigger.clone()
+            else {
+                panic!("failSchedule is scheduled");
+            };
+            spec.trigger = Trigger::Schedule {
+                schedule,
+                time_zone,
+                retry: ScheduleRetryConfig {
+                    retry_count: 5,
+                    max_retry_seconds: 0,
+                    max_backoff_seconds: 100,
+                    max_doublings: 1,
+                    min_backoff_seconds: 4,
+                },
+            };
+            spec.retry = true;
+            spec.generation = FunctionGeneration::Second;
+        },
+    )
+    .await;
+    let attempts = |runtime: &FunctionsRuntime| -> usize {
+        runtime
+            .history()
+            .iter()
+            .filter(|record| record.function == "failSchedule")
+            .count()
+    };
+    runtime.run_schedule("failSchedule").unwrap();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), 1);
+    // the attempts are due at 4, 12, 22, 34 and 48 seconds: move to one second before each, then onto it
+    let mut at = 0;
+    for (index, due) in [4, 12, 22, 34, 48].into_iter().enumerate() {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(due - 1 - at))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+        assert_eq!(attempts(&runtime), index + 1, "one second before {due} s");
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(1))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+        assert_eq!(attempts(&runtime), index + 2, "at {due} s");
+        at = due;
+    }
+    // the count is used up: no seventh attempt
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(600))
+        .unwrap();
+    runtime.on_clock_changed();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), 6);
+    runtime.runner().shutdown().await;
+}
+
+/// A zero minimum and maximum backoff together are stored by Cloud Scheduler as 5 s and 3600 s (run `f123d4fa2d61c5f5`,
+/// the job asked for `0s` and `0s` with a window of 10 s: two attempts, 5.62 s apart, in both passes). With a window of 5 s
+/// the first retry is at 5 s, inside it, and the second would be at 15 s: two attempts, however far the clock goes.
+#[tokio::test]
+async fn a_zero_backoff_window_is_the_default_backoff_as_recorded() {
+    use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            let spec = manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap();
+            let Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = spec.trigger.clone()
+            else {
+                panic!("failSchedule is scheduled");
+            };
+            spec.trigger = Trigger::Schedule {
+                schedule,
+                time_zone,
+                retry: ScheduleRetryConfig {
+                    retry_count: 0,
+                    max_retry_seconds: 5,
+                    max_backoff_seconds: 0,
+                    max_doublings: 0,
+                    min_backoff_seconds: 0,
+                },
+            };
+            spec.retry = true;
+            spec.generation = FunctionGeneration::Second;
+        },
+    )
+    .await;
+    let attempts = |runtime: &FunctionsRuntime| -> usize {
+        runtime
+            .history()
+            .iter()
+            .filter(|record| record.function == "failSchedule")
+            .count()
+    };
+    runtime.run_schedule("failSchedule").unwrap();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), 1);
+    let mut counts = vec![1];
+    for _ in 0..9 {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(1))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+        counts.push(attempts(&runtime));
+    }
+    // The first retry waits the default 5 s (the move to 5 s releases it); its own backoff, 10 s, would end past the
+    // window of 5 s: no third attempt, however many moves follow.
+    assert_eq!(counts, vec![1, 1, 1, 1, 1, 2, 2, 2, 2, 2]);
+    runtime.runner().shutdown().await;
+}
+
+/// A first-generation schedule's job targets Pub/Sub, so Cloud Scheduler's retry covers the publish, not the handler:
+/// no handler retry was recorded for it (the window was recorded for an HTTP target only). A window alone is one
+/// attempt, however far the clock goes.
+#[tokio::test]
+async fn a_first_generation_retry_window_without_a_count_is_one_attempt() {
+    use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            let spec = manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap();
+            let Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = spec.trigger.clone()
+            else {
+                panic!("failSchedule is scheduled");
+            };
+            spec.trigger = Trigger::Schedule {
+                schedule,
+                time_zone,
+                retry: ScheduleRetryConfig {
+                    retry_count: 0,
+                    max_retry_seconds: 30,
+                    max_backoff_seconds: 10,
+                    max_doublings: 5,
+                    min_backoff_seconds: 4,
+                },
+            };
+            spec.retry = true;
+            spec.generation = FunctionGeneration::First;
+        },
+    )
+    .await;
+    runtime.run_schedule("failSchedule").unwrap();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    for advance in [5, 10, 600] {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(advance))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    }
+    let attempts: Vec<u32> = runtime
+        .history()
+        .iter()
+        .filter(|record| record.function == "failSchedule")
+        .map(|record| record.attempt)
+        .collect();
+    assert_eq!(attempts, vec![1]);
+    runtime.runner().shutdown().await;
+}
+
+/// A first-generation schedule's job targets Pub/Sub, so Cloud Scheduler's retry covers the publish, not the handler.
+/// A count alone (here 3, no window) is one attempt, however far the clock goes: schedFailV1's handler ran once per
+/// occurrence and its Scheduler attempts all finished without an error although the handler threw. (The window-only
+/// case is `a_first_generation_retry_window_without_a_count_is_one_attempt`.)
+#[tokio::test]
+async fn a_first_generation_retry_count_is_one_attempt() {
+    use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            let spec = manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap();
+            let Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = spec.trigger.clone()
+            else {
+                panic!("failSchedule is scheduled");
+            };
+            spec.trigger = Trigger::Schedule {
+                schedule,
+                time_zone,
+                retry: ScheduleRetryConfig {
+                    retry_count: 3,
+                    max_retry_seconds: 0,
+                    max_backoff_seconds: 10,
+                    max_doublings: 5,
+                    min_backoff_seconds: 4,
+                },
+            };
+            spec.retry = true;
+            spec.generation = FunctionGeneration::First;
+        },
+    )
+    .await;
+    runtime.run_schedule("failSchedule").unwrap();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    for advance in [5, 10, 600] {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(advance))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    }
+    let attempts: Vec<u32> = runtime
+        .history()
+        .iter()
+        .filter(|record| record.function == "failSchedule")
+        .map(|record| record.attempt)
+        .collect();
+    assert_eq!(attempts, vec![1]);
     runtime.runner().shutdown().await;
 }
 
@@ -2705,7 +3092,7 @@ fn firestore_events_carry_the_production_id_and_time_forms() {
 
 /// The frames a production 1st and 2nd gen Firestore onCreate handler printed for one document
 /// create (recorded 2026-09-30). Each field of the `CloudEvent` the runtime builds for the same
-/// commit is compared with the recorded one; the `source` difference is a known divergence.
+/// commit is compared with the recorded one, including the database `source`.
 #[test]
 fn a_firestore_create_event_matches_the_recorded_production_delivery() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
@@ -2750,22 +3137,21 @@ fn a_firestore_create_event_matches_the_recorded_production_delivery() {
     assert_eq!(shape(event["id"].as_str().unwrap()), shape(production_id));
     let local_id = event["id"].as_str().unwrap();
     assert_eq!(&local_id[14..15], &production_id[14..15], "version nibble");
-    // Known divergence (FN-CLAIM-EVENTS): production's `source` names the database, the local
-    // one the document, because the JSON path of firebase-functions reads the name from it.
+    // Created snapshots carry their document name in the payload; source names the database.
     assert_eq!(
         gen2["source"],
         "//firestore.googleapis.com/projects/demo-project/databases/(default)"
     );
     assert_eq!(
         event["source"],
-        "projects/demo-project/databases/(default)/documents/fe_events_primary/fe011probe0001"
+        "//firestore.googleapis.com/projects/demo-project/databases/(default)"
     );
 }
 
 /// The frames a production 1st and 2nd gen Cloud Storage onFinalize handler printed for one object
 /// create (recorded 2026-10-01). Each field of the `CloudEvent` the runtime builds for an object
 /// with the same bytes, name and times is compared with the recorded one; the `etag` and the
-/// `generation` forms are known divergences of the Storage surface, pinned here.
+/// `generation` forms are the known divergences of the Storage surface, pinned here.
 #[test]
 fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
@@ -2792,15 +3178,14 @@ fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
             created,
         )
         .unwrap();
-    let event = storage_event("42-1", ObjectEvent::Finalized, &meta, delivered);
+    let event = storage_event("42-1", ObjectEvent::Finalized, &meta, delivered, None);
     // The attributes production and the runtime agree on, the bucket extension included.
     for key in ["type", "subject", "source", "specversion"] {
         assert_eq!(event[key], gen2[key], "{key}");
     }
     // The CloudEvent carries the recorded members: the framework adds `context` and `object` on
-    // the way to a handler. Two known divergences: the delivery's `traceparent` (the runtime
-    // sends none) and `datacontenttype` (the runtime sets `application/json`; production's
-    // Storage event carries none, as the recorded `eventKeys` and the null member show).
+    // the way to a handler. One known divergence: the delivery's `traceparent` (the runtime sends
+    // none). Production's Storage event carries no `datacontenttype`, nor does the runtime's.
     let mut recorded_keys: Vec<String> = gen2["eventKeys"]
         .as_array()
         .unwrap()
@@ -2808,13 +3193,12 @@ fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
         .map(|key| key.as_str().unwrap().to_owned())
         .filter(|key| !["context", "object", "traceparent"].contains(&key.as_str()))
         .collect();
-    recorded_keys.push("datacontenttype".to_owned());
     recorded_keys.sort();
     let mut local_keys: Vec<String> = event.as_object().unwrap().keys().cloned().collect();
     local_keys.sort();
     assert_eq!(local_keys, recorded_keys);
     assert!(gen2["datacontenttype"].is_null());
-    assert_eq!(event["datacontenttype"], "application/json");
+    assert!(event.get("datacontenttype").is_none());
     assert_eq!(event["bucket"], gen2["extensionAttributes"]["bucket"]);
     // The event time is the object's creation instant with the microseconds production prints,
     // not the moment the runtime admitted the event.
@@ -2871,10 +3255,15 @@ fn a_storage_finalize_event_matches_the_recorded_production_delivery() {
         .as_str()
         .unwrap()
         .contains(&format!("generation={}", meta.generation)));
-    // Known divergence: production's etag is the base64 of the protobuf of the generation and
-    // the metageneration (`CLuI7vG3mJcDEAE=`); the local one is the quoted `<generation>-<n>`.
+    // Production's etag is the base64 of the protobuf of the generation and the metageneration
+    // (`CLuI7vG3mJcDEAE=`); the runtime encodes the same two numbers, its own generation here.
     assert_eq!(recorded["etag"], "CLuI7vG3mJcDEAE=");
-    assert_eq!(local["etag"], format!("\"{}-1\"", meta.generation));
+    let recorded_generation: u64 = recorded["generation"].as_str().unwrap().parse().unwrap();
+    assert_eq!(production_etag(recorded_generation, 1), recorded["etag"]);
+    assert_eq!(
+        local["etag"],
+        production_etag(meta.generation, meta.metageneration)
+    );
 }
 
 /// A Storage delivery's runner frame carries the instant the runtime admitted the event as
@@ -2949,7 +3338,7 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
     assert_eq!(e["type"], "google.cloud.firestore.document.v1.updated");
     assert_eq!(
         e["source"],
-        "projects/demo-app/databases/(default)/documents/todos/t1"
+        "//firestore.googleapis.com/projects/demo-app/databases/(default)"
     );
     assert_eq!(e["subject"], "documents/todos/t1");
     assert_eq!(e["document"], "todos/t1");
@@ -2983,7 +3372,7 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
             START,
         )
         .unwrap();
-    let s = storage_event("e3", ObjectEvent::Finalized, &meta, START);
+    let s = storage_event("e3", ObjectEvent::Finalized, &meta, START, None);
     assert_eq!(s["type"], "google.cloud.storage.object.v1.finalized");
     assert_eq!(s["bucket"], "demo-app.appspot.com");
     assert_eq!(s["subject"], "objects/dir/a.txt");
@@ -2993,6 +3382,448 @@ fn cloudevents_carry_the_shapes_the_sdk_decodes() {
         .as_str()
         .unwrap()
         .ends_with("/o/dir%2Fa.txt"));
+}
+
+#[test]
+fn gen2_firestore_source_is_database_for_all_document_events() {
+    let before = doc("documents/one/databases/two", 1);
+    let after = doc("documents/one/databases/two", 2);
+    for (kind, old, new) in [
+        (DocumentEvent::Created, None, Some(&after)),
+        (DocumentEvent::Updated, Some(&before), Some(&after)),
+        (DocumentEvent::Deleted, Some(&before), None),
+        (DocumentEvent::Written, None, Some(&after)),
+        (DocumentEvent::Written, Some(&before), None),
+        (DocumentEvent::Written, Some(&before), Some(&after)),
+    ] {
+        let event = firestore_event(
+            "source-gate",
+            "documents",
+            "databases",
+            "nam5",
+            "documents/one/databases/two",
+            kind,
+            old,
+            new,
+            START,
+            Some(("system", Some("u1"))),
+        );
+        assert_eq!(
+            event["source"], "//firestore.googleapis.com/projects/documents/databases/databases",
+            "Gen2 source must identify only the database"
+        );
+        assert_eq!(event["subject"], "documents/documents/one/databases/two");
+        assert_eq!(event["authtype"], "system");
+        assert_eq!(event["authid"], "u1");
+        assert_eq!(
+            event["time"],
+            fireemu_adapter_functions::events::firestore_time(START)
+        );
+    }
+}
+
+/// The real cached SDK is required: absence or version drift fails this adoption gate.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn real_sdk_rust_builder_framed_runner_handler_source_gate() {
+    struct Fixture(std::path::PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let sdk = std::env::var("FE_SOURCE_SDK_ROOT").unwrap_or_else(|_| {
+        root.join("conformance/node_modules/firebase-functions")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let package: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(Path::new(&sdk).join("package.json"))
+            .expect("cached real firebase-functions is required"),
+    )
+    .unwrap();
+    assert_eq!(package["version"], "7.3.2");
+    let dir =
+        Fixture(std::env::temp_dir().join(format!("fireemu-source-sdk-{}", std::process::id())));
+    std::fs::create_dir(&dir.0).unwrap();
+    std::fs::write(
+        dir.0.join("package.json"),
+        r#"{"private":true,"main":"index.cjs"}"#,
+    )
+    .unwrap();
+    let fixture = r"
+const {appendFileSync}=require('node:fs');
+const {join}=require('node:path');
+const v1=require(join(SDK,'lib/v1/index.js'));
+const v2=require(join(SDK,'lib/v2/providers/firestore.js'));
+const snap=s=>({path:s.ref.path,id:s.id,exists:s.exists,data:s.data()??null,createTime:s.createTime?.toDate().toISOString()??null,updateTime:s.updateTime?.toDate().toISOString()??null});
+const report=(name,d,e)=>{appendFileSync(join(__dirname,'observations.jsonl'),JSON.stringify({name,data:d.before?{before:snap(d.before),after:snap(d.after)}:snap(d),event:e,emulator:process.env.FUNCTIONS_EMULATOR})+'\n');return Promise.resolve();};
+for(const [kind,method]of Object.entries({created:'onCreate',updated:'onUpdate',deleted:'onDelete',written:'onWrite'})){
+ exports[kind+'V1']=v1.firestore.document('items/{id}')[method]((d,c)=>report(kind+'V1',d,c));
+ exports[kind+'V2']=v2[{created:'onDocumentCreated',updated:'onDocumentUpdated',deleted:'onDocumentDeleted',written:'onDocumentWritten'}[kind]]('items/{id}',e=>report(kind+'V2',e.data,{...e,data:undefined}));
+}
+exports.authV2=v2.onDocumentCreatedWithAuthContext('items/{id}',e=>report('authV2',e.data,{...e,data:undefined}));
+exports.authWrittenV2=v2.onDocumentWrittenWithAuthContext('items/{id}',e=>report('authWrittenV2',e.data,{...e,data:undefined}));
+let wire;
+const rich=v2.onDocumentWritten('items/{id}',e=>{
+ appendFileSync(join(__dirname,'observations.jsonl'),JSON.stringify({name:'richV2',wire,data:{before:snap(e.data.before),after:snap(e.data.after)},event:{...e,data:undefined}})+'\n');
+});
+exports.richV2=Object.assign(async e=>{
+ if(!Buffer.isBuffer(e.data))throw Error('expected actual protobuf bytes');
+ const codec=require(join(SDK,'protos/compiledFirestore.js')).google.events.cloud.firestore.v1.DocumentEventData;
+ wire=codec.toObject(codec.decode(e.data),{longs:String,bytes:String});
+ return rich(e);
+},rich);
+let retried=false;
+exports.retryV2=v2.onDocumentCreated({document:'items/{id}',retry:true},async e=>{
+ await report('retryV2',e.data,{...e,data:undefined});
+ if(!retried){retried=true;throw Error('intentional local retry');}
+});
+const raw=(name,e)=>{appendFileSync(join(__dirname,'observations.jsonl'),JSON.stringify({name,event:e,emulator:process.env.FUNCTIONS_EMULATOR})+'\n');return Promise.resolve();};
+exports.topicV2=require(join(SDK,'lib/v2/providers/pubsub.js')).onMessagePublished('t',e=>raw('topicV2',e));
+exports.customV2=require(join(SDK,'lib/v2/providers/eventarc.js')).onCustomEventPublished({eventType:'example.custom',channel:'locations/us-central1/channels/firebase'},e=>raw('customV2',e));
+";
+    std::fs::write(
+        dir.0.join("index.cjs"),
+        format!("const SDK={};\n{fixture}", json!(sdk)),
+    )
+    .unwrap();
+    let mut command: Vec<String> = std::env::var("FE_SOURCE_RUNNER_PREFIX").map_or_else(
+        |_| vec!["node".to_owned()],
+        |s| serde_json::from_str(&s).unwrap(),
+    );
+    command.extend([
+        root.join("tools/runner-node/index.mjs")
+            .to_string_lossy()
+            .into_owned(),
+        "--source".into(),
+        dir.0.to_string_lossy().into_owned(),
+    ]);
+    let mut env = vec![
+        ("GCLOUD_PROJECT".into(), "demo-app".into()),
+        (
+            "NODE_PATH".into(),
+            Path::new(&sdk)
+                .parent()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    ];
+    if let Ok(receipts) = std::env::var("FE_SOURCE_RECEIPTS") {
+        env.push(("FE_SOURCE_RECEIPTS".into(), receipts));
+    }
+    let runner = Runner::spawn_spec(&SpawnSpec {
+        command,
+        cwd: Some(dir.0.to_string_lossy().into_owned()),
+        env,
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    })
+    .await
+    .unwrap();
+    let before = doc("items/one", 1);
+    let after = doc("items/one", 2);
+    let cases = [
+        (DocumentEvent::Created, "created", None, Some(&after)),
+        (
+            DocumentEvent::Updated,
+            "updated",
+            Some(&before),
+            Some(&after),
+        ),
+        (DocumentEvent::Deleted, "deleted", Some(&before), None),
+        (DocumentEvent::Written, "written", None, Some(&after)),
+        (DocumentEvent::Written, "written", Some(&before), None),
+        (
+            DocumentEvent::Written,
+            "written",
+            Some(&before),
+            Some(&after),
+        ),
+    ];
+    let mut deliveries = Vec::new();
+    for (kind, name, old, new) in cases {
+        let mut event = firestore_event(
+            "real-source",
+            "demo-app",
+            "(default)",
+            "nam5",
+            "items/one",
+            kind,
+            old,
+            new,
+            START,
+            None,
+        );
+        event["params"] = json!({"id":"one"});
+        for generation in [1, 2] {
+            let function = format!("{name}V{generation}");
+            let invocation = runner.invoke(json!({"type":"invoke","invocationId":format!("source-{}",deliveries.len()),"function":function,"entryPoint":function,"trigger":"firestore","event":event}), Duration::from_secs(10)).await;
+            deliveries.push((
+                invocation.outcome,
+                generation,
+                kind,
+                old.map(|_| 1),
+                new.map(|_| 2),
+                event.clone(),
+            ));
+        }
+    }
+    let mut auth = firestore_event(
+        "auth-source",
+        "demo-app",
+        "(default)",
+        "nam5",
+        "items/one",
+        DocumentEvent::Created,
+        None,
+        Some(&after),
+        START,
+        Some(("system", Some("principal"))),
+    );
+    auth["params"] = json!({"id":"one"});
+    let auth_outcome = runner.invoke(json!({"type":"invoke","invocationId":"auth-source","function":"authV2","entryPoint":"authV2","trigger":"firestore","event":auth}), Duration::from_secs(10)).await.outcome;
+    // Replay the same immutable producer payload; this is not a production retry recording.
+    let replay = &deliveries[0].5;
+    let replay_outcome = runner.invoke(json!({"type":"invoke","invocationId":"source-replay","function":"createdV2","entryPoint":"createdV2","trigger":"firestore","event":replay}), Duration::from_secs(10)).await.outcome;
+    let mut topic = fireemu_adapter_functions::events::pubsub_event(
+        "topic-source",
+        "demo-app",
+        "us-central1",
+        "topicFn",
+        "t",
+        &json!({"data":"aGVsbG8=","attributes":{"key":"value"}}),
+        START,
+    );
+    // Typed Firestore-like extensions must not change another product's source.
+    for key in ["project", "database", "document"] {
+        topic[key] = replay[key].clone();
+    }
+    let custom = json!({"specversion":"1.0","id":"custom-id","type":"example.custom","source":"//example/custom-source","subject":"custom-subject","time":replay["time"],"data":{"v":3},"project":"demo-app","database":"(default)","document":"items/one"});
+    let mut other_outcomes = Vec::new();
+    for (function, trigger, event) in [
+        ("topicV2", "pubsub", &topic),
+        ("customV2", "eventarc", &custom),
+    ] {
+        other_outcomes.push(runner.invoke(json!({"type":"invoke","invocationId":function,"function":function,"entryPoint":function,"trigger":trigger,"event":event}), Duration::from_secs(10)).await.outcome);
+    }
+    let mut retry_outcomes = Vec::new();
+    for attempt in [1, 2] {
+        retry_outcomes.push(runner.invoke(json!({"type":"invoke","invocationId":format!("retry-{attempt}"),"function":"retryV2","entryPoint":"retryV2","trigger":"firestore","event":replay}), Duration::from_secs(10)).await.outcome);
+    }
+    let mut rich = after.clone();
+    let nanosecond =
+        fireemu_core_firestore::value::Timestamp::new(1_790_769_798, 846_431_123).unwrap();
+    rich.fields
+        .insert("large".into(), FsValue::Integer(i64::MAX));
+    rich.fields
+        .insert("small".into(), FsValue::Integer(i64::MIN));
+    rich.fields
+        .insert("bytes".into(), FsValue::Bytes(vec![0, 1, 255]));
+    rich.fields.insert(
+        "nested".into(),
+        FsValue::Map(
+            [(
+                "arr".into(),
+                FsValue::Array(vec![
+                    FsValue::Timestamp(nanosecond),
+                    FsValue::Bytes(vec![0, 1, 255]),
+                ]),
+            )]
+            .into_iter()
+            .collect(),
+        ),
+    );
+    let mut rich_event = firestore_event(
+        "rich",
+        "demo-app",
+        "(default)",
+        "nam5",
+        "items/one",
+        DocumentEvent::Written,
+        None,
+        Some(&rich),
+        START,
+        None,
+    );
+    rich_event["params"] = json!({"id":"one"});
+    let rich_outcome = runner.invoke(json!({"type":"invoke","invocationId":"rich","function":"richV2","entryPoint":"richV2","trigger":"firestore","event":rich_event}), Duration::from_secs(10)).await.outcome;
+    let mut written_auth = firestore_event(
+        "written-auth",
+        "demo-app",
+        "(default)",
+        "nam5",
+        "items/one",
+        DocumentEvent::Written,
+        Some(&rich),
+        None,
+        START,
+        Some(("system", Some("principal"))),
+    );
+    written_auth["params"] = json!({"id":"one"});
+    let written_auth_outcome = runner.invoke(json!({"type":"invoke","invocationId":"written-auth","function":"authWrittenV2","entryPoint":"authWrittenV2","trigger":"firestore","event":written_auth}), Duration::from_secs(10)).await.outcome;
+    let bytes = std::fs::read_to_string(dir.0.join("observations.jsonl"));
+    runner.shutdown().await;
+    assert!(!runner.is_alive());
+    for (outcome, ..) in &deliveries {
+        assert_eq!(
+            outcome,
+            &fireemu_adapter_functions::runner::InvokeOutcome::Ok,
+            "actual SDK decode must succeed"
+        );
+    }
+    assert_eq!(
+        auth_outcome,
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    assert_eq!(
+        replay_outcome,
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    for outcome in other_outcomes {
+        assert_eq!(
+            outcome,
+            fireemu_adapter_functions::runner::InvokeOutcome::Ok
+        );
+    }
+    let observations: Vec<serde_json::Value> = bytes
+        .unwrap()
+        .lines()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    assert!(
+        matches!(&retry_outcomes[0], fireemu_adapter_functions::runner::InvokeOutcome::Failed(message) if message.contains("intentional local retry")),
+        "actual retry outcomes: {retry_outcomes:?}"
+    );
+    assert_eq!(
+        retry_outcomes[1],
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    assert_eq!(
+        rich_outcome,
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    assert_eq!(
+        written_auth_outcome,
+        fireemu_adapter_functions::runner::InvokeOutcome::Ok
+    );
+    assert_eq!(observations.len(), 20);
+    let document = "projects/demo-app/databases/(default)/documents/items/one";
+    let database = "//firestore.googleapis.com/projects/demo-app/databases/(default)";
+    for (observation, (_, generation, kind, old, new, event)) in
+        observations.iter().zip(&deliveries)
+    {
+        let expected = |n: Option<i32>| json!({"path":"items/one","id":"one","exists":n.is_some(),"data":n.map(|v|json!({"v":v})),"createTime":n.map(|_|"2026-08-29T12:01:00.000Z"),"updateTime":n.map(|_|"2026-08-29T12:01:00.000Z")});
+        let data = if matches!(kind, DocumentEvent::Updated | DocumentEvent::Written) {
+            json!({"before":expected(*old),"after":expected(*new)})
+        } else {
+            expected(if *kind == DocumentEvent::Deleted {
+                *old
+            } else {
+                *new
+            })
+        };
+        assert_eq!(
+            observation["data"], data,
+            "snapshot path, values and timestamps"
+        );
+        assert_eq!(observation["event"]["params"], json!({"id":"one"}));
+        assert_eq!(observation["emulator"], "true");
+        if *generation == 1 {
+            assert_eq!(
+                observation["event"]["resource"],
+                json!({"service":"firestore.googleapis.com","name":document}),
+                "Gen1 typed document resource"
+            );
+            assert_eq!(
+                observation["event"]["eventId"],
+                format!("{}-0", event["id"].as_str().unwrap())
+            );
+            assert_eq!(observation["event"]["timestamp"], event["time"]);
+        } else {
+            assert_eq!(
+                observation["event"]["source"], database,
+                "Gen2 canonical database source for every document event"
+            );
+            for key in [
+                "id", "subject", "time", "type", "project", "database", "document",
+            ] {
+                assert_eq!(observation["event"][key], event[key], "{key}");
+            }
+        }
+    }
+    assert_eq!(observations[12]["event"]["authType"], "system");
+    assert_eq!(observations[12]["event"]["authId"], "principal");
+    assert_eq!(
+        observations[13]["event"], observations[1]["event"],
+        "replay preserves the same identity and envelope"
+    );
+    assert_eq!(observations[13]["data"], observations[1]["data"]);
+    assert_eq!(
+        observations[14]["event"]["source"], topic["source"],
+        "PubSub source remains the topic"
+    );
+    assert_eq!(
+        observations[14]["event"]["data"]["message"]["data"],
+        "aGVsbG8="
+    );
+    assert_eq!(
+        observations[15]["event"], custom,
+        "Eventarc retains the entire custom envelope"
+    );
+    assert_eq!(
+        observations[16], observations[17],
+        "actual failing and successful SDK retry callbacks retain identity and data"
+    );
+    let wire = &observations[18]["wire"];
+    assert!(
+        wire.get("oldValue").is_none(),
+        "missing before stays omitted"
+    );
+    assert_eq!(
+        wire["value"]["fields"]["large"]["integerValue"],
+        i64::MAX.to_string()
+    );
+    assert_eq!(
+        wire["value"]["fields"]["small"]["integerValue"],
+        i64::MIN.to_string()
+    );
+    assert_eq!(wire["value"]["fields"]["bytes"]["bytesValue"], "AAH/");
+    assert_eq!(
+        wire["value"]["fields"]["nested"]["mapValue"]["fields"]["arr"]["arrayValue"]["values"][0]
+            ["timestampValue"],
+        json!({"seconds":"1790769798","nanos":846_431_123})
+    );
+    assert_eq!(observations[18]["data"]["before"]["exists"], false);
+    assert_eq!(observations[18]["data"]["after"]["path"], "items/one");
+    assert_eq!(observations[18]["event"]["source"], database);
+    assert_eq!(observations[19]["data"]["after"]["exists"], false);
+    assert_eq!(observations[19]["data"]["after"]["id"], "one");
+    assert_eq!(observations[19]["event"]["authType"], "system");
+    assert_eq!(observations[19]["event"]["authId"], "principal");
+    assert_eq!(observations[19]["event"]["source"], database);
+}
+
+proptest::proptest! {
+    #[test]
+    fn firestore_source_projection_obeys_the_product_model(
+        project in "[a-z][a-z0-9]{0,12}", database in "[a-z][a-z0-9]{0,12}",
+        collection in "[a-z][a-z0-9]{0,12}", id in "[a-z][a-z0-9]{0,12}",
+        kind in 0u8..4,
+    ) {
+        let path = format!("{collection}/{id}");
+        let kinds = [DocumentEvent::Created, DocumentEvent::Updated, DocumentEvent::Deleted, DocumentEvent::Written];
+        let event = firestore_event("property", &project, &database, "nam5", &path, kinds[usize::from(kind)], None, None, START, None);
+        let expected = format!("//firestore.googleapis.com/projects/{project}/databases/{database}");
+        proptest::prop_assert_eq!(&event["source"], &json!(expected));
+        proptest::prop_assert_eq!(&event["subject"], &json!(format!("documents/{path}")));
+        proptest::prop_assert_eq!(&event["data"], &json!({}));
+    }
 }
 
 #[test]
@@ -3115,6 +3946,66 @@ async fn overlap_policies_skip_queue_or_reject_concurrent_schedule_runs() {
     runtime.runner().shutdown().await;
 }
 
+/// A handler that is really still running (it never answers) makes its function busy, so
+/// under `skip` and `reject` both a manual run and a clock-driven occurrence meet the policy.
+#[tokio::test]
+async fn a_really_running_handler_makes_skip_and_reject_refuse_the_next_run() {
+    use fireemu_adapter_functions::runtime::{CatchUpPolicy, OverlapPolicy};
+    for overlap in [OverlapPolicy::Skip, OverlapPolicy::Reject] {
+        let (runtime, clock) = start_with_policies_and_manifest(overlap, CatchUpPolicy::All, |m| {
+            let mut slow = parse_manifest(&json!({"functions": [{
+                "name": "slowTick",
+                "generation": 2,
+                "trigger": {"type": "schedule", "schedule": "every 5 minutes"}
+            }]}))
+            .unwrap();
+            m.functions.append(&mut slow.functions);
+        })
+        .await;
+        runtime.run_schedule("slowTick").unwrap();
+        for _ in 0..100 {
+            if runtime.status()["running"].as_u64() >= Some(1) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(
+            runtime.status()["running"],
+            1,
+            "{overlap:?}: the handler runs"
+        );
+        let refused = |runtime: &FunctionsRuntime| -> usize {
+            let tag = match overlap {
+                OverlapPolicy::Skip => "skipped: overlap",
+                _ => "rejected: overlap",
+            };
+            runtime
+                .history()
+                .iter()
+                .chain(runtime.dead_letters().iter())
+                .filter(|r| r.function == "slowTick" && r.outcome == tag)
+                .count()
+        };
+        // A manual run while the handler runs is refused and recorded.
+        assert!(runtime.run_schedule("slowTick").is_err(), "{overlap:?}");
+        assert_eq!(refused(&runtime), 1, "{overlap:?}: manual run");
+        // So is the occurrence a clock move brings due.
+        clock
+            .lock()
+            .unwrap()
+            .advance(fireemu_core_types::time::LogicalDuration::from_seconds(300))
+            .unwrap();
+        runtime.on_clock_changed();
+        assert_eq!(refused(&runtime), 2, "{overlap:?}: clock-driven occurrence");
+        assert_eq!(
+            runtime.status()["running"],
+            1,
+            "{overlap:?}: still one handler"
+        );
+        runtime.shutdown().await;
+    }
+}
+
 #[tokio::test]
 async fn pubsub_messages_and_auth_user_events_reach_their_functions() {
     use fireemu_core_auth::mfa::TotpPolicy;
@@ -3172,7 +4063,15 @@ fn pubsub_and_auth_events_carry_the_shapes_the_sdk_decodes() {
     use fireemu_core_functions::manifest::{AuthEvent, DocumentEvent};
     use fireemu_core_types::determinism::SplitMix64;
     let msg = serde_json::json!({"data": "aGVsbG8=", "attributes": {"k": "v"}, "orderingKey": "o"});
-    let e = pubsub_event("m1", "demo-app", "jobs", &msg, START);
+    let e = pubsub_event(
+        "m1",
+        "demo-app",
+        "us-central1",
+        "onJob",
+        "jobs",
+        &msg,
+        START,
+    );
     assert_eq!(e["type"], "google.cloud.pubsub.topic.v1.messagePublished");
     assert_eq!(
         e["source"],
@@ -3182,9 +4081,20 @@ fn pubsub_and_auth_events_carry_the_shapes_the_sdk_decodes() {
     assert_eq!(e["data"]["message"]["data"], "aGVsbG8=");
     assert_eq!(e["data"]["message"]["attributes"]["k"], "v");
     assert_eq!(e["data"]["message"]["orderingKey"], "o");
+    // Eventarc's own subscription for the function, in the form production names it.
+    let subscription = e["data"]["subscription"].as_str().unwrap();
+    let id = subscription
+        .strip_prefix("projects/demo-app/subscriptions/")
+        .unwrap();
+    assert!(id.starts_with("eventarc-us-central1-onjob-"), "{id}");
+    assert!(id.ends_with(|c: char| c.is_ascii_digit()), "{id}");
     assert_eq!(
-        e["data"]["subscription"],
-        "projects/demo-app/subscriptions/emulator-sub-jobs"
+        id,
+        fireemu_adapter_functions::events::eventarc_subscription_id(
+            "demo-app",
+            "us-central1",
+            "onJob"
+        )
     );
     let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
     let uid = store
@@ -4067,6 +4977,50 @@ fn the_bounded_run_window_matches_enumeration_in_iana_zones() {
 }
 
 #[tokio::test]
+async fn messages_published_through_the_runtime_get_seventeen_digit_decimal_ids() {
+    // Production's message ids are seventeen-digit decimal strings, not counts or session
+    // strings (FUNCTIONS-EVENTS formal record 2026-10-04, `messageId` of the 2nd gen frames
+    // 6ac2a47f0000967f445e8b09 and 6ac2a51c000844422b7986d1).
+    let (runtime, _clock) = start().await;
+    let ids = runtime.publish(
+        "jobs",
+        &[
+            serde_json::json!({"data": "YQ=="}),
+            serde_json::json!({"data": "Yg=="}),
+        ],
+    );
+    let silent = runtime.publish("nobody", &[serde_json::json!({"data": ""})]);
+    let mut all: Vec<String> = ids.into_iter().chain(silent).collect();
+    for id in &all {
+        assert_eq!(id.len(), 17, "{id}");
+        assert!(id.bytes().all(|byte| byte.is_ascii_digit()), "{id}");
+    }
+    all.sort();
+    all.dedup();
+    assert_eq!(all.len(), 3, "the ids are all different");
+    assert!(runtime.await_idle(Duration::from_secs(5)).await.is_ok());
+}
+
+#[tokio::test]
+async fn messages_published_to_a_topic_nobody_listens_to_still_get_different_ids() {
+    // Pub/Sub assigns ids even when nothing is subscribed; no delivery advances the counter here,
+    // so the publish itself must.
+    let (runtime, _clock) = start().await;
+    let ids = runtime.publish(
+        "nobody",
+        &[
+            serde_json::json!({"data": "YQ=="}),
+            serde_json::json!({"data": "Yg=="}),
+            serde_json::json!({"data": "Yw=="}),
+        ],
+    );
+    let mut distinct = ids.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(distinct.len(), 3, "{ids:?}");
+}
+
+#[tokio::test]
 async fn diagnostic_retention_is_bounded_and_counters_survive_eviction() {
     // FN-RET-01 / 03 / 04: completing twice the retention budget leaves a bounded window in
     // the order the records were made, while the cumulative counters keep every outcome.
@@ -4552,4 +5506,414 @@ async fn virtual_tasks_accept_extreme_clock_moves_without_host_instant_overflow(
     assert!(runtime.task_queue_stats().is_object());
     runtime.shutdown().await;
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Manual schedule runs and the schedule across lifecycle boundaries.
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_manual_run_of_an_unknown_or_unscheduled_function_is_refused_and_changes_nothing() {
+    use fireemu_adapter_functions::runtime::ScheduleRunError;
+    let (runtime, _clock) = start().await;
+    assert_eq!(
+        runtime.run_schedule("noSuchJob"),
+        Err(ScheduleRunError::Refused(
+            "unknown function \"noSuchJob\"".to_owned()
+        ))
+    );
+    // `ok` is a registered function, but not a scheduled one.
+    let unscheduled = runtime.run_schedule("ok");
+    assert!(
+        matches!(&unscheduled, Err(ScheduleRunError::Refused(m)) if m.contains("is not scheduled")),
+        "{unscheduled:?}"
+    );
+    assert!(runtime.is_idle(), "nothing was enqueued");
+    assert!(runtime.history().is_empty());
+    assert_eq!(runtime.status()["pending"], 0);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_schedule_run_queued_while_the_runner_is_stopped_survives_a_reload_and_runs_once() {
+    let (runtime, clock) = start().await;
+    let guard = runtime
+        .stop_runner_for_fixed_inspector_reload("default")
+        .await
+        .unwrap();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(5 * 60))
+        .unwrap();
+    runtime.on_clock_changed();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!runtime.is_idle(), "the 12:05 run waits for a runner");
+    assert!(runtime.history().is_empty());
+    let spec = SpawnSpec {
+        command: vec![
+            "python3".to_owned(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+        ],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    };
+    let replacement = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+    runtime
+        .reload_codebase(CodebaseSpec {
+            name: "default".to_owned(),
+            manifest: runtime.manifest().clone(),
+            runner: replacement,
+            spawn: Some(spec),
+            cleanup_dir: None,
+        })
+        .unwrap();
+    drop(guard);
+    runtime.await_idle(Duration::from_secs(3)).await.unwrap();
+    let ticks = |runtime: &FunctionsRuntime| {
+        runtime
+            .history()
+            .iter()
+            .filter(|r| r.function == "tick" && r.outcome == "ok")
+            .count()
+    };
+    assert_eq!(ticks(&runtime), 1, "the queued run was delivered once");
+    // The reload kept the schedule's cursor: 12:05 is not run again, 12:10 is.
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(5 * 60))
+        .unwrap();
+    runtime.on_clock_changed();
+    runtime.await_idle(Duration::from_secs(3)).await.unwrap();
+    assert_eq!(ticks(&runtime), 2);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_schedule_run_is_delivered_once_after_the_runner_died_before_it() {
+    let (runtime, clock) = start().await;
+    runtime.runner().kill_now();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(5 * 60))
+        .unwrap();
+    runtime.on_clock_changed();
+    runtime.await_idle(Duration::from_secs(5)).await.unwrap();
+    let ticks = runtime
+        .history()
+        .iter()
+        .filter(|r| r.function == "tick" && r.outcome == "ok")
+        .count();
+    assert_eq!(ticks, 1);
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
+async fn queue_runs_one_scheduled_invocation_at_a_time_where_allow_runs_several() {
+    use fireemu_adapter_functions::runtime::{CatchUpPolicy, OverlapPolicy};
+    for (overlap, running) in [(OverlapPolicy::Queue, 1u64), (OverlapPolicy::Allow, 2)] {
+        let (runtime, _clock) =
+            start_with_policies_and_manifest(overlap, CatchUpPolicy::All, |m| {
+                // A function whose name contains "slow" never answers, so what runs at once is
+                // exactly what dispatch admitted.
+                let mut slow = parse_manifest(&json!({"functions": [{
+                    "name": "slowTick",
+                    "generation": 2,
+                    "concurrency": 5,
+                    "trigger": {"type": "schedule", "schedule": "every 5 minutes"}
+                }]}))
+                .unwrap();
+                m.functions.append(&mut slow.functions);
+            })
+            .await;
+        runtime.run_schedule("slowTick").unwrap();
+        runtime.run_schedule("slowTick").unwrap();
+        for _ in 0..100 {
+            if runtime.status()["running"].as_u64() >= Some(running) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        // Let a second invocation start if the policy allows one.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let status = runtime.status();
+        assert_eq!(status["running"], running, "{overlap:?}: {status}");
+        assert_eq!(status["pending"], 2 - running, "{overlap:?}: {status}");
+        runtime.shutdown().await;
+    }
+}
+
+/// An Archived event (a generation of a versioned bucket became noncurrent) carries the time it
+/// stopped being live: as `timeDeleted` in the object resource and as the `CloudEvent` time. The
+/// shape is RECORDED (FE v5); the Archived event and the Deleted event of a noncurrent generation
+/// are the only ones that carry `timeDeleted`.
+#[test]
+fn an_archived_event_carries_the_time_the_generation_stopped_being_live() {
+    let mut store = StorageState::new(1);
+    let bucket = BucketName::try_new("versioned-bucket").unwrap();
+    store.set_versioning(&bucket, true);
+    let put = |store: &mut StorageState, at: LogicalInstant| {
+        store
+            .put(
+                &bucket,
+                &ObjectName::try_new("o.txt").unwrap(),
+                b"x".to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                at,
+            )
+            .unwrap()
+    };
+    let first = put(&mut store, START);
+    let deleted = START.checked_add(LogicalDuration::from_seconds(5)).unwrap();
+    let second = put(&mut store, deleted);
+    let archived = storage_event("e9", ObjectEvent::Archived, &first, START, Some(deleted));
+    assert_eq!(archived["type"], "google.cloud.storage.object.v1.archived");
+    assert_eq!(archived["subject"], "objects/o.txt");
+    assert_eq!(archived["data"]["generation"], first.generation.to_string());
+    // The instant the generation stopped being live is the instant of the overwrite: the
+    // creation time of the generation that replaced it, in both places it is printed.
+    let finalized = storage_event("e9", ObjectEvent::Finalized, &second, START, None);
+    assert_eq!(archived["time"], finalized["time"]);
+    assert_eq!(
+        archived["data"]["timeDeleted"],
+        finalized["data"]["timeCreated"]
+    );
+    // No other event carries timeDeleted, and the data otherwise is the object resource.
+    assert!(finalized["data"].get("timeDeleted").is_none());
+    let mut without = archived["data"].clone();
+    without.as_object_mut().unwrap().remove("timeDeleted");
+    assert_eq!(
+        without,
+        storage_event("e9", ObjectEvent::Finalized, &first, START, None)["data"]
+    );
+}
+
+/// Archived events reach the functions that subscribed to them and only those; the Finalized
+/// events of the same overwrite reach the finalize ones. The overwrite announces Finalized first
+/// (the observed order, FE v5).
+#[tokio::test]
+async fn archived_events_reach_archived_functions_and_finalized_events_finalized_ones() {
+    let (runtime, _clock) = start_with_policies_and_manifest(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        |manifest| {
+            manifest.functions.extend(
+                parse_manifest(&json!({"functions": [
+                    {"name": "archivedObserver", "generation": 2, "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.archived", "bucket": "versioned-bucket"}},
+                    {"name": "finalizedObserver", "generation": 2, "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.finalized", "bucket": "versioned-bucket"}},
+                    {"name": "otherBucketArchived", "generation": 2, "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.archived", "bucket": "elsewhere"}},
+                ]}))
+                .unwrap()
+                .functions,
+            );
+        },
+    )
+    .await;
+    let mut store = StorageState::new(1);
+    let bucket = BucketName::try_new("versioned-bucket").unwrap();
+    store.set_versioning(&bucket, true);
+    for (data, at) in [(&b"one"[..], START), (&b"two"[..], START)] {
+        store
+            .put(
+                &bucket,
+                &ObjectName::try_new("o.txt").unwrap(),
+                data.to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                at,
+            )
+            .unwrap();
+    }
+    let events = store.drain_events();
+    assert_eq!(events.len(), 3, "{events:?}");
+    for event in &events {
+        runtime.on_storage_event(event);
+    }
+    assert!(runtime.await_idle(Duration::from_secs(10)).await.is_ok());
+    let ran = |function: &str| {
+        runtime
+            .history()
+            .iter()
+            .filter(|record| record.function == function && record.outcome == "ok")
+            .count()
+    };
+    assert_eq!(ran("archivedObserver"), 1, "one generation was archived");
+    assert_eq!(
+        ran("finalizedObserver"),
+        2,
+        "two generations were finalized"
+    );
+    assert_eq!(ran("otherBucketArchived"), 0, "another bucket's trigger");
+    runtime.runner().shutdown().await;
+}
+
+/// The real `firebase-functions` 7.3.2 SDK's `onArchive` (v1) and `onObjectArchived` (v2) handlers
+/// receive an Archived event with the object resource, `timeDeleted` included. The Archived event
+/// shape is RECORDED in FE v5; this pins what the local runtime delivers to the real handlers.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn real_sdk_archived_handlers_receive_the_archived_event() {
+    struct Fixture(std::path::PathBuf);
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let sdk = std::env::var("FE_SOURCE_SDK_ROOT").unwrap_or_else(|_| {
+        root.join("conformance/node_modules/firebase-functions")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let package: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(Path::new(&sdk).join("package.json"))
+            .expect("cached real firebase-functions is required"),
+    )
+    .unwrap();
+    assert_eq!(package["version"], "7.3.2");
+    let dir =
+        Fixture(std::env::temp_dir().join(format!("fireemu-archived-sdk-{}", std::process::id())));
+    std::fs::create_dir(&dir.0).unwrap();
+    std::fs::write(
+        dir.0.join("package.json"),
+        r#"{"private":true,"main":"index.cjs"}"#,
+    )
+    .unwrap();
+    let fixture = r"
+const {appendFileSync}=require('node:fs');
+const {join}=require('node:path');
+const v1=require(join(SDK,'lib/v1/index.js'));
+const v2=require(join(SDK,'lib/v2/providers/storage.js'));
+const seen=(name,object,event)=>{appendFileSync(join(__dirname,'observations.jsonl'),JSON.stringify({name,object,event})+'\n');return Promise.resolve();};
+exports.archivedV1=v1.storage.bucket('versioned-bucket').object().onArchive((object,context)=>seen('archivedV1',object,context));
+exports.archivedV2=v2.onObjectArchived({bucket:'versioned-bucket'},(event)=>seen('archivedV2',event.data,{...event,data:undefined}));
+";
+    std::fs::write(
+        dir.0.join("index.cjs"),
+        format!("const SDK={};\n{fixture}", json!(sdk)),
+    )
+    .unwrap();
+    let mut command: Vec<String> = std::env::var("FE_SOURCE_RUNNER_PREFIX").map_or_else(
+        |_| vec!["node".to_owned()],
+        |s| serde_json::from_str(&s).unwrap(),
+    );
+    command.extend([
+        root.join("tools/runner-node/index.mjs")
+            .to_string_lossy()
+            .into_owned(),
+        "--source".into(),
+        dir.0.to_string_lossy().into_owned(),
+    ]);
+    let runner = Runner::spawn_spec(&SpawnSpec {
+        command,
+        cwd: Some(dir.0.to_string_lossy().into_owned()),
+        env: vec![
+            ("GCLOUD_PROJECT".into(), "demo-app".into()),
+            (
+                "NODE_PATH".into(),
+                Path::new(&sdk)
+                    .parent()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        ],
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    })
+    .await
+    .unwrap();
+    let mut store = StorageState::new(1);
+    let bucket = BucketName::try_new("versioned-bucket").unwrap();
+    store.set_versioning(&bucket, true);
+    let put = |store: &mut StorageState, data: &[u8], at: LogicalInstant| {
+        store
+            .put(
+                &bucket,
+                &ObjectName::try_new("dir/o.txt").unwrap(),
+                data.to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                at,
+            )
+            .unwrap()
+    };
+    let first = put(&mut store, b"one", START);
+    let deleted = START.checked_add(LogicalDuration::from_seconds(5)).unwrap();
+    put(&mut store, b"two", deleted);
+    let event = storage_event(
+        "77-1",
+        ObjectEvent::Archived,
+        &first,
+        deleted,
+        Some(deleted),
+    );
+    let mut outcomes = Vec::new();
+    for (id, function) in [("v1", "archivedV1"), ("v2", "archivedV2")] {
+        outcomes.push(
+            runner
+                .invoke(
+                    json!({"type":"invoke","invocationId":format!("archived-{id}"),"function":function,"entryPoint":function,"trigger":"storage","event":event}),
+                    Duration::from_secs(10),
+                )
+                .await
+                .outcome,
+        );
+    }
+    let bytes = std::fs::read_to_string(dir.0.join("observations.jsonl"));
+    runner.shutdown().await;
+    for outcome in &outcomes {
+        assert_eq!(
+            outcome,
+            &fireemu_adapter_functions::runner::InvokeOutcome::Ok,
+            "the real SDK decodes the Archived event"
+        );
+    }
+    let text = bytes.unwrap();
+    // The 2nd gen handler sees the members of an Archived event's data in the order production
+    // sends them (RECORDED, FE v5, 44 v2 frames: `timeDeleted` follows `updated`). The order of a
+    // 1st gen `object` was not recorded and is the runner's input order. `serde_json` sorts keys,
+    // so the order is read from the text of the observation.
+    for line in text.lines().filter(|line| line.contains("\"archivedV2\"")) {
+        let object = &line[line.find("\"object\":").unwrap()..];
+        let at = |member: &str| object.find(&format!("\"{member}\":")).unwrap();
+        assert!(
+            at("timeCreated") < at("updated")
+                && at("updated") < at("timeDeleted")
+                && at("timeDeleted") < at("storageClass"),
+            "{line}"
+        );
+    }
+    assert_eq!(
+        text.lines()
+            .filter(|l| l.contains("\"archivedV2\""))
+            .count(),
+        1
+    );
+    let observations: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(observations.len(), 2);
+    for observation in &observations {
+        let object = &observation["object"];
+        assert_eq!(object["name"], "dir/o.txt");
+        assert_eq!(object["bucket"], "versioned-bucket");
+        assert_eq!(object["generation"], first.generation.to_string());
+        assert_eq!(
+            object["timeDeleted"], event["data"]["timeDeleted"],
+            "{observation}"
+        );
+    }
+    assert_eq!(
+        observations[1]["event"]["type"],
+        "google.cloud.storage.object.v1.archived"
+    );
 }

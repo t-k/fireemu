@@ -1,11 +1,12 @@
 //! hyper glue for the Storage surface: raw bodies (uploads), CORS for the browser SDK,
 //! loopback-only origins.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use bytes::Bytes;
 use fireemu_adapter_support::connection::{DrainBounds, GracefulClose};
+use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -16,7 +17,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
 use crate::identity_toolkit::origin_is_local;
-use crate::storage::{handle, StorageRequest, StorageState};
+use crate::storage::{handle_framed, StorageRequest, StorageState};
 
 /// Maximum accepted upload body (object limit plus multipart overhead).
 pub const MAX_STORAGE_BODY_BYTES: usize = 260 * 1024 * 1024;
@@ -40,6 +41,22 @@ pub static BODY_BUDGET: BodyBudget = BodyBudget::new(DEFAULT_BODY_BUDGET_BYTES);
 /// lock. Body collection does not hold a slot, so slow clients cannot occupy the pool.
 const BLOCKING_HANDLER_LIMIT: usize = 16;
 static BLOCKING_HANDLER_SLOTS: Semaphore = Semaphore::const_new(BLOCKING_HANDLER_LIMIT);
+
+/// Bounds the list requests that carry a `matchGlob`, whose cost depends on a pattern the caller
+/// writes. A request waits for one of these slots before it takes a handler slot, and waits
+/// without holding a thread, so a flood of them leaves the handler slots to the other requests.
+const GLOB_HANDLER_LIMIT: usize = 2;
+static GLOB_HANDLER_SLOTS: Semaphore = Semaphore::const_new(GLOB_HANDLER_LIMIT);
+
+/// Sets its flag when dropped: the request future that owns it was dropped (the client has gone) or
+/// has finished.
+struct SetOnDrop(Arc<AtomicBool>);
+
+impl Drop for SetOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
 
 /// An admission budget for the request bodies buffered in memory at the same time.
 ///
@@ -241,7 +258,7 @@ const FORWARDED_HEADERS: &[&str] = &[
 ];
 
 /// The header set the official emulator's `cors` middleware exposes, verbatim.
-const EXPOSED_HEADERS: &str = "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url";
+pub(crate) const EXPOSED_HEADERS: &str = "content-type,x-firebase-storage-version,X-Goog-Upload-Size-Received,x-goog-upload-url,x-goog-upload-command,x-gupload-uploadid,x-goog-upload-header-content-length,x-goog-upload-header-content-type,x-goog-upload-protocol,x-goog-upload-status,x-goog-upload-chunk-granularity,x-goog-upload-control-url";
 
 /// The CORS headers of an ordinary (non-preflight) response, as the official emulator's
 /// `cors({origin: true, exposedHeaders})` middleware stamps them: the origin reflected when
@@ -260,7 +277,61 @@ fn cors(
 }
 
 /// The refusal a body that was not accepted turns into.
-fn body_error_response(e: BodyError, origin: Option<&str>) -> Response<Full<Bytes>> {
+/// The body of every Storage answer.
+type StorageBody = BoxBody<Bytes, std::convert::Infallible>;
+
+fn plain(bytes: Bytes) -> StorageBody {
+    Full::new(bytes).boxed()
+}
+
+/// An empty body that tells hyper its length is known to be zero. hyper drops a `Content-Length: 0`
+/// from a `204` whose body is already at its end, and production's JSON API object delete sends one
+/// (recorded); a body that still has one (empty) frame to give keeps the header on the wire.
+struct ZeroLength {
+    sent: bool,
+}
+
+impl hyper::body::Body for ZeroLength {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        _context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>> {
+        if self.sent {
+            return std::task::Poll::Ready(None);
+        }
+        self.sent = true;
+        std::task::Poll::Ready(Some(Ok(hyper::body::Frame::data(Bytes::new()))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.sent
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        hyper::body::SizeHint::with_exact(0)
+    }
+}
+
+/// The body of `response`: [`ZeroLength`] for the one shape that needs it (an empty `204` that
+/// carries an explicit `Content-Length: 0`), the plain bytes for every other answer.
+fn body_of(response: &crate::storage::StorageResponse) -> StorageBody {
+    let explicit_zero = response.status == 204
+        && response.body.is_empty()
+        && response
+            .headers
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("content-length") && value == "0");
+    if explicit_zero {
+        ZeroLength { sent: false }.boxed()
+    } else {
+        plain(response.body.clone())
+    }
+}
+
+fn body_error_response(e: BodyError, origin: Option<&str>) -> Response<StorageBody> {
     let (status, message, retry_after) = match e {
         BodyError::TooLarge => (413, &b"payload too large"[..], false),
         BodyError::BudgetExhausted => (503, &b"storage upload memory budget exhausted"[..], true),
@@ -271,8 +342,8 @@ fn body_error_response(e: BodyError, origin: Option<&str>) -> Response<Full<Byte
         builder = builder.header("retry-after", "1");
     }
     builder
-        .body(Full::new(Bytes::from_static(message)))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+        .body(plain(Bytes::from_static(message)))
+        .unwrap_or_else(|_| Response::new(plain(Bytes::new())))
 }
 
 fn handler_error_response(
@@ -280,14 +351,14 @@ fn handler_error_response(
     message: &'static [u8],
     origin: Option<&str>,
     retry: bool,
-) -> Response<Full<Bytes>> {
+) -> Response<StorageBody> {
     let mut builder = cors(Response::builder().status(status), origin);
     if retry {
         builder = builder.header("retry-after", "1");
     }
     builder
-        .body(Full::new(Bytes::from_static(message)))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+        .body(plain(Bytes::from_static(message)))
+        .unwrap_or_else(|_| Response::new(plain(Bytes::new())))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -295,7 +366,7 @@ async fn respond(
     state: Arc<StorageState>,
     budget: &'static BodyBudget,
     req: Request<Incoming>,
-) -> Result<Response<Full<Bytes>>, std::io::Error> {
+) -> Result<Response<StorageBody>, std::io::Error> {
     let origin = req
         .headers()
         .get("origin")
@@ -304,8 +375,8 @@ async fn respond(
     if origin.as_deref().is_some_and(|o| !origin_is_local(o)) {
         return Ok(Response::builder()
             .status(StatusCode::FORBIDDEN)
-            .body(Full::new(Bytes::from_static(b"forbidden origin")))
-            .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
+            .body(plain(Bytes::from_static(b"forbidden origin")))
+            .unwrap_or_else(|_| Response::new(plain(Bytes::new()))));
     }
     if req.method() == hyper::Method::OPTIONS {
         // The preflight the official emulator's `cors` middleware answers: the requested
@@ -341,8 +412,8 @@ async fn respond(
             builder = builder.header("access-control-allow-headers", requested.to_owned());
         }
         return Ok(builder
-            .body(Full::new(Bytes::new()))
-            .unwrap_or_else(|_| Response::new(Full::new(Bytes::new()))));
+            .body(plain(Bytes::new()))
+            .unwrap_or_else(|_| Response::new(plain(Bytes::new()))));
     }
     let method = req.method().as_str().to_owned();
     let path = req.uri().path().to_owned();
@@ -393,6 +464,17 @@ async fn respond(
         Ok(buffer) => buffer,
         Err(e) => return Ok(body_error_response(e, origin.as_deref())),
     };
+    let glob_permit = if crate::storage::uses_match_glob(state.is_strict(), &method, &path, &query)
+    {
+        Some(
+            GLOB_HANDLER_SLOTS
+                .acquire()
+                .await
+                .expect("storage glob semaphore is never closed"),
+        )
+    } else {
+        None
+    };
     let permit = BLOCKING_HANDLER_SLOTS
         .acquire()
         .await
@@ -404,24 +486,32 @@ async fn respond(
         query.clone(),
         buffer.bytes.len(),
     );
+    // hyper drops this future when the client closes its connection (even while the handler works),
+    // which sets the flag: a glob scan stops, mid-name, instead of working through the bucket for
+    // nobody, and gives its glob slot back.
+    let client_gone = Arc::new(AtomicBool::new(false));
+    let _gone_on_drop = SetOnDrop(Arc::clone(&client_gone));
     let response = tokio::task::spawn_blocking(move || {
         let _permit = permit;
+        let _glob_permit = glob_permit;
         let body = buffer.take();
-        handle(
-            &state,
-            StorageRequest {
-                method,
-                path,
-                query,
-                host,
-                headers,
-                app_check,
-                body,
-            },
-        )
+        crate::storage::with_cancellation(client_gone, || {
+            handle_framed(
+                &state,
+                StorageRequest {
+                    method,
+                    path,
+                    query,
+                    host,
+                    headers,
+                    app_check,
+                    body,
+                },
+            )
+        })
     })
     .await;
-    let Ok(response) = response else {
+    let Ok((response, framed)) = response else {
         return Ok(handler_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             b"storage handler failed",
@@ -448,22 +538,25 @@ async fn respond(
         // A `dropConnection` fault: the connection closes without a response.
         return Err(std::io::Error::other("fault plan: connection dropped"));
     }
-    let mut builder = cors(
-        Response::builder()
-            .status(
-                StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            )
+    // A response the strict profile framed carries production's own header set; every other
+    // response gets the official emulator's CORS and `nosniff` stamps.
+    let mut builder = Response::builder()
+        .status(StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR));
+    if !framed {
+        builder = cors(
             // Defence in depth: a body typed text/plain that happens to look like markup is
             // never sniffed as HTML on this origin. It does not change how an explicit
             // text/html content-type renders, so it is not a substitute for typing
             // caller-influenced bodies as text/plain -- see storage::gcs_no_such_object.
-            .header("x-content-type-options", "nosniff"),
-        origin.as_deref(),
-    );
+            builder.header("x-content-type-options", "nosniff"),
+            origin.as_deref(),
+        );
+    }
+    let body = body_of(&response);
     for (k, v) in response.headers {
         builder = builder.header(k, v);
     }
-    match builder.body(Full::new(response.body)) {
+    match builder.body(body) {
         Ok(response) => Ok(response),
         // A header value the handler built is not a valid HTTP header (a metadata string with
         // a control character reached `Builder::header`). The input boundary rejects those, so
@@ -474,10 +567,10 @@ async fn respond(
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .header("content-type", "text/plain; charset=utf-8")
             .header("x-content-type-options", "nosniff")
-            .body(Full::new(Bytes::from_static(
+            .body(plain(Bytes::from_static(
                 b"internal error building response",
             )))
-            .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))),
+            .unwrap_or_else(|_| Response::new(plain(Bytes::new())))),
     }
 }
 
@@ -530,5 +623,77 @@ mod handler_error_tests {
         let busy = handler_error_response(StatusCode::SERVICE_UNAVAILABLE, b"busy", None, true);
         assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(busy.headers().get("retry-after").unwrap(), "1");
+    }
+}
+
+#[cfg(test)]
+mod zero_length_tests {
+    use super::*;
+    use crate::storage::StorageResponse;
+    use hyper::body::Body as _;
+
+    fn answer(status: u16, headers: &[(&str, &str)], body: &'static [u8]) -> StorageResponse {
+        StorageResponse {
+            status,
+            headers: headers
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect(),
+            body: Bytes::from_static(body),
+        }
+    }
+
+    /// Whether the body of `response` is the zero-length one: it has a frame left to give, where the
+    /// plain body of an empty answer is already at its end.
+    fn is_zero_length(response: &StorageResponse) -> bool {
+        let body = body_of(response);
+        !body.is_end_stream() && body.size_hint().exact() == Some(0)
+    }
+
+    #[test]
+    fn only_an_empty_204_with_an_explicit_zero_length_gets_the_zero_length_body() {
+        let zero = [("content-length", "0")];
+        assert!(is_zero_length(&answer(204, &zero, b"")));
+        assert!(is_zero_length(&answer(
+            204,
+            &[("Content-Length", "0")],
+            b""
+        )));
+        // Each condition alone is not enough.
+        assert!(!is_zero_length(&answer(200, &zero, b"")), "another status");
+        assert!(
+            !is_zero_length(&answer(204, &[], b"")),
+            "no explicit length"
+        );
+        assert!(
+            !is_zero_length(&answer(204, &[("content-length", "1")], b"")),
+            "another length"
+        );
+        assert!(
+            !is_zero_length(&answer(204, &[("x-other", "0")], b"")),
+            "another header"
+        );
+        assert!(!is_zero_length(&answer(204, &zero, b"x")), "a body");
+        assert!(!is_zero_length(&answer(404, &[], b"gone")));
+    }
+
+    #[test]
+    fn the_zero_length_body_gives_one_empty_frame_then_ends() {
+        use std::task::{Context, Poll, Waker};
+        let mut body = ZeroLength { sent: false };
+        assert!(!body.is_end_stream());
+        assert_eq!(body.size_hint().exact(), Some(0));
+        let mut context = Context::from_waker(Waker::noop());
+        let first = std::pin::Pin::new(&mut body).poll_frame(&mut context);
+        let Poll::Ready(Some(Ok(frame))) = first else {
+            panic!("an empty frame first");
+        };
+        assert_eq!(frame.into_data().unwrap().len(), 0);
+        assert!(body.is_end_stream());
+        assert_eq!(body.size_hint().exact(), Some(0));
+        assert!(matches!(
+            std::pin::Pin::new(&mut body).poll_frame(&mut context),
+            Poll::Ready(None)
+        ));
     }
 }

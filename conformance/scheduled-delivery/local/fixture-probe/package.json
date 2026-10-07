@@ -1,0 +1,11 @@
+{
+  "name": "fireemu-scheduled-delivery-probe",
+  "private": true,
+  "main": "index.js",
+  "dependencies": {
+    "firebase-functions": "7.3.2"
+  },
+  "engines": {
+    "node": "22"
+  }
+}

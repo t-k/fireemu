@@ -4724,6 +4724,54 @@ fn a_phantom_rest_write_succeeds_after_the_query_transaction_finishes() {
 }
 
 #[test]
+fn rest_new_transaction_retry_batch_get_and_run_query_return_documents() {
+    for (method, document_field) in [("batchGet", "found"), ("runQuery", "document")] {
+        let s = state(None);
+        let name = "projects/demo-app/databases/(default)/documents/retry-snapshot/1";
+        let (status, seeded) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/retry-snapshot/1"),
+            json!({"fields": {"v": {"integerValue": "1"}}}),
+        );
+        assert_eq!(status, 200, "{seeded}");
+        let (status, begun) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:beginTransaction"),
+            json!({"options": {"readWrite": {}}}),
+        );
+        assert_eq!(status, 200, "{begun}");
+        let previous = begun["transaction"].as_str().unwrap();
+        let (status, updated) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/retry-snapshot/1"),
+            json!({"fields": {"v": {"integerValue": "2"}}}),
+        );
+        assert_eq!(status, 200, "{updated}");
+        let mut request = if method == "batchGet" {
+            json!({"documents": [name]})
+        } else {
+            json!({"structuredQuery": {"from": [{"collectionId": "retry-snapshot"}]}})
+        };
+        request["newTransaction"] = json!({"readWrite": {"retryTransaction": previous}});
+        let (status, responses) = call(&s, "POST", &format!("{DOCS}:{method}"), request);
+        assert_eq!(status, 200, "{responses}");
+        let responses = responses.as_array().unwrap();
+        assert_eq!(responses.len(), 2);
+        let transaction = responses[0]["transaction"].as_str().unwrap();
+        assert!(!transaction.is_empty());
+        assert_ne!(transaction, previous);
+        assert_eq!(responses[1][document_field]["name"], name);
+        assert_eq!(
+            responses[1][document_field]["fields"]["v"]["integerValue"],
+            "2"
+        );
+    }
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn rest_retry_transaction_starts_fresh_transaction_and_replay_is_refused() {
     let s = state(None);

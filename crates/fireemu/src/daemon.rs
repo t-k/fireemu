@@ -325,6 +325,23 @@ fn blocking_auth_selection(
     }
 }
 
+/// How long a writer held behind a read lock waits before it is refused, and whether the wait
+/// also runs on the virtual clock. Strict follows what production showed (20 s, counted on the
+/// virtual clock as well as the wall clock: see `STRICT_CONTENTION_WAIT`); the emulator profile
+/// keeps the 15 s wall-clock wait it has always had.
+const fn contention_for(
+    profile: crate::config::CompatibilityProfile,
+) -> (std::time::Duration, bool) {
+    match profile {
+        crate::config::CompatibilityProfile::Strict => {
+            (fireemu_adapter_grpc::local::STRICT_CONTENTION_WAIT, true)
+        }
+        crate::config::CompatibilityProfile::Emulator => {
+            (fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT, false)
+        }
+    }
+}
+
 /// How `signInWithIdp` assertions are verified (AUTH-FEDERATION owner decision O4). Strict
 /// verifies signed OIDC ID tokens with the `auth.idpSigners` keys, and refuses every `IdP`
 /// sign-in without them; the emulator profile keeps the fixture `IdP` and ignores the keys.
@@ -545,10 +562,20 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             ),
         );
     }
+    // The buckets the deployed Storage triggers name exist for the strict profile, as in production.
+    if let Some(runtime) = &functions_runtime {
+        storage_rules
+            .registry
+            .set_trigger_buckets(functions::storage_trigger_buckets(runtime.manifest()));
+    }
     let pubsub_resources = if pubsub_listener.is_some() {
         if let Some(runtime) = &functions_runtime {
-            let resources =
-                functions::function_pubsub_resources(runtime.project(), runtime.manifest())?;
+            let resources = functions::function_pubsub_resources(
+                runtime.project(),
+                runtime.manifest(),
+                functions::subscription_naming(cfg.profile),
+                cfg.profile,
+            )?;
             let mut state = pubsub_state
                 .lock()
                 .map_err(|_| "the Pub/Sub state lock is poisoned".to_owned())?;
@@ -569,7 +596,22 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         pubsub_state.clone(),
         clock.clone(),
         pubsub_bridge,
-    );
+    )
+    .with_paging_policy(match cfg.profile {
+        crate::config::CompatibilityProfile::Strict => fireemu_adapter_pubsub::PagingPolicy::Strict,
+        crate::config::CompatibilityProfile::Emulator => {
+            fireemu_adapter_pubsub::PagingPolicy::Emulator
+        }
+    });
+    // Under the strict profile a first-generation schedule's occurrence also puts its message on the job's topic, as Cloud
+    // Scheduler does; without a Pub/Sub listener there is no topic and nothing to publish to.
+    if functions::publishes_schedule_messages(pubsub_listener.is_some(), cfg.profile) {
+        if let Some(runtime) = &functions_runtime {
+            runtime.set_schedule_topic_publisher(Arc::new(
+                functions::PubSubSchedulePublisher::new(pubsub_handle.clone(), runtime.project()),
+            ));
+        }
+    }
     let auth_policy = service_admission(
         app_check_gate.as_ref(),
         "auth",
@@ -1195,10 +1237,11 @@ async fn serve_suite(
     if let (Some(listener), Some(runtime)) = (eventarc_listener, functions_runtime.clone()) {
         spawn_server!(
             "Eventarc",
-            fireemu_adapter_functions::http::serve_eventarc(
+            fireemu_adapter_functions::http::serve_eventarc_with_profile(
                 listener,
                 runtime,
                 functions_http_admission.clone(),
+                functions_http_profile,
             )
         );
     }
@@ -1530,13 +1573,19 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             },
             indexes: default_indexes,
         };
+        let (contention_wait, virtual_contention) = contention_for(cfg.profile);
         let backend = if cfg.clock_start_pinned {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
-                .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
+                .with_contention_wait(contention_wait)
         } else {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
-                .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
+                .with_contention_wait(contention_wait)
                 .with_wall_clock_write_time()
+        };
+        let backend = if virtual_contention {
+            backend.with_virtual_contention_wait()
+        } else {
+            backend
         }
         // A database the configuration names exists before anything writes to it. Under the
         // strict profile every other named database is refused until a create path (an import
@@ -1873,6 +1922,21 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_strict_profile_waits_20_s_on_both_clocks_and_the_emulator_profile_15_s_on_the_wall_clock(
+    ) {
+        use crate::config::CompatibilityProfile::{Emulator, Strict};
+
+        assert_eq!(
+            super::contention_for(Strict),
+            (std::time::Duration::from_secs(20), true)
+        );
+        assert_eq!(
+            super::contention_for(Emulator),
+            (std::time::Duration::from_secs(15), false)
+        );
+    }
+
     use std::sync::{Arc, Mutex};
 
     use fireemu_adapter_logging::wire::build_bundle;

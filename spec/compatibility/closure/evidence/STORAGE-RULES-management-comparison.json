@@ -1,0 +1,101 @@
+{
+ "kind": "storage-rules-management-comparison-v1",
+ "artifactSha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+ "sourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+ "judge": "conformance/src/storage-rules/management-compare.mjs",
+ "recordings": [
+  {
+   "runId": "stage3-20260930c",
+   "productionSourceCommit": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+   "productionJournalSha256": "0ef2d20dfcfa90df183db90c107f74af0bd25cefe14a24256fbe3e3213d235b4",
+   "productionProjectionSha256": "3c7db3df5193de21f116ce7c625b36c3756ba11761caa9cae3a25b4d32da8c35",
+   "localProvenance": {
+    "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+    "binarySourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+    "collectorSha256": "92a165bdd6b599ac16056be9eda35c2ac11e60f04fca7405bab769e3d09d5fb7",
+    "judgeSha256": "8c9f911b6357aab2abc9c0994a53b609f014425f7eb61a040d0bc0d205ef05ca",
+    "corpusSha256": "5f8fa2f505c2e3f8f3e5c34f101012b35c160450f5de4dbcf7b8205ddd13ce53",
+    "fixtureSha256": "f78ff93cd94a328e83e217c686c43a88e3aea2edd3ce35b1b8be8635adc1f847",
+    "configSha256": "78366b27a95e2ced81f53042c267628ebbf7a696f289aa40e965245d5820e306"
+   },
+   "localRows": 406,
+   "localRowKinds": {
+    "absence": 8,
+    "metadata": 26,
+    "storage": 30,
+    "compile": 338,
+    "rejection": 1,
+    "identity": 2,
+    "clear": 1
+   },
+   "localOnlySteps": 7,
+   "pairedEffectsMatch": true,
+   "mismatches": 0,
+   "unjudgedHeaders": [
+    "date",
+    "expires",
+    "server",
+    "connection",
+    "x-guploader-uploadid",
+    "access-control-expose-headers",
+    "access-control-allow-origin",
+    "alt-svc"
+   ],
+   "inputDigests": {
+    "local": "8e7d2050f9de410d231ed0bf0246db599c11108fbe66bf068459dda53b62b8f1",
+    "production": "471aafcdd05d2d13a53a357564ed1ec20b191e0c2d1c16c16e61bd43f52e00fc",
+    "receipt": "d99cd553d203e211ac42d20756eb19e9619002fc86f8759484c73ebfbaae5120",
+    "judgeOutput": "3a2b1aa9160ae5fba5619e96319d903c3fe1a9e5afe40cbc5ca76ffa77aa9237"
+   },
+   "comparisonSha256": "98b5eec24d7b3d40d4fac1261c5c7034a1283c2363f02d13d2a8790d9d405ee4",
+   "judgeOutputSha256": "3a2b1aa9160ae5fba5619e96319d903c3fe1a9e5afe40cbc5ca76ffa77aa9237"
+  },
+  {
+   "runId": "stage3-20260930d",
+   "productionSourceCommit": "5c48b355f7f13b2136697086dcf2a5f5c269329d",
+   "productionJournalSha256": "19d039ae166c54c922d3b688b0bc57523376836896f093888af7577ee7f5657f",
+   "productionProjectionSha256": "099406777bdf089f3a1cebb61eb189f9fad0625715ee7235b46cb3254eafee36",
+   "localProvenance": {
+    "binarySha256": "d0d8d43726a808b600f702f1f6be26c4863fc48dd7b4971a519adcae9ce01888",
+    "binarySourceCommit": "774a9f24c62abdd7381c66797d6202ed03f24666",
+    "collectorSha256": "92a165bdd6b599ac16056be9eda35c2ac11e60f04fca7405bab769e3d09d5fb7",
+    "judgeSha256": "8c9f911b6357aab2abc9c0994a53b609f014425f7eb61a040d0bc0d205ef05ca",
+    "corpusSha256": "5f8fa2f505c2e3f8f3e5c34f101012b35c160450f5de4dbcf7b8205ddd13ce53",
+    "fixtureSha256": "578c1b67948ad5fa8b2873e148d6608e5f7f45e7b8a0852296d06423e3e2c9de",
+    "configSha256": "78366b27a95e2ced81f53042c267628ebbf7a696f289aa40e965245d5820e306"
+   },
+   "localRows": 406,
+   "localRowKinds": {
+    "absence": 8,
+    "metadata": 26,
+    "storage": 30,
+    "compile": 338,
+    "rejection": 1,
+    "identity": 2,
+    "clear": 1
+   },
+   "localOnlySteps": 7,
+   "pairedEffectsMatch": true,
+   "mismatches": 0,
+   "unjudgedHeaders": [
+    "date",
+    "expires",
+    "server",
+    "connection",
+    "x-guploader-uploadid",
+    "access-control-expose-headers",
+    "access-control-allow-origin",
+    "alt-svc"
+   ],
+   "inputDigests": {
+    "local": "dfa89ef71230f9e32e6ffd66a6eb5576fe61c5d90f4d11586b4770c789c3f10c",
+    "production": "f17ff515d90d9b235234028c696a38ecbe31cd42d089fb57d6f2f8d423b19d72",
+    "receipt": "81f365e7346ca8323c853649e1037cb803bf1514dfe6161c2add06bde653eda6",
+    "judgeOutput": "3a2b1aa9160ae5fba5619e96319d903c3fe1a9e5afe40cbc5ca76ffa77aa9237"
+   },
+   "comparisonSha256": "ab552b52eccc538bc6090a6cec5f1c1215806fcece506cdbe10c191ae0e639a2",
+   "judgeOutputSha256": "3a2b1aa9160ae5fba5619e96319d903c3fe1a9e5afe40cbc5ca76ffa77aa9237"
+  }
+ ],
+ "note": "The judge compares every storage step of the management programs (the Admin and Firebase object reads and writes around each compile, release switch and no-release step) between the local run and the production projection, whole: status, body bytes and digest, content-type, content-length, x-content-type-options and cache-control. The other step kinds are validated against the condition on each side. The judge's hard-coded gap MISSING_PRODUCTION_INVALID_INSTALLED_IDENTITY_AND_EFFECTIVE_WITNESS is not a closure condition: owner-delegated ruling 809(4) takes recording c (release absent before, invalid :test refused with 200 and issues, release absent after) as the observation that an invalid compile leaves the effective release unchanged. comparisonSha256 is the digest of the compact JSON of inputDigests (the local run, the production projection, the receipt and the judge's own output of that recording); judgeOutputSha256 is the digest of the judge's output alone, which holds only the summary and is the same for both recordings."
+}

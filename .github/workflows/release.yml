@@ -137,6 +137,16 @@ jobs:
       - uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c
         with:
           tool: cargo-nextest@0.9.143
+      # The Functions runtime tests load the pinned real firebase-functions SDK from the conformance
+      # install (crates/fireemu-adapter-functions/tests/runtime.rs), as in ci.yml. No pnpm cache.
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - name: the pinned real SDK for the Functions runtime tests
+        run: pnpm -C conformance install --frozen-lockfile
       # No cache restore here or in `build`: the published binary is built from a clean target, so a
       # cache entry written by any other run cannot reach it.
       - run: cargo nextest run --workspace --profile pr -E 'not binary(leak_fixture)'

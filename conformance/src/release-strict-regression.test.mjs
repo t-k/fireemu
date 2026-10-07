@@ -437,7 +437,44 @@ test("the excluded kinds are exactly the ones the release discloses", () => {
   // Removing an exclusion means adding its run; adding one means a disclosure of its own.
   assert.deepEqual(EXCLUDED_KINDS.map((exclusion) => exclusion.kind).toSorted(), [
     "auth-fs-cross-stage2-comparison-v1",
+    "fs-listen-sdk-comparison-v1",
+    "functions-events-comparison",
+    "scheduled-functions-calendar-comparison-v1",
+    "scheduled-functions-comparison-v1",
+    "storage-object-comparison-v1",
+    "storage-rules-comparison-v2",
+    "storage-rules-management-comparison-v1",
   ]);
+});
+
+test("scheduled exclusions are used by a verified closure", () => {
+  const scheduledKinds = EXCLUDED_KINDS.filter(({ kind }) =>
+    kind.startsWith("scheduled-functions-"),
+  );
+  assert.equal(scheduledKinds.length, 2);
+  const closures = committedClosures();
+  const scheduled = closures.find(({ closure }) => closure.parent === "SCHEDULED-FUNCTIONS");
+  assert.equal(scheduled.closure.parentStatus, "COMPAT_VERIFIED");
+  const plan = planComparisons(closures, readJson);
+  assert.deepEqual(plan.errors, []);
+  const excluded = plan.excluded.filter(({ parents }) => parents.includes("SCHEDULED-FUNCTIONS"));
+  assert.deepEqual(
+    excluded.map(({ kind }) => kind).toSorted(),
+    scheduledKinds.map(({ kind }) => kind).toSorted(),
+  );
+  assert.ok(excluded.every(({ parents }) => parents.length === 1));
+  scheduled.closure.integratedRegression.comparisons.pop();
+  assert.ok(
+    planComparisons(closures, readJson).errors.some((error) =>
+      error.includes("no verified closure names it"),
+    ),
+  );
+  assert.ok(
+    planComparisons(
+      closures.filter((entry) => entry !== scheduled),
+      readJson,
+    ).errors.some((error) => error.includes("scheduled-functions")),
+  );
 });
 
 test("every kind exclusion names its reason and an issue by file name only", () => {
@@ -1717,4 +1754,53 @@ test("R11 generated proof combinations agree with an independent six-condition m
       String(mask),
     );
   }
+});
+
+// The historical FS-DATA-WRITE replay (R11) sends the recorded transaction-lifecycle program to
+// the strict binary. Its `out-of-band-write` step is a writer held behind a read-write
+// transaction's lock; production answered it 409 ABORTED "Too much contention on these
+// documents. Please try again." (conformance/firestore-production-matrix.json,
+// transactions/lifecycle#out-of-band-write). Strict holds such a writer for
+// STRICT_CONTENTION_WAIT before it answers, and the probe session abandons any request after
+// FIRESTORE_PROBE_TIMEOUT_MS (20 s unless set), which turned the answer into "no-response" (an
+// indeterminate row) once the wait reached 20 s. Production was recorded with the timeout of
+// run.mjs (`recordProduction`), so the replay uses that value.
+test("the historical FS-DATA-WRITE replay waits for a held writer longer than strict holds it, as the production recording did", () => {
+  const root = fileURLToPath(new URL("../..", import.meta.url));
+  const localSource = readFileSync(join(root, "crates/fireemu-adapter-grpc/src/local.rs"), "utf8");
+  const strictWait =
+    /STRICT_CONTENTION_WAIT: std::time::Duration =\s*std::time::Duration::from_secs\((\d+)\)/.exec(
+      localSource,
+    );
+  assert.ok(strictWait, "the strict contention wait is a whole number of seconds");
+  const strictWaitMs = Number(strictWait[1]) * 1000;
+  const probeSource = readFileSync(join(root, "conformance/src/firestore-probe/run.mjs"), "utf8");
+  const recorded =
+    /FIRESTORE_PROBE_TARGET: "production"[\s\S]*?FIRESTORE_PROBE_TIMEOUT_MS: "(\d+)"/.exec(
+      probeSource,
+    );
+  assert.ok(recorded, "the production recording names its request timeout");
+  const r11 = RUNS.find((run) => run.id === "R11");
+  assert.ok(r11, "R11 is the historical FS-DATA-WRITE replay");
+  for (const command of r11.commands) {
+    const timeout = Number(command.env.FIRESTORE_PROBE_TIMEOUT_MS);
+    assert.equal(
+      command.env.FIRESTORE_PROBE_TIMEOUT_MS,
+      recorded[1],
+      `${command.mode}: the replay's request timeout is the recording's`,
+    );
+    assert.ok(
+      timeout > strictWaitMs + 10_000,
+      `${command.mode}: ${timeout} ms is not above ${strictWaitMs} ms`,
+    );
+  }
+});
+
+test("FS-LISTEN-SDK uses its disclosed exclusion as a verified closure", () => {
+  const closures = committedClosures();
+  const listen = closures.find((entry) => entry.closure.parent === "FS-LISTEN-SDK");
+  assert.equal(listen.closure.parentStatus, "COMPAT_VERIFIED");
+  const reviewed = planComparisons(closures, readJson);
+  assert.deepEqual(reviewed.errors, []);
+  assert.ok(reviewed.excluded.some((entry) => entry.kind === "fs-listen-sdk-comparison-v1"));
 });

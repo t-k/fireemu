@@ -15,7 +15,7 @@
 //!
 //! A token is only honoured while the store can still reproduce its version exactly
 //! (`FirestoreState::is_retained`: not compacted away by the one-hour retention window, not
-//! ahead of this database). An undecodable, future or expired token falls back to `RESET`,
+//! ahead of this database). A future or expired token falls back to `RESET`; strict removes non-empty undecodable tokens and the emulator resets them,
 //! so a token is never resumed against unrelated history; the client drops its cache and
 //! replays from scratch. Security Rules are re-checked on every refresh; a denial removes
 //! the target with a `PERMISSION_DENIED` cause.
@@ -390,6 +390,8 @@ enum Resume {
     Invalid,
 }
 
+// The flags are independent facts of one target (once, server-assigned id, current).
+#[allow(clippy::struct_excessive_bools)]
 struct TargetState {
     kind: TargetKind,
     target_hash: u64,
@@ -398,6 +400,10 @@ struct TargetState {
     /// Pending resume, resolved on the first refresh (it needs the snapshot).
     resume: Option<Resume>,
     once: bool,
+    /// The server picked this target's id (the request said 0).
+    assigned: bool,
+    /// How a strict resume of a query target is answered (see `ResumeAnswer`).
+    resume_answer: ResumeAnswer,
     /// Reached its first consistent snapshot (`CURRENT` was sent).
     current: bool,
     /// Responses produced by the last refresh, drained by the caller.
@@ -696,14 +702,15 @@ fn handle_listen_request(
     };
     match &req.target_change {
         Some(pb::listen_request::TargetChange::AddTarget(target)) => {
-            let id = target.target_id;
-            if id == 0 {
-                return Err(Status::invalid_argument("target_id must be non-zero"));
-            }
+            let (id, assigned) = listen_target_id(ctx, target, targets)?;
             if targets.contains_key(&id) {
-                return Err(Status::invalid_argument(format!(
-                    "target {id} is already active on this stream"
-                )));
+                // Production removes the new target and keeps the stream (and the first target)
+                // listening: `native/target-protocol/duplicate-id`.
+                out.push(removed_with_cause(
+                    id,
+                    &Status::already_exists(format!("Target ID already exists: {id}")),
+                ));
+                return Ok(());
             }
             if targets.len() >= MAX_LISTEN_TARGETS {
                 return Err(Status::resource_exhausted(format!(
@@ -721,10 +728,14 @@ fn handle_listen_request(
             let kind = match decode_target(ctx, parent, target) {
                 Ok(kind) => kind,
                 Err(e) => {
-                    out.push(removed_with_cause(id, &e));
+                    out.extend(decode_refusal(id, &e));
                     return Ok(());
                 }
             };
+            if let Some(refusal) = malformed_token_refusal(ctx, parent, target, &kind, id) {
+                out.push(refusal);
+                return Ok(());
+            }
             let target_hash = target_hash(&kind);
             let database_hash = synchronize_database_generation(
                 parent,
@@ -744,18 +755,12 @@ fn handle_listen_request(
             // start over and would silently line up with unrelated history.
             let binding = TokenBinding {
                 epoch: ctx.local.epoch(),
+                strict: ctx.gateway.production_refusals(),
                 database: database_hash,
                 target: target_hash,
             };
-            let resume = match &target.resume_type {
-                None => None,
-                Some(pb::target::ResumeType::ResumeToken(bytes)) => {
-                    Some(parse_resume_token(bytes, &binding))
-                }
-                Some(pb::target::ResumeType::ReadTime(t)) => {
-                    Some(Resume::ReadTime(decode_instant(t)))
-                }
-            };
+            let resume = resume_of(target, &binding);
+            let resume_answer = resume_answer_of(ctx, target, &kind);
             targets.insert(
                 id,
                 TargetState {
@@ -765,6 +770,8 @@ fn handle_listen_request(
                     known: BTreeMap::new(),
                     resume,
                     once: target.once,
+                    assigned,
+                    resume_answer,
                     current: false,
                     pending: Vec::new(),
                 },
@@ -793,6 +800,114 @@ fn handle_listen_request(
         None => {}
     }
     Ok(())
+}
+
+/// The id a target is added under, and whether the server picked it.
+///
+/// Production assigns the smallest free positive id to a target sent with id 0 (FS-LISTEN-SDK L1,
+/// `native/target-protocol/server-assigned-id` and `second-zero-id`), as the API documents and
+/// the official emulator does. A negative id ends the stream with `INVALID_ARGUMENT` in production
+/// (`negative-id`) and in the official emulator. Production also ends the stream when an explicit
+/// id follows a server-assigned one (`id-after-assigned`); the official emulator accepts it, so
+/// only strict refuses.
+fn listen_target_id(
+    ctx: &StreamContext,
+    target: &pb::Target,
+    targets: &BTreeMap<i32, TargetState>,
+) -> Result<(i32, bool), Status> {
+    choose_target_id(
+        target.target_id,
+        &targets.keys().copied().collect(),
+        targets.values().any(|t| t.assigned),
+        ctx.gateway.production_refusals(),
+    )
+    .map_err(Status::invalid_argument)
+}
+
+/// The decision of `listen_target_id`, without the stream: `requested` is the id on the wire,
+/// `used` the ids active on the stream, `assigned_before` whether one of them was server-assigned
+/// and `strict` whether production's refusals apply.
+fn choose_target_id(
+    requested: i32,
+    used: &BTreeSet<i32>,
+    assigned_before: bool,
+    strict: bool,
+) -> Result<(i32, bool), &'static str> {
+    match requested {
+        id if id < 0 => Err("target_id must not be negative"),
+        0 => Ok((first_free_target_id(used), true)),
+        _ if strict && assigned_before => {
+            Err("an explicit target_id cannot follow a server-assigned one on this stream")
+        }
+        id => Ok((id, false)),
+    }
+}
+
+/// Where an added target resumes from, if it names a token or a read time.
+fn resume_of(target: &pb::Target, binding: &TokenBinding) -> Option<Resume> {
+    match &target.resume_type {
+        None => None,
+        Some(pb::target::ResumeType::ResumeToken(bytes)) => {
+            Some(parse_resume_token(bytes, binding))
+        }
+        Some(pb::target::ResumeType::ReadTime(t)) => Some(Resume::ReadTime(decode_instant(t))),
+    }
+}
+
+/// The answer to a target that cannot be decoded. A refused index is acknowledged first and
+/// removed after, as production does (`native/target-protocol/missing-index`: ADD[1], then
+/// REMOVE[1] with code 9); any other refusal is a removal alone.
+fn decode_refusal(id: i32, error: &Status) -> Vec<pb::ListenResponse> {
+    let mut out = Vec::new();
+    if error.code() == tonic::Code::FailedPrecondition {
+        out.push(target_change(
+            pb::target_change::TargetChangeType::Add,
+            vec![id],
+            None,
+            None,
+        ));
+    }
+    out.push(removed_with_cause(id, error));
+    out
+}
+
+/// Bytes that are not a token at all: production removes the target with `INVALID_ARGUMENT` and
+/// sends no ADD (`native/resume-token/invalid`, recorded with 11 bytes). The official emulator
+/// ignores the token and replays everything, so only strict refuses; the emulator profile resets.
+/// An empty token is not the recorded shape (production probably reads it as no token), so it is
+/// not refused and keeps the reset.
+fn malformed_token_refusal(
+    ctx: &StreamContext,
+    parent: &Parent,
+    target: &pb::Target,
+    kind: &TargetKind,
+    id: i32,
+) -> Option<pb::ListenResponse> {
+    let binding = TokenBinding {
+        epoch: ctx.local.epoch(),
+        strict: ctx.gateway.production_refusals(),
+        database: database_hash(parent, ctx.local.database_generation(parent)),
+        target: target_hash(kind),
+    };
+    let malformed = matches!(
+        &target.resume_type,
+        Some(pb::target::ResumeType::ResumeToken(bytes))
+            if !bytes.is_empty() && matches!(parse_resume_token(bytes, &binding), Resume::Invalid)
+    );
+    (ctx.gateway.production_refusals() && malformed)
+        .then(|| removed_with_cause(id, &Status::invalid_argument("bad resume token")))
+}
+
+/// Whether `bytes` have the shape of an emulator-profile token (32 bytes).
+fn is_token_shaped(bytes: &[u8]) -> bool {
+    <[u8; 32]>::try_from(bytes).is_ok()
+}
+
+/// The smallest positive id not in `used`: what the server assigns to a target sent with id 0.
+fn first_free_target_id(used: &BTreeSet<i32>) -> i32 {
+    (1..=i32::MAX)
+        .find(|id| !used.contains(id))
+        .unwrap_or(i32::MAX)
 }
 
 fn decode_target(
@@ -930,13 +1045,13 @@ fn refresh_all(
             let read_time = encode_instant(read_at);
             let binding = TokenBinding {
                 epoch: local.epoch(),
+                strict: ctx.gateway.production_refusals(),
                 database: database_hash,
                 target: 0,
             };
             let token = resume_token(version, &binding);
             let delta_paths = complete_delta_paths(&input, version);
             let mut removed = Vec::new();
-            let mut made_current = BTreeSet::new();
             for (id, state) in targets.iter_mut() {
                 let refreshed = authorize_target(ctx, &principal, db, state).and_then(|()| {
                     if state.current && state.resume.is_none() {
@@ -946,22 +1061,26 @@ fn refresh_all(
                             }
                         }
                     }
-                    refresh_target_full(db, *id, state, read_time, &binding)
+                    refresh_target_full(db, *id, state, read_time, &binding, version)
                 });
                 match refreshed {
                     Ok(()) => {
                         out.append(&mut state.pending);
                         if !state.current {
                             state.current = true;
-                            made_current.insert(*id);
-                            let bound = TokenBinding {
-                                target: state.target_hash,
-                                ..binding
+                            let bound = if binding.strict {
+                                binding
+                            } else {
+                                TokenBinding {
+                                    target: state.target_hash,
+                                    ..binding
+                                }
                             };
+                            let target_token = resume_token(version, &bound);
                             out.push(target_change(
                                 pb::target_change::TargetChangeType::Current,
                                 vec![*id],
-                                Some(resume_token(version, &bound)),
+                                Some(target_token),
                                 Some(read_time),
                             ));
                         }
@@ -973,10 +1092,9 @@ fn refresh_all(
                     }
                 }
             }
-            Ok((read_time, token, removed, version, binding, made_current))
+            Ok((read_time, token, removed, version))
         });
-    let (read_time, token, removed, version, binding, made_current) = match snapshot.and_then(|r| r)
-    {
+    let (read_time, token, removed, version) = match snapshot.and_then(|r| r) {
         Ok(s) => s,
         Err(e) => {
             for id in targets.keys() {
@@ -993,20 +1111,7 @@ fn refresh_all(
     if targets.is_empty() {
         return Ok(());
     }
-    // A target that became current in this snapshot got its token with CURRENT: no NO_CHANGE
-    // follows it, as production and the official emulator frame it (AUTH-FS-CROSS stage 2).
-    for (id, state) in targets.iter().filter(|(id, _)| !made_current.contains(*id)) {
-        let bound = TokenBinding {
-            target: state.target_hash,
-            ..binding
-        };
-        out.push(target_change(
-            pb::target_change::TargetChangeType::NoChange,
-            vec![*id],
-            Some(resume_token(version, &bound)),
-            Some(read_time),
-        ));
-    }
+    // One global boundary closes the snapshot. Strict CURRENT uses this same global token.
     out.push(target_change(
         pb::target_change::TargetChangeType::NoChange,
         vec![],
@@ -1078,8 +1183,10 @@ fn refresh_target_full(
     state: &mut TargetState,
     read_time: prost_types::Timestamp,
     boundary: &TokenBinding,
+    snapshot_version: CommitVersion,
 ) -> Result<(), Status> {
-    if let Some(from) = resolve_resume(db, id, state)? {
+    let resumed = resolve_resume(db, id, state)?;
+    if let Some(from) = resumed {
         state.pending.push(target_change(
             pb::target_change::TargetChangeType::NoChange,
             vec![],
@@ -1087,6 +1194,12 @@ fn refresh_target_full(
             Some(read_time),
         ));
     }
+    // How production answers this resume: see `ResumeAnswer`.
+    let answer = if resumed.is_some() {
+        state.resume_answer
+    } else {
+        ResumeAnswer::Exact
+    };
     let current: Vec<Document> = match &state.kind {
         TargetKind::Documents(paths) => paths
             .iter()
@@ -1097,20 +1210,141 @@ fn refresh_target_full(
             .map_err(|error| crate::encode::status_from_error(&error))?,
     };
     let mut next_known: BTreeMap<DocumentPath, CommitVersion> = BTreeMap::new();
+    let mut changed = 0_usize;
     for doc in &current {
         next_known.insert(doc.path.clone(), doc.version);
         if state.known.get(&doc.path) != Some(&doc.version) {
+            changed += 1;
             out_change(doc, id, &mut state.pending);
         }
     }
-    for path in state.known.keys() {
-        if next_known.contains_key(path) {
-            continue;
+    let departed: Vec<&DocumentPath> = state
+        .known
+        .keys()
+        .filter(|path| !next_known.contains_key(*path))
+        .collect();
+    // Exactly one commit since the token, and what it did is one departure: production replayed
+    // it, a boundary after the removal message and no filter (`native/resume-kinds/leave` and
+    // `delete`, both L1b runs).
+    let one_commit_departure = answer == ResumeAnswer::CountOnly
+        && changed == 0
+        && departed.len() == 1
+        && resumed
+            .is_some_and(|from| from.value().checked_add(1) == Some(snapshot_version.value()));
+    match answer {
+        ResumeAnswer::CountOnly if one_commit_departure => {
+            out_removal(db, departed[0], id, read_time, &mut state.pending);
+            state.pending.push(target_change(
+                pb::target_change::TargetChangeType::NoChange,
+                vec![],
+                Some(resume_token(snapshot_version, boundary)),
+                Some(read_time),
+            ));
         }
-        out_removal(db, path, id, read_time, &mut state.pending);
+        ResumeAnswer::CountOnly => {
+            // With the count filter the client finds the removals by the count, as production
+            // leaves them to it (`native/existence-filter/without-expected-count`, both runs).
+            state.pending.push(count_only_filter(id, current.len()));
+        }
+        ResumeAnswer::BloomWhenUnchanged | ResumeAnswer::Exact => {
+            for path in &departed {
+                out_removal(db, path, id, read_time, &mut state.pending);
+            }
+            // A client that gave an expected count and lost no document is answered with the bloom
+            // filter of the documents the target matches, whatever its count was (`resume-grid-*`
+            // k1-expected, k2-expected, k2-wrong, both L1b runs).
+            if answer == ResumeAnswer::BloomWhenUnchanged && departed.is_empty() {
+                let names: Vec<String> =
+                    current.iter().map(|doc| doc.path.resource_name()).collect();
+                if let Some(bloom) = crate::bloom::Bloom::for_documents(&names) {
+                    state.pending.push(existence_filter(
+                        id,
+                        current.len(),
+                        Some(bloom.into_proto()),
+                    ));
+                }
+            }
+        }
     }
     state.known = next_known;
     Ok(())
+}
+
+/// How a strict resume by token of a query target is answered. Production answered a resume with
+/// an exact replay of the changes, and, depending on the request, with an existence filter.
+///
+/// - `CountOnly`: no expected count. The replay ends with a count-only existence filter and the
+///   removals are left to the count, in four L1 rows (`native/resume-token/older`, `other-query`,
+///   `native/existence-filter/without-expected-count`, `native/resume-token-expired/expired`) and
+///   most L1b rows; the one-commit departure is the exception (`refresh_target_full`). Some
+///   one-commit modifications were replayed instead, in some runs and not in others (the L1b
+///   reading): this answer is one of the two production gave, so strict keeps it.
+///   "One commit" is database-wide (the token's version + 1 is the snapshot version): an unrelated
+///   commit in between makes a departure fall back to this answer, narrower than one commit on the
+///   target and enough for the recorded shape.
+/// - `BloomWhenUnchanged`: an expected count. The diff ends with a bloom filter of the documents
+///   the target matches (see `bloom`) when no document left; a departure keeps the removal
+///   messages and no filter (L1's `with-expected-count`).
+/// - `Exact`: the diff and nothing else: a profile that follows the official emulator, a target
+///   that is not a resumed query, and what production's rows do not decide.
+///
+/// The official emulator never sends an existence filter (it resets the target on a resume), so
+/// the emulator profile is always `Exact`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResumeAnswer {
+    Exact,
+    CountOnly,
+    BloomWhenUnchanged,
+}
+
+/// The `ResumeAnswer` of a target. Only strict (production's refusals), only a query target
+/// resumed by a token of this daemon's shape; whether the request gave an expected count decides
+/// between the two answers. An SDK always gives one.
+fn resume_answer_of(ctx: &StreamContext, target: &pb::Target, kind: &TargetKind) -> ResumeAnswer {
+    let resumed_query = ctx.gateway.production_refusals()
+        && matches!(kind, TargetKind::Query(_))
+        && matches!(
+            &target.resume_type,
+            Some(pb::target::ResumeType::ResumeToken(bytes)) if bytes.len() == 11
+        );
+    match (resumed_query, target.expected_count.is_some()) {
+        (false, _) => ResumeAnswer::Exact,
+        (true, false) => ResumeAnswer::CountOnly,
+        (true, true) => ResumeAnswer::BloomWhenUnchanged,
+    }
+}
+
+/// The recorded count-only existence filter: the target, the number of documents it matches and
+/// an empty bloom filter (hash count 0, no bitmap, no padding), as production sent it in the rows
+/// above.
+fn count_only_filter(id: i32, count: usize) -> pb::ListenResponse {
+    existence_filter(
+        id,
+        count,
+        Some(pb::BloomFilter {
+            bits: Some(pb::BitSequence {
+                bitmap: Vec::new(),
+                padding: 0,
+            }),
+            hash_count: 0,
+        }),
+    )
+}
+
+fn existence_filter(
+    id: i32,
+    count: usize,
+    unchanged: Option<pb::BloomFilter>,
+) -> pb::ListenResponse {
+    pb::ListenResponse {
+        response_type: Some(pb::listen_response::ResponseType::Filter(
+            pb::ExistenceFilter {
+                target_id: id,
+                count: i32::try_from(count).unwrap_or(i32::MAX),
+                unchanged_names: unchanged,
+            },
+        )),
+    }
 }
 
 /// Applies one complete changed-path set to a target. Returns `false` when the query shape
@@ -1184,6 +1418,10 @@ fn complete_delta_paths(
     }
 }
 
+/// A document that left the target. One that still exists (it stopped matching) goes as a
+/// document change that names the target in `removed_target_ids`, as production sends it
+/// (`native/existence-filter/with-expected-count`: a change with removed ids and no target ids);
+/// a deleted one goes as a `DocumentDelete`.
 fn out_removal(
     db: &fireemu_core_firestore::store::FirestoreState,
     path: &DocumentPath,
@@ -1191,11 +1429,11 @@ fn out_removal(
     read_time: prost_types::Timestamp,
     out: &mut Vec<pb::ListenResponse>,
 ) {
-    let response_type = if db.get(path).is_some() {
-        pb::listen_response::ResponseType::DocumentRemove(pb::DocumentRemove {
-            document: path.resource_name(),
+    let response_type = if let Some(document) = db.get(path) {
+        pb::listen_response::ResponseType::DocumentChange(pb::DocumentChange {
+            document: Some(encode_document(document)),
+            target_ids: vec![],
             removed_target_ids: vec![id],
-            read_time: Some(read_time),
         })
     } else {
         pb::listen_response::ResponseType::DocumentDelete(pb::DocumentDelete {
@@ -1247,6 +1485,8 @@ fn resolve_resume(
 /// What a resume token is bound to besides its version.
 #[derive(Debug, Clone, Copy)]
 struct TokenBinding {
+    /// Strict uses the recorded 11-byte length; the emulator keeps 32 bytes.
+    strict: bool,
     /// Backend reset epoch.
     epoch: u64,
     /// Hash of the project / database.
@@ -1329,10 +1569,19 @@ fn target_hash(kind: &TargetKind) -> u64 {
     fnv(&format!("{kind:?}"))
 }
 
-/// 32 bytes: version, epoch, database hash, target hash (big-endian).
+/// Strict: 8-byte big-endian version and a 3-byte binding check. Emulator: four 8-byte words.
+/// The truncated check can collide; it is an opaque binding check, not authentication.
 fn resume_token(version: CommitVersion, binding: &TokenBinding) -> Vec<u8> {
     let mut out = Vec::with_capacity(32);
     out.extend_from_slice(&version.value().to_be_bytes());
+    if binding.strict {
+        let check = fnv(&format!(
+            "{}/{}/{}",
+            binding.epoch, binding.database, binding.target
+        ));
+        out.extend_from_slice(&check.to_be_bytes()[5..]);
+        return out;
+    }
     out.extend_from_slice(&binding.epoch.to_be_bytes());
     out.extend_from_slice(&binding.database.to_be_bytes());
     out.extend_from_slice(&binding.target.to_be_bytes());
@@ -1341,6 +1590,26 @@ fn resume_token(version: CommitVersion, binding: &TokenBinding) -> Vec<u8> {
 
 /// A token this daemon issued for this epoch, database and target (or for every target).
 fn parse_resume_token(bytes: &[u8], binding: &TokenBinding) -> Resume {
+    if binding.strict {
+        let Ok(raw) = <[u8; 11]>::try_from(bytes) else {
+            return Resume::Invalid;
+        };
+        let version =
+            CommitVersion::from_value(u64::from_be_bytes(raw[..8].try_into().unwrap_or([0; 8])));
+        let global = TokenBinding {
+            target: 0,
+            ..*binding
+        };
+        if raw[8..] != resume_token(version, binding)[8..]
+            && raw[8..] != resume_token(version, &global)[8..]
+        {
+            return Resume::Invalid;
+        }
+        return Resume::Version(version);
+    }
+    if !is_token_shaped(bytes) {
+        return Resume::Invalid;
+    }
     let Ok(raw) = <[u8; 32]>::try_from(bytes) else {
         return Resume::Invalid;
     };
@@ -1645,6 +1914,8 @@ mod refresh_tests {
                 known: BTreeMap::from([(path("restored/a"), CommitVersion::from_value(1))]),
                 resume: None,
                 once: false,
+                assigned: false,
+                resume_answer: ResumeAnswer::Exact,
                 current: true,
                 pending: Vec::new(),
             },
@@ -1808,6 +2079,8 @@ mod refresh_tests {
             known: BTreeMap::from([(document.path.clone(), document.version)]),
             resume: None,
             once: false,
+            assigned: false,
+            resume_answer: ResumeAnswer::Exact,
             current: true,
             pending: Vec::new(),
         };
@@ -1892,6 +2165,8 @@ mod refresh_tests {
                 known: BTreeMap::new(),
                 resume: None,
                 once: false,
+                assigned: false,
+                resume_answer: ResumeAnswer::Exact,
                 current: true,
                 pending: Vec::new(),
             };
@@ -2053,5 +2328,84 @@ mod empty_write_tests {
 
         let closed = run(true).await;
         assert!(closed.is_empty(), "{closed:?}");
+    }
+}
+
+#[cfg(test)]
+mod assigned_target_id_tests {
+    use super::{choose_target_id, first_free_target_id, is_token_shaped};
+    use proptest::prelude::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn the_decision_table_of_a_requested_id() {
+        let used = BTreeSet::from([1, 2]);
+        assert_eq!(choose_target_id(0, &used, false, true), Ok((3, true)));
+        assert_eq!(choose_target_id(0, &used, true, true), Ok((3, true)));
+        assert_eq!(choose_target_id(7, &used, false, true), Ok((7, false)));
+        assert!(choose_target_id(7, &used, true, true).is_err());
+        assert_eq!(choose_target_id(7, &used, true, false), Ok((7, false)));
+        assert!(choose_target_id(-1, &used, false, false).is_err());
+        assert!(choose_target_id(-1, &used, false, true).is_err());
+        assert!(choose_target_id(i32::MIN, &used, false, true).is_err());
+    }
+
+    #[test]
+    fn a_token_has_the_shape_of_exactly_thirty_two_bytes() {
+        assert!(is_token_shaped(&[0; 32]));
+        assert!(!is_token_shaped(&[0; 31]));
+        assert!(!is_token_shaped(&[0; 33]));
+        assert!(!is_token_shaped(&[]));
+    }
+
+    #[test]
+    fn the_first_id_is_one_and_a_gap_is_filled_before_the_end() {
+        assert_eq!(first_free_target_id(&BTreeSet::new()), 1);
+        assert_eq!(first_free_target_id(&BTreeSet::from([1])), 2);
+        assert_eq!(first_free_target_id(&BTreeSet::from([2, 3])), 1);
+        assert_eq!(first_free_target_id(&BTreeSet::from([1, 3])), 2);
+        // Ids at or below zero never count: they do not occupy a positive id.
+        assert_eq!(first_free_target_id(&BTreeSet::from([-1, 0])), 1);
+        assert_eq!(first_free_target_id(&BTreeSet::from([i32::MAX])), 1);
+    }
+
+    proptest! {
+        #[test]
+        fn the_assigned_id_is_the_smallest_free_positive_one(
+            used in proptest::collection::btree_set(-3_i32..40, 0..30)
+        ) {
+            let id = first_free_target_id(&used);
+            prop_assert!(id >= 1);
+            prop_assert!(!used.contains(&id));
+            for smaller in 1..id {
+                prop_assert!(used.contains(&smaller));
+            }
+        }
+
+        #[test]
+        fn a_requested_id_is_decided_by_sign_and_by_what_the_stream_holds(
+            requested in -5_i32..50,
+            used in proptest::collection::btree_set(-3_i32..40, 0..30),
+            assigned_before in any::<bool>(),
+            strict in any::<bool>(),
+        ) {
+            let decided = choose_target_id(requested, &used, assigned_before, strict);
+            if requested < 0 {
+                prop_assert!(decided.is_err());
+            } else if requested == 0 {
+                let (id, assigned) = decided.unwrap();
+                prop_assert!(assigned);
+                prop_assert_eq!(id, first_free_target_id(&used));
+            } else if strict && assigned_before {
+                prop_assert!(decided.is_err());
+            } else {
+                prop_assert_eq!(decided, Ok((requested, false)));
+            }
+        }
+
+        #[test]
+        fn only_thirty_two_bytes_are_token_shaped(len in 0_usize..70) {
+            prop_assert_eq!(is_token_shaped(&vec![7; len]), len == 32);
+        }
     }
 }

@@ -4922,6 +4922,7 @@
           "fireemu": {
             "body": "",
             "headers": {
+              "content-type": "text/plain; charset=utf-8",
               "range": "bytes=0-4"
             },
             "status": 308
@@ -5212,9 +5213,6 @@
           "fireemu": {
             "body": {
               "bucket": "demo-storage-probe.appspot.com",
-              "cacheControl": "no-store",
-              "contentEncoding": "identity",
-              "contentLanguage": "de",
               "contentType": "text/x-put",
               "crc32c": "zegzwA==",
               "etag": "<etag>",
@@ -6855,25 +6853,32 @@
           },
           "fireemu": {
             "body": {
-              "error": {
-                "code": 400,
-                "errors": [
-                  {
-                    "domain": "global",
-                    "message": "md5 checksum mismatch: expected XUFAKrxLKna5cZ2REBfFkg==, received yYMZBIPfFn0qOEFGPCqTQQ==",
-                    "reason": "invalid"
-                  }
-                ],
-                "message": "md5 checksum mismatch: expected XUFAKrxLKna5cZ2REBfFkg==, received yYMZBIPfFn0qOEFGPCqTQQ=="
-              }
+              "bucket": "demo-storage-probe.appspot.com",
+              "contentType": "text/plain",
+              "crc32c": "1DxABw==",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "id": "demo-storage-probe.appspot.com/open/sum/bad.txt/<generation>",
+              "kind": "storage#object",
+              "md5Hash": "yYMZBIPfFn0qOEFGPCqTQQ==",
+              "mediaLink": "http://<host>/download/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fsum%2Fbad.txt?generation=<generation>&alt=media",
+              "metageneration": "1",
+              "name": "open/sum/bad.txt",
+              "selfLink": "http://<host>/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fsum%2Fbad.txt",
+              "size": "5",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "timeFinalized": "<timestamp>",
+              "timeStorageClassUpdated": "<timestamp>",
+              "updated": "<timestamp>"
             },
             "headers": {
               "content-type": "application/json; charset=utf-8"
             },
-            "status": 400
+            "status": 200
           },
           "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
-          "reason": "A declared md5Hash / X-Goog-Hash is verified against the received bytes before the commit, as production verifies it; a mismatch is 400 and nothing is published. The official emulator ignores declared checksums and was measured to store the corrupt payload."
+          "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). The declared checksum is no longer verified in the emulator profile, as the official emulator does not verify it (measured, firebase-tools 15.28.2: the wrong checksum is accepted and the object is stored); the strict profile verifies it as production does (recorded, lean-v4)."
         },
         {
           "id": "mismatching-md5-not-published",
@@ -6905,25 +6910,32 @@
           },
           "fireemu": {
             "body": {
-              "error": {
-                "code": 404,
-                "errors": [
-                  {
-                    "domain": "global",
-                    "message": "No such object: demo-storage-probe.appspot.com/open/sum/bad.txt",
-                    "reason": "notFound"
-                  }
-                ],
-                "message": "No such object: demo-storage-probe.appspot.com/open/sum/bad.txt"
-              }
+              "bucket": "demo-storage-probe.appspot.com",
+              "contentType": "text/plain",
+              "crc32c": "1DxABw==",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "id": "demo-storage-probe.appspot.com/open/sum/bad.txt/<generation>",
+              "kind": "storage#object",
+              "md5Hash": "yYMZBIPfFn0qOEFGPCqTQQ==",
+              "mediaLink": "http://<host>/download/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fsum%2Fbad.txt?generation=<generation>&alt=media",
+              "metageneration": "1",
+              "name": "open/sum/bad.txt",
+              "selfLink": "http://<host>/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fsum%2Fbad.txt",
+              "size": "5",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "timeFinalized": "<timestamp>",
+              "timeStorageClassUpdated": "<timestamp>",
+              "updated": "<timestamp>"
             },
             "headers": {
               "content-type": "application/json; charset=utf-8"
             },
-            "status": 404
+            "status": 200
           },
           "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
-          "reason": "The consequence: the refused upload does not exist under fireemu (404); the official emulator serves the object it should have refused."
+          "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). The declared checksum is no longer verified in the emulator profile, as the official emulator does not verify it (measured, firebase-tools 15.28.2: the wrong checksum is accepted and the object is stored); the strict profile verifies it as production does (recorded, lean-v4)."
         },
         {
           "id": "mismatching-crc32c-in-metadata",
@@ -6955,25 +6967,32 @@
           },
           "fireemu": {
             "body": {
-              "error": {
-                "code": 400,
-                "errors": [
-                  {
-                    "domain": "global",
-                    "message": "crc32c checksum mismatch: expected AAAAAA==, received mnG7TA==",
-                    "reason": "invalid"
-                  }
-                ],
-                "message": "crc32c checksum mismatch: expected AAAAAA==, received mnG7TA=="
-              }
+              "bucket": "demo-storage-probe.appspot.com",
+              "contentType": "application/octet-stream",
+              "crc32c": "mnG7TA==",
+              "etag": "<etag>",
+              "generation": "<generation>",
+              "id": "demo-storage-probe.appspot.com/open/sum/crc.txt/<generation>",
+              "kind": "storage#object",
+              "md5Hash": "XUFAKrxLKna5cZ2REBfFkg==",
+              "mediaLink": "http://<host>/download/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fsum%2Fcrc.txt?generation=<generation>&alt=media",
+              "metageneration": "1",
+              "name": "open/sum/crc.txt",
+              "selfLink": "http://<host>/storage/v1/b/demo-storage-probe.appspot.com/o/open%2Fsum%2Fcrc.txt",
+              "size": "5",
+              "storageClass": "STANDARD",
+              "timeCreated": "<timestamp>",
+              "timeFinalized": "<timestamp>",
+              "timeStorageClassUpdated": "<timestamp>",
+              "updated": "<timestamp>"
             },
             "headers": {
               "content-type": "application/json; charset=utf-8"
             },
-            "status": 400
+            "status": 200
           },
           "documents": "README.md, \"Storage\"; capability manifest ST-OBJ-1 (crates/fireemu/src/capabilities.json)",
-          "reason": "The same verification for a crc32c declared in the metadata document of a multipart upload."
+          "reason": "In fireemu, the JSON API object resource carries timeFinalized, as production writes it (equal to timeCreated in all 735 recorded resources). The declared checksum is no longer verified in the emulator profile, as the official emulator does not verify it (measured, firebase-tools 15.28.2: the wrong checksum is accepted and the object is stored); the strict profile verifies it as production does (recorded, lean-v4)."
         },
         {
           "id": "reported-hashes",
@@ -7323,7 +7342,7 @@
                   "timeStorageClassUpdated": "<timestamp>",
                   "updated": "<timestamp>"
                 },
-                "datacontenttype": "application/json",
+                "datacontenttype": null,
                 "hasId": true,
                 "hasTime": true,
                 "source": "//storage.googleapis.com/projects/_/buckets/demo-storage-probe.appspot.com",
@@ -7335,7 +7354,7 @@
             "status": 200
           },
           "documents": "README.md, \"Storage\"; capability manifest FN-EVT-1 (crates/fireemu/src/capabilities.json)",
-          "reason": "fireemu's Storage events carry the production CloudEvent envelope (source names the bucket, subject names the object, the bucket extension attribute and datacontenttype are set) and the production selfLink / mediaLink hosts inside the object payload. The official emulator writes the object path into source, sets no subject, no bucket attribute and no datacontenttype, and links to its own emulator host. The object payload is otherwise identical field for field."
+          "reason": "fireemu's Storage events carry the production CloudEvent envelope (source names the bucket, subject names the object, the bucket extension attribute is set, and no datacontenttype, as in production's 2nd gen frame of 2026-10-01 and the official emulator) and the production selfLink / mediaLink hosts inside the object payload. The official emulator writes the object path into source, sets no subject, no bucket attribute and no datacontenttype, and links to its own emulator host. The object payload is otherwise identical field for field."
         },
         {
           "id": "metadata-update-on-patch",
@@ -7485,7 +7504,7 @@
                   "timeStorageClassUpdated": "<timestamp>",
                   "updated": "<timestamp>"
                 },
-                "datacontenttype": "application/json",
+                "datacontenttype": null,
                 "hasId": true,
                 "hasTime": true,
                 "source": "//storage.googleapis.com/projects/_/buckets/demo-storage-probe.appspot.com",
@@ -7635,7 +7654,7 @@
                   "timeStorageClassUpdated": "<timestamp>",
                   "updated": "<timestamp>"
                 },
-                "datacontenttype": "application/json",
+                "datacontenttype": null,
                 "hasId": true,
                 "hasTime": true,
                 "source": "//storage.googleapis.com/projects/_/buckets/demo-storage-probe.appspot.com",
@@ -7789,7 +7808,7 @@
                   "timeStorageClassUpdated": "<timestamp>",
                   "updated": "<timestamp>"
                 },
-                "datacontenttype": "application/json",
+                "datacontenttype": null,
                 "hasId": true,
                 "hasTime": true,
                 "source": "//storage.googleapis.com/projects/_/buckets/demo-storage-probe.appspot.com",
@@ -7943,7 +7962,7 @@
                   "timeStorageClassUpdated": "<timestamp>",
                   "updated": "<timestamp>"
                 },
-                "datacontenttype": "application/json",
+                "datacontenttype": null,
                 "hasId": true,
                 "hasTime": true,
                 "source": "//storage.googleapis.com/projects/_/buckets/demo-storage-probe.appspot.com",
@@ -8113,7 +8132,7 @@
                   "timeStorageClassUpdated": "<timestamp>",
                   "updated": "<timestamp>"
                 },
-                "datacontenttype": "application/json",
+                "datacontenttype": null,
                 "hasId": true,
                 "hasTime": true,
                 "source": "//storage.googleapis.com/projects/_/buckets/demo-storage-probe.appspot.com",
@@ -8251,7 +8270,7 @@
                   "timeStorageClassUpdated": "<timestamp>",
                   "updated": "<timestamp>"
                 },
-                "datacontenttype": "application/json",
+                "datacontenttype": null,
                 "hasId": true,
                 "hasTime": true,
                 "source": "//storage.googleapis.com/projects/_/buckets/demo-storage-probe.appspot.com",

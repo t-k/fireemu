@@ -8,7 +8,8 @@
 //! # Security posture
 //!
 //! The daemon binds the listener to loopback (`127.0.0.1`) only, exactly like the official
-//! emulator and the other fireemu services, and no credential is required on loopback. Message
+//! emulator and the other fireemu services. Missing credentials are accepted for SDK emulator
+//! connections; strict rejects every presented credential without a trusted OAuth verifier. Message
 //! sizes are bounded at the gRPC codec (10 MiB decode / encode), and the core state machine
 //! bounds topics, subscriptions and retained messages so a client cannot exhaust memory.
 //!
@@ -18,14 +19,20 @@
 //! redelivery therefore advance only when the control API advances the clock, and message /
 //! ack ids come from the daemon seed, so a run reproduces and `await-idle` stays deterministic.
 
+mod ack_token;
+mod admission;
+mod authentication;
 mod convert;
 mod publisher;
 mod push;
 mod rest;
+mod rest_json;
 mod subscriber;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
+
+pub use fireemu_core_pubsub::pagination::PagingPolicy;
 
 use fireemu_core_pubsub::{
     DeadLetterForward, PubSubError, PubSubState, PubsubMessage, ReceivedMessage, StoredMessage,
@@ -397,6 +404,7 @@ pub trait TopicDelivery: Send + Sync {
 /// optional Functions bridge.
 #[derive(Clone)]
 pub struct PubSubHandle {
+    paging_policy: PagingPolicy,
     state: Arc<Mutex<PubSubState>>,
     clock: Arc<Mutex<VirtualClock>>,
     bridge: Option<Arc<dyn TopicDelivery>>,
@@ -420,6 +428,7 @@ impl PubSubHandle {
         bridge: Option<Arc<dyn TopicDelivery>>,
     ) -> Self {
         Self {
+            paging_policy: PagingPolicy::Emulator,
             state,
             clock,
             bridge,
@@ -433,6 +442,13 @@ impl PubSubHandle {
             push_clock_notify: Arc::new(Notify::new()),
             dead_letter_cancel_notify: Arc::new(Notify::new()),
         }
+    }
+
+    /// Selects the list policy. The default follows the official emulator.
+    #[must_use]
+    pub fn with_paging_policy(mut self, policy: PagingPolicy) -> Self {
+        self.paging_policy = policy;
+        self
     }
 
     /// The current virtual-clock instant.
@@ -526,8 +542,23 @@ impl PubSubHandle {
         messages: Vec<PubsubMessage>,
     ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
         let now = self.now();
+        self.publish_prepared(topic, now, |state| {
+            state.prepare_publish(topic, messages, now)
+        })
+    }
+
+    /// Admits and commits one publication that `prepare` builds against the locked state, at `now`, through the broker and
+    /// every configured topic delivery bridge.
+    fn publish_prepared(
+        &self,
+        topic: &TopicName,
+        now: LogicalInstant,
+        prepare: impl FnOnce(
+            &mut PubSubState,
+        ) -> Result<fireemu_core_pubsub::PreparedPublication, PubSubError>,
+    ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
         let mut state = self.state();
-        let prepared = state.prepare_publish(topic, messages, now)?;
+        let prepared = prepare(&mut state)?;
         let bridge_reservation = self
             .bridge
             .as_ref()
@@ -561,6 +592,22 @@ impl PubSubHandle {
     ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
         let _publication = self.lock_publication();
         self.publish_locked(topic, messages)
+    }
+
+    /// Publishes messages that carry the identifier the caller chose, stamped with the publish time `at` (the instant of
+    /// the occurrence that caused them), through the same admission and bridges as [`Self::publish`]. Cloud Scheduler's
+    /// publish for a first-generation schedule is one: the message id and the publish time are the ones the handler's
+    /// context reports.
+    pub fn publish_with_message_ids(
+        &self,
+        topic: &TopicName,
+        messages: Vec<(PubsubMessage, String)>,
+        at: LogicalInstant,
+    ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
+        let _publication = self.lock_publication();
+        self.publish_prepared(topic, at, |state| {
+            state.prepare_publish_with_message_ids(topic, messages, at)
+        })
     }
 
     /// Pulls from the broker and routes exhausted messages through the same publication
@@ -753,8 +800,10 @@ impl PubSubHandle {
         let subscriptions = self.state().push_subscriptions(topic);
         let now = self.now();
         let mut dispatch = self.push_dispatch.lock().expect("push dispatch lock");
-        for (subscription, _) in subscriptions {
-            dispatch.enqueue(subscription, now);
+        for (subscription, endpoint) in subscriptions {
+            if push::validate_endpoint(&endpoint).is_ok() {
+                dispatch.enqueue(subscription, now);
+            }
         }
         drop(dispatch);
         self.push_ready_notify.notify_one();
@@ -1128,7 +1177,11 @@ pub async fn serve_pubsub(
     handle.start_dead_letter_dispatcher();
     let _dispatcher_cancellation = PushDispatcherCancellationGuard(handle.clone());
     let publisher = PublisherServer::new(PublisherService::new(handle.clone()))
-        .max_decoding_message_size(MAX_MESSAGE_BYTES)
+        .max_decoding_message_size(if handle.paging_policy == PagingPolicy::Strict {
+            MAX_MESSAGE_BYTES + 1
+        } else {
+            MAX_MESSAGE_BYTES
+        })
         .max_encoding_message_size(MAX_MESSAGE_BYTES);
     let subscriber = SubscriberServer::new(SubscriberService::new(handle.clone()))
         .max_decoding_message_size(MAX_MESSAGE_BYTES)
@@ -1142,6 +1195,14 @@ pub async fn serve_pubsub(
         let handle = rest_handle.clone();
         async move { rest::handle(request, handle).await }
     });
+    prepared_router = prepared_router.layer(axum::middleware::from_fn_with_state(
+        handle.paging_policy,
+        authentication::authenticate,
+    ));
+    if handle.paging_policy == PagingPolicy::Strict {
+        prepared_router =
+            prepared_router.layer(axum::middleware::from_fn(recorded_grpc_error_headers));
+    }
     let result = tonic::transport::Server::builder()
         .accept_http1(true)
         .serve_with_incoming(
@@ -1669,6 +1730,10 @@ mod dispatch_tests {
             state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
+                    retain_acked_messages: false,
+                    message_retention_duration: None,
                     name: subscription,
                     topic: topic.clone(),
                     ack_deadline_seconds: 10,
@@ -1677,6 +1742,7 @@ mod dispatch_tests {
                     dead_letter_policy: None,
                     retry_policy: None,
                     push_config: PushConfig {
+                        attributes: std::collections::BTreeMap::new(),
                         push_endpoint: "http://127.0.0.1:1/push".to_owned(),
                     },
                 })
@@ -1747,6 +1813,10 @@ mod dispatch_tests {
             state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
+                    retain_acked_messages: false,
+                    message_retention_duration: None,
                     name: subscription.clone(),
                     topic: topic.clone(),
                     ack_deadline_seconds: 10,
@@ -1758,6 +1828,7 @@ mod dispatch_tests {
                         maximum_backoff: LogicalDuration::from_seconds(10),
                     }),
                     push_config: PushConfig {
+                        attributes: std::collections::BTreeMap::new(),
                         push_endpoint: "http://127.0.0.1:1/push".to_owned(),
                     },
                 })
@@ -1820,6 +1891,10 @@ mod dispatch_tests {
         let topic = TopicName::new("demo-project", "reset-topic").unwrap();
         let subscription = SubscriptionName::new("demo-project", "reset-subscription").unwrap();
         let config = || SubscriptionConfig {
+            labels: std::collections::BTreeMap::new(),
+            expiration_policy: None,
+            retain_acked_messages: false,
+            message_retention_duration: None,
             name: subscription.clone(),
             topic: topic.clone(),
             ack_deadline_seconds: 10,
@@ -1828,6 +1903,7 @@ mod dispatch_tests {
             dead_letter_policy: None,
             retry_policy: None,
             push_config: PushConfig {
+                attributes: std::collections::BTreeMap::new(),
                 push_endpoint: "http://127.0.0.1:1/push".to_owned(),
             },
         };
@@ -1937,6 +2013,10 @@ mod dispatch_tests {
                 .unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
+                    retain_acked_messages: false,
+                    message_retention_duration: None,
                     name: source_subscription.clone(),
                     topic: source_topic.clone(),
                     ack_deadline_seconds: DEFAULT_ACK_DEADLINE_SECONDS,
@@ -2134,6 +2214,173 @@ mod publication_gate_tests {
         )
     }
 
+    #[tokio::test]
+    async fn accepted_remote_push_configuration_never_queues_network_delivery() {
+        let handle = handle();
+        let topic = fireemu_core_pubsub::TopicName::new("demo-guard", "events").unwrap();
+        let name = fireemu_core_pubsub::SubscriptionName::new("demo-guard", "configured").unwrap();
+        handle
+            .state()
+            .create_topic(topic.clone(), std::collections::BTreeMap::new())
+            .unwrap();
+        let config = crate::convert::subscription_from_proto_with_policy(
+            &fireemu_proto_pubsub::google::pubsub::v1::Subscription {
+                name: name.to_full(),
+                topic: topic.to_full(),
+                push_config: Some(fireemu_proto_pubsub::google::pubsub::v1::PushConfig {
+                    push_endpoint: "https://example.com/probe".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            super::PagingPolicy::Strict,
+        )
+        .unwrap();
+        handle.state().create_subscription(config).unwrap();
+        handle.schedule_push(&topic);
+        handle.start_push_dispatcher();
+        handle
+            .publish(
+                &topic,
+                vec![fireemu_core_pubsub::PubsubMessage {
+                    data: b"guarded".to_vec(),
+                    ..Default::default()
+                }],
+            )
+            .unwrap();
+        tokio::task::yield_now().await;
+        {
+            let dispatch = handle.push_dispatch.lock().unwrap();
+            assert!(dispatch.ready.is_empty());
+            assert!(dispatch.active.is_empty());
+            assert_eq!(dispatch.spawned, 0);
+        }
+        assert_eq!(
+            handle
+                .state()
+                .subscription_config(&name)
+                .unwrap()
+                .push_config
+                .push_endpoint,
+            "https://example.com/probe"
+        );
+        handle.shutdown_push_dispatcher().await;
+    }
+
+    /// A publication with chosen identifiers reaches the subscriptions with that identifier and that publish time, and
+    /// reaches the topic-delivery bridge once, like any other publication.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn a_publication_with_chosen_identifiers_reaches_subscriptions_and_the_bridge() {
+        use fireemu_core_pubsub::{
+            Filter, PubsubMessage, SubscriptionConfig, SubscriptionName, TopicName,
+        };
+        use std::collections::BTreeMap;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use super::{BridgeMessage, TopicDelivery, TopicDeliveryError, TopicDeliveryReservation};
+
+        struct Counting(Arc<AtomicUsize>, Arc<Mutex<Vec<(String, String)>>>);
+        struct Commit;
+        impl TopicDeliveryReservation for Commit {
+            fn commit(self: Box<Self>) {}
+        }
+        impl TopicDelivery for Counting {
+            fn reserve(
+                &self,
+                topic: &str,
+                messages: &[BridgeMessage],
+            ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                for m in messages {
+                    self.1
+                        .lock()
+                        .unwrap()
+                        .push((topic.to_owned(), m.message.message_id.clone()));
+                }
+                Ok(Box::new(Commit))
+            }
+        }
+        let reserved = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let state = Arc::new(Mutex::new(PubSubState::new(5)));
+        let handle = PubSubHandle::new(
+            state.clone(),
+            Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+            Some(Arc::new(Counting(reserved.clone(), seen.clone()))),
+        );
+        let topic = TopicName::new("demo-app", "firebase-schedule-tick-us-central1").unwrap();
+        let subscription = SubscriptionName::new("demo-app", "watch").unwrap();
+        {
+            let mut state = state.lock().unwrap();
+            state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
+            state
+                .create_subscription(SubscriptionConfig {
+                    labels: BTreeMap::new(),
+                    expiration_policy: None,
+                    retain_acked_messages: false,
+                    message_retention_duration: None,
+                    name: subscription.clone(),
+                    topic: topic.clone(),
+                    ack_deadline_seconds: 10,
+                    enable_message_ordering: false,
+                    filter: Filter::always(),
+                    dead_letter_policy: None,
+                    retry_policy: None,
+                    push_config: fireemu_core_pubsub::PushConfig::default(),
+                })
+                .unwrap();
+        }
+        let at = LogicalInstant::from_unix_seconds(1_788_004_800);
+        let message = PubsubMessage {
+            attributes: BTreeMap::from([("scheduled".to_owned(), "true".to_owned())]),
+            ..PubsubMessage::default()
+        };
+        let published = handle
+            .publish_with_message_ids(&topic, vec![(message, "21339796619509982".to_owned())], at)
+            .unwrap();
+        assert_eq!(published[0].message_id, "21339796619509982");
+        assert_eq!(published[0].publish_time, at);
+        assert_eq!(reserved.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            [(topic.to_full(), "21339796619509982".to_owned())]
+        );
+        let pulled = handle.pull(&subscription, 10).unwrap();
+        assert_eq!(pulled.len(), 1);
+        assert_eq!(pulled[0].message.message_id, "21339796619509982");
+        // an ordinary publish still numbers its message and reports it, and reaches the bridge as well
+        let ordinary = handle
+            .publish(
+                &topic,
+                vec![PubsubMessage {
+                    data: b"x".to_vec(),
+                    ..PubsubMessage::default()
+                }],
+            )
+            .unwrap();
+        assert_eq!(ordinary.len(), 1);
+        assert_eq!(
+            ordinary[0].message_id,
+            fireemu_core_pubsub::pubsub_message_id(1)
+        );
+        assert_eq!(reserved.load(Ordering::SeqCst), 2);
+        assert_eq!(pulled[0].message.publish_time, at);
+        assert!(pulled[0].message.message.data.is_empty());
+        // an unknown topic publishes nothing and reserves nothing more
+        let other = TopicName::new("demo-app", "nope").unwrap();
+        assert!(handle
+            .publish_with_message_ids(
+                &other,
+                vec![(PubsubMessage::default(), "2000".to_owned())],
+                at
+            )
+            .is_err());
+        assert_eq!(reserved.load(Ordering::SeqCst), 2);
+    }
+
     /// PUBGATE-1: the publication gate is held across the control-plane transitions that
     /// publish and reset Pub/Sub state, so panicking on a poisoned gate would turn one earlier
     /// failure into a permanent one for every later caller. The refusal is returned instead.
@@ -2160,5 +2407,56 @@ mod publication_gate_tests {
             .expect_err("a poisoned gate must be reported");
         assert!(refusal.contains("publication gate"), "{refusal}");
         assert!(refusal.contains("poisoned"), "{refusal}");
+    }
+}
+
+fn canonical_recorded_grpc_message(message: &str) -> String {
+    message
+        .replace(
+            "pubsub-basics%23resource_names",
+            "pubsub-basics#resource_names",
+        )
+        .replace("subscriber%23create", "subscriber#create")
+}
+
+async fn recorded_grpc_error_headers(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(request).await;
+    if let Some(message) = response
+        .headers()
+        .get("grpc-message")
+        .and_then(|value| value.to_str().ok())
+    {
+        let canonical = canonical_recorded_grpc_message(message);
+        if let Ok(value) = axum::http::HeaderValue::from_str(&canonical) {
+            response.headers_mut().insert("grpc-message", value);
+        }
+    }
+    response
+}
+
+#[cfg(test)]
+mod grpc_error_header_tests {
+    use super::canonical_recorded_grpc_message;
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn recorded_anchors_roundtrip_and_literal_percent_sequences_stay_encoded(text in "[a-z0-9 #?%]{0,100}") {
+            for anchor in ["https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names","https://cloud.google.com/pubsub/subscriber#create"] {
+                let message=format!("{text} {anchor}");
+                let status=tonic::Status::invalid_argument(&message);
+                let mut headers=axum::http::HeaderMap::new();status.add_header(&mut headers).unwrap();
+                let encoded=headers["grpc-message"].to_str().unwrap();
+                let canonical=canonical_recorded_grpc_message(encoded);
+                prop_assert!(canonical.contains(anchor));
+                prop_assert!(!canonical.contains("%23resource_names") && !canonical.contains("%23create"));
+                prop_assert_eq!(canonical_recorded_grpc_message(&canonical),canonical);
+            }
+            let mut encoded=axum::http::HeaderMap::new();tonic::Status::invalid_argument("pubsub-basics%23resource_names").add_header(&mut encoded).unwrap();
+            let value=encoded["grpc-message"].to_str().unwrap();
+            prop_assert_eq!(canonical_recorded_grpc_message(value),value);
+        }
     }
 }

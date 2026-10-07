@@ -865,9 +865,20 @@ fn decode_chunked(mut rest: &[u8]) -> Result<Vec<u8>, String> {
 /// The official emulator refuses a `400` for an event with no `type` and otherwise answers a
 /// bare `200` -- `res.sendStatus(200)`, so `OK` as text -- whether or not anything was
 /// subscribed, because delivery is fire-and-forget from the publisher's point of view
-/// (`eventarcEmulator.js` `publishEventsHandler`). A conversion this emulator cannot make is
-/// reported the same way an unpublishable event is, with the official sentence, rather than
-/// accepted and dropped.
+/// (`eventarcEmulator.js` `publishEventsHandler`). It converts after answering, so a conversion
+/// it cannot make is only logged and that event is not delivered. This emulator does the same
+/// (stage B rows 89 and 102 are events production accepts and the conversion cannot make: no
+/// `time` attribute, an attribute of the kind `ceBytes`); an emulator profile must not refuse
+/// what the official emulator accepts. That includes the number of events in one publication and the number of
+/// deliveries it fans out to: the official handler has no limit (earlier versions answered `429` above 256
+/// events, and above 256 deliveries). What bounds the work is the body limit and the global queue bound of the
+/// runtime (3072 Eventarc records and 48 MiB, declared in `capabilities.json`): a publication that would
+/// overflow it is refused whole, with nothing enqueued.
+///
+/// The loop is the official one: each event is handled in order, and the first one with a falsy `type`
+/// (`!event.type`: a missing one, `null`, `false`, `0`, `""`) ends it with `res.sendStatus(400)`, so the events
+/// before it have been delivered and the ones after it have not. A `type` that is not a string, and a string
+/// the runtime cannot hold, are accepted and not delivered.
 fn publish_events(runtime: &FunctionsRuntime, channel: &str, body: &[u8]) -> Response<OutBody> {
     let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(body) else {
         return simple(StatusCode::BAD_REQUEST, "Bad Request");
@@ -875,15 +886,15 @@ fn publish_events(runtime: &FunctionsRuntime, channel: &str, body: &[u8]) -> Res
     let Some(events) = parsed.get("events").and_then(serde_json::Value::as_array) else {
         return simple(StatusCode::BAD_REQUEST, "Bad Request");
     };
-    if events.len() > crate::eventarc::MAX_EVENTS_PER_PUBLISH {
-        return simple(
-            StatusCode::TOO_MANY_REQUESTS,
-            "Eventarc event count exceeded",
-        );
-    }
     let google = channel == crate::eventarc::GOOGLE_CHANNEL;
     let mut published = Vec::with_capacity(events.len());
+    let mut refused = false;
     for event in events {
+        // The only refusal of the official handler besides an unreadable body.
+        if crate::eventarc::missing_type(event).is_some() {
+            refused = true;
+            break;
+        }
         // The sentinel `google` channel forwards verbatim; a custom channel converts the
         // proto form the Admin SDK publishes. That branch is the official one, and it is why
         // Firebase alerts -- which have no channel and are indexed under `<type>-google` --
@@ -895,7 +906,9 @@ fn publish_events(runtime: &FunctionsRuntime, channel: &str, body: &[u8]) -> Res
         };
         match converted {
             Ok(event) => published.push(event),
-            Err(why) => return simple(StatusCode::BAD_REQUEST, &why),
+            Err(why) => {
+                eprintln!("[functions] eventarc: an event on {channel} was not delivered: {why}");
+            }
         }
     }
     match runtime.publish_registered_custom_events(channel, &published) {
@@ -904,7 +917,12 @@ fn publish_events(runtime: &FunctionsRuntime, channel: &str, body: &[u8]) -> Res
                 "[functions] eventarc: {} event(s) on {channel} reached {delivered} function(s)",
                 published.len()
             );
-            simple(StatusCode::OK, "OK")
+            // `res.sendStatus(400)` writes its status text as the body.
+            if refused {
+                simple(StatusCode::BAD_REQUEST, "Bad Request")
+            } else {
+                simple(StatusCode::OK, "OK")
+            }
         }
         Err(crate::runtime::EventarcPublishError::Capacity) => simple(
             StatusCode::TOO_MANY_REQUESTS,
@@ -1177,12 +1195,149 @@ fn eventarc_mutation_response(result: Result<(), String>) -> Response<OutBody> {
     }
 }
 
+/// The 16 hex digits of a `requestId`: ten for the seconds (their low 40 bits) and six for the counter
+/// (its low 24 bits), so two requests of one process never share one.
+fn format_request_id(seconds: u64, counter: u64) -> String {
+    format!(
+        "{:010x}{:06x}",
+        seconds & 0xff_ffff_ffff,
+        counter & 0xff_ffff
+    )
+}
+
+/// A fresh 16-hex ID for the answers that carry a `requestId`.
+fn request_id() -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    format_request_id(
+        seconds,
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// The token of an `Authorization: Bearer <token>` header (the scheme is case-insensitive), or `None` when
+/// there is no such header or its token is empty. The token is not verified here: see
+/// `eventarc_strict::classify_token` for what is judged and what is left to Google.
+fn bearer_token(headers: &hyper::HeaderMap) -> Option<String> {
+    let value = headers.get(hyper::header::AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = value.split_once(' ')?;
+    let token = token.trim();
+    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then(|| token.to_owned())
+}
+
+fn json_answer(answer: &crate::eventarc_strict::Answer) -> Response<OutBody> {
+    typed(
+        StatusCode::from_u16(answer.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        "application/json; charset=UTF-8",
+        &answer.text(),
+    )
+}
+
+/// Hands the events of a valid publication to the emulator's delivery, which converts them to what a
+/// handler receives and enqueues them.
+fn deliver_strict(
+    runtime: &FunctionsRuntime,
+    channel: &str,
+    events: &[serde_json::Value],
+) -> Response<OutBody> {
+    let mut published = Vec::with_capacity(events.len());
+    for event in events {
+        // The event passed the recorded checks, so production accepted it; what the emulator cannot
+        // convert (no `time`, a `ceBytes` attribute: stage B rows 89 and 102) is not delivered and
+        // is not an error of the publisher.
+        match crate::eventarc::convert(event) {
+            Ok(event) => published.push(event),
+            Err(why) => {
+                eprintln!("[functions] eventarc: an event on {channel} was not delivered: {why}");
+            }
+        }
+    }
+    match runtime.publish_registered_custom_events(channel, &published) {
+        Ok(delivered) => {
+            eprintln!(
+                "[functions] eventarc: {} event(s) on {channel} reached {delivered} function(s)",
+                published.len()
+            );
+            typed(StatusCode::OK, "application/json; charset=UTF-8", "{}\n")
+        }
+        Err(crate::runtime::EventarcPublishError::Capacity) => {
+            json_answer(&crate::eventarc_strict::failure(
+                429,
+                "RESOURCE_EXHAUSTED",
+                "Eventarc delivery capacity exceeded",
+            ))
+        }
+        Err(crate::runtime::EventarcPublishError::InvalidEvent) => json_answer(
+            &crate::eventarc_strict::failure(400, "INVALID_ARGUMENT", "Invalid event"),
+        ),
+        Err(crate::runtime::EventarcPublishError::Unavailable) => json_answer(
+            &crate::eventarc_strict::failure(500, "INTERNAL", "Eventarc registry unavailable"),
+        ),
+    }
+}
+
+/// The strict profile's production routes (`/v1/projects/...` and the same paths the Admin SDK writes
+/// to an emulator host).
+async fn respond_eventarc_strict(
+    runtime: &FunctionsRuntime,
+    channels: &crate::eventarc_channels::ChannelStore,
+    req: Request<Incoming>,
+    route: crate::eventarc_strict::Route,
+    body_limit: usize,
+) -> Response<OutBody> {
+    use crate::eventarc_strict::{evaluate, Input, Outcome, World};
+
+    let bearer = bearer_token(req.headers());
+    let query = req.uri().query().map(str::to_owned);
+    let body = match collect_body(req.into_body(), body_limit).await {
+        Ok(body) => body,
+        Err(answer) => return *answer,
+    };
+    let request_id = request_id();
+    let declared_channel = |channel: &str| runtime.eventarc_channel_declared(channel);
+    let declared_in =
+        |project: &str, location: &str| runtime.eventarc_channels_declared_in(project, location);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
+        });
+    let world = World {
+        project: runtime.project(),
+        request_id: &request_id,
+        declared_channel: &declared_channel,
+        declared_in: &declared_in,
+        channels,
+        now,
+    };
+    let input = Input {
+        route: &route,
+        query: query.as_deref(),
+        bearer: bearer.as_deref(),
+        body: &body,
+    };
+    match evaluate(&input, &world) {
+        Outcome::Answer(answer) => json_answer(&answer),
+        Outcome::Deliver { channel, events } => deliver_strict(runtime, &channel, &events),
+    }
+}
+
 async fn respond_eventarc_surface(
     runtime: &FunctionsRuntime,
+    channels: &crate::eventarc_channels::ChannelStore,
     req: Request<Incoming>,
     body_limit: usize,
+    profile: FunctionsHttpProfile,
     origin: Option<&str>,
 ) -> Response<OutBody> {
+    if profile == FunctionsHttpProfile::Strict {
+        if let Some(route) = crate::eventarc_strict::route(req.method().as_str(), req.uri().path())
+        {
+            return respond_eventarc_strict(runtime, channels, req, route, body_limit).await;
+        }
+    }
     let Some(route) = crate::eventarc::route(req.uri().path()) else {
         drain_refused_body(req.into_body()).await;
         return simple(StatusCode::NOT_FOUND, "Not Found");
@@ -1252,14 +1407,18 @@ async fn respond_eventarc_surface(
 
 async fn respond_support_surface(
     runtime: Arc<FunctionsRuntime>,
+    channels: Arc<crate::eventarc_channels::ChannelStore>,
     req: Request<Incoming>,
     body_limit: usize,
     surface: HttpSurface,
+    profile: FunctionsHttpProfile,
     origin: Option<&str>,
 ) -> Response<OutBody> {
     let path = req.uri().path().to_owned();
     match surface {
-        HttpSurface::Eventarc => respond_eventarc_surface(&runtime, req, body_limit, origin).await,
+        HttpSurface::Eventarc => {
+            respond_eventarc_surface(&runtime, &channels, req, body_limit, profile, origin).await
+        }
         HttpSurface::Tasks => {
             let Some(route) = crate::tasks::route(&path) else {
                 drain_refused_body(req.into_body()).await;
@@ -1374,8 +1533,40 @@ async fn invoke_runner(
     }
 }
 
+/// A request to one of the support listeners (Eventarc, Cloud Tasks): the origin check, then the surface.
+async fn respond_support_request(
+    runtime: Arc<FunctionsRuntime>,
+    channels: Arc<crate::eventarc_channels::ChannelStore>,
+    req: Request<Incoming>,
+    body_limit: usize,
+    surface: HttpSurface,
+    profile: FunctionsHttpProfile,
+) -> Response<OutBody> {
+    let origin = match request_origin(req.headers()) {
+        Ok(origin) => origin,
+        Err(refusal) => return *refusal,
+    };
+    if origin
+        .as_deref()
+        .is_some_and(|value| !origin_is_local(value))
+    {
+        return simple(StatusCode::FORBIDDEN, "forbidden origin");
+    }
+    respond_support_surface(
+        runtime,
+        channels,
+        req,
+        body_limit,
+        surface,
+        profile,
+        origin.as_deref(),
+    )
+    .await
+}
+
 async fn respond(
     runtime: Arc<FunctionsRuntime>,
+    channels: Arc<crate::eventarc_channels::ChannelStore>,
     req: Request<Incoming>,
     body_limit: usize,
     surface: HttpSurface,
@@ -1385,18 +1576,8 @@ async fn respond(
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
     if surface != HttpSurface::Functions {
-        let origin = match request_origin(req.headers()) {
-            Ok(origin) => origin,
-            Err(refusal) => return Ok(*refusal),
-        };
-        if origin
-            .as_deref()
-            .is_some_and(|value| !origin_is_local(value))
-        {
-            return Ok(simple(StatusCode::FORBIDDEN, "forbidden origin"));
-        }
         return Ok(
-            respond_support_surface(runtime, req, body_limit, surface, origin.as_deref()).await,
+            respond_support_request(runtime, channels, req, body_limit, surface, profile).await,
         );
     }
     let (_region, function, target) = match resolve_route(&runtime, &path) {
@@ -1509,7 +1690,9 @@ async fn serve_surface(
     surface: HttpSurface,
     admission: HttpAdmission,
     profile: FunctionsHttpProfile,
+    channels: Arc<crate::eventarc_channels::ChannelStore>,
 ) -> std::io::Result<()> {
+    // The channels created through the strict Eventarc surface live as long as the listener.
     loop {
         let (stream, peer) = listener.accept().await?;
         let connection = admission
@@ -1519,6 +1702,7 @@ async fn serve_surface(
             .await
             .expect("the connection semaphore is never closed");
         let runtime = runtime.clone();
+        let channels = channels.clone();
         let request_admission = admission.requests.clone();
         tokio::spawn(async move {
             let _connection = connection;
@@ -1528,12 +1712,22 @@ async fn serve_surface(
             ));
             let svc = service_fn(move |req| {
                 let runtime = runtime.clone();
+                let channels = channels.clone();
                 let request_admission = request_admission.clone();
                 async move {
                     let body_limit = request_body_limit(surface, req.uri().path());
                     let reservation = request_body_reservation(&req, body_limit);
                     let _request = request_admission.acquire(reservation).await;
-                    respond(runtime, req, body_limit, surface, profile, peer.ip()).await
+                    respond(
+                        runtime,
+                        channels,
+                        req,
+                        body_limit,
+                        surface,
+                        profile,
+                        peer.ip(),
+                    )
+                    .await
                 }
             });
             let mut builder = http1::Builder::new();
@@ -1570,6 +1764,7 @@ pub async fn serve_functions_with_profile(
         HttpSurface::Functions,
         admission,
         profile,
+        Arc::new(crate::eventarc_channels::ChannelStore::default()),
     )
     .await
 }
@@ -1580,12 +1775,44 @@ pub async fn serve_eventarc(
     runtime: Arc<FunctionsRuntime>,
     admission: HttpAdmission,
 ) -> std::io::Result<()> {
+    serve_eventarc_with_profile(listener, runtime, admission, FunctionsHttpProfile::Emulator).await
+}
+
+/// Serves the Eventarc listener with an explicit compatibility profile: the emulator profile is the
+/// official emulator's routes; the strict profile also serves the production Eventarc and Eventarc
+/// Publishing paths (`/v1/projects/...`) with the answers production gave to the stage A recordings.
+pub async fn serve_eventarc_with_profile(
+    listener: TcpListener,
+    runtime: Arc<FunctionsRuntime>,
+    admission: HttpAdmission,
+    profile: FunctionsHttpProfile,
+) -> std::io::Result<()> {
+    serve_eventarc_with_channels(
+        listener,
+        runtime,
+        admission,
+        profile,
+        Arc::new(crate::eventarc_channels::ChannelStore::default()),
+    )
+    .await
+}
+
+/// Serves the Eventarc listener with the channels of the strict profile held by `channels`: the store
+/// decides how long the operations of a creation and a deletion take, and what identifiers they carry.
+pub async fn serve_eventarc_with_channels(
+    listener: TcpListener,
+    runtime: Arc<FunctionsRuntime>,
+    admission: HttpAdmission,
+    profile: FunctionsHttpProfile,
+    channels: Arc<crate::eventarc_channels::ChannelStore>,
+) -> std::io::Result<()> {
     serve_surface(
         listener,
         runtime,
         HttpSurface::Eventarc,
         admission,
-        FunctionsHttpProfile::Emulator,
+        profile,
+        channels,
     )
     .await
 }
@@ -1602,6 +1829,7 @@ pub async fn serve_tasks(
         HttpSurface::Tasks,
         admission,
         FunctionsHttpProfile::Emulator,
+        Arc::new(crate::eventarc_channels::ChannelStore::default()),
     )
     .await
 }
@@ -2056,5 +2284,105 @@ mod streaming_tests {
             .await
             .expect("the invalid response closes upstream")
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod strict_eventarc_tests {
+    use super::{bearer_token, format_request_id, request_id};
+    use hyper::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+
+    fn headers(value: Option<&str>) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        if let Some(value) = value {
+            map.insert(AUTHORIZATION, HeaderValue::from_str(value).unwrap());
+        }
+        map
+    }
+
+    #[test]
+    fn a_credential_is_a_bearer_scheme_with_a_token_and_nothing_else() {
+        for (value, token) in [
+            ("Bearer abc", "abc"),
+            ("bearer abc", "abc"),
+            ("BEARER abc", "abc"),
+            ("Bearer  spaced ", "spaced"),
+            ("Bearer a b", "a b"),
+        ] {
+            assert_eq!(
+                bearer_token(&headers(Some(value))).as_deref(),
+                Some(token),
+                "{value:?}"
+            );
+        }
+        for refused in [
+            "Bearer",
+            "Bearer ",
+            "Bearer    ",
+            "Basic abc",
+            "abc",
+            "Token abc",
+            "Bearerabc",
+            "",
+        ] {
+            assert_eq!(bearer_token(&headers(Some(refused))), None, "{refused:?}");
+        }
+        assert_eq!(bearer_token(&headers(None)), None);
+        let mut opaque = HeaderMap::new();
+        opaque.insert(
+            AUTHORIZATION,
+            HeaderValue::from_bytes(b"Bearer \xff\xfe").unwrap(),
+        );
+        assert_eq!(
+            bearer_token(&opaque),
+            None,
+            "a value that is not text is no credential"
+        );
+    }
+
+    #[test]
+    fn a_request_id_is_ten_digits_of_the_time_and_six_of_a_counter() {
+        assert_eq!(format_request_id(0, 0), "0000000000000000");
+        assert_eq!(
+            format_request_id(0x12_3456_789a, 0xbc_def0),
+            "123456789abcdef0"
+        );
+        assert_eq!(format_request_id(1, 2), "0000000001000002");
+        // Only the low 40 bits of the seconds and the low 24 bits of the counter are kept.
+        assert_eq!(
+            format_request_id(0x100_0000_0000, 0x100_0000),
+            "0000000000000000"
+        );
+        assert_eq!(format_request_id(u64::MAX, u64::MAX), "ffffffffffffffff");
+    }
+
+    #[test]
+    fn a_request_id_is_sixteen_lower_case_hex_digits_dated_now_and_each_is_new() {
+        let now = || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        };
+        let before = now();
+        let ids: Vec<String> = (0..50).map(|_| request_id()).collect();
+        let after = now();
+        for id in &ids {
+            assert_eq!(id.len(), 16, "{id}");
+            assert!(
+                id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+                "{id}"
+            );
+            let seconds = u64::from_str_radix(&id[..10], 16).unwrap();
+            assert!((before..=after).contains(&seconds), "{id}");
+        }
+        let counters: Vec<u64> = ids
+            .iter()
+            .map(|id| u64::from_str_radix(&id[10..], 16).unwrap())
+            .collect();
+        for pair in counters.windows(2) {
+            // Another test may take a number in between, so "later" rather than "next".
+            assert!(pair[1] > pair[0], "the counter only moves forward");
+        }
     }
 }

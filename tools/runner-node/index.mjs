@@ -25,6 +25,7 @@ import { blockingResult } from "./blocking-response.mjs";
 import { boundLogMessage, createInvocationLogger } from "./log-context.mjs";
 import { invocationFailure } from "./invocation-error.mjs";
 import { InvocationBudget, readFrames } from "./protocol.mjs";
+import { deliverSchedule, v1ScheduleContext } from "./schedule-delivery.mjs";
 import { collectFunctions, exportNamespace } from "./discovery.mjs";
 import { FrameWriter } from "./output.mjs";
 import { installDiagnosticOutput } from "./diagnostic-output.mjs";
@@ -622,7 +623,14 @@ function describeSchedule(base, value) {
     SCHEDULE_RETRY_FIELDS, base.generation === 1 ? V1_SCHEDULE_DURATIONS : undefined);
   return {
     ...base,
-    retry: (retryConfig.retryCount ?? 0) > 0,
+    // Production retries a Gen2 job (HTTP target) with a retry window and no count until the window ends (a job with
+    // `maxRetryDuration: 30s` and no `retryCount` was attempted four times in run 156715222b86ea44), so a window
+    // alone is a retry declaration there too. A Gen1 schedule's job targets Pub/Sub, so Cloud Scheduler's retry covers
+    // the publish and never the handler: `schedFailV1`'s handler threw at each occurrence, ran once per occurrence,
+    // and every attempt of its job finished without an error. A Gen1 handler is not retried at all.
+    retry:
+      base.generation !== 1 &&
+      ((retryConfig.retryCount ?? 0) > 0 || (retryConfig.maxRetrySeconds ?? 0) > 0),
     trigger: { type: "schedule", schedule, timeZone, retryConfig },
   };
 }
@@ -1066,6 +1074,33 @@ function millisecondTimestamp(time) {
   return Number.isNaN(parsed.getTime()) ? time : parsed.toISOString();
 }
 
+// The members of a 2nd gen Storage event's `data` in the order production hands them over (recorded,
+// FE v5 production run functions-events-formal-20261004T182904Z-a9621bfae74fe9bc: kind, id, selfLink,
+// name, bucket, generation, metageneration, contentType, timeCreated, updated, [timeDeleted],
+// storageClass, timeStorageClassUpdated, size, md5Hash, mediaLink, [metadata], crc32c, etag; the order
+// of all 44 recorded v2 frames is in tests/fixtures/production-storage-v5-v2-member-orders.json).
+// The runtime's JSON lists members by name; a member the recordings never showed follows the recorded
+// ones in name order.
+const STORAGE_OBJECT_MEMBERS = [
+  "kind", "id", "selfLink", "name", "bucket", "generation", "metageneration", "contentType",
+  "timeCreated", "updated", "timeDeleted", "storageClass", "timeStorageClassUpdated", "size", "md5Hash",
+  "mediaLink", "metadata", "crc32c", "etag",
+];
+function storageObjectInRecordedOrder(data) {
+  if (data === null || typeof data !== "object" || Array.isArray(data)) return data;
+  const ordered = {};
+  for (const key of STORAGE_OBJECT_MEMBERS) {
+    if (Object.hasOwn(data, key)) ordered[key] = data[key];
+  }
+  for (const key of Object.keys(data).sort()) {
+    if (!Object.hasOwn(ordered, key)) ordered[key] = data[key];
+  }
+  return ordered;
+}
+
+/** Whether the daemon runs the strict profile (production's behaviour where the official emulator differs). */
+const strictProfile = () => process.env.FIREEMU_HTTP_PROFILE === "strict";
+
 function v1Context(msg) {
   const event = msg.event;
   switch (msg.trigger) {
@@ -1088,8 +1123,14 @@ function v1Context(msg) {
         eventType: legacy,
         // A string: firebase-functions rewrites a legacy event type's resource into
         // { service, name } itself (makeCloudFunction); an object here would be nested.
-        resource: event.source,
+        resource: [event.project, event.database, event.document].every(
+          value => typeof value === "string" && value.length > 0,
+        )
+          ? `projects/${event.project}/databases/${event.database}/documents/${event.document}`
+          : event.source,
         params: event.params || {},
+        // Production's Gen1 Firestore context has an empty `notSupported` member (all 60 recorded frames).
+        notSupported: {},
       };
     }
     case "storage": {
@@ -1110,15 +1151,20 @@ function v1Context(msg) {
         }[event.type],
         // The official emulator's legacy storage event resource: no generation suffix, and
         // a `type` member (its createLegacyEventRequestBody).
+        // Members in the order production hands them over (recorded, FE v5, 2026-10-04: name,
+        // service, type; the order is observable through Object.keys and JSON.stringify).
         resource: {
-          service: "storage.googleapis.com",
           name: `projects/_/buckets/${o.bucket}/objects/${o.name}`,
+          service: "storage.googleapis.com",
           type: "storage#object",
         },
         params: {},
       };
     }
     case "schedule":
+      // The strict profile hands a Gen1 handler the context of the Pub/Sub message production's Scheduler
+      // published (run 156715222b86ea44): see schedule-delivery.mjs.
+      if (strictProfile()) return v1ScheduleContext(event);
       return {
         eventId: event.id,
         timestamp: event.time,
@@ -1128,11 +1174,18 @@ function v1Context(msg) {
       };
     case "pubsub": {
       const topic = String(event.source || "").replace(/^\/\/pubsub\.googleapis\.com\//, "");
+      // Production (functions-events-formal run a9621bfae74fe9bc, handler pubsubPublishedV1): the
+      // timestamp has exactly three fraction digits and the resource carries the message type.
       return {
         eventId: event.id,
-        timestamp: event.time,
+        timestamp: millisecondTimestamp(event.time),
         eventType: "google.pubsub.topic.publish",
-        resource: { service: "pubsub.googleapis.com", name: topic },
+        // Members in the order of the recorded frames (FE v5 and v7: name, service, type).
+        resource: {
+          name: topic,
+          service: "pubsub.googleapis.com",
+          type: "type.googleapis.com/google.pubsub.v1.PubsubMessage",
+        },
         params: {},
       };
     }
@@ -1152,6 +1205,8 @@ function v1Context(msg) {
             : "providers/firebase.auth/eventTypes/user.create",
         resource: project,
         params: {},
+        // As Firestore's: all 28 recorded Gen1 Auth frames carry an empty `notSupported` member.
+        notSupported: {},
       };
     }
     default:
@@ -1361,6 +1416,54 @@ async function makeHttpServer(functions, manifest) {
   });
 }
 
+let writtenFirestoreCodec;
+
+function firestoreProtoTimestamp(value) {
+  if (typeof value !== "string") return value;
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) throw new Error("invalid Firestore protobuf timestamp");
+  const milliseconds = Date.parse(`${match[1]}${match[3]}`);
+  if (!Number.isFinite(milliseconds)) throw new Error("invalid Firestore protobuf timestamp");
+  return { seconds: Math.floor(milliseconds / 1000), nanos: Number((match[2] ?? "").padEnd(9, "0")) };
+}
+
+function firestoreProtoFields(fields) {
+  return Object.fromEntries(Object.entries(fields ?? {}).map(([key, value]) => {
+    const converted = { ...value };
+    if (value.timestampValue !== undefined) converted.timestampValue = firestoreProtoTimestamp(value.timestampValue);
+    if (value.mapValue !== undefined) converted.mapValue = { fields: firestoreProtoFields(value.mapValue.fields) };
+    if (value.arrayValue !== undefined) {
+      converted.arrayValue = { values: (value.arrayValue.values ?? []).map(item => firestoreProtoFields({ item }).item) };
+    }
+    return [key, converted];
+  }));
+}
+
+function writtenFirestoreEvent(event) {
+  if (!["google.cloud.firestore.document.v1.written", "google.cloud.firestore.document.v1.written.withAuthContext"].includes(event.type) ||
+      !event.datacontenttype?.includes("application/json")) return event;
+  // The SDK's protobuf decoder derives missing snapshot paths from typed metadata,
+  // independently of the canonical database source. Reuse the codebase's shipped codec.
+  if (!writtenFirestoreCodec) {
+    const require = createRequire(join(sourceDir, "package.json"));
+    const { root } = firebaseFunctionsPackage(require);
+    writtenFirestoreCodec = require(join(root, "protos/compiledFirestore.js")).google.events.cloud.firestore.v1.DocumentEventData;
+  }
+  const data = { ...event.data };
+  for (const side of ["value", "oldValue"]) {
+    if (data[side] === undefined || data[side] === null) continue;
+    const document = { ...data[side], fields: firestoreProtoFields(data[side].fields) };
+    for (const time of ["createTime", "updateTime"]) {
+      if (document[time] !== undefined) document[time] = firestoreProtoTimestamp(document[time]);
+    }
+    data[side] = document;
+  }
+  const message = writtenFirestoreCodec.fromObject(data);
+  const invalid = writtenFirestoreCodec.verify(message);
+  if (invalid) throw new Error(`invalid Firestore protobuf event: ${invalid}`);
+  return { ...event, datacontenttype: "application/protobuf", data: Buffer.from(writtenFirestoreCodec.encode(message).finish()) };
+}
+
 async function invoke(functions, manifest, msg) {
   const spec = manifest.functions.find((f) => f.name === msg.function);
   if (!spec) throw new Error("unknown function");
@@ -1387,12 +1490,23 @@ async function invoke(functions, manifest, msg) {
       }
       switch (msg.trigger) {
         case "schedule": {
+          // The strict profile calls the function the way production's Scheduler does, through its HTTP wrapper,
+          // so the SDK builds the event from the scheduler headers (job id, Los Angeles time, `context` getter)
+          // and its own error handling runs. A bare handler (no separate wrapper) is called directly.
+          if (strictProfile() && typeof fn.run === "function" && fn.run !== fn) {
+            await deliverSchedule(fn, msg.event.data);
+            return;
+          }
           const run = fn.run || fn;
           await run(msg.event.data);
           return;
         }
         case "firestore":
+          await fn(writtenFirestoreEvent(msg.event));
+          return;
         case "storage":
+          await fn({ ...msg.event, data: storageObjectInRecordedOrder(msg.event.data) });
+          return;
         case "pubsub":
         // A custom event reaches the handler as the CloudEvent itself, exactly as the official
         // Eventarc emulator POSTs it to the functions emulator.

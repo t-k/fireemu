@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use fireemu_core_pubsub::subscription::{
-    DeadLetterPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
+    DeadLetterPolicy, ExpirationPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
     DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS, MAX_RETRY_BACKOFF_SECONDS, MIN_DEAD_LETTER_ATTEMPTS,
 };
 use fireemu_core_pubsub::{
@@ -26,7 +26,28 @@ pub fn status(err: &PubSubError) -> tonic::Status {
         Code::ResourceExhausted => tonic::Code::ResourceExhausted,
         Code::Unimplemented => tonic::Code::Unimplemented,
     };
-    tonic::Status::new(code, err.message().to_owned())
+    tonic::Status::new(code, wire_error_message(err))
+}
+
+/// Renders the production leaf-resource diagnostics without changing the core error class.
+pub(crate) fn wire_error_message(err: &PubSubError) -> String {
+    let prefix = match err.code() {
+        Code::NotFound => "Resource not found",
+        Code::AlreadyExists => "Resource already exists in the project",
+        _ => return err.message().to_owned(),
+    };
+    let suffix = match err.code() {
+        Code::NotFound => " not found",
+        _ => " already exists",
+    };
+    let resource = ["topic ", "subscription ", "snapshot ", "dead-letter topic "]
+        .iter()
+        .find_map(|kind| err.message().strip_prefix(kind))
+        .and_then(|message| message.strip_suffix(suffix));
+    resource.and_then(|name| name.rsplit_once('/')).map_or_else(
+        || err.message().to_owned(),
+        |(_, leaf)| format!("{prefix} (resource={leaf})."),
+    )
 }
 
 const NANOS_PER_SEC: i128 = 1_000_000_000;
@@ -78,11 +99,19 @@ pub fn message_to_proto(stored: &StoredMessage) -> pb::PubsubMessage {
 
 /// Renders a delivered message as a wire `ReceivedMessage`.
 #[must_use]
-pub fn received_to_proto(r: &ReceivedMessage) -> pb::ReceivedMessage {
+pub fn received_to_proto(
+    r: &ReceivedMessage,
+    report_attempt: bool,
+    policy: crate::PagingPolicy,
+) -> pb::ReceivedMessage {
     pb::ReceivedMessage {
-        ack_id: r.ack_id.clone(),
+        ack_id: crate::ack_token::wire(&r.ack_id, policy),
         message: Some(message_to_proto(&r.message)),
-        delivery_attempt: i32::try_from(r.delivery_attempt).unwrap_or(i32::MAX),
+        delivery_attempt: if report_attempt {
+            i32::try_from(r.delivery_attempt).unwrap_or(i32::MAX)
+        } else {
+            0
+        },
     }
 }
 
@@ -99,7 +128,7 @@ fn retry_duration_from_proto(
     ))
 }
 
-fn duration_to_proto(d: LogicalDuration) -> prost_types::Duration {
+pub(crate) fn duration_to_proto(d: LogicalDuration) -> prost_types::Duration {
     let nanos = d.as_nanos();
     prost_types::Duration {
         seconds: i64::try_from(nanos.div_euclid(NANOS_PER_SEC)).unwrap_or(0),
@@ -110,9 +139,7 @@ fn duration_to_proto(d: LogicalDuration) -> prost_types::Duration {
 /// Rejects push fields that have no representation in the core state machine.
 pub fn validate_push_config_options(push: Option<&pb::PushConfig>) -> Result<(), PubSubError> {
     let unsupported = push.and_then(|push| {
-        if !push.attributes.is_empty() {
-            Some("push_config.attributes")
-        } else if push.authentication_method.is_some() {
+        if push.authentication_method.as_ref().is_some_and(|method| !matches!(method, pb::push_config::AuthenticationMethod::OidcToken(token) if token.service_account_email.is_empty() && token.audience.is_empty())) {
             Some("push_config.authentication_method")
         } else if push.wrapper.is_some() {
             Some("push_config.wrapper")
@@ -129,32 +156,32 @@ pub fn validate_push_config_options(push: Option<&pb::PushConfig>) -> Result<(),
 
 /// Subscription fields declared by `google.pubsub.v1.Subscription` whose value the emulator
 /// applies. Every other declared field is refused explicitly instead of being dropped.
-pub const SUPPORTED_SUBSCRIPTION_FIELDS: [&str; 8] = [
+pub const SUPPORTED_SUBSCRIPTION_FIELDS: [&str; 13] = [
     "name",
     "topic",
     "ack_deadline_seconds",
     "enable_message_ordering",
+    "retain_acked_messages",
+    "message_retention_duration",
     "filter",
     "dead_letter_policy",
     "retry_policy",
     "push_config",
+    "labels",
+    "expiration_policy",
+    "state",
 ];
 
 /// Subscription fields declared by `google.pubsub.v1.Subscription` that the emulator cannot
 /// represent. Naming one of these is an explicit unsupported-feature refusal; naming anything
 /// outside both tables is an unknown field, which is an invalid argument.
-pub const UNSUPPORTED_SUBSCRIPTION_FIELDS: [&str; 14] = [
+pub const UNSUPPORTED_SUBSCRIPTION_FIELDS: [&str; 9] = [
     "bigquery_config",
     "cloud_storage_config",
     "bigtable_config",
-    "retain_acked_messages",
-    "message_retention_duration",
-    "labels",
-    "expiration_policy",
     "detached",
     "enable_exactly_once_delivery",
     "topic_message_retention_duration",
-    "state",
     "analytics_hub_subscription_info",
     "message_transforms",
     "tags",
@@ -169,24 +196,34 @@ pub fn is_declared_subscription_field(field: &str) -> bool {
 
 /// Rejects an `UpdateSubscription` field mask that names a field the emulator cannot apply.
 ///
-/// Only the ack deadline and the push endpoint are mutable. Any other declared field is refused
-/// as unsupported so a client never believes a silently dropped update was applied, and an
-/// undeclared path is an invalid argument, as the wire schema rejects unknown names.
+/// Configuration fields are selected as complete field values. Immutable fields and unknown
+/// paths are invalid arguments; managed fields outside the broker subset remain unsupported.
 pub fn validate_subscription_update_paths<S: AsRef<str>>(paths: &[S]) -> Result<(), PubSubError> {
     for path in paths {
         let path = path.as_ref();
-        if path == "ack_deadline_seconds" || path == "push_config" {
+        if [
+            "ack_deadline_seconds",
+            "push_config",
+            "labels",
+            "expiration_policy",
+            "retain_acked_messages",
+            "message_retention_duration",
+            "retry_policy",
+            "dead_letter_policy",
+        ]
+        .contains(&path)
+        {
             continue;
         }
-        let head = path.split_once('.').map_or(path, |(head, _)| head);
-        if is_declared_subscription_field(head) {
+        if ["name", "topic", "enable_message_ordering", "filter"].contains(&path) {
+            return Err(PubSubError::invalid_argument(format!("Invalid update_mask provided in the UpdateSubscriptionRequest: the '{path}' field in the Subscription is not mutable.")));
+        }
+        if is_declared_subscription_field(path) {
             return Err(PubSubError::unimplemented(format!(
                 "updating {path} is not supported by the Pub/Sub emulator"
             )));
         }
-        return Err(PubSubError::invalid_argument(format!(
-            "unknown update_mask path {path}"
-        )));
+        return Err(PubSubError::invalid_argument(format!("Invalid update_mask provided in the UpdateSubscriptionRequest: '{path}' is not a known Subscription field. Note that field paths must be of the form 'push_config' rather than 'pushConfig'.")));
     }
     Ok(())
 }
@@ -199,22 +236,12 @@ pub fn validate_subscription_options(sub: &pb::Subscription) -> Result<(), PubSu
         Some("cloud_storage_config")
     } else if sub.bigtable_config.is_some() {
         Some("bigtable_config")
-    } else if sub.retain_acked_messages {
-        Some("retain_acked_messages")
-    } else if sub.message_retention_duration.is_some() {
-        Some("message_retention_duration")
-    } else if !sub.labels.is_empty() {
-        Some("labels")
-    } else if sub.expiration_policy.is_some() {
-        Some("expiration_policy")
     } else if sub.detached {
         Some("detached")
     } else if sub.enable_exactly_once_delivery {
         Some("enable_exactly_once_delivery")
     } else if sub.topic_message_retention_duration.is_some() {
         Some("topic_message_retention_duration")
-    } else if sub.state != 0 {
-        Some("state")
     } else if sub.analytics_hub_subscription_info.is_some() {
         Some("analytics_hub_subscription_info")
     } else if !sub.message_transforms.is_empty() {
@@ -234,14 +261,19 @@ pub fn validate_subscription_options(sub: &pb::Subscription) -> Result<(), PubSu
 
 /// Topic fields declared by `google.pubsub.v1.Topic` whose value the emulator applies, plus the
 /// output-only fields it accepts and ignores on input.
-pub const SUPPORTED_TOPIC_FIELDS: [&str; 4] = ["name", "labels", "state", "satisfies_pzs"];
+pub const SUPPORTED_TOPIC_FIELDS: [&str; 5] = [
+    "name",
+    "labels",
+    "state",
+    "satisfies_pzs",
+    "message_retention_duration",
+];
 
 /// Topic fields declared by `google.pubsub.v1.Topic` that the emulator cannot represent. Naming
 /// one of these is an explicit unsupported-feature refusal; a name outside both tables is an
 /// unknown field, which is an invalid argument.
-pub const UNSUPPORTED_TOPIC_FIELDS: [&str; 7] = [
+pub const UNSUPPORTED_TOPIC_FIELDS: [&str; 6] = [
     "schema_settings",
-    "message_retention_duration",
     "kms_key_name",
     "message_storage_policy",
     "ingestion_data_source_settings",
@@ -260,8 +292,6 @@ pub fn is_declared_topic_field(field: &str) -> bool {
 pub fn validate_topic_options(topic: &pb::Topic) -> Result<(), PubSubError> {
     let unsupported = if topic.schema_settings.is_some() {
         Some("schema_settings")
-    } else if topic.message_retention_duration.is_some() {
-        Some("message_retention_duration")
     } else if !topic.kms_key_name.is_empty() {
         Some("kms_key_name")
     } else if topic.message_storage_policy.is_some() {
@@ -306,6 +336,96 @@ pub fn validate_topic_update_options(request: &pb::UpdateTopicRequest) -> Result
 }
 
 /// Builds a validated [`SubscriptionConfig`] from a wire `Subscription`.
+pub(crate) fn duration_from_proto(
+    duration: &prost_types::Duration,
+) -> Result<LogicalDuration, PubSubError> {
+    if duration.seconds < 0 || !(0..1_000_000_000).contains(&duration.nanos) {
+        return Err(PubSubError::invalid_argument(
+            "duration must use non-negative canonical seconds and nanos",
+        ));
+    }
+    Ok(LogicalDuration::from_nanos(
+        i128::from(duration.seconds) * NANOS_PER_SEC + i128::from(duration.nanos),
+    ))
+}
+
+pub(crate) fn push_config_from_proto(
+    push: Option<&pb::PushConfig>,
+    policy: crate::PagingPolicy,
+) -> Result<PushConfig, PubSubError> {
+    validate_push_config_options(push)?;
+    let Some(push) = push else {
+        return Ok(PushConfig::default());
+    };
+    let endpoint = &push.push_endpoint;
+    if !endpoint.is_empty() {
+        let uri = endpoint.parse::<axum::http::Uri>().ok();
+        let valid = uri.as_ref().is_some_and(|uri| {
+            uri.host().is_some() && matches!(uri.scheme_str(), Some("http" | "https"))
+        });
+        let strict = policy == crate::PagingPolicy::Strict;
+        if !valid
+            || (strict
+                && uri
+                    .as_ref()
+                    .is_none_or(|uri| uri.scheme_str() != Some("https"))
+                && crate::push::validate_endpoint(endpoint).is_err())
+        {
+            return Err(PubSubError::invalid_argument(format!("Invalid push endpoint given (endpoint={endpoint}). Refer to https://cloud.google.com/pubsub/subscriber#create for more information.")));
+        }
+    }
+    if policy == crate::PagingPolicy::Strict {
+        if let Some(version) = push.attributes.get("x-goog-version") {
+            if version != "v1" && !endpoint.is_empty() {
+                return Err(PubSubError::invalid_argument(format!(
+                    "Invalid push endpoint version given in push config (version={version})."
+                )));
+            }
+        }
+    }
+    Ok(PushConfig {
+        push_endpoint: endpoint.clone(),
+        attributes: if endpoint.is_empty() {
+            BTreeMap::new()
+        } else {
+            push.attributes
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect()
+        },
+    })
+}
+
+pub(crate) fn validate_strict_ack_deadline(value: i32) -> Result<(), PubSubError> {
+    if value != 0 && !(10..=600).contains(&value) {
+        return Err(PubSubError::invalid_argument(format!("Invalid ack deadline given (ack_deadline={value}). The ack deadline must be between 10 and 600 seconds.")));
+    }
+    Ok(())
+}
+
+pub(crate) fn subscription_from_proto_with_policy(
+    sub: &pb::Subscription,
+    policy: crate::PagingPolicy,
+) -> Result<SubscriptionConfig, PubSubError> {
+    let mut config = subscription_from_proto(sub)?;
+    config.push_config = push_config_from_proto(sub.push_config.as_ref(), policy)?;
+    if policy == crate::PagingPolicy::Strict {
+        validate_strict_ack_deadline(sub.ack_deadline_seconds)?;
+        if config.message_retention_duration.is_none() {
+            config.message_retention_duration = Some(
+                config
+                    .expiration_policy
+                    .and_then(|policy| policy.ttl)
+                    .map_or(LogicalDuration::from_seconds(604_800), |ttl| {
+                        ttl.min(LogicalDuration::from_seconds(604_800))
+                    }),
+            );
+        }
+        config.validate_production_configuration()?;
+    }
+    Ok(config)
+}
+
 pub fn subscription_from_proto(sub: &pb::Subscription) -> Result<SubscriptionConfig, PubSubError> {
     validate_subscription_options(sub)?;
     let name = SubscriptionName::parse(&sub.name)?;
@@ -352,14 +472,30 @@ pub fn subscription_from_proto(sub: &pb::Subscription) -> Result<SubscriptionCon
             })
         })
         .transpose()?;
-    let push_endpoint = sub
-        .push_config
+    let push_config =
+        push_config_from_proto(sub.push_config.as_ref(), crate::PagingPolicy::Emulator)?;
+    let message_retention_duration = sub
+        .message_retention_duration
         .as_ref()
-        .map(|p| p.push_endpoint.clone())
-        .unwrap_or_default();
-    crate::push::validate_endpoint(&push_endpoint).map_err(PubSubError::invalid_argument)?;
-    let push_config = PushConfig { push_endpoint };
+        .map(duration_from_proto)
+        .transpose()?;
     Ok(SubscriptionConfig {
+        labels: sub
+            .labels
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+        expiration_policy: sub
+            .expiration_policy
+            .as_ref()
+            .map(|policy| {
+                Ok::<_, PubSubError>(ExpirationPolicy {
+                    ttl: policy.ttl.as_ref().map(duration_from_proto).transpose()?,
+                })
+            })
+            .transpose()?,
+        retain_acked_messages: sub.retain_acked_messages,
+        message_retention_duration,
         name,
         topic,
         ack_deadline_seconds,
@@ -377,12 +513,46 @@ pub fn subscription_from_proto(sub: &pb::Subscription) -> Result<SubscriptionCon
 pub fn subscription_to_proto(
     config: &SubscriptionConfig,
     reported_topic: &str,
+    policy: crate::PagingPolicy,
 ) -> pb::Subscription {
     pb::Subscription {
         name: config.name.to_full(),
         topic: reported_topic.to_owned(),
         ack_deadline_seconds: i32::try_from(config.ack_deadline_seconds).unwrap_or(10),
         enable_message_ordering: config.enable_message_ordering,
+        retain_acked_messages: config.retain_acked_messages,
+        message_retention_duration: config
+            .message_retention_duration
+            .map(duration_to_proto)
+            .or_else(|| {
+                (policy == crate::PagingPolicy::Strict).then_some(prost_types::Duration {
+                    seconds: 604_800,
+                    nanos: 0,
+                })
+            }),
+        labels: config
+            .labels
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+        expiration_policy: config
+            .expiration_policy
+            .map(|policy| pb::ExpirationPolicy {
+                ttl: policy.ttl.map(duration_to_proto),
+            })
+            .or_else(|| {
+                (policy == crate::PagingPolicy::Strict).then_some(pb::ExpirationPolicy {
+                    ttl: Some(prost_types::Duration {
+                        seconds: 2_678_400,
+                        nanos: 0,
+                    }),
+                })
+            }),
+        state: if policy == crate::PagingPolicy::Strict {
+            pb::subscription::State::Active as i32
+        } else {
+            0
+        },
         filter: config.filter.as_str().to_owned(),
         dead_letter_policy: config
             .dead_letter_policy
@@ -395,9 +565,18 @@ pub fn subscription_to_proto(
             minimum_backoff: Some(duration_to_proto(rp.minimum_backoff)),
             maximum_backoff: Some(duration_to_proto(rp.maximum_backoff)),
         }),
-        push_config: if config.is_push() {
+        push_config: if config.is_push() || policy == crate::PagingPolicy::Strict {
             Some(pb::PushConfig {
                 push_endpoint: config.push_config.push_endpoint.clone(),
+                attributes: config
+                    .push_config
+                    .attributes
+                    .iter()
+                    .filter(|(key, _)| {
+                        policy == crate::PagingPolicy::Emulator || key.as_str() != "x-goog-version"
+                    })
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
                 ..pb::PushConfig::default()
             })
         } else {
@@ -436,10 +615,84 @@ pub fn snapshot_to_proto(snapshot: &Snapshot) -> pb::Snapshot {
 mod tests {
     use std::collections::HashMap;
 
-    use super::{validate_topic_options, validate_topic_update_options};
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn strict_push_admission_distinguishes_remote_http_https_and_loopback(host in "[a-z]{1,12}", path in "[a-z]{1,12}") {
+            for (endpoint, strict_ok) in [(format!("http://{host}.example/{path}"), false), (format!("https://{host}.example/{path}"), true), (format!("http://127.0.0.1:1/{path}"), true)] {
+                let push = pb::PushConfig { push_endpoint: endpoint, ..Default::default() };
+                prop_assert_eq!(push_config_from_proto(Some(&push), crate::PagingPolicy::Strict).is_ok(), strict_ok);
+                prop_assert!(push_config_from_proto(Some(&push), crate::PagingPolicy::Emulator).is_ok());
+            }
+        }
+        #[test]
+        fn strict_native_default_retention_matches_ttl_reference(ttl in 86_400i64..=2_678_400, explicit in any::<bool>()) {
+            let input = pb::Subscription {
+                name: "projects/demo-app/subscriptions/ttl-property".to_owned(), topic: "projects/demo-app/topics/ttl-property".to_owned(),
+                expiration_policy: Some(pb::ExpirationPolicy { ttl: Some(prost_types::Duration { seconds: ttl, nanos: 0 }) }),
+                message_retention_duration: explicit.then_some(prost_types::Duration { seconds: 600, nanos: 0 }), ..Default::default()
+            };
+            let strict = subscription_from_proto_with_policy(&input, crate::PagingPolicy::Strict).unwrap();
+            prop_assert_eq!(strict.resolved_retention(), LogicalDuration::from_seconds(if explicit { 600 } else { ttl.min(604_800) }));
+            let emulator = subscription_from_proto_with_policy(&input, crate::PagingPolicy::Emulator).unwrap();
+            prop_assert_eq!(emulator.message_retention_duration.is_some(), explicit);
+        }
+        #[test]
+        fn subscription_update_path_error_classes_are_distinct(path in prop::sample::select(vec!["name", "topic", "enable_message_ordering", "filter", "no_such_field", "pushConfig", "enable_exactly_once_delivery", "labels", "push_config"])) {
+            let result = validate_subscription_update_paths(&[path]);
+            if ["labels", "push_config"].contains(&path) { prop_assert!(result.is_ok()); }
+            else {
+                let error = result.unwrap_err();
+                if ["name", "topic", "enable_message_ordering", "filter"].contains(&path) {
+                    prop_assert_eq!(error.code(), Code::InvalidArgument);
+                    prop_assert_eq!(error.message(), format!("Invalid update_mask provided in the UpdateSubscriptionRequest: the '{path}' field in the Subscription is not mutable."));
+                } else if path == "enable_exactly_once_delivery" { prop_assert_eq!(error.code(), Code::Unimplemented); }
+                else {
+                    prop_assert_eq!(error.code(), Code::InvalidArgument);
+                    prop_assert!(error.message().contains("not a known Subscription field"));
+                }
+            }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn resource_errors_preserve_leaf_and_unrelated_diagnostics(leaf in "[a-z][a-z0-9-]{2,30}", kind in prop_oneof![Just("topic"), Just("subscription"), Just("snapshot"),Just("dead-letter topic")]) {
+            let error = fireemu_core_pubsub::PubSubError::not_found(format!("{kind} projects/demo-app/resources/{leaf} not found"));
+            prop_assert_eq!(super::wire_error_message(&error),format!("Resource not found (resource={leaf})."));
+            let error = fireemu_core_pubsub::PubSubError::already_exists(format!("{kind} projects/demo-app/resources/{leaf} already exists"));
+            prop_assert_eq!(super::wire_error_message(&error),format!("Resource already exists in the project (resource={leaf})."));
+            let error = fireemu_core_pubsub::PubSubError::invalid_argument(leaf.clone());
+            prop_assert_eq!(super::wire_error_message(&error),leaf);
+        }
+    }
+    proptest! {
+        #[test]
+        fn strict_creation_ack_deadline_matches_recorded_bounds(value in -100i32..700) {
+            prop_assert_eq!(validate_strict_ack_deadline(value).is_ok(),value==0 || (10..=600).contains(&value));
+        }
+    }
     use fireemu_core_pubsub::Code;
 
     use super::pb;
+
+    proptest! {
+        #[test]
+        fn push_configuration_admission_does_not_admit_network_delivery(host in "[a-z]{1,20}", path in "[a-z/]{1,30}",version in "v[0-9]{1,3}") {
+            let endpoint=format!("https://{host}.example/{path}");
+            let push=pb::PushConfig {push_endpoint:endpoint.clone(),attributes:[("x-goog-version".to_owned(),version.clone())].into(),..Default::default()};
+            prop_assert_eq!(push_config_from_proto(Some(&push),crate::PagingPolicy::Strict).is_ok(),version=="v1");
+            prop_assert!(push_config_from_proto(Some(&push),crate::PagingPolicy::Emulator).is_ok());
+            prop_assert!(crate::push::validate_endpoint(&endpoint).is_err());
+        }
+        #[test]
+        fn subscription_update_paths_admit_only_selected_mutable_fields(path in prop_oneof![Just("labels"),Just("retain_acked_messages"),Just("message_retention_duration"),Just("expiration_policy"),Just("retry_policy"),Just("ack_deadline_seconds"),Just("push_config"),Just("dead_letter_policy"),Just("topic"),Just("filter"),Just("enable_message_ordering"),Just(""),Just("no_such_field")]) {
+            let expected=["labels","retain_acked_messages","message_retention_duration","expiration_policy","retry_policy","ack_deadline_seconds","push_config","dead_letter_policy"].contains(&path);
+            prop_assert_eq!(validate_subscription_update_paths(&[path]).is_ok(),expected);
+        }
+    }
 
     #[test]
     fn topic_option_validation_rejects_each_unrepresentable_value() {
@@ -497,7 +750,10 @@ mod tests {
                 },
             ),
         ];
-        for (field, topic) in cases {
+        for (field, topic) in cases
+            .into_iter()
+            .filter(|(field, _)| *field != "message_retention_duration")
+        {
             let error = validate_topic_options(&topic).unwrap_err();
             assert_eq!(error.code(), Code::Unimplemented);
             assert!(error.message().contains(field), "{field}: {error}");

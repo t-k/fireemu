@@ -10,7 +10,7 @@ import txn_expiry_cases as cases
 import txn_expiry_comparison as comparison
 import txn_expiry_plan as plan
 from broad_contract import digest
-from evidence_common import runtime_inputs, runtime_inputs_at_commit
+from evidence_common import BINARY_INPUTS_SCHEME, binary_inputs, binary_inputs_at_commit, source_files_including_test_only_trees
 
 ROOT = Path(__file__).resolve().parents[3]
 PATH = ROOT / "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json"
@@ -57,10 +57,20 @@ def test_current_recorded_artifact_has_a_successful_build_and_current_rust_input
     assert artifact["sourceUnchanged"] is True and artifact["exitCode"] == 0
     assert artifact["buildCommand"] == ["cargo", "build", "--locked", "-p", "fireemu", "--bin", "fireemu"]
     assert re.fullmatch(r"[a-f0-9]{64}", artifact["artifactSha256"])
-    current = runtime_inputs(ROOT)
-    assert current == runtime_inputs_at_commit(artifact["sourceCommit"], ROOT)
+    # the debug binary is made from the crates' sources, manifests, lock and toolchain, not from their integration tests: the artifact binds `binary_inputs`
+    assert artifact["runtimeInputsScheme"] == BINARY_INPUTS_SCHEME
+    current = binary_inputs(ROOT)
+    assert current == binary_inputs_at_commit(artifact["sourceCommit"], ROOT)
     assert artifact["runtimeInputsDigest"] == digest(current)
     assert artifact["runtimeInputCount"] == len(current)
+    # what the build read: no file of an excluded tree (the dependency-info file of the build, checked by the step that made the receipt), and no built user interface
+    assert artifact["dependencyInfoInExcludedTrees"] == [] and artifact["dependencyInfoWorkspaceFiles"] > 100
+    assert artifact["uiBundled"] is False
+
+
+def test_no_bound_source_can_pull_a_file_of_an_excluded_tree_into_the_binary():
+    # the guard that keeps `binary_inputs` sound: this runs in the compat-broad shards
+    assert source_files_including_test_only_trees(ROOT) == []
 
 
 def test_both_profiles_match_every_case_in_both_production_recordings():
@@ -73,6 +83,7 @@ def test_both_profiles_match_every_case_in_both_production_recordings():
         assert profile["artifactSha256"] == value["artifact"]["artifactSha256"]
         assert profile["sourceCommit"] == value["artifact"]["sourceCommit"]
         assert profile["runtimeInputsDigest"] == value["artifact"]["runtimeInputsDigest"]
+        assert profile["runtimeInputsScheme"] == value["artifact"]["runtimeInputsScheme"]
         assert profile["runtimeInputsClean"] is True and profile["productionRequests"] == 0
         assert profile["ownedDocumentsAbsent"] == 5
         assert profile["openTransactions"] == profile["unconfirmedTransactionStarts"] == 0
@@ -159,16 +170,19 @@ def test_partial_recordings_do_not_promote_unobserved_conditions_or_official_emu
     assert set(mapped) == {row["caseId"] for row in value["cases"]}
     assert len(closure["conditions"]) == 18
     assert closure["parentStatus"] == "IMPLEMENTING" and closure["closureReview"]["decision"] == "PENDING"
-    assert closure["profileComparison"]["emulatorCompatibilityCheck"] == "PENDING_LOCAL_OBSERVATION"
+    assert closure["profileComparison"]["emulatorCompatibilityCheck"] == "SEPARATE_TRACK"
     for condition in closure["conditions"]:
-        assert condition["status"] != "VERIFIED"
         if condition["conditionId"] in counts:
-            assert condition["status"] == "PRODUCTION_RECORDED"
+            # the published recordedComparison records verify these on the strict profile; the 13-case subset stays partial evidence beside them
+            assert condition["status"] == "VERIFIED"
             partial = condition["partialEvidence"]
             assert partial["coverage"] == "PARTIAL" and partial["remainingBoundaries"]
             assert partial["caseIds"] == value["conditionMap"][condition["conditionId"]]
             assert partial["reference"] == str(PATH.relative_to(ROOT))
+        elif "recordedComparison" in condition:
+            assert condition["status"] == "VERIFIED"
         else:
+            assert condition["status"] != "VERIFIED"
             assert condition["productionObservation"] == "UNOBSERVED_BY_RECORDED_CORPUS"
 
 

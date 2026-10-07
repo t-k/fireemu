@@ -1,0 +1,283 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-observations-v1",
+  "parent": "FS-TRANSACTION",
+  "condition": [
+    "FS-TRANSACTION/read-time-snapshot"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "decodedSemanticsValidated": true,
+  "rawRestWireLayoutValidated": false,
+  "normalization": "Only the declared run identities (nonce, owner marker, issued token values, project number) are replaced by roles; codes, diagnostics, read states, token ends and cleanup are the program's own projection.",
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open."
+  ],
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P03-READTIME",
+      "packetName": "p03-readtime",
+      "corpusDigest": "68f373dcbef6da967eba9cca9d34b2c1a7b5c420f9eafaded84453abe968f290",
+      "recordings": 2,
+      "agree": true,
+      "productionFileSha256": [
+        "9e60fc867d4b5363b0b8860e48d02fa88be50b8a6a9df2357e715a38f16656ba",
+        "74092fe65c0a86492d205ecf63dc18bba14ce2d6a223bbf315abf7e9f09adbc3"
+      ],
+      "projection": {
+        "program": "FS-TRANSACTION-P03-READTIME",
+        "packetName": "p03-readtime",
+        "corpusDigest": "68f373dcbef6da967eba9cca9d34b2c1a7b5c420f9eafaded84453abe968f290",
+        "cases": [
+          {
+            "caseId": "rest/current-a",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/get-at-v1",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/get-at-v0",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/batch-at-v1",
+            "transport": "rest",
+            "rpc": "BatchGetDocuments",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/ro-read-a",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/ro-batch",
+            "transport": "rest",
+            "rpc": "BatchGetDocuments",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/emb-batch-new",
+            "transport": "rest",
+            "rpc": "BatchGetDocuments",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/emb-get-a",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/emb-commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/current-a",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/get-at-v1",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/batch-at-v1",
+            "transport": "grpc",
+            "rpc": "BatchGetDocuments",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/ro-read-a",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/emb-batch-new",
+            "transport": "grpc",
+            "rpc": "BatchGetDocuments",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/emb-commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          }
+        ],
+        "reads": [
+          {
+            "site": "setup/absence-a",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "setup/absence-m",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "rest/current-a",
+            "code": 0,
+            "state": "v2"
+          },
+          {
+            "site": "rest/get-at-v1",
+            "code": 0,
+            "state": "v1"
+          },
+          {
+            "site": "rest/get-at-v0",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/batch-at-v1",
+            "code": 0,
+            "documents": {
+              "a": "v1",
+              "m": null
+            }
+          },
+          {
+            "site": "rest/ro/read-a",
+            "code": 0,
+            "state": "v1"
+          },
+          {
+            "site": "rest/ro/batch",
+            "code": 0,
+            "documents": {
+              "a": "v1",
+              "m": null
+            }
+          },
+          {
+            "site": "rest/emb/batch-new",
+            "code": 0,
+            "documents": {
+              "a": "v2",
+              "m": null
+            }
+          },
+          {
+            "site": "rest/emb/get-a",
+            "code": 0,
+            "state": "v2"
+          },
+          {
+            "site": "rest/emb/post-read-a",
+            "code": 0,
+            "state": "rest-emb-commit"
+          },
+          {
+            "site": "grpc/current-a",
+            "code": 0,
+            "state": "rest-emb-commit"
+          },
+          {
+            "site": "grpc/get-at-v1",
+            "code": 0,
+            "state": "v1"
+          },
+          {
+            "site": "grpc/batch-at-v1",
+            "code": 0,
+            "documents": {
+              "a": "v1",
+              "m": null
+            }
+          },
+          {
+            "site": "grpc/ro/read-a",
+            "code": 0,
+            "state": "v1"
+          },
+          {
+            "site": "grpc/emb/batch-new",
+            "code": 0,
+            "documents": {
+              "a": "rest-emb-commit",
+              "m": null
+            }
+          },
+          {
+            "site": "grpc/emb/post-read-a",
+            "code": 0,
+            "state": "grpc-emb-commit"
+          }
+        ],
+        "tokens": {
+          "rest-ro": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-emb": {
+            "transport": "rest",
+            "state": "committed"
+          },
+          "grpc-ro": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-emb": {
+            "transport": "grpc",
+            "state": "committed"
+          }
+        },
+        "expectedStates": {
+          "a": "grpc-emb-commit"
+        },
+        "cleanup": {
+          "absent": true
+        }
+      }
+    }
+  ]
+}

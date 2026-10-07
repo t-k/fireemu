@@ -578,8 +578,8 @@ struct UsEastern2026;
 impl UsEastern2026 {
     const EDT: i64 = -4 * 3_600;
     const EST: i64 = -5 * 3_600;
-    const SPRING: i64 = 1_773_385_200; // 2026-03-08T07:00:00Z
-    const FALL: i64 = 1_793_944_800; // 2026-11-01T06:00:00Z
+    const SPRING: i64 = 1_772_953_200; // 2026-03-08T07:00:00Z
+    const FALL: i64 = 1_793_512_800; // 2026-11-01T06:00:00Z
 
     const fn offset_at(utc: i64) -> i64 {
         if utc >= Self::SPRING && utc < Self::FALL {
@@ -641,6 +641,8 @@ fn the_bounded_run_window_matches_enumeration_over_zones_and_schedules() {
         "every 7 minutes",
         "every 3 hours",
         "every monday 09:30",
+        "1st friday of quarter 9:00",
+        "2nd,3rd monday 06:30",
     ];
     let ranges = [
         // A DST spring gap, a fall fold, a plain week, an empty window and a minute.
@@ -746,4 +748,587 @@ fn a_large_window_costs_the_same_whatever_it_holds() {
     assert_eq!(RunCount::Exact(0).saturating_sub(1), RunCount::Exact(0));
     assert!(RunCount::Exact(0).is_zero() && !RunCount::AtLeast(0).is_zero());
     assert_eq!(RunCount::AtLeast(7).value(), 7);
+}
+
+// ---------------------------------------------------------------------------------------------
+// App Engine ordinal-weekday ("groc") schedules: `1st friday of quarter 9:00`.
+// ---------------------------------------------------------------------------------------------
+
+fn utc_next(text: &str, after: &str) -> Option<LogicalInstant> {
+    Schedule::parse(text)
+        .unwrap_or_else(|e| panic!("{text:?} must parse: {e}"))
+        .next_after_in(t(after), &FixedOffset(0))
+}
+
+#[test]
+fn groc_ordinal_weekday_forms_parse() {
+    for text in [
+        "1st friday of quarter 9:00",
+        "1st friday of quarter 09:00",
+        "first monday of month 12:00",
+        "1st,3rd sat of month 09:00",
+        "2nd,third wed,thu of feb,aug 13:50",
+        "1st,2nd monday 9:00",
+        "5th sunday of month 00:00",
+        "FIRST Friday OF Quarter 9:00",
+    ] {
+        let schedule = Schedule::parse(text).unwrap_or_else(|e| panic!("{text:?}: {e}"));
+        assert_eq!(schedule.as_str(), text);
+    }
+}
+
+#[test]
+fn groc_ordinal_weekday_refuses_what_it_does_not_recognise() {
+    for text in [
+        "1st friday of quarter",
+        "1st friday of quarter 24:00",
+        "1st friday of quarter 9:60",
+        "1st friday of quarter 9:0",
+        "1st friday of quarter 9",
+        "6th friday of month 9:00",
+        "0th friday of month 9:00",
+        "1st funday of month 9:00",
+        "1st friday of fortnight 9:00",
+        "1st friday off month 9:00",
+        "1st friday of month 9:00 extra",
+        "1st,,3rd friday of month 9:00",
+        "1st friday,, of month 9:00",
+        "1st friday of jan,,feb 9:00",
+        "1st of month 9:00",
+        "friday of month 9:00",
+        "1st friday of 9:00",
+    ] {
+        assert!(
+            matches!(
+                Schedule::parse(text),
+                Err(ScheduleError::Malformed(_) | ScheduleError::OutOfRange { .. })
+            ),
+            "{text:?} must be refused"
+        );
+    }
+}
+
+/// The production observation (calendar v5, c04): created on 2026-10-01 (a Thursday) the
+/// next run was the first Friday of October.
+#[test]
+fn groc_first_friday_of_quarter_runs_on_the_first_friday() {
+    assert_eq!(
+        utc_next("1st friday of quarter 9:00", "2026-10-01T05:20:18Z"),
+        Some(t("2026-10-02T09:00:00Z"))
+    );
+}
+
+/// UNVERIFIED against production: that `quarter` means January, April, July and October. The
+/// recorded c04 cannot tell it from `month` (it was created before October's first Friday).
+/// 2027-01-01 is a Friday, so the next run after October's is the very first day of January.
+#[test]
+fn groc_quarter_is_assumed_to_be_the_first_month_of_each_quarter() {
+    assert_eq!(
+        utc_next("1st friday of quarter 9:00", "2026-10-02T09:00:00Z"),
+        Some(t("2027-01-01T09:00:00Z"))
+    );
+    assert_eq!(
+        utc_next("1st friday of month 9:00", "2026-10-02T09:00:00Z"),
+        Some(t("2026-11-06T09:00:00Z"))
+    );
+}
+
+#[test]
+fn groc_ordinal_lists_pick_every_listed_occurrence() {
+    let sat = Schedule::parse("1st,3rd sat of month 09:00").unwrap();
+    let zone = FixedOffset(0);
+    let runs = sat.runs_between_in(
+        t("2026-10-01T00:00:00Z"),
+        t("2026-11-30T00:00:00Z"),
+        &zone,
+        100,
+    );
+    assert_eq!(
+        runs,
+        [
+            t("2026-10-03T09:00:00Z"),
+            t("2026-10-17T09:00:00Z"),
+            t("2026-11-07T09:00:00Z"),
+            t("2026-11-21T09:00:00Z"),
+        ]
+    );
+}
+
+#[test]
+fn groc_weekday_and_month_lists_combine() {
+    let schedule = Schedule::parse("2nd,third wed,thu of feb,aug 13:50").unwrap();
+    let runs = schedule.runs_between_in(
+        t("2026-01-01T00:00:00Z"),
+        t("2026-12-31T00:00:00Z"),
+        &FixedOffset(0),
+        100,
+    );
+    assert_eq!(
+        runs,
+        [
+            t("2026-02-11T13:50:00Z"),
+            t("2026-02-12T13:50:00Z"),
+            t("2026-02-18T13:50:00Z"),
+            t("2026-02-19T13:50:00Z"),
+            t("2026-08-12T13:50:00Z"),
+            t("2026-08-13T13:50:00Z"),
+            t("2026-08-19T13:50:00Z"),
+            t("2026-08-20T13:50:00Z"),
+        ]
+    );
+}
+
+#[test]
+fn groc_fifth_occurrence_exists_only_in_months_with_five_of_that_weekday() {
+    let schedule = Schedule::parse("5th monday of month 09:00").unwrap();
+    let runs = schedule.runs_between_in(
+        t("2026-01-01T00:00:00Z"),
+        t("2026-12-31T00:00:00Z"),
+        &FixedOffset(0),
+        100,
+    );
+    assert_eq!(
+        runs,
+        [
+            t("2026-03-30T09:00:00Z"),
+            t("2026-06-29T09:00:00Z"),
+            t("2026-08-31T09:00:00Z"),
+            t("2026-11-30T09:00:00Z"),
+        ]
+    );
+}
+
+#[test]
+fn groc_without_a_month_spec_runs_in_every_month() {
+    let schedule = Schedule::parse("1st,2nd monday 9:00").unwrap();
+    let runs = schedule.runs_between_in(
+        t("2026-10-01T00:00:00Z"),
+        t("2026-11-30T00:00:00Z"),
+        &FixedOffset(0),
+        100,
+    );
+    assert_eq!(
+        runs,
+        [
+            t("2026-10-05T09:00:00Z"),
+            t("2026-10-12T09:00:00Z"),
+            t("2026-11-02T09:00:00Z"),
+            t("2026-11-09T09:00:00Z"),
+        ]
+    );
+}
+
+mod groc_model {
+    use super::*;
+    use fireemu_core_functions::cron::civil_from_days;
+    use proptest::prelude::*;
+    use std::fmt::Write as _;
+
+    const ORDINALS: [[&str; 2]; 5] = [
+        ["1st", "first"],
+        ["2nd", "second"],
+        ["3rd", "third"],
+        ["4th", "fourth"],
+        ["5th", "fifth"],
+    ];
+    const WEEKDAYS: [[&str; 2]; 7] = [
+        ["sun", "sunday"],
+        ["mon", "monday"],
+        ["tue", "tuesday"],
+        ["wed", "wednesday"],
+        ["thu", "thursday"],
+        ["fri", "friday"],
+        ["sat", "saturday"],
+    ];
+    const MONTHS: [[&str; 2]; 12] = [
+        ["jan", "january"],
+        ["feb", "february"],
+        ["mar", "march"],
+        ["apr", "april"],
+        ["may", "may"],
+        ["jun", "june"],
+        ["jul", "july"],
+        ["aug", "august"],
+        ["sep", "september"],
+        ["oct", "october"],
+        ["nov", "november"],
+        ["dec", "december"],
+    ];
+    const HORIZON_DAYS: i64 = 8 * 366;
+
+    /// How the month part of the text is written, with the month mask it must mean.
+    #[derive(Debug, Clone)]
+    enum MonthSpec {
+        Absent,
+        Month,
+        Quarter,
+        List(u16),
+    }
+
+    impl MonthSpec {
+        fn mask(&self) -> u16 {
+            match self {
+                Self::Absent | Self::Month => 0b1_1111_1111_1110,
+                Self::Quarter => (1 << 1) | (1 << 4) | (1 << 7) | (1 << 10),
+                Self::List(mask) => *mask,
+            }
+        }
+    }
+
+    fn names(table: &[[&str; 2]], mask: u16, base: u32, long: bool) -> String {
+        (base..base + u32::try_from(table.len()).unwrap())
+            .filter(|n| mask >> n & 1 == 1)
+            .map(|n| table[(n - base) as usize][usize::from(long)])
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// The independent day-by-day reference: the first matching minute strictly after `after`.
+    fn reference_next(
+        after: i64,
+        offset: i64,
+        ordinals: u16,
+        weekdays: u16,
+        months: u16,
+        hour: u32,
+        minute: u32,
+    ) -> Option<i64> {
+        let start_day = (after + offset).div_euclid(86_400);
+        (start_day..start_day + HORIZON_DAYS).find_map(|day| {
+            let (_, month, dom) = civil_from_days(day);
+            let weekday = (day + 4).rem_euclid(7);
+            let nth = (dom - 1) / 7 + 1;
+            let matches = months >> month & 1 == 1
+                && weekdays >> weekday & 1 == 1
+                && ordinals >> nth & 1 == 1;
+            let utc = day * 86_400 + i64::from(hour) * 3_600 + i64::from(minute) * 60 - offset;
+            (matches && utc > after).then_some(utc)
+        })
+    }
+
+    fn month_spec() -> impl Strategy<Value = MonthSpec> {
+        prop_oneof![
+            Just(MonthSpec::Absent),
+            Just(MonthSpec::Month),
+            Just(MonthSpec::Quarter),
+            (1u16..4096).prop_map(|bits| MonthSpec::List(bits << 1)),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(400))]
+
+        #[test]
+        fn the_next_run_matches_a_day_by_day_reference(
+            ordinal_bits in 1u16..32,
+            weekday_bits in 1u16..128,
+            spec in month_spec(),
+            long_names in any::<bool>(),
+            hour in 0u32..24,
+            minute in 0u32..60,
+            after in 1_577_836_800i64..2_082_758_400,
+            offset in prop::sample::select(vec![-18_000i64, 0, 19_800, 32_400]),
+        ) {
+            let ordinals = ordinal_bits << 1;
+            let mut text = names(&ORDINALS, ordinals, 1, long_names);
+            text.push(' ');
+            text.push_str(&names(&WEEKDAYS, weekday_bits, 0, long_names));
+            match &spec {
+                MonthSpec::Absent => {}
+                MonthSpec::Month => text.push_str(" of month"),
+                MonthSpec::Quarter => text.push_str(" of quarter"),
+                MonthSpec::List(mask) => {
+                    text.push_str(" of ");
+                    text.push_str(&names(&MONTHS, *mask, 1, long_names));
+                }
+            }
+            write!(text, " {hour}:{minute:02}").unwrap();
+
+            let schedule = Schedule::parse(&text).unwrap_or_else(|e| panic!("{text:?}: {e}"));
+            let got = schedule
+                .next_after(LogicalInstant::from_unix_seconds(after), offset)
+                .map(|i| i64::try_from(i.as_nanos() / 1_000_000_000).unwrap());
+            let want = reference_next(
+                after, offset, ordinals, weekday_bits, spec.mask(), hour, minute,
+            );
+            let near_horizon = after + (HORIZON_DAYS - 3) * 86_400;
+            if want.is_some_and(|w| w < near_horizon) {
+                prop_assert_eq!(got, want, "{}", text);
+            } else {
+                prop_assert!(got.is_none() || got.is_some_and(|g| g >= near_horizon), "{}", text);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The boundary of a run window: an occurrence belongs to `(from, to]`.
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn an_occurrence_is_in_the_window_that_ends_at_it_and_not_in_one_that_ends_a_nanosecond_before() {
+    let utc = FixedOffset(0);
+    let from = t("2026-08-29T12:00:00Z");
+    let at = t("2026-08-29T12:05:00Z");
+    let before = |i: LogicalInstant| LogicalInstant::from_nanos(i.as_nanos() - 1);
+    let after = |i: LogicalInstant| LogicalInstant::from_nanos(i.as_nanos() + 1);
+    for text in ["every 5 minutes", "*/5 * * * *", "5 12 * * *"] {
+        let schedule = Schedule::parse(text).unwrap();
+        // Ends one nanosecond before the occurrence: nothing is due yet.
+        assert!(
+            schedule
+                .runs_between_in(from, before(at), &utc, 10)
+                .is_empty(),
+            "{text}"
+        );
+        let early = schedule.window_in(from, before(at), &utc, 10);
+        assert_eq!(early.count, RunCount::Exact(0), "{text}");
+        assert_eq!(early.latest, None, "{text}");
+        // Ends exactly at the occurrence: it is due, once.
+        assert_eq!(
+            schedule.runs_between_in(from, at, &utc, 10),
+            vec![at],
+            "{text}"
+        );
+        let on_time = schedule.window_in(from, at, &utc, 10);
+        assert_eq!(on_time.count, RunCount::Exact(1), "{text}");
+        assert_eq!(on_time.latest, Some(at), "{text}");
+        // Starts at the occurrence: it is not due a second time.
+        assert!(
+            schedule.runs_between_in(at, after(at), &utc, 10).is_empty(),
+            "{text}"
+        );
+        assert_eq!(
+            schedule.window_in(at, after(at), &utc, 10).count,
+            RunCount::Exact(0),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn a_restricted_month_or_day_is_found_across_months_years_and_leap_days() {
+    let utc = FixedOffset(0);
+    let next = |text: &str, after: &str| {
+        Schedule::parse(text)
+            .unwrap()
+            .next_after_in(t(after), &utc)
+            .unwrap_or_else(|| panic!("{text} after {after} has no run"))
+    };
+    // A month later in the same year, the same run exactly at the instant, and the next year.
+    assert_eq!(
+        next("0 9 1 6 *", "2026-01-15T00:00:00Z"),
+        t("2026-06-01T09:00:00Z")
+    );
+    assert_eq!(
+        next("0 9 1 6 *", "2026-06-01T08:59:59Z"),
+        t("2026-06-01T09:00:00Z")
+    );
+    assert_eq!(
+        next("0 9 1 6 *", "2026-06-01T09:00:00Z"),
+        t("2027-06-01T09:00:00Z")
+    );
+    // The search wraps over the year end (December to a month early in the next year).
+    assert_eq!(
+        next("0 9 1 6 *", "2026-12-31T10:00:00Z"),
+        t("2027-06-01T09:00:00Z")
+    );
+    assert_eq!(
+        next("0 0 1 1,7 *", "2026-07-01T00:00:00Z"),
+        t("2027-01-01T00:00:00Z")
+    );
+    assert_eq!(
+        next("0 0 1 1,7 *", "2026-12-15T00:00:00Z"),
+        t("2027-01-01T00:00:00Z")
+    );
+    // A day some months lack, and a leap day years ahead.
+    assert_eq!(
+        next("0 9 31 * *", "2026-04-15T00:00:00Z"),
+        t("2026-05-31T09:00:00Z")
+    );
+    assert_eq!(
+        next("0 0 29 2 *", "2026-03-01T00:00:00Z"),
+        t("2028-02-29T00:00:00Z")
+    );
+}
+
+#[test]
+fn a_window_over_a_restricted_schedule_lists_counts_and_ends_on_the_right_runs() {
+    let utc = FixedOffset(0);
+    let june_first = Schedule::parse("0 9 1 6,12 *").unwrap();
+    assert_eq!(
+        june_first.runs_between_in(
+            t("2026-01-01T00:00:00Z"),
+            t("2027-12-31T00:00:00Z"),
+            &utc,
+            100
+        ),
+        vec![
+            t("2026-06-01T09:00:00Z"),
+            t("2026-12-01T09:00:00Z"),
+            t("2027-06-01T09:00:00Z"),
+            t("2027-12-01T09:00:00Z"),
+        ]
+    );
+    // Seven Junes in the window: counted exactly, the newest is the latest, and the work done
+    // is more than nothing (the counter is what the bounded-work assertions read).
+    let june = Schedule::parse("0 9 1 6 *").unwrap();
+    let all = june.window_in(
+        t("2020-01-01T00:00:00Z"),
+        t("2026-12-31T00:00:00Z"),
+        &utc,
+        100,
+    );
+    assert_eq!(all.count, RunCount::Exact(7));
+    assert_eq!(all.latest, Some(t("2026-06-01T09:00:00Z")));
+    assert!(all.steps >= 7, "{} steps for seven runs", all.steps);
+    // A cap below the number of runs stops the count there and says so.
+    let capped = june.window_in(
+        t("2020-01-01T00:00:00Z"),
+        t("2026-12-31T00:00:00Z"),
+        &utc,
+        5,
+    );
+    assert!(!capped.count.is_exact());
+    assert_eq!(capped.count.value(), 5);
+    assert_eq!(capped.latest, Some(t("2026-06-01T09:00:00Z")));
+    // Three nights in a window that ends before the fourth.
+    let nightly = Schedule::parse("0 3 * * *").unwrap();
+    let nights = nightly.window_in(
+        t("2026-08-29T12:01:00Z"),
+        t("2026-09-01T04:00:00Z"),
+        &utc,
+        100,
+    );
+    assert_eq!(nights.count, RunCount::Exact(3));
+    assert_eq!(nights.latest, Some(t("2026-09-01T03:00:00Z")));
+    assert!(nights.steps >= 3, "{} steps", nights.steps);
+    // A cap equal to the number of runs is not "at least": nothing more lies in the window.
+    let exact = nightly.window_in(
+        t("2026-08-29T12:01:00Z"),
+        t("2026-09-01T04:00:00Z"),
+        &utc,
+        3,
+    );
+    assert_eq!(exact.count, RunCount::Exact(3));
+    let below = nightly.window_in(
+        t("2026-08-29T12:01:00Z"),
+        t("2026-09-01T04:00:00Z"),
+        &utc,
+        2,
+    );
+    assert_eq!(below.count, RunCount::AtLeast(2));
+}
+
+#[test]
+fn the_dst_gap_is_skipped_and_the_fold_runs_at_its_first_occurrence_in_every_window_search() {
+    let ny = UsEastern2026;
+    // 2026-03-08 02:30 does not exist: the next run of `30 2 * * *` is the day after.
+    let spring = Schedule::parse("30 2 * * *").unwrap();
+    assert_eq!(
+        spring.next_after_in(t("2026-03-07T12:00:00Z"), &ny),
+        Some(t("2026-03-09T06:30:00Z"))
+    );
+    let gap = spring.window_in(
+        t("2026-03-07T12:00:00Z"),
+        t("2026-03-09T12:00:00Z"),
+        &ny,
+        100,
+    );
+    assert_eq!(gap.count, RunCount::Exact(1));
+    assert_eq!(gap.latest, Some(t("2026-03-09T06:30:00Z")));
+
+    // 2026-11-01 01:30 happens twice: the schedule runs at the first (EDT, 05:30Z) only.
+    let fold = Schedule::parse("30 1 * * *").unwrap();
+    assert_eq!(
+        fold.next_after_in(t("2026-10-31T12:00:00Z"), &ny),
+        Some(t("2026-11-01T05:30:00Z"))
+    );
+    assert_eq!(
+        fold.next_after_in(t("2026-11-01T05:30:00Z"), &ny),
+        Some(t("2026-11-02T06:30:00Z")),
+        "the second 01:30 (EST) is not a run"
+    );
+    // A window ending in the repeated hour, after the first occurrence: it holds that run, and
+    // the one ending after the second occurrence holds it too, once.
+    for to in ["2026-11-01T06:10:00Z", "2026-11-01T06:40:00Z"] {
+        let w = fold.window_in(t("2026-10-31T12:00:00Z"), t(to), &ny, 100);
+        assert_eq!(w.count, RunCount::Exact(1), "{to}");
+        assert_eq!(w.latest, Some(t("2026-11-01T05:30:00Z")), "{to}");
+    }
+    // A window that ends before the first occurrence: the candidate 01:30 maps to an instant
+    // after the window's end, so the latest run is the previous night's.
+    let before = fold.window_in(
+        t("2026-10-30T12:00:00Z"),
+        t("2026-11-01T05:10:00Z"),
+        &ny,
+        100,
+    );
+    assert_eq!(before.count, RunCount::Exact(1));
+    assert_eq!(before.latest, Some(t("2026-10-31T05:30:00Z")));
+}
+
+#[test]
+fn the_work_counter_is_deterministic() {
+    let utc = FixedOffset(0);
+    let every5 = Schedule::parse("every 5 minutes").unwrap();
+    let interval_window = every5.window_in(
+        t("2026-08-29T12:00:00Z"),
+        t("2026-08-29T12:20:00Z"),
+        &utc,
+        100,
+    );
+    assert_eq!(
+        interval_window.steps, 2,
+        "an interval window is two divisions"
+    );
+    let nightly = Schedule::parse("0 3 * * *").unwrap();
+    let nightly_window = nightly.window_in(
+        t("2026-08-29T12:01:00Z"),
+        t("2026-09-01T04:00:00Z"),
+        &utc,
+        100,
+    );
+    assert_eq!(
+        nightly_window.steps, 45,
+        "27 reverse-probe hours, the backward walk, the forward count"
+    );
+    let june = Schedule::parse("0 9 1 6 *").unwrap();
+    let june_window = june.window_in(
+        t("2020-01-01T00:00:00Z"),
+        t("2026-12-31T00:00:00Z"),
+        &utc,
+        100,
+    );
+    assert_eq!(
+        june_window.steps, 380,
+        "a month-restricted schedule walks months"
+    );
+    let ny = UsEastern2026;
+    let fold = Schedule::parse("30 1 * * *").unwrap();
+    let fold_window = fold.window_in(
+        t("2026-10-31T12:00:00Z"),
+        t("2026-11-01T06:10:00Z"),
+        &ny,
+        100,
+    );
+    assert_eq!(
+        fold_window.steps, 39,
+        "a fold window walks one repeated hour"
+    );
+    // An every-minute schedule across the repeated hour: 01:01 to 01:59 run once (05:01 to 05:59Z),
+    // and the second 01:00 hour (06:00 to 06:59Z) holds no run at all.
+    let every_minute = Schedule::parse("* * * * *").unwrap();
+    let minute_window = every_minute.window_in(
+        t("2026-11-01T05:00:00Z"),
+        t("2026-11-01T06:10:00Z"),
+        &ny,
+        1_000,
+    );
+    assert_eq!(minute_window.count, RunCount::Exact(59));
+    assert_eq!(minute_window.latest, Some(t("2026-11-01T05:59:00Z")));
+    assert_eq!(
+        minute_window.steps, 100,
+        "a window ending in the repeated hour starts its walk at the right height"
+    );
 }

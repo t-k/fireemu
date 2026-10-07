@@ -1,16 +1,43 @@
 {
   "schemaVersion": 1,
   "parent": "SCHEDULED-FUNCTIONS",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "inventoryStatus": "FROZEN",
   "oracleTrack": "disposable-sandbox",
   "oracle": {
     "project": "fireemu-oracle-sbx",
     "region": "us-central1",
-    "generations": [1, 2]
+    "generations": [
+      1,
+      2
+    ]
   },
   "closureReview": {
-    "decision": "PENDING"
+    "decision": "APPROVED",
+    "decidedOn": "2026-10-06",
+    "decider": "project coordinator (delegated by the owner)",
+    "reviewer": "independent read-only closure reviewer (Opus), clean context",
+    "decisionRef": "docs.local/instructions/owner-decisions.md line 965",
+    "decisionSha256": "373cd695694ec942eabe5c78eff99f190dfb3a5fba4685e88c90e5787b54b993",
+    "reviewedCommit": "2732fa9188a8180b4c2497938c52b89c0f767154",
+    "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+    "reviews": [
+      {
+        "reviewer": "independent read-only closure reviewer (Opus)",
+        "scope": "3cbc08780e3640e385747c41832cad226705cf29",
+        "reportPath": "docs.local/reviews/2026-10-06-sched-closure-review.md",
+        "reportSha256": "a58390b02c0870253fb1bffd9f4f5c10782d2eb08c92ee29712a5609fb89d799",
+        "outcome": "CHANGES REQUESTED (Must Fix 4, Should Fix 9)"
+      },
+      {
+        "reviewer": "independent read-only closure reviewer (Opus)",
+        "scope": "2732fa9188a8180b4c2497938c52b89c0f767154",
+        "reportPath": "docs.local/reviews/2026-10-06-sched-closure-review-delta.md",
+        "reportSha256": "e28cce1c644f700cd315e89ba2ce050f95d47f9ba3c7d215ec3af854f81f7d5d",
+        "outcome": "APPROVE (Must Fix 0, Should Fix 7; R1-R3 applied in the promotion)"
+      }
+    ],
+    "followUps": "R4: add productionPassComparisons for the five remaining retry rows when the generator next runs. R5: correct the local comparison provenance note to distinguish tests from de04d3de0 and the identical binary rebuilt from 0b6d27a96. R6: print the binary path and digest in the next no-new-refusals receipt. R7: cite scheduled-redeploy-keeps-prior-retry-config.md in jobResourceReadings and limitations. M4: scheduled-redeploy-keeps-prior-retry-config.md tracks omitted retry options resetting on strict redeploy. S7: scheduled-functions-calendar-comparison-needs-release-replay.md and scheduled-functions-delivery-comparison-needs-release-replay.md track release replay. scheduled-gen1-topic-publish-not-delivered.md tracks user publishes to Gen1 schedule topics. The v0.13.0 tag must preserve closure-base-0b6d27a96 runtime inputs (apart from test code and workspace version fields); otherwise rerun calendar and delivery comparisons on its final binary."
   },
   "scopeDecisions": [
     {
@@ -90,7 +117,9 @@
     {
       "conditionId": "SCHEDULED-FUNCTIONS/declarations-v1-v2",
       "evidenceType": "production-parity",
-      "recipeIds": ["scheduled-functions/deployment"],
+      "recipeIds": [
+        "scheduled-functions/deployment"
+      ],
       "cases": [
         "v1-schedule-chain",
         "v2-onSchedule-string",
@@ -105,16 +134,447 @@
         "fractional-retry-duration",
         "SDK-attemptDeadline-versus-CLI-timeout"
       ],
-      "status": "PENDING_CORPUS",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+        "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+        "rows": {
+          "MATCH": 7,
+          "DIVERGENCE_APPROVED": 5
+        },
+        "coverage": {
+          "MATCH": 7,
+          "DIVERGENCE_APPROVED": 5
+        },
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          },
+          {
+            "pass": 2,
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          }
+        ],
+        "approvedDifferences": [
+          {
+            "caseId": "attempt-deadline",
+            "status": "DIVERGENCE_APPROVED",
+            "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+          },
+          {
+            "caseId": "v1-App-Engine-job-location",
+            "status": "DIVERGENCE_APPROVED",
+            "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+          },
+          {
+            "caseId": "v2-function-region-job-location",
+            "status": "DIVERGENCE_APPROVED",
+            "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+          },
+          {
+            "caseId": "omitted-versus-null-reset",
+            "status": "DIVERGENCE_APPROVED",
+            "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+          },
+          {
+            "caseId": "SDK-attemptDeadline-versus-CLI-timeout",
+            "status": "DIVERGENCE_APPROVED",
+            "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+          }
+        ],
+        "supplementalRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "ecef353d18975246-pass-1",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "95174e781182e8a396b5fe23eebdb994f96e69ddcdbe1b694050e8cef448ec48",
+            "path": "conformance/scheduled-delivery/local/production-run4.json",
+            "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99"
+          },
+          {
+            "pass": 2,
+            "recordingId": "ecef353d18975246-pass-2",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "95174e781182e8a396b5fe23eebdb994f96e69ddcdbe1b694050e8cef448ec48",
+            "path": "conformance/scheduled-delivery/local/production-run4.json",
+            "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99"
+          }
+        ]
+      },
+      "caseDecisions": [
+        {
+          "caseId": "attempt-deadline",
+          "status": "DIVERGENCE_APPROVED",
+          "decisionOfRecord": "S4",
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+        },
+        {
+          "caseId": "omitted-versus-null-reset",
+          "status": "DIVERGENCE_APPROVED",
+          "decisionOfRecord": "S4",
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)",
+          "note": "Production keeps the prior retryConfig when redeploy omits retry options (the CLI PATCH update mask omits retryConfig, run 4 C6); strict reloads the manifest and resets defaults. This gap is not modelled and is filed as scheduled-redeploy-keeps-prior-retry-config.md."
+        },
+        {
+          "caseId": "SDK-attemptDeadline-versus-CLI-timeout",
+          "status": "DIVERGENCE_APPROVED",
+          "decisionOfRecord": "S4",
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+        },
+        {
+          "caseId": "v1-App-Engine-job-location",
+          "status": "DIVERGENCE_APPROVED",
+          "decisionOfRecord": "S4",
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+        },
+        {
+          "caseId": "v2-function-region-job-location",
+          "status": "DIVERGENCE_APPROVED",
+          "decisionOfRecord": "S4",
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+        }
+      ],
       "obligation": "Pinned SDK declarations and Firebase CLI effective job readback",
-      "source": "https://firebase.google.com/docs/functions/schedule-functions; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js; conformance/node_modules/firebase-functions/lib/v2/providers/scheduler.js; conformance/node_modules/firebase-functions/lib/v1/providers/pubsub.js"
+      "source": "https://firebase.google.com/docs/functions/schedule-functions; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js; conformance/node_modules/firebase-functions/lib/v2/providers/scheduler.js; conformance/node_modules/firebase-functions/lib/v1/providers/pubsub.js",
+      "caseEvidence": [
+        {
+          "caseId": "v1-schedule-chain",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/fixture/index.js",
+              "sha256": "1805e6b0ca9a052fb80f31ac59d98ab9e47108eddd7e921777fd0d2630ed6b5b",
+              "fields": [
+                "exports.schedOkV1"
+              ]
+            },
+            {
+              "path": "conformance/scheduled-delivery/local/production-run3.json",
+              "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+              "fields": [
+                "jobs.schedOkV1"
+              ]
+            },
+            {
+              "path": "conformance/scheduled-delivery/local/production-run2.json",
+              "sha256": "f361f4d30ddb7d655715b1eec9395bfa58275791dfa5922643d7a13ba637e21f",
+              "fields": [
+                "jobs",
+                "frames"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "v2-onSchedule-string",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/fixture/index.js",
+              "sha256": "1805e6b0ca9a052fb80f31ac59d98ab9e47108eddd7e921777fd0d2630ed6b5b",
+              "fields": [
+                "exports.schedOkV2"
+              ]
+            },
+            {
+              "path": "conformance/scheduled-delivery/local/production-run3.json",
+              "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+              "fields": [
+                "jobs.schedOkV2"
+              ]
+            },
+            {
+              "path": "conformance/scheduled-delivery/local/production-run2.json",
+              "sha256": "f361f4d30ddb7d655715b1eec9395bfa58275791dfa5922643d7a13ba637e21f",
+              "fields": [
+                "jobs",
+                "frames"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "v2-onSchedule-options",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/fixture/index.js",
+              "sha256": "1805e6b0ca9a052fb80f31ac59d98ab9e47108eddd7e921777fd0d2630ed6b5b",
+              "fields": [
+                "exports.schedRetryV2"
+              ]
+            },
+            {
+              "path": "conformance/scheduled-delivery/local/production-run3.json",
+              "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+              "fields": [
+                "jobs.schedRetryV2"
+              ]
+            },
+            {
+              "path": "conformance/scheduled-delivery/local/production-run2.json",
+              "sha256": "f361f4d30ddb7d655715b1eec9395bfa58275791dfa5922643d7a13ba637e21f",
+              "fields": [
+                "jobs",
+                "frames"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "omitted-timezone",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/local/production-run4.json",
+              "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99",
+              "fields": [
+                "jobs.declNullV2.timeZone",
+                "jobs.declOmitV2.timeZone"
+              ]
+            },
+            {
+              "path": "docs.local/submissions/scheduled-delivery/run4-report.md",
+              "sha256": "f23a0fd4b0a3aaef9de7c328b5d425d10c8d35ea98ae6e87f454d0cb0e31b269"
+            },
+            {
+              "path": "conformance/scheduled-delivery/local/production-run2.json",
+              "sha256": "f361f4d30ddb7d655715b1eec9395bfa58275791dfa5922643d7a13ba637e21f",
+              "fields": [
+                "jobs",
+                "frames"
+              ]
+            },
+            {
+              "path": "conformance/scheduled-delivery/local/production-run3.json",
+              "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+              "fields": [
+                "jobs",
+                "frames"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "explicit-timezone",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/local/production-run3.json",
+              "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+              "fields": [
+                "jobs.schedOkV1.timeZone",
+                "jobs.schedRetryV2.timeZone"
+              ]
+            },
+            {
+              "path": "conformance/scheduled-delivery/local/production-run2.json",
+              "sha256": "f361f4d30ddb7d655715b1eec9395bfa58275791dfa5922643d7a13ba637e21f",
+              "fields": [
+                "jobs",
+                "frames"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "retry-options-preserved",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/local/production-run3.json",
+              "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+              "fields": [
+                "jobs.schedRetryV2.retryConfig"
+              ]
+            },
+            {
+              "path": "docs.local/runs/scheduled-delivery/run-4/result-ecef353d18975246.json",
+              "sha256": "82001f12ae45cd707a23725f323e99f90f23e20e51655d9b815a11b6c9c7d8cc",
+              "fields": [
+                "rounds[].driftJobs.declOmitV2",
+                "rounds[].jobs.declOmitV2"
+              ]
+            },
+            {
+              "path": "docs.local/submissions/scheduled-delivery/run4-report.md",
+              "sha256": "f23a0fd4b0a3aaef9de7c328b5d425d10c8d35ea98ae6e87f454d0cb0e31b269"
+            },
+            {
+              "path": "conformance/scheduled-delivery/local/production-run2.json",
+              "sha256": "f361f4d30ddb7d655715b1eec9395bfa58275791dfa5922643d7a13ba637e21f",
+              "fields": [
+                "jobs",
+                "frames"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "attempt-deadline",
+          "status": "DIVERGENCE_APPROVED",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/local/production-run4.json",
+              "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99",
+              "fields": [
+                "jobs.declTimeoutV2.attemptDeadline"
+              ]
+            },
+            {
+              "path": "docs.local/submissions/scheduled-delivery/run4-report.md",
+              "sha256": "f23a0fd4b0a3aaef9de7c328b5d425d10c8d35ea98ae6e87f454d0cb0e31b269"
+            }
+          ],
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+        },
+        {
+          "caseId": "v1-App-Engine-job-location",
+          "status": "DIVERGENCE_APPROVED",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/local/production-run4.json",
+              "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99",
+              "fields": [
+                "jobs.schedFailV1.name",
+                "jobs.schedRetryV1.name"
+              ]
+            },
+            {
+              "path": "docs.local/submissions/scheduled-delivery/run4-report.md",
+              "sha256": "f23a0fd4b0a3aaef9de7c328b5d425d10c8d35ea98ae6e87f454d0cb0e31b269"
+            }
+          ],
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+        },
+        {
+          "caseId": "v2-function-region-job-location",
+          "status": "DIVERGENCE_APPROVED",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/local/production-run4.json",
+              "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99",
+              "fields": [
+                "jobs.declNullV2.name",
+                "jobs.declOmitV2.name"
+              ]
+            },
+            {
+              "path": "docs.local/submissions/scheduled-delivery/run4-report.md",
+              "sha256": "f23a0fd4b0a3aaef9de7c328b5d425d10c8d35ea98ae6e87f454d0cb0e31b269"
+            }
+          ],
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+        },
+        {
+          "caseId": "omitted-versus-null-reset",
+          "status": "DIVERGENCE_APPROVED",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "docs.local/runs/scheduled-delivery/run-4/result-ecef353d18975246.json",
+              "sha256": "82001f12ae45cd707a23725f323e99f90f23e20e51655d9b815a11b6c9c7d8cc",
+              "fields": [
+                "jobs.declNullV2",
+                "jobs.declOmitV2",
+                "rounds[].driftJobs",
+                "rounds[].jobs"
+              ]
+            },
+            {
+              "path": "docs.local/submissions/scheduled-delivery/run4-report.md",
+              "sha256": "f23a0fd4b0a3aaef9de7c328b5d425d10c8d35ea98ae6e87f454d0cb0e31b269"
+            }
+          ],
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+        },
+        {
+          "caseId": "fractional-retry-duration",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/local/production-run3.json",
+              "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+              "fields": [
+                "extraAnswers.fraction",
+                "extraJobs.fraction"
+              ]
+            },
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+              "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+              "fields": [
+                "localVerificationRows"
+              ],
+              "testId": "crates/fireemu-adapter-functions/tests/scheduler_fractional_retry.rs#the_recorded_declaration_is_listed_and_the_accepted_one_is_not"
+            }
+          ]
+        },
+        {
+          "caseId": "SDK-attemptDeadline-versus-CLI-timeout",
+          "status": "DIVERGENCE_APPROVED",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/local/production-run4.json",
+              "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99",
+              "fields": [
+                "jobs.declTimeoutV2.attemptDeadline",
+                "jobs.schedFailV1.attemptDeadline"
+              ]
+            },
+            {
+              "path": "docs.local/submissions/scheduled-delivery/run4-report.md",
+              "sha256": "f23a0fd4b0a3aaef9de7c328b5d425d10c8d35ea98ae6e87f454d0cb0e31b269"
+            }
+          ],
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+        }
+      ],
+      "note": "Production keeps the prior retryConfig when redeploy omits retry options (the CLI PATCH update mask omits retryConfig, run 4 C6); strict reloads the manifest and resets defaults. This gap is not modelled and is filed as scheduled-redeploy-keeps-prior-retry-config.md."
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/cron-grammar",
       "evidenceType": "production-parity",
-      "recipeIds": ["scheduled-functions/calendar/cron"],
+      "recipeIds": [
+        "scheduled-functions/calendar/cron"
+      ],
       "cases": [
         "wildcard",
         "list",
@@ -130,16 +590,45 @@
         "numeric-slash-step",
         "impossible-date"
       ],
-      "status": "PENDING_CORPUS",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+        "comparisonSha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+        "rows": {
+          "MATCH": 13
+        },
+        "coverage": {
+          "MATCH": 13
+        },
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "189fb441835b2645",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "a05b1a52fa586dfdf0436c38bbe3533725ce44e2fcd3cd5cec99a8cf122860a6"
+          },
+          {
+            "pass": 2,
+            "recordingId": "75478d967aa09afc",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "a05b1a52fa586dfdf0436c38bbe3533725ce44e2fcd3cd5cec99a8cf122860a6"
+          }
+        ]
+      },
       "obligation": "Cloud Scheduler accepted and refused cron schedules",
       "source": "https://docs.cloud.google.com/scheduler/docs/configuring/cron-job-schedules; crates/fireemu-core-functions/src/cron.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/groc-grammar",
       "evidenceType": "production-parity",
-      "recipeIds": ["scheduled-functions/calendar/groc"],
+      "recipeIds": [
+        "scheduled-functions/calendar/groc"
+      ],
       "cases": [
         "every-minute",
         "every-N-minutes",
@@ -155,16 +644,45 @@
         "interval-phase-versus-creation-anchor",
         "synchronized-window"
       ],
-      "status": "PENDING_CORPUS",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+        "comparisonSha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+        "rows": {
+          "MATCH": 13
+        },
+        "coverage": {
+          "MATCH": 13
+        },
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "189fb441835b2645",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "a05b1a52fa586dfdf0436c38bbe3533725ce44e2fcd3cd5cec99a8cf122860a6"
+          },
+          {
+            "pass": 2,
+            "recordingId": "75478d967aa09afc",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "a05b1a52fa586dfdf0436c38bbe3533725ce44e2fcd3cd5cec99a8cf122860a6"
+          }
+        ]
+      },
       "obligation": "English-like schedule language; no App Engine HTTP execution claim",
       "source": "https://docs.cloud.google.com/scheduler/docs/configuring/cron-job-schedules; crates/fireemu-core-functions/src/cron.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/timezone-validation-defaults",
       "evidenceType": "production-parity",
-      "recipeIds": ["scheduled-functions/calendar/timezone"],
+      "recipeIds": [
+        "scheduled-functions/calendar/timezone"
+      ],
       "cases": [
         "explicit-UTC",
         "Asia-Tokyo",
@@ -173,16 +691,165 @@
         "v2-default",
         "invalid-zone"
       ],
-      "status": "PENDING_CORPUS",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+        "comparisonSha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+        "rows": {
+          "MATCH": 6
+        },
+        "coverage": {
+          "MATCH": 6
+        },
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "189fb441835b2645",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "a05b1a52fa586dfdf0436c38bbe3533725ce44e2fcd3cd5cec99a8cf122860a6"
+          },
+          {
+            "pass": 2,
+            "recordingId": "75478d967aa09afc",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "a05b1a52fa586dfdf0436c38bbe3533725ce44e2fcd3cd5cec99a8cf122860a6"
+          }
+        ],
+        "approvedDifferences": [],
+        "supplementalComparisons": [
+          {
+            "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+            "sha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+            "caseIds": []
+          }
+        ]
+      },
       "obligation": "Effective generation-specific defaults and timezone acceptance",
-      "source": "https://docs.cloud.google.com/scheduler/docs/configuring/cron-job-schedules; crates/fireemu-core-functions/src/cron.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
+      "source": "https://docs.cloud.google.com/scheduler/docs/configuring/cron-job-schedules; crates/fireemu-core-functions/src/cron.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js",
+      "caseEvidence": [
+        {
+          "caseId": "explicit-UTC",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+              "caseId": "explicit-UTC",
+              "fields": [
+                "rows"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "Asia-Tokyo",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+              "caseId": "Asia-Tokyo",
+              "fields": [
+                "rows"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "America-New-York",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+              "caseId": "America-New-York",
+              "fields": [
+                "rows"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "v1-default",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+              "caseId": "v1-default",
+              "fields": [
+                "rows"
+              ]
+            },
+            {
+              "path": "conformance/scheduled-delivery/local/production-run4.json",
+              "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99",
+              "fields": [
+                "jobs.schedFailV1.timeZone"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "v2-default",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+              "caseId": "v2-default",
+              "fields": [
+                "rows"
+              ]
+            },
+            {
+              "path": "conformance/scheduled-delivery/local/production-run4.json",
+              "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99",
+              "fields": [
+                "jobs.declOmitV2.timeZone"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "invalid-zone",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+              "caseId": "invalid-zone",
+              "fields": [
+                "rows"
+              ]
+            }
+          ]
+        }
+      ]
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/next-occurrence",
       "evidenceType": "production-parity",
-      "recipeIds": ["scheduled-functions/calendar/next"],
+      "recipeIds": [
+        "scheduled-functions/calendar/next"
+      ],
       "cases": [
         "strictly-after-anchor",
         "minute-boundary",
@@ -190,32 +857,90 @@
         "leap-day",
         "sparse-calendar"
       ],
-      "status": "PENDING_CORPUS",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+        "comparisonSha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+        "rows": {
+          "MATCH": 5
+        },
+        "coverage": {
+          "MATCH": 5
+        },
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "189fb441835b2645",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "a05b1a52fa586dfdf0436c38bbe3533725ce44e2fcd3cd5cec99a8cf122860a6"
+          },
+          {
+            "pass": 2,
+            "recordingId": "75478d967aa09afc",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "a05b1a52fa586dfdf0436c38bbe3533725ce44e2fcd3cd5cec99a8cf122860a6"
+          }
+        ]
+      },
       "obligation": "Recorded job next-time bracketed by create dispatch/response; local calendar query",
       "source": "https://docs.cloud.google.com/scheduler/docs/configuring/cron-job-schedules; crates/fireemu-core-functions/src/cron.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/dst-calendar",
       "evidenceType": "production-parity",
-      "recipeIds": ["scheduled-functions/calendar/dst"],
+      "recipeIds": [
+        "scheduled-functions/calendar/dst"
+      ],
       "cases": [
         "spring-gap-next-time",
         "fall-fold-next-time",
         "UTC-control",
         "non-DST-zone-control"
       ],
-      "status": "PENDING_CORPUS",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+        "comparisonSha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+        "rows": {
+          "MATCH": 4
+        },
+        "coverage": {
+          "MATCH": 4
+        },
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "189fb441835b2645",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "a05b1a52fa586dfdf0436c38bbe3533725ce44e2fcd3cd5cec99a8cf122860a6"
+          },
+          {
+            "pass": 2,
+            "recordingId": "75478d967aa09afc",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "a05b1a52fa586dfdf0436c38bbe3533725ce44e2fcd3cd5cec99a8cf122860a6"
+          }
+        ]
+      },
       "obligation": "Observed future transition next-time only; unobservable repeated delivery remains explicit debt",
       "source": "https://docs.cloud.google.com/scheduler/docs/configuring/cron-job-schedules; crates/fireemu-core-functions/src/cron.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/v2-http-delivery",
       "evidenceType": "production-parity",
-      "recipeIds": ["scheduled-functions/delivery/v2"],
+      "recipeIds": [
+        "scheduled-functions/delivery/v2"
+      ],
       "cases": [
         "request-method",
         "jobName-header",
@@ -227,16 +952,49 @@
         "SDK-context-getter",
         "SDK-event-enumerability"
       ],
-      "status": "PENDING_CORPUS",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+        "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+        "rows": {
+          "MATCH": 9
+        },
+        "coverage": {
+          "MATCH": 9
+        },
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          },
+          {
+            "pass": 2,
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          }
+        ]
+      },
       "obligation": "Actual Scheduler to HTTP function delivery and SDK-visible event",
       "source": "https://firebase.google.com/docs/functions/schedule-functions; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js; conformance/node_modules/firebase-functions/lib/v2/providers/scheduler.js; conformance/node_modules/firebase-functions/lib/v1/providers/pubsub.js"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/v1-pubsub-delivery",
       "evidenceType": "production-parity",
-      "recipeIds": ["scheduled-functions/delivery/v1"],
+      "recipeIds": [
+        "scheduled-functions/delivery/v1"
+      ],
       "cases": [
         "published-data",
         "published-attributes",
@@ -246,32 +1004,107 @@
         "context-only-handler",
         "context-resource-topic-versus-job"
       ],
-      "status": "PENDING_CORPUS",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+        "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+        "rows": {
+          "MATCH": 7
+        },
+        "coverage": {
+          "MATCH": 7
+        },
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          },
+          {
+            "pass": 2,
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          }
+        ]
+      },
       "obligation": "Actual Scheduler publish and deployed v1 handler payload",
       "source": "https://firebase.google.com/docs/functions/schedule-functions; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js; conformance/node_modules/firebase-functions/lib/v2/providers/scheduler.js; conformance/node_modules/firebase-functions/lib/v1/providers/pubsub.js"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/forced-and-natural-invocation",
       "evidenceType": "production-parity",
-      "recipeIds": ["scheduled-functions/delivery/identity"],
+      "recipeIds": [
+        "scheduled-functions/delivery/identity"
+      ],
       "cases": [
         "natural-scheduled-run",
         "Cloud-Scheduler-run-now",
         "retry-stable-occurrence-identity",
         "success-next-occurrence"
       ],
-      "status": "PENDING_CORPUS",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+        "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+        "rows": {
+          "MATCH": 3,
+          "DIVERGENCE_APPROVED": 1
+        },
+        "coverage": {
+          "MATCH": 3,
+          "DIVERGENCE_APPROVED": 1
+        },
+        "approvedDifferences": [
+          {
+            "caseId": "Cloud-Scheduler-run-now",
+            "status": "DIVERGENCE_APPROVED",
+            "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.4)"
+          }
+        ],
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          },
+          {
+            "pass": 2,
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          }
+        ]
+      },
       "obligation": "Natural/forced Scheduler dispatch, distinct from Fireemu manual control",
       "source": "https://firebase.google.com/docs/functions/schedule-functions; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js; conformance/node_modules/firebase-functions/lib/v2/providers/scheduler.js; conformance/node_modules/firebase-functions/lib/v1/providers/pubsub.js"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/retry-config-validation",
       "evidenceType": "production-parity",
-      "recipeIds": ["scheduled-functions/retry/config"],
+      "recipeIds": [
+        "scheduled-functions/retry/config"
+      ],
       "cases": [
         "omitted-options",
         "explicit-zero",
@@ -282,16 +1115,223 @@
         "max-retry-duration",
         "attemptDeadline-boundary"
       ],
-      "status": "PENDING_CORPUS",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+        "comparisonSha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+        "rows": {
+          "MATCH": 7,
+          "DIVERGENCE_APPROVED": 1
+        },
+        "coverage": {
+          "MATCH": 7,
+          "DIVERGENCE_APPROVED": 1
+        },
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "189fb441835b2645",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "a05b1a52fa586dfdf0436c38bbe3533725ce44e2fcd3cd5cec99a8cf122860a6"
+          },
+          {
+            "pass": 2,
+            "recordingId": "75478d967aa09afc",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "a05b1a52fa586dfdf0436c38bbe3533725ce44e2fcd3cd5cec99a8cf122860a6"
+          }
+        ],
+        "approvedDifferences": [
+          {
+            "caseId": "attemptDeadline-boundary",
+            "status": "DIVERGENCE_APPROVED",
+            "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+          }
+        ],
+        "supplementalComparisons": [
+          {
+            "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+            "sha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+            "caseIds": [
+              "omitted-options"
+            ]
+          }
+        ]
+      },
+      "caseDecisions": [
+        {
+          "caseId": "attemptDeadline-boundary",
+          "status": "DIVERGENCE_APPROVED",
+          "decisionOfRecord": "S4",
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+        }
+      ],
       "obligation": "Effective job config acceptance/refusal and declaration mapping",
-      "source": "https://docs.cloud.google.com/scheduler/docs/configuring/retry-jobs; crates/fireemu-core-functions/src/manifest.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
+      "source": "https://docs.cloud.google.com/scheduler/docs/configuring/retry-jobs; crates/fireemu-core-functions/src/manifest.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js",
+      "caseEvidence": [
+        {
+          "caseId": "omitted-options",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/local/production-run4.json",
+              "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99",
+              "fields": [
+                "jobs.declOmitV2.retryConfig"
+              ]
+            },
+            {
+              "path": "docs.local/runs/scheduled-delivery/run-4/result-ecef353d18975246.json",
+              "sha256": "82001f12ae45cd707a23725f323e99f90f23e20e51655d9b815a11b6c9c7d8cc",
+              "fields": [
+                "rounds[].jobs.declOmitV2"
+              ]
+            },
+            {
+              "path": "docs.local/submissions/scheduled-delivery/run4-report.md",
+              "sha256": "f23a0fd4b0a3aaef9de7c328b5d425d10c8d35ea98ae6e87f454d0cb0e31b269"
+            },
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+              "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+              "fields": [
+                "localVerificationRows"
+              ],
+              "testId": "crates/fireemu-core-functions/tests/scheduler_refusal.rs#the_recorded_declaration_is_refused_and_the_default_is_not"
+            }
+          ]
+        },
+        {
+          "caseId": "explicit-zero",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+              "caseId": "explicit-zero",
+              "fields": [
+                "rows"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "retryCount-boundary",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+              "caseId": "retryCount-boundary",
+              "fields": [
+                "rows"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "min-backoff",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+              "caseId": "min-backoff",
+              "fields": [
+                "rows"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "max-backoff",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+              "caseId": "max-backoff",
+              "fields": [
+                "rows"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "max-doublings",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+              "caseId": "max-doublings",
+              "fields": [
+                "rows"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "max-retry-duration",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+              "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+              "caseId": "max-retry-duration",
+              "fields": [
+                "rows"
+              ]
+            }
+          ]
+        },
+        {
+          "caseId": "attemptDeadline-boundary",
+          "status": "DIVERGENCE_APPROVED",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/local/production-run4.json",
+              "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99",
+              "fields": [
+                "jobs.declTimeoutV2.attemptDeadline"
+              ]
+            },
+            {
+              "path": "docs.local/submissions/scheduled-delivery/run4-report.md",
+              "sha256": "f23a0fd4b0a3aaef9de7c328b5d425d10c8d35ea98ae6e87f454d0cb0e31b269"
+            }
+          ],
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+        }
+      ]
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/v2-retry-limits",
       "evidenceType": "production-parity",
-      "recipeIds": ["scheduled-functions/retry/v2-limits"],
+      "recipeIds": [
+        "scheduled-functions/retry/v2-limits"
+      ],
       "cases": [
         "zero-no-retry",
         "next-schedule-after-failure",
@@ -300,16 +1340,49 @@
         "duration-only",
         "count-and-duration-interaction"
       ],
-      "status": "PENDING_CORPUS",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+        "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+        "rows": {
+          "MATCH": 6
+        },
+        "coverage": {
+          "MATCH": 6
+        },
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          },
+          {
+            "pass": 2,
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          }
+        ]
+      },
       "obligation": "Record actual attempts and stopping rules; do not assume one shared event retry policy",
       "source": "https://docs.cloud.google.com/scheduler/docs/configuring/retry-jobs; crates/fireemu-core-functions/src/manifest.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/v2-backoff",
       "evidenceType": "production-parity",
-      "recipeIds": ["scheduled-functions/retry/v2-backoff"],
+      "recipeIds": [
+        "scheduled-functions/retry/v2-backoff"
+      ],
       "cases": [
         "first-delay",
         "exponential-doubling",
@@ -317,48 +1390,381 @@
         "max-backoff-cap",
         "stable-scheduleTime"
       ],
-      "status": "PENDING_CORPUS",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+        "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+        "rows": {
+          "MATCH": 5
+        },
+        "coverage": {
+          "MATCH": 5
+        },
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          },
+          {
+            "pass": 2,
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          }
+        ]
+      },
       "obligation": "Short bounded production retry chains with dispatch/response timing",
       "source": "https://docs.cloud.google.com/scheduler/docs/configuring/retry-jobs; crates/fireemu-core-functions/src/manifest.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/v1-two-stage-retry",
       "evidenceType": "production-parity",
-      "recipeIds": ["scheduled-functions/retry/v1"],
+      "recipeIds": [
+        "scheduled-functions/retry/v1"
+      ],
       "cases": [
         "publish-ack-versus-handler-failure",
         "handler-no-retry",
         "handler-retry-declaration",
         "scheduled-occurrence-identity"
       ],
-      "status": "PENDING_CORPUS",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+        "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+        "rows": {
+          "DIVERGENCE_APPROVED": 1,
+          "MATCH": 3
+        },
+        "coverage": {
+          "DIVERGENCE_APPROVED": 1,
+          "MATCH": 3
+        },
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          },
+          {
+            "pass": 2,
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          }
+        ],
+        "approvedDifferences": [
+          {
+            "caseId": "publish-ack-versus-handler-failure",
+            "status": "DIVERGENCE_APPROVED",
+            "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
+          }
+        ]
+      },
+      "note": "Verified from final-binary run-3 evidence. The persisted Gen1 schedule message remains published when its handler fails; the Cloud Scheduler publisher acknowledgement is scheduler-side and declared under S4, with no Cloud Scheduler API claimed. Run-3 natural message/context joins are complete. Run-4's last unpulled publications remain a recording limitation per row.",
       "obligation": "Separate Scheduler publish retry from v1 subscriber retry; coordinate generic Pub/Sub scope",
-      "source": "https://docs.cloud.google.com/scheduler/docs/configuring/retry-jobs; crates/fireemu-core-functions/src/manifest.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js"
+      "source": "https://docs.cloud.google.com/scheduler/docs/configuring/retry-jobs; crates/fireemu-core-functions/src/manifest.rs; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js",
+      "caseEvidence": [
+        {
+          "caseId": "publish-ack-versus-handler-failure",
+          "status": "DIVERGENCE_APPROVED",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/local/production-run3.json",
+              "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+              "fields": [
+                "attempts.firebase-schedule-schedFailV1-us-central1",
+                "attempts.firebase-schedule-schedRetryV1-us-central1",
+                "frames",
+                "published"
+              ]
+            },
+            {
+              "path": "conformance/scheduled-delivery/local/production-run4.json",
+              "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99",
+              "fields": [
+                "attempts.firebase-schedule-schedFailV1-us-central1",
+                "attempts.firebase-schedule-schedRetryV1-us-central1",
+                "frames",
+                "published"
+              ]
+            },
+            {
+              "path": "docs.local/submissions/scheduled-delivery/run4-report.md",
+              "sha256": "f23a0fd4b0a3aaef9de7c328b5d425d10c8d35ea98ae6e87f454d0cb0e31b269"
+            },
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+              "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+              "fields": [
+                "localVerificationRows"
+              ],
+              "testId": "crates/fireemu-adapter-functions/tests/runtime.rs#a_first_generation_retry_count_is_one_attempt"
+            },
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+              "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+              "fields": [
+                "localVerificationRows"
+              ],
+              "testId": "crates/fireemu-adapter-functions/tests/runtime.rs#a_first_generation_retry_window_without_a_count_is_one_attempt"
+            }
+          ],
+          "coveredBy": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases",
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
+        },
+        {
+          "caseId": "handler-no-retry",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": []
+        },
+        {
+          "caseId": "handler-retry-declaration",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": []
+        },
+        {
+          "caseId": "scheduled-occurrence-identity",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/local/production-run3.json",
+              "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+              "fields": [
+                "attempts.firebase-schedule-schedFailV1-us-central1",
+                "attempts.firebase-schedule-schedRetryV1-us-central1",
+                "frames",
+                "published"
+              ]
+            },
+            {
+              "path": "conformance/scheduled-delivery/local/production-run4.json",
+              "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99",
+              "fields": [
+                "attempts.firebase-schedule-schedFailV1-us-central1",
+                "attempts.firebase-schedule-schedRetryV1-us-central1",
+                "frames",
+                "published"
+              ]
+            },
+            {
+              "path": "docs.local/submissions/scheduled-delivery/run4-report.md",
+              "sha256": "f23a0fd4b0a3aaef9de7c328b5d425d10c8d35ea98ae6e87f454d0cb0e31b269"
+            },
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+              "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+              "fields": [
+                "localVerificationRows"
+              ],
+              "testId": "crates/fireemu-adapter-functions/src/runtime.rs#a_first_generation_schedule_publishes_its_message_at_each_occurrence"
+            }
+          ],
+          "coveredBy": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases",
+          "note": "Run 3 joins are complete; the last run-4 messages were not pulled."
+        }
+      ],
+      "caseDecisions": [
+        {
+          "caseId": "publish-ack-versus-handler-failure",
+          "status": "DIVERGENCE_APPROVED",
+          "decisionOfRecord": "S4",
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
+        }
+      ]
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/deadline-and-overlap",
       "evidenceType": "production-parity",
-      "recipeIds": ["scheduled-functions/delivery/deadline-overlap"],
+      "recipeIds": [
+        "scheduled-functions/delivery/deadline-overlap"
+      ],
       "cases": [
         "attemptDeadline-readback",
         "bounded-handler-timeout",
         "scheduler-attempt-versus-handler-instance",
         "next-occurrence-during-work"
       ],
-      "status": "PENDING_CORPUS",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "production-parity",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+        "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+        "rows": {
+          "DIVERGENCE_APPROVED": 3,
+          "MATCH": 1
+        },
+        "coverage": {
+          "DIVERGENCE_APPROVED": 3,
+          "MATCH": 1
+        },
+        "productionRecordings": [
+          {
+            "pass": 1,
+            "recordingId": "f123d4fa2d61c5f5-pass-1",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          },
+          {
+            "pass": 2,
+            "recordingId": "f123d4fa2d61c5f5-pass-2",
+            "project": "fireemu-oracle-sbx",
+            "corpusDigest": "afc33707aa269c36bfe46f72eca6c64fec1f11dd18be5cf8d055c59280871d47",
+            "path": "conformance/scheduled-delivery/local/production-run3.json",
+            "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b"
+          }
+        ],
+        "approvedDifferences": [
+          {
+            "caseId": "attemptDeadline-readback",
+            "status": "DIVERGENCE_APPROVED",
+            "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+          },
+          {
+            "caseId": "bounded-handler-timeout",
+            "status": "DIVERGENCE_APPROVED",
+            "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
+          },
+          {
+            "caseId": "scheduler-attempt-versus-handler-instance",
+            "status": "DIVERGENCE_APPROVED",
+            "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.3)"
+          }
+        ]
+      },
+      "caseDecisions": [
+        {
+          "caseId": "attemptDeadline-readback",
+          "status": "DIVERGENCE_APPROVED",
+          "decisionOfRecord": "S4",
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+        },
+        {
+          "caseId": "bounded-handler-timeout",
+          "status": "DIVERGENCE_APPROVED",
+          "decisionOfRecord": "S4, S7 and 3.3",
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
+        }
+      ],
+      "note": "Verified from final-binary run-3 evidence: the handler continues after timeout and the run is recorded as timed out, matching the user-observable behavior. The HTTP 504 received by Cloud Scheduler is scheduler-side and declared under S4 and S7; approved 3.3 records the strict handler-end in-flight boundary. The run-3 attempt and frame readings are retained in caseEvidence.",
       "obligation": "Observe deadline acknowledgement and overlap; no exactly-once or scaling claim",
-      "source": "https://firebase.google.com/docs/functions/schedule-functions; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js; conformance/node_modules/firebase-functions/lib/v2/providers/scheduler.js; conformance/node_modules/firebase-functions/lib/v1/providers/pubsub.js"
+      "source": "https://firebase.google.com/docs/functions/schedule-functions; conformance/node_modules/firebase-tools/lib/gcp/cloudscheduler.js; conformance/node_modules/firebase-functions/lib/v2/providers/scheduler.js; conformance/node_modules/firebase-functions/lib/v1/providers/pubsub.js",
+      "caseEvidence": [
+        {
+          "caseId": "attemptDeadline-readback",
+          "status": "DIVERGENCE_APPROVED",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/local/production-run4.json",
+              "sha256": "293d4d61b6e907605e419bbe948730e4a4424830d4880423ac10ae563dd76b99",
+              "fields": [
+                "jobs.declTimeoutV2.attemptDeadline",
+                "jobs.schedFailV1.attemptDeadline"
+              ]
+            },
+            {
+              "path": "docs.local/submissions/scheduled-delivery/run4-report.md",
+              "sha256": "f23a0fd4b0a3aaef9de7c328b5d425d10c8d35ea98ae6e87f454d0cb0e31b269"
+            }
+          ],
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+        },
+        {
+          "caseId": "bounded-handler-timeout",
+          "status": "DIVERGENCE_APPROVED",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/local/production-run3.json",
+              "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+              "fields": [
+                "jobs.schedSlowV2",
+                "frames",
+                "attempts.firebase-schedule-schedSlowV2-us-central1"
+              ]
+            },
+            {
+              "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+              "sha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+              "fields": [
+                "localVerificationRows"
+              ],
+              "testId": "crates/fireemu-adapter-functions/tests/runtime.rs#events_are_dispatched_and_retried_in_virtual_time"
+            }
+          ],
+          "coveredBy": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases",
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-1024z-rulings-on-the-last-three-sched-cases-final-binary-evidence-round-3"
+        },
+        {
+          "caseId": "scheduler-attempt-versus-handler-instance",
+          "status": "DIVERGENCE_APPROVED",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": [
+            {
+              "path": "conformance/scheduled-delivery/local/production-run3.json",
+              "sha256": "e0c1bc6350ce52bb4067dcf4de4449c11939cc10f623f24d3a9531a20016666b",
+              "fields": [
+                "frames",
+                "attempts.firebase-schedule-schedSlowV2-us-central1"
+              ]
+            }
+          ],
+          "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.3)"
+        },
+        {
+          "caseId": "next-occurrence-during-work",
+          "status": "MATCH",
+          "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+          "comparisonSha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+          "sources": []
+        }
+      ]
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/clock-config",
       "evidenceType": "fireemu-only",
-      "recipeIds": ["scheduled-functions/local/config"],
+      "recipeIds": [
+        "scheduled-functions/local/config"
+      ],
       "cases": [
         "daemon-clockStart",
         "timezone-default",
@@ -366,16 +1772,29 @@
         "unsupported-wall-mode",
         "invalid-config-location"
       ],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+        "rows": {
+          "PASS": 5
+        }
+      },
       "obligation": "Fireemu configuration contract, not a production wall-clock implementation claim",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/clock-forward-boundaries",
       "evidenceType": "fireemu-only",
-      "recipeIds": ["scheduled-functions/local/clock"],
+      "recipeIds": [
+        "scheduled-functions/local/clock"
+      ],
       "cases": [
         "advance",
         "advanceTo",
@@ -384,16 +1803,29 @@
         "exact-minute",
         "boundary-before-after"
       ],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+        "rows": {
+          "PASS": 6
+        }
+      },
       "obligation": "Logical clock operations produce documented schedule occurrences",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/catch-up-policy",
       "evidenceType": "fireemu-only",
-      "recipeIds": ["scheduled-functions/local/catch-up"],
+      "recipeIds": [
+        "scheduled-functions/local/catch-up"
+      ],
       "cases": [
         "all",
         "latest",
@@ -404,59 +1836,184 @@
         "repeated-notification",
         "multiple-jobs"
       ],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+        "rows": {
+          "PASS": 8
+        }
+      },
       "obligation": "Explicit policy and bounded occurrence admission",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/overlap-policy",
       "evidenceType": "fireemu-only",
-      "recipeIds": ["scheduled-functions/local/overlap"],
-      "cases": ["allow", "skip", "queue", "reject", "manual-overlap", "long-running-handler"],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "recipeIds": [
+        "scheduled-functions/local/overlap"
+      ],
+      "cases": [
+        "allow",
+        "skip",
+        "queue",
+        "reject",
+        "manual-overlap",
+        "long-running-handler"
+      ],
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+        "rows": {
+          "PASS": 6
+        }
+      },
+      "localVerificationSource": "docs.local/submissions/scheduled-fireemu-only/evidence_map.py (W3 overlap-policy mapping; frozen cases retained; long-running-handler retains its existing test)",
+      "localVerificationRows": [
+        {
+          "row": "allow-and-queue",
+          "status": "PASS",
+          "tests": [
+            "crates/fireemu-adapter-functions/src/runtime.rs:allow_and_queue_admit_overlapping_scheduler_runs"
+          ]
+        },
+        {
+          "row": "skip",
+          "status": "PASS",
+          "tests": [
+            "crates/fireemu-adapter-functions/src/runtime.rs:skip_drops_a_run_that_overlaps_a_queued_one_for_good",
+            "crates/fireemu-adapter-functions/src/runtime.rs:one_jump_over_several_occurrences_overlaps_itself_under_skip_and_reject"
+          ]
+        },
+        {
+          "row": "reject",
+          "status": "PASS",
+          "tests": [
+            "crates/fireemu-adapter-functions/src/runtime.rs:reject_counts_an_overlapping_scheduler_run_as_a_dead_letter",
+            "crates/fireemu-adapter-functions/src/runtime.rs:one_jump_over_several_occurrences_overlaps_itself_under_skip_and_reject"
+          ]
+        },
+        {
+          "row": "manual-run-against-scheduler-run",
+          "status": "PASS",
+          "tests": [
+            "crates/fireemu-adapter-functions/src/runtime.rs:a_manual_run_follows_the_overlap_policy_against_a_scheduler_run",
+            "crates/fireemu-adapter-functions/tests/runtime.rs:overlap_policies_skip_queue_or_reject_concurrent_schedule_runs"
+          ]
+        },
+        {
+          "row": "skip-in-flight-strict-default",
+          "status": "PASS",
+          "tests": [
+            "crates/fireemu/src/functions.rs:the_overlap_policy_defaults_by_profile_and_an_explicit_one_wins",
+            "crates/fireemu-adapter-functions/src/runtime.rs:skip_in_flight_drops_an_occurrence_while_a_handler_is_running",
+            "crates/fireemu-adapter-functions/src/runtime.rs:skip_in_flight_looks_only_at_the_same_function",
+            "crates/fireemu-adapter-functions/src/runtime.rs:skip_in_flight_matches_a_reference_of_the_running_handler"
+          ]
+        },
+        {
+          "row": "skip-in-flight-manual-never-refused",
+          "status": "PASS",
+          "tests": [
+            "crates/fireemu-adapter-functions/src/runtime.rs:skip_in_flight_never_refuses_a_manual_run"
+          ]
+        },
+        {
+          "row": "skip-in-flight-one-sweep-not-counted",
+          "status": "PASS",
+          "tests": [
+            "crates/fireemu-adapter-functions/src/runtime.rs:skip_in_flight_keeps_every_occurrence_of_one_clock_move",
+            "crates/fireemu-adapter-functions/src/runtime.rs:skip_in_flight_does_not_count_a_queued_run"
+          ]
+        },
+        {
+          "row": "long-running-handler",
+          "status": "PASS",
+          "tests": [
+            "crates/fireemu-adapter-functions/src/runtime.rs:a_handler_that_is_still_running_makes_its_function_busy"
+          ]
+        }
+      ],
       "obligation": "Document local suppression/queuing; distinguish overlapping functions from Scheduler attempts",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/retry-delay-fairness",
       "evidenceType": "fireemu-only",
-      "recipeIds": ["scheduled-functions/local/fairness"],
+      "recipeIds": [
+        "scheduled-functions/local/fairness"
+      ],
       "cases": [
         "full-catch-up-cap-releases-retry",
         "delayed-fault-wakeup",
         "completion-reentry",
         "awaitIdle-settles"
       ],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+        "rows": {
+          "PASS": 4
+        }
+      },
       "obligation": "Regression for catch-up early-return starvation",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/capacity-cursor",
       "evidenceType": "fireemu-only",
-      "recipeIds": ["scheduled-functions/local/capacity"],
+      "recipeIds": [
+        "scheduled-functions/local/capacity"
+      ],
       "cases": [
         "automatic-admission-refusal-preserves-occurrence",
         "capacity-recovery-delivers",
         "manual-refusal-is-visible",
         "per-job-fairness"
       ],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+        "rows": {
+          "PASS": 4
+        }
+      },
       "obligation": "No silent schedule loss on admission refusal; only schedule/manual ownership",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/rewind-and-token-policy",
       "evidenceType": "fireemu-only",
-      "recipeIds": ["scheduled-functions/local/rewind"],
+      "recipeIds": [
+        "scheduled-functions/local/rewind"
+      ],
       "cases": [
         "backwards-without-opt-in",
         "allowBackwards-counter",
@@ -464,16 +2021,29 @@
         "future-issued-held-token",
         "token-after-new-issuance"
       ],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+        "rows": {
+          "PASS": 5
+        }
+      },
       "obligation": "Explicit rewind policy and fail-closed future-claim behavior",
-      "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
+      "source": "owner ledger 781 and scope decision S8 (the token response shapes are inferred from the ID-token contract and are not production parity); spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/manual-schedule",
       "evidenceType": "fireemu-only",
-      "recipeIds": ["scheduled-functions/local/manual"],
+      "recipeIds": [
+        "scheduled-functions/local/manual"
+      ],
       "cases": [
         "registered-job",
         "missing-job",
@@ -481,27 +2051,59 @@
         "does-not-silently-consume-natural-occurrence",
         "admission-refusal"
       ],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+        "rows": {
+          "PASS": 5
+        }
+      },
       "obligation": "Fireemu manual control semantics independently documented",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/state-lifecycle",
       "evidenceType": "fireemu-only",
-      "recipeIds": ["scheduled-functions/local/lifecycle"],
-      "cases": ["snapshot-restore", "reset", "reload", "runner-shutdown", "pending-job-retention"],
-      "status": "PENDING_LOCAL_VERIFICATION",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "recipeIds": [
+        "scheduled-functions/local/lifecycle"
+      ],
+      "cases": [
+        "snapshot-restore",
+        "reset",
+        "reload",
+        "runner-shutdown",
+        "pending-job-retention"
+      ],
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "fireemu-only",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "artifactBuiltFrom": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-local-comparison.json",
+        "comparisonSha256": "a40b9aaf3415f5c66f2913228969bc5cab5d5f8b98c10521b8e54d79b761a3b7",
+        "rows": {
+          "PASS": 5
+        }
+      },
       "obligation": "Scheduled cursor/outbox consistency across supported lifecycle boundaries",
       "source": "spec/compatibility/contract.json#FN-CLAIM-SCHEDULE and crates/fireemu-adapter-functions/src/runtime.rs and crates/fireemu-core-session/src/clock.rs"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/final-artifact-regression",
       "evidenceType": "closure-gate",
-      "recipeIds": ["scheduled-functions/final"],
+      "recipeIds": [
+        "scheduled-functions/final"
+      ],
       "cases": [
         "two-production-recordings",
         "exact-frozen-case-set",
@@ -511,28 +2113,151 @@
         "workspace-regression",
         "artifact-runner-binding"
       ],
-      "status": "PENDING_REVIEW",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "closure-gate",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-final-artifact-regression.json",
+        "comparisonSha256": "ee9281bd15e352302f1580c4362b1baf7297c06f53c2b6e3fe779ac36554d6ba",
+        "rows": {
+          "PASS": 7
+        },
+        "productionRequests": 0
+      },
       "obligation": "Final binary and bundled runner receipts with exact comparison coverage",
       "source": "spec/compatibility/closure/FUNCTIONS-HTTP.json"
     },
     {
       "conditionId": "SCHEDULED-FUNCTIONS/closure-review",
       "evidenceType": "closure-gate",
-      "recipeIds": ["scheduled-functions/review"],
-      "cases": ["independent-Opus-coordinator-review", "owner-ledger-promotion-decision"],
-      "status": "PENDING_REVIEW",
-      "coverageStatus": "debt",
-      "evidence": null,
+      "recipeIds": [
+        "scheduled-functions/review"
+      ],
+      "cases": [
+        "independent-Opus-coordinator-review",
+        "owner-ledger-promotion-decision"
+      ],
+      "status": "VERIFIED",
+      "coverageStatus": "covered",
+      "evidence": {
+        "evidenceType": "closure-gate",
+        "sourceCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+        "finalArtifactSha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+        "runnerSha256": "d2ecc2b58a88b5ccb5cf460ec1c669c07a5dbe0026c38bbe544da9414214f6d2",
+        "comparisonPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-final-artifact-regression.json",
+        "comparisonSha256": "ee9281bd15e352302f1580c4362b1baf7297c06f53c2b6e3fe779ac36554d6ba",
+        "rows": {
+          "PASS": 2
+        }
+      },
       "obligation": "Only reviewed frozen closure can become COMPAT_VERIFIED",
       "source": "spec/compatibility/closure/FUNCTIONS-HTTP.json"
     }
   ],
+  "closureNotes": {
+    "declaredDifferences": [
+      {
+        "section": "3.1",
+        "row": "v2.request.header-names",
+        "status": "DIVERGENCE_APPROVED",
+        "note": "Production supplies authorization, forwarded, traceparent, x-cloud-trace-context, x-forwarded-for and x-client-data; strict omits these environment headers. Compared handler-visible header values match. Header synthesis is an improvement, not a closure blocker.",
+        "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.1)"
+      },
+      {
+        "section": "3.2",
+        "caseId": "interval-phase-versus-creation-anchor",
+        "status": "DIVERGENCE_APPROVED",
+        "note": "W1 follows the creation minute for minute-level interval phase. The sub-second fraction is stable per job name across runs 2 to 4, with an unknown derivation; strict uses whole minutes and does not fabricate a fraction.",
+        "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.2)"
+      },
+      {
+        "section": "3.4",
+        "caseId": "Cloud-Scheduler-run-now",
+        "status": "DIVERGENCE_APPROVED",
+        "decisionOfRecord": [
+          "S7",
+          "S4"
+        ],
+        "note": "Production run-now carries the next schedule time; functions/{name}:run is Fireemu-only control using current logical time. No Cloud Scheduler run-now API is claimed.",
+        "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.4)"
+      }
+    ],
+    "undetermined": [
+      {
+        "section": "3.3",
+        "conditionId": "SCHEDULED-FUNCTIONS/deadline-and-overlap",
+        "note": "Both recordings leave the in-flight boundary undetermined: function timeout (504 at 90 seconds) and handler completion (100 seconds) precede the next boundary. Strict chooses handler completion.",
+        "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.3)",
+        "status": "DIVERGENCE_APPROVED"
+      },
+      {
+        "section": "3.6",
+        "caseId": "synchronized-window",
+        "note": "Both v6 recordings match the synchronized window. A forced run re-anchors the next every-five-minutes occurrence about 4.5 to 5 minutes later in runs 2 to 4 for Gen1 and Gen2; this is unreachable in strict because run-now is Fireemu-only under 3.4.",
+        "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.6)",
+        "status": "OBSERVATION"
+      }
+    ],
+    "notImplemented": [
+      {
+        "section": "3.7",
+        "row": "user-publish-to-gen1-topic",
+        "frozenCase": false,
+        "note": "A user publish to a Gen1 schedule topic invokes the handler in production; strict stores the message without delivery. Implementation is a production-parity improvement, not a frozen case.",
+        "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.7)"
+      }
+    ],
+    "jobResourceReadings": {
+      "note": "Run 4 has three separate deploy observations: reset options restore retryConfig defaults while omitted options preserve existing values; both write the CLI time zone default. Gen2 attemptDeadline follows the function timeout clamped to 180..1800 seconds and is restored on update; Gen1 has no attemptDeadline. On redeploy, production keeps a previous deploy retryConfig when retry options are omitted (the CLI PATCH has no retryConfig in its update mask); strict rebuilds from the reloaded manifest and resets to defaults. This gap is not modelled. S4 remains the decision of record.",
+      "decisionRef": "docs.local/runs/sched-lane/coordinator-rulings.md#2026-10-06-0710z-rulings-on-the-closure-proposal-section-3-a0-owner-ledger-922-coordinator-approval-plus-the-opus-closure-review (3.5)"
+    }
+  },
+  "integratedRegression": {
+    "release": "closure-base-0b6d27a96",
+    "integrationCommit": "0b6d27a9638f8740586ba969631e6ac70b31a37f",
+    "releaseBinarySha256": "9a4a6895e661b32f74d86ab99552c6c02672d46fa2045e49b3786fe0e803d36a",
+    "buildReceiptPath": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-build.json",
+    "buildReceiptSha256": "c60dda3a1bba898642e83aa5033c5cddcb7b10397cf930ee1c8fd24a46cb5963",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json",
+        "sha256": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
+        "rows": 48,
+        "summary": {
+          "DIVERGENCE_APPROVED": 1,
+          "MATCH": 47
+        }
+      },
+      {
+        "path": "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json",
+        "sha256": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",
+        "rows": 70,
+        "summary": {
+          "DIVERGENCE_APPROVED": 15,
+          "MATCH": 54,
+          "NOT_IMPLEMENTED": 1
+        }
+      }
+    ],
+    "result": "VERIFIED_ON_CLOSURE_BASE",
+    "productionRequests": 0,
+    "releaseBindingNote": "The evidence is bound to closure-base-0b6d27a96. A release tag whose Rust inputs (apart from test code), lockfile (beyond workspace version fields), toolchain or runner inputs differ requires another final-binary comparison."
+  },
   "limitations": [
-    "The inventory is frozen; all evidence remains pending and the parent is IMPLEMENTING.",
+    "The frozen inventory and all 25 conditions are verified on closure-base-0b6d27a96. Workspace-regression cites ci.yml 37476145315 on reviewed head 2732fa9188a8180b4c2497938c52b89c0f767154; per-OS counts and independent CI conclusion verification require coordinator completion because GitHub CLI authentication was unavailable. The parent is COMPAT_VERIFIED.",
     "DST repeated delivery is not proven by future next-time metadata.",
-    "General Cloud Scheduler resource API is not claimed."
+    "General Cloud Scheduler resource API is not claimed.",
+    "The Fireemu-only conditions are bound to local tests and claim no production behaviour.",
+    "A snapshot restore that is rolled back because a later hook refuses it resets the functions runtime a second time: the schedule queue from before the restore is discarded and every schedule cursor stays at the restored time, so occurrences can repeat or be skipped. Known; not fixed here.",
+    "With scheduler.catchUp all and scheduler.overlap skip or reject, one clock move over several occurrences of a function overlaps itself (skip keeps the oldest, reject counts the rest). The behaviour is pinned by a test, not endorsed.",
+    "scheduler.clock wall is declared in the config schema and refused at load as not implemented.",
+    "overlap-policy is verified by the frozen local cases and the W3 supplemental rows on the final artifact inputs. Legacy skip and reject count queued, running and retry-waiting runs as busy. Strict defaults to skip-in-flight, which counts only a running handler of the same function, admits manual runs and does not count queued occurrences of one sweep. Production Scheduler-attempt versus handler-instance boundaries remain undetermined under ruling 3.3.",
+    "After a rewind below a schedule cursor that trails the clock (a catchUp all backlog that was cut at the cap, or a run held for room), the owed runs stay owed but do not come due again until the clock passes the cursor, and the session reports idle meanwhile. Documented in the README; no test pins it.",
+    "scheduler.defaultTimeZone is tested only for a configured value (it moves the occurrences of a schedule that names no zone). What a schedule that names no zone and has no configured default does is not claimed: firebase-tools deploys a zone-less v1 schedule as America/Los_Angeles, and run 4 confirms that CLI default. Final-artifact omitted-zone interval receipts and the loaded v1 manifest now confirm the calendar behavior and effective CLI default.",
+    "The token response shapes asserted after a rewind (INVALID_ID_TOKEN, the Storage 401 and the Firestore PermissionDenied in strict, TOKEN_EXPIRED for a sign-in below the account creation) are inferred from the ID-token contract by owner ledger 781 and scope decision S8. A rewound clock has no production counterpart, so they are local rulings, not production parity; AUTH-CREDENTIAL owns them."
   ],
   "frozenOn": "2026-09-30",
   "freezeAuthority": "docs.local/instructions/owner-decisions.md (2026-09-30 SCHEDULED-FUNCTIONS scope: coordinator rulings)"

@@ -892,6 +892,172 @@ const assert = require('node:assert/strict');
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// The strict profile names a 2nd gen Pub/Sub function's subscription as Eventarc does, in the
+/// broker's listing and in the event's `data.subscription`; the emulator profile keeps the official
+/// emulator's `emulator-sub-<topic>` in both. A 1st gen function has `emulator-sub-<topic>` in both.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn the_profile_names_a_pubsub_functions_subscription_in_the_listing_and_in_the_event() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    for profile in ["strict", "emulator"] {
+        let dir = scratch_codebase(&format!("pubsub-subscription-naming-{profile}"));
+        write(
+            &dir,
+            "index.js",
+            r"
+const { onRequest } = require('firebase-functions/v2/https');
+const { onMessagePublished } = require('firebase-functions/v2/pubsub');
+const v1 = require('firebase-functions/v1');
+const { PubSub } = require('@google-cloud/pubsub');
+let eventSubscription = null;
+exports.fxReceive = onMessagePublished('naming-topic', (event) => {
+  eventSubscription = event.data.subscription;
+});
+exports.fxLegacy = v1.pubsub.topic('naming-topic').onPublish(() => {});
+exports.fxNaming = onRequest(async (req, res) => {
+  const client = new PubSub({ projectId: process.env.GCLOUD_PROJECT });
+  try {
+    if (req.method === 'POST') await client.topic('naming-topic').publishMessage({ json: { n: 1 } });
+    const [subscriptions] = await client.topic('naming-topic').getSubscriptions();
+    res.json({ eventSubscription, listed: subscriptions.map((s) => s.name).sort() });
+  } finally { await client.close(); }
+});
+",
+        );
+        write(
+            &dir,
+            "fireemu-profile.json",
+            &format!(
+                r#"{{"schemaVersion":1,"profile":"{profile}","firestore":{{"edition":"standard","apiMode":"native"}}}}"#
+            ),
+        );
+        let output = fireemu_exec(&dir, "demo-subscription-naming")
+            .args(["--config", dir.join("fireemu-profile.json").to_str().unwrap()])
+            .args(["--only", "functions,pubsub", "--pubsub-port", "0", "--", "node", "-e", r"
+const assert = require('node:assert/strict');
+(async () => {
+  const profile = process.argv[1];
+  const url = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-subscription-naming/us-central1/fxNaming`;
+  const get = async (method) => { const r = await fetch(url, { method }); assert.equal(r.status, 200); return r.json(); };
+  const listed = (await get('GET')).listed.map((name) => name.replace('projects/demo-subscription-naming/subscriptions/', ''));
+  const eventarc = /^eventarc-us-central1-fxreceive-\d{6}-sub-\d{3}$/;
+  if (profile === 'strict') {
+    assert.equal(listed.length, 2, JSON.stringify(listed));
+    assert.ok(listed.includes('emulator-sub-naming-topic'), JSON.stringify(listed));
+    assert.equal(listed.filter((name) => eventarc.test(name)).length, 1, JSON.stringify(listed));
+  } else {
+    assert.deepEqual(listed, ['emulator-sub-naming-topic']);
+  }
+  await get('POST');
+  const deadline = Date.now() + 10000;
+  let seen = null;
+  while (Date.now() < deadline && !seen) {
+    seen = (await get('GET')).eventSubscription;
+    if (!seen) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(seen, 'the published message did not reach the function');
+  const named = seen.replace('projects/demo-subscription-naming/subscriptions/', '');
+  assert.ok(listed.includes(named), `${named} is not among ${JSON.stringify(listed)}`);
+  assert.equal(eventarc.test(named), profile === 'strict', named);
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+", profile])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{profile}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+/// The strict profile names the writer of a Firestore event with auth context as production does
+/// (`api_key` and the uid for a write with a Firebase ID token, `unknown` and the credential's own id
+/// for the owner), the emulator profile as the official emulator does (`unknown` and
+/// `fake-auth-id@gmail.com` for every writer).
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn the_profile_names_the_writer_of_an_auth_context_event() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    for profile in ["strict", "emulator"] {
+        let dir = scratch_codebase(&format!("auth-context-naming-{profile}"));
+        write(
+            &dir,
+            "index.js",
+            r"
+const { onRequest } = require('firebase-functions/v2/https');
+const { onDocumentWrittenWithAuthContext } = require('firebase-functions/v2/firestore');
+const seen = [];
+exports.fxAuthContext = onDocumentWrittenWithAuthContext('naming/{id}', (event) => {
+  seen.push({ id: event.params.id, authType: event.authType, authId: event.authId });
+});
+exports.fxSeen = onRequest((req, res) => res.json(seen));
+",
+        );
+        // The strict profile enforces Firestore rules: let every write through, so the principals
+        // of an owner write and of an ID-token write both commit.
+        write(
+            &dir,
+            "allow-all.rules",
+            "rules_version = '2';\nservice cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read, write: if true; } } }\n",
+        );
+        write(
+            &dir,
+            "fireemu-profile.json",
+            &format!(
+                r#"{{"schemaVersion":1,"profile":"{profile}","firestore":{{"edition":"standard","apiMode":"native"}},"rules":{{"source":"{}"}}}}"#,
+                dir.join("allow-all.rules").display()
+            ),
+        );
+        let output = fireemu_exec(&dir, "demo-auth-context-naming")
+            .args(["--config", dir.join("fireemu-profile.json").to_str().unwrap()])
+            .args(["--only", "auth,firestore,functions", "--", "node", "-e", r"
+const assert = require('node:assert/strict');
+(async () => {
+  const profile = process.argv[1];
+  const project = 'demo-auth-context-naming';
+  const fs = `http://${process.env.FIRESTORE_EMULATOR_HOST}/v1/projects/${project}/databases/(default)/documents`;
+  const auth = `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake`;
+  const seen = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/${project}/us-central1/fxSeen`;
+  const create = async (id, authorization) => {
+    const r = await fetch(`${fs}/naming?documentId=${id}`, { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify({ fields: { value: { stringValue: id } } }) });
+    assert.equal(r.status, 200, await r.text());
+  };
+  const signUp = await (await fetch(auth, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'u@example.test', password: 'local-only-password-123', returnSecureToken: true }) })).json();
+  await create('owner-write', 'Bearer owner');
+  await create('token-write', `Bearer ${signUp.idToken}`);
+  const wait = async () => { const deadline = Date.now() + 10000; for (;;) { const rows = await (await fetch(seen)).json(); if (rows.length >= 2 || Date.now() > deadline) return rows; await new Promise((resolve) => setTimeout(resolve, 50)); } };
+  const rows = Object.fromEntries((await wait()).map((row) => [row.id, row]));
+  assert.ok(rows['owner-write'] && rows['token-write'], JSON.stringify(rows));
+  if (profile === 'strict') {
+    assert.deepEqual([rows['token-write'].authType, rows['token-write'].authId], ['api_key', signUp.localId]);
+    assert.equal(rows['owner-write'].authType, 'unknown');
+    assert.equal(rows['owner-write'].authId, 'owner');
+  } else {
+    for (const row of Object.values(rows)) assert.deepEqual([row.authType, row.authId], ['unknown', 'fake-auth-id@gmail.com']);
+  }
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+", profile])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{profile}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
 #[test]
 #[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
 fn unbound_pubsub_and_hub_are_absent_from_the_runner() {
@@ -1033,4 +1199,58 @@ assert.equal(child.status, 0, `nested exec failed: ${child.signal}`);
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// A bucket a deployed Storage trigger names exists under the strict profile even when nothing
+/// was uploaded (production needs it to deploy the trigger), and its resource is served on the
+/// short spelling the Admin SDK uses. The emulator profile keeps the official emulator's answer
+/// (no bucket route: the missing-object 404). A bucket nobody named stays 404 in both.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the manual SDK workflow runs this test"]
+fn a_deployed_storage_trigger_makes_its_empty_bucket_exist_under_strict_only() {
+    assert!(
+        have_sdk(),
+        "install tools/sdk-smoke dependencies before running this test"
+    );
+    for profile in ["strict", "emulator"] {
+        let dir = scratch_codebase(&format!("trigger-bucket-{profile}"));
+        write(
+            &dir,
+            "index.js",
+            r"
+const { onObjectFinalized } = require('firebase-functions/v2/storage');
+exports.fxFinalized = onObjectFinalized({ bucket: 'wired-trigger-bucket' }, () => {});
+",
+        );
+        write(
+            &dir,
+            "fireemu-profile.json",
+            &format!(
+                r#"{{"schemaVersion":1,"profile":"{profile}","firestore":{{"edition":"standard","apiMode":"native"}}}}"#
+            ),
+        );
+        let output = fireemu_exec(&dir, "demo-trigger-bucket")
+            .args(["--config", &dir.join("fireemu-profile.json").display().to_string(), "--only", "functions,storage", "--", "node", "-e", &format!(r"
+const assert = require('node:assert/strict');
+(async () => {{
+  const base = new URL(process.env.STORAGE_EMULATOR_HOST.startsWith('http') ? process.env.STORAGE_EMULATOR_HOST : 'http://' + process.env.STORAGE_EMULATOR_HOST);
+  const authorization = 'Basic ' + Buffer.from(`${{base.username}}:${{base.password}}`).toString('base64');
+  const get = async (path) => (await fetch(`http://${{base.host}}${{path}}`, {{ headers: {{ authorization }} }})).status;
+  const strict = '{profile}' === 'strict';
+  assert.equal(await get('/b/wired-trigger-bucket'), strict ? 200 : 404);
+  assert.equal(await get('/storage/v1/b/wired-trigger-bucket'), strict ? 200 : 404);
+  assert.equal(await get('/b/unnamed-bucket'), 404);
+  assert.equal(await get('/storage/v1/b/unnamed-bucket'), 404);
+}})().catch((error) => {{ console.error(error); process.exitCode = 1; }});
+")])
+            .env_remove("FIREEMU_NODE")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{profile}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

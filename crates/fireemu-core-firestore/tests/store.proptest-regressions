@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 5540ad486c245b1b156d765ee2ac5adf1f5e5e789f358723aba275805044821f # shrinks to before = [(None, None), (None, None), (None, None)], commits = [[(1, Replace((Some(1), Some(1)))), (1, Delete)]]

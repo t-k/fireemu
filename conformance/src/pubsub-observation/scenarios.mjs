@@ -251,6 +251,7 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
       stream = await wire.open({ opener, cellId: cell.id });
       if (cell.variant === "future-publications") await publish(0);
       if (cell.variant === "invalid-ack-silence") stream.write({ ackIds: [cell.invalidAck] });
+      const invalidAckIssuedClock = meter.clock();
       const nextOwned = async () => {
         for (let frame = 0; frame < 6; frame++) {
           const body = await stream.next();
@@ -346,12 +347,16 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
         for (let frame = 0; frame < 6; frame++) if (!(await stream.next())) break;
       }
       const state = stream.state();
+      const invalidAckObservedMs = meter.clock() - invalidAckIssuedClock;
+      if (cell.variant === "invalid-ack-silence" && !state.terminal && invalidAckObservedMs < 30000)
+        state.incomplete = true;
       journal.write({
         event: "stream-case-observation",
         cellId: cell.id,
         state,
         ackSelector: "NOT_COMPARABLE-until-observed",
         silenceBeyond30sGeneralized: false,
+        invalidAckObservedMs: cell.variant === "invalid-ack-silence" ? invalidAckObservedMs : null,
       });
       complete =
         !state.incomplete &&

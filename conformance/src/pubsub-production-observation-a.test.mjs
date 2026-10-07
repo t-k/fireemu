@@ -1615,3 +1615,108 @@ test("metadata byte properties preserve repeated UTF-8 and binary value widths",
     );
   }
 });
+
+test("uncertain native CREATE failures retain an outstanding ownership obligation", async () => {
+  for (const code of [1, 2, 4, 8, 13, 14, 15]) {
+    const meter = createMeter({ now: () => 0 }),
+      cell = makePlan().cells.find((item) => item.id === "N3"),
+      ledger = createLedger(),
+      applied = new Set();
+    meter.enter(cell);
+    const wire = createWire({
+      meter,
+      journal: { write() {} },
+      getToken: async () => "fake",
+      client: {
+        close() {},
+        makeUnaryRequest(...args) {
+          if (args[0].endsWith("/CreateTopic")) applied.add("remotely-created-topic");
+          const rpc = new EventEmitter();
+          rpc.cancel = () => {};
+          queueMicrotask(() => {
+            args.at(-1)({
+              code,
+              details: code === 8 ? "Received message larger than max" : "lost result",
+            });
+            rpc.emit("status", { code, details: "lost result" });
+          });
+          return rpc;
+        },
+      },
+    });
+    try {
+      const result = await runCell({
+        cell,
+        meter,
+        wire,
+        ledger,
+        runId: "123456abcdef",
+        journal: { write() {} },
+      });
+      assert.equal(applied.size, 1, String(code));
+      assert.equal(result.complete, false, String(code));
+      assert.equal(result.cleanupClosed, false, String(code));
+      assert.ok(
+        ledger.outstanding().some((item) => item.action === "create"),
+        String(code),
+      );
+    } finally {
+      wire.close();
+    }
+  }
+});
+
+test("last target persistence overrun stays incomplete even when cleanup fits the reserve", async () => {
+  let clock = 0,
+    targetReads = 0;
+  const meter = createMeter({ now: () => clock }),
+    cell = makePlan().cells.find((item) => item.id === "R3"),
+    world = fakeWorld();
+  meter.enter(cell);
+  const result = await runCell({
+    cell,
+    meter,
+    ledger: createLedger(),
+    runId: "123456abcdef",
+    journal: { write() {} },
+    wire: {
+      async call(call) {
+        const reply = await world.call(call);
+        if (call.category === "target" && call.method === "GetSubscription" && ++targetReads === 2)
+          clock = 80000;
+        return reply;
+      },
+    },
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.cleanupClosed, true);
+  assert.equal(result.budgetOverrun, true);
+  assert.ok(meter.remaining(true) > 0);
+});
+
+test("six early control frames cannot complete the invalid-ACK silence interval", async () => {
+  let clock = 0;
+  const meter = createMeter({ now: () => clock }),
+    cell = makePlan().cells.find((item) => item.variant === "invalid-ack-silence"),
+    world = fakeWorld();
+  meter.enter(cell);
+  world.open = async () => ({
+    write() {},
+    dispose() {},
+    async next() {
+      clock += 100;
+      return {};
+    },
+    state: () => ({ windowMs: 90000, incomplete: false, terminal: null }),
+  });
+  const result = await runCell({
+    cell,
+    meter,
+    wire: world,
+    ledger: createLedger(),
+    runId: "123456abcdef",
+    journal: { write() {} },
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.cleanupClosed, true);
+});

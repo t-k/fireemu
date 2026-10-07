@@ -10,7 +10,15 @@ import { metadataBytes, FRAMING_RESERVE } from "./metadata.mjs";
 const statusNames = Object.fromEntries(
   Object.entries(grpc.status).map(([key, value]) => [value, key]),
 );
-const unsure = new Set(["UNKNOWN", "INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED", "CANCELLED"]);
+const unsure = new Set([
+  "UNKNOWN",
+  "INTERNAL",
+  "UNAVAILABLE",
+  "DEADLINE_EXCEEDED",
+  "CANCELLED",
+  "DATA_LOSS",
+  "RESOURCE_EXHAUSTED",
+]);
 const types = protos.google.pubsub.v1;
 // This reservation is for framing overhead, not an assertion about TCP retransmissions.
 const headerBytes = (headers) =>

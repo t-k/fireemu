@@ -189,6 +189,7 @@ test("post-persistence case budget overrun preserves incomplete evidence and kno
     f.rows.push({ ...final, n: 5, at: new Date(5000).toISOString(), event: "case-budget-overrun" });
     const local = fixture();
     if (gap) local.rows[2].reply.body = { x: 1 };
+    assert.doesNotThrow(() => result(f, local));
     const r = result(f, local).cells.find((c) => c.id === "R3");
     assert.equal(r.verdict, gap ? "DIVERGES" : "NOT_COMPARABLE");
     assert.ok(r.debts.some((d) => d.includes("incomplete")));

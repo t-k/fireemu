@@ -68,10 +68,17 @@ test("D generated category histories admit only native ordinary and REST IAM wit
 import { graph, runCell } from "./pubsub-observation-d/scenarios.mjs";
 import { route, encodeRequest, typeOf } from "./pubsub-observation-d/wire.mjs";
 import { createLedger } from "./pubsub-production/ledger.mjs";
+const clockEpoch = Number(process.env.OBSERVATION_TEST_CLOCK_MS ?? 0);
 const principal = "serviceAccount:service-123456789012@gcp-sa-pubsub.iam.gserviceaccount.com";
 function world(
   cell,
-  { fault = null, latency = false, empty = false, tick = { value: 0 }, meterOverride = null } = {},
+  {
+    fault = null,
+    latency = false,
+    empty = false,
+    tick = { value: clockEpoch },
+    meterOverride = null,
+  } = {},
 ) {
   let serial = 0,
     sourceDeliveries = 0;
@@ -293,7 +300,7 @@ test("D recorded maximum create/Pull/sink delays clip windows and never claim720
   )) {
     const w = world(cell, { latency: true, empty: true });
     const r = await runCell(w);
-    assert.ok(w.clock() <= cell.cellMs);
+    assert.ok(w.clock() <= cell.cellMs + clockEpoch);
     assert.equal(r.parityEstablished, false);
     assert.ok(r.observations.every((o) => o.iamConvergenceClaim !== true));
     assert.ok(r.observations.some((o) => o.stage === "inactivity-not-completed"));
@@ -387,7 +394,7 @@ test("D phase spent before last-grant wait cannot start A publish or later recor
   const r = await runCell(w);
   assert.equal(r.complete, false);
   assert.equal(w.calls.filter((c) => c.method === "Publish").length, 0);
-  assert.ok(w.clock() <= 1800000);
+  assert.ok(w.clock() <= 1800000 + clockEpoch);
 });
 
 test("D unknown creates and deletes keep exact original aged A2 obligations without retransmission", async () => {
@@ -527,7 +534,7 @@ import { createWire } from "./pubsub-observation-d/wire.mjs";
 test("D main records12 complete cells and durable IAM proofs then stops unknown before next cell", async () => {
   for (const unknown of [false, true]) {
     const out = mkdtempSync(join(tmpdir(), "pubsub-d-main-")),
-      tick = { value: 0 },
+      tick = { value: clockEpoch },
       worlds = new Map(),
       signals = new EventEmitter();
     try {

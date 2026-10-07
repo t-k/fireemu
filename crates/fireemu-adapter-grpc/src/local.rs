@@ -365,7 +365,7 @@ pub struct LocalBackend {
     /// generated document ids stay what they were for a given seed.
     transaction_ids: Mutex<SplitMix64>,
     /// Exact identities of active transactions authenticated by this backend, bounded globally.
-    issued_transactions: Mutex<BTreeMap<TransactionId, (String, String)>>,
+    issued_transactions: Mutex<BTreeMap<Vec<u8>, (String, String)>>,
     /// Identity source for logical query streams whose response is split into bounded pages.
     query_execution_ids: std::sync::atomic::AtomicU64,
     /// Estimated bytes retained by execution-scoped value-order selections.
@@ -1520,7 +1520,11 @@ mod tests {
                 .unwrap();
             let id = backend.required_txn(&source, &transaction).unwrap();
             assert_eq!(
-                backend.issued_transactions.lock().unwrap().get(&id),
+                backend
+                    .issued_transactions
+                    .lock()
+                    .unwrap()
+                    .get(transaction.as_slice()),
                 Some(&database_key(&source))
             );
             let refused = backend.txn_of(&foreign, &transaction).unwrap_err();
@@ -1645,11 +1649,12 @@ mod tests {
                 &crate::rules::allow_all_reads,
             )
             .unwrap();
-        let id = backend
-            .required_txn(&source, &response.transaction)
-            .unwrap();
         assert_eq!(
-            backend.issued_transactions.lock().unwrap().get(&id),
+            backend
+                .issued_transactions
+                .lock()
+                .unwrap()
+                .get(response.transaction.as_slice()),
             Some(&database_key(&source))
         );
         let foreign = parent("other");
@@ -1686,7 +1691,7 @@ mod tests {
                 let fixture_id = TransactionId::from_value(value);
                 assert_ne!(fixture_id, id);
                 issued.insert(
-                    fixture_id,
+                    [encode_transaction(&fixture_id), vec![0; 16]].concat(),
                     ("fixture-project".to_owned(), "fixture-database".to_owned()),
                 );
             }
@@ -1715,11 +1720,13 @@ mod tests {
             backend.txn_of(&other, &original).unwrap_err().code(),
             tonic::Code::Aborted
         );
-        backend
-            .issued_transactions
-            .lock()
-            .unwrap()
-            .remove(&TransactionId::from_value(0));
+        backend.issued_transactions.lock().unwrap().remove(
+            &[
+                encode_transaction(&TransactionId::from_value(0)),
+                vec![0; 16],
+            ]
+            .concat(),
+        );
         let issued = backend.begin_transaction(&request).unwrap();
         assert_eq!(
             backend.issued_transactions.lock().unwrap().len(),
@@ -1736,6 +1743,207 @@ mod tests {
             backend.issued_transactions.lock().unwrap().len(),
             MAX_ISSUED_TRANSACTIONS - 1
         );
+    }
+
+    #[test]
+    fn matching_transaction_tags_still_check_exact_registered_ownership() {
+        for identity in [
+            ("demo-app".to_owned(), "other".to_owned()),
+            ("demo-other".to_owned(), "(default)".to_owned()),
+        ] {
+            let backend = admission_backend();
+            let source = parent("(default)");
+            let transaction = backend
+                .begin_transaction(&pb::BeginTransactionRequest {
+                    database: "projects/demo-app/databases/(default)".to_owned(),
+                    ..Default::default()
+                })
+                .unwrap();
+            // Simulate equal binding hashes without needing a real 64-bit collision.
+            backend
+                .issued_transactions
+                .lock()
+                .unwrap()
+                .insert(transaction.clone(), identity.clone());
+            let refused = backend.txn_of(&source, &transaction).unwrap_err();
+            assert_eq!(
+                refused.code(),
+                if identity.0 == "demo-app" {
+                    tonic::Code::Aborted
+                } else {
+                    tonic::Code::InvalidArgument
+                }
+            );
+            assert_eq!(
+                refused.message(),
+                if identity.0 == "demo-app" {
+                    "The referenced transaction has expired or is no longer valid."
+                } else {
+                    "Invalid transaction."
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn registry_capacity_recovers_after_transactions_in_an_unrelated_database_expire() {
+        for wall_clock in [false, true] {
+            for new_transaction in [false, true] {
+                let mut backend = admission_backend();
+                let source = parent("(default)");
+                let original = backend
+                    .begin_transaction(&pb::BeginTransactionRequest {
+                        database: "projects/demo-app/databases/(default)".to_owned(),
+                        ..Default::default()
+                    })
+                    .unwrap();
+                let id = backend.required_txn(&source, &original).unwrap();
+                {
+                    let mut issued = backend.issued_transactions.lock().unwrap();
+                    for value in 0..u64::try_from(MAX_ISSUED_TRANSACTIONS - 1).unwrap() {
+                        let fixture_id = TransactionId::from_value(value);
+                        assert_ne!(fixture_id, id);
+                        issued.insert(
+                            [encode_transaction(&fixture_id), vec![0; 16]].concat(),
+                            database_key(&source),
+                        );
+                    }
+                }
+                if wall_clock {
+                    backend = backend.with_wall_clock_write_time();
+                } else {
+                    backend
+                        .clock
+                        .lock()
+                        .unwrap()
+                        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(340))
+                        .unwrap();
+                }
+                let other = parent("other");
+                backend.ensure_database(&other).unwrap();
+                let database = "projects/demo-app/databases/other";
+                let transaction = if new_transaction {
+                    backend.batch_get_documents(&pb::BatchGetDocumentsRequest {
+                        database: database.to_owned(),
+                        documents: vec![format!("{database}/documents/guard/read")],
+                        consistency_selector: Some(pb::batch_get_documents_request::ConsistencySelector::NewTransaction(pb::TransactionOptions::default())),
+                        ..Default::default()
+                    }, &crate::rules::allow_all_reads).unwrap().transaction
+                } else {
+                    backend
+                        .begin_transaction(&pb::BeginTransactionRequest {
+                            database: database.to_owned(),
+                            ..Default::default()
+                        })
+                        .unwrap()
+                };
+                assert_eq!(backend.issued_transactions.lock().unwrap().len(), 1);
+                assert_eq!(
+                    backend.txn_of(&other, &original).unwrap_err().message(),
+                    "Invalid transaction."
+                );
+                backend
+                    .rollback(&pb::RollbackRequest {
+                        database: database.to_owned(),
+                        transaction,
+                        ..Default::default()
+                    })
+                    .unwrap();
+                assert!(backend.issued_transactions.lock().unwrap().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_database_mutations_do_not_wait_on_the_global_transaction_registry() {
+        let backend = admission_backend();
+        let source = parent("(default)");
+        backend.ensure_database(&source).unwrap();
+        std::thread::scope(|scope| {
+            let registry = backend.issued_transactions.lock().unwrap();
+            let (done, received) = std::sync::mpsc::channel();
+            let backend = &backend;
+            let operation = scope.spawn(move || {
+                let result = backend.commit(&pb::CommitRequest {
+                    database: "projects/demo-app/databases/(default)".to_owned(),
+                    writes: vec![pb::Write {
+                        operation: Some(pb::write::Operation::Update(pb::Document {
+                            name: "projects/demo-app/databases/(default)/documents/guard/write"
+                                .to_owned(),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                });
+                done.send(result).unwrap();
+            });
+            let result = received.recv_timeout(std::time::Duration::from_secs(2));
+            drop(registry);
+            operation.join().unwrap();
+            result
+                .expect("ordinary writes must progress while the registry is locked")
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn compaction_reconciles_history_before_releasing_the_database_to_a_writer() {
+        let backend = admission_backend();
+        let source = parent("(default)");
+        let request = pb::CommitRequest {
+            database: "projects/demo-app/databases/(default)".to_owned(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: "projects/demo-app/databases/(default)/documents/guard/write".to_owned(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        backend.commit(&request).unwrap();
+        let handle = backend.database_handle(&source).unwrap();
+        std::thread::scope(|scope| {
+            let ledger = backend.history_budget.lock().unwrap();
+            let registry = backend.issued_transactions.lock().unwrap();
+            let compactor = scope.spawn(|| backend.compact_all(backend.write_time()));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while handle.0.cell.try_read().is_ok() && std::time::Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            let entered = handle.0.cell.try_read().is_err();
+            drop(registry);
+            // Hold accounting unavailable after compaction has entered the database.
+            // A writer must not enter between the usage snapshot and its publication.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+            let mut released_early = false;
+            while std::time::Instant::now() < deadline {
+                if handle.0.cell.try_read().is_ok() {
+                    released_early = true;
+                    break;
+                }
+                std::thread::yield_now();
+            }
+            let writer = scope.spawn(|| backend.commit(&request));
+            drop(ledger);
+            compactor.join().unwrap();
+            writer.join().unwrap().unwrap();
+            assert!(
+                entered,
+                "compaction must reach the database while the registry is held"
+            );
+            assert!(
+                !released_early,
+                "compaction must hold the database until accounting is reconciled"
+            );
+        });
+        let actual = backend
+            .read_db(&source, |db| Ok(db.history_usage()))
+            .unwrap();
+        let accounted = backend.history_usage();
+        assert_eq!(accounted.total_bytes, actual.total_bytes);
+        assert_eq!(accounted.versions, actual.versions);
     }
 
     #[test]
@@ -2569,24 +2777,27 @@ impl LocalBackend {
         let scope =
             fireemu_core_session::tenancy::Scope::AllExcept(std::collections::BTreeSet::new());
         for (key, handle) in self.handles_of(&scope) {
-            let usage = handle.with(|state| {
+            let _ = handle.with(|state| {
                 state.compact(now);
                 self.issued_transactions
                     .lock()
                     .map_err(|_| lock_poisoned())?
-                    .retain(|id, identity| identity != &key || state.transaction_is_active(id));
-                Ok(state.history_usage())
-            });
-            if let Ok(usage) = usage {
+                    .retain(|bytes, identity| {
+                        identity != &key
+                            || decode_transaction(&bytes[..8])
+                                .is_ok_and(|id| state.transaction_is_active(&id))
+                    });
+                // Publish accounting before releasing this database to a concurrent writer.
                 let mut ledger = self
                     .history_budget
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if let Some(mut charge) = ledger.committed.get(&key).cloned() {
-                    charge.usage = usage;
+                    charge.usage = state.history_usage();
                     ledger.replace_committed(key, &charge);
                 }
-            }
+                Ok(())
+            });
         }
     }
 
@@ -4466,11 +4677,23 @@ impl LocalBackend {
         let releases_before = handle.release_marker();
         let key = database_key(parent);
         let outcome = handle.with(|state| {
+            let releases = state.transaction_releases();
+            let pruned = state.transaction_bookkeeping_stats().pruned_deadlines;
             let outcome = f(state);
-            self.issued_transactions
-                .lock()
-                .map_err(|_| lock_poisoned())?
-                .retain(|id, identity| identity != &key || state.transaction_is_active(id));
+            // Ordinary mutations never scan the issuance registry. Reconcile only when
+            // this operation finished a transaction or pruned an elapsed deadline.
+            if state.transaction_releases() != releases
+                || state.transaction_bookkeeping_stats().pruned_deadlines != pruned
+            {
+                self.issued_transactions
+                    .lock()
+                    .map_err(|_| lock_poisoned())?
+                    .retain(|bytes, identity| {
+                        identity != &key
+                            || decode_transaction(&bytes[..8])
+                                .is_ok_and(|id| state.transaction_is_active(&id))
+                    });
+            }
             // Core operations may legally release an expired retention root even when the
             // requested operation returns an error. Reconcile before releasing this database
             // lock so a later same-database commit cannot be overwritten by stale accounting.
@@ -4530,22 +4753,25 @@ impl LocalBackend {
         db: &mut FirestoreState,
     ) -> Result<Vec<u8>, Status> {
         let key = database_key(parent);
+        let mut bytes = encode_transaction(id);
+        bytes.extend_from_slice(&database_tag(parent));
+        let mac = self.token_mac(&bytes);
+        bytes.extend_from_slice(&mac);
         let mut issued = self
             .issued_transactions
             .lock()
             .map_err(|_| lock_poisoned())?;
-        issued.retain(|id, identity| identity != &key || db.transaction_is_active(id));
-        if issued.len() >= MAX_ISSUED_TRANSACTIONS || issued.contains_key(id) {
+        issued.retain(|bytes, identity| {
+            identity != &key
+                || decode_transaction(&bytes[..8]).is_ok_and(|id| db.transaction_is_active(&id))
+        });
+        if issued.len() >= MAX_ISSUED_TRANSACTIONS || issued.contains_key(&bytes) {
             db.rollback(id).map_err(|error| status_from_error(&error))?;
             return Err(Status::resource_exhausted(
                 "transaction issuance registry is full",
             ));
         }
-        let mut bytes = encode_transaction(id);
-        bytes.extend_from_slice(&database_tag(parent));
-        let mac = self.token_mac(&bytes);
-        bytes.extend_from_slice(&mac);
-        issued.insert(id.clone(), key);
+        issued.insert(bytes.clone(), key);
         Ok(bytes)
     }
 
@@ -4589,14 +4815,22 @@ impl LocalBackend {
         let id = decode_transaction(handle).map_err(status)?;
         let tag: Option<[u8; 8]> = tag.try_into().ok();
         let expected_tag = database_tag(parent);
-        if tag != Some(expected_tag) {
+        let identity = self
+            .issued_transactions
+            .lock()
+            .map_err(|_| lock_poisoned())?
+            .get(bytes)
+            .cloned();
+        // Even equal binding hashes cannot make an active token change owners. Finished
+        // same-database tokens still reach the core's bounded retry/expiry lineage.
+        if tag != Some(expected_tag)
+            || identity
+                .as_ref()
+                .is_some_and(|issuer| issuer != &database_key(parent))
+        {
             if self.gateway.production_refusals() {
-                let issued = self
-                    .issued_transactions
-                    .lock()
-                    .map_err(|_| lock_poisoned())?;
                 return Err(
-                    if issued.get(&id).is_some_and(|(project, database)| {
+                    if identity.as_ref().is_some_and(|(project, database)| {
                         project == parent.project.as_str() && database != parent.database.as_str()
                     }) {
                         Status::aborted(
@@ -4796,6 +5030,19 @@ impl LocalBackend {
         now: fireemu_core_types::time::LogicalInstant,
         run: impl FnOnce(&mut SnapshotAccess<'_>) -> Result<T, Status>,
     ) -> Result<T, Status> {
+        // Reclaim other databases before taking this database's lock, so capacity
+        // recovery never nests database locks or holds the registry while compacting.
+        if matches!(selector, SnapshotSelector::NewTransaction(_))
+            && self
+                .issued_transactions
+                .lock()
+                .map_err(|_| lock_poisoned())?
+                .len()
+                >= MAX_ISSUED_TRANSACTIONS
+        {
+            let _admitted = self.barrier.admit();
+            self.compact_all(now);
+        }
         match selector {
             SnapshotSelector::ReadTime(read_at) => self.read_db(parent, |db| {
                 run(&mut SnapshotAccess {
@@ -4836,6 +5083,10 @@ impl LocalBackend {
                             (&mut access.state, &access.selected.transaction)
                         {
                             db.abandon_transaction(transaction);
+                            self.issued_transactions
+                                .lock()
+                                .map_err(|_| lock_poisoned())?
+                                .remove(&access.selected.report);
                         }
                     }
                     outcome
@@ -5344,6 +5595,16 @@ impl LocalBackend {
         self.fault(parent.project.as_str(), "firestore.beginTransaction")?;
         // BeginTransaction without options is read-write (unlike `new_transaction`).
         let now = self.write_time();
+        if self
+            .issued_transactions
+            .lock()
+            .map_err(|_| lock_poisoned())?
+            .len()
+            >= MAX_ISSUED_TRANSACTIONS
+        {
+            let _admitted = self.barrier.admit();
+            self.compact_all(now);
+        }
         self.with_db(&parent, |db| {
             let id = match req.options.as_ref().and_then(|o| o.mode.as_ref()) {
                 Some(pb::transaction_options::Mode::ReadOnly(ro)) => {
@@ -5593,6 +5854,15 @@ impl LocalBackend {
         lease_writes: &[Write],
         own: Option<&TransactionId>,
     ) -> bool {
+        let key = self.databases.lock().ok().and_then(|databases| {
+            databases
+                .iter()
+                .find(|(_, entry)| Arc::ptr_eq(entry, &handle.0))
+                .map(|(key, _)| key.clone())
+        });
+        let Some(key) = key else {
+            return false;
+        };
         handle
             .with(|db| {
                 // Recheck idleness and roll back under the same database write lock. A read
@@ -5609,12 +5879,18 @@ impl LocalBackend {
                 let mut rolled_back = false;
                 for id in &expired {
                     if db.rollback(id).is_ok() {
-                        self.issued_transactions
-                            .lock()
-                            .map_err(|_| lock_poisoned())?
-                            .remove(id);
                         rolled_back = true;
                     }
+                }
+                if rolled_back {
+                    self.issued_transactions
+                        .lock()
+                        .map_err(|_| lock_poisoned())?
+                        .retain(|bytes, identity| {
+                            identity != &key
+                                || decode_transaction(&bytes[..8])
+                                    .is_ok_and(|id| db.transaction_is_active(&id))
+                        });
                 }
                 Ok(rolled_back)
             })

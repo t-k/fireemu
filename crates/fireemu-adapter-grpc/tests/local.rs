@@ -829,6 +829,181 @@ async fn a_busy_holder_keeps_its_locks_past_the_lease() {
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
+async fn imported_databases_can_issue_identical_transaction_ids_over_grpc() {
+    for strict in [true, false] {
+        for new_transaction in [false, true] {
+            let (mut client, _clock, backend, server) =
+                start_profile_with_state(strict, None).await;
+            let databases = [
+                ("demo-app", "(default)"),
+                ("demo-app", "other"),
+                ("demo-other", "(default)"),
+            ];
+            let imported = databases.map(|(project, database)| {
+                (
+                    (project.to_owned(), database.to_owned()),
+                    fireemu_core_firestore::store::FirestoreState::new(),
+                )
+            });
+            backend
+                .restore_databases(imported.clone().into_iter().collect())
+                .unwrap();
+            let mut transactions = Vec::new();
+            for (project, database) in databases {
+                let database = format!("projects/{project}/databases/{database}");
+                let transaction = if new_transaction {
+                    let mut stream = client.batch_get_documents(pb::BatchGetDocumentsRequest {
+                        database: database.clone(),
+                        documents: vec![format!("{database}/documents/guard/read")],
+                        consistency_selector: Some(pb::batch_get_documents_request::ConsistencySelector::NewTransaction(pb::TransactionOptions::default())),
+                        ..Default::default()
+                    }).await.unwrap().into_inner();
+                    stream.next().await.unwrap().unwrap().transaction
+                } else {
+                    client
+                        .begin_transaction(pb::BeginTransactionRequest {
+                            database,
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap()
+                        .into_inner()
+                        .transaction
+                };
+                assert_eq!(&transaction[..8], &1_u64.to_be_bytes());
+                transactions.push(transaction);
+            }
+            assert_ne!(transactions[0], transactions[1]);
+            assert_ne!(transactions[1], transactions[2]);
+            let target = "projects/demo-app/databases/other";
+            for index in [0, 2] {
+                let transaction = &transactions[index];
+                let (code, message) = if !strict {
+                    (
+                        tonic::Code::InvalidArgument,
+                        "transaction token does not belong to this database",
+                    )
+                } else if index == 0 {
+                    (
+                        tonic::Code::Aborted,
+                        "The referenced transaction has expired or is no longer valid.",
+                    )
+                } else {
+                    (tonic::Code::InvalidArgument, "Invalid transaction.")
+                };
+                let commit = client
+                    .commit(pb::CommitRequest {
+                        database: target.to_owned(),
+                        transaction: transaction.clone(),
+                        writes: vec![pb::Write {
+                            operation: Some(pb::write::Operation::Update(pb::Document {
+                                name: format!("{target}/documents/guard/should-not-write"),
+                                ..Default::default()
+                            })),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap_err();
+                assert_eq!(commit.code(), code);
+                assert_eq!(commit.message(), message);
+            }
+            assert_eq!(
+                client
+                    .get_document(pb::GetDocumentRequest {
+                        name: format!("{target}/documents/guard/should-not-write"),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::NotFound
+            );
+            for ((project, database), transaction) in
+                databases.into_iter().zip(&transactions).skip(1)
+            {
+                client
+                    .rollback(pb::RollbackRequest {
+                        database: format!("projects/{project}/databases/{database}"),
+                        transaction: transaction.clone(),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+            }
+            let refused = client
+                .commit(pb::CommitRequest {
+                    database: target.to_owned(),
+                    transaction: transactions[0].clone(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(
+                refused.code(),
+                if strict {
+                    tonic::Code::Aborted
+                } else {
+                    tonic::Code::InvalidArgument
+                },
+                "retiring B must preserve A"
+            );
+            assert_eq!(
+                refused.message(),
+                if strict {
+                    "The referenced transaction has expired or is no longer valid."
+                } else {
+                    "transaction token does not belong to this database"
+                }
+            );
+            // Import replaces the states and restarts their database-local counters.
+            backend
+                .restore_databases(imported.into_iter().collect())
+                .unwrap();
+            let begun = client
+                .begin_transaction(pb::BeginTransactionRequest {
+                    database: target.to_owned(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .transaction;
+            assert_eq!(&begun[..8], &1_u64.to_be_bytes());
+            let refused = client
+                .commit(pb::CommitRequest {
+                    database: target.to_owned(),
+                    transaction: transactions[0].clone(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+            assert_eq!(
+                refused.message(),
+                if strict {
+                    "Invalid transaction."
+                } else {
+                    "transaction token does not belong to this database"
+                }
+            );
+            client
+                .rollback(pb::RollbackRequest {
+                    database: target.to_owned(),
+                    transaction: begun,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            server.abort();
+            let _ = server.await;
+        }
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn foreign_transaction_tokens_match_profile_over_grpc() {
     for strict in [true, false] {
         let (mut client, _clock, backend, server) = start_profile_with_state(strict, None).await;

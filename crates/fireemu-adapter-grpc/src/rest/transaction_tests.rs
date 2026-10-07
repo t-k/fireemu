@@ -256,6 +256,185 @@ fn foreign_transaction_tokens_match_profile_over_rest() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
+fn imported_databases_can_issue_identical_transaction_ids_over_rest() {
+    for strict in [true, false] {
+        for new_transaction in [false, true] {
+            let mut state = state();
+            if !strict {
+                let mut gateway = (*state.gateway).clone();
+                gateway.ctx.policy = IndexValidationPolicy::Emulator;
+                gateway.enforce_limits = false;
+                state.local = Arc::new(LocalBackend::new(
+                    gateway.clone(),
+                    Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+                    7,
+                ));
+                state.gateway = Arc::new(gateway);
+            }
+            let databases = [
+                ("demo-app", "(default)"),
+                ("demo-app", "other"),
+                ("demo-other", "(default)"),
+            ];
+            let imported = databases.map(|(project, database)| {
+                (
+                    (project.to_owned(), database.to_owned()),
+                    fireemu_core_firestore::store::FirestoreState::new(),
+                )
+            });
+            state
+                .local
+                .restore_databases(imported.clone().into_iter().collect())
+                .unwrap();
+            let mut transactions = Vec::new();
+            for (project, database) in databases {
+                let docs = format!("/v1/projects/{project}/databases/{database}/documents");
+                let (status, begun) = if new_transaction {
+                    call(
+                        &state,
+                        "POST",
+                        &format!("{docs}:batchGet"),
+                        json!({
+                            "documents": [format!("{}/guard/read", &docs[4..])], "newTransaction": {}
+                        }),
+                    )
+                } else {
+                    call(
+                        &state,
+                        "POST",
+                        &format!("{docs}:beginTransaction"),
+                        json!({}),
+                    )
+                };
+                assert_eq!(
+                    status, 200,
+                    "strict={strict} newTransaction={new_transaction}: {begun}"
+                );
+                let begun = if new_transaction { &begun[0] } else { &begun };
+                let transaction = begun["transaction"].as_str().unwrap().to_owned();
+                let bytes = super::json::base64_decode(&transaction).unwrap();
+                assert_eq!(&bytes[..8], &1_u64.to_be_bytes());
+                transactions.push(transaction);
+            }
+            assert_ne!(transactions[0], transactions[1]);
+            assert_ne!(transactions[1], transactions[2]);
+            let docs = "/v1/projects/demo-app/databases/other/documents";
+            for index in [0, 2] {
+                let transaction = &transactions[index];
+                let (http, code, message) = if !strict {
+                    (
+                        400,
+                        "INVALID_ARGUMENT",
+                        "transaction token does not belong to this database",
+                    )
+                } else if index == 0 {
+                    (
+                        409,
+                        "ABORTED",
+                        "The referenced transaction has expired or is no longer valid.",
+                    )
+                } else {
+                    (400, "INVALID_ARGUMENT", "Invalid transaction.")
+                };
+                let (status, refused) = call(
+                    &state,
+                    "POST",
+                    &format!("{docs}:commit"),
+                    json!({"transaction": transaction, "writes": [{"update": {"name": format!("{}/guard/should-not-write", &docs[4..])}}]}),
+                );
+                assert_eq!(status, http, "{refused}");
+                assert_eq!(refused["error"]["code"], http);
+                assert_eq!(refused["error"]["status"], code);
+                assert_eq!(refused["error"]["message"], message);
+            }
+            assert_eq!(
+                call(
+                    &state,
+                    "GET",
+                    &format!("{docs}/guard/should-not-write"),
+                    Value::Null
+                )
+                .0,
+                404
+            );
+            for ((project, database), transaction) in
+                databases.into_iter().zip(&transactions).skip(1)
+            {
+                assert_eq!(
+                    call(
+                        &state,
+                        "POST",
+                        &format!("/v1/projects/{project}/databases/{database}/documents:rollback"),
+                        json!({"transaction": transaction})
+                    )
+                    .0,
+                    200
+                );
+            }
+            let (status, refused) = call(
+                &state,
+                "POST",
+                &format!("{docs}:commit"),
+                json!({"transaction": transactions[0]}),
+            );
+            assert_eq!(
+                status,
+                if strict { 409 } else { 400 },
+                "retiring B must preserve A: {refused}"
+            );
+            assert_eq!(
+                refused["error"]["message"],
+                if strict {
+                    "The referenced transaction has expired or is no longer valid."
+                } else {
+                    "transaction token does not belong to this database"
+                }
+            );
+            // Import replaces the states and restarts their database-local counters.
+            state
+                .local
+                .restore_databases(imported.into_iter().collect())
+                .unwrap();
+            let (status, begun) = call(
+                &state,
+                "POST",
+                &format!("{docs}:beginTransaction"),
+                json!({}),
+            );
+            assert_eq!(status, 200, "{begun}");
+            let bytes = super::json::base64_decode(begun["transaction"].as_str().unwrap()).unwrap();
+            assert_eq!(&bytes[..8], &1_u64.to_be_bytes());
+            let (status, refused) = call(
+                &state,
+                "POST",
+                &format!("{docs}:commit"),
+                json!({"transaction": transactions[0]}),
+            );
+            assert_eq!(status, 400, "{refused}");
+            assert_eq!(
+                refused["error"]["message"],
+                if strict {
+                    "Invalid transaction."
+                } else {
+                    "transaction token does not belong to this database"
+                }
+            );
+            assert_eq!(
+                call(
+                    &state,
+                    "POST",
+                    &format!("{docs}:rollback"),
+                    json!({"transaction": begun["transaction"]})
+                )
+                .0,
+                200
+            );
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
 fn failed_rest_commit_requires_rollback_before_exact_subsequent_poststate() {
     let state = state();
     let original = format!("{DOCS}/locked/doc");

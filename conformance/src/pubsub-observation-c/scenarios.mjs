@@ -1,5 +1,7 @@
+import { protectCell, checkpoint, obligations } from "../pubsub-observation/safety.mjs";
+import { normalizeOutcome } from "../pubsub-production/outcome.mjs";
 import { isDeepStrictEqual } from "node:util";
-import { kindOf } from "../pubsub-production/ledger.mjs";
+import { kindOf } from "../pubsub-observation/ledger.mjs";
 import { PROJECT, makePlan, minimumCallMs } from "./plan.mjs";
 const kinds = { topics: "Topic", subscriptions: "Subscription", snapshots: "Snapshot" };
 const resourceRank = (name) =>
@@ -135,6 +137,10 @@ export async function runCell({
         : null;
     if (action === "delete" && (ledger.deleting(name) || ledger.unconfirmed(name)))
       throw new Error("unknown delete cannot retry");
+    if (action) {
+      tracked.add(name);
+      checkpoint(journal, ledger, tracked, cell.id, [{ name, action, transport: cell.transport }]);
+    }
     const intent = action
       ? {
           name,
@@ -158,6 +164,7 @@ export async function runCell({
       if (intent) ledger.answered({ ...intent, kind: "unknown" });
       throw error;
     }
+    reply = normalizeOutcome(reply);
     let kind = kindOf(reply);
     if (
       (action === "create" || method.startsWith("Get")) &&
@@ -309,208 +316,239 @@ export async function runCell({
   };
   const makeSnapshot = async () =>
     create(manifest.resources.find((r) => r.name === manifest.snapshot));
-  try {
-    for (const resource of manifest.resources.filter((r) => !r.late))
-      await create(
-        resource,
-        !(cell.variant === "wrong-topic-snapshot" && resource.name === manifest.subscription),
-      );
-    const s = manifest.subscription,
-      c = manifest.control;
-    if (cell.variant === "multiple-subscriptions") {
-      await publish([{}]);
-      const first = await pull(s, "first-subscription", { attempts: 2, required: true });
-      await ack(s, first);
-      const second = await pull(c, "independent-subscription", { attempts: 2, required: true });
-      await ack(c, second);
-      await wait(1000);
-      await pull(s, "post-ack-bounded-window", { attempts: 2, immediate: true });
-    } else if (cell.variant === "stale-ack") {
-      const [id] = await publish([{}]);
-      const [original] = await pull(s, "initial-token", { attempts: 2, required: true });
-      await nack(s, original);
-      const redelivery = await pull(s, "redelivery-token", { attempts: 3, required: true });
-      const current = redelivery.find((i) => i.message.messageId === id);
-      if (!current || current.ackId === original.ackId)
-        throw new Error("distinct stale/current token witness missing; NOT_COMPARABLE");
-      await ack(s, [original]);
-      await ack(s, [current]);
-      await wait(1000);
-      await pull(s, "post-current-ack", { attempts: 2, immediate: true });
-    } else if (cell.variant === "cancel-followup") {
-      observe("prior-cancel-causal-debt", {
-        verdict: "NOT_COMPARABLE",
-        reason:
-          "Prior G4 resources must already be closed; no transferable outstanding subscription or correlated unary follow-up is supplied. No new stream is authorized by G2.",
-      });
-      await publish([{}]);
-      const items = await pull(s, "fresh-unary-control-only", { attempts: 2, required: true });
-      await ack(s, items);
-    } else if (filters[cell.variant]) {
-      const attrs =
-        cell.variant === "filter-inequality"
-          ? [{ env: "prod" }, { env: "test" }, {}]
-          : cell.variant === "attribute-exists"
-            ? [{ env: "test" }, { env: "" }, {}]
-            : [
-                { env: "test", region: "west" },
-                { env: "test", region: "east" },
-                { env: "prod", region: "west" },
-                { env: "prod", region: "east" },
-                {},
-              ];
-      for (let i = 0; i < attrs.length; i += 3)
-        await publish(attrs.slice(i, i + 3).map((attributes) => ({ attributes })));
-      const positive = new Set();
-      for (let i = 0; i < 2 && positive.size < published.size; i++) {
-        const items = await pull(c, "unfiltered-positive-control", { attempts: 2, required: true });
-        items.forEach((item) => positive.add(item.message.messageId));
-        await ack(c, items);
-      }
-      if (positive.size !== published.size)
-        throw new Error("unfiltered positive control incomplete; NOT_COMPARABLE");
-      for (let i = 0; i < 2; i++) {
-        const items = await pull(s, "filtered-selection-window", { attempts: 2, immediate: true });
-        await ack(s, items);
-        await wait(1000);
-      }
-      observe("filter-window-censored", {
-        verdict: "bounded-observation",
-        permanentAutomaticAckProved: false,
-      });
-    } else if (["nack-blocked-key", "ordered-first-cross-key"].includes(cell.variant)) {
-      if (cell.variant === "nack-blocked-key") {
-        const [firstId] = await publish([{ orderingKey: "key-A", attributes: { seq: "0" } }]);
-        const [first] = await pull(s, "outstanding-predecessor", {
-          attempts: 2,
-          maxMessages: 1,
-          required: true,
-        });
-        await publish([
-          { orderingKey: "key-A", attributes: { seq: "1" } },
-          { orderingKey: "key-B", attributes: { seq: "0" } },
-        ]);
-        await nack(s, first);
-        const before = await pull(s, "before-predecessor-ACK", { attempts: 3, required: true });
-        if (!before.some((i) => i.message.messageId === firstId))
-          throw new Error("correlated predecessor redelivery missing; NOT_COMPARABLE");
-        await ack(s, before);
-        const after = await pull(s, "after-predecessor-ACK", { attempts: 3, required: true });
-        await ack(s, after);
-      } else {
-        await publish([
-          { orderingKey: "key-A", attributes: { seq: "0" } },
-          { orderingKey: "key-A", attributes: { seq: "1" } },
-        ]);
-        await publish([{ orderingKey: "key-B", attributes: { seq: "0" } }]);
-        for (const subscription of [s, c]) {
-          const seen = new Set();
-          for (let i = 0; i < 2 && seen.size < published.size; i++) {
-            const items = await pull(
-              subscription,
-              i === 0 ? "first-Pull-exact-order" : "subsequent-Pull-exact-order",
-              { attempts: 2, required: true },
-            );
-            items.forEach((item) => seen.add(item.message.messageId));
-            await ack(subscription, items);
-          }
-          if (seen.size !== published.size)
-            throw new Error("ordered/unordered delivery control incomplete; NOT_COMPARABLE");
-        }
-      }
-    } else if (cell.variant === "retain-false-seek") {
-      await publish([{}]);
-      const first = await pull(s, "retain-false-original", { attempts: 2, required: true });
-      const target = seekTime(first[0]);
-      await ack(s, first);
-      const other = await pull(c, "retain-true-original", { attempts: 2, required: true });
-      await ack(c, other);
-      await publish([{}]);
-      for (const subscription of [s, c]) {
-        await seek(subscription, { time: target }, "retention-Seek");
-        const items = await pull(subscription, "post-retention-Seek", {
-          attempts: 2,
-          required: true,
-        });
-        await ack(subscription, items);
-      }
-    } else if (cell.variant === "wrong-topic-snapshot") {
-      await publish([{}], manifest.otherTopic);
-      await makeSnapshot();
-      await publish([{}, {}]);
-      const before = await pull(s, "target-before-wrong-Seek", { attempts: 3, required: true });
-      if (before.length < 2)
-        throw new Error("two target messages required before wrong-topic Seek");
-      await ack(s, [before[0]]);
-      await seek(s, { snapshot: manifest.snapshot }, "wrong-topic-Seek");
-      const config = await send("get", "GetSubscription", { name: s });
-      observe("target-config-after-wrong-Seek", { reply: config });
-      await nack(s, before[1]);
-      const after = await pull(s, "target-after-wrong-Seek", { attempts: 3, required: true });
-      await ack(s, after);
-    } else if (cell.variant === "unacked-backlog-seek") {
-      await publish([{}, {}]);
-      const before = await pull(s, "pre-snapshot-ACK-split", { attempts: 3, required: true });
-      if (before.length < 2)
-        throw new Error("ACKed/unACKed snapshot boundary requires two messages");
-      await ack(s, [before[0]]);
-      await makeSnapshot();
-      await ack(s, [before[1]]);
-      await publish([{}]);
-      const after = await pull(s, "post-snapshot-publication", { attempts: 2, required: true });
-      await ack(s, after);
-      await seek(s, { snapshot: manifest.snapshot }, "snapshot-Seek");
-      const replay = await pull(s, "snapshot-replay", { attempts: 3, required: true });
-      await ack(s, replay);
-    } else if (cell.variant === "reverse-seek-members") {
-      await publish([{}]);
-      const before = await pull(s, "before-snapshot", { attempts: 2, required: true });
-      const time = seekTime(before[0]);
-      await ack(s, before);
-      await makeSnapshot();
-      await publish([{}]);
-      const after = await pull(s, "after-snapshot", { attempts: 2, required: true });
-      await ack(s, after);
-      for (const target of [
-        { snapshot: manifest.snapshot, time },
-        { time, snapshot: manifest.snapshot },
-      ]) {
-        await seek(s, target, "both-target-Seek-member-order");
-        const items = await pull(s, "both-target-Seek-followup", { attempts: 2, immediate: true });
-        await ack(s, items);
-      }
-      observe("native-member-order-scope", {
-        jsonOrderAnalogue: cell.transport === "rest",
-        nativeRawBytesCaptured: cell.transport === "grpc",
-        inferredOneofSelection: false,
-      });
-    } else throw new Error("undeclared recipe");
-    complete = true;
-  } catch (error) {
-    reason = error.message;
-    journal.write({ event: "case-incomplete", cellId: cell.id, reason, verdict: "NOT_COMPARABLE" });
-  }
   let cleanupClosed = true;
-  for (const name of [...tracked].sort((a, b) => resourceRank(b) - resourceRank(a))) {
-    if (settled(ledger, name)) continue;
-    try {
-      if (ledger.unconfirmed(name)) {
-        const reply = await send("cleanupGet", resourceMethod(name, "Get"), { name });
-        ledger.observeRead(name, reply);
-        if (ledger.unconfirmed(name)) {
-          cleanupClosed = false;
-          continue;
+  const failures = await protectCell({
+    body: async () => {
+      for (const resource of manifest.resources.filter((r) => !r.late))
+        await create(
+          resource,
+          !(cell.variant === "wrong-topic-snapshot" && resource.name === manifest.subscription),
+        );
+      const s = manifest.subscription,
+        c = manifest.control;
+      if (cell.variant === "multiple-subscriptions") {
+        await publish([{}]);
+        const first = await pull(s, "first-subscription", { attempts: 2, required: true });
+        await ack(s, first);
+        const second = await pull(c, "independent-subscription", { attempts: 2, required: true });
+        await ack(c, second);
+        await wait(1000);
+        await pull(s, "post-ack-bounded-window", { attempts: 2, immediate: true });
+      } else if (cell.variant === "stale-ack") {
+        const [id] = await publish([{}]);
+        const [original] = await pull(s, "initial-token", { attempts: 2, required: true });
+        await nack(s, original);
+        const redelivery = await pull(s, "redelivery-token", { attempts: 3, required: true });
+        const current = redelivery.find((i) => i.message.messageId === id);
+        if (!current || current.ackId === original.ackId)
+          throw new Error("distinct stale/current token witness missing; NOT_COMPARABLE");
+        await ack(s, [original]);
+        await ack(s, [current]);
+        await wait(1000);
+        await pull(s, "post-current-ack", { attempts: 2, immediate: true });
+      } else if (cell.variant === "cancel-followup") {
+        observe("prior-cancel-causal-debt", {
+          verdict: "NOT_COMPARABLE",
+          reason:
+            "Prior G4 resources must already be closed; no transferable outstanding subscription or correlated unary follow-up is supplied. No new stream is authorized by G2.",
+        });
+        await publish([{}]);
+        const items = await pull(s, "fresh-unary-control-only", { attempts: 2, required: true });
+        await ack(s, items);
+      } else if (filters[cell.variant]) {
+        const attrs =
+          cell.variant === "filter-inequality"
+            ? [{ env: "prod" }, { env: "test" }, {}]
+            : cell.variant === "attribute-exists"
+              ? [{ env: "test" }, { env: "" }, {}]
+              : [
+                  { env: "test", region: "west" },
+                  { env: "test", region: "east" },
+                  { env: "prod", region: "west" },
+                  { env: "prod", region: "east" },
+                  {},
+                ];
+        for (let i = 0; i < attrs.length; i += 3)
+          await publish(attrs.slice(i, i + 3).map((attributes) => ({ attributes })));
+        const positive = new Set();
+        for (let i = 0; i < 2 && positive.size < published.size; i++) {
+          const items = await pull(c, "unfiltered-positive-control", {
+            attempts: 2,
+            required: true,
+          });
+          items.forEach((item) => positive.add(item.message.messageId));
+          await ack(c, items);
         }
+        if (positive.size !== published.size)
+          throw new Error("unfiltered positive control incomplete; NOT_COMPARABLE");
+        for (let i = 0; i < 2; i++) {
+          const items = await pull(s, "filtered-selection-window", {
+            attempts: 2,
+            immediate: true,
+          });
+          await ack(s, items);
+          await wait(1000);
+        }
+        observe("filter-window-censored", {
+          verdict: "bounded-observation",
+          permanentAutomaticAckProved: false,
+        });
+      } else if (["nack-blocked-key", "ordered-first-cross-key"].includes(cell.variant)) {
+        if (cell.variant === "nack-blocked-key") {
+          const [firstId] = await publish([{ orderingKey: "key-A", attributes: { seq: "0" } }]);
+          const [first] = await pull(s, "outstanding-predecessor", {
+            attempts: 2,
+            maxMessages: 1,
+            required: true,
+          });
+          await publish([
+            { orderingKey: "key-A", attributes: { seq: "1" } },
+            { orderingKey: "key-B", attributes: { seq: "0" } },
+          ]);
+          await nack(s, first);
+          const before = await pull(s, "before-predecessor-ACK", { attempts: 3, required: true });
+          if (!before.some((i) => i.message.messageId === firstId))
+            throw new Error("correlated predecessor redelivery missing; NOT_COMPARABLE");
+          await ack(s, before);
+          const after = await pull(s, "after-predecessor-ACK", { attempts: 3, required: true });
+          await ack(s, after);
+        } else {
+          await publish([
+            { orderingKey: "key-A", attributes: { seq: "0" } },
+            { orderingKey: "key-A", attributes: { seq: "1" } },
+          ]);
+          await publish([{ orderingKey: "key-B", attributes: { seq: "0" } }]);
+          for (const subscription of [s, c]) {
+            const seen = new Set();
+            for (let i = 0; i < 2 && seen.size < published.size; i++) {
+              const items = await pull(
+                subscription,
+                i === 0 ? "first-Pull-exact-order" : "subsequent-Pull-exact-order",
+                { attempts: 2, required: true },
+              );
+              items.forEach((item) => seen.add(item.message.messageId));
+              await ack(subscription, items);
+            }
+            if (seen.size !== published.size)
+              throw new Error("ordered/unordered delivery control incomplete; NOT_COMPARABLE");
+          }
+        }
+      } else if (cell.variant === "retain-false-seek") {
+        await publish([{}]);
+        const first = await pull(s, "retain-false-original", { attempts: 2, required: true });
+        const target = seekTime(first[0]);
+        await ack(s, first);
+        const other = await pull(c, "retain-true-original", { attempts: 2, required: true });
+        await ack(c, other);
+        await publish([{}]);
+        for (const subscription of [s, c]) {
+          await seek(subscription, { time: target }, "retention-Seek");
+          const items = await pull(subscription, "post-retention-Seek", {
+            attempts: 2,
+            required: true,
+          });
+          await ack(subscription, items);
+        }
+      } else if (cell.variant === "wrong-topic-snapshot") {
+        await publish([{}], manifest.otherTopic);
+        await makeSnapshot();
+        await publish([{}, {}]);
+        const before = await pull(s, "target-before-wrong-Seek", { attempts: 3, required: true });
+        if (before.length < 2)
+          throw new Error("two target messages required before wrong-topic Seek");
+        await ack(s, [before[0]]);
+        await seek(s, { snapshot: manifest.snapshot }, "wrong-topic-Seek");
+        const config = await send("get", "GetSubscription", { name: s });
+        observe("target-config-after-wrong-Seek", { reply: config });
+        await nack(s, before[1]);
+        const after = await pull(s, "target-after-wrong-Seek", { attempts: 3, required: true });
+        await ack(s, after);
+      } else if (cell.variant === "unacked-backlog-seek") {
+        await publish([{}, {}]);
+        const before = await pull(s, "pre-snapshot-ACK-split", { attempts: 3, required: true });
+        if (before.length < 2)
+          throw new Error("ACKed/unACKed snapshot boundary requires two messages");
+        await ack(s, [before[0]]);
+        await makeSnapshot();
+        await ack(s, [before[1]]);
+        await publish([{}]);
+        const after = await pull(s, "post-snapshot-publication", { attempts: 2, required: true });
+        await ack(s, after);
+        await seek(s, { snapshot: manifest.snapshot }, "snapshot-Seek");
+        const replay = await pull(s, "snapshot-replay", { attempts: 3, required: true });
+        await ack(s, replay);
+      } else if (cell.variant === "reverse-seek-members") {
+        await publish([{}]);
+        const before = await pull(s, "before-snapshot", { attempts: 2, required: true });
+        const time = seekTime(before[0]);
+        await ack(s, before);
+        await makeSnapshot();
+        await publish([{}]);
+        const after = await pull(s, "after-snapshot", { attempts: 2, required: true });
+        await ack(s, after);
+        for (const target of [
+          { snapshot: manifest.snapshot, time },
+          { time, snapshot: manifest.snapshot },
+        ]) {
+          await seek(s, target, "both-target-Seek-member-order");
+          const items = await pull(s, "both-target-Seek-followup", {
+            attempts: 2,
+            immediate: true,
+          });
+          await ack(s, items);
+        }
+        observe("native-member-order-scope", {
+          jsonOrderAnalogue: cell.transport === "rest",
+          nativeRawBytesCaptured: cell.transport === "grpc",
+          inferredOneofSelection: false,
+        });
+      } else throw new Error("undeclared recipe");
+      complete = true;
+    },
+    report: (error) => {
+      reason = error.message;
+      journal.write({
+        event: "case-incomplete",
+        cellId: cell.id,
+        reason,
+        verdict: "NOT_COMPARABLE",
+      });
+    },
+    finalize: async () => {
+      for (const name of ledger.state().keys()) if (allowed.has(name)) tracked.add(name);
+      for (const name of [...tracked].sort((a, b) => resourceRank(b) - resourceRank(a))) {
+        if (settled(ledger, name)) continue;
+        try {
+          if (ledger.unconfirmed(name)) {
+            const reply = await send("cleanupGet", resourceMethod(name, "Get"), { name });
+            ledger.observeRead(name, reply);
+            if (ledger.unconfirmed(name)) {
+              cleanupClosed = false;
+              continue;
+            }
+          }
+          if (!ledger.deleting(name) && !absentSeen.has(name))
+            await send("cleanupDelete", resourceMethod(name, "Delete"), { name });
+          const reply = await send("cleanupGet", resourceMethod(name, "Get"), { name });
+          if (!ledger.settleAbsent(name, reply)) cleanupClosed = false;
+        } catch {
+          cleanupClosed = false;
+        }
+        if (!settled(ledger, name)) cleanupClosed = false;
       }
-      if (!ledger.deleting(name) && !absentSeen.has(name))
-        await send("cleanupDelete", resourceMethod(name, "Delete"), { name });
-      const reply = await send("cleanupGet", resourceMethod(name, "Get"), { name });
-      if (!ledger.settleAbsent(name, reply)) cleanupClosed = false;
-    } catch {
-      cleanupClosed = false;
-    }
-    if (!settled(ledger, name)) cleanupClosed = false;
+    },
+    persist: () => checkpoint(journal, ledger, tracked, cell.id, [], []),
+  });
+  if (failures.length) {
+    complete = false;
+    reason ??= failures[0].message;
   }
+  if (
+    failures.finalizationFailed ||
+    failures.persistenceFailed ||
+    obligations(ledger, tracked).length
+  )
+    cleanupClosed = false;
   try {
     meter.remaining(true);
   } catch {

@@ -130,11 +130,13 @@ test("boundary encoding properties hold for small exact byte targets and message
 
 const { createWire, readResponse } = await import("./pubsub-observation/wire.mjs");
 test("REST bounded reader cancels oversized bodies before buffering the whole response", async () => {
-  let cancelled = 0;
+  let cancelled = 0,
+    reads = 0;
   const response = {
     body: {
       getReader: () => ({
-        read: async () => ({ done: false, value: Buffer.alloc(65537) }),
+        read: async () =>
+          ++reads === 1 ? { done: false, value: Buffer.alloc(65537) } : { done: true },
         cancel: async () => {
           cancelled++;
         },
@@ -183,7 +185,7 @@ test("wire refuses exhausted categories before retrieving credentials or dispatc
 const { EventEmitter } = await import("node:events");
 const { protos } = await import("@google-cloud/pubsub");
 const { openStream } = await import("./pubsub-observation/stream.mjs");
-test("native stream records cancel and half-close separately and preserves exact update presence", async () => {
+test("native stream records cancel and half-close separately and preserves exact update presence", async (context) => {
   const meter = createMeter({ now: () => 0 });
   meter.enter(makePlan().cells[0]);
   const rpc = new EventEmitter();
@@ -215,6 +217,7 @@ test("native stream records cancel and half-close separately and preserves exact
   });
   stream.write({ modifyDeadlineAckIds: ["own-runtime-token"], modifyDeadlineSeconds: [] });
   const entry = rows.find((row) => row.event === "stream-frame" && row.body.modifyDeadlineAckIds);
+  context.after(() => stream.dispose());
   assert.deepEqual(entry.body.modifyDeadlineSeconds, []);
   stream.end();
   stream.cancel("test");
@@ -226,7 +229,7 @@ test("native stream records cancel and half-close separately and preserves exact
   assert.ok(rows.some((row) => row.event === "stream-cancel"));
   stream.dispose();
 });
-test("inbound stream overflow is incomplete, cancels once, and never reopens", async () => {
+test("inbound stream overflow is incomplete, cancels once, and never reopens", async (context) => {
   const meter = createMeter({ now: () => 0 });
   meter.enter(makePlan().cells[0]);
   const rpc = new EventEmitter();
@@ -256,6 +259,7 @@ test("inbound stream overflow is incomplete, cancels once, and never reopens", a
   });
   const bytes = Buffer.from(protos.google.pubsub.v1.StreamingPullResponse.encode({}).finish());
   for (let i = 0; i < 7; i++) rpc.emit("data", bytes);
+  context.after(() => stream.dispose());
   assert.equal(stream.state().incomplete, true);
   assert.equal(cancelled, 1);
   assert.equal(starts, 1);
@@ -1005,4 +1009,301 @@ test("setup GET with a foreign response name stops before target writes", async 
     world.calls.some((call) => call.category === "target"),
     false,
   );
+});
+
+test("wire revalidates authority after asynchronous credentials before dispatch", async () => {
+  const meter = createMeter({ now: () => 0 });
+  meter.enter(makePlan().cells.find((item) => item.id === "R3"));
+  let valid = true,
+    dispatches = 0,
+    checks = 0;
+  const wire = createWire({
+    meter,
+    journal: { write() {} },
+    getToken: async () => {
+      valid = false;
+      return "fake";
+    },
+    beforeDispatch: () => {
+      checks++;
+      if (!valid) throw new Error("authority changed");
+    },
+    client: { close() {} },
+    fetch: async () => {
+      dispatches++;
+      return new Response("{}");
+    },
+  });
+  const reply = await wire.call({
+    category: "get",
+    transport: "rest",
+    service: "Publisher",
+    method: "GetTopic",
+    request: { name: "projects/fixture/topics/fe123456abcdef-a" },
+  });
+  assert.equal(reply.unknown, true);
+  assert.equal(dispatches, 0);
+  assert.equal(checks, 1);
+  wire.close();
+});
+
+test("stream revalidates authority after asynchronous credentials before opening", async () => {
+  const meter = createMeter({ now: () => 0 });
+  meter.enter(makePlan().cells[0]);
+  let dispatches = 0;
+  await assert.rejects(
+    openStream({
+      meter,
+      credential: async () => "fake",
+      beforeDispatch: () => {
+        throw new Error("authority changed");
+      },
+      client: {
+        makeBidiStreamRequest() {
+          dispatches++;
+          throw new Error("unexpected dispatch");
+        },
+      },
+      journal: { write() {}, frame() {} },
+      cellId: "S01",
+      opener: {},
+    }),
+    /authority changed/,
+  );
+  assert.equal(dispatches, 0);
+});
+
+test("durable dispatch time is charged before a request can enter the wire", async () => {
+  let clock = 0,
+    dispatches = 0;
+  const meter = createMeter({ now: () => clock });
+  meter.enter(makePlan().cells.find((item) => item.id === "R3"));
+  const wire = createWire({
+    meter,
+    journal: {
+      write(row) {
+        if (row.event === "request-dispatch") clock = 80000;
+      },
+    },
+    getToken: async () => "fake",
+    client: { close() {} },
+    fetch: async () => {
+      dispatches++;
+      return new Response("{}");
+    },
+  });
+  const reply = await wire.call({
+    category: "create",
+    transport: "rest",
+    service: "Publisher",
+    method: "CreateTopic",
+    request: { name: "projects/fixture/topics/fe123456abcdef-a" },
+  });
+  assert.equal(reply.unknown, true);
+  assert.equal(dispatches, 0);
+  wire.close();
+});
+
+test("unavailable stream status cannot become a complete production witness", async () => {
+  const meter = createMeter({ now: () => 0 });
+  meter.enter(makePlan().cells[0]);
+  const rpc = new EventEmitter();
+  rpc.write = () => true;
+  rpc.cancel = () => {};
+  rpc.end = () => {};
+  const stream = await openStream({
+    meter,
+    client: { makeBidiStreamRequest: () => rpc },
+    journal: { write() {}, frame() {} },
+    credential: async () => "fake",
+    cellId: "S01",
+    opener: {
+      subscription: "projects/fixture/subscriptions/fe123456abcdef-a",
+      streamAckDeadlineSeconds: 10,
+    },
+  });
+  try {
+    rpc.emit("status", { code: 14 });
+    assert.equal(stream.state().incomplete, true);
+  } finally {
+    stream.dispose();
+  }
+});
+
+test("normal opener cannot be complete merely because the server rejected the stream", async () => {
+  const meter = createMeter({ now: () => 0 }),
+    cell = makePlan().cells[0];
+  meter.enter(cell);
+  const world = fakeWorld();
+  world.open = async () => ({
+    next: async () => null,
+    dispose() {},
+    state: () => ({ incomplete: false, terminal: { code: 3 } }),
+  });
+  const result = await runCell({
+    cell,
+    meter,
+    wire: world,
+    ledger: createLedger(),
+    runId: "123456abcdef",
+    journal: { write() {} },
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.cleanupClosed, true);
+});
+
+test("every later outbound stream frame revalidates current authority", async () => {
+  const meter = createMeter({ now: () => 0 });
+  meter.enter(makePlan().cells[0]);
+  const rpc = new EventEmitter();
+  let valid = true,
+    writes = 0;
+  rpc.write = () => {
+    writes++;
+    return true;
+  };
+  rpc.cancel = () => {};
+  rpc.end = () => {};
+  const stream = await openStream({
+    meter,
+    client: { makeBidiStreamRequest: () => rpc },
+    journal: { write() {}, frame() {} },
+    credential: async () => "fake",
+    beforeDispatch: () => {
+      if (!valid) throw new Error("authority changed");
+    },
+    cellId: "S01",
+    opener: {
+      subscription: "projects/fixture/subscriptions/fe123456abcdef-a",
+      streamAckDeadlineSeconds: 10,
+    },
+  });
+  try {
+    valid = false;
+    assert.throws(() => stream.write({ ackIds: ["own-observed-ack"] }), /authority changed/);
+    assert.equal(writes, 1);
+  } finally {
+    stream.dispose();
+  }
+});
+
+test("stream persistence exhausting the window refuses physical opening", async () => {
+  let clock = 0,
+    opens = 0;
+  const meter = createMeter({ now: () => clock });
+  meter.enter(makePlan().cells[0]);
+  await assert.rejects(
+    openStream({
+      meter,
+      credential: async () => "fake",
+      client: {
+        makeBidiStreamRequest() {
+          opens++;
+          throw new Error("unexpected dispatch");
+        },
+      },
+      journal: {
+        write(row) {
+          if (row.event === "stream-dispatch") clock += 140000;
+        },
+        frame() {},
+      },
+      cellId: "S01",
+      opener: {},
+    }),
+    /time exhausted/,
+  );
+  assert.equal(opens, 0);
+});
+
+test("actual main wires admission to dispatch and keeps the parent open after signal or unknown write", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs"),
+    { tmpdir } = await import("node:os"),
+    { join } = await import("node:path");
+  for (const signal of [false, true]) {
+    const out = mkdtempSync(join(tmpdir(), "pubsub-obsa-main-")),
+      runId = "123456abcdef",
+      signals = new EventEmitter();
+    let code, guard;
+    try {
+      const summary = await main(
+        [
+          "--record",
+          ...Object.entries({
+            authority: "fixture",
+            descriptor: "fixture",
+            packet: "fixture",
+            E: "fixture",
+            V: "fixture",
+            lock: "fixture",
+            "run-id": runId,
+            out,
+          }).flatMap(([k, v]) => [`--${k}`, v]),
+        ],
+        {
+          admit: () => ({
+            check() {},
+            descriptor: { head: "a".repeat(40) },
+            descriptorSha256: "b".repeat(64),
+            scope: { envelopeId: "FIXTURE-A", packetSha256: "c".repeat(64) },
+          }),
+          createCredentials: () => async () => "fake",
+          signals,
+          setExitCode: (value) => {
+            code = value;
+          },
+          createWire: (options) => {
+            guard = options.beforeDispatch;
+            return {
+              close() {},
+              abortSource() {},
+              open: async () => {
+                throw new Error("no stream");
+              },
+              call: async (call) => {
+                if (call.category === "create") {
+                  if (signal) signals.emit("SIGTERM");
+                  return { ok: false, unknown: true, code: "UNKNOWN", body: {} };
+                }
+                return {
+                  ok: false,
+                  status: 404,
+                  code: "NOT_FOUND",
+                  body: { error: { status: "NOT_FOUND" } },
+                };
+              },
+            };
+          },
+        },
+      );
+      assert.equal(typeof guard, "function");
+      assert.equal(summary.parentClosureReady, false);
+      assert.equal(summary.resourcesClosed, false);
+      assert.equal(code, 2);
+      assert.equal(signals.listenerCount("SIGTERM"), 0);
+      assert.equal(signals.listenerCount("SIGINT"), 0);
+      assert.equal(
+        JSON.parse(readFileSync(join(out, `summary-${runId}.json`))).parentClosureReady,
+        false,
+      );
+    } finally {
+      rmSync(out, { recursive: true });
+    }
+  }
+});
+
+test("owned delivery selection properties exclude missing data and unknown identities", () => {
+  for (let seed = 1; seed <= 256; seed++) {
+    const id = `own-${seed}`,
+      data = Buffer.from(`marker-${seed}`).toString("base64"),
+      published = new Map([[id, data]]);
+    const messages = [
+      { ackId: "valid", message: { messageId: id, data } },
+      { ackId: "other", message: { messageId: `foreign-${seed}` } },
+      { ackId: "missing", message: { messageId: id } },
+      { ackId: "", message: { messageId: id, data } },
+      { ackId: "changed", message: { messageId: id, data: `${data}x` } },
+    ];
+    assert.deepEqual(selectOwn({ receivedMessages: messages }, published), [messages[0]]);
+  }
 });

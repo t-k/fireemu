@@ -113,6 +113,7 @@ export function createWire({
   meter,
   journal,
   getToken,
+  beforeDispatch = () => {},
   fetch = globalThis.fetch,
   client = new grpc.Client("pubsub.googleapis.com:443", grpc.credentials.createSsl(), {
     "grpc.enable_retries": 0,
@@ -162,6 +163,7 @@ export function createWire({
     meter,
     journal,
     credential,
+    beforeDispatch,
     now,
     close: () => client.close(),
     abortSource() {
@@ -220,8 +222,16 @@ export function createWire({
       });
       let reply;
       const controller = controllerFor(maintenance);
-      const requestTimer = setTimeout(() => controller.abort(), timeoutMs);
+      let requestTimer;
       try {
+        beforeDispatch();
+        const available = Math.min(
+          timeoutMs - (meter.clock() - monotonicStarted),
+          meter.remaining(maintenance),
+        );
+        if (available < minimumCallMs(method))
+          throw new Error("durable dispatch latency margin unavailable");
+        requestTimer = setTimeout(() => controller.abort(), available);
         if (transport === "rest") {
           const response = await fetch(address.url, {
             method: address.verb,

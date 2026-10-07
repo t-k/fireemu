@@ -115,7 +115,12 @@ export async function main(args = process.argv.slice(2), deps = {}) {
     admission.check();
     return token(value);
   };
-  const wire = (deps.createWire ?? createWire)({ meter, journal, getToken: guardedToken });
+  const wire = (deps.createWire ?? createWire)({
+    meter,
+    journal,
+    getToken: guardedToken,
+    beforeDispatch: () => admission.check(),
+  });
   let signalled = false;
   let activeStream;
   const interrupted = new AbortController();
@@ -224,6 +229,7 @@ export async function main(args = process.argv.slice(2), deps = {}) {
     resourcesClosed: resourcesClosed && error === null,
     recordingComplete: recordingComplete && !signalled && error === null,
     closureReady: false,
+    parentClosureReady: false,
     a2: options.a2,
     signalled,
     error,

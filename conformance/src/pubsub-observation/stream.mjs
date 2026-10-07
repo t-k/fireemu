@@ -9,26 +9,32 @@ export async function openStream({
   client,
   journal,
   credential,
+  beforeDispatch = () => {},
   now = Date.now,
   cellId,
   opener,
 }) {
   meter.start("stream", "streams");
   const token = await credential(false);
-  const windowMs = Math.min(90000, meter.remaining() - 1);
-  if (windowMs < 1) throw new Error("stream time exhausted");
   const metadata = new grpc.Metadata();
   metadata.add("authorization", `Bearer ${token}`);
   metadata.add("x-goog-user-project", PROJECT);
-  const startedAt = now();
-  const monotonicStarted = meter.clock();
+  const intentAt = now(),
+    intentClock = meter.clock();
+  const initialRemaining = meter.remaining();
   journal.write({
     event: "stream-dispatch",
     cellId,
-    windowMs,
     requestedWindowMs: 90000,
-    requestDeadlineAt: new Date(startedAt + windowMs).toISOString(),
+    requestDeadlineAt: new Date(intentAt + initialRemaining).toISOString(),
+    deadlineBasis: "conservative active-cell ceiling before persistence",
   });
+  beforeDispatch();
+  const windowMs = Math.min(90000, meter.remaining() - 1);
+  if (windowMs < 1) throw new Error("stream time exhausted before dispatch");
+  const startedAt = now(),
+    monotonicStarted = meter.clock();
+  const preDispatchMs = monotonicStarted - intentClock;
   const rpc = client.makeBidiStreamRequest(
     "/google.pubsub.v1.Subscriber/StreamingPull",
     (value) => value,
@@ -39,6 +45,7 @@ export async function openStream({
   const queue = [];
   let waiter,
     cancelled = false,
+    cancelReason = null,
     ended = false,
     disposed = false;
   const state = {
@@ -49,6 +56,7 @@ export async function openStream({
     incomplete: windowMs < 90000,
     windowExpired: false,
     received: 0,
+    preDispatchMs,
   };
   const wake = () => {
     const callback = waiter;
@@ -62,16 +70,20 @@ export async function openStream({
   const cancel = (reason) => {
     if (!cancelled && !state.terminal) {
       cancelled = true;
+      cancelReason = reason;
       event("stream-cancel", { reason });
       rpc.cancel();
     }
     wake();
   };
-  const timer = setTimeout(() => {
-    state.windowExpired = true;
-    event("stream-observation-window-end");
-    cancel("window-end");
-  }, windowMs);
+  const timer = setTimeout(
+    () => {
+      state.windowExpired = true;
+      event("stream-observation-window-end");
+      cancel("window-end");
+    },
+    Math.max(0, windowMs - (meter.clock() - monotonicStarted)),
+  );
   rpc.on("data", (raw) => {
     if (cancelled || disposed) return;
     try {
@@ -100,10 +112,24 @@ export async function openStream({
   });
   rpc.on("status", (status) => {
     state.terminal = { code: status.code };
+    const localEnd =
+      cancelled &&
+      ((status.code === 1 && ["window-end", "unacked-owned-delivery"].includes(cancelReason)) ||
+        (status.code === 4 && state.windowExpired));
+    if ([1, 2, 4, 13, 14, 15].includes(status.code) && !localEnd) state.incomplete = true;
     event("stream-status", state.terminal);
     wake();
   });
   rpc.on("error", (error) => {
+    if (
+      [1, 2, 4, 13, 14, 15].includes(error.code) &&
+      !(
+        cancelled &&
+        ((error.code === 1 && ["window-end", "unacked-owned-delivery"].includes(cancelReason)) ||
+          (error.code === 4 && state.windowExpired))
+      )
+    )
+      state.incomplete = true;
     event("stream-error", { code: error.code ?? null });
     wake();
   });
@@ -130,6 +156,9 @@ export async function openStream({
         elapsedMs: elapsed(),
         body,
       });
+      beforeDispatch();
+      meter.remaining();
+      if (elapsed() >= windowMs) throw new Error("stream observation window exhausted");
       const writable = rpc.write(raw);
       event("stream-local-write", { writable });
     },
@@ -137,6 +166,9 @@ export async function openStream({
       if (!ended && !cancelled && !state.terminal) {
         ended = true;
         event("stream-write-end");
+        beforeDispatch();
+        meter.remaining();
+        if (elapsed() >= windowMs) throw new Error("stream observation window exhausted");
         rpc.end();
       }
     },
@@ -170,7 +202,12 @@ export async function openStream({
   };
   try {
     api.write(opener);
-    event("stream-open-local", { serverReadyClaim: false });
+    event("stream-open-local", {
+      serverReadyClaim: false,
+      windowMs,
+      preDispatchMs,
+      requestDeadlineAt: new Date(startedAt + windowMs).toISOString(),
+    });
   } catch (error) {
     state.incomplete = true;
     api.dispose();

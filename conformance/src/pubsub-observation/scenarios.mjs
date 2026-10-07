@@ -242,7 +242,6 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
       stream = await wire.open({ opener, cellId: cell.id });
       if (cell.variant === "future-publications") await publish(0);
       if (cell.variant === "invalid-ack-silence") stream.write({ ackIds: [cell.invalidAck] });
-      if (cell.variant === "half-close") stream.end();
       const nextOwned = async () => {
         for (let frame = 0; frame < 6; frame++) {
           const body = await stream.next();
@@ -254,6 +253,10 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
       };
       const first = (await nextOwned())[0];
       journal.write({ event: "first-owned-delivery", cellId: cell.id, bound: Boolean(first) });
+      if (cell.variant === "half-close") {
+        if (!first) throw new Error("half-close has no pending owned delivery");
+        stream.end();
+      }
       if (["in-stream-ack", "future-publications"].includes(cell.variant)) {
         if (!first) throw new Error("missing owned token");
         stream.write({ ackIds: [first.ackId] });
@@ -343,7 +346,9 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
       });
       complete =
         !state.incomplete &&
-        (Boolean(first) || Boolean(state.terminal) || cell.variant === "invalid-ack-silence");
+        (Boolean(first) ||
+          ((noMessage || cell.variant === "invalid-opening-frame") &&
+            (Boolean(state.terminal) || cell.variant === "invalid-ack-silence")));
       if (!complete) reason = "bounded witness incomplete or clipped";
     }
   } catch (error) {

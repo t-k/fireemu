@@ -394,19 +394,51 @@ for (const outcome of ['writer-aborted', 'writer-late', 'older-retry', 'rollback
 }
 
 
-test('production SDK auth supplies the oracle quota project without credential discovery', async () => {
+test('production SDK custom headers reach the interceptor and loopback server exactly once', async () => {
   const { Firestore } = require('@google-cloud/firestore');
+  const { v1: { FirestoreClient } } = require('@google-cloud/firestore');
+  const descriptor = new FirestoreClient({ projectId: 'demo-descriptors' });
+  const fs = descriptor._protos.google.firestore.v1;
+  const server = new grpc.Server();
+  const received = [];
+  server.addService({ BatchGetDocuments: { path: '/google.firestore.v1.Firestore/BatchGetDocuments', requestStream: false, responseStream: true,
+    requestSerialize: fs.BatchGetDocumentsRequest.serialize, requestDeserialize: fs.BatchGetDocumentsRequest.deserialize,
+    responseSerialize: fs.BatchGetDocumentsResponse.serialize, responseDeserialize: fs.BatchGetDocumentsResponse.deserialize } }, {
+    BatchGetDocuments(call) {
+      received.push(call.metadata.get('x-goog-user-project'));
+      call.sendMetadata(new grpc.Metadata());
+      call.emit('error', { code: 9, details: 'offline stop after metadata' });
+    },
+  });
+  const port = await new Promise((resolve, reject) => server.bindAsync('127.0.0.1:0', grpc.ServerCredentials.createInsecure(), (error, value) => error ? reject(error) : resolve(value)));
   const settings = Firestore.prototype.settings;
   let headers;
+  const intercepted = [];
   Firestore.prototype.settings = function (value) {
     headers = value.auth.getClient().then(client => client.getRequestHeaders());
-    throw new Error('offline stop before any native channel');
+    const transform = value['grpc.callInvocationTransformer'];
+    return settings.call(this, { ...value, host: `127.0.0.1:${port}`, ssl: false,
+      'grpc.callInvocationTransformer': properties => {
+        transform(properties);
+        properties.callOptions.interceptors.unshift((options, nextCall) => new grpc.InterceptingCall(nextCall(options), {
+          start(metadata, listener, next) { intercepted.push(metadata.get('x-goog-user-project')); next(metadata, listener); },
+        }));
+        return properties;
+      },
+    });
   };
   try {
-    const receipt = await recordAdminRetries({ project: 'fireemu-oracle-txn', admission: { bearer: 'offline-parent', journal: () => {}, check: () => {} } });
-    assert.equal((await headers)['x-goog-user-project'], 'fireemu-oracle-txn');
+    const admission = { bearer: 'offline-parent', check: () => {}, journal: event => {
+      if (event.event === 'dispatch' && (!event.row.metadataKeys.includes('x-goog-user-project') || event.row.quotaProject !== 'fireemu-oracle-txn')) throw new Error('SDK quota project metadata missing');
+    } };
+    const receipt = await recordAdminRetries({ project: 'fireemu-oracle-txn', admission });
+    assert.deepEqual(intercepted, [['fireemu-oracle-txn']]);
+    assert.deepEqual(received, [['fireemu-oracle-txn']]);
+    assert.equal(receipt.steps[0].quotaProject, 'fireemu-oracle-txn');
+    assert.equal(receipt.steps[0].metadataKeys.filter(key => key === 'x-goog-user-project').length, 1);
+    assert.equal((await headers)['x-goog-user-project'], undefined);
     assert.equal((await headers).Authorization, 'Bearer offline-parent');
-    assert.equal(receipt.sandboxRequests, 0);
+    assert.equal(receipt.sandboxRequests, 1);
     assert.equal(receipt.complete, false);
-  } finally { Firestore.prototype.settings = settings; }
+  } finally { Firestore.prototype.settings = settings; server.forceShutdown(); await descriptor.close(); }
 });

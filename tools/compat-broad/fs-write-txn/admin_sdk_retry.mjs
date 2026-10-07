@@ -122,7 +122,8 @@ export async function recordAdminRetries({ host, project, admission }) {
       apps.push(app);
       const db = getFirestore(app);
       db.settings({ host: production ? 'firestore.googleapis.com' : host, ssl: production, preferRest: false,
-        auth: { getUniverseDomain: async () => 'googleapis.com', getProjectId: async () => project, getClient: async () => ({ getRequestHeaders: async () => ({ Authorization: `Bearer ${admission.bearer}`, ...(production ? { 'x-goog-user-project': project } : {}) }) }) },
+        customHeaders: production ? { 'x-goog-user-project': project } : {},
+        auth: { getUniverseDomain: async () => 'googleapis.com', getProjectId: async () => project, getClient: async () => ({ getRequestHeaders: async () => ({ Authorization: `Bearer ${admission.bearer}` }) }) },
         clientConfig: { interfaces: { 'google.firestore.v1.Firestore': { retry_codes: { no_retry: [] }, methods: Object.fromEntries(['BatchGetDocuments', 'Commit', 'Rollback', 'DeleteDocument'].map(method => [method, { retry_codes_name: 'no_retry', timeout_millis: 10000 }])) } } },
         'grpc.enable_retries': 0,
         'grpc.callInvocationTransformer': properties => {

@@ -316,7 +316,7 @@ def test_the_whole_task_budget_is_rechecked_before_each_recording(tmp_path):
     assert calls == [0]
 
 
-@pytest.mark.parametrize('fault', ['complete', 'unknown-commit', 'unknown-rollback', 'foreign-document', 'forged-status', 'journal-failure', 'event-journal-failure', 'final-journal-failure', 'quota-missing', 'quota-wrong', 'two-writes', 'foreign-owner', 'foreign-nonce', 'delete-no-witness', 'delete-wrong-version', 'delete-no-version', 'frame-cap', 'request-count'])
+@pytest.mark.parametrize('fault', ['complete', 'unknown-commit', 'unknown-rollback', 'foreign-document', 'forged-status', 'journal-failure', 'event-journal-failure', 'final-journal-failure', 'quota-missing', 'quota-wrong', 'loopback-quota-present', 'loopback-quota-missing', 'two-writes', 'foreign-owner', 'foreign-nonce', 'delete-no-witness', 'delete-wrong-version', 'delete-no-version', 'frame-cap', 'request-count'])
 def test_sdk_broker_preserves_responsibility_and_denies_failure_paths(tmp_path, monkeypatch, fault):
     import shutil
     from txn_program_cli import table_for
@@ -338,6 +338,37 @@ function exchange(event) {
   while (fs.readSync(0, b, 0, 1, null)) { if (b[0] === 10) break; bytes.push(b[0]); }
   return JSON.parse(Buffer.from(bytes).toString());
 }
+if (fault.startsWith('loopback-')) {
+  (async () => {
+    const url = require('url').pathToFileURL(process.argv[3]);
+    const sdkRequire = require('module').createRequire(new URL('../../../conformance/package.json', url));
+    const grpc = sdkRequire('@grpc/grpc-js');
+    const { Firestore, v1: { FirestoreClient } } = sdkRequire('@google-cloud/firestore');
+    const descriptor = new FirestoreClient({ projectId: 'demo-descriptors' });
+    const protos = descriptor._protos.google.firestore.v1;
+    const server = new grpc.Server();
+    server.addService({ BatchGetDocuments: { path: '/google.firestore.v1.Firestore/BatchGetDocuments', requestStream: false, responseStream: true,
+      requestSerialize: protos.BatchGetDocumentsRequest.serialize, requestDeserialize: protos.BatchGetDocumentsRequest.deserialize,
+      responseSerialize: protos.BatchGetDocumentsResponse.serialize, responseDeserialize: protos.BatchGetDocumentsResponse.deserialize } }, {
+      BatchGetDocuments(call) {
+        fs.writeFileSync(process.argv[4], JSON.stringify([call.metadata.get('x-goog-user-project')]));
+        call.sendMetadata(new grpc.Metadata());
+        call.emit('error', { code: 9, details: 'offline stop after metadata' });
+      },
+    });
+    const port = await new Promise((resolve, reject) => server.bindAsync('127.0.0.1:0', grpc.ServerCredentials.createInsecure(), (error, value) => error ? reject(error) : resolve(value)));
+    const settings = Firestore.prototype.settings;
+    Firestore.prototype.settings = function (value) {
+      return settings.call(this, { ...value, host: `127.0.0.1:${port}`, ssl: false, ...(fault === 'loopback-quota-missing' ? { customHeaders: {} } : {}) });
+    };
+    try {
+      const spec = exchange({ event: 'ready' });
+      const { recordAdminRetries } = await import(url.href);
+      const receipt = await recordAdminRetries({ project: 'fireemu-oracle-txn', admission: { ...spec, check: () => {}, journal: event => exchange(event) } });
+      fs.writeSync(1, JSON.stringify({ event: 'receipt', receipt }) + '\n');
+    } finally { Firestore.prototype.settings = settings; server.forceShutdown(); await descriptor.close(); }
+  })().catch(() => { process.exitCode = 1; });
+} else {
 const spec = exchange({ event: 'ready' });
 const raw = JSON.stringify(local).split(local.nonce).join(spec.nonce).split(local.ownerId).join(spec.ownerId).split('demo-admin-retry').join('fireemu-oracle-txn');
 const receipt = JSON.parse(raw);
@@ -375,10 +406,13 @@ if (fault === 'request-count') receipt.sandboxRequests += 1;
 const bound = {...receipt}; delete bound.receiptDigest;
 receipt.receiptDigest = require('crypto').createHash('sha256').update(JSON.stringify(canonical(bound))).digest('hex');
 fs.writeSync(1, JSON.stringify({event: 'receipt', receipt}) + '\n');
+}
 """
+    loopback_metadata = tmp_path / 'loopback-metadata.json'
+    if fault.startswith('loopback-'): loopback_metadata.write_text('[]')
     def popen(args, **kwargs):
         if len(args) == 3 and args[1:] == [table['sourceFile'], 'production']:
-            return original([args[0], '-e', script, str(local_path), fault, table['sourceFile']], **kwargs)
+            return original([args[0], '-e', script, str(local_path), fault, table['sourceFile'], str(loopback_metadata)], **kwargs)
         return original(args, **kwargs)
     monkeypatch.setattr(runner.subprocess, 'Popen', popen)
     def refresh(_baseline, budget, **kwargs):
@@ -436,8 +470,14 @@ fs.writeSync(1, JSON.stringify({event: 'receipt', receipt}) + '\n');
     events = [json.loads(line) for line in (tmp_path / 'journal-1/sdk-journal.jsonl').read_text().splitlines()]
     if fault == 'foreign-document': assert not any(event['event'] == 'dispatch' for event in events)
     if fault == 'forged-status': assert not any(event['event'] == 'status' for event in events)
-    if fault in ('quota-missing', 'quota-wrong', 'two-writes', 'foreign-owner', 'foreign-nonce'):
-        assert not any(event['event'] == 'dispatch' and (event['row']['rpc'] == 'Commit' or fault.startswith('quota')) for event in events)
+    if fault in ('quota-missing', 'quota-wrong', 'loopback-quota-missing', 'two-writes', 'foreign-owner', 'foreign-nonce'):
+        assert not any(event['event'] == 'dispatch' and (event['row']['rpc'] == 'Commit' or 'quota' in fault) for event in events)
+    if fault.startswith('loopback-'):
+        expected = [['fireemu-oracle-txn']] if fault == 'loopback-quota-present' else []
+        assert json.loads(loopback_metadata.read_text()) == expected
+        if expected:
+            assert receipt['steps'][0]['quotaProject'] == 'fireemu-oracle-txn'
+            assert receipt['steps'][0]['metadataKeys'].count('x-goog-user-project') == 1
     if fault in ('delete-no-witness', 'delete-wrong-version', 'delete-no-version'):
         assert not any(event['event'] == 'dispatch' and event['row']['rpc'] == 'Commit' and 'delete' in event['row']['request']['writes'][0] for event in events)
     if fault == 'frame-cap': assert len([event for event in events if event['event'] == 'frame']) == 3

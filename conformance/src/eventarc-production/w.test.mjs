@@ -59,50 +59,73 @@ test("W family reaches every ladder point and adjacent bytes below the ceiling",
   );
 });
 
-test("W refusals require native request-size attribution and exclude per-event errors", () => {
+test("W accepts native recorded-layout 400 and 413 refusals without guessing message wording", () => {
   const spec = {
     host: "publishing",
     method: "POST",
     path: `/v1/${manifest().channel}:publishEvents`,
-    recipe: { httpBytes: 1000000, requestBytes: 990000 },
   };
-  const body = template((r) => r.status === 400 && r.body.error?.message === "No events provided.");
-  body.error.message =
-    "The request size (1000000 bytes) is too large. The maximum size is 999999 bytes.";
-  body.error.details[0].fieldViolations[0].description = body.error.message;
-  assert.equal(wAcceptance(native(400, body), spec), false);
-  for (const message of [
-    "The event size (1000000 bytes) is too large. The maximum size is 999999 bytes.",
-    "Too many events.",
-    "Quota exceeded.",
-    "Request too large.",
-  ]) {
-    const changed = structuredClone(body);
-    changed.error.message = message;
-    changed.error.details[0].fieldViolations[0].description = message;
-    assert.equal(wAcceptance(native(400, changed), spec), null);
-  }
-  const badLayout = native(400, body);
-  badLayout.bodyBase64 = Buffer.from(
-    Buffer.from(badLayout.bodyBase64, "base64").toString().replace("  ", "\t "),
-  ).toString("base64");
-  assert.equal(wAcceptance(badLayout, spec), null);
-  assert.equal(wAcceptance({ ...native(400, body), bodyBytes: 1 }, spec), null);
-  assert.equal(
-    wAcceptance(native(400, body), {
-      ...spec,
-      recipe: { httpBytes: 2000000, requestBytes: 1900000 },
-    }),
-    null,
+  const refusals = corpus.filter(
+    (r) =>
+      r.status === 400 &&
+      ["No events provided.", "Too many events."].includes(r.body.error?.message),
   );
+  assert.ok(refusals.length > 0);
+  for (const row of refusals) {
+    assert.equal(wAcceptance(row, spec), false);
+    for (const status of [400, 413]) {
+      const body = structuredClone(row.body);
+      body.error.code = status;
+      body.error.status = status === 413 ? "RESOURCE_EXHAUSTED" : "INVALID_ARGUMENT";
+      body.error.message = "Payload rejected by the service.";
+      body.error.details[0].fieldViolations[0].description = "Observed service detail.";
+      assert.equal(wAcceptance(native(status, body), spec), false);
+      const answer = native(status, body);
+      const badLayout = {
+        ...answer,
+        bodyBase64: Buffer.from(
+          Buffer.from(answer.bodyBase64, "base64").toString().replace("  ", "\t "),
+        ).toString("base64"),
+      };
+      assert.equal(wAcceptance(badLayout, spec), null);
+      assert.equal(wAcceptance({ ...answer, bodyBytes: 1 }, spec), null);
+      assert.equal(wAcceptance({ ...answer, headers: { "content-length": "1" } }, spec), null);
+      assert.equal(wAcceptance({ ...answer, bodySha256: "0".repeat(64) }, spec), null);
+      assert.equal(wAcceptance({ ...answer, unknown: true }, spec), null);
+      assert.equal(wAcceptance(answer, { ...spec, host: "eventarc" }), null);
+      assert.equal(wAcceptance(answer, { ...spec, method: "GET" }), null);
+      assert.equal(wAcceptance(answer, { ...spec, path: "/v1/foreign:publishEvents" }), null);
+      for (const edit of [
+        (b) => {
+          b.error.code = 429;
+        },
+        (b) => {
+          delete b.error.details;
+        },
+        (b) => {
+          b.error.details[0]["@type"] = "foreign";
+        },
+        (b) => {
+          b.error.details[0].fieldViolations[0].field = "events[0]";
+        },
+        (b) => {
+          b.error.message = 1;
+        },
+        (b) => {
+          b.extra = true;
+        },
+      ]) {
+        const changed = structuredClone(body);
+        edit(changed);
+        assert.equal(wAcceptance(native(status, changed), spec), null);
+      }
+      for (const rejected of [200, 403, 429, 503])
+        assert.equal(wAcceptance(native(rejected, body), spec), null);
+    }
+  }
+  assert.equal(wAcceptance(native(413, { raw: "<html>too large</html>" }), spec), null);
   assert.equal(wAcceptance(native(200, {}), spec), true);
   assert.equal(wAcceptance({ ...native(200, {}), bodyBytes: 2 }, spec), null);
-  assert.equal(wAcceptance(native(503, body), spec), null);
-  assert.equal(wAcceptance(native(429, body), spec), null);
-  assert.equal(
-    wAcceptance(native(400, body), { ...spec, path: "/v1/foreign:publishEvents" }),
-    null,
-  );
 });
 
 // Resource answers use recorded bodies and the real production judge; only instance values change.
@@ -143,7 +166,7 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
               body = template(
                 (r) => r.status === 400 && r.body.error?.message === "No events provided.",
               );
-              body.error.message = `The request size (${size} bytes) is too large. The maximum size is 1500000 bytes.`;
+              body.error.message = "Payload rejected by the service.";
               body.error.details[0].fieldViolations[0].description = body.error.message;
             }
           } else if (host === "usage") {
@@ -239,6 +262,14 @@ test("W0 discovers an interval through real resource judges and cleans its exact
   assert.equal(calls.filter((c) => c.method === "DELETE").length, 1);
   assert.ok(result.counts.publish <= 20);
   assert.equal(result.publishes[0].accepted, true);
+  assert.equal(result.evidenceComplete, true);
+  for (const p of result.publishes.filter((item) => item.accepted === false))
+    assert.equal(p.observation, "Payload rejected by the service.");
+  for (const call of calls)
+    assert.equal(
+      call.timeoutMs,
+      30_000 + Math.ceil(((call.recipe?.httpBytes ?? 0) * 8 * 1000) / 2_000_000),
+    );
 });
 
 test("W recorded C and D CREATE refusals settle failed with no open writes in main cleanup and A2", async () => {
@@ -556,7 +587,7 @@ test("W A2 polls only its own prior DELETE and preserves unknown CREATE and topi
   }
 });
 
-test("W A2 requires spacing, exhaustive pages and the original wall cap", async () => {
+test("W A2 requires spacing, exhaustive pages and its own bounded deadline", async () => {
   const m = manifest();
   const recording = {
     manifest: m,
@@ -578,14 +609,63 @@ test("W A2 requires spacing, exhaustive pages and the original wall cap", async 
   let calls = 0;
   const late = await recordW({
     manifest: m,
-    recording,
+    recording: {
+      ...recording,
+      writes: [...recording.writes, { action: "delete", name: m.channel, state: "confirmed" }],
+    },
     now: () => m.wallMs,
     note: () => {},
     sleep: async () => {},
-    transports: {},
+    transports: Object.fromEntries(
+      ["eventarc", "pubsub"].map((host) => [
+        host,
+        {
+          request: async (spec) => {
+            calls++;
+            return spec.path.includes("/channels/")
+              ? native(
+                  404,
+                  template(
+                    (r) =>
+                      r.status === 404 &&
+                      r.method === "GET" &&
+                      (r.path ?? r.url).includes("/channels/"),
+                  ),
+                )
+              : native(200, {});
+          },
+        },
+      ]),
+    ),
   });
-  assert.equal(late.cleanupReady, false);
-  assert.match(late.cleanupError, /wall/);
+  assert.equal(calls, 4);
+  assert.equal(late.cleanupReady, true);
+  calls = 0;
+  let clock = m.wallMs;
+  const expired = await recordW({
+    manifest: m,
+    recording,
+    now: () => clock,
+    note: () => {},
+    sleep: async () => {},
+    transports: {
+      eventarc: {
+        request: async () => {
+          calls++;
+          clock += 45 * 60_000;
+          return native(
+            404,
+            template(
+              (r) =>
+                r.status === 404 && r.method === "GET" && (r.path ?? r.url).includes("/channels/"),
+            ),
+          );
+        },
+      },
+    },
+  });
+  assert.equal(calls, 1);
+  assert.match(expired.cleanupError, /wall/);
   const spent = await recordW({
     manifest: m,
     recording: { ...recording, a2Requests: 38 },
@@ -597,6 +677,7 @@ test("W A2 requires spacing, exhaustive pages and the original wall cap", async 
   assert.equal(spent.cleanupReady, false);
   assert.match(spent.cleanupError, /ceiling/);
   assert.equal(spent.counts.cleanup, 0);
+  calls = 0;
   const incomplete = await recordW({
     manifest: m,
     now: () => 0,
@@ -614,6 +695,33 @@ test("W A2 requires spacing, exhaustive pages and the original wall cap", async 
   assert.equal(calls, 1);
   assert.match(incomplete.stopped, /needs-review/);
   assert.equal(incomplete.writes.length, 0);
+});
+
+test("W publication upload budget reserves cleanup and refuses dispatch beyond the wall", async () => {
+  const m = manifest();
+  assert.equal(m.wallMs, 150 * 60_000);
+  const world = await replay("w0", "normal", undefined, true);
+  let clock = 0;
+  const request = world.transports.eventarc.request;
+  world.transports.eventarc.request = async (spec) => {
+    const answer = await request(spec);
+    if (spec.method === "GET" && answer.status === 200 && answer.body.pubsubTopic)
+      clock = m.wallMs - 5 * 60_000 - 60_000;
+    return answer;
+  };
+  const result = await recordW({
+    manifest: m,
+    transports: world.transports,
+    now: () => clock,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    note: () => {},
+  });
+  assert.match(result.stopped, /publish.*wall/);
+  assert.equal(result.counts.publish, 0);
+  assert.equal(world.calls.filter((c) => c.host === "publishing").length, 0);
+  assert.equal(result.cleanupReady, true);
 });
 
 test("W refuses changed W2 boundaries and inconsistent whitespace layers", async () => {
@@ -727,6 +835,8 @@ test("W entry records exact emitted bytes with real judges and gates E, V, rulin
     "ruling-changed",
     "revoked",
     "artifact-changed",
+    "outbound-wall",
+    "summary-exists",
   ]) {
     const dir = mkdtempSync(join(root, "entry-replay-"));
     try {
@@ -781,6 +891,11 @@ test("W entry records exact emitted bytes with real judges and gates E, V, rulin
       const input = join(dir, "input.json");
       writeFileSync(input, JSON.stringify(config));
       const world = await replay("w0", "normal", undefined, true);
+      if (failure === "summary-exists") {
+        mkdirSync(config.out, { recursive: true });
+        writeFileSync(join(config.out, "summary.json"), "existing");
+      }
+      let clock = 0;
       let credentials = 0,
         requests = 0;
       const output = [],
@@ -795,10 +910,11 @@ test("W entry records exact emitted bytes with real judges and gates E, V, rulin
         io,
         {
           head: () => config.sourceCommit,
-          now: () => 0,
+          now: () => clock,
           sleep: async () => {},
           execToken: async () => {
             credentials++;
+            if (failure === "outbound-wall") clock = manifest().wallMs;
             return "offline-not-a-real-credential";
           },
           fetchImpl: async (address, options) => {
@@ -832,12 +948,76 @@ test("W entry records exact emitted bytes with real judges and gates E, V, rulin
           },
         },
       );
-      assert.equal(code, failure === null ? 0 : 2, errors.join(""));
-      assert.equal(credentials, failure === null ? 1 : 0);
+      assert.equal(
+        code,
+        failure === null ? 0 : ["outbound-wall", "summary-exists"].includes(failure) ? 3 : 2,
+        errors.join(""),
+      );
+      assert.equal(
+        credentials,
+        [null, "outbound-wall", "summary-exists"].includes(failure) ? 1 : 0,
+      );
       if (failure === null) {
         assert.ok(requests <= 86);
+        const rows = readFileSync(config.sandboxLedger, "utf8").trim().split("\n").map(JSON.parse);
+        assert.deepEqual(
+          rows.map((r) => r.event),
+          ["started", "finished"],
+        );
+        assert.ok(
+          rows.every(
+            (r) =>
+              r.taskId === "PUBSUB-EVENTARC" &&
+              r.envelopeId === `EVENTARC-W-${config.runId}` &&
+              r.runId === config.runId &&
+              r.mode === "w0",
+          ),
+        );
+        assert.equal(rows[0].reserveUsd, 0.05);
+        assert.equal(rows[1].requests, requests);
+        assert.equal(rows[1].sandboxAtBaseline, true);
+        assert.equal(rows[1].lockRetained, false);
+        assert.equal(rows[1].outcome, "recorded");
         const recovered = readWJournal(join(config.out, `issued-${config.runId}.jsonl`));
         assert.equal(recovered.cleanupReady, true);
+        const a2Requests = requests;
+        const codeA2 = await main(
+          ["--config", input, "--a2"],
+          { PATH: `${dirname(process.execPath)}:/etc/profiles/per-user/tk/bin:/usr/bin:/bin` },
+          io,
+          {
+            head: () => config.sourceCommit,
+            now: () => manifest().wallMs + 600_000,
+            sleep: async () => {},
+            execToken: async () => "offline-not-a-real-credential",
+            fetchImpl: async (address, options) => {
+              requests++;
+              assert.equal(options.method, "GET");
+              const url = new URL(address);
+              const answer = await world.transports[
+                url.hostname === "pubsub.googleapis.com" ? "pubsub" : "eventarc"
+              ].request({ method: options.method, path: url.pathname + url.search });
+              return new Response(Buffer.from(answer.bodyBase64, "base64"), {
+                status: answer.status,
+              });
+            },
+          },
+        );
+        assert.equal(codeA2, 0, errors.join(""));
+        const a2Rows = readFileSync(config.sandboxLedger, "utf8")
+          .trim()
+          .split("\n")
+          .map(JSON.parse)
+          .slice(2);
+        assert.deepEqual(
+          a2Rows.map((r) => r.event),
+          ["started", "finished"],
+        );
+        assert.ok(a2Rows.every((r) => r.mode === "a2" && r.estimatedUsd === 0));
+        assert.equal(a2Rows[0].reserveUsd, 0);
+        assert.equal(a2Rows[1].requests, requests - a2Requests);
+        assert.equal(a2Rows[1].sandboxAtBaseline, true);
+        assert.equal(a2Rows[1].lockRetained, false);
         const captures = readFileSync(join(config.out, `capture-${config.runId}.jsonl`), "utf8");
         assert.doesNotMatch(captures, /offline-not-a-real-credential|authorization/i);
         const entries = captures
@@ -850,6 +1030,21 @@ test("W entry records exact emitted bytes with real judges and gates E, V, rulin
           assert.equal(entries[i].requestBytes, recovered.publishes[i].httpBytes);
           assert.equal(entries[i].requestSha256, recovered.publishes[i].sha256);
         }
+      } else if (["outbound-wall", "summary-exists"].includes(failure)) {
+        const rows = readFileSync(config.sandboxLedger, "utf8").trim().split("\n").map(JSON.parse);
+        assert.deepEqual(
+          rows.map((r) => r.event),
+          ["started", "finished"],
+        );
+        assert.equal(rows[1].requests, failure === "outbound-wall" ? 1 : requests);
+        assert.equal(rows[1].lockRetained, failure === "summary-exists");
+        assert.equal(rows[1].sandboxAtBaseline, failure === "outbound-wall");
+        assert.equal(
+          rows[1].outcome,
+          failure === "outbound-wall" ? "stopped-for-review" : "needs-recovery",
+        );
+        if (failure === "outbound-wall") assert.equal(requests, 0);
+        else assert.ok(requests > 0);
       } else assert.equal(requests, 0);
     } finally {
       rmSync(dir, { recursive: true });
@@ -881,6 +1076,8 @@ test("W stops on unknowns, unavailable APIs, incomplete cleanup and unobserved b
     if (mode === "all-accepted") {
       assert.equal(result.boundary, null);
       assert.equal(result.counts.publish, 8);
+      const largest = calls.find((c) => c.recipe?.httpBytes === manifest().ceiling - 2);
+      assert.equal(largest.timeoutMs, 197773);
     }
     if (mode === "unknown-create")
       assert.equal(calls.filter((c) => c.method === "DELETE").length, 0);

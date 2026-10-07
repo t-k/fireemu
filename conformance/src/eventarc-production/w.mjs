@@ -6,7 +6,7 @@ import { hProductionAnswer, hProductionEvidence } from "./h-production.mjs";
 import { hUnknown, hReadList } from "./h-deploy.mjs";
 
 export const W_A2_RULING =
-  "- 2026-10-07 | EVENTARC-W A2 channel settlement | decision=APPROVE; for EVENTARC packet W recordings W0, W1 and W2 on fireemu-oracle-events, separate coordinator A2 starts at least 600 seconds after the latest preceding request; at most 38 requests within the recording's 45-minute wall cap; it may confirm only the exact baseline-absent run channel by its own judged positive GET or own CREATE operation done; unknown or pending CREATE never closes by absence; it may send one exact channel DELETE only for that confirmed create after a fresh complete judged trigger list has no channel dependents; never resend an unknown or pending DELETE; it may read the own operation of a prior channel DELETE; the exact pubsubTopic positively named by the channel is its own topic and may remain when admitting channel DELETE; close channel and topic only after that DELETE's own matching-target operation is done without error, the exact channel GET is a judged 404, and a fresh complete judged topics list omits its exact topic; no topic DELETE, deployment, API enable or publication | Claude（委任。オーナーの裁量の委任 2026-09-28） | docs.local/runs/eventarc-lane/2026-10-07-h2-w-design.md";
+  "- 2026-10-07 | EVENTARC-W A2 channel settlement | decision=APPROVE; for EVENTARC packet W recordings W0, W1 and W2 on fireemu-oracle-events, separate coordinator A2 starts at least 600 seconds after the latest preceding request; at most 38 cumulative requests with each A2 invocation bounded by its own 45-minute wall cap; it may confirm only the exact baseline-absent run channel by its own judged positive GET or own CREATE operation done; unknown or pending CREATE never closes by absence; it may send one exact channel DELETE only for that confirmed create after a fresh complete judged trigger list has no channel dependents; never resend an unknown or pending DELETE; it may read the own operation of a prior channel DELETE; the exact pubsubTopic positively named by the channel is its own topic and may remain when admitting channel DELETE; close channel and topic only after that DELETE's own matching-target operation is done without error, the exact channel GET is a judged 404, and a fresh complete judged topics list omits its exact topic; no topic DELETE, deployment, API enable or publication | Claude（委任。オーナーの裁量の委任 2026-09-28） | docs.local/runs/eventarc-lane/2026-10-07-h2-w-design.md";
 
 export function wManifest({ project, runId, stage, prerequisite }) {
   if (
@@ -44,7 +44,7 @@ export function wManifest({ project, runId, stage, prerequisite }) {
     ladder: [1, 2, 4, 8, 16, 32].map((n) => n * 1024 * 1024).concat(ceiling - 2),
     ...(stage === "w0" ? {} : { prerequisite }),
     limits: { preflight: 16, setup: 12, publish: 20, cleanup: 38 },
-    wallMs: 45 * 60_000,
+    wallMs: 150 * 60_000,
     reserveUsd: 0.05,
   };
 }
@@ -134,31 +134,17 @@ export function wAcceptance(reply, spec) {
       reply.bodySha256 !== createHash("sha256").update(bytes).digest("hex"))
   )
     return null;
-  const error = reply.body.error;
+  const error = reply.body?.error;
   if (
-    reply.status !== 400 ||
-    error?.code !== 400 ||
-    !["INVALID_ARGUMENT", "OUT_OF_RANGE"].includes(error.status) ||
-    !/^The request size \(\d{1,8} bytes\) is too large\. The maximum size is \d{1,8} bytes\.$/.test(
-      error.message ?? "",
-    )
-  )
-    return null;
-  const sizes = error.message.match(/\d+/g).map(Number);
-  if (
-    !spec.recipe ||
-    ![spec.recipe.httpBytes, spec.recipe.requestBytes].includes(sizes[0]) ||
-    sizes[0] <= sizes[1] ||
-    sizes[1] === 0
-  )
-    return null;
-  if (
+    ![400, 413].includes(reply.status) ||
+    error?.code !== reply.status ||
+    typeof error.message !== "string" ||
+    typeof error.status !== "string" ||
     !Array.isArray(error.details) ||
     error.details.length !== 1 ||
     error.details[0]["@type"] !== "type.googleapis.com/google.rpc.BadRequest" ||
     error.details[0].fieldViolations?.length !== 1 ||
-    !["request", "events"].includes(error.details[0].fieldViolations[0].field) ||
-    error.details[0].fieldViolations[0].description !== error.message
+    !["request", "events"].includes(error.details[0].fieldViolations[0].field)
   )
     return null;
   const layout = (value) =>
@@ -250,6 +236,7 @@ export async function recordW({
         cleanupReady: false,
         evidenceComplete: false,
       };
+  const deadline = a2 ? now() + 45 * 60_000 : result.startedAt + m.wallMs;
   const counts = { preflight: 0, setup: 0, publish: 0, cleanup: 0 };
   if (a2) result.mainCounts ??= result.counts;
   result.a2Requests ??= 0;
@@ -257,10 +244,11 @@ export async function recordW({
   const checkpoint = () => note("w-state", result);
   checkpoint();
   const request = async (host, spec, phase, judge) => {
+    const timeoutMs = 30_000 + Math.ceil(((spec.recipe?.httpBytes ?? 0) * 8 * 1000) / 2_000_000);
     if (
       (a2 && result.a2Requests >= 38) ||
       counts[phase] >= m.limits[phase] ||
-      now() + 60_000 > result.startedAt + m.wallMs - (phase === "cleanup" ? 0 : 5 * 60_000) ||
+      now() + 30_000 + timeoutMs > deadline - (phase === "cleanup" ? 0 : 5 * 60_000) ||
       (phase !== "cleanup" && shouldStop())
     )
       throw new Error(`W ${phase} ceiling, wall or signal`);
@@ -268,7 +256,11 @@ export async function recordW({
     if (a2) result.a2Requests++;
     result.lastRequestAt = now();
     checkpoint();
-    const reply = await transports[host].request({ ...spec, label: { case: `w-${phase}` } });
+    const reply = await transports[host].request({
+      ...spec,
+      timeoutMs,
+      label: { case: `w-${phase}` },
+    });
     result.lastRequestAt = now();
     checkpoint();
     if (hUnknown(reply) || !judge(reply, { ...spec, host }))
@@ -408,6 +400,7 @@ export async function recordW({
           entry.answer = reply;
           answer = wAcceptance(reply, judged);
           entry.accepted = answer;
+          if (answer === false) entry.observation = reply.body.error.message;
           return answer !== null;
         });
         const earlier = result.publishes

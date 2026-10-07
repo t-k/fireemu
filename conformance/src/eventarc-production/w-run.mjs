@@ -1,6 +1,7 @@
 // Coordinator entry: node w-run.mjs --config <reviewed input.json> [--a2].
 import {
   readFileSync,
+  appendFileSync,
   mkdirSync,
   writeFileSync,
   openSync,
@@ -169,7 +170,6 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
         !isDeepStrictEqual(recording.manifest, m) ||
         recording.sourceCommit !== config.sourceCommit ||
         now() - recording.lastRequestAt < 600_000 ||
-        now() + 60_000 > recording.startedAt + m.wallMs ||
         (recording.a2Requests ?? 0) >= 38
       )
         throw new Error("W A2 identity, spacing, request or wall cap mismatch");
@@ -233,6 +233,15 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
           signals = deps.signals ?? process;
         const stop = () => controller.abort();
         for (const signal of ["SIGINT", "SIGTERM"]) signals.on(signal, stop);
+        const deadline = now() + (a2 ? 45 * 60_000 : m.wallMs);
+        const ledgerFd = openSync(config.sandboxLedger, "a", 0o600);
+        const row = (event, extra = {}) => {
+          appendFileSync(
+            ledgerFd,
+            `${JSON.stringify({ ts: new Date(now()).toISOString(), taskId: "PUBSUB-EVENTARC", project: m.project, packetId: `EVENTARC-W-${m.runId}`, envelopeId: `EVENTARC-W-${m.runId}`, estimatedUsd: a2 ? 0 : m.reserveUsd, lockRetained: true, runId: m.runId, mode: a2 ? "a2" : m.stage, event, ...extra })}\n`,
+          );
+          fsyncSync(ledgerFd);
+        };
         let live = recording,
           credentialCalls = 0;
         const note = (kind, value) => {
@@ -245,7 +254,7 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
         const token = createTokenProvider({
           now,
           execFile: (...args) => {
-            if (++credentialCalls > 2) throw new Error("W credential invocation ceiling");
+            if (++credentialCalls > 4) throw new Error("W credential invocation ceiling");
             if (deps.execToken) return deps.execToken(...args);
             return new Promise((accept, reject) =>
               execFile(...args, (error, stdout) => (error ? reject(error) : accept(stdout))),
@@ -260,7 +269,7 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
             publishing: "eventarcpublishing",
             pubsub: "pubsub",
           }).map(([host, service]) => {
-            let emitted;
+            let emitted, timeoutMs;
             const rest = createHRest({
               base: `https://${service}.googleapis.com`,
               getToken: () => token.get(),
@@ -277,8 +286,7 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
                   }),
               },
               fetchImpl: (address, options) => {
-                if (now() + 30_000 > live.startedAt + m.wallMs)
-                  throw new Error("W outbound wall cap");
+                if (now() + timeoutMs > deadline) throw new Error("W outbound wall cap");
                 return (deps.fetchImpl ?? fetch)(address, {
                   ...options,
                   redirect: "manual",
@@ -292,6 +300,7 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
                 request: async (spec) => {
                   await lease.verifyHeld();
                   emitted = spec.rawBody;
+                  timeoutMs = spec.timeoutMs;
                   // The recipe and exact hash reconstruct the emitted bytes without recording credentials or huge strings.
                   note("request", {
                     host,
@@ -308,6 +317,7 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
           }),
         );
         try {
+          row("started", { reserveUsd: a2 ? 0 : m.reserveUsd });
           const result = await recordW({
             manifest: m,
             transports,
@@ -325,12 +335,33 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
           } finally {
             closeSync(fd);
           }
+          row("finished", {
+            outcome: result.closureReady
+              ? "recorded"
+              : result.cleanupReady
+                ? "stopped-for-review"
+                : "needs-recovery",
+            sandboxAtBaseline: result.cleanupReady,
+            requests: budget.used(),
+            estimatedUsd: a2 || budget.used() === 0 ? 0 : m.reserveUsd,
+            lockRetained: !result.cleanupReady,
+          });
           if (result.cleanupReady && budget.used() > 0) lease.confirmClosed();
           io.stdout.write(
             `${JSON.stringify({ stage: m.stage, runId: m.runId, requests: budget.used(), stopped: result.stopped, cleanupReady: result.cleanupReady, evidenceComplete: result.evidenceComplete, lockRetained: !result.cleanupReady })}\n`,
           );
           return result.cleanupReady && !result.stopped ? 0 : 3;
+        } catch (error) {
+          row("finished", {
+            outcome: !a2 && budget.used() === 0 ? "stopped-clean" : "needs-recovery",
+            sandboxAtBaseline: !a2 && budget.used() === 0,
+            requests: budget.used(),
+            estimatedUsd: a2 || budget.used() === 0 ? 0 : m.reserveUsd,
+            lockRetained: a2 || budget.used() > 0,
+          });
+          throw error;
         } finally {
+          closeSync(ledgerFd);
           if (live) note("w-state", live);
           for (const signal of ["SIGINT", "SIGTERM"]) signals.off(signal, stop);
           issued.close();

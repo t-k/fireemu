@@ -646,6 +646,11 @@ def test_sdk_action_reuses_bounded_wire_journals_and_per_case_scope(tmp_path, mo
 
 def test_sdk_document_cleanup_passes_the_actual_native_validator():
     import shutil
+    node = shutil.which('node')
+    if not node or runner.subprocess.run([node, '--version'], capture_output=True, text=True).stdout.strip() != 'v24.14.0':
+        pytest.skip('requires the reviewed Node v24.14.0 executable')
+    if not (runner.Path(__file__).resolve().parents[3] / 'conformance' / 'node_modules').is_dir():
+        pytest.skip('requires the conformance install the native validator loads')
     from txn_program_cli import table_for
     table = table_for('p17-admin-sdk-retry')
     plan = compile_plan(table, 'a' * 32, 'b' * 32)

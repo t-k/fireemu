@@ -264,7 +264,11 @@ test("recorded Storage finalized shapes (attempt 012) against a real fireemu ses
   assert.equal(v2.status, "DIFF");
   assert.deepEqual(
     reasonHeads(v2),
-    both([...expectedV1.slice(0, 4), "type $.frame.event.datacontenttype"]),
+    both([
+      ...expectedV1.slice(0, 4),
+      "type $.frame.event.datacontenttype",
+      "missing-field $.frame.event.traceparent",
+    ]),
   );
   assert.ok(
     v2.reasons.includes(
@@ -450,4 +454,43 @@ test("a local Pub/Sub message id that is a counter does not rewrite specversion,
         reason.includes("time"),
     ),
   );
+});
+
+test("recorded Firestore shape comparison retains configured location and checks traceparent before masking", () => {
+  const w = firestoreWorld();
+  const traces = [
+    "00-0123456789abcdef0123456789abcdef-0123456789abcdef-00",
+    "00-abcdef0123456789abcdef0123456789-abcdef0123456789-01",
+  ];
+  for (const [index, entry] of w.run.frames
+    .filter(({ frame }) => frame.generation === 2)
+    .entries()) {
+    entry.frame.event.extensionAttributes = {
+      location: "us-central1",
+      traceparent: traces[index % 2],
+    };
+  }
+  for (const session of [w.emulator, w.strict]) {
+    const entry = session.programs[0].operations[0].framesByGeneration.v2[0];
+    const frame = JSON.parse(entry.rawJson);
+    frame.event.extensionAttributes = { location: "us-central1", traceparent: traces[1] };
+    entry.rawJson = JSON.stringify(frame);
+  }
+  const id = "functions-events/firestore/create#new-document#v2";
+  assert.equal(rowById(compare(w), id).status, "MATCH");
+  const entry = w.strict.programs[0].operations[0].framesByGeneration.v2[0];
+  const frame = JSON.parse(entry.rawJson);
+  frame.event.extensionAttributes.location = "europe-west1";
+  entry.rawJson = JSON.stringify(frame);
+  const mismatch = rowById(compare(w), id);
+  assert.equal(mismatch.status, "DIFF");
+  assert.ok(
+    mismatch.reasons.some((reason) => reason.includes("strict: value $.frame.event.location")),
+  );
+  frame.event.extensionAttributes.traceparent = "00-invalid";
+  entry.rawJson = JSON.stringify(frame);
+  assert.throws(() => compare(w), {
+    name: "TypeError",
+    message: "invalid Gen2 traceparent extension",
+  });
 });

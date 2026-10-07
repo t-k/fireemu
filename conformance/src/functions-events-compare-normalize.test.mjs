@@ -488,3 +488,55 @@ test("member order is ignored under the paths the caller names and their descend
   assert.equal(volatile.has("$.frame.event.data.data.nested"), false);
   assert.equal(deriveVolatile(production, reordered).volatile.has("$.frame.event.data.data"), true);
 });
+
+test("Gen2 extension values compare location exactly and traceparent format without disclosing IDs", () => {
+  const trace = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
+  const frame = {
+    generation: 2,
+    source: "firestore",
+    event: {
+      extensionAttributes: { traceparent: trace, location: "us-central1", database: "(default)" },
+    },
+  };
+  const { frame: normalized, listing } = splitProductionOnly(frame);
+  assert.equal(normalized.event.location, "us-central1");
+  assert.equal(normalized.event.traceparent, "00-<trace-id>-<parent-id>-<flags>");
+  assert.deepEqual(listing["$.event.extensionAttributes"], ["database", "location", "traceparent"]);
+  assert.equal(JSON.stringify(normalized).includes("0123456789abcdef"), false);
+  assert.equal(frame.event.extensionAttributes.traceparent, trace);
+  const other = structuredClone(frame);
+  other.event.extensionAttributes.traceparent =
+    "00-abcdef0123456789abcdef0123456789-abcd0123456789ef-00";
+  assert.deepEqual(splitProductionOnly(other).frame, normalized);
+  other.event.extensionAttributes.location = "europe-west1";
+  assert.notDeepEqual(splitProductionOnly(other).frame, normalized);
+  const missing = structuredClone(frame);
+  delete missing.event.extensionAttributes.traceparent;
+  assert.notDeepEqual(splitProductionOnly(missing).frame, normalized);
+});
+
+test("Gen2 malformed traceparents fail closed without printing their values", () => {
+  const valid = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
+  for (const trace of [
+    null,
+    1,
+    "00-short",
+    valid.toUpperCase(),
+    valid.replace(/^00/, "01"),
+    valid.replace(/01$/, "02"),
+    valid.replace(/0123456789abcdef0123456789abcdef/, "0".repeat(32)),
+    valid.replace(/-0123456789abcdef-/, `-${"0".repeat(16)}-`),
+    `${valid}\n`,
+  ]) {
+    assert.throws(
+      () =>
+        splitProductionOnly({
+          generation: 2,
+          event: {
+            extensionAttributes: { traceparent: trace },
+          },
+        }),
+      { name: "TypeError", message: "invalid Gen2 traceparent extension" },
+    );
+  }
+});

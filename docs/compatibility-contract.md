@@ -109,6 +109,8 @@ Two profiles are declared as configuration key sets, and the canonical schema's 
   documented limitations. Nothing in this profile may refuse a request the official emulator
   admits.
 
+`firestore.location` configures the database location attribute of strict second-generation Firestore events and defaults to `nam5`. The emulator profile always emits `nam5`, even when a different location is configured. Locations are opaque identifiers: unknown non-empty strings are accepted verbatim, while whitespace and control characters anywhere in the string are rejected under both profiles. The value only supplies an event attribute; it does not control routing or trigger a location lookup. `spec/config/examples/standard-minimal.json` demonstrates `us-central1`, and `spec/config/fireemu.schema.json` publishes the same validation and default.
+
 A profile's `sets` lists exactly what the daemon derives from it — `firestore.enforceLimits`,
 which an explicit key may still override; the other derived settings, how composite indexes are
 validated and how a caller's ID token is verified on the Firestore and Storage Security Rules

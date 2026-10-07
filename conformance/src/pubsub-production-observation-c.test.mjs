@@ -532,6 +532,21 @@ test("C vector reference model counts every category start and clips cleanup ins
   }
 });
 
+test("C a spent cell cannot restart or reset its category budget", () => {
+  let clock = 0;
+  const meter = createMeter({ now: () => clock }),
+    plan = makePlan();
+  meter.enter(plan.cells[0]);
+  for (let i = 0; i < 5; i++) meter.start("create", "rest");
+  const spent = meter.snapshot();
+  assert.throws(() => meter.enter(plan.cells[0]), /reopen/);
+  assert.deepEqual(meter.snapshot(), spent);
+  assert.throws(() => meter.start("create", "rest"), /category/);
+  clock = 180000;
+  assert.throws(() => meter.enter(plan.cells[1]), /time/);
+  assert.deepEqual(meter.snapshot(), spent);
+});
+
 function priorProof() {
   const summaries = {};
   const value = {

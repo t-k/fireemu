@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { cloudEventSize, publishRequestSize } from "./compare.mjs";
 import { bisect, bracket } from "./bisect.mjs";
-import { hProductionEvidence } from "./h-production.mjs";
+import { hProductionAnswer, hProductionEvidence } from "./h-production.mjs";
 import { hUnknown, hReadList } from "./h-deploy.mjs";
 
 export const W_A2_RULING =
@@ -190,6 +190,39 @@ export function wAdmission({ stage, runId, sourceCommit, checkpointSha256, date 
   return `- ${date} | EVENTARC-W stage admission | run=${runId}; source=${sourceCommit}; stage=${stage}; checkpoint=${checkpointSha256}; decision=APPROVE | Claude（委任。オーナーの裁量の委任 2026-09-28） | docs.local/runs/eventarc-lane/2026-10-07-h2-w-design.md`;
 }
 
+/** A failed CREATE requires the complete recorded native refusal, never just a 4xx status. */
+export function wCreateRefusal(reply, spec) {
+  if (
+    spec?.host !== "eventarc" ||
+    spec.method !== "POST" ||
+    !spec.path.split("?")[0].endsWith("/channels") ||
+    reply?.status < 400 ||
+    reply?.status >= 500 ||
+    !hProductionAnswer(reply, spec)
+  )
+    return false;
+  const error = reply.body.error;
+  return (
+    JSON.stringify(Object.keys(reply.body)) === '["error"]' &&
+    JSON.stringify(Object.keys(error ?? {})) === '["code","message","status","details"]' &&
+    error.code === reply.status &&
+    typeof error.message === "string" &&
+    error.message.length > 0 &&
+    Array.isArray(error.details) &&
+    error.details.length === 4 &&
+    error.details.every((detail, i) =>
+      i % 2 === 0
+        ? JSON.stringify(detail) ===
+          '{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"field":"channel.name"}]}'
+        : JSON.stringify(Object.keys(detail ?? {})) === '["@type","requestId"]' &&
+          detail["@type"] === "type.googleapis.com/google.rpc.RequestInfo" &&
+          typeof detail.requestId === "string" &&
+          /^[a-f0-9]{16}$/.test(detail.requestId) &&
+          detail.requestId === error.details[1].requestId,
+    )
+  );
+}
+
 /** W uses H's native judges and complete lists, with no deploy, API enable or write resend. */
 export async function recordW({
   manifest: m,
@@ -287,7 +320,19 @@ export async function recordW({
             body: { name: m.channel },
           }
         : { method: "DELETE", path: `/v1/${m.channel}` };
-    const answer = await request("eventarc", spec, phase, hProductionEvidence.operation);
+    const answer = await request(
+      "eventarc",
+      spec,
+      phase,
+      (reply, judged) =>
+        hProductionEvidence.operation(reply, judged) ||
+        (action === "create" && wCreateRefusal(reply, judged)),
+    );
+    if (action === "create" && answer.status >= 400 && answer.status < 500) {
+      intent.state = "failed";
+      checkpoint();
+      return intent;
+    }
     if (
       answer.status !== 200 ||
       !answer.body.name.startsWith(`${m.parent}/operations/`) ||
@@ -451,6 +496,21 @@ export async function recordW({
       })
     )
       throw new Error("W channel absence unjudged");
+    if (create.state === "failed" && !create.operation && !result.topic && answer.status === 404) {
+      if (!result.baselineAbsent) throw new Error("W baseline ownership absent");
+      const remaining = await triggers("cleanup");
+      if (
+        remaining.some((t) => t.channel === m.channel) ||
+        remaining.some((t) => !result.baselineTriggers.some((b) => b.name === t.name)) ||
+        (await topics("cleanup")).some((t) => !result.baselineTopics.some((b) => b.name === t.name))
+      )
+        throw new Error("W failed CREATE has dependents or foreign residue");
+      result.cleanupReady = true;
+      delete result.cleanupError;
+      result.closureReady = false;
+      checkpoint();
+      return result;
+    }
     if (create.state !== "confirmed" || !result.topic)
       throw new Error("W unknown CREATE stays open");
     const remaining = await triggers("cleanup");

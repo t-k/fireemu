@@ -1700,5 +1700,93 @@
     "bodyBase64": "e30K",
     "bodyBytes": 3,
     "recordedBodyBytes": 3
+  },
+  {
+    "run": "eventarc-stage-c-20261005-r1",
+    "sequence": 39,
+    "case": "channel-create-refusal",
+    "method": "POST",
+    "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=GOOG-FE404DEE592E",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "The request was invalid: invalid resource id: GOOG-FE404DEE592E",
+        "status": "INVALID_ARGUMENT",
+        "details": [
+          {
+            "@type": "type.googleapis.com/google.rpc.BadRequest",
+            "fieldViolations": [
+              {
+                "field": "channel.name"
+              }
+            ]
+          },
+          {
+            "@type": "type.googleapis.com/google.rpc.RequestInfo",
+            "requestId": "d8dd12dd22b386d5"
+          },
+          {
+            "@type": "type.googleapis.com/google.rpc.BadRequest",
+            "fieldViolations": [
+              {
+                "field": "channel.name"
+              }
+            ]
+          },
+          {
+            "@type": "type.googleapis.com/google.rpc.RequestInfo",
+            "requestId": "d8dd12dd22b386d5"
+          }
+        ]
+      }
+    },
+    "bodyBytes": 772,
+    "bodyBase64": "ewogICJlcnJvciI6IHsKICAgICJjb2RlIjogNDAwLAogICAgIm1lc3NhZ2UiOiAiVGhlIHJlcXVlc3Qgd2FzIGludmFsaWQ6IGludmFsaWQgcmVzb3VyY2UgaWQ6IEdPT0ctRkU0MDRERUU1OTJFIiwKICAgICJzdGF0dXMiOiAiSU5WQUxJRF9BUkdVTUVOVCIsCiAgICAiZGV0YWlscyI6IFsKICAgICAgewogICAgICAgICJAdHlwZSI6ICJ0eXBlLmdvb2dsZWFwaXMuY29tL2dvb2dsZS5ycGMuQmFkUmVxdWVzdCIsCiAgICAgICAgImZpZWxkVmlvbGF0aW9ucyI6IFsKICAgICAgICAgIHsKICAgICAgICAgICAgImZpZWxkIjogImNoYW5uZWwubmFtZSIKICAgICAgICAgIH0KICAgICAgICBdCiAgICAgIH0sCiAgICAgIHsKICAgICAgICAiQHR5cGUiOiAidHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUucnBjLlJlcXVlc3RJbmZvIiwKICAgICAgICAicmVxdWVzdElkIjogImQ4ZGQxMmRkMjJiMzg2ZDUiCiAgICAgIH0sCiAgICAgIHsKICAgICAgICAiQHR5cGUiOiAidHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUucnBjLkJhZFJlcXVlc3QiLAogICAgICAgICJmaWVsZFZpb2xhdGlvbnMiOiBbCiAgICAgICAgICB7CiAgICAgICAgICAgICJmaWVsZCI6ICJjaGFubmVsLm5hbWUiCiAgICAgICAgICB9CiAgICAgICAgXQogICAgICB9LAogICAgICB7CiAgICAgICAgIkB0eXBlIjogInR5cGUuZ29vZ2xlYXBpcy5jb20vZ29vZ2xlLnJwYy5SZXF1ZXN0SW5mbyIsCiAgICAgICAgInJlcXVlc3RJZCI6ICJkOGRkMTJkZDIyYjM4NmQ1IgogICAgICB9CiAgICBdCiAgfQp9Cg==",
+    "bodySha256": "b0067851fd53e1a7556e53421679885c46e96088ca3f625e2430e7b70c364146"
+  },
+  {
+    "run": "eventarc-packet-d-20261006-r1",
+    "sequence": 83,
+    "case": "channel-create-refusal",
+    "method": "POST",
+    "path": "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels?channelId=a",
+    "status": 400,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "The request was invalid: invalid resource id: a",
+        "status": "INVALID_ARGUMENT",
+        "details": [
+          {
+            "@type": "type.googleapis.com/google.rpc.BadRequest",
+            "fieldViolations": [
+              {
+                "field": "channel.name"
+              }
+            ]
+          },
+          {
+            "@type": "type.googleapis.com/google.rpc.RequestInfo",
+            "requestId": "395ce73279ddfb2f"
+          },
+          {
+            "@type": "type.googleapis.com/google.rpc.BadRequest",
+            "fieldViolations": [
+              {
+                "field": "channel.name"
+              }
+            ]
+          },
+          {
+            "@type": "type.googleapis.com/google.rpc.RequestInfo",
+            "requestId": "395ce73279ddfb2f"
+          }
+        ]
+      }
+    },
+    "bodyBytes": 756,
+    "bodyBase64": "ewogICJlcnJvciI6IHsKICAgICJjb2RlIjogNDAwLAogICAgIm1lc3NhZ2UiOiAiVGhlIHJlcXVlc3Qgd2FzIGludmFsaWQ6IGludmFsaWQgcmVzb3VyY2UgaWQ6IGEiLAogICAgInN0YXR1cyI6ICJJTlZBTElEX0FSR1VNRU5UIiwKICAgICJkZXRhaWxzIjogWwogICAgICB7CiAgICAgICAgIkB0eXBlIjogInR5cGUuZ29vZ2xlYXBpcy5jb20vZ29vZ2xlLnJwYy5CYWRSZXF1ZXN0IiwKICAgICAgICAiZmllbGRWaW9sYXRpb25zIjogWwogICAgICAgICAgewogICAgICAgICAgICAiZmllbGQiOiAiY2hhbm5lbC5uYW1lIgogICAgICAgICAgfQogICAgICAgIF0KICAgICAgfSwKICAgICAgewogICAgICAgICJAdHlwZSI6ICJ0eXBlLmdvb2dsZWFwaXMuY29tL2dvb2dsZS5ycGMuUmVxdWVzdEluZm8iLAogICAgICAgICJyZXF1ZXN0SWQiOiAiMzk1Y2U3MzI3OWRkZmIyZiIKICAgICAgfSwKICAgICAgewogICAgICAgICJAdHlwZSI6ICJ0eXBlLmdvb2dsZWFwaXMuY29tL2dvb2dsZS5ycGMuQmFkUmVxdWVzdCIsCiAgICAgICAgImZpZWxkVmlvbGF0aW9ucyI6IFsKICAgICAgICAgIHsKICAgICAgICAgICAgImZpZWxkIjogImNoYW5uZWwubmFtZSIKICAgICAgICAgIH0KICAgICAgICBdCiAgICAgIH0sCiAgICAgIHsKICAgICAgICAiQHR5cGUiOiAidHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUucnBjLlJlcXVlc3RJbmZvIiwKICAgICAgICAicmVxdWVzdElkIjogIjM5NWNlNzMyNzlkZGZiMmYiCiAgICAgIH0KICAgIF0KICB9Cn0K",
+    "bodySha256": "f25d5251d277241e328b5d1a666b4dad631c50a08d7bccee0a92a2cb768891f6"
   }
 ]

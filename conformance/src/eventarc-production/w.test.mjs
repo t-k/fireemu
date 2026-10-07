@@ -3,7 +3,15 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdirSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { createHash } from "node:crypto";
-import { wManifest, wBody, wAcceptance, recordW, wAdmission, W_A2_RULING } from "./w.mjs";
+import {
+  wManifest,
+  wBody,
+  wAcceptance,
+  recordW,
+  wAdmission,
+  wCreateRefusal,
+  W_A2_RULING,
+} from "./w.mjs";
 import { hProductionAnswer } from "./h-production.mjs";
 import { readWJournal, main } from "./w-run.mjs";
 
@@ -98,7 +106,7 @@ test("W refusals require native request-size attribution and exclude per-event e
 });
 
 // Resource answers use recorded bodies and the real production judge; only instance values change.
-async function replay(stage = "w0", mode = "normal", prerequisite, defer = false) {
+async function replay(stage = "w0", mode = "normal", prerequisite, defer = false, createReply) {
   const m = manifest(stage, prerequisite),
     calls = [],
     notes = [];
@@ -173,6 +181,7 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
               if (mode === "wrong-target") body.metadata.target += "-foreign";
             }
           } else if (spec.method === "POST") {
+            if (createReply) return structuredClone(createReply);
             present = true;
             topicPresent = true;
             if (mode === "unknown-create") return { unknown: true, status: 503, body: {} };
@@ -230,6 +239,197 @@ test("W0 discovers an interval through real resource judges and cleans its exact
   assert.equal(calls.filter((c) => c.method === "DELETE").length, 1);
   assert.ok(result.counts.publish <= 20);
   assert.equal(result.publishes[0].accepted, true);
+});
+
+test("W recorded C and D CREATE refusals settle failed with no open writes in main cleanup and A2", async () => {
+  const refusals = corpus.filter((r) => r.case === "channel-create-refusal");
+  assert.deepEqual(
+    refusals.map((r) => r.run),
+    ["eventarc-stage-c-20261005-r1", "eventarc-packet-d-20261006-r1"],
+  );
+  for (const refusal of refusals) {
+    const world = await replay("w0", "normal", undefined, true, refusal);
+    const result = await recordW({
+      manifest: manifest(),
+      transports: world.transports,
+      now: () => 0,
+      sleep: async () => {},
+      note: () => {},
+    });
+    assert.equal(result.writes[0].state, "failed", refusal.run);
+    assert.equal(result.writes[0].operation, undefined);
+    assert.equal(result.cleanupReady, true);
+    assert.equal(result.cleanupError, undefined);
+    assert.equal(result.writes.filter((w) => ["unknown", "pending"].includes(w.state)).length, 0);
+    assert.equal(result.topic, undefined);
+    assert.equal(result.publishes.length, 0);
+    assert.deepEqual(
+      world.calls.filter((c) => c.method !== "GET").map((c) => c.method),
+      ["POST"],
+    );
+    const a2 = await recordW({
+      manifest: manifest(),
+      recording: { ...result, cleanupReady: false },
+      transports: world.transports,
+      now: () => 600_000,
+      sleep: async () => {},
+      note: () => {},
+    });
+    assert.equal(a2.cleanupReady, true);
+    assert.equal(a2.writes[0].state, "failed");
+    assert.equal(world.calls.filter((c) => c.method === "POST").length, 1);
+    assert.equal(world.calls.filter((c) => c.method === "DELETE").length, 0);
+  }
+});
+
+test("W incomplete, non-native and unjudged CREATE refusals remain unknown after absence", async () => {
+  const m = manifest(),
+    refusal = corpus.find((r) => r.case === "channel-create-refusal");
+  const spec = {
+    host: "eventarc",
+    method: "POST",
+    path: `/v1/${m.parent}/channels?channelId=${m.channel.split("/").at(-1)}`,
+    body: { name: m.channel },
+  };
+  assert.equal(wCreateRefusal(refusal, spec), true);
+  assert.equal(wCreateRefusal(refusal, { ...spec, method: "DELETE" }), false);
+  assert.equal(wCreateRefusal(refusal, { ...spec, host: "publishing" }), false);
+  assert.equal(wCreateRefusal(refusal, { ...spec, path: `/v1/${m.parent}/triggers` }), false);
+  const changed = [
+    { ...refusal, unknown: true },
+    { ...refusal, status: 503 },
+    { ...refusal, bodyBytes: 1 },
+    { ...refusal, bodySha256: "0".repeat(64) },
+    { ...refusal, bodyBase64: Buffer.from(JSON.stringify(refusal.body)).toString("base64") },
+  ];
+  for (const edit of [
+    (b) => {
+      b.name = `${m.parent}/operations/unjudged`;
+    },
+    (b) => {
+      b.error.code = 403;
+    },
+    (b) => {
+      b.error.status = "PERMISSION_DENIED";
+    },
+    (b) => {
+      b.error.message = "";
+    },
+    (b) => {
+      b.error.message = 5;
+    },
+    (b) => {
+      delete b.error.details;
+    },
+    (b) => {
+      b.error.details.pop();
+    },
+    (b) => {
+      b.error.details[0].fieldViolations[0].field = "foreign";
+    },
+    (b) => {
+      b.error.details[0].fieldViolations[0].extra = true;
+    },
+    (b) => {
+      b.error.details[1].requestId = 5;
+    },
+    (b) => {
+      b.error.details[1].requestId = "";
+    },
+    (b) => {
+      b.error.details[3].requestId = "a".repeat(16);
+    },
+    (b) => {
+      b.error.details[3]["@type"] = "foreign";
+    },
+  ]) {
+    const body = structuredClone(refusal.body);
+    edit(body);
+    changed.push(native(400, body));
+  }
+  for (const reply of changed) {
+    assert.equal(wCreateRefusal(reply, spec), false);
+    const { result, calls } = await replay("w0", "normal", undefined, false, reply);
+    assert.equal(result.writes[0].state, "unknown");
+    assert.equal(result.cleanupReady, false);
+    assert.match(result.cleanupError, /unknown CREATE/);
+    assert.equal(calls.filter((c) => c.method === "DELETE").length, 0);
+  }
+});
+
+test("W refused CREATE settlement in A2 requires absence, baseline ownership and complete clean lists", async () => {
+  const refusal = corpus.find((r) => r.case === "channel-create-refusal");
+  const { result } = await replay("w0", "normal", undefined, false, refusal);
+  for (const failure of [
+    "baseline",
+    "dependent",
+    "foreign-trigger",
+    "foreign-topic",
+    "unjudged-absence",
+    "present",
+    "topic-obligation",
+    "failed-operation",
+    "incomplete-list",
+  ]) {
+    const m = manifest();
+    const world = await replay("w0", "normal", undefined, true, refusal);
+    const recording = structuredClone(result);
+    recording.cleanupReady = false;
+    if (failure === "baseline") recording.baselineAbsent = false;
+    if (failure === "topic-obligation") recording.topic = `projects/${m.project}/topics/own`;
+    if (failure === "failed-operation")
+      recording.writes[0].operation = `${m.parent}/operations/failed`;
+    const request = world.transports.eventarc.request;
+    world.transports.eventarc.request = async (spec) => {
+      if (failure === "unjudged-absence" && spec.path.includes("/channels/"))
+        return native(404, {});
+      if (failure === "present" && spec.path.includes("/channels/")) {
+        const body = template((r) => r.method === "GET" && r.body.pubsubTopic);
+        body.name = m.channel;
+        body.pubsubTopic = `projects/${m.project}/topics/own`;
+        return native(200, body);
+      }
+      if (spec.path.endsWith("/triggers")) {
+        if (["dependent", "foreign-trigger"].includes(failure))
+          return native(200, {
+            triggers: [
+              {
+                name: `${m.parent}/triggers/foreign`,
+                ...(failure === "dependent" ? { channel: m.channel } : {}),
+              },
+            ],
+          });
+        if (failure === "incomplete-list") return native(200, { nextPageToken: "not-exhausted" });
+      }
+      return request(spec);
+    };
+    if (failure === "foreign-topic")
+      world.transports.pubsub.request = async () =>
+        native(200, { topics: [{ name: `projects/${m.project}/topics/foreign` }] });
+    const a2 = await recordW({
+      manifest: m,
+      recording,
+      transports: world.transports,
+      now: () => 600_000,
+      sleep: async () => {},
+      note: () => {},
+    });
+    assert.equal(a2.cleanupReady, false, failure);
+    assert.equal(a2.writes[0].state, "failed");
+    assert.equal(world.calls.filter((c) => c.method !== "GET").length, 0);
+    if (failure === "dependent") {
+      const recovered = await recordW({
+        manifest: m,
+        recording: a2,
+        transports: (await replay("w0", "normal", undefined, true, refusal)).transports,
+        now: () => 1_200_000,
+        sleep: async () => {},
+        note: () => {},
+      });
+      assert.equal(recovered.cleanupReady, true);
+      assert.equal(recovered.cleanupError, undefined);
+    }
+  }
 });
 
 test("W1 and W2 confirm adjacent bytes and distinguish HTTP and logical dependence", async () => {

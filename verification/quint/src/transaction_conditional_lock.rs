@@ -35,8 +35,10 @@ const CLIENTS: [&str; 2] = ["c1", "c2"];
 pub struct TransactionConditionalLockState {
     /// Protocol phase for each bounded client.
     pub phase: BTreeMap<String, String>,
-    /// Begin instants of the initial lazy transactions; zero means not begun.
+    /// Begin order of the initial lazy transactions; zero means not begun.
     pub age: BTreeMap<String, i64>,
+    /// Pinned begin instant, or -1 before the transaction begins.
+    pub started_at: BTreeMap<String, i64>,
     /// Value read from the real lock document.
     pub locked: bool,
     /// Values returned by real transaction reads for each attempt.
@@ -50,8 +52,10 @@ pub struct TransactionConditionalLockState {
 pub enum ProjectionFault {
     /// Change only one client phase.
     Phase,
-    /// Change only one initial begin instant.
+    /// Change only one initial begin order.
     Age,
+    /// Change only one pinned begin instant.
+    StartedAt,
     /// Change only the real lock projection.
     Locked,
     /// Change only one observation list.
@@ -67,6 +71,7 @@ impl ProjectionFault {
         match self {
             Self::Phase => "phase",
             Self::Age => "age",
+            Self::StartedAt => "startedAt",
             Self::Locked => "locked",
             Self::Observations => "observations",
             Self::Acted => "acted",
@@ -160,7 +165,7 @@ impl TransactionConditionalLockDriver {
             + 1;
         let transaction = self
             .store
-            .begin_transaction(false, LogicalInstant::from_unix_seconds(age))
+            .begin_transaction(false, LogicalInstant::UNIX_EPOCH)
             .map_err(|error| firestore_error(&error))?;
         let observed = self
             .store
@@ -235,7 +240,7 @@ impl TransactionConditionalLockDriver {
             Some(&transaction),
             LogicalInstant::UNIX_EPOCH,
         ) {
-            Err(FirestoreError::Aborted(_)) if self.store.transaction_is_active(&transaction) => {
+            Ok(_) => {
                 for other in &held {
                     let victim = self.transaction(other)?.clone();
                     if self.store.transaction_is_active(&victim) {
@@ -243,13 +248,6 @@ impl TransactionConditionalLockDriver {
                     }
                     self.set_phase(other, "Aborted")?;
                 }
-                self.store
-                    .commit(
-                        &[set_lock_write(true)],
-                        Some(&transaction),
-                        LogicalInstant::from_unix_seconds(3),
-                    )
-                    .map_err(|error| firestore_error(&error))?;
                 self.set_phase(client, "Committed")?;
                 return self.record_action("AbortStale");
             }
@@ -259,7 +257,6 @@ impl TransactionConditionalLockDriver {
                     "stale production commit returned the wrong error: {error}"
                 )));
             }
-            Ok(_) => return Err(invalid_data("stale production transaction committed")),
         }
         self.set_phase(client, "Aborted")?;
         // The victim released its lock: a held-back commit goes through now, as the adapter's
@@ -352,6 +349,11 @@ impl TransactionConditionalLockDriver {
         let mut projected = TransactionConditionalLockState {
             phase: self.phase.clone(),
             age: self.age.clone(),
+            started_at: self
+                .age
+                .iter()
+                .map(|(client, age)| (client.clone(), if *age == 0 { -1 } else { 0 }))
+                .collect(),
             locked: self.locked()?,
             observations: self.observations.clone(),
             acted: self.acted.clone(),
@@ -365,6 +367,9 @@ impl TransactionConditionalLockDriver {
             }
             Some(ProjectionFault::Age) => {
                 projected.age.insert("c1".to_owned(), -1);
+            }
+            Some(ProjectionFault::StartedAt) => {
+                projected.started_at.insert("c1".to_owned(), 1);
             }
             Some(ProjectionFault::Locked) => projected.locked = !projected.locked,
             Some(ProjectionFault::Observations) => {

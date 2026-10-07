@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Fixed
+
+- Firestore transaction deadlocks abort the younger transaction with production's cross-transaction contention message. Begin order breaks equal-clock ties, a holder waiting on a third transaction is preserved, and an older requester commits immediately after releasing the last colliding lock. Retry attempts keep a fresh age, whose production behavior was not recorded.
+
 ## [0.14.0] - 2026-10-07
 
 No compatibility parent changed status in this release: 18 of 21 remain `COMPAT_VERIFIED`. The changes below close named differences and add local testing controls; they do not claim a new parent closure.

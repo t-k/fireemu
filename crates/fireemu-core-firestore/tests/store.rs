@@ -4515,20 +4515,16 @@ fn older_requester_aborts_the_younger_waiting_holder_using_begin_age() {
         );
         assert!(s.transaction_is_active(&older) && s.transaction_is_active(&younger));
         assert_eq!(s.transaction_releases(), releases);
-        assert_eq!(
-            s.commit(std::slice::from_ref(&older_write), Some(&older), t(6))
-                .unwrap_err(),
-            FirestoreError::Aborted(TOO_MUCH_CONTENTION.into())
-        );
-        assert!(s.transaction_is_active(&older));
+        s.commit(std::slice::from_ref(&older_write), Some(&older), t(6))
+            .unwrap();
+        assert!(!s.transaction_is_active(&older));
         assert!(!s.transaction_is_active(&younger));
-        assert_eq!(s.transaction_releases(), releases + 1);
+        assert_eq!(s.transaction_releases(), releases + 2);
         assert_eq!(s.commit(&[younger_write], Some(&younger), t(7)).unwrap_err(), FirestoreError::Aborted("Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.".into()));
         assert_eq!(
             s.get(&path("age/a")).unwrap().fields["v"],
             Value::Integer(0)
         );
-        s.commit(&[older_write], Some(&older), t(8)).unwrap();
         assert_eq!(
             s.get(&path("age/b")).unwrap().fields["v"],
             Value::Integer(1)
@@ -4552,7 +4548,7 @@ mod transaction_age_properties {
         #![proptest_config(ProptestConfig { cases: 256, failure_persistence: None, ..ProptestConfig::default() })]
 
         #[test]
-        fn deadlock_aborts_only_the_younger_or_tied_later_requester(
+        fn deadlock_aborts_only_the_younger_by_begin_instant_and_id(
             first_age in 1_i64..20,
             second_age in 1_i64..20,
             second_requests_first in any::<bool>(),
@@ -4576,20 +4572,136 @@ mod transaction_age_properties {
             prop_assert_eq!(s.commit(std::slice::from_ref(&write), Some(held), t(22)).unwrap_err(), FirestoreError::Aborted(TOO_MUCH_CONTENTION.into()));
             prop_assert!(s.transaction_is_active(held) && s.transaction_is_active(own));
             prop_assert_eq!(s.transaction_releases(), releases);
-            let error = s.commit(std::slice::from_ref(&write), Some(own), t(23)).unwrap_err();
-            let (winner, victim) = if own_age < held_age { (own, held) } else { (held, own) };
-            prop_assert!(s.transaction_is_active(winner));
+            let outcome = s.commit(std::slice::from_ref(&write), Some(own), t(23));
+            let (winner, victim) = if (own_age, own) < (held_age, held) { (own, held) } else { (held, own) };
+            prop_assert_eq!(s.transaction_is_active(winner), winner != own);
             prop_assert!(!s.transaction_is_active(victim));
-            prop_assert_eq!(s.transaction_releases(), releases + 1);
+            prop_assert_eq!(s.transaction_releases(), releases + if winner == own { 2 } else { 1 });
             let deadlock = FirestoreError::Aborted("Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.".into());
-            prop_assert_eq!(error, if victim == own { deadlock.clone() } else { FirestoreError::Aborted(TOO_MUCH_CONTENTION.into()) });
+            if victim == own { prop_assert_eq!(outcome.unwrap_err(), deadlock.clone()); } else { prop_assert!(outcome.is_ok()); }
             prop_assert_eq!(s.commit(std::slice::from_ref(&write), Some(victim), t(24)).unwrap_err(), deadlock);
-            prop_assert_eq!(&s.get(&path("age/doc")).unwrap().fields["v"], &Value::Integer(0));
-            s.commit(&[write], Some(winner), t(25)).unwrap();
+            prop_assert_eq!(&s.get(&path("age/doc")).unwrap().fields["v"], &Value::Integer(if winner == own { value } else { 0 }));
+            if winner != own { s.commit(&[write], Some(winner), t(25)).unwrap(); }
             prop_assert_eq!(&s.get(&path("age/doc")).unwrap().fields["v"], &Value::Integer(value));
             let retry = s.retry_transaction(victim, t(26)).unwrap();
             s.touch_transaction(&retry, t(26)).unwrap();
             prop_assert_eq!(&s.get_in_transaction(&retry, &path("age/doc")).unwrap().unwrap().fields["v"], &Value::Integer(value));
         }
     }
+}
+
+#[test]
+fn a_waiting_holder_on_a_third_transaction_is_not_a_deadlock_victim() {
+    for requester_age in [1, 4] {
+        let mut s = FirestoreState::new();
+        let requester = s.begin_transaction(false, t(requester_age)).unwrap();
+        let third = s.begin_transaction(false, t(2)).unwrap();
+        let holder = s.begin_transaction(false, t(3)).unwrap();
+        s.get_in_transaction(&third, &path("age/x")).unwrap();
+        s.get_in_transaction(&holder, &path("age/y")).unwrap();
+        let x = set("age/x", &[("v", Value::Integer(1))]);
+        let y = set("age/y", &[("v", Value::Integer(2))]);
+        let releases = s.transaction_releases();
+        assert_eq!(
+            s.commit(std::slice::from_ref(&x), Some(&holder), t(5))
+                .unwrap_err(),
+            FirestoreError::Aborted(TOO_MUCH_CONTENTION.into())
+        );
+        assert_eq!(
+            s.commit(std::slice::from_ref(&y), Some(&requester), t(6))
+                .unwrap_err(),
+            FirestoreError::Aborted(TOO_MUCH_CONTENTION.into())
+        );
+        assert!(s.transaction_is_active(&requester));
+        assert!(s.transaction_is_active(&holder));
+        assert!(s.transaction_is_active(&third));
+        assert_eq!(s.transaction_releases(), releases);
+        s.rollback(&third).unwrap();
+        s.commit(&[x], Some(&holder), t(7)).unwrap();
+        s.commit(&[y], Some(&requester), t(8)).unwrap();
+    }
+}
+
+#[test]
+fn a_retry_attempt_has_fresh_age_against_an_intervening_begin() {
+    let mut s = FirestoreState::new();
+    let original = s.begin_transaction(false, t(1)).unwrap();
+    s.get_in_transaction(&original, &path("age/doc")).unwrap();
+    let intervening = s.begin_transaction(false, t(2)).unwrap();
+    s.get_in_transaction(&intervening, &path("age/doc"))
+        .unwrap();
+    let write = set("age/doc", &[("v", Value::Integer(1))]);
+    s.commit(std::slice::from_ref(&write), Some(&intervening), t(3))
+        .unwrap_err();
+    s.commit(std::slice::from_ref(&write), Some(&original), t(4))
+        .unwrap();
+    let middle = s.begin_transaction(false, t(4)).unwrap();
+    let retry = s.retry_transaction(&intervening, t(5)).unwrap();
+    s.touch_transaction(&retry, t(5)).unwrap();
+    s.get_in_transaction(&retry, &path("age/doc")).unwrap();
+    s.get_in_transaction(&middle, &path("age/doc")).unwrap();
+    s.commit(std::slice::from_ref(&write), Some(&middle), t(6))
+        .unwrap_err();
+    assert_eq!(
+        s.commit(std::slice::from_ref(&write), Some(&retry), t(7))
+            .unwrap_err(),
+        FirestoreError::Aborted(fireemu_core_firestore::store::CROSS_TRANSACTION_CONTENTION.into())
+    );
+    s.commit(&[write], Some(&middle), t(8)).unwrap();
+}
+
+#[test]
+fn aborting_a_deadlock_holder_still_waits_for_an_unrelated_holder() {
+    let mut s = FirestoreState::new();
+    let older = s.begin_transaction(false, t(1)).unwrap();
+    let younger = s.begin_transaction(false, t(2)).unwrap();
+    let third = s.begin_transaction(false, t(3)).unwrap();
+    s.get_in_transaction(&older, &path("age/a")).unwrap();
+    s.get_in_transaction(&younger, &path("age/b")).unwrap();
+    s.get_in_transaction(&third, &path("age/b")).unwrap();
+    let a = set("age/a", &[("v", Value::Integer(1))]);
+    let b = set("age/b", &[("v", Value::Integer(2))]);
+    s.commit(&[a], Some(&younger), t(4)).unwrap_err();
+    assert_eq!(
+        s.commit(std::slice::from_ref(&b), Some(&older), t(5))
+            .unwrap_err(),
+        FirestoreError::Aborted(TOO_MUCH_CONTENTION.into())
+    );
+    assert!(s.transaction_is_active(&older));
+    assert!(s.transaction_is_active(&third));
+    assert!(!s.transaction_is_active(&younger));
+    assert!(s.get(&path("age/b")).is_none());
+    s.rollback(&third).unwrap();
+    s.commit(&[b], Some(&older), t(6)).unwrap();
+    assert_eq!(
+        s.get(&path("age/b")).unwrap().fields["v"],
+        Value::Integer(2)
+    );
+}
+
+#[test]
+fn stopping_a_commit_wait_preserves_both_transactions_until_a_real_release() {
+    let mut s = FirestoreState::new();
+    let older = s.begin_transaction(false, t(1)).unwrap();
+    let younger = s.begin_transaction(false, t(1)).unwrap();
+    for id in [&older, &younger] {
+        s.get_in_transaction(id, &path("age/doc")).unwrap();
+    }
+    let write = set("age/doc", &[("v", Value::Integer(1))]);
+    s.commit(std::slice::from_ref(&write), Some(&younger), t(2))
+        .unwrap_err();
+    s.stop_waiting_to_commit(&younger);
+    assert_eq!(
+        s.commit(std::slice::from_ref(&write), Some(&older), t(3))
+            .unwrap_err(),
+        FirestoreError::Aborted(TOO_MUCH_CONTENTION.into())
+    );
+    assert!(s.transaction_is_active(&older) && s.transaction_is_active(&younger));
+    s.stop_waiting_to_commit(&older);
+    s.rollback(&younger).unwrap();
+    s.commit(&[write], Some(&older), t(4)).unwrap();
+    assert_eq!(
+        s.get(&path("age/doc")).unwrap().fields["v"],
+        Value::Integer(1)
+    );
 }

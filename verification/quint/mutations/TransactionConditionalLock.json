@@ -19,9 +19,9 @@
     {
       "id": "M-FORMAL-TXN-LOCK-AGE-001",
       "property": "OlderWins",
-      "operator": "abort-the-older-requester",
-      "from": "val ownWins = holder.exists(other => observable.age.get(client) < observable.age.get(other))",
-      "to": "val ownWins = holder.exists(other => observable.age.get(client) >= observable.age.get(other))"
+      "operator": "abort-the-earlier-begin-on-a-pinned-clock",
+      "from": "val ownWins = holder.exists(other => or {\n      observable.startedAt.get(client) < observable.startedAt.get(other),\n      observable.startedAt.get(client) == observable.startedAt.get(other) and observable.age.get(client) < observable.age.get(other),\n    })",
+      "to": "val ownWins = holder.exists(other => or {\n      observable.startedAt.get(client) < observable.startedAt.get(other),\n      observable.startedAt.get(client) == observable.startedAt.get(other) and observable.age.get(client) >= observable.age.get(other),\n    })"
     }
   ]
 }

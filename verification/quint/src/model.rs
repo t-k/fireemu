@@ -902,7 +902,14 @@ const MODELS: &[ModelDescriptor] = &[
             "youngerWaitsThenLoses",
             "retrySeesCommittedLock",
         ],
-        projection_fields: &["phase", "age", "locked", "observations", "acted"],
+        projection_fields: &[
+            "phase",
+            "age",
+            "startedAt",
+            "locked",
+            "observations",
+            "acted",
+        ],
         driver: "verification/quint/src/transaction_conditional_lock.rs",
         connect_test: "verification/quint/tests/transaction_conditional_lock_connect.rs",
         additional_evidence_inputs: &[

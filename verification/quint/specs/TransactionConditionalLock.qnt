@@ -1,6 +1,7 @@
 // Two read-write transactions contend for one application-level conditional lock under
 // production's pessimistic locking: a commit that runs into the other client's read lock is
-// held back; on deadlock the younger begin instant loses, regardless of Commit order.
+// held back; on deadlock the younger (begin instant, begin order) loses. This bounded
+// model pins both begin instants, so age is the transaction-id tie-break in begin order.
 
 module TransactionConditionalLock {
   const CLIENTS: Set[str]
@@ -8,6 +9,7 @@ module TransactionConditionalLock {
   type Observable = {
     phase: str -> str,
     age: str -> int,
+    startedAt: str -> int,
     locked: bool,
     observations: str -> List[bool],
     acted: Set[str],
@@ -34,6 +36,7 @@ module TransactionConditionalLock {
     val initial = {
       phase: CLIENTS.mapBy(_ => "Ready"),
       age: CLIENTS.mapBy(_ => 0),
+      startedAt: CLIENTS.mapBy(_ => -1),
       locked: false,
       observations: CLIENTS.mapBy(_ => List()),
       acted: Set(),
@@ -50,8 +53,9 @@ module TransactionConditionalLock {
     not(observable.locked),
     record("ReadUnlocked", client, {
       phase: observable.phase.set(client, "Read"),
-      // The lazy transaction begins at this first read with newTransaction.
+      // Both lazy begins occur at instant zero; ids still increase in begin order.
       age: observable.age.set(client, CLIENTS.filter(c => observable.age.get(c) > 0).size() + 1),
+      startedAt: observable.startedAt.set(client, 0),
       locked: observable.locked,
       observations: observable.observations.set(
         client, observable.observations.get(client).append(observable.locked)),
@@ -72,6 +76,7 @@ module TransactionConditionalLock {
     record("Commit", client, {
       phase: observable.phase.set(client, if (heldBack) "Held" else "Committed"),
       age: observable.age,
+      startedAt: observable.startedAt,
       locked: not(heldBack),
       observations: observable.observations,
       acted: observable.acted,
@@ -86,13 +91,17 @@ module TransactionConditionalLock {
     },
     // Resolve the cycle only when the second Commit arrives; never wound or refuse at first wait.
     val holder = CLIENTS.exclude(Set(client)).filter(other => observable.phase.get(other) == "Held")
-    val ownWins = holder.exists(other => observable.age.get(client) < observable.age.get(other))
+    val ownWins = holder.exists(other => or {
+      observable.startedAt.get(client) < observable.startedAt.get(other),
+      observable.startedAt.get(client) == observable.startedAt.get(other) and observable.age.get(client) < observable.age.get(other),
+    })
     record("AbortStale", client, {
       phase: holder.fold(
         observable.phase.set(client, if (ownWins) "Committed" else "Aborted"),
         (phases, other) => phases.set(other, if (ownWins) "Aborted" else "Committed")
       ),
       age: observable.age,
+      startedAt: observable.startedAt,
       locked: true,
       observations: observable.observations,
       acted: observable.acted,
@@ -104,6 +113,7 @@ module TransactionConditionalLock {
     record("Retry", client, {
       phase: observable.phase.set(client, "Retried"),
       age: observable.age,
+      startedAt: observable.startedAt,
       locked: observable.locked,
       observations: observable.observations.set(
         client, observable.observations.get(client).append(observable.locked)),
@@ -118,6 +128,7 @@ module TransactionConditionalLock {
     record("RejectLocked", client, {
       phase: observable.phase.set(client, "Rejected"),
       age: observable.age,
+      startedAt: observable.startedAt,
       locked: observable.locked,
       observations: observable.observations,
       acted: observable.acted,
@@ -130,6 +141,7 @@ module TransactionConditionalLock {
     record("RunProtectedAction", client, {
       phase: observable.phase,
       age: observable.age,
+      startedAt: observable.startedAt,
       locked: observable.locked,
       observations: observable.observations,
       acted: observable.acted.union(Set(client)),
@@ -143,6 +155,7 @@ module TransactionConditionalLock {
     record("Release", client, {
       phase: observable.phase.set(client, "Done"),
       age: observable.age,
+      startedAt: observable.startedAt,
       locked: false,
       observations: observable.observations,
       acted: observable.acted,
@@ -171,6 +184,8 @@ module TransactionConditionalLock {
     CLIENTS.size() == 2,
     observable.phase.keys() == CLIENTS,
     observable.age.keys() == CLIENTS,
+    observable.startedAt.keys() == CLIENTS,
+    CLIENTS.forall(client => observable.startedAt.get(client) == (if (observable.age.get(client) == 0) -1 else 0)),
     CLIENTS.forall(client => observable.age.get(client).in(0.to(CLIENTS.size()))),
     observable.observations.keys() == CLIENTS,
     CLIENTS.forall(client => observable.phase.get(client).in(PHASES)),
@@ -185,7 +200,10 @@ module TransactionConditionalLock {
 
   val OlderWins = CLIENTS.forall(client =>
     observable.phase.get(client).in(Set("Committed", "Done")).implies(
-      CLIENTS.exclude(Set(client)).forall(other => observable.age.get(client) < observable.age.get(other))
+      CLIENTS.exclude(Set(client)).forall(other => or {
+        observable.startedAt.get(client) < observable.startedAt.get(other),
+        observable.startedAt.get(client) == observable.startedAt.get(other) and observable.age.get(client) < observable.age.get(other),
+      })
     )
   )
 

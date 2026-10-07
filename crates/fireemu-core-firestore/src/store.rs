@@ -605,6 +605,7 @@ struct Transaction {
     /// Snapshot time reported for every read inside the transaction.
     read_time: LogicalInstant,
     /// Age begins at `BeginTransaction`, or the first read with `newTransaction`.
+    /// A retry gets a fresh age; production's retry age was not recorded.
     started_at: LogicalInstant,
     /// Observed version per read path (`None` = absent at read time).
     read_set: BTreeMap<DocumentPath, Option<CommitVersion>>,
@@ -619,10 +620,9 @@ struct Transaction {
     /// Bumped on every operation the client drives through this transaction, so a waiter
     /// under a clock that does not move can still tell an idle holder from a busy one.
     activity: u64,
-    /// Set while a commit of this transaction is held back by another transaction's locks
-    /// (the adapter is waiting for that release). Another transaction that then runs into
-    /// this one's locks resolves the deadlock by aborting the younger transaction.
-    waiting_to_commit: bool,
+    /// Pending writes while the adapter waits for another transaction's locks. A requester
+    /// forms a deadlock only if these writes also collide with its own read locks.
+    waiting_to_commit: Option<Vec<Write>>,
     /// Retains the deadlock refusal for a pending Commit retried after the release notification.
     deadlock_victim: bool,
     /// A read-only transaction begun without a `readTime` takes its snapshot at its first use, not
@@ -2351,7 +2351,7 @@ impl FirestoreState {
             wall_last_activity: std::time::Instant::now(),
             state: TransactionState::Active,
             activity: 0,
-            waiting_to_commit: false,
+            waiting_to_commit: None,
             deadlock_victim: false,
             snapshot_pending: false,
             lifetime_expired: false,
@@ -2498,6 +2498,7 @@ impl FirestoreState {
         }
         if let Some(transaction) = self.transactions.get_mut(id) {
             transaction.state = state;
+            transaction.waiting_to_commit = None;
             self.active_transaction_conflict_ledger_bytes = self
                 .active_transaction_conflict_ledger_bytes
                 .saturating_sub(transaction.conflict_ledger_bytes);
@@ -3185,6 +3186,8 @@ impl FirestoreState {
                     TRANSACTION_NO_LONGER_VALID.into(),
                 ))
             }
+            // The pending Commit's refusal is recorded; using the same message for reads
+            // after the abort is inferred because production recorded no such read.
             Some(t) if t.state == TransactionState::RetryableAborted && t.deadlock_victim => {
                 Err(FirestoreError::Aborted(CROSS_TRANSACTION_CONTENTION.into()))
             }
@@ -4053,10 +4056,10 @@ impl FirestoreState {
     /// wording, and the adapter waits for a release before trying again or giving that answer.
     /// A commit outside a transaction, or by a transaction none of the lock holders is
     /// waiting on, leaves everything as it was. A transaction that runs into the locks of a
-    /// holder which is itself waiting to commit is the deadlock production resolves by
-    /// aborting the younger transaction (retryable). Age is the begin instant; equal ages
-    /// abort the later requester. An older requester releases the waiting holder's locks
-    /// and remains waiting so the adapter's existing release notification retries its Commit.
+    /// holder waiting on the requester's own locks forms a deadlock, resolved by aborting
+    /// the younger transaction (retryable). Age is ordered by (begin instant, transaction id),
+    /// with ids issued in begin order. After aborting holders, a requester commits in this
+    /// call if no active holder remains; otherwise the adapter waits for the remaining locks.
     fn check_contention(
         &mut self,
         writes: &[Write],
@@ -4068,7 +4071,7 @@ impl FirestoreState {
         }
         self.prune_transactions(now);
         if let Some(transaction) = own.and_then(|id| self.transactions.get_mut(id)) {
-            transaction.waiting_to_commit = false;
+            transaction.waiting_to_commit = None;
         }
         let floor = self.compaction_floor;
         let holders: Vec<(TransactionId, LogicalInstant, bool)> = self
@@ -4081,16 +4084,22 @@ impl FirestoreState {
                     && own != Some(*id)
                     && self.holder_locks_writes(holder, writes)
             })
-            .map(|(id, holder)| (id.clone(), holder.started_at, holder.waiting_to_commit))
+            .map(|(id, holder)| {
+                let cycle = holder.waiting_to_commit.as_ref().is_some_and(|pending| {
+                    own.and_then(|id| self.transactions.get(id))
+                        .is_some_and(|requester| self.holder_locks_writes(requester, pending))
+                });
+                (id.clone(), holder.started_at, cycle)
+            })
             .collect();
         if holders.is_empty() {
             return Ok(());
         }
         if let Some(id) = own {
-            let own_age = self.transaction(id)?.started_at;
+            let own_age = (self.transaction(id)?.started_at, id);
             if holders
                 .iter()
-                .any(|(_, age, waiting)| *waiting && own_age >= *age)
+                .any(|(holder, age, cycle)| *cycle && own_age > (*age, holder))
             {
                 if let Some(transaction) = self.transactions.get_mut(id) {
                     transaction.deadlock_victim = true;
@@ -4106,11 +4115,24 @@ impl FirestoreState {
                     self.finish_transaction(holder, TransactionState::RetryableAborted);
                 }
             }
+            if holders
+                .iter()
+                .all(|(holder, _, _)| !self.transaction_is_active(holder))
+            {
+                return Ok(());
+            }
             if let Some(transaction) = self.transactions.get_mut(id) {
-                transaction.waiting_to_commit = true;
+                transaction.waiting_to_commit = Some(writes.to_vec());
             }
         }
         Err(FirestoreError::Aborted(TOO_MUCH_CONTENTION.into()))
+    }
+
+    /// Clears the pending Commit when its adapter stops waiting for contention.
+    pub fn stop_waiting_to_commit(&mut self, id: &TransactionId) {
+        if let Some(transaction) = self.transactions.get_mut(id) {
+            transaction.waiting_to_commit = None;
+        }
     }
 
     /// The active read-write transactions whose locks `writes` would collide with, other than

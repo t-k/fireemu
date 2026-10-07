@@ -422,7 +422,7 @@ fn body_rejection_response(rejection: BodyRejection) -> RestResponse {
     }
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::result_large_err)]
 async fn rest_call(
     state: Arc<RestState>,
     req: Request<Incoming>,
@@ -506,7 +506,20 @@ async fn rest_call(
     // waits for a transaction to finish, then runs the request again.
     let request = Arc::new(request);
     let deadline = state.local.contention_deadline();
+    let decoded_path = crate::rest::decode_path(&request.request.path).ok();
+    let waiting_transaction = decoded_path
+        .as_deref()
+        .and_then(|path| path.strip_prefix("/v1/"))
+        .and_then(|path| path.strip_suffix(":commit"))
+        .and_then(|path| crate::decode::parse_parent(path).ok())
+        .and_then(|parent| {
+            let token = request.request.body.get("transaction")?.as_str()?;
+            let token = crate::rest::json::base64_decode(token).ok()?;
+            let own = state.local.txn_of(&parent, &token).ok()??;
+            Some((parent, own))
+        });
     let mut permit = permit;
+    let mut waited = false;
     let response = loop {
         let attempt_permit = permit;
         let seen = state.local.release_count();
@@ -519,6 +532,7 @@ async fn rest_call(
         })
         .await
         .map_err(|error| std::io::Error::other(format!("Firestore REST task failed: {error}")))?;
+        waited |= contended;
         if !contended || deadline.expired() {
             break response;
         }
@@ -532,11 +546,17 @@ async fn rest_call(
         // request.
         match try_admit_rest_work(rest_work_limiter()) {
             Some(admitted) => permit = admitted,
-            None => {
-                return Ok(json(&too_many_concurrent_requests()));
-            }
+            None => break too_many_concurrent_requests(),
         }
     };
+    if let Some((parent, own)) = waiting_transaction.filter(|_| waited) {
+        if let Ok(handle) = state.local.database_handle(&parent) {
+            let _ = handle.with(|db| {
+                db.stop_waiting_to_commit(&own);
+                Ok(())
+            });
+        }
+    }
     if crate::rest::drops_connection(&response) {
         // A `dropConnection` fault: the connection closes without a response.
         return Err(dropped());

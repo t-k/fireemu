@@ -28,6 +28,7 @@ fn initial_state() -> TransactionConditionalLockState {
             ("c2".to_owned(), "Ready".to_owned()),
         ]),
         age: BTreeMap::from([("c1".to_owned(), 0), ("c2".to_owned(), 0)]),
+        started_at: BTreeMap::from([("c1".to_owned(), -1), ("c2".to_owned(), -1)]),
         locked: false,
         observations: BTreeMap::from([
             ("c1".to_owned(), Vec::new()),
@@ -247,9 +248,10 @@ fn modeled_action_inventory_is_exact() {
     );
 }
 
-const PROJECTION_FAULTS: [ProjectionFault; 5] = [
+const PROJECTION_FAULTS: [ProjectionFault; 6] = [
     ProjectionFault::Phase,
     ProjectionFault::Age,
+    ProjectionFault::StartedAt,
     ProjectionFault::Locked,
     ProjectionFault::Observations,
     ProjectionFault::Acted,
@@ -265,6 +267,7 @@ fn projection_fault_changes_exactly_one_field() {
         let changed = [
             ("phase", baseline.phase != perturbed.phase),
             ("age", baseline.age != perturbed.age),
+            ("startedAt", baseline.started_at != perturbed.started_at),
             ("locked", baseline.locked != perturbed.locked),
             (
                 "observations",

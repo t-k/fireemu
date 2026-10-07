@@ -185,7 +185,7 @@ async fn a_held_rest_commit_under_the_emulator_profile_waits_for_the_release_wha
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(clippy::too_many_lines)]
-async fn grpc_replays_all_four_recorded_transaction_age_cases() {
+async fn grpc_replays_all_four_recorded_transaction_age_cases_with_a_pinned_clock() {
     const DEADLOCK: &str = "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.";
     for case in ["conflict", "control", "retry", "retry-older"] {
         let server = start(true).await;
@@ -267,12 +267,10 @@ async fn grpc_replays_all_four_recorded_transaction_age_cases() {
             let (transaction, state) = read_new(client.clone(), "b", vec![]).await;
             assert_eq!(state, baseline);
             writer = transaction;
-            move_clock(&server.clock, 1);
         }
         let (transaction, state) = read_new(client.clone(), "a", vec![]).await;
         assert_eq!(state, baseline);
         if case != "retry-older" && case != "control" {
-            move_clock(&server.clock, 1);
             let (token, state) = read_new(client.clone(), "b", vec![]).await;
             assert_eq!(state, baseline);
             writer = token;
@@ -486,6 +484,610 @@ async fn contention_lease_bookkeeping_preserves_other_refusals_in_both_wait_loop
                 !released,
                 "async={asynchronous}, code={code:?}, message={message}"
             );
+        }
+    }
+    server.task.abort();
+    assert!(server.task.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines, clippy::result_large_err)]
+async fn deadlock_winner_commits_in_one_attempt_with_zero_wait_or_an_expired_deadline() {
+    for asynchronous in [false, true] {
+        for expired in [false, true] {
+            let clock = Arc::new(Mutex::new(VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            )));
+            let backend = LocalBackend::new(
+                Gateway {
+                    enforce_limits: true,
+                    ctx: PlanningContext {
+                        edition: FirestoreEdition::Standard,
+                        api_mode: FirestoreApiMode::Native,
+                        policy: IndexValidationPolicy::Production,
+                    },
+                    indexes: IndexSet::default(),
+                },
+                Arc::clone(&clock),
+                7,
+            )
+            .with_contention_wait(if expired {
+                STRICT_CONTENTION_WAIT
+            } else {
+                Duration::ZERO
+            })
+            .with_virtual_contention_wait();
+            let older = hold(&backend);
+            let younger = hold(&backend);
+            let mut request = pb::CommitRequest {
+                database: DATABASE.into(),
+                transaction: younger.clone(),
+                writes: vec![pb::Write {
+                    operation: Some(pb::write::Operation::Update(pb::Document {
+                        name: DOCUMENT.into(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let error = backend
+                .commit_once(&request, &|_, _, _| Ok(()))
+                .unwrap_err();
+            assert!(LocalBackend::is_contention(&error));
+            request.transaction = older;
+            let (parent, writes) = LocalBackend::plan_commit(&request).unwrap();
+            let own = backend.txn_of(&parent, &request.transaction).unwrap();
+            let mut calls = 0;
+            let attempt = || {
+                calls += 1;
+                if expired {
+                    move_clock(&clock, 21);
+                }
+                backend.commit_once(&request, &|_, _, _| Ok(()))
+            };
+            let result = if asynchronous {
+                backend
+                    .retry_on_contention_async(&parent, own.as_ref(), &writes, attempt)
+                    .await
+            } else {
+                backend.retry_on_contention(&parent, own.as_ref(), &writes, attempt)
+            };
+            result.unwrap();
+            assert_eq!(calls, 1, "async={asynchronous}, expired={expired}");
+            request.transaction = younger;
+            let error = backend
+                .commit_once(&request, &|_, _, _| Ok(()))
+                .unwrap_err();
+            assert_eq!(error.code(), tonic::Code::Aborted);
+            assert_eq!(
+                error.message(),
+                fireemu_core_firestore::store::CROSS_TRANSACTION_CONTENTION
+            );
+        }
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::result_large_err)]
+async fn a_commit_that_stopped_waiting_is_not_a_deadlock_holder() {
+    for asynchronous in [false, true] {
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        )));
+        let backend = LocalBackend::new(
+            Gateway {
+                enforce_limits: true,
+                ctx: PlanningContext {
+                    edition: FirestoreEdition::Standard,
+                    api_mode: FirestoreApiMode::Native,
+                    policy: IndexValidationPolicy::Production,
+                },
+                indexes: IndexSet::default(),
+            },
+            clock,
+            7,
+        )
+        .with_contention_wait(Duration::ZERO);
+        let older = hold(&backend);
+        let younger = hold(&backend);
+        let mut request = pb::CommitRequest {
+            database: DATABASE.into(),
+            transaction: younger,
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: DOCUMENT.into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let (parent, writes) = LocalBackend::plan_commit(&request).unwrap();
+        let own = backend.txn_of(&parent, &request.transaction).unwrap();
+        let error = if asynchronous {
+            backend
+                .retry_on_contention_async(&parent, own.as_ref(), &writes, || {
+                    backend.commit_once(&request, &|_, _, _| Ok(()))
+                })
+                .await
+                .unwrap_err()
+        } else {
+            backend.commit(&request).unwrap_err()
+        };
+        assert!(LocalBackend::is_contention(&error));
+        request.transaction = older;
+        assert!(LocalBackend::is_contention(
+            &backend
+                .commit_once(&request, &|_, _, _| Ok(()))
+                .unwrap_err()
+        ));
+        assert!(backend
+            .database_handle(&parent)
+            .unwrap()
+            .with(|db| Ok(db.transaction_is_active(own.as_ref().unwrap())))
+            .unwrap());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn rest_replays_all_four_recorded_transaction_age_cases_with_a_pinned_clock() {
+    use serde_json::{json, Value};
+    const DEADLOCK: &str = fireemu_core_firestore::store::CROSS_TRANSACTION_CONTENTION;
+    for case in ["conflict", "control", "retry", "retry-older"] {
+        let server = start(true).await;
+        let addr = server.addr;
+        let commit_path = format!("/v1/{DATABASE}/documents:commit");
+        let write = |role: &str, state: &str| json!({"update": {"name": format!("{DATABASE}/documents/age/{role}"), "fields": {"state": {"stringValue": state}}}});
+        let parse = |response: &str| -> Value {
+            serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap()
+        };
+        let response = http(
+            addr,
+            "POST",
+            &commit_path,
+            &json!({"writes": (["a", "b", "c"].map(|role| write(role, "baseline")))}).to_string(),
+        )
+        .await;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let read_new = |role: &str, retry: String| {
+            let body = json!({"documents": [format!("{DATABASE}/documents/age/{role}")], "newTransaction": {"readWrite": if retry.is_empty() { json!({}) } else { json!({"retryTransaction": retry}) }}}).to_string();
+            async move {
+                let response = http(
+                    addr,
+                    "POST",
+                    &format!("/v1/{DATABASE}/documents:batchGet"),
+                    &body,
+                )
+                .await;
+                assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+                let rows: Value =
+                    serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+                let rows = rows.as_array().unwrap();
+                let token = rows
+                    .iter()
+                    .find_map(|row| row["transaction"].as_str())
+                    .unwrap()
+                    .to_owned();
+                let state = rows
+                    .iter()
+                    .find_map(|row| row["found"]["fields"]["state"]["stringValue"].as_str())
+                    .unwrap()
+                    .to_owned();
+                (token, state)
+            }
+        };
+        let mut writer = String::new();
+        if case == "retry-older" {
+            let (token, state) = read_new("b", String::new()).await;
+            assert_eq!(state, "baseline");
+            writer = token;
+        }
+        let (transaction, state) = read_new("a", String::new()).await;
+        assert_eq!(state, "baseline");
+        if case != "retry-older" && case != "control" {
+            let (token, state) = read_new("b", String::new()).await;
+            assert_eq!(state, "baseline");
+            writer = token;
+        }
+        let body = json!({"transaction": writer, "writes": [write(if case == "control" { "c" } else { "a" }, "writer")]}).to_string();
+        let path = commit_path.clone();
+        let mut pending = tokio::spawn(async move { http(addr, "POST", &path, &body).await });
+        if case == "control" {
+            let response = tokio::time::timeout(Duration::from_secs(5), &mut pending)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        } else {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(150), &mut pending)
+                    .await
+                    .is_err(),
+                "{case}: W waits before T commits"
+            );
+        }
+        let response = http(
+            addr,
+            "POST",
+            &commit_path,
+            &json!({"transaction": transaction, "writes": [write("b", "transaction-baseline")]})
+                .to_string(),
+        )
+        .await;
+        let mut attempts = 1;
+        if case == "retry-older" {
+            assert!(response.starts_with("HTTP/1.1 409"), "{response}");
+            assert_eq!(parse(&response)["error"]["status"], "ABORTED");
+            assert_eq!(parse(&response)["error"]["message"], DEADLOCK);
+            let response = tokio::time::timeout(Duration::from_secs(5), &mut pending)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+            for (role, state) in [("a", "writer"), ("b", "baseline"), ("c", "baseline")] {
+                let response = http(
+                    addr,
+                    "GET",
+                    &format!("/v1/{DATABASE}/documents/age/{role}"),
+                    "",
+                )
+                .await;
+                assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+                assert_eq!(parse(&response)["fields"]["state"]["stringValue"], state);
+            }
+            let response = http(
+                addr,
+                "POST",
+                &format!("/v1/{DATABASE}/documents:rollback"),
+                &json!({"transaction": transaction}).to_string(),
+            )
+            .await;
+            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+            let (token, state) = read_new("a", transaction).await;
+            assert_eq!(state, "writer");
+            attempts += 1;
+            let response = http(
+                addr,
+                "POST",
+                &commit_path,
+                &json!({"transaction": token, "writes": [write("b", "transaction-writer")]})
+                    .to_string(),
+            )
+            .await;
+            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        } else {
+            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+            if case != "control" {
+                let response = tokio::time::timeout(Duration::from_secs(5), &mut pending)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(response.starts_with("HTTP/1.1 409"), "{response}");
+                assert_eq!(parse(&response)["error"]["status"], "ABORTED");
+                assert_eq!(parse(&response)["error"]["message"], DEADLOCK);
+                let response = http(
+                    addr,
+                    "POST",
+                    &format!("/v1/{DATABASE}/documents:rollback"),
+                    &json!({"transaction": writer}).to_string(),
+                )
+                .await;
+                assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+            }
+        }
+        assert_eq!(attempts, if case == "retry-older" { 2 } else { 1 });
+        for (role, expected) in [
+            (
+                "a",
+                if case == "retry-older" {
+                    "writer"
+                } else {
+                    "baseline"
+                },
+            ),
+            (
+                "b",
+                if case == "retry-older" {
+                    "transaction-writer"
+                } else {
+                    "transaction-baseline"
+                },
+            ),
+            (
+                "c",
+                if case == "control" {
+                    "writer"
+                } else {
+                    "baseline"
+                },
+            ),
+        ] {
+            let response = http(
+                addr,
+                "GET",
+                &format!("/v1/{DATABASE}/documents/age/{role}"),
+                "",
+            )
+            .await;
+            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+            assert_eq!(
+                parse(&response)["fields"]["state"]["stringValue"],
+                expected,
+                "{case}/{role}"
+            );
+        }
+        server.task.abort();
+        assert!(server.task.await.unwrap_err().is_cancelled());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::result_large_err)]
+async fn a_rest_commit_that_timed_out_is_not_a_deadlock_holder() {
+    use fireemu_adapter_grpc::rest::json::base64_encode;
+    let server = start(true).await;
+    let older = hold(&server.backend);
+    let younger = hold(&server.backend);
+    let addr = server.addr;
+    let body = serde_json::json!({"transaction": base64_encode(&younger), "writes": [{"update": {"name": DOCUMENT}}]}).to_string();
+    let mut pending = tokio::spawn(async move {
+        http(
+            addr,
+            "POST",
+            "/v1/projects/demo-app/databases/%28default%29/documents:commit",
+            &body,
+        )
+        .await
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), &mut pending)
+            .await
+            .is_err()
+    );
+    move_clock(&server.clock, 21);
+    let response = tokio::time::timeout(Duration::from_secs(5), pending)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(response.starts_with("HTTP/1.1 409"), "{response}");
+    assert!(
+        response.contains(fireemu_core_firestore::store::TOO_MUCH_CONTENTION),
+        "{response}"
+    );
+    let request = pb::CommitRequest {
+        database: DATABASE.into(),
+        transaction: older,
+        writes: vec![pb::Write {
+            operation: Some(pb::write::Operation::Update(pb::Document {
+                name: DOCUMENT.into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    assert!(LocalBackend::is_contention(
+        &server
+            .backend
+            .commit_once(&request, &|_, _, _| Ok(()))
+            .unwrap_err()
+    ));
+    let (parent, _) = LocalBackend::plan_commit(&request).unwrap();
+    let own = server.backend.txn_of(&parent, &younger).unwrap().unwrap();
+    assert!(server
+        .backend
+        .database_handle(&parent)
+        .unwrap()
+        .with(|db| Ok(db.transaction_is_active(&own)))
+        .unwrap());
+    server.task.abort();
+    assert!(server.task.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::result_large_err)]
+async fn an_unrelated_rest_refusal_does_not_clear_a_pending_commits_wait() {
+    let server = start(true).await;
+    let older = hold(&server.backend);
+    let younger = hold(&server.backend);
+    let addr = server.addr;
+    let body = serde_json::json!({"transaction": fireemu_adapter_grpc::rest::json::base64_encode(&younger), "writes": [{"update": {"name": DOCUMENT}}]}).to_string();
+    let pending_body = body.clone();
+    let mut pending = tokio::spawn(async move {
+        http(
+            addr,
+            "POST",
+            &format!("/v1/{DATABASE}/documents:commit"),
+            &pending_body,
+        )
+        .await
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), &mut pending)
+            .await
+            .is_err()
+    );
+    let response = http(
+        addr,
+        "GET",
+        &format!("/v1/{DATABASE}/documents:commit"),
+        &body,
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+    let request = pb::CommitRequest {
+        database: DATABASE.into(),
+        transaction: older,
+        writes: vec![pb::Write {
+            operation: Some(pb::write::Operation::Update(pb::Document {
+                name: DOCUMENT.into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    server
+        .backend
+        .commit_once(&request, &|_, _, _| Ok(()))
+        .unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(5), pending)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(response.starts_with("HTTP/1.1 409"), "{response}");
+    assert!(
+        response.contains(fireemu_core_firestore::store::CROSS_TRANSACTION_CONTENTION),
+        "{response}"
+    );
+    server.task.abort();
+    assert!(server.task.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+#[allow(clippy::result_large_err)]
+async fn a_guard_refusal_does_not_clear_another_commit_wait() {
+    for asynchronous in [false, true] {
+        let server = start(true).await;
+        let older = hold(&server.backend);
+        let younger = hold(&server.backend);
+        let mut request = pb::CommitRequest {
+            database: DATABASE.into(),
+            transaction: younger.clone(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: DOCUMENT.into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(LocalBackend::is_contention(
+            &server
+                .backend
+                .commit_once(&request, &|_, _, _| Ok(()))
+                .unwrap_err()
+        ));
+        let (parent, writes) = LocalBackend::plan_commit(&request).unwrap();
+        let own = server
+            .backend
+            .txn_of(&parent, &request.transaction)
+            .unwrap();
+        let denied =
+            |_: &fireemu_core_firestore::store::FirestoreState,
+             _: &[fireemu_core_firestore::store::Write],
+             _: LogicalInstant| Err(tonic::Status::permission_denied("guard refused"));
+        let error = if asynchronous {
+            server
+                .backend
+                .retry_on_contention_async(&parent, own.as_ref(), &writes, || {
+                    server.backend.commit_once(&request, &denied)
+                })
+                .await
+                .unwrap_err()
+        } else {
+            server.backend.commit_with(&request, &denied).unwrap_err()
+        };
+        assert_eq!(error.code(), tonic::Code::PermissionDenied);
+        request.transaction = older;
+        server
+            .backend
+            .commit_once(&request, &|_, _, _| Ok(()))
+            .unwrap();
+        request.transaction = younger;
+        assert_eq!(
+            server
+                .backend
+                .commit_once(&request, &|_, _, _| Ok(()))
+                .unwrap_err()
+                .message(),
+            fireemu_core_firestore::store::CROSS_TRANSACTION_CONTENTION
+        );
+        server.task.abort();
+        assert!(server.task.await.unwrap_err().is_cancelled());
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::result_large_err)]
+async fn a_guard_refusal_after_a_wait_clears_that_commits_wait() {
+    let server = start(true).await;
+    for asynchronous in [false, true] {
+        let older = hold(&server.backend);
+        let younger = hold(&server.backend);
+        let mut request = pb::CommitRequest {
+            database: DATABASE.into(),
+            transaction: younger.clone(),
+            writes: vec![pb::Write {
+                operation: Some(pb::write::Operation::Update(pb::Document {
+                    name: DOCUMENT.into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let (parent, writes) = LocalBackend::plan_commit(&request).unwrap();
+        let own = server.backend.txn_of(&parent, &younger).unwrap();
+        let mut calls = 0;
+        let attempt = || {
+            calls += 1;
+            if calls > 1 {
+                return Err(tonic::Status::permission_denied(
+                    "guard changed while waiting",
+                ));
+            }
+            let refusal = server.backend.commit_once(&request, &|_, _, _| Ok(()));
+            let unrelated = server
+                .backend
+                .begin_transaction(&pb::BeginTransactionRequest {
+                    database: DATABASE.into(),
+                    ..Default::default()
+                })
+                .unwrap();
+            server
+                .backend
+                .rollback(&pb::RollbackRequest {
+                    database: DATABASE.into(),
+                    transaction: unrelated,
+                    ..Default::default()
+                })
+                .unwrap();
+            refusal
+        };
+        let error = if asynchronous {
+            server
+                .backend
+                .retry_on_contention_async(&parent, own.as_ref(), &writes, attempt)
+                .await
+                .unwrap_err()
+        } else {
+            server
+                .backend
+                .retry_on_contention(&parent, own.as_ref(), &writes, attempt)
+                .unwrap_err()
+        };
+        assert_eq!(error.code(), tonic::Code::PermissionDenied);
+        assert_eq!(calls, 2);
+        request.transaction = older.clone();
+        assert!(LocalBackend::is_contention(
+            &server
+                .backend
+                .commit_once(&request, &|_, _, _| Ok(()))
+                .unwrap_err()
+        ));
+        for transaction in [older, younger] {
+            server
+                .backend
+                .rollback(&pb::RollbackRequest {
+                    database: DATABASE.into(),
+                    transaction,
+                    ..Default::default()
+                })
+                .unwrap();
         }
     }
     server.task.abort();

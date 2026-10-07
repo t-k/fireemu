@@ -182,3 +182,312 @@ async fn a_held_rest_commit_under_the_emulator_profile_waits_for_the_release_wha
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     server.task.abort();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn grpc_replays_all_four_recorded_transaction_age_cases() {
+    const DEADLOCK: &str = "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.";
+    for case in ["conflict", "control", "retry", "retry-older"] {
+        let server = start(true).await;
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://{}", server.addr))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let mut client = pb::firestore_client::FirestoreClient::new(channel);
+        let write = |role: &str, state: &str| pb::Write {
+            operation: Some(pb::write::Operation::Update(pb::Document {
+                name: format!("{DATABASE}/documents/age/{role}"),
+                fields: [(
+                    "state".to_owned(),
+                    pb::Value {
+                        value_type: Some(pb::value::ValueType::StringValue(state.to_owned())),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        client
+            .commit(pb::CommitRequest {
+                database: DATABASE.to_owned(),
+                writes: ["a", "b", "c"].map(|role| write(role, "baseline")).to_vec(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let read_new =
+            |mut client: pb::firestore_client::FirestoreClient<tonic::transport::Channel>,
+             role: &str,
+             retry: Vec<u8>| {
+                let name = format!("{DATABASE}/documents/age/{role}");
+                async move {
+                    let mut stream = client
+                    .batch_get_documents(pb::BatchGetDocumentsRequest {
+                        database: DATABASE.to_owned(),
+                        documents: vec![name],
+                        consistency_selector: Some(
+                            pb::batch_get_documents_request::ConsistencySelector::NewTransaction(
+                                pb::TransactionOptions {
+                                    mode: Some(pb::transaction_options::Mode::ReadWrite(
+                                        pb::transaction_options::ReadWrite {
+                                            retry_transaction: retry,
+                                            ..Default::default()
+                                        },
+                                    )),
+                                },
+                            ),
+                        ),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner();
+                    let mut transaction = Vec::new();
+                    let mut state = None;
+                    while let Some(response) = stream.message().await.unwrap() {
+                        if !response.transaction.is_empty() {
+                            transaction = response.transaction;
+                        }
+                        if let Some(pb::batch_get_documents_response::Result::Found(document)) =
+                            response.result
+                        {
+                            state = document.fields["state"].value_type.clone();
+                        }
+                    }
+                    assert!(!transaction.is_empty());
+                    (transaction, state.unwrap())
+                }
+            };
+        let baseline = pb::value::ValueType::StringValue("baseline".into());
+        let mut writer = Vec::new();
+        if case == "retry-older" {
+            let (transaction, state) = read_new(client.clone(), "b", vec![]).await;
+            assert_eq!(state, baseline);
+            writer = transaction;
+            move_clock(&server.clock, 1);
+        }
+        let (transaction, state) = read_new(client.clone(), "a", vec![]).await;
+        assert_eq!(state, baseline);
+        if case != "retry-older" && case != "control" {
+            move_clock(&server.clock, 1);
+            let (token, state) = read_new(client.clone(), "b", vec![]).await;
+            assert_eq!(state, baseline);
+            writer = token;
+        }
+        let mut writer_client = client.clone();
+        let writer_request = pb::CommitRequest {
+            database: DATABASE.to_owned(),
+            transaction: writer.clone(),
+            writes: vec![write(if case == "control" { "c" } else { "a" }, "writer")],
+            ..Default::default()
+        };
+        let mut pending = tokio::spawn(async move { writer_client.commit(writer_request).await });
+        if case == "control" {
+            tokio::time::timeout(Duration::from_secs(5), &mut pending)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        } else {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(150), &mut pending)
+                    .await
+                    .is_err(),
+                "{case}: W must wait before T commits"
+            );
+        }
+        let first = client
+            .commit(pb::CommitRequest {
+                database: DATABASE.to_owned(),
+                transaction: transaction.clone(),
+                writes: vec![write("b", "transaction-baseline")],
+                ..Default::default()
+            })
+            .await;
+        let mut attempts = 1;
+        if case == "retry-older" {
+            let error = first.unwrap_err();
+            assert_eq!(error.code(), tonic::Code::Aborted);
+            assert_eq!(error.message(), DEADLOCK);
+            tokio::time::timeout(Duration::from_secs(5), &mut pending)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            // The first attempt never published b; the older writer published only a.
+            let document = client
+                .get_document(pb::GetDocumentRequest {
+                    name: format!("{DATABASE}/documents/age/b"),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(
+                document.fields["state"].value_type.as_ref(),
+                Some(&baseline)
+            );
+            client
+                .rollback(pb::RollbackRequest {
+                    database: DATABASE.to_owned(),
+                    transaction: transaction.clone(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            let (retry, state) = read_new(client.clone(), "a", transaction).await;
+            assert_eq!(state, pb::value::ValueType::StringValue("writer".into()));
+            attempts += 1;
+            client
+                .commit(pb::CommitRequest {
+                    database: DATABASE.to_owned(),
+                    transaction: retry,
+                    writes: vec![write("b", "transaction-writer")],
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+        } else {
+            first.unwrap();
+            if case != "control" {
+                let error = tokio::time::timeout(Duration::from_secs(5), &mut pending)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap_err();
+                assert_eq!(error.code(), tonic::Code::Aborted);
+                assert_eq!(error.message(), DEADLOCK);
+                client
+                    .rollback(pb::RollbackRequest {
+                        database: DATABASE.to_owned(),
+                        transaction: writer,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+            }
+        }
+        assert_eq!(attempts, if case == "retry-older" { 2 } else { 1 });
+        for (role, expected) in [
+            (
+                "a",
+                if case == "retry-older" {
+                    "writer"
+                } else {
+                    "baseline"
+                },
+            ),
+            (
+                "b",
+                if case == "retry-older" {
+                    "transaction-writer"
+                } else {
+                    "transaction-baseline"
+                },
+            ),
+            (
+                "c",
+                if case == "control" {
+                    "writer"
+                } else {
+                    "baseline"
+                },
+            ),
+        ] {
+            let document = client
+                .get_document(pb::GetDocumentRequest {
+                    name: format!("{DATABASE}/documents/age/{role}"),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(
+                document.fields["state"].value_type,
+                Some(pb::value::ValueType::StringValue(expected.into())),
+                "{case}/{role}"
+            );
+        }
+        server.task.abort();
+        assert!(server.task.await.unwrap_err().is_cancelled());
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::result_large_err)]
+async fn contention_lease_bookkeeping_preserves_other_refusals_in_both_wait_loops() {
+    use fireemu_core_firestore::store::CROSS_TRANSACTION_CONTENTION;
+    let server = start(true).await;
+    for asynchronous in [false, true] {
+        for (code, message, released) in [
+            (tonic::Code::Aborted, CROSS_TRANSACTION_CONTENTION, true),
+            (
+                tonic::Code::Aborted,
+                "Transaction was aborted due to a concurrent modification.",
+                false,
+            ),
+            (
+                tonic::Code::PermissionDenied,
+                CROSS_TRANSACTION_CONTENTION,
+                false,
+            ),
+            (tonic::Code::PermissionDenied, "write guard refused", false),
+        ] {
+            let backend = LocalBackend::new(
+                Gateway {
+                    enforce_limits: true,
+                    ctx: PlanningContext {
+                        edition: FirestoreEdition::Standard,
+                        api_mode: FirestoreApiMode::Native,
+                        policy: IndexValidationPolicy::Production,
+                    },
+                    indexes: IndexSet::default(),
+                },
+                Arc::clone(&server.clock),
+                7,
+            )
+            .with_lock_lease(Duration::ZERO);
+            let token = hold(&backend);
+            let (parent, writes) = LocalBackend::plan_commit(&pb::CommitRequest {
+                database: DATABASE.to_owned(),
+                writes: vec![pb::Write {
+                    operation: Some(pb::write::Operation::Update(pb::Document {
+                        name: DOCUMENT.to_owned(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+            let transaction = backend.txn_of(&parent, &token).unwrap().unwrap();
+            let attempt = || Err::<(), _>(tonic::Status::new(code, message));
+            let error = if asynchronous {
+                backend
+                    .retry_on_contention_async(&parent, None, &writes, attempt)
+                    .await
+                    .unwrap_err()
+            } else {
+                backend
+                    .retry_on_contention(&parent, None, &writes, attempt)
+                    .unwrap_err()
+            };
+            assert_eq!(error.code(), code);
+            assert_eq!(error.message(), message);
+            assert_eq!(
+                backend
+                    .database_handle(&parent)
+                    .unwrap()
+                    .with(|db| Ok(db.transaction_is_active(&transaction)))
+                    .unwrap(),
+                !released,
+                "async={asynchronous}, code={code:?}, message={message}"
+            );
+        }
+    }
+    server.task.abort();
+    assert!(server.task.await.unwrap_err().is_cancelled());
+}

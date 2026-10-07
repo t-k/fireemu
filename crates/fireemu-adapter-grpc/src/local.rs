@@ -5712,6 +5712,15 @@ impl LocalBackend {
                         handle.wait_for_release_until(marker, &deadline);
                     }
                 }
+                Err(status)
+                    if status.code() == tonic::Code::Aborted
+                        && status.message()
+                            == fireemu_core_firestore::store::CROSS_TRANSACTION_CONTENTION =>
+                {
+                    // Preserve lease bookkeeping even though a deadlock victim never waits.
+                    self.expire_lock_leases(&handle, lease_writes, own);
+                    return Err(status);
+                }
                 outcome => return outcome,
             }
         }
@@ -5812,6 +5821,15 @@ impl LocalBackend {
                         })
                         .await;
                     }
+                }
+                Err(status)
+                    if status.code() == tonic::Code::Aborted
+                        && status.message()
+                            == fireemu_core_firestore::store::CROSS_TRANSACTION_CONTENTION =>
+                {
+                    // Preserve lease bookkeeping even though a deadlock victim never waits.
+                    self.expire_lock_leases(&handle, lease_writes, own);
+                    return Err(status);
                 }
                 outcome => return outcome,
             }

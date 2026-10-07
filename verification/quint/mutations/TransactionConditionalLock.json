@@ -15,6 +15,13 @@
       "operator": "retry-reuses-the-stale-lock-observation",
       "from": "client, observable.observations.get(client).append(observable.locked)),\n      acted: observable.acted,\n    }),\n  }\n\n  action rejectLocked",
       "to": "client, observable.observations.get(client).append(false)),\n      acted: observable.acted,\n    }),\n  }\n\n  action rejectLocked"
+    },
+    {
+      "id": "M-FORMAL-TXN-LOCK-AGE-001",
+      "property": "OlderWins",
+      "operator": "abort-the-older-requester",
+      "from": "val ownWins = holder.exists(other => observable.age.get(client) < observable.age.get(other))",
+      "to": "val ownWins = holder.exists(other => observable.age.get(client) >= observable.age.get(other))"
     }
   ]
 }

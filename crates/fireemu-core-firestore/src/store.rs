@@ -604,6 +604,7 @@ struct Transaction {
     read_version: CommitVersion,
     /// Snapshot time reported for every read inside the transaction.
     read_time: LogicalInstant,
+    /// Age begins at `BeginTransaction`, or the first read with `newTransaction`.
     started_at: LogicalInstant,
     /// Observed version per read path (`None` = absent at read time).
     read_set: BTreeMap<DocumentPath, Option<CommitVersion>>,
@@ -620,9 +621,10 @@ struct Transaction {
     activity: u64,
     /// Set while a commit of this transaction is held back by another transaction's locks
     /// (the adapter is waiting for that release). Another transaction that then runs into
-    /// this one's locks is the deadlock production resolves by aborting one side: that other
-    /// side is aborted, so this one can proceed.
+    /// this one's locks resolves the deadlock by aborting the younger transaction.
     waiting_to_commit: bool,
+    /// Retains the deadlock refusal for a pending Commit retried after the release notification.
+    deadlock_victim: bool,
     /// A read-only transaction begun without a `readTime` takes its snapshot at its first use, not
     /// at its begin (P02: an outside write between the begin and the first read is shown). The
     /// emulator profile does the same for a read-write transaction (the official emulator's read).
@@ -1082,6 +1084,8 @@ const TRANSACTION_CONCURRENT_MODIFICATION: &str =
 /// Production's answer to a write that collides with the locks an active read-write
 /// transaction holds on what it read (`concurrencyMode: PESSIMISTIC`).
 pub const TOO_MUCH_CONTENTION: &str = "Too much contention on these documents. Please try again.";
+/// Production's exact refusal of the younger transaction in a transaction deadlock.
+pub const CROSS_TRANSACTION_CONTENTION: &str = "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.";
 const MAX_FINISHED_TRANSACTION_LINEAGE: usize = 8_192;
 // Strict allows a transaction to sit idle 120 s (the nominal 60 s quota plus this allowance).
 // Production accepted a native Commit after a nominal 110 s idle (measured idle in [110.58,
@@ -2348,6 +2352,7 @@ impl FirestoreState {
             state: TransactionState::Active,
             activity: 0,
             waiting_to_commit: false,
+            deadlock_victim: false,
             snapshot_pending: false,
             lifetime_expired: false,
             first_read_time: None,
@@ -3180,6 +3185,9 @@ impl FirestoreState {
                     TRANSACTION_NO_LONGER_VALID.into(),
                 ))
             }
+            Some(t) if t.state == TransactionState::RetryableAborted && t.deadlock_victim => {
+                Err(FirestoreError::Aborted(CROSS_TRANSACTION_CONTENTION.into()))
+            }
             // A finished transaction is reported the way the official emulator reports it:
             // `ABORTED`, which is the code the SDKs retry a transaction on.
             Some(_) => Err(FirestoreError::Aborted(TRANSACTION_NO_LONGER_VALID.into())),
@@ -3642,12 +3650,13 @@ impl FirestoreState {
     /// ended at `now`.
     pub fn rollback(&mut self, id: &TransactionId) -> Result<(), FirestoreError> {
         if self.transactions.get(id).is_some_and(|transaction| {
-            matches!(
-                transaction.state,
-                TransactionState::RolledBack
-                    | TransactionState::Finished
-                    | TransactionState::CommitRefused
-            )
+            (transaction.state == TransactionState::RetryableAborted && transaction.deadlock_victim)
+                || matches!(
+                    transaction.state,
+                    TransactionState::RolledBack
+                        | TransactionState::Finished
+                        | TransactionState::CommitRefused
+                )
         }) {
             // Production remembers a transaction that ran out of its total lifetime for a while, and answers
             // its Rollback like every other request (P11 v4: 10 with the expired text).
@@ -4045,7 +4054,9 @@ impl FirestoreState {
     /// A commit outside a transaction, or by a transaction none of the lock holders is
     /// waiting on, leaves everything as it was. A transaction that runs into the locks of a
     /// holder which is itself waiting to commit is the deadlock production resolves by
-    /// aborting one side: it is aborted (retryable) so the waiting holder can proceed.
+    /// aborting the younger transaction (retryable). Age is the begin instant; equal ages
+    /// abort the later requester. An older requester releases the waiting holder's locks
+    /// and remains waiting so the adapter's existing release notification retries its Commit.
     fn check_contention(
         &mut self,
         writes: &[Write],
@@ -4060,7 +4071,7 @@ impl FirestoreState {
             transaction.waiting_to_commit = false;
         }
         let floor = self.compaction_floor;
-        let holders: Vec<bool> = self
+        let holders: Vec<(TransactionId, LogicalInstant, bool)> = self
             .transactions
             .iter()
             .filter(|(id, holder)| {
@@ -4070,15 +4081,32 @@ impl FirestoreState {
                     && own != Some(*id)
                     && self.holder_locks_writes(holder, writes)
             })
-            .map(|(_, holder)| holder.waiting_to_commit)
+            .map(|(id, holder)| (id.clone(), holder.started_at, holder.waiting_to_commit))
             .collect();
         if holders.is_empty() {
             return Ok(());
         }
         if let Some(id) = own {
-            if holders.iter().any(|waiting| *waiting) {
+            let own_age = self.transaction(id)?.started_at;
+            if holders
+                .iter()
+                .any(|(_, age, waiting)| *waiting && own_age >= *age)
+            {
+                if let Some(transaction) = self.transactions.get_mut(id) {
+                    transaction.deadlock_victim = true;
+                }
                 self.finish_transaction(id, TransactionState::RetryableAborted);
-            } else if let Some(transaction) = self.transactions.get_mut(id) {
+                return Err(FirestoreError::Aborted(CROSS_TRANSACTION_CONTENTION.into()));
+            }
+            for (holder, _, waiting) in &holders {
+                if *waiting {
+                    if let Some(transaction) = self.transactions.get_mut(holder) {
+                        transaction.deadlock_victim = true;
+                    }
+                    self.finish_transaction(holder, TransactionState::RetryableAborted);
+                }
+            }
+            if let Some(transaction) = self.transactions.get_mut(id) {
                 transaction.waiting_to_commit = true;
             }
         }

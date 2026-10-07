@@ -1720,3 +1720,19 @@ test("six early control frames cannot complete the invalid-ACK silence interval"
   assert.equal(result.complete, false);
   assert.equal(result.cleanupClosed, true);
 });
+
+test("source deadline properties also bind a delayed first cell", () => {
+  for (let seed = 0; seed < 256; seed++) {
+    let clock = 0;
+    const meter = createMeter({ now: () => clock }),
+      offset = seed - 128;
+    clock = CAPS.sourceWallMs + offset;
+    if (offset >= 0) assert.throws(() => meter.enter(makePlan().cells[0]), /time/);
+    else {
+      meter.enter(makePlan().cells[0]);
+      assert.equal(meter.remaining(), -offset);
+      clock = CAPS.sourceWallMs;
+      assert.throws(() => meter.start("create", "rest"), /time/);
+    }
+  }
+});

@@ -95,6 +95,7 @@ test("B cleanup reserve is inside the cell and expired cells cannot reset the so
   let clock = 0;
   const meter = createMeter({ now: () => clock });
   meter.enter(makePlan().cells[0]);
+  assert.throws(() => meter.enter(makePlan().cells[0]), /reopen/);
   clock = 80000;
   assert.throws(() => meter.start("list", "rest"), /time/);
   meter.start("cleanupGet", "rest");
@@ -657,12 +658,14 @@ test("B REST query bytes are included in outbound metadata before dispatch", asy
 });
 
 test("B unreadable or oversized response bodies are unknown rather than successful ownership evidence", async () => {
-  let cancelled = 0;
+  let cancelled = 0,
+    reads = 0;
   await assert.rejects(
     readResponse({
       body: {
         getReader: () => ({
-          read: async () => ({ done: false, value: Buffer.alloc(65537) }),
+          read: async () =>
+            ++reads === 1 ? { done: false, value: Buffer.alloc(65537) } : { done: true },
           cancel: async () => {
             cancelled++;
           },
@@ -865,7 +868,7 @@ test("B persistence expiry prevents a physical request and cannot turn settled c
     meter,
     journal: {
       write: (r) => {
-        if (r.event === "request-dispatch") clock = 80000;
+        if (r.event === "request-dispatch") clock = 75000;
       },
     },
     getToken: async () => "fake",

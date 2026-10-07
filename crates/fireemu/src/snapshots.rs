@@ -493,12 +493,14 @@ impl SnapshotHook for SessionClock {
         Ok(Arc::new(at))
     }
     fn validate(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
-        part.downcast_ref::<fireemu_core_types::time::LogicalInstant>()
+        let at = *part
+            .downcast_ref::<fireemu_core_types::time::LogicalInstant>()
             .ok_or_else(|| wrong_shape(self.name()))?;
         self.0
             .lock()
-            .map(|_| ())
-            .map_err(|_| poisoned(self.name(), "the clock"))
+            .map_err(|_| poisoned(self.name(), "the clock"))?
+            .validate_target(at)
+            .map_err(|error| poisoned(self.name(), &error.to_string()))
     }
     fn restore(&self, _: &Scope, part: &SnapshotPart) -> Result<(), TransitionFailure> {
         let at = *part
@@ -508,8 +510,9 @@ impl SnapshotHook for SessionClock {
             .0
             .lock()
             .map_err(|_| poisoned(self.name(), "the clock"))?;
-        clock.set_allow_backwards(at);
-        Ok(())
+        clock
+            .try_set_allow_backwards(at)
+            .map_err(|error| poisoned(self.name(), &error.to_string()))
     }
 }
 
@@ -705,9 +708,7 @@ mod tests {
     ) -> Arc<fireemu_adapter_functions::runtime::FunctionsRuntime> {
         use fireemu_adapter_functions::manifest_json::parse_manifest;
         use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
-        use fireemu_adapter_functions::runtime::{
-            CatchUpPolicy, FunctionsConfig, FunctionsRuntime, OverlapPolicy,
-        };
+        use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
         let spec = SpawnSpec {
             command: vec![
                 "python3".to_owned(),
@@ -727,21 +728,9 @@ mod tests {
         FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
-                session: fireemu_core_types::ids::SessionId::new(7),
-                max_running: 4,
-                debug_mode: false,
                 retry_attempts: 1,
-                max_catch_up_runs: 1000,
-                runner_secret: "test-secret".to_owned(),
-                overlap: OverlapPolicy::Allow,
-                catch_up: CatchUpPolicy::All,
                 functions_host: Some("127.0.0.1:5001".to_owned()),
-                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
-                ),
-                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1000, "test-secret".to_owned())
             },
             clock,
             Arc::new(runner),
@@ -791,6 +780,65 @@ mod tests {
             "the schedule restarted at the restored time: 12:05 and 12:10, once each"
         );
         runtime.shutdown().await;
+    }
+
+    #[test]
+    fn an_active_eventarc_channel_remains_publishable_after_snapshot_restore() {
+        use fireemu_adapter_functions::eventarc_channels::{ChannelStore, Created, Lookup};
+        use fireemu_adapter_functions::eventarc_strict::{evaluate, route, Input, Outcome, World};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::determinism::Clock;
+        use fireemu_core_types::time::LogicalDuration;
+        use std::sync::Mutex;
+
+        let clock = Arc::new(Mutex::new(VirtualClock::new(AT)));
+        let hook = super::SessionClock(clock.clone());
+        let scope = Scope::AllExcept(BTreeSet::new());
+        let captured = hook.capture(&scope).unwrap();
+        let channels = ChannelStore::default();
+        let name = "projects/demo-app/locations/us-central1/channels/restored";
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(10))
+            .unwrap();
+        let now = u64::try_from(clock.lock().unwrap().now().as_nanos()).unwrap();
+        assert!(matches!(channels.create(name, now), Created::Started(_)));
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(10))
+            .unwrap();
+        let now = u64::try_from(clock.lock().unwrap().now().as_nanos()).unwrap();
+        let active = channels.lookup(name, now);
+        assert!(matches!(active, Lookup::Ready(_)));
+
+        hook.restore(&scope, &captured).unwrap();
+        assert_eq!(clock.lock().unwrap().now(), AT);
+        let now = u64::try_from(clock.lock().unwrap().now().as_nanos()).unwrap();
+        assert_eq!(channels.lookup(name, now), active);
+        let route = route("POST", &format!("/v1/{name}:publishEvents")).unwrap();
+        let body = br#"{"events":[{"@type":"type.googleapis.com/io.cloudevents.v1.CloudEvent","id":"restored","source":"//test/source","specVersion":"1.0","type":"com.example.done","attributes":{"datacontenttype":{"ceString":"application/json"}},"textData":"{}"}]}"#;
+        let outcome = evaluate(
+            &Input {
+                route: &route,
+                query: None,
+                bearer: Some("ya29.fixture"),
+                body,
+            },
+            &World {
+                project: "demo-app",
+                request_id: "0123456789abcdef",
+                declared_channel: &|_| false,
+                declared_in: &|_, _| Vec::new(),
+                channels: &channels,
+                now,
+            },
+        );
+        let Outcome::Answer(answer) = outcome else {
+            panic!("an API-created channel must answer directly")
+        };
+        assert_eq!(answer.status, 200, "{}", answer.text());
     }
 
     #[test]

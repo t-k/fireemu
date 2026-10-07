@@ -1,0 +1,8 @@
+✔  functions[events:pubsubPublishedV2(us-east1)] Successful create operation. 
+[2026-10-04T16:13:22.916Z] Total Function Deployment time: 84019
+[2026-10-04T16:13:22.916Z] 22 Functions Deployed
+[2026-10-04T16:13:22.916Z] 0 Functions Errored
+[2026-10-04T16:13:22.916Z] 0 Function Deployments Aborted
+[2026-10-04T16:13:22.916Z] Average Function Deployment time: 70282.18181818182
+[2026-10-04T16:13:22.917Z] No OAuth tokens found
+[2026-10-04T16:13:22.918Z] No OAuth tokens found

@@ -1,8 +1,10 @@
 //! The `google.pubsub.v1.Publisher` service implementation.
 #![allow(clippy::result_large_err)] // tonic::Status is large by design
 
+use prost::Message;
 use tonic::{Request, Response, Status};
 
+use fireemu_core_pubsub::pagination::paginate;
 use fireemu_core_pubsub::TopicName;
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 use pb::publisher_server::Publisher;
@@ -44,18 +46,37 @@ impl Publisher for PublisherService {
         validate_topic_options(&topic).map_err(|e| status(&e))?;
         let name = TopicName::parse(&topic.name).map_err(|e| status(&e))?;
         let labels = topic.labels.into_iter().collect();
+        if self.handle.paging_policy == crate::PagingPolicy::Strict {
+            fireemu_core_pubsub::configuration::validate_labels(&labels)
+                .map_err(|error| status(&error))?;
+        }
         self.handle
             .state()
-            .create_topic(name.clone(), labels)
+            .create_topic_with_retention(
+                name.clone(),
+                labels,
+                topic
+                    .message_retention_duration
+                    .as_ref()
+                    .map(crate::convert::duration_from_proto)
+                    .transpose()
+                    .map_err(|error| status(&error))?,
+            )
             .map_err(|e| status(&e))?;
         self.handle.retry_pending_dead_letters();
-        let created = topic_to_proto(
+        let mut created = topic_to_proto(
             &name,
             self.handle
                 .state()
                 .topic_labels(&name)
                 .map_err(|e| status(&e))?,
         );
+        created.message_retention_duration = self
+            .handle
+            .state()
+            .topic_retention(&name)
+            .map_err(|error| status(&error))?
+            .map(crate::convert::duration_to_proto);
         Ok(Response::new(created))
     }
 
@@ -76,6 +97,11 @@ impl Publisher for PublisherService {
     ) -> Result<Response<pb::PublishResponse>, Status> {
         let req = request.into_inner();
         let topic = TopicName::parse(&req.topic).map_err(|e| status(&e))?;
+        if self.handle.paging_policy == crate::PagingPolicy::Strict {
+            crate::admission::publish_request_size(req.encoded_len())
+                .map_err(|error| status(&error))?;
+            crate::admission::message_count(req.messages.len()).map_err(|error| status(&error))?;
+        }
         let messages = req.messages.into_iter().map(message_from_proto).collect();
         let published = self.handle.publish(&topic, messages);
         if published.is_ok() {
@@ -96,7 +122,12 @@ impl Publisher for PublisherService {
         let name = TopicName::parse(&request.into_inner().topic).map_err(|e| status(&e))?;
         let state = self.handle.state();
         let labels = state.topic_labels(&name).map_err(|e| status(&e))?;
-        Ok(Response::new(topic_to_proto(&name, labels)))
+        let mut topic = topic_to_proto(&name, labels);
+        topic.message_retention_duration = state
+            .topic_retention(&name)
+            .map_err(|error| status(&error))?
+            .map(crate::convert::duration_to_proto);
+        Ok(Response::new(topic))
     }
 
     async fn list_topics(
@@ -106,17 +137,30 @@ impl Publisher for PublisherService {
         let req = request.into_inner();
         let project = project_of(&req.project)?;
         let state = self.handle.state();
-        let topics = state
+        let topics: Vec<_> = state
             .list_topics(project)
             .iter()
             .map(|n| {
                 let labels = state.topic_labels(n).cloned().unwrap_or_default();
-                topic_to_proto(n, &labels)
+                let mut topic = topic_to_proto(n, &labels);
+                topic.message_retention_duration = state
+                    .topic_retention(n)
+                    .unwrap_or_default()
+                    .map(crate::convert::duration_to_proto);
+                topic
             })
             .collect();
-        Ok(Response::new(pb::ListTopicsResponse {
+        let page = paginate(
             topics,
-            next_page_token: String::new(),
+            req.page_size,
+            &req.page_token,
+            self.handle.paging_policy,
+            |topic| topic.name.clone(),
+        )
+        .map_err(|e| status(&e))?;
+        Ok(Response::new(pb::ListTopicsResponse {
+            topics: page.resources,
+            next_page_token: page.next_page_token,
         }))
     }
 
@@ -124,17 +168,26 @@ impl Publisher for PublisherService {
         &self,
         request: Request<pb::ListTopicSubscriptionsRequest>,
     ) -> Result<Response<pb::ListTopicSubscriptionsResponse>, Status> {
-        let name = TopicName::parse(&request.into_inner().topic).map_err(|e| status(&e))?;
+        let req = request.into_inner();
+        let name = TopicName::parse(&req.topic).map_err(|e| status(&e))?;
         let state = self.handle.state();
-        if !state.topic_exists(&name) {
+        if !state.topic_exists(&name) && self.handle.paging_policy == crate::PagingPolicy::Strict {
             return Err(Status::not_found(format!(
-                "topic {} not found",
-                name.to_full()
+                "Resource not found (resource={}).",
+                name.topic()
             )));
         }
+        let page = paginate(
+            state.topic_subscriptions(&name),
+            req.page_size,
+            &req.page_token,
+            self.handle.paging_policy,
+            Clone::clone,
+        )
+        .map_err(|e| status(&e))?;
         Ok(Response::new(pb::ListTopicSubscriptionsResponse {
-            subscriptions: state.topic_subscriptions(&name),
-            next_page_token: String::new(),
+            subscriptions: page.resources,
+            next_page_token: page.next_page_token,
         }))
     }
 
@@ -142,16 +195,30 @@ impl Publisher for PublisherService {
         &self,
         request: Request<pb::ListTopicSnapshotsRequest>,
     ) -> Result<Response<pb::ListTopicSnapshotsResponse>, Status> {
-        let name = TopicName::parse(&request.into_inner().topic).map_err(|e| status(&e))?;
+        let req = request.into_inner();
+        let name = TopicName::parse(&req.topic).map_err(|e| status(&e))?;
         let now = self.handle.now();
-        let snapshots = self
-            .handle
-            .state()
-            .list_topic_snapshots(&name, now)
-            .map_err(|e| status(&e))?;
-        Ok(Response::new(pb::ListTopicSnapshotsResponse {
+        let mut state = self.handle.state();
+        let snapshots = if !state.topic_exists(&name)
+            && self.handle.paging_policy == crate::PagingPolicy::Emulator
+        {
+            Vec::new()
+        } else {
+            state
+                .list_topic_snapshots(&name, now)
+                .map_err(|e| status(&e))?
+        };
+        let page = paginate(
             snapshots,
-            next_page_token: String::new(),
+            req.page_size,
+            &req.page_token,
+            self.handle.paging_policy,
+            Clone::clone,
+        )
+        .map_err(|e| status(&e))?;
+        Ok(Response::new(pb::ListTopicSnapshotsResponse {
+            snapshots: page.resources,
+            next_page_token: page.next_page_token,
         }))
     }
 

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   ALL_FUNCTIONS,
+  EXTRA_JOBS,
   FUNCTIONS,
   extraJobId,
   functionName,
@@ -63,7 +64,7 @@ test("a clean run records, cleans up and may close", async () => {
   assert.deepEqual(world.cliRuns, ["dry-run", "deploy", "delete"], "each CLI action once");
   assert.equal(result.cleanup.verified, true);
   assert.equal(result.passes.length, 2);
-  assert.ok(result.passes.every((p) => p.complete && p.forced.length === 9));
+  assert.ok(result.passes.every((p) => p.complete && p.forced.length === 11));
   assert.equal(
     world.jobs.size +
       world.topics.size +
@@ -96,10 +97,10 @@ test("a clean run records, cleans up and may close", async () => {
 test("every name that is created is journaled as issued before the request that creates it", async () => {
   const { journal } = await go();
   const issued = journal.filter((r) => r.state === "issued");
-  assert.equal(issued.filter((r) => r.kind === "function").length, 5);
-  assert.equal(issued.filter((r) => r.kind === "job").length, 9);
-  assert.equal(issued.filter((r) => r.kind === "topic").length, 2);
-  assert.equal(issued.filter((r) => r.kind === "subscription").length, 2);
+  assert.equal(issued.filter((r) => r.kind === "function").length, 6);
+  assert.equal(issued.filter((r) => r.kind === "job").length, 12);
+  assert.equal(issued.filter((r) => r.kind === "topic").length, 3);
+  assert.equal(issued.filter((r) => r.kind === "subscription").length, 3);
   for (const row of issued.filter((r) => r.transport === "rest")) {
     const issuedAt = journal.indexOf(row);
     const createdAt = journal.findIndex(
@@ -453,7 +454,7 @@ test("only issued names are ever deleted, and no DELETE precedes its function's 
   const { world } = await go({ leaveOnDelete: ["schedFailV1"] });
   const allowed = new Set([
     ...ALL_FUNCTIONS.map(scheduleId),
-    ...["zero", "duration", "count", "retry5"].map((k) => extraJobId(RUN, k)),
+    ...EXTRA_JOBS.map((job) => extraJobId(RUN, job.key)),
     ...FUNCTIONS.v1.map((f) => "fe-sd-" + RUN + "-pull-" + f.toLowerCase()),
     ...ALL_FUNCTIONS,
   ]);
@@ -512,7 +513,7 @@ test("the extra jobs copy the deployed retry job's target and differ only in the
   const creates = journal.filter(
     (r) => r.state === "before-send" && r.id.startsWith("create-extra-"),
   );
-  assert.equal(creates.length, 4);
+  assert.equal(creates.length, 6);
   for (const row of creates) {
     assert.deepEqual(row.json.httpTarget, {
       uri: "https://schedretryv2-abc-uc.a.run.app",
@@ -526,6 +527,7 @@ test("the extra jobs copy the deployed retry job's target and differ only in the
     [
       ["retryCount"],
       ["maxRetryDuration", "minBackoffDuration", "maxBackoffDuration"],
+      ["retryCount", "maxRetryDuration", "minBackoffDuration", "maxBackoffDuration"],
       [
         "retryCount",
         "maxRetryDuration",
@@ -533,6 +535,7 @@ test("the extra jobs copy the deployed retry job's target and differ only in the
         "maxBackoffDuration",
         "maxDoublings",
       ],
+      ["maxRetryDuration", "minBackoffDuration", "maxBackoffDuration"],
       ["retryCount"],
     ],
   );

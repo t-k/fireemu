@@ -52,6 +52,8 @@ pub struct PublishedEvent {
     pub attributes: BTreeMap<String, String>,
     /// The JSON `CloudEvent` the function receives.
     pub event: Value,
+    /// Validated JSON text retained only for strict custom-event delivery.
+    pub raw_data: Option<String>,
 }
 
 /// Matching would exceed the caller's bounded delivery budget.
@@ -607,6 +609,16 @@ fn trigger_key(event_trigger: &Value) -> Result<String, String> {
 /// (`cloudEventFromProtoToJson`), including its messages, because a publisher that gets one
 /// wrong should read the same sentence from either emulator.
 pub fn convert(proto: &Value) -> Result<PublishedEvent, String> {
+    convert_with_profile(proto, false)
+}
+
+/// Converts a proto-format `CloudEvent` using the strict profile's observed delivery rules.
+pub fn convert_strict(proto: &Value) -> Result<PublishedEvent, String> {
+    convert_with_profile(proto, true)
+}
+
+#[allow(clippy::too_many_lines)] // Keep profile-specific conversion and raw data validation together.
+fn convert_with_profile(proto: &Value, strict: bool) -> Result<PublishedEvent, String> {
     let text = |key: &str| proto.get(key).and_then(Value::as_str);
     for required in ["id", "type", "specVersion", "source"] {
         if text(required).is_none() {
@@ -625,11 +637,15 @@ pub fn convert(proto: &Value) -> Result<PublishedEvent, String> {
             .and_then(|a| a.get(kind))
             .and_then(Value::as_str)
     };
-    let time = attribute("time", "ceTimestamp")
-        .ok_or_else(|| "CloudEvent must contain time attribute".to_owned())?;
-    let content_type = attribute("datacontenttype", "ceString")
-        .ok_or_else(|| "CloudEvent must contain datacontenttype attribute".to_owned())?;
-    let data = match content_type {
+    let time = attribute("time", "ceTimestamp");
+    if !strict && time.is_none() {
+        return Err("CloudEvent must contain time attribute".to_owned());
+    }
+    let content_type = attribute("datacontenttype", "ceString");
+    if !strict && content_type.is_none() {
+        return Err("CloudEvent must contain datacontenttype attribute".to_owned());
+    }
+    let data = match content_type.unwrap_or("application/json") {
         "application/json" => {
             let raw = proto.get("textData").and_then(Value::as_str).unwrap_or("");
             serde_json::from_str(raw)
@@ -644,6 +660,8 @@ pub fn convert(proto: &Value) -> Result<PublishedEvent, String> {
         ),
         other => return Err(format!("Unsupported content type: {other}")),
     };
+    let mut raw_data = (strict && content_type.unwrap_or("application/json") == "application/json")
+        .then(|| proto["textData"].as_str().unwrap_or("").to_owned());
 
     let mut event = Map::new();
     event.insert(
@@ -665,12 +683,15 @@ pub fn convert(proto: &Value) -> Result<PublishedEvent, String> {
     if let Some(subject) = attribute("subject", "ceString") {
         event.insert("subject".to_owned(), Value::String(subject.to_owned()));
     }
-    event.insert("time".to_owned(), Value::String(time.to_owned()));
+    if let Some(time) = time {
+        event.insert("time".to_owned(), Value::String(time.to_owned()));
+    }
     event.insert("data".to_owned(), data);
-    event.insert(
-        "datacontenttype".to_owned(),
-        Value::String(content_type.to_owned()),
-    );
+    // Production's custom-event deliveries carry no datacontenttype member, even when the
+    // publisher sent one (EVENTARC H1 v5: 0 of 69 handler frames); the emulator keeps it.
+    if let (Some(content_type), false) = (content_type, strict) {
+        event.insert("datacontenttype".to_owned(), Value::from(content_type));
+    }
 
     // Attributes the CloudEvent spec does not define are copied across as strings, and are
     // also what a filter matches on.
@@ -681,8 +702,12 @@ pub fn convert(proto: &Value) -> Result<PublishedEvent, String> {
     for key in ["id", "type", "source", "specVersion"] {
         attributes.insert(key.to_owned(), text(key).unwrap_or("").to_owned());
     }
-    attributes.insert("time".to_owned(), time.to_owned());
-    attributes.insert("datacontenttype".to_owned(), content_type.to_owned());
+    if let Some(time) = time {
+        attributes.insert("time".to_owned(), time.to_owned());
+    }
+    if let Some(content_type) = content_type {
+        attributes.insert("datacontenttype".to_owned(), content_type.to_owned());
+    }
     if let Some(subject) = attribute("subject", "ceString") {
         attributes.insert("subject".to_owned(), subject.to_owned());
     }
@@ -694,9 +719,13 @@ pub fn convert(proto: &Value) -> Result<PublishedEvent, String> {
             let text = value
                 .get("ceString")
                 .or_else(|| value.get("ceTimestamp"))
+                .or_else(|| strict.then(|| value.get("ceBytes")).flatten())
                 .and_then(Value::as_str)
                 .ok_or_else(|| format!("CloudEvent must contain {name} attribute"))?;
             event.insert(name.clone(), Value::String(text.to_owned()));
+            if name == "data" {
+                raw_data = None;
+            }
             attributes.insert(name.clone(), text.to_owned());
         }
     }
@@ -704,6 +733,7 @@ pub fn convert(proto: &Value) -> Result<PublishedEvent, String> {
         event_type,
         attributes,
         event: Value::Object(event),
+        raw_data,
     })
 }
 
@@ -766,6 +796,7 @@ pub fn accept_verbatim(event: &Value) -> Result<PublishedEvent, String> {
         event_type,
         attributes,
         event: event.clone(),
+        raw_data: None,
     })
 }
 
@@ -851,6 +882,39 @@ mod tests {
             },
             "textData": "{\"n\":3}"
         })
+    }
+
+    #[test]
+    fn strict_conversion_accepts_missing_time_and_preserves_bytes_extensions() {
+        let mut event = proto();
+        event["attributes"].as_object_mut().unwrap().remove("time");
+        event["attributes"]["convbytes"] = json!({"ceBytes": "AAE="});
+        let delivered = super::convert_strict(&event).unwrap();
+        assert_eq!(delivered.event.get("time"), None);
+        assert_eq!(delivered.event["convbytes"], "AAE=");
+    }
+
+    #[test]
+    fn strict_conversion_delivers_no_data_content_type_even_when_published() {
+        let event = proto();
+        assert!(event["attributes"].get("datacontenttype").is_some());
+        let delivered = super::convert_strict(&event).unwrap();
+        assert_eq!(delivered.event.get("datacontenttype"), None);
+        assert_eq!(
+            super::convert(&event).unwrap().event["datacontenttype"],
+            "application/json"
+        );
+    }
+
+    #[test]
+    fn strict_conversion_does_not_add_missing_data_content_type() {
+        let mut event = proto();
+        event["attributes"]
+            .as_object_mut()
+            .unwrap()
+            .remove("datacontenttype");
+        let delivered = super::convert_strict(&event).unwrap();
+        assert_eq!(delivered.event.get("datacontenttype"), None);
     }
 
     #[test]

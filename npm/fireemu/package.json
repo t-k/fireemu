@@ -21,6 +21,10 @@
   },
   "files": [
     "bin/fireemu.mjs",
+    "binary.mjs",
+    "testing.mjs",
+    "testing-snapshot.mjs",
+    "testing-process.mjs",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_LICENSES.txt"
@@ -35,5 +39,9 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "exports": {
+    "./testing": "./testing.mjs",
+    "./package.json": "./package.json"
   }
 }

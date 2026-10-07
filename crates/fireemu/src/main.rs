@@ -46,6 +46,7 @@ mod hub;
 mod import_export;
 mod init;
 mod managed_storage;
+mod readiness;
 mod resources;
 mod session_rsa_cache;
 mod sessions;
@@ -66,7 +67,7 @@ use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommand
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
 
 fn usage() -> ExitCode {
     eprintln!("usage: fireemu init [--profile strict|emulator] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities\n       fireemu --version");
@@ -214,6 +215,9 @@ struct Options {
     import: Option<PathBuf>,
     /// The export directory to write at exit (`--export-on-exit`).
     export_on_exit: Option<PathBuf>,
+    /// Private endpoint descriptor for a supervised test world.
+    ready_file: Option<PathBuf>,
+    owner_stdin: bool,
 }
 
 const DEFAULT_MAX_RUNTIME_WORKERS: usize = 4;
@@ -267,6 +271,8 @@ fn main() -> ExitCode {
             Ok((_, Some(_))) => unreachable!("start does not accept a positional argument"),
             Err(e) => fail(&e),
         },
+        #[cfg(windows)]
+        Some("__test-world-command") => supervise_world_command(&args[1..]),
         Some("exec" | "emulators:exec") => match parse_exec(&args[1..]) {
             Ok((options, plan)) => daemon::run(options, Some(plan)),
             Err(e) => fail(&e),
@@ -533,6 +539,8 @@ struct RawOptions {
     /// The official `emulators:exec <script>` positional argument.
     positional_script: Option<String>,
     config_path: Option<PathBuf>,
+    ready_file: Option<PathBuf>,
+    owner_stdin: bool,
     firebase_json: Option<PathBuf>,
     project: Option<String>,
     only: Option<Selection>,
@@ -595,6 +603,17 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--owner-stdin" => {
+                raw.owner_stdin = true;
+                i += 1;
+            }
+            "--ready-file" => {
+                raw.ready_file =
+                    Some(PathBuf::from(args.get(i + 1).ok_or_else(|| {
+                        CliError::usage("--ready-file needs a value")
+                    })?));
+                i += 2;
+            }
             "--config" => {
                 raw.config_path = Some(PathBuf::from(
                     args.get(i + 1)
@@ -1016,6 +1035,8 @@ fn parse_options(
             verbosity: raw.verbosity,
             import: raw.import,
             export_on_exit,
+            ready_file: raw.ready_file,
+            owner_stdin: raw.owner_stdin,
         },
         positional_script,
     ))
@@ -1263,6 +1284,60 @@ type ExecChild = tokio::process::Child;
 
 #[cfg(windows)]
 type ExecChild = Box<dyn TokioChildWrapper>;
+
+/// Observe the private owner pipe without retaining a Tokio blocking worker at shutdown.
+async fn owner_input_closed(enabled: bool) {
+    if !enabled {
+        std::future::pending::<()>().await;
+    }
+    let (closed, receiver) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut input = std::io::stdin().lock();
+        let mut bytes = [0; 512];
+        while input.read(&mut bytes).is_ok_and(|count| count > 0) {}
+        let _ = closed.send(());
+    });
+    let _ = receiver.await;
+}
+
+/// Package-private Windows command owner. Killing this supervisor closes its Job Object,
+/// retiring the complete command tree even if the original command leader already exited.
+#[cfg(windows)]
+fn supervise_world_command(arguments: &[String]) -> ExitCode {
+    let Some((program, args)) = arguments.split_first() else {
+        return ExitCode::FAILURE;
+    };
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return ExitCode::FAILURE;
+    };
+    runtime.block_on(async {
+        let mut command = tokio::process::Command::new(program);
+        command.args(args).stdin(std::process::Stdio::null());
+        let mut wrapped = TokioCommandWrap::from(command);
+        wrapped.wrap(JobObject).wrap(KillOnDrop);
+        let Ok(mut child) = wrapped.spawn() else {
+            return ExitCode::FAILURE;
+        };
+        let status = tokio::select! {
+            status = child.inner_mut().wait() => status.ok(),
+            () = owner_input_closed(true) => None,
+        };
+        let _ = child.start_kill();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            Box::into_pin(child.wait()),
+        )
+        .await;
+        status
+            .and_then(|value| value.code())
+            .and_then(|value| u8::try_from(value).ok())
+            .map_or(ExitCode::FAILURE, ExitCode::from)
+    })
+}
 
 fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<ExecChild, String> {
     let (mut cmd, program) = match &plan.command {
@@ -3658,6 +3733,7 @@ mod reset_pubsub_tests {
             project,
             &manifest,
             fireemu_adapter_functions::events::SubscriptionNaming::default(),
+            crate::config::CompatibilityProfile::Emulator,
         )
         .expect("the resources resolve")
     }

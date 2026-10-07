@@ -1,0 +1,641 @@
+{
+  "schemaVersion": 1,
+  "parent": "FUNCTIONS-EVENTS",
+  "status": "LOCAL_DRAFT",
+  "sendAuthorized": false,
+  "productionEvidence": null,
+  "budgetStatus": "PROVISIONAL_NOT_SEND_READY",
+  "productionRequestBudgetDraft": {
+    "sharedSetup": 60,
+    "total": 2256
+  },
+  "programs": [
+    {
+      "recipeId": "functions-events/firestore/create",
+      "scenarioIds": [
+        "fs-create"
+      ],
+      "sourceOrder": [
+        "fs-create"
+      ],
+      "generations": [
+        1,
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/firestore-created#new-document#v1",
+        "FUNCTIONS-EVENTS/firestore-created#new-document#v2",
+        "FUNCTIONS-EVENTS/firestore-created#before-absent#v1",
+        "FUNCTIONS-EVENTS/firestore-created#before-absent#v2",
+        "FUNCTIONS-EVENTS/firestore-created#after-present#v1",
+        "FUNCTIONS-EVENTS/firestore-created#after-present#v2"
+      ],
+      "handlerExports": {
+        "v1": "fsCreatedV1",
+        "v2": "fsCreatedV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 24,
+        "sourceMutation": 12,
+        "captureRead": 20,
+        "cleanup": 28
+      }
+    },
+    {
+      "recipeId": "functions-events/firestore/update",
+      "scenarioIds": [
+        "fs-update"
+      ],
+      "sourceOrder": [
+        "fs-update"
+      ],
+      "generations": [
+        1,
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/firestore-updated#changed-field#v1",
+        "FUNCTIONS-EVENTS/firestore-updated#changed-field#v2",
+        "FUNCTIONS-EVENTS/firestore-updated#before-present#v1",
+        "FUNCTIONS-EVENTS/firestore-updated#before-present#v2",
+        "FUNCTIONS-EVENTS/firestore-updated#after-present#v1",
+        "FUNCTIONS-EVENTS/firestore-updated#after-present#v2"
+      ],
+      "handlerExports": {
+        "v1": "fsUpdatedV1",
+        "v2": "fsUpdatedV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 24,
+        "sourceMutation": 12,
+        "captureRead": 20,
+        "cleanup": 28
+      }
+    },
+    {
+      "recipeId": "functions-events/firestore/delete",
+      "scenarioIds": [
+        "fs-delete"
+      ],
+      "sourceOrder": [
+        "fs-delete"
+      ],
+      "generations": [
+        1,
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/firestore-deleted#deleted-document#v1",
+        "FUNCTIONS-EVENTS/firestore-deleted#deleted-document#v2",
+        "FUNCTIONS-EVENTS/firestore-deleted#before-present#v1",
+        "FUNCTIONS-EVENTS/firestore-deleted#before-present#v2",
+        "FUNCTIONS-EVENTS/firestore-deleted#after-absent#v1",
+        "FUNCTIONS-EVENTS/firestore-deleted#after-absent#v2"
+      ],
+      "handlerExports": {
+        "v1": "fsDeletedV1",
+        "v2": "fsDeletedV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 24,
+        "sourceMutation": 12,
+        "captureRead": 20,
+        "cleanup": 28
+      }
+    },
+    {
+      "recipeId": "functions-events/firestore/write",
+      "scenarioIds": [
+        "fs-create",
+        "fs-update",
+        "fs-delete"
+      ],
+      "sourceOrder": [
+        "fs-create",
+        "fs-update",
+        "fs-delete"
+      ],
+      "generations": [
+        1,
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/firestore-written#create#v1",
+        "FUNCTIONS-EVENTS/firestore-written#create#v2",
+        "FUNCTIONS-EVENTS/firestore-written#update#v1",
+        "FUNCTIONS-EVENTS/firestore-written#update#v2",
+        "FUNCTIONS-EVENTS/firestore-written#delete#v1",
+        "FUNCTIONS-EVENTS/firestore-written#delete#v2"
+      ],
+      "handlerExports": {
+        "v1": "fsWrittenV1",
+        "v2": "fsWrittenV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 24,
+        "sourceMutation": 36,
+        "captureRead": 60,
+        "cleanup": 52
+      }
+    },
+    {
+      "recipeId": "functions-events/firestore/noop",
+      "scenarioIds": [
+        "fs-noop"
+      ],
+      "sourceOrder": [
+        "fs-noop"
+      ],
+      "generations": [
+        1,
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/firestore-noop#same-value-write-no-event#v1",
+        "FUNCTIONS-EVENTS/firestore-noop#same-value-write-no-event#v2"
+      ],
+      "handlerExports": {
+        "v1": "fsWrittenV1",
+        "v2": "fsWrittenV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 24,
+        "sourceMutation": 12,
+        "captureRead": 20,
+        "cleanup": 28
+      }
+    },
+    {
+      "recipeId": "functions-events/firestore/routing",
+      "scenarioIds": [
+        "fs-create",
+        "fs-other-path"
+      ],
+      "sourceOrder": [
+        "fs-create",
+        "fs-other-path"
+      ],
+      "generations": [
+        1,
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/firestore-routing-params#matching-path#v1",
+        "FUNCTIONS-EVENTS/firestore-routing-params#matching-path#v2",
+        "FUNCTIONS-EVENTS/firestore-routing-params#nonmatching-path#v1",
+        "FUNCTIONS-EVENTS/firestore-routing-params#nonmatching-path#v2",
+        "FUNCTIONS-EVENTS/firestore-routing-params#wildcard-param#v1",
+        "FUNCTIONS-EVENTS/firestore-routing-params#wildcard-param#v2"
+      ],
+      "handlerExports": {
+        "v1": "fsCreatedV1",
+        "v2": "fsCreatedV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 24,
+        "sourceMutation": 24,
+        "captureRead": 40,
+        "cleanup": 40
+      }
+    },
+    {
+      "recipeId": "functions-events/firestore/payload",
+      "scenarioIds": [
+        "fs-update"
+      ],
+      "sourceOrder": [
+        "fs-update"
+      ],
+      "generations": [
+        1,
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/firestore-payload#handler-envelope#v1",
+        "FUNCTIONS-EVENTS/firestore-payload#handler-envelope#v2",
+        "FUNCTIONS-EVENTS/firestore-payload#field-values#v1",
+        "FUNCTIONS-EVENTS/firestore-payload#field-values#v2",
+        "FUNCTIONS-EVENTS/firestore-payload#document-name#v1",
+        "FUNCTIONS-EVENTS/firestore-payload#document-name#v2",
+        "FUNCTIONS-EVENTS/firestore-payload#update-time#v1",
+        "FUNCTIONS-EVENTS/firestore-payload#update-time#v2",
+        "FUNCTIONS-EVENTS/firestore-payload#event-metadata#v1",
+        "FUNCTIONS-EVENTS/firestore-payload#event-metadata#v2"
+      ],
+      "handlerExports": {
+        "v1": "fsUpdatedV1",
+        "v2": "fsUpdatedV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 24,
+        "sourceMutation": 12,
+        "captureRead": 20,
+        "cleanup": 28
+      }
+    },
+    {
+      "recipeId": "functions-events/firestore/auth-context",
+      "scenarioIds": [
+        "fs-auth-client",
+        "fs-auth-admin"
+      ],
+      "sourceOrder": [
+        "fs-auth-client",
+        "fs-auth-admin"
+      ],
+      "generations": [
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/firestore-auth-context#authenticated-write#v2",
+        "FUNCTIONS-EVENTS/firestore-auth-context#admin-write#v2",
+        "FUNCTIONS-EVENTS/firestore-auth-context#auth-type-and-id#v2"
+      ],
+      "handlerExports": {
+        "v2": "fsWrittenWithAuthContextV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 12,
+        "sourceMutation": 24,
+        "captureRead": 40,
+        "cleanup": 32
+      }
+    },
+    {
+      "recipeId": "functions-events/storage/finalize",
+      "scenarioIds": [
+        "storage-upload",
+        "storage-overwrite",
+        "storage-failed-upload"
+      ],
+      "sourceOrder": [
+        "storage-upload",
+        "storage-overwrite",
+        "storage-failed-upload"
+      ],
+      "generations": [
+        1,
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/storage-finalized#new-object#v1",
+        "FUNCTIONS-EVENTS/storage-finalized#new-object#v2",
+        "FUNCTIONS-EVENTS/storage-finalized#overwritten-generation#v1",
+        "FUNCTIONS-EVENTS/storage-finalized#overwritten-generation#v2",
+        "FUNCTIONS-EVENTS/storage-finalized#failed-upload-no-event#v1",
+        "FUNCTIONS-EVENTS/storage-finalized#failed-upload-no-event#v2"
+      ],
+      "handlerExports": {
+        "v1": "storageFinalizedV1",
+        "v2": "storageFinalizedV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 24,
+        "sourceMutation": 36,
+        "captureRead": 60,
+        "cleanup": 52
+      }
+    },
+    {
+      "recipeId": "functions-events/storage/delete",
+      "scenarioIds": [
+        "storage-delete",
+        "storage-delete-missing"
+      ],
+      "sourceOrder": [
+        "storage-delete",
+        "storage-delete-missing"
+      ],
+      "generations": [
+        1,
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/storage-deleted#live-object-delete#v1",
+        "FUNCTIONS-EVENTS/storage-deleted#live-object-delete#v2",
+        "FUNCTIONS-EVENTS/storage-deleted#no-event-for-missing-object#v1",
+        "FUNCTIONS-EVENTS/storage-deleted#no-event-for-missing-object#v2"
+      ],
+      "handlerExports": {
+        "v1": "storageDeletedV1",
+        "v2": "storageDeletedV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 24,
+        "sourceMutation": 24,
+        "captureRead": 40,
+        "cleanup": 40
+      }
+    },
+    {
+      "recipeId": "functions-events/storage/metadata",
+      "scenarioIds": [
+        "storage-metadata"
+      ],
+      "sourceOrder": [
+        "storage-metadata"
+      ],
+      "generations": [
+        1,
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/storage-metadata-updated#custom-metadata-change#v1",
+        "FUNCTIONS-EVENTS/storage-metadata-updated#custom-metadata-change#v2",
+        "FUNCTIONS-EVENTS/storage-metadata-updated#metageneration#v1",
+        "FUNCTIONS-EVENTS/storage-metadata-updated#metageneration#v2"
+      ],
+      "handlerExports": {
+        "v1": "storageMetadataUpdatedV1",
+        "v2": "storageMetadataUpdatedV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 24,
+        "sourceMutation": 12,
+        "captureRead": 20,
+        "cleanup": 28
+      }
+    },
+    {
+      "recipeId": "functions-events/storage/archive",
+      "scenarioIds": [
+        "storage-archive"
+      ],
+      "sourceOrder": [
+        "storage-archive"
+      ],
+      "generations": [
+        1,
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/storage-archived#versioned-overwrite#v1",
+        "FUNCTIONS-EVENTS/storage-archived#versioned-overwrite#v2",
+        "FUNCTIONS-EVENTS/storage-archived#archived-generation#v1",
+        "FUNCTIONS-EVENTS/storage-archived#archived-generation#v2"
+      ],
+      "handlerExports": {
+        "v1": "storageArchivedV1",
+        "v2": "storageArchivedV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 24,
+        "sourceMutation": 12,
+        "captureRead": 20,
+        "cleanup": 28
+      }
+    },
+    {
+      "recipeId": "functions-events/storage/payload",
+      "scenarioIds": [
+        "storage-upload"
+      ],
+      "sourceOrder": [
+        "storage-upload"
+      ],
+      "generations": [
+        1,
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/storage-payload#handler-envelope#v1",
+        "FUNCTIONS-EVENTS/storage-payload#handler-envelope#v2",
+        "FUNCTIONS-EVENTS/storage-payload#name-and-bucket#v1",
+        "FUNCTIONS-EVENTS/storage-payload#name-and-bucket#v2",
+        "FUNCTIONS-EVENTS/storage-payload#generation#v1",
+        "FUNCTIONS-EVENTS/storage-payload#generation#v2",
+        "FUNCTIONS-EVENTS/storage-payload#content-type#v1",
+        "FUNCTIONS-EVENTS/storage-payload#content-type#v2",
+        "FUNCTIONS-EVENTS/storage-payload#event-metadata#v1",
+        "FUNCTIONS-EVENTS/storage-payload#event-metadata#v2"
+      ],
+      "handlerExports": {
+        "v1": "storageFinalizedV1",
+        "v2": "storageFinalizedV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 24,
+        "sourceMutation": 12,
+        "captureRead": 20,
+        "cleanup": 28
+      }
+    },
+    {
+      "recipeId": "functions-events/storage/routing",
+      "scenarioIds": [
+        "storage-upload",
+        "storage-other-bucket",
+        "storage-other-prefix"
+      ],
+      "sourceOrder": [
+        "storage-upload",
+        "storage-other-bucket",
+        "storage-other-prefix"
+      ],
+      "generations": [
+        1,
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/storage-bucket-routing#matching-bucket#v1",
+        "FUNCTIONS-EVENTS/storage-bucket-routing#matching-bucket#v2",
+        "FUNCTIONS-EVENTS/storage-bucket-routing#nonmatching-bucket#v1",
+        "FUNCTIONS-EVENTS/storage-bucket-routing#nonmatching-bucket#v2",
+        "FUNCTIONS-EVENTS/storage-bucket-routing#same-bucket-other-prefix-delivered#v1",
+        "FUNCTIONS-EVENTS/storage-bucket-routing#same-bucket-other-prefix-delivered#v2"
+      ],
+      "handlerExports": {
+        "v1": "storageFinalizedV1",
+        "v2": "storageFinalizedV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 24,
+        "sourceMutation": 36,
+        "captureRead": 60,
+        "cleanup": 52
+      }
+    },
+    {
+      "recipeId": "functions-events/auth/create",
+      "scenarioIds": [
+        "auth-admin-create",
+        "auth-signup",
+        "auth-repeat-signin"
+      ],
+      "sourceOrder": [
+        "auth-admin-create",
+        "auth-signup",
+        "auth-repeat-signin"
+      ],
+      "generations": [
+        1
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/auth-created#admin-create#v1",
+        "FUNCTIONS-EVENTS/auth-created#email-password-create#v1",
+        "FUNCTIONS-EVENTS/auth-created#repeat-sign-in-no-event#v1"
+      ],
+      "handlerExports": {
+        "v1": "authCreatedV1"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 12,
+        "sourceMutation": 36,
+        "captureRead": 60,
+        "cleanup": 44
+      }
+    },
+    {
+      "recipeId": "functions-events/auth/delete",
+      "scenarioIds": [
+        "auth-delete",
+        "auth-bulk-delete"
+      ],
+      "sourceOrder": [
+        "auth-delete",
+        "auth-bulk-delete"
+      ],
+      "generations": [
+        1
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/auth-deleted#single-user-delete#v1",
+        "FUNCTIONS-EVENTS/auth-deleted#bulk-delete-no-event#v1"
+      ],
+      "handlerExports": {
+        "v1": "authDeletedV1"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 12,
+        "sourceMutation": 24,
+        "captureRead": 40,
+        "cleanup": 32
+      }
+    },
+    {
+      "recipeId": "functions-events/auth/payload",
+      "scenarioIds": [
+        "auth-admin-create"
+      ],
+      "sourceOrder": [
+        "auth-admin-create"
+      ],
+      "generations": [
+        1
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/auth-payload#handler-envelope#v1",
+        "FUNCTIONS-EVENTS/auth-payload#uid#v1",
+        "FUNCTIONS-EVENTS/auth-payload#email#v1",
+        "FUNCTIONS-EVENTS/auth-payload#empty-provider-data#v1",
+        "FUNCTIONS-EVENTS/auth-payload#event-metadata#v1"
+      ],
+      "handlerExports": {
+        "v1": "authCreatedV1"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 12,
+        "sourceMutation": 12,
+        "captureRead": 20,
+        "cleanup": 20
+      }
+    },
+    {
+      "recipeId": "functions-events/pubsub/publish",
+      "scenarioIds": [
+        "pubsub-publish"
+      ],
+      "sourceOrder": [
+        "pubsub-publish"
+      ],
+      "generations": [
+        1,
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/pubsub-published#handler-envelope#v1",
+        "FUNCTIONS-EVENTS/pubsub-published#handler-envelope#v2",
+        "FUNCTIONS-EVENTS/pubsub-published#base64-data#v1",
+        "FUNCTIONS-EVENTS/pubsub-published#base64-data#v2",
+        "FUNCTIONS-EVENTS/pubsub-published#attributes#v1",
+        "FUNCTIONS-EVENTS/pubsub-published#attributes#v2",
+        "FUNCTIONS-EVENTS/pubsub-published#message-id#v1",
+        "FUNCTIONS-EVENTS/pubsub-published#message-id#v2",
+        "FUNCTIONS-EVENTS/pubsub-published#publish-time#v1",
+        "FUNCTIONS-EVENTS/pubsub-published#publish-time#v2"
+      ],
+      "handlerExports": {
+        "v1": "pubsubPublishedV1",
+        "v2": "pubsubPublishedV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 24,
+        "sourceMutation": 12,
+        "captureRead": 20,
+        "cleanup": 28
+      }
+    },
+    {
+      "recipeId": "functions-events/pubsub/routing",
+      "scenarioIds": [
+        "pubsub-publish",
+        "pubsub-other-topic",
+        "pubsub-ordering"
+      ],
+      "sourceOrder": [
+        "pubsub-publish",
+        "pubsub-other-topic",
+        "pubsub-ordering"
+      ],
+      "generations": [
+        1,
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/pubsub-topic-routing#matching-topic#v1",
+        "FUNCTIONS-EVENTS/pubsub-topic-routing#matching-topic#v2",
+        "FUNCTIONS-EVENTS/pubsub-topic-routing#nonmatching-topic#v1",
+        "FUNCTIONS-EVENTS/pubsub-topic-routing#nonmatching-topic#v2",
+        "FUNCTIONS-EVENTS/pubsub-topic-routing#ordering-key#v1",
+        "FUNCTIONS-EVENTS/pubsub-topic-routing#ordering-key#v2"
+      ],
+      "handlerExports": {
+        "v1": "pubsubPublishedV1",
+        "v2": "pubsubPublishedV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 24,
+        "sourceMutation": 36,
+        "captureRead": 60,
+        "cleanup": 52
+      }
+    },
+    {
+      "recipeId": "functions-events/delivery/retry",
+      "scenarioIds": [
+        "fs-retry"
+      ],
+      "sourceOrder": [
+        "fs-retry"
+      ],
+      "generations": [
+        2
+      ],
+      "caseIds": [
+        "FUNCTIONS-EVENTS/delivery-retry-identity#handler-failure#v2",
+        "FUNCTIONS-EVENTS/delivery-retry-identity#fail-once-then-success#v2",
+        "FUNCTIONS-EVENTS/delivery-retry-identity#retry-enabled#v2",
+        "FUNCTIONS-EVENTS/delivery-retry-identity#event-id-across-attempts#v2"
+      ],
+      "handlerExports": {
+        "v2": "fsRetryV2"
+      },
+      "productionRequestBudgetDraft": {
+        "deploy": 12,
+        "sourceMutation": 12,
+        "captureRead": 20,
+        "cleanup": 20
+      }
+    }
+  ]
+}

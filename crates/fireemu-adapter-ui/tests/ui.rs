@@ -695,7 +695,7 @@ async fn state_with_functions() -> (
     Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>,
 ) {
     use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
-    use fireemu_adapter_functions::runtime::{CatchUpPolicy, FunctionsConfig, OverlapPolicy};
+    use fireemu_adapter_functions::runtime::FunctionsConfig;
     let spec = SpawnSpec {
         command: vec![
             "python3".to_owned(),
@@ -717,20 +717,7 @@ async fn state_with_functions() -> (
     let runtime = fireemu_adapter_functions::runtime::FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: fireemu_core_types::ids::SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: OverlapPolicy::Allow,
-            catch_up: CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         clock,
         Arc::new(runner),
@@ -814,7 +801,7 @@ async fn state_with_http_functions() -> (
     Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>,
 ) {
     use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
-    use fireemu_adapter_functions::runtime::{CatchUpPolicy, FunctionsConfig, OverlapPolicy};
+    use fireemu_adapter_functions::runtime::FunctionsConfig;
     use fireemu_core_functions::manifest::{TaskRateLimits, TaskRetryConfig, Trigger};
 
     // A per-fixture sequence keeps each invocation's probe path unique even when several of
@@ -866,20 +853,8 @@ async fn state_with_http_functions() -> (
     let runtime = fireemu_adapter_functions::runtime::FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: fireemu_core_types::ids::SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: OverlapPolicy::Allow,
-            catch_up: CatchUpPolicy::All,
             functions_host: Some(addr.clone()),
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         clock,
         Arc::new(runner),

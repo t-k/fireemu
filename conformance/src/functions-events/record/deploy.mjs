@@ -1,0 +1,481 @@
+// Deploy and readiness. The one `firebase deploy` of the 22 handlers runs from a private copy of the
+// fixture taken from the pinned commit; the recorder never retries it. Readiness is observed from four
+// list reads (no per-function reads) and only recorded: a deploy that did not become ready means the
+// passes are skipped, not that anything is judged.
+
+import { spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  closeSync,
+  cpSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+
+import { buildCanaryBatchCli, formalHandlers, mainDeployHandlers } from "../canary-cli.mjs";
+import { HANDLERS } from "./logs.mjs";
+import { PRIMARY_BUCKET, PRIMARY_COLLECTION, PRIMARY_TOPIC, PROJECT, REGION } from "./script.mjs";
+
+export const DEPLOY_TIMEOUT_MS = 40 * 60 * 1000;
+export const DELETE_TIMEOUT_MS = 20 * 60 * 1000;
+export const DRY_RUN_TIMEOUT_MS = 10 * 60 * 1000;
+export const DEPLOY_ONE_TIMEOUT_MS = 20 * 60 * 1000;
+export const CLI_TIMEOUT_MS = {
+  deploy: DEPLOY_TIMEOUT_MS,
+  "deploy-one": DEPLOY_ONE_TIMEOUT_MS,
+  "dry-run": DRY_RUN_TIMEOUT_MS,
+  delete: DELETE_TIMEOUT_MS,
+};
+export const READY_POLL_SECONDS = 30;
+export const READY_MAX_POLLS = 40;
+export const PROPAGATION_WAIT_SECONDS = 300;
+
+/** The runtime environment of the deployed fixture, as the dotenv file the deploy reads. Deterministic, so its digest is a pin. */
+export function dotenvText() {
+  return [
+    "FE_EVENTS_MODE=production",
+    `FE_EVENTS_PROJECT_ID=${PROJECT}`,
+    `FE_EVENTS_PRIMARY_COLLECTION=${PRIMARY_COLLECTION}`,
+    `FE_EVENTS_PRIMARY_BUCKET=${PRIMARY_BUCKET}`,
+    `FE_EVENTS_PRIMARY_TOPIC=${PRIMARY_TOPIC}`,
+    "FE_EVENTS_CAPTURE_MODE=stdout",
+    "",
+  ].join("\n");
+}
+export const dotenvSha256 = () => createHash("sha256").update(dotenvText()).digest("hex");
+
+// The dependencies the offline discovery loads; the functions framework is installed by Cloud Build from
+// the pinned lockfile (a harness input), not from this copy.
+export const PINNED_DEPENDENCIES = {
+  "firebase-functions": "7.3.2",
+  "firebase-admin": "14.3.0",
+};
+
+/** Every entry of a tree is inside it: no symlink leaves `root`. Returns the entries that do. */
+export function escapingLinks(root) {
+  const base = realpathSync(root);
+  const escaped = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir)) {
+      const path = join(dir, entry);
+      const stat = lstatSync(path);
+      if (stat.isSymbolicLink()) {
+        let real;
+        try {
+          real = realpathSync(path);
+        } catch {
+          escaped.push(path);
+          continue;
+        }
+        if (real !== base && !real.startsWith(`${base}/`)) escaped.push(path);
+      } else if (stat.isDirectory()) walk(path);
+    }
+  };
+  walk(root);
+  return escaped;
+}
+
+/** Problems with the dependency tree the deploy will upload against: the pinned versions, resolvable from the fixture, no link out of the tree. */
+export function dependencyProblems(fixtureDir) {
+  const problems = [];
+  const require_ = createRequire(join(fixtureDir, "package.json"));
+  for (const [name, version] of Object.entries(PINNED_DEPENDENCIES)) {
+    try {
+      require_.resolve(name);
+      const found = JSON.parse(
+        readFileSync(join(fixtureDir, "node_modules", name, "package.json"), "utf8"),
+      );
+      if (found.version !== version) problems.push(`${name} is ${found.version}, not ${version}`);
+    } catch {
+      problems.push(`${name} cannot be resolved from the fixture`);
+    }
+  }
+  try {
+    const escaped = escapingLinks(join(fixtureDir, "node_modules"));
+    if (escaped.length) problems.push(`${escaped.length} links in node_modules leave the tree`);
+  } catch {
+    problems.push("node_modules cannot be read");
+  }
+  return problems;
+}
+
+/**
+ * Copies the tracked files of `conformance/functions-events` at `commit` into `target` (git archive,
+ * so nothing untracked comes along), writes the dotenv, and copies the installed dependency tree
+ * `depsDir` (a pnpm node_modules, symlinks kept relative) next to the fixture: firebase-tools resolves
+ * firebase-functions from the source directory before it creates anything. Returns the paths the CLI needs.
+ */
+export function prepareSource({ repoRoot, commit, target, depsDir }) {
+  if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error("the source commit must be a full SHA");
+  mkdirSync(target, { recursive: true, mode: 0o700 });
+  const archive = execFileSync(
+    "git",
+    ["-C", repoRoot, "archive", commit, "conformance/functions-events"],
+    { maxBuffer: 64 * 1024 * 1024 },
+  );
+  execFileSync("tar", ["-x", "-C", target], { input: archive });
+  const fixtureDir = join(target, "conformance/functions-events/fixtures");
+  writeFileSync(join(fixtureDir, `.env.${PROJECT}`), dotenvText(), { mode: 0o600 });
+  if (depsDir)
+    cpSync(realpathSync(depsDir), join(fixtureDir, "node_modules"), {
+      recursive: true,
+      verbatimSymlinks: true,
+    });
+  return { configPath: join(target, "conformance/functions-events/firebase.json"), fixtureDir };
+}
+
+/**
+ * The SDK's own discovery of the fixture, offline, with the production environment: returns the names
+ * of the endpoints it finds. A missing dependency, a refused environment or a handler that does not load
+ * shows up here, before anything is sent.
+ */
+export function discoverManifest({ fixtureDir, node, directory }) {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const manifest = join(directory, "functions-manifest.json");
+  const env = {
+    PATH: dirname(node),
+    HOME: directory,
+    FUNCTIONS_MANIFEST_OUTPUT_PATH: manifest,
+    GCLOUD_PROJECT: PROJECT,
+    FIREBASE_CONFIG: JSON.stringify({ projectId: PROJECT }),
+    ...Object.fromEntries(
+      dotenvText()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => line.split("=")),
+    ),
+  };
+  execFileSync(
+    node,
+    [join(fixtureDir, "node_modules/firebase-functions/lib/bin/firebase-functions.js"), fixtureDir],
+    { env, cwd: fixtureDir, timeout: 60_000, stdio: ["ignore", "ignore", "pipe"] },
+  );
+  return JSON.parse(readFileSync(manifest, "utf8")).endpoints ?? {};
+}
+
+/** The names of the endpoints the discovery finds (see `discoverManifest`). */
+export function discoverEndpoints(options) {
+  return Object.keys(discoverManifest(options));
+}
+
+// Where firebase-tools 15.28.2 puts an endpoint whose manifest names no region (prepare.js
+// resolveDefaultRegionsForBuild): a Gen1 function in us-central1; a Gen2 Firestore or Storage trigger in the
+// location of its database or bucket (us-central1 in the sandbox project); every other Gen2 trigger by its
+// service's default, which for Pub/Sub is us-east1 (services/index.js DEFAULT_GLOBAL_TRIGGER_REGION). The v4 run
+// put pubsubPublishedV2 in us-east1 that way, where the recorder neither read nor deleted it.
+const PINNED_REGION = ["us-central1"];
+const sameRegion = (region) => JSON.stringify(region) === JSON.stringify(PINNED_REGION);
+const locatedByResource = (endpoint) => {
+  const type = endpoint.eventTrigger?.eventType ?? "";
+  return type.startsWith("google.cloud.firestore.") || type.startsWith("google.cloud.storage.");
+};
+
+/**
+ * The endpoints of a discovered manifest whose region is not the one the recorder reads and deletes in. A region
+ * that is set must be exactly ["us-central1"]. An endpoint with no region must be a Gen1 function, or a Gen2
+ * Firestore or Storage trigger (placed by its resource); every other one must be pinned.
+ */
+export function regionProblems(endpoints) {
+  const problems = [];
+  for (const [name, endpoint] of Object.entries(endpoints)) {
+    const region = endpoint.region;
+    if (region !== undefined && region !== null) {
+      if (!sameRegion(region))
+        problems.push(`${name}: the region is ${JSON.stringify(region)}, not ["us-central1"]`);
+    } else if (endpoint.platform !== "gcfv1" && !locatedByResource(endpoint)) {
+      problems.push(
+        `${name}: no region is set, and firebase-tools would place a ${endpoint.eventTrigger?.eventType ?? "this kind of"} trigger by its service's default; pin region "us-central1"`,
+      );
+    }
+  }
+  return problems;
+}
+
+/** Everything about the source copy that can be checked offline: the dependencies and the 22 discovered endpoints. */
+export function sourceProblems({ fixtureDir, node, directory }) {
+  const problems = dependencyProblems(fixtureDir);
+  if (problems.length) return problems;
+  let manifest;
+  let found;
+  try {
+    manifest = discoverManifest({ fixtureDir, node, directory });
+    found = Object.keys(manifest);
+  } catch (error) {
+    return [
+      `the SDK discovery of the fixture failed: ${String(error.stderr ?? error.message).slice(0, 300)}`,
+    ];
+  }
+  const missing = formalHandlers.filter((name) => !found.includes(name));
+  const extra = found.filter((name) => !formalHandlers.includes(name));
+  if (missing.length || extra.length)
+    return [
+      `the fixture exports ${found.length} endpoints (missing: ${missing.join(", ") || "none"}; extra: ${extra.join(", ") || "none"})`,
+    ];
+  return regionProblems(manifest);
+}
+
+/**
+ * The CLI invocation (args, cwd, env) from the reviewed helper. `dry-run` validates the whole set of 22 (the deploy command with
+ * `--dry-run` appended); `deploy` deploys the main set (the 18 functions that are not Gen1 Storage); `deploy-one` deploys exactly
+ * one of the four Gen1 Storage functions (`options.name`), one command each, after the main deploy (v7: v6's single deploy of
+ * all 22 failed three of the four, which contend on the bucket's notification configuration); `delete` deletes the 22.
+ * Deploys carry `--force` (a deploy that retries a failed event is refused without it); the delete is unchanged.
+ */
+export function cliPlan(action, { name, ...options }) {
+  if (!["deploy", "deploy-one", "dry-run", "delete"].includes(action))
+    throw new Error("unknown CLI action");
+  const common = {
+    configHome: options.configHome,
+    configPath: options.configPath,
+    workDir: options.workDir,
+    home: options.home,
+    path: options.path,
+    captureMode: "stdout",
+  };
+  if (action === "delete") return buildCanaryBatchCli("delete", PROJECT, formalHandlers, common);
+  if (action === "dry-run")
+    return buildCanaryBatchCli("deploy", PROJECT, formalHandlers, {
+      ...common,
+      force: true,
+      dryRun: true,
+    });
+  // `deploy-one` takes the name as given: the helper refuses everything but the four reviewed single functions
+  const names = action === "deploy-one" ? [name] : mainDeployHandlers;
+  return buildCanaryBatchCli("deploy", PROJECT, names, { ...common, force: true, dryRun: false });
+}
+
+/**
+ * How many functions the CLI says errored: the line `N Functions Errored` its summary prints for a deploy
+ * and for a delete (with or without a timestamp in front, from `--debug`). `null` when the output has no such
+ * line. The v4 run's CLI delete printed `1 Functions Errored` and still exited 0, so the exit code alone judges nothing.
+ */
+export function erroredFunctions(text) {
+  const matches = [...String(text).matchAll(/^(?:\[[^\]]*\] )?(\d+) Functions? Errored[ \t]*$/gm)];
+  return matches.length === 0 ? null : Number(matches.at(-1)[1]);
+}
+
+/** Whether a CLI result (`runCli`'s answer) is a failure: a non-zero exit, a timeout, an error, or any function errored. */
+export const cliFailed = (result) =>
+  result?.exitCode !== 0 ||
+  Boolean(result?.timedOut) ||
+  Boolean(result?.error) ||
+  (Number.isInteger(result?.errored) && result.errored > 0);
+
+/**
+ * Runs the pinned firebase-tools once. stdout and stderr go to private files in `directory`. Never
+ * retried; a timeout stops the process group. Returns what happened (the exit code, and the count of errored
+ * functions the output reports), judging nothing; `cliFailed` judges.
+ */
+export function runCli({
+  action,
+  plan,
+  firebaseJs,
+  node,
+  directory,
+  spawnFn = spawn,
+  timeoutMs,
+  killGraceMs = 60_000,
+}) {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const out = openSync(join(directory, `cli-${action}-stdout.txt`), "wx", 0o600);
+  const err = openSync(join(directory, `cli-${action}-stderr.txt`), "wx", 0o600);
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const child = spawnFn(node, [firebaseJs, ...plan.args], {
+      cwd: plan.cwd,
+      env: plan.env,
+      stdio: ["ignore", out, err],
+      detached: true,
+    });
+    let timedOut = false;
+    let killTimer;
+    let settled = false;
+    const finish = (exitCode, signal, error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(killTimer);
+      closeSync(out);
+      closeSync(err);
+      let errored = null;
+      try {
+        const text = readFileSync(join(directory, `cli-${action}-stdout.txt`), "utf8");
+        errored = erroredFunctions(text.slice(-65_536));
+      } catch {
+        // the output cannot be read: no count
+      }
+      resolve({
+        action,
+        exitCode,
+        signal,
+        timedOut,
+        error: error?.message ?? null,
+        errored,
+        durationMs: Date.now() - startedAt,
+      });
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch {}
+      // A CLI that ignores SIGTERM is killed, so the cleanup that follows always runs.
+      killTimer = setTimeout(() => {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {}
+        setTimeout(
+          () => finish(null, "SIGKILL", new Error("the CLI had to be killed")),
+          killGraceMs,
+        );
+      }, killGraceMs);
+    }, timeoutMs ?? CLI_TIMEOUT_MS[action]);
+    child.on("error", (error) => finish(null, null, error));
+    child.on("exit", (code, signal) => finish(code, signal));
+  });
+}
+
+// ---- readiness -------------------------------------------------------------------------------
+
+const region = `projects/${PROJECT}/locations/${REGION}`;
+const listSpec = (id, url) => ({
+  id,
+  role: "readiness",
+  method: "GET",
+  url,
+  auth: "oauth",
+  mutation: false,
+  expect: [200],
+});
+export const LISTS = {
+  v1: (page) =>
+    listSpec(
+      "lists.functions-v1",
+      `https://cloudfunctions.googleapis.com/v1/${region}/functions${page ? `?pageToken=${encodeURIComponent(page)}` : ""}`,
+    ),
+  v2: (page) =>
+    listSpec(
+      "lists.functions-v2",
+      `https://cloudfunctions.googleapis.com/v2/${region}/functions${page ? `?pageToken=${encodeURIComponent(page)}` : ""}`,
+    ),
+  run: (page) =>
+    listSpec(
+      "lists.run-services",
+      `https://run.googleapis.com/v2/${region}/services${page ? `?pageToken=${encodeURIComponent(page)}` : ""}`,
+    ),
+  eventarc: (page) =>
+    listSpec(
+      "lists.eventarc-triggers",
+      `https://eventarc.googleapis.com/v1/${region}/triggers${page ? `?pageToken=${encodeURIComponent(page)}` : ""}`,
+    ),
+};
+const KEYS = { v1: "functions", v2: "functions", run: "services", eventarc: "triggers" };
+
+/** Reads one list completely (follows nextPageToken, at most five pages); returns the items and whether the read was complete. */
+export async function readList(transport, kind) {
+  const items = [];
+  let page;
+  for (let i = 0; i < 5; i += 1) {
+    const answer = await transport.request(LISTS[kind](page));
+    if (answer.kind !== "success") return { items, complete: false, status: answer.status ?? null };
+    items.push(...(answer.json?.[KEYS[kind]] ?? []));
+    page = answer.json?.nextPageToken;
+    if (!page) return { items, complete: true, status: answer.status };
+  }
+  return { items, complete: false, status: 200 };
+}
+
+const lastSegment = (name) =>
+  String(name ?? "")
+    .split("/")
+    .at(-1);
+
+/** What a four-list read says about the 22 handlers: which are listed and which are active. */
+export function summarize({ v1, v2, run, eventarc }) {
+  const v1Active = new Set(
+    v1.items.filter((f) => f.status === "ACTIVE").map((f) => lastSegment(f.name)),
+  );
+  const v2Active = new Set(
+    v2.items.filter((f) => f.state === "ACTIVE").map((f) => lastSegment(f.name)),
+  );
+  const services = new Set(run.items.map((s) => lastSegment(s.name)));
+  const triggers = eventarc.items.map((t) => lastSegment(t.name));
+  const listed = {
+    functionsActive: HANDLERS.filter((h) =>
+      h.generation === 1 ? v1Active.has(h.name) : v2Active.has(h.name),
+    ).map((h) => h.name),
+    functionsListed: v1.items.length + v2.items.length,
+    runServices: HANDLERS.filter(
+      (h) => h.generation === 2 && services.has(h.name.toLowerCase()),
+    ).map((h) => h.name),
+    eventarcTriggers: HANDLERS.filter(
+      (h) => h.generation === 2 && triggers.some((t) => t.startsWith(`${h.name.toLowerCase()}-`)),
+    ).map((h) => h.name),
+  };
+  return {
+    ...listed,
+    complete: [v1, v2, run, eventarc].every((l) => l.complete),
+    ready:
+      listed.functionsActive.length === HANDLERS.length &&
+      listed.runServices.length === 11 &&
+      listed.eventarcTriggers.length === 11,
+    absent:
+      [v1, v2, run, eventarc].every((l) => l.complete) &&
+      listed.functionsListed === 0 &&
+      run.items.length === 0 &&
+      eventarc.items.length === 0,
+  };
+}
+
+export async function readLists(transport) {
+  const out = {};
+  for (const kind of ["v1", "v2", "run", "eventarc"]) out[kind] = await readList(transport, kind);
+  return out;
+}
+
+const NOT_READ = { items: [], complete: true };
+
+/**
+ * Polls until the 22 handlers are active or the polls run out. A poll reads the two function lists;
+ * only when all 22 are active does it read the Run and Eventarc lists to confirm. Returns the last
+ * summary and the number of polls.
+ */
+export async function waitReady({
+  transport,
+  sleep,
+  polls = READY_MAX_POLLS,
+  everySeconds = READY_POLL_SECONDS,
+  shouldStop = () => false,
+}) {
+  let summary;
+  for (let i = 1; i <= polls; i += 1) {
+    if (shouldStop()) return { ...summary, polls: i - 1, stopped: true };
+    const v1 = await readList(transport, "v1");
+    const v2 = await readList(transport, "v2");
+    summary = summarize({ v1, v2, run: NOT_READ, eventarc: NOT_READ });
+    if (summary.functionsActive.length === HANDLERS.length) {
+      summary = summarize({
+        v1,
+        v2,
+        run: await readList(transport, "run"),
+        eventarc: await readList(transport, "eventarc"),
+      });
+      if (summary.ready) return { ...summary, polls: i };
+    }
+    if (i < polls) await sleep(everySeconds);
+  }
+  return { ...summary, polls };
+}
+
+export const fixtureDigest = (fixtureDir) =>
+  createHash("sha256")
+    .update(readFileSync(join(fixtureDir, "index.js")))
+    .digest("hex");

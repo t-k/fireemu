@@ -14,9 +14,8 @@ use fireemu_adapter_functions::http::{
 };
 use fireemu_adapter_functions::manifest_json::parse_manifest;
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
-use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
+use fireemu_adapter_functions::runtime::{CodebaseSpec, FunctionsConfig, FunctionsRuntime};
 use fireemu_core_session::clock::VirtualClock;
-use fireemu_core_types::ids::SessionId;
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -80,28 +79,22 @@ async fn start_with(
         .expect("the fake runner starts");
     let manifest =
         parse_manifest(runner.hello().manifest.as_ref().expect("a manifest")).expect("it parses");
-    let runtime = FunctionsRuntime::new(
-        manifest,
+    let runtime = FunctionsRuntime::with_codebases(
+        vec![CodebaseSpec {
+            name: "default".to_owned(),
+            manifest,
+            runner: Arc::new(runner),
+            spawn: Some(spec),
+            cleanup_dir: None,
+        }],
         FunctionsConfig {
             project: project.into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
-        Arc::new(runner),
-        Some(spec),
-    );
+        profile.unwrap_or(FunctionsHttpProfile::Emulator),
+    )
+    .expect("the runtime uses the listener profile");
     tokio::spawn(runtime.clone().dispatch_loop());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -273,6 +266,55 @@ fn publish_body(events: &[Value]) -> String {
 
 fn error_of(body: &str) -> Value {
     serde_json::from_str::<Value>(body).expect("a JSON error body")["error"].clone()
+}
+
+#[tokio::test]
+async fn custom_json_data_keeps_publisher_member_order_only_in_strict_deliveries() {
+    use fireemu_adapter_functions::ordered_json::parse;
+
+    let data = r#"{"run":"fixture-run","recording":"H1","case":"sdk-metadata","nested":{"z":3,"a":{"last":true,"first":null}},"items":[{"second":2,"first":1}]}"#;
+    let sorted = serde_json::from_str::<Value>(data).unwrap().to_string();
+    for (profile, expected) in [
+        (FunctionsHttpProfile::Emulator, sorted.as_str()),
+        (FunctionsHttpProfile::Strict, data),
+    ] {
+        let server = start(Some(profile)).await;
+        let mut published = event("eu");
+        published["textData"] = json!(data);
+        let body = publish_body(&[published]);
+        let answer = server
+            .send(
+                "POST",
+                &format!("/{CUSTOM}:publishEvents"),
+                true,
+                Some(&body),
+            )
+            .await;
+        let count = server.wait_for_frames(1).await;
+        let frames = std::fs::read_to_string(&server.frames).unwrap_or_default();
+        server.stop().await;
+
+        assert_eq!(answer.0, 200);
+        assert_eq!(count, 1);
+        let frame = frames
+            .lines()
+            .find(|line| line.contains("customEvent"))
+            .unwrap();
+        assert_eq!(
+            parse(frame.as_bytes()).unwrap()["event"]["data"],
+            parse(expected.as_bytes()).unwrap(),
+            "{profile:?} preserves its data member order through the runner"
+        );
+        let frame: Value = serde_json::from_str(frame).unwrap();
+        if profile == FunctionsHttpProfile::Strict {
+            let trace = frame["event"]["traceparent"].as_str().unwrap();
+            assert_eq!(trace.len(), 55);
+            assert!(trace.starts_with("00-") && trace.ends_with("-01"));
+            assert!(frame["event"].get("datacontenttype").is_none());
+        } else {
+            assert!(frame["event"].get("traceparent").is_none());
+        }
+    }
 }
 
 #[tokio::test]
@@ -635,6 +677,161 @@ async fn the_emulator_profile_ignores_the_credential_as_the_official_emulator_do
     server.stop().await;
 }
 
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn strict_pinned_channel_clock_refuses_unrepresentable_instants_and_keeps_active_channels_after_rewind(
+) {
+    use fireemu_core_types::time::LogicalDuration;
+
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let spec = SpawnSpec {
+        command: vec![
+            "python3".into(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").into(),
+        ],
+        cwd: None,
+        env: Vec::new(),
+        hello_timeout: Duration::from_secs(60),
+    };
+    let runner = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+    let manifest = parse_manifest(&json!({"functions": []})).unwrap();
+    let runtime = FunctionsRuntime::with_codebases(
+        vec![CodebaseSpec {
+            name: "default".into(),
+            manifest,
+            runner,
+            spawn: Some(spec),
+            cleanup_dir: None,
+        }],
+        FunctionsConfig {
+            project: PROJECT.into(),
+            clock_start_pinned: true,
+            ..FunctionsConfig::for_tests(1000, "s".into())
+        },
+        clock.clone(),
+        FunctionsHttpProfile::Strict,
+    )
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let serving = runtime.clone();
+    let server = tokio::spawn(async move {
+        serve_eventarc_with_profile(
+            listener,
+            serving,
+            HttpAdmission::new(),
+            FunctionsHttpProfile::Strict,
+        )
+        .await
+    });
+    let scratch =
+        std::env::temp_dir().join(format!("fireemu-eventarc-pinned-{}", std::process::id()));
+    std::fs::create_dir(&scratch).unwrap();
+    let server = Listener {
+        addr,
+        runtime,
+        frames: scratch.join("frames.jsonl"),
+        scratch,
+        server,
+    };
+    let parent = "/v1/projects/demo-app/locations/us-central1/channels";
+    let body =
+        json!({"name": "projects/demo-app/locations/us-central1/channels/pinned"}).to_string();
+    for instant in [
+        LogicalInstant::from_unix_seconds(32_503_680_000),
+        LogicalInstant::from_nanos(-1),
+    ] {
+        clock
+            .lock()
+            .unwrap()
+            .try_set_allow_backwards(instant)
+            .unwrap();
+        let (status, answer) = server
+            .send(
+                "POST",
+                &format!("{parent}?channelId=pinned"),
+                true,
+                Some(&body),
+            )
+            .await;
+        assert_eq!(status, 400, "{answer}");
+        assert_eq!(error_of(&answer)["status"], "INVALID_ARGUMENT");
+        assert!(error_of(&answer)["message"]
+            .as_str()
+            .unwrap()
+            .contains("clock"));
+    }
+    clock
+        .lock()
+        .unwrap()
+        .try_set_allow_backwards(START)
+        .unwrap();
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(10))
+        .unwrap();
+    let (status, answer) = server
+        .send(
+            "POST",
+            &format!("{parent}?channelId=pinned"),
+            true,
+            Some(&body),
+        )
+        .await;
+    assert_eq!(status, 200, "{answer}");
+    let operation: Value = serde_json::from_str(&answer).unwrap();
+    let channel = format!("{parent}/pinned");
+    let (status, creating) = server.send("GET", &channel, true, None).await;
+    assert_eq!(status, 200);
+    assert!(serde_json::from_str::<Value>(&creating)
+        .unwrap()
+        .get("state")
+        .is_none());
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(10))
+        .unwrap();
+    let (status, active) = server.send("GET", &channel, true, None).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        serde_json::from_str::<Value>(&active).unwrap()["state"],
+        "ACTIVE"
+    );
+    clock
+        .lock()
+        .unwrap()
+        .try_set_allow_backwards(START)
+        .unwrap();
+    let (status, rewound) = server.send("GET", &channel, true, None).await;
+    assert_eq!((status, rewound), (200, active));
+    let (status, finished) = server
+        .send(
+            "GET",
+            &format!("/v1/{}", operation["name"].as_str().unwrap()),
+            true,
+            None,
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        serde_json::from_str::<Value>(&finished).unwrap()["done"],
+        true
+    );
+    let body = publish_body(&[event("eu")]);
+    let (status, answer) = server
+        .send(
+            "POST",
+            &format!("{channel}:publishEvents"),
+            true,
+            Some(&body),
+        )
+        .await;
+    assert_eq!((status, answer.as_str()), (200, "{}\n"));
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn strict_serves_the_channel_api_over_http_and_the_emulator_profile_serves_none_of_it() {
     // Operations that take a tenth of a second, so that the test waits for them.
@@ -773,14 +970,19 @@ fn recorded_body(value: &Value) -> String {
 #[tokio::test]
 async fn the_emulator_profile_has_no_channel_api_and_accepts_every_recorded_publication_production_accepts(
 ) {
-    let rows: Vec<Value> = serde_json::from_slice(
-        &std::fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/eventarc-stage-b/rows.json"
-        ))
-        .expect("the fixture exists"),
-    )
-    .expect("JSON");
+    // Both recordings: stage B (233 rows) and stage C (424 rows, the second record of its cases and the new ones).
+    let mut rows: Vec<Value> = Vec::new();
+    for fixture in ["eventarc-stage-b", "eventarc-stage-c"] {
+        let more: Vec<Value> = serde_json::from_slice(
+            &std::fs::read(format!(
+                "{}/tests/fixtures/{fixture}/rows.json",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .expect("the fixture exists"),
+        )
+        .expect("JSON");
+        rows.extend(more);
+    }
     let server = start(Some(FunctionsHttpProfile::Emulator)).await;
     let mut accepted_by_production = 0;
     let mut refused: Vec<(u64, u16, String)> = Vec::new();
@@ -976,7 +1178,7 @@ async fn the_emulator_profile_still_refuses_what_the_official_emulator_refuses()
 }
 
 #[tokio::test]
-async fn strict_accepts_the_events_production_accepts_and_the_handler_gets_the_others() {
+async fn strict_accepts_missing_time_and_bytes_extensions_and_delivers_them() {
     let server = start(Some(FunctionsHttpProfile::Strict)).await;
     let target = format!("/v1/{CUSTOM}:publishEvents");
     let (status, answer) = server
@@ -999,8 +1201,8 @@ async fn strict_accepts_the_events_production_accepts_and_the_handler_gets_the_o
     assert_eq!((status, answer.as_str()), (200, "{}\n"), "{answer}");
     assert_eq!(
         server.frames_so_far().await,
-        2 * one,
-        "only the good event of the batch is delivered"
+        4 * one,
+        "all three accepted events are delivered"
     );
     // Near misses that production refuses stay refused: a missing `id`, and a missing content type.
     let mut no_id = with_id("x");

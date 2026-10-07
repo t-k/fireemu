@@ -7,6 +7,7 @@ import {
   compareProfiles,
   inFlightFacts,
   localChains,
+  loadDigest,
   productionChains,
   rows,
   secondsOf,
@@ -245,7 +246,11 @@ function local(over = {}) {
   };
   for (const [name, offsets] of Object.entries(local))
     for (const o of offsets)
-      probe.push({ at: instant(T0 + o * 1000), kind: "PROBE", value: { handler: name } });
+      probe.push({
+        at: instant(T0 + o * 1000),
+        kind: "PROBE",
+        value: { handler: name, scheduleTime: la(T0) },
+      });
   // the in-flight scenario: the same runs as the recording's slow job, the forced one placed by a manual run
   const inflight = [];
   for (const [start, scheduleTime] of [
@@ -280,11 +285,19 @@ const verdicts = (p, l) => Object.fromEntries(rows(p, l).map((r) => [r.id, r.ver
 test("a local run built like the recording matches every comparable row, and a forced run is not comparable", () => {
   const v = verdicts(production(), local());
   const notMatching = Object.entries(v).filter(
-    ([id, verdict]) => verdict !== "MATCH" && id !== "forced-run",
+    ([id, verdict]) => verdict !== "MATCH" && id !== "forced-run" && !id.startsWith("delivery."),
   );
   assert.deepEqual(notMatching, []);
+  assert.ok(
+    Object.entries(v)
+      .filter(
+        ([id]) => id.startsWith("delivery.") && id !== "delivery.retry-stable-occurrence-identity",
+      )
+      .every(([, verdict]) => verdict === "NOT_COMPARABLE"),
+  );
   assert.equal(v["forced-run"], "NOT_COMPARABLE");
-  assert.equal(Object.keys(v).length, 25);
+  assert.equal(v["delivery.retry-stable-occurrence-identity"], "MATCH");
+  assert.equal(Object.keys(v).length, 30);
 });
 
 test("FORM keeps the shape of a time, its fraction's length and a trailing zero, and masks the digits", () => {
@@ -487,7 +500,11 @@ for (const [id, change] of breaking) {
       }[id] ?? [];
     const others = Object.entries(v).filter(
       ([k, verdict]) =>
-        k !== id && !coupled.includes(k) && verdict !== "MATCH" && k !== "forced-run",
+        k !== id &&
+        !coupled.includes(k) &&
+        verdict !== "MATCH" &&
+        k !== "forced-run" &&
+        !k.startsWith("delivery."),
     );
     assert.deepEqual(others, [], "only the broken row moves");
   });
@@ -565,7 +582,11 @@ test("cadence: a different spacing, whole-minute phase and a five-minute boundar
 test("retry chains: a different attempt count, a gap beyond the tolerance, and a missing chain diverge; latency within tolerance matches", () => {
   const withProbe = (probe) => verdicts(production(), local({ probe }));
   const chain = (name, offsets) =>
-    offsets.map((o) => ({ at: instant(T0 + o * 1000), kind: "PROBE", value: { handler: name } }));
+    offsets.map((o) => ({
+      at: instant(T0 + o * 1000),
+      kind: "PROBE",
+      value: { handler: name, scheduleTime: la(T0) },
+    }));
   const good = () => [
     ...chain("retryFour", [0, 4, 12, 28, 48]),
     ...chain("retryFive", [0, 5, 15, 35, 75, 155]),
@@ -604,10 +625,18 @@ test("productionChains groups attempts by job and schedule time, and localChains
   assert.deepEqual(localChains({ lines: [] }), {});
   // two occurrences of one handler: only the first is its chain, and occurrences are told apart by schedule time
   const two = [
-    { at: instant(T0 + 300_000), kind: "PROBE", value: { handler: "h", scheduleTime: "B" } },
-    { at: instant(T0), kind: "PROBE", value: { handler: "h", scheduleTime: "A" } },
-    { at: instant(T0 + 4000), kind: "PROBE", value: { handler: "h", scheduleTime: "A" } },
-    { at: instant(T0 + 304_000), kind: "PROBE", value: { handler: "h", scheduleTime: "B" } },
+    {
+      at: instant(T0 + 300_000),
+      kind: "PROBE",
+      value: { handler: "h", scheduleTime: la(T0 + 300000) },
+    },
+    { at: instant(T0), kind: "PROBE", value: { handler: "h", scheduleTime: la(T0) } },
+    { at: instant(T0 + 4000), kind: "PROBE", value: { handler: "h", scheduleTime: la(T0) } },
+    {
+      at: instant(T0 + 304_000),
+      kind: "PROBE",
+      value: { handler: "h", scheduleTime: la(T0 + 300000) },
+    },
     { at: instant(T0 + 1000), kind: "SCHED_DELIVERY_FRAME", value: { handler: "h" } },
   ];
   assert.deepEqual(localChains({ lines: two }), { h: [0, 4] });
@@ -700,16 +729,16 @@ test("productionChains sorts the attempts, keeps the longest chain of a job and 
   });
   const digest = {
     frames: [
-      frame("fe-sd-0123456789abcdef-zero", 9000, "A"),
-      frame("fe-sd-0123456789abcdef-zero", 3000, "A"),
-      frame("fe-sd-0123456789abcdef-zero", 6000, "A"),
-      frame("fe-sd-0123456789abcdef-zero", 100, "B"),
-      frame("fe-sd-0123456789abcdef-zero", 4100, "B"),
-      frame("fe-sd-0123456789abcdef-zero", 8100, "B"),
-      frame("fe-sd-0123456789abcdef-duration", 1000, "A"),
-      frame("fe-sd-0123456789abcdef-duration", 2000, "A"),
-      frame("fe-sd-0123456789abcdef-duration", 500, "B"),
-      frame("unknown-job", 1, "A"),
+      frame("fe-sd-0123456789abcdef-zero", 9000, la(T0)),
+      frame("fe-sd-0123456789abcdef-zero", 3000, la(T0)),
+      frame("fe-sd-0123456789abcdef-zero", 6000, la(T0)),
+      frame("fe-sd-0123456789abcdef-zero", 100, la(T0 + 300000)),
+      frame("fe-sd-0123456789abcdef-zero", 4100, la(T0 + 300000)),
+      frame("fe-sd-0123456789abcdef-zero", 8100, la(T0 + 300000)),
+      frame("fe-sd-0123456789abcdef-duration", 1000, la(T0)),
+      frame("fe-sd-0123456789abcdef-duration", 2000, la(T0)),
+      frame("fe-sd-0123456789abcdef-duration", 500, la(T0 + 300000)),
+      frame("unknown-job", 1, la(T0)),
     ],
   };
   const chains = productionChains(digest);
@@ -723,10 +752,10 @@ test("productionChains sorts the attempts, keeps the longest chain of a job and 
   // a chain must not be replaced by an equal-length one
   const equal = {
     frames: [
-      frame("fe-sd-0123456789abcdef-zero", 0, "A"),
-      frame("fe-sd-0123456789abcdef-zero", 1000, "A"),
-      frame("fe-sd-0123456789abcdef-zero", 5000, "B"),
-      frame("fe-sd-0123456789abcdef-zero", 9000, "B"),
+      frame("fe-sd-0123456789abcdef-zero", 0, la(T0)),
+      frame("fe-sd-0123456789abcdef-zero", 1000, la(T0)),
+      frame("fe-sd-0123456789abcdef-zero", 5000, la(T0 + 300000)),
+      frame("fe-sd-0123456789abcdef-zero", 9000, la(T0 + 300000)),
     ],
   };
   assert.deepEqual(productionChains(equal).retryZero, [0, 1]);
@@ -778,7 +807,7 @@ test("the retry tolerance: latency of a second per attempt is allowed, earlier o
     offsets.map((o) => ({
       at: instant(T0 + o * 1000),
       kind: "PROBE",
-      value: { handler: "retryFour" },
+      value: { handler: "retryFour", scheduleTime: la(T0) },
     }));
   const withFour = (offsets) => {
     const l = local();
@@ -1070,15 +1099,25 @@ test("localChains keeps the earliest occurrence, the first of equal starts, and 
     value: { handler, scheduleTime },
   });
   // later occurrence first, then an earlier one that starts before it but ends after it
-  const both = [line("h", "A", 10), line("h", "A", 20), line("h", "B", 5), line("h", "B", 30)];
+  const both = [
+    line("h", la(T0), 10),
+    line("h", la(T0), 20),
+    line("h", la(T0 + 300000), 5),
+    line("h", la(T0 + 300000), 30),
+  ];
   assert.deepEqual(localChains({ lines: both }).h, [0, 25]);
   assert.deepEqual(localChains({ lines: [...both].reverse() }).h, [0, 25]);
   // equal starts: the first one met wins
-  const tie = [line("h", "A", 0), line("h", "A", 4), line("h", "B", 0), line("h", "B", 9)];
+  const tie = [
+    line("h", la(T0), 0),
+    line("h", la(T0), 4),
+    line("h", la(T0 + 300000), 0),
+    line("h", la(T0 + 300000), 9),
+  ];
   assert.deepEqual(localChains({ lines: tie }).h, [0, 4]);
   // an occurrence listed in descending time order is read ascending
   assert.deepEqual(
-    localChains({ lines: [line("h", "A", 12), line("h", "A", 4), line("h", "A", 0)] }).h,
+    localChains({ lines: [line("h", la(T0), 12), line("h", la(T0), 4), line("h", la(T0), 0)] }).h,
     [0, 4, 12],
   );
 });
@@ -1105,7 +1144,7 @@ test("the lower edge of the retry tolerance is inclusive: half a second earlier 
     l.probe.lines.push({
       at: instant(T0 + o * 1000),
       kind: "PROBE",
-      value: { handler: "retryDuration" },
+      value: { handler: "retryDuration", scheduleTime: la(T0) },
     });
   assert.equal(value(rows(p, l), "retry.retryDuration").verdict, "MATCH");
   p.frames = p.frames.filter(
@@ -1753,7 +1792,7 @@ test("cadence.in-flight-skip: a queueing model that starts each due occurrence w
   assert.equal(row.production.startsOnTime, true);
 });
 
-test("inFlightFacts: starts are on time when their lag against their own schedule time varies by under five seconds", () => {
+test("inFlightFacts: starts are on time when their lag against their own schedule time varies by 20 seconds or less", () => {
   const f = (start, end, sched) => [
     { phase: "start", at: start, scheduled: sched },
     { phase: "end", at: end, scheduled: sched },
@@ -1762,10 +1801,12 @@ test("inFlightFacts: starts are on time when their lag against their own schedul
   // a constant lag of any size is on time (the timeline's origin is not the schedule's)
   assert.equal(on([...f(10, 110, 0), ...f(130, 230, 120), ...f(250, 350, 240)]), true);
   assert.equal(on([...f(10, 110, 0), ...f(134, 234, 120)]), true, "4 s of jitter");
-  assert.equal(on([...f(10, 110, 0), ...f(135, 235, 120)]), true, "exactly 5 s");
-  assert.equal(on([...f(10, 110, 0), ...f(135.01, 235, 120)]), false, "just over 5 s");
-  assert.equal(on([...f(10, 110, 0), ...f(125, 225, 120)]), true, "early by 5 s");
-  assert.equal(on([...f(10, 110, 0), ...f(124.9, 224.9, 120)]), false, "early by over 5 s");
+  // run f123d4fa2d61c5f5's slow job lagged by up to about 12.6 s from one start to another (cold starts)
+  assert.equal(on([...f(10, 110, 0), ...f(142.6, 242.6, 120)]), true, "12.6 s");
+  assert.equal(on([...f(10, 110, 0), ...f(150, 250, 120)]), true, "exactly 20 s");
+  assert.equal(on([...f(10, 110, 0), ...f(150.01, 250, 120)]), false, "just over 20 s");
+  assert.equal(on([...f(10, 110, 0), ...f(110, 210, 120)]), true, "early by 20 s");
+  assert.equal(on([...f(10, 110, 0), ...f(109.9, 209.9, 120)]), false, "early by over 20 s");
   // one late start among on-time ones
   assert.equal(on([...f(10, 110, 0), ...f(130, 230, 120), ...f(300, 400, 240)]), false);
   // a start with no schedule time is not on time; no starts, or one, is vacuously on time
@@ -1807,4 +1848,734 @@ test("cadence.in-flight-skip: a forced run in flight suppresses a natural occurr
     inFlightFacts([...f(0, 100), ...f(150, 250), ...f(260, 360)], [149], 60).naturalStartsInFlight,
     0,
   );
+});
+
+// ---- Gen1: the message published to the job's topic (run f123d4fa2d61c5f5) ----
+
+const msg = (fn, id, publishTime, over = {}) => ({
+  function: fn,
+  messageId: id,
+  publishTime,
+  atMs: Date.parse(publishTime) - T0,
+  attributes: { scheduled: "true" },
+  hasData: false,
+  ...over,
+});
+/** A recording of the Gen1 handlers and of the messages pulled from their topics: ids and times agree. */
+function productionWithMessages() {
+  const p = production();
+  // two schedOkV1 occurrences (the first two frames), one schedFailV1 pair, and a schedRetryV1 pair
+  const frames = [
+    prodV1("schedOkV1", 5000, "22257109111563910", "2026-10-05T08:41:02.5Z"),
+    prodV1("schedRetryV1", 6000, "21339796619509982", "2026-10-05T08:41:03.993Z"),
+    prodV1("schedRetryV1", 306_000, "21339949440159039", "2026-10-05T08:46:03.319Z"),
+  ];
+  return {
+    ...p,
+    frames: [...p.frames, ...frames],
+    published: [
+      msg("schedOkV1", "22257109111563910", "2026-10-05T08:41:02.5Z"),
+      msg("schedOkV1", "22257109111563907", "2026-10-05T08:41:01.359Z"),
+      msg("schedFailV1", "22256732696405721", "2026-10-05T08:42:50.384Z"),
+      msg("schedRetryV1", "21339796619509982", "2026-10-05T08:41:03.993Z"),
+      msg("schedRetryV1", "21339949440159039", "2026-10-05T08:46:03.319Z"),
+    ],
+  };
+}
+/** The local run: the same Gen1 frames, and the messages a pull subscription held on each topic. */
+function localWithMessages(over = {}) {
+  const l = local();
+  const lines = [
+    ...l.natural.lines,
+    localV1("schedOkV1", instant(T0 + 5000), "27440000000000001", "2026-10-05T08:41:02.5Z"),
+    localV1("schedRetryV1", instant(T0 + 6000), "27440000000000002", "2026-10-05T08:41:03.993Z"),
+    localV1("schedRetryV1", instant(T0 + 306_000), "27440000000000003", "2026-10-05T08:46:03.319Z"),
+  ];
+  const message = (id, publishTime, extra = {}) => ({
+    messageId: id,
+    publishTime,
+    attributes: { scheduled: "true" },
+    ...extra,
+  });
+  const pulled = over.pulled ?? [
+    {
+      topic: jobId("schedOkV1"),
+      status: 200,
+      messages: [
+        message("21060470636220959", "2026-10-05T08:41:01.359Z"),
+        message("27440000000000001", "2026-10-05T08:41:02.5Z"),
+      ],
+    },
+    {
+      topic: jobId("schedFailV1"),
+      status: 200,
+      messages: [
+        message("27203228007418468", "2026-10-05T08:42:50.384Z"),
+        message("27777684328644704", "2026-10-05T08:47:05.447Z"),
+      ],
+    },
+    {
+      topic: jobId("schedRetryV1"),
+      status: 200,
+      messages: [
+        message("27440000000000002", "2026-10-05T08:41:03.993Z"),
+        message("27440000000000003", "2026-10-05T08:46:03.319Z"),
+      ],
+    },
+  ];
+  return { ...l, natural: { ...l.natural, lines: over.lines ?? lines, pulled } };
+}
+const PUBLISHED_ROWS = [
+  "v1.published.topic",
+  "v1.published.data",
+  "v1.published.attributes",
+  "v1.published.messageId",
+  "v1.published.publishTime",
+];
+
+test("v1.published.messageId: every local handler needs exactly one publication", () => {
+  const p = productionWithMessages();
+  const base = localWithMessages();
+  for (const messages of [
+    base.natural.pulled[0].messages.slice(0, 1),
+    [...base.natural.pulled[0].messages, base.natural.pulled[0].messages[0]],
+  ]) {
+    const pulled = base.natural.pulled.map((t, i) => (i === 0 ? { ...t, messages } : t));
+    assert.equal(verdicts(p, localWithMessages({ pulled }))["v1.published.messageId"], "DIVERGES");
+  }
+});
+
+test("v1.published.messageId: every local publication needs its handler", () => {
+  const base = localWithMessages();
+  const lines = base.natural.lines.filter((l) => l.value?.context?.eventId !== "27440000000000001");
+  assert.equal(
+    verdicts(productionWithMessages(), localWithMessages({ lines }))["v1.published.messageId"],
+    "DIVERGES",
+  );
+});
+
+test("the published-message rows exist only for a recording that pulled messages, and match a local run built like it", () => {
+  assert.equal(
+    Object.keys(verdicts(production(), local())).some((id) => id.startsWith("v1.published.")),
+    false,
+    "run 2's digest holds no messages",
+  );
+  const v = verdicts(productionWithMessages(), localWithMessages());
+  for (const id of PUBLISHED_ROWS) assert.equal(v[id], "MATCH", id);
+  assert.equal(v["v1.retry-declaration-no-retry"], "MATCH");
+});
+
+test("v1.published.topic: a topic the local broker has no subscription for, or that held nothing, diverges", () => {
+  const p = productionWithMessages();
+  for (const pulled of [
+    // no such topic (the subscribe was refused)
+    localWithMessages().natural.pulled.map((t) =>
+      t.topic === jobId("schedRetryV1") ? { ...t, status: 404, messages: [] } : t,
+    ),
+    // the topic exists and holds nothing
+    localWithMessages().natural.pulled.map((t) =>
+      t.topic === jobId("schedRetryV1") ? { ...t, messages: [] } : t,
+    ),
+    // no pulled topic at all
+    [],
+  ]) {
+    const v = verdicts(p, localWithMessages({ pulled }));
+    assert.equal(v["v1.published.topic"], "DIVERGES");
+  }
+  // a topic named like the official emulator's (no region) is not the job's topic
+  const official = localWithMessages().natural.pulled.map((t) => ({
+    ...t,
+    topic: t.topic.replace("-us-central1", ""),
+  }));
+  assert.equal(
+    verdicts(p, localWithMessages({ pulled: official }))["v1.published.topic"],
+    "DIVERGES",
+  );
+});
+
+test("v1.published.data and .attributes: data on a message, or another attribute set, diverges", () => {
+  const p = productionWithMessages();
+  const change = (edit) =>
+    localWithMessages().natural.pulled.map((t, i) =>
+      i === 0 ? { ...t, messages: t.messages.map((m) => edit(m)) } : t,
+    );
+  const withData = verdicts(
+    p,
+    localWithMessages({ pulled: change((m) => ({ ...m, data: "YQ==" })) }),
+  );
+  assert.equal(withData["v1.published.data"], "DIVERGES");
+  assert.equal(withData["v1.published.attributes"], "MATCH");
+  for (const attributes of [{}, { scheduled: "false" }, { scheduled: "true", extra: "1" }]) {
+    const v = verdicts(p, localWithMessages({ pulled: change((m) => ({ ...m, attributes })) }));
+    assert.equal(v["v1.published.attributes"], "DIVERGES", JSON.stringify(attributes));
+    assert.equal(v["v1.published.data"], "MATCH");
+  }
+});
+
+test("v1.published.messageId: an id of another form, or one no handler frame carries, diverges", () => {
+  const p = productionWithMessages();
+  const one = (id) =>
+    localWithMessages().natural.pulled.map((t, i) =>
+      i === 0
+        ? { ...t, messages: t.messages.map((m, j) => (j === 0 ? { ...m, messageId: id } : m)) }
+        : t,
+    );
+  // another form: a counter (what the broker numbers an ordinary publish with)
+  assert.equal(
+    verdicts(p, localWithMessages({ pulled: one("1") }))["v1.published.messageId"],
+    "DIVERGES",
+  );
+  // 17 digits, but the handler's context named another message
+  assert.equal(
+    verdicts(p, localWithMessages({ pulled: one("29999999999999999") }))["v1.published.messageId"],
+    "DIVERGES",
+  );
+});
+
+test("v1.published.publishTime: a publish time that is not the handler's context time diverges, at any digit", () => {
+  const p = productionWithMessages();
+  const shifted = (time) =>
+    localWithMessages().natural.pulled.map((t, i) =>
+      i === 2
+        ? { ...t, messages: t.messages.map((m, j) => (j === 0 ? { ...m, publishTime: time } : m)) }
+        : t,
+    );
+  for (const time of [
+    "2026-10-05T08:41:03.994Z",
+    "2026-10-05T08:41:04.993Z",
+    "2026-10-05T08:41:03.993001Z",
+  ])
+    assert.equal(
+      verdicts(p, localWithMessages({ pulled: shifted(time) }))["v1.published.publishTime"],
+      "DIVERGES",
+      time,
+    );
+  // the same instant written with more digits is the same time
+  assert.equal(
+    verdicts(p, localWithMessages({ pulled: shifted("2026-10-05T08:41:03.993000000Z") }))[
+      "v1.published.publishTime"
+    ],
+    "MATCH",
+  );
+});
+
+test("v1.retry-declaration-no-retry: a second attempt of a schedRetryV1 occurrence diverges, and so does a run without any", () => {
+  const p = productionWithMessages();
+  const l = localWithMessages();
+  const dup = [
+    ...l.natural.lines,
+    localV1("schedRetryV1", instant(T0 + 12_000), "27440000000000002", "2026-10-05T08:41:03.993Z"),
+  ];
+  assert.equal(
+    verdicts(p, localWithMessages({ lines: dup }))["v1.retry-declaration-no-retry"],
+    "DIVERGES",
+  );
+  const without = l.natural.lines.filter((x) => x.value.handler !== "schedRetryV1");
+  assert.equal(
+    verdicts(p, localWithMessages({ lines: without, pulled: l.natural.pulled.slice(0, 2) }))[
+      "v1.retry-declaration-no-retry"
+    ],
+    "DIVERGES",
+  );
+});
+
+test("the emulator profile has no job topic: every published-message row diverges there, and the strict row is its own", () => {
+  const table = compareProfiles(productionWithMessages(), localWithMessages(), {
+    ...localWithMessages(),
+    natural: {
+      ...localWithMessages().natural,
+      pulled: localWithMessages().natural.pulled.map((t) => ({ ...t, status: 404, messages: [] })),
+    },
+  });
+  for (const id of PUBLISHED_ROWS) {
+    const row = table.find((r) => r.id === id);
+    assert.equal(row.strict.verdict, "MATCH", id);
+    assert.equal(row.emulator.verdict, "DIVERGES", id);
+  }
+});
+
+// ---- the published-message rows: the values they compare, and what they ignore ----
+
+const rowOf = (p, l, id) => rows(p, l).find((r) => r.id === id);
+
+test("the published-message rows compare the recorded values, not only equal ones", () => {
+  const p = productionWithMessages();
+  const l = localWithMessages();
+  assert.deepEqual(rowOf(p, l, "v1.published.topic").production, [
+    "schedFailV1",
+    "schedOkV1",
+    "schedRetryV1",
+  ]);
+  assert.deepEqual(rowOf(p, l, "v1.published.topic").local, [
+    "schedFailV1",
+    "schedOkV1",
+    "schedRetryV1",
+  ]);
+  assert.deepEqual(rowOf(p, l, "v1.published.data").production, [false]);
+  assert.deepEqual(rowOf(p, l, "v1.published.attributes").production, [{ scheduled: "true" }]);
+  assert.deepEqual(rowOf(p, l, "v1.published.messageId").production, [
+    { form: "<17 digits>", namedByAHandler: true },
+  ]);
+  assert.deepEqual(rowOf(p, l, "v1.published.messageId").local, [
+    { form: "<17 digits>", namedByAHandler: true },
+  ]);
+  assert.deepEqual(rowOf(p, l, "v1.published.publishTime").production, [true]);
+  assert.deepEqual(rowOf(p, l, "v1.published.publishTime").local, [true]);
+  assert.deepEqual(rowOf(p, l, "v1.retry-declaration-no-retry").production, [1]);
+  assert.deepEqual(rowOf(p, l, "v1.retry-declaration-no-retry").local, [1]);
+});
+
+test("a recording with a single pulled message still has the rows", () => {
+  const p = productionWithMessages();
+  const one = { ...p, published: [p.published[0]] };
+  const base = localWithMessages();
+  const l = localWithMessages({
+    lines: base.natural.lines.filter(
+      (l) => l.value?.generation !== 1 || l.value.context.eventId === "27440000000000001",
+    ),
+    pulled: [{ ...base.natural.pulled[0], messages: [base.natural.pulled[0].messages[1]] }],
+  });
+  const v = verdicts(one, l);
+  for (const id of PUBLISHED_ROWS) assert.equal(v[id], "MATCH", id);
+});
+
+test("a topic that is not the job's, or that did not answer 200, adds nothing to what the local run published", () => {
+  const p = productionWithMessages();
+  const good = localWithMessages().natural.pulled;
+  const message = {
+    messageId: "27999999999999999",
+    publishTime: "2026-10-05T08:41:09Z",
+    attributes: { other: "1" },
+    data: "YQ==",
+  };
+  const extra = [
+    { topic: "firebase-schedule-schedOkV1", status: 200, messages: [message] }, // the official emulator's name
+    {
+      topic: jobId("schedFailV1").replace("schedFailV1", "ghost"),
+      status: 404,
+      messages: [message],
+    }, // refused
+  ];
+  const v = verdicts(p, localWithMessages({ pulled: [...good, ...extra] }));
+  for (const id of PUBLISHED_ROWS) assert.equal(v[id], "MATCH", id);
+});
+
+test("v1.published.messageId: an id of 16 or 18 digits is another form even when a handler reports it", () => {
+  const p = productionWithMessages();
+  for (const id of ["2744000000000001", "274400000000000001"]) {
+    const base = localWithMessages();
+    const lines = base.natural.lines.map((line) =>
+      line.value.handler === "schedRetryV1" && line.value.context.eventId === "27440000000000002"
+        ? { ...line, value: { ...line.value, context: { ...line.value.context, eventId: id } } }
+        : line,
+    );
+    const pulled = base.natural.pulled.map((t) => ({
+      ...t,
+      messages: t.messages.map((m) =>
+        m.messageId === "27440000000000002" ? { ...m, messageId: id } : m,
+      ),
+    }));
+    assert.equal(
+      verdicts(p, localWithMessages({ lines, pulled }))["v1.published.messageId"],
+      "DIVERGES",
+      id,
+    );
+  }
+});
+
+test("v1.retry-declaration-no-retry counts schedRetryV1 only: another Gen1 handler's repeated message id does not change it", () => {
+  const p = productionWithMessages();
+  const twice = {
+    ...p,
+    frames: [...p.frames, prodV1("schedOkV1", 9000, "22257109111563910", "2026-10-05T08:41:02.5Z")],
+  };
+  assert.deepEqual(
+    rowOf(twice, localWithMessages(), "v1.retry-declaration-no-retry").production,
+    [1],
+  );
+});
+
+test("the recording has no schedRetryV1 frame: that row is not made", () => {
+  const p = productionWithMessages();
+  const without = { ...p, frames: p.frames.filter((f) => f.handler !== "schedRetryV1") };
+  assert.equal(rowOf(without, localWithMessages(), "v1.retry-declaration-no-retry"), undefined);
+});
+
+// ---- run f123d4fa2d61c5f5's count-and-window and zero-backoff chains ----
+
+/** The synthetic recording with the two chains run 3 added (frames of the REST jobs `count` and `zerobackoff`). */
+function productionWithRun3Chains() {
+  const p = production();
+  let base = 40_000_000;
+  const frames = [];
+  for (const [key, offsets] of [
+    ["count", [0, 4.65, 13.26, 23.88]],
+    ["zerobackoff", [0, 5.62]],
+  ]) {
+    base += 1_000_000;
+    for (const o of offsets)
+      frames.push(
+        prodV2(
+          "schedRetryV2",
+          base + Math.round(o * 1000),
+          "2026-12-31T16:00:00-08:00",
+          `fe-sd-0123456789abcdef-${key}`,
+        ),
+      );
+  }
+  return { ...p, frames: [...p.frames, ...frames] };
+}
+function localWithRun3Chains(over = {}) {
+  const l = local();
+  const chains = { retryCountWindow: [0, 4, 12, 22], retryZeroBackoff: [0, 5], ...over };
+  const probe = [...l.probe.lines];
+  let at = 5_000_000;
+  for (const [name, offsets] of Object.entries(chains)) {
+    at += 100_000;
+    for (const o of offsets)
+      probe.push({
+        at: instant(T0 + at + o * 1000),
+        kind: "PROBE",
+        value: { handler: name, scheduleTime: la(T0) },
+      });
+  }
+  return { ...l, probe: { ...l.probe, lines: probe } };
+}
+
+test("the count-and-window and zero-backoff chains match a local chain of the recorded attempts, and diverge from any other", () => {
+  const p = productionWithRun3Chains();
+  const v = verdicts(p, localWithRun3Chains());
+  assert.equal(v["retry.retryCountWindow"], "MATCH");
+  assert.equal(v["retry.retryZeroBackoff"], "MATCH");
+  // the first-limit model stopped the count job at three attempts
+  assert.equal(
+    verdicts(p, localWithRun3Chains({ retryCountWindow: [0, 4, 12] }))["retry.retryCountWindow"],
+    "DIVERGES",
+  );
+  // a fifth attempt
+  assert.equal(
+    verdicts(p, localWithRun3Chains({ retryCountWindow: [0, 4, 12, 22, 32] }))[
+      "retry.retryCountWindow"
+    ],
+    "DIVERGES",
+  );
+  // zero backoff as a hot loop (a retry every clock move), or no retry at all
+  assert.equal(
+    verdicts(p, localWithRun3Chains({ retryZeroBackoff: [0, 1, 2, 3, 4, 5] }))[
+      "retry.retryZeroBackoff"
+    ],
+    "DIVERGES",
+  );
+  assert.equal(
+    verdicts(p, localWithRun3Chains({ retryZeroBackoff: [0] }))["retry.retryZeroBackoff"],
+    "DIVERGES",
+  );
+  // a gap the recording does not allow: the second attempt of the zero-backoff chain 9 s after the first
+  assert.equal(
+    verdicts(p, localWithRun3Chains({ retryZeroBackoff: [0, 9] }))["retry.retryZeroBackoff"],
+    "DIVERGES",
+  );
+  // a local run without the probe functions has no chain: it diverges, it does not match vacuously
+  assert.equal(verdicts(p, local())["retry.retryCountWindow"], "DIVERGES");
+});
+
+test("the run 3 chain rows exist only for a recording that has those chains", () => {
+  const v = verdicts(production(), local());
+  assert.equal("retry.retryCountWindow" in v, false);
+  assert.equal("retry.retryZeroBackoff" in v, false);
+  assert.deepEqual(
+    productionChains(productionWithRun3Chains()).retryCountWindow,
+    [0, 4.65, 13.26, 23.88],
+  );
+  assert.deepEqual(productionChains(productionWithRun3Chains()).retryZeroBackoff, [0, 5.62]);
+});
+
+// ---- run ecef353d18975246's double chains ----
+
+const cumulative = (gaps) =>
+  gaps.reduce((offsets, gap) => [...offsets, +(offsets.at(-1) + gap).toFixed(2)], [0]);
+const DOUBLES = {
+  double0: cumulative([3.69, 6.53, 12.67, 24.52, 48.57]),
+  double1: cumulative([4.64, 8.63, 10.91, 12.63, 14.69]),
+  double3: cumulative([2.54, 4.64, 8.54, 16.48, 18.62]),
+};
+function productionWithDoubles() {
+  const p = production();
+  let base = 60_000_000;
+  const frames = [];
+  for (const [key, offsets] of Object.entries(DOUBLES)) {
+    base += 1_000_000;
+    for (const o of offsets)
+      frames.push(
+        prodV2(
+          "schedRetryV2",
+          base + Math.round(o * 1000),
+          "2026-12-31T16:00:00-08:00",
+          `fe-sd-0123456789abcdef-${key}`,
+        ),
+      );
+  }
+  return { ...p, frames: [...p.frames, ...frames] };
+}
+function localWithDoubles(over = {}) {
+  const l = local();
+  const chains = {
+    retryDouble0: [0, 3, 9, 21, 45, 93],
+    retryDouble1: [0, 4, 12, 22, 34, 48],
+    retryDouble3: [0, 2, 6, 14, 30, 48],
+    ...over,
+  };
+  const probe = [...l.probe.lines];
+  let at = 7_000_000;
+  for (const [name, offsets] of Object.entries(chains)) {
+    at += 100_000;
+    for (const o of offsets)
+      probe.push({
+        at: instant(T0 + at + o * 1000),
+        kind: "PROBE",
+        value: { handler: name, scheduleTime: la(T0) },
+      });
+  }
+  return { ...l, probe: { ...l.probe, lines: probe } };
+}
+
+test("the double chains match the local chains of the recorded gaps, and diverge from the old linear step", () => {
+  const p = productionWithDoubles();
+  const v = verdicts(p, localWithDoubles());
+  for (const id of ["retry.retryDouble0", "retry.retryDouble1", "retry.retryDouble3"])
+    assert.equal(v[id], "MATCH", id);
+  // the documented step (min * 2^doublings after the doublings) instead of 2 s
+  assert.equal(
+    verdicts(p, localWithDoubles({ retryDouble1: [0, 4, 12, 28, 52, 84] }))["retry.retryDouble1"],
+    "DIVERGES",
+  );
+  assert.equal(
+    verdicts(p, localWithDoubles({ retryDouble3: [0, 2, 6, 14, 30, 62] }))["retry.retryDouble3"],
+    "DIVERGES",
+  );
+  // a zero doubling count taken as zero doublings (the step from the first gap on) instead of the stored 5
+  assert.equal(
+    verdicts(p, localWithDoubles({ retryDouble0: [0, 3, 6, 9, 12, 15] }))["retry.retryDouble0"],
+    "DIVERGES",
+  );
+  // a chain of another length
+  assert.equal(
+    verdicts(p, localWithDoubles({ retryDouble1: [0, 4, 12, 22, 34] }))["retry.retryDouble1"],
+    "DIVERGES",
+  );
+  // no chain locally: not a vacuous match
+  assert.equal(verdicts(p, local())["retry.retryDouble0"], "DIVERGES");
+});
+
+test("the double rows exist only for a recording that has those chains", () => {
+  const v = verdicts(production(), local());
+  for (const id of ["retry.retryDouble0", "retry.retryDouble1", "retry.retryDouble3"])
+    assert.equal(id in v, false, id);
+  const chains = productionChains(productionWithDoubles());
+  assert.deepEqual(chains.retryDouble1, DOUBLES.double1);
+  assert.deepEqual(chains.retryDouble3, DOUBLES.double3);
+  assert.deepEqual(chains.retryDouble0, DOUBLES.double0);
+});
+
+test("another recording's extra chains join the rows when the main recording has none of its own", () => {
+  const main = production();
+  const also = productionWithDoubles();
+  const v = Object.fromEntries(
+    rows(main, localWithDoubles(), [also]).map((r) => [r.id, r.verdict]),
+  );
+  for (const id of ["retry.retryDouble0", "retry.retryDouble1", "retry.retryDouble3"])
+    assert.equal(v[id], "MATCH", id);
+  // the other recording's deployed job and cadence are not joined: the main recording's rows are unchanged
+  const without = Object.fromEntries(rows(main, localWithDoubles()).map((r) => [r.id, r.verdict]));
+  for (const [id, verdict] of Object.entries(without)) assert.equal(v[id], verdict, id);
+  // a chain the main recording has is not replaced by the other's
+  const both = productionWithRun3Chains();
+  const rowsBoth = rows(both, localWithRun3Chains(), [{ ...also, frames: [...also.frames] }]);
+  assert.equal(rowsBoth.find((r) => r.id === "retry.retryCountWindow").verdict, "MATCH");
+  // compareProfiles passes them on
+  const table = compareProfiles(main, localWithDoubles(), localWithDoubles(), [also]);
+  assert.equal(table.find((r) => r.id === "retry.retryDouble1").strict.verdict, "MATCH");
+});
+
+test("another recording's chain never replaces the main recording's own, and its non-optional chains are not joined", () => {
+  const main = productionWithRun3Chains();
+  // a second recording with a different `count` chain (a gap of 20 s: it would diverge) and its own deployed retry job
+  const frame = (job, at) => prodV2("schedRetryV2", at, "2026-12-31T16:00:00-08:00", job);
+  const other = {
+    ...production(),
+    frames: [
+      ...production().frames,
+      ...[0, 20_000].map((o) => frame("fe-sd-fedcba9876543210-count", 80_000_000 + o)),
+      ...[0, 90_000].map((o) =>
+        frame("firebase-schedule-schedRetryV2-us-central1", 90_000_000 + o),
+      ),
+    ],
+  };
+  const withOther = Object.fromEntries(
+    rows(main, localWithRun3Chains(), [other]).map((r) => [r.id, r.verdict]),
+  );
+  const alone = Object.fromEntries(rows(main, localWithRun3Chains()).map((r) => [r.id, r.verdict]));
+  assert.deepEqual(withOther, alone);
+  assert.equal(withOther["retry.retryCountWindow"], "MATCH");
+});
+
+test("delivery outcomes compare both profiles and missing evidence stays unjudged", () => {
+  const p = production();
+  const job = jobId("schedRetryV2");
+  const frame = (at, failing, scheduled = la(T0)) => ({
+    ...prodV2("schedRetryV2", at, scheduled),
+    failing,
+  });
+  p.frames = p.frames.filter((f) => f.handler !== "schedRetryV2");
+  p.frames.push(
+    frame(0, true),
+    frame(4000, false),
+    frame(300000, true, la(T0 + 300000)),
+    frame(304000, true, la(T0 + 300000)),
+    frame(600000, true, la(T0 + 600000)),
+  );
+  p.attempts = {
+    [jobId("schedOkV2")]: [
+      { kind: "AttemptFinished", status: null, debugInfo: "code number = 200" },
+    ],
+    [job]: [{ kind: "AttemptFinished", status: "INTERNAL", debugInfo: "code number = 500" }],
+  };
+  const l = local();
+  l.natural.lines = l.natural.lines.filter((f) => f.value.handler !== "schedRetryV2");
+  l.natural.lines.push(
+    localV2("schedRetryV2", instant(T0), la(T0), { failing: true }),
+    localV2("schedRetryV2", instant(T0 + 4000), la(T0), { failing: false }),
+  );
+  l.natural.history = [
+    { function: "schedOkV2", outcome: "ok" },
+    { function: "schedRetryV2", outcome: "failed: HTTP 500" },
+    { function: "schedRetryV2", outcome: "ok" },
+  ];
+  l.probe.lines = [0, 4, 300].map((t) => ({
+    at: instant(T0 + t * 1000),
+    kind: "PROBE",
+    value: { handler: "retryFour", scheduleTime: la(T0 + (t < 300 ? 0 : 300000)) },
+  }));
+  l.probe.history = [1, 2].map((attempt) => ({
+    eventId: "1",
+    function: "retryFour",
+    attempt,
+    outcome: "failed: deliberate failure",
+  }));
+  const ids = [
+    "handler-success-ack",
+    "handler-throw-ack",
+    "success-stops-retry",
+    "next-schedule-after-failure",
+  ];
+  const emulator = structuredClone(l);
+  const table = byId(compareProfiles(p, l, emulator));
+  for (const id of ids) {
+    assert.equal(table[`delivery.${id}`].production, true, id);
+    assert.equal(table[`delivery.${id}`].strict.verdict, "MATCH", id);
+    assert.equal(table[`delivery.${id}`].emulator.verdict, "MATCH", id);
+  }
+  l.natural.history[0].outcome = "failed: unexpected";
+  l.natural.history[1].outcome = "ok";
+  l.natural.lines.push(localV2("schedRetryV2", instant(T0 + 8000), la(T0), { failing: true }));
+  l.probe.lines.pop();
+  for (const id of ids) assert.equal(byId(rows(p, l))[`delivery.${id}`].verdict, "DIVERGES", id);
+  const changed = byId(compareProfiles(p, l, emulator));
+  for (const id of ids) {
+    assert.equal(changed[`delivery.${id}`].strict.verdict, "DIVERGES", id);
+    assert.equal(changed[`delivery.${id}`].emulator.verdict, "MATCH", id);
+  }
+  delete l.natural.history;
+  assert.match(byId(rows(p, l))["delivery.handler-success-ack"].note, /Missing local/);
+  delete p.attempts;
+  const missing = byId(rows(p, local()))["delivery.handler-throw-ack"];
+  assert.equal(missing.verdict, "NOT_COMPARABLE");
+  assert.match(missing.note, /Missing production/);
+  delete p.frames.find((f) => f.handler === "schedRetryV2").failing;
+  assert.equal(byId(rows(p, l))["delivery.success-stops-retry"].verdict, "NOT_COMPARABLE");
+  delete p.forced;
+  assert.match(byId(rows(p, l))["delivery.next-schedule-after-failure"].note, /Missing production/);
+});
+
+test("success-stops-retry rejects the review's repeated initially successful occurrence", () => {
+  const p = loadDigest(new URL("./production-run3.json", import.meta.url));
+  const chain = p.frames
+    .filter(
+      (f) =>
+        f.handler === "schedRetryV2" && f.event.scheduleTime === "2026-10-05T06:46:01.751605-07:00",
+    )
+    .toSorted((a, b) => a.at - b.at);
+  assert.deepEqual(
+    chain.map((f) => f.failing),
+    [true, true, true, false],
+  );
+  const l = local();
+  const attempts = (shape, scheduled, start) =>
+    shape.map((failing, i) =>
+      localV2("schedRetryV2", instant(T0 + start + i * 4000), scheduled, { failing }),
+    );
+  l.natural.lines = attempts([true, false], la(T0), 0).concat(
+    attempts([false, false], la(T0 + 60000), 60000),
+  );
+  for (const profile of ["strict", "emulator"])
+    assert.equal(
+      byId(compareProfiles(p, l, l))["delivery.success-stops-retry"][profile].verdict,
+      "DIVERGES",
+    );
+  l.natural.lines = attempts([true, true, true, false], la(T0), 0).concat(
+    attempts([false, false], la(T0 + 60000), 60000),
+  );
+  assert.equal(rowOf(p, l, "delivery.success-stops-retry").verdict, "DIVERGES");
+  l.natural.lines = attempts([true, false], la(T0), 0);
+  assert.equal(rowOf(p, l, "delivery.success-stops-retry").verdict, "DIVERGES");
+  l.natural.lines = attempts([true, true, true, false], la(T0), 0);
+  assert.equal(rowOf(p, l, "delivery.success-stops-retry").verdict, "MATCH");
+  l.natural.lines.reverse();
+  assert.equal(rowOf(p, l, "delivery.success-stops-retry").verdict, "MATCH");
+});
+
+test("retry identity never matches the review's five unidentified local attempts", () => {
+  const p = loadDigest(new URL("./production-run3.json", import.meta.url));
+  for (const scheduleTime of [undefined, "", "invalid", null]) {
+    const l = local();
+    l.probe.lines = [0, 4, 12, 28, 46].map((t) => ({
+      at: instant(T0 + t * 1000),
+      kind: "PROBE",
+      value: { handler: "retryFour", scheduleTime },
+    }));
+    assert.equal(localChains(l.probe).retryFour, undefined);
+    for (const profile of ["strict", "emulator"])
+      assert.notEqual(byId(compareProfiles(p, l, l))["retry.retryFour"][profile].verdict, "MATCH");
+  }
+});
+
+test("missing production identity and partially missing local identity never match", () => {
+  const original = loadDigest(new URL("./production-run3.json", import.meta.url));
+  const l = local();
+  l.probe.lines = [0, 4, 12, 28, 46].map((t) => ({
+    at: instant(T0 + t * 1000),
+    kind: "PROBE",
+    value: { handler: "retryFour", scheduleTime: la(T0) },
+  }));
+  assert.equal(rowOf(original, l, "retry.retryFour").verdict, "MATCH");
+  for (const [container, field] of [
+    ["event", "jobName"],
+    ["event", "scheduleTime"],
+    ["headers", "x-cloudscheduler-jobname"],
+    ["headers", "x-cloudscheduler-scheduletime"],
+  ]) {
+    const p = structuredClone(original);
+    const frame = p.frames.find(
+      (f) => f.handler === "schedRetryV2" && f.event.scheduleTime === "2026-10-05T06:42:00-07:00",
+    );
+    delete frame[container][field];
+    assert.notEqual(
+      rowOf(p, l, "delivery.retry-stable-occurrence-identity").verdict,
+      "MATCH",
+      field,
+    );
+    assert.notEqual(rowOf(p, l, "retry.retryFour").verdict, "MATCH", field);
+  }
+  l.probe.lines.push({ at: instant(T0 + 60000), kind: "PROBE", value: { handler: "retryFour" } });
+  assert.notEqual(rowOf(original, l, "retry.retryFour").verdict, "MATCH");
 });

@@ -30,8 +30,9 @@ use crate::config::{CompatibilityProfile, FunctionsCodebase, RuntimeConfig};
 pub struct FunctionPubSubResource {
     /// The canonical topic name.
     pub topic: fireemu_core_pubsub::TopicName,
-    /// The canonical emulator subscription name.
-    pub subscription: fireemu_core_pubsub::SubscriptionName,
+    /// The canonical emulator subscription name. A first-generation schedule's topic under the strict profile has none:
+    /// production creates a topic and no subscription for it.
+    pub subscription: Option<fireemu_core_pubsub::SubscriptionName>,
 }
 
 /// How the strict and the emulator profile name the subscription of a Pub/Sub function: the strict
@@ -63,50 +64,115 @@ pub fn auth_context_naming(
     }
 }
 
-/// Derives the unique Pub/Sub resources required by Pub/Sub and scheduled functions. Under
-/// `SubscriptionNaming::Eventarc` every 2nd gen Pub/Sub function gets its own subscription, so
-/// two functions on one topic give two resources; otherwise a topic gets one `emulator-sub-<topic>`.
+/// The buckets the Storage triggers of a manifest name explicitly. A trigger without a bucket
+/// listens on the project's default buckets, which always exist. The strict profile counts these
+/// buckets as existing even when empty: production needs the bucket to deploy the trigger.
+#[must_use]
+pub fn storage_trigger_buckets(
+    manifest: &fireemu_core_functions::manifest::FunctionManifest,
+) -> BTreeSet<String> {
+    use fireemu_core_functions::manifest::Trigger;
+    manifest
+        .functions
+        .iter()
+        .filter_map(|function| match &function.trigger {
+            Trigger::Storage {
+                bucket: Some(bucket),
+                ..
+            } => Some(bucket.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Derives the unique Pub/Sub resources required by Pub/Sub and scheduled functions.
+///
+/// Under `SubscriptionNaming::Eventarc` every 2nd gen Pub/Sub function gets its own subscription, so two functions on one
+/// topic give two resources; otherwise a topic gets one `emulator-sub-<topic>`.
+///
+/// The emulator profile follows the official emulator: every scheduled function has the topic
+/// `firebase-schedule-<name>` and an emulator subscription. The strict profile follows production: only a
+/// first-generation schedule has a topic, `firebase-schedule-<name>-<region>` (the id of its Cloud Scheduler job, runs
+/// `156715222b86ea44` and `f123d4fa2d61c5f5`), and no subscription of the emulator's; a second-generation schedule has
+/// none.
 pub fn function_pubsub_resources(
     project: &str,
     manifest: &fireemu_core_functions::manifest::FunctionManifest,
     naming: fireemu_adapter_functions::events::SubscriptionNaming,
+    profile: CompatibilityProfile,
 ) -> Result<Vec<FunctionPubSubResource>, String> {
     use fireemu_adapter_functions::events::function_subscription_id;
     use fireemu_core_functions::manifest::Trigger;
 
-    // (topic, subscription) -> the function that requires it, for diagnostics.
-    let mut wanted: BTreeMap<(String, String), String> = BTreeMap::new();
+    // (topic, subscription id; `None` for the topic of a schedule that production creates without a subscription) -> the
+    // smallest text of the functions that require it, for diagnostics.
+    let mut wanted: BTreeMap<(String, Option<String>), String> = BTreeMap::new();
+    let mut declare = |topic: String, subscription: Option<String>, owner: String| {
+        let entry = wanted
+            .entry((topic, subscription))
+            .or_insert_with(|| owner.clone());
+        if owner < *entry {
+            *entry = owner;
+        }
+    };
     for function in &manifest.functions {
         match &function.trigger {
             Trigger::PubSub { topic } => {
                 let subscription = function_subscription_id(naming, project, function, topic);
-                wanted
-                    .entry((topic.clone(), subscription))
-                    .or_insert_with(|| format!("function {:?}", function.name));
+                declare(
+                    topic.clone(),
+                    Some(subscription),
+                    format!("function {:?}", function.name),
+                );
+            }
+            Trigger::Schedule { .. } if uses_production_scheduler_defaults(profile) => {
+                if let Some(topic) = function.schedule_topic() {
+                    declare(
+                        topic,
+                        None,
+                        format!("scheduled function {:?}", function.name),
+                    );
+                }
             }
             Trigger::Schedule { .. } => {
                 let topic = format!("firebase-schedule-{}", function.name);
                 let subscription = format!("emulator-sub-{topic}");
-                wanted
-                    .entry((topic, subscription))
-                    .or_insert_with(|| format!("scheduled function {:?}", function.name));
+                declare(
+                    topic,
+                    Some(subscription),
+                    format!("scheduled function {:?}", function.name),
+                );
             }
             _ => {}
         }
     }
 
-    // Resource names, not the diagnostics attached to them, define uniqueness.
+    // A topic that some function subscribes to keeps its subscription; the subscriptionless declaration of the same topic
+    // adds nothing. Resource names, not the diagnostics attached to them, define uniqueness.
+    let subscribed: std::collections::BTreeSet<String> = wanted
+        .keys()
+        .filter(|(_, subscription)| subscription.is_some())
+        .map(|(topic, _)| topic.clone())
+        .collect();
     let mut resources = Vec::new();
     for ((topic_id, subscription_id), owner) in wanted {
+        if subscription_id.is_none() && subscribed.contains(&topic_id) {
+            continue;
+        }
         let topic = fireemu_core_pubsub::TopicName::new(project, &topic_id).map_err(|error| {
             format!("{owner} requires invalid Pub/Sub topic {topic_id:?}: {error}")
         })?;
-        let subscription = fireemu_core_pubsub::SubscriptionName::new(project, &subscription_id)
-            .map_err(|error| {
-                format!(
-                    "{owner} requires invalid Pub/Sub subscription {subscription_id:?}: {error}"
+        let subscription = subscription_id
+            .map(|subscription_id| {
+                fireemu_core_pubsub::SubscriptionName::new(project, &subscription_id).map_err(
+                    |error| {
+                        format!(
+                            "{owner} requires invalid Pub/Sub subscription {subscription_id:?}: {error}"
+                        )
+                    },
                 )
-            })?;
+            })
+            .transpose()?;
         resources.push(FunctionPubSubResource {
             topic,
             subscription,
@@ -126,11 +192,14 @@ pub fn provision_function_pubsub_resources(
     // Check every existing subscription before creating anything. A stale subscription with
     // the expected name but another topic is configuration drift, not an idempotent match.
     for resource in resources {
-        if let Ok(existing) = state.subscription_config(&resource.subscription) {
+        let Some(subscription) = &resource.subscription else {
+            continue;
+        };
+        if let Ok(existing) = state.subscription_config(subscription) {
             if existing.topic != resource.topic {
                 return Err(format!(
                     "Functions requires subscription {} to target {}, but it already targets {}",
-                    resource.subscription.to_full(),
+                    subscription.to_full(),
                     resource.topic.to_full(),
                     existing.topic.to_full()
                 ));
@@ -149,12 +218,17 @@ pub fn provision_function_pubsub_resources(
                     )
                 })?;
         }
-        if state.subscription_config(&resource.subscription).is_err() {
+        let Some(subscription) = &resource.subscription else {
+            continue;
+        };
+        if state.subscription_config(subscription).is_err() {
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                     retain_acked_messages: false,
                     message_retention_duration: None,
-                    name: resource.subscription.clone(),
+                    name: subscription.clone(),
                     topic: resource.topic.clone(),
                     ack_deadline_seconds: DEFAULT_ACK_DEADLINE_SECONDS,
                     enable_message_ordering: false,
@@ -166,16 +240,16 @@ pub fn provision_function_pubsub_resources(
                 .map_err(|error| {
                     format!(
                         "could not provision subscription {}: {error}",
-                        resource.subscription.to_full()
+                        subscription.to_full()
                     )
                 })?;
         }
         state
-            .mark_function_subscription(&resource.subscription)
+            .mark_function_subscription(subscription)
             .map_err(|error| {
                 format!(
                     "could not provision subscription {}: {error}",
-                    resource.subscription.to_full()
+                    subscription.to_full()
                 )
             })?;
     }
@@ -1395,6 +1469,7 @@ async fn supervise_codebase_reloads(
             &secret,
             callable_trusted_protocol,
             &resources.node_probe_cache,
+            runtime.clock_snapshot(),
         )
         .await
         {
@@ -2520,9 +2595,48 @@ fn default_runner_for_codebase(
     ])
 }
 
+fn launch_codebases(
+    cfg: &RuntimeConfig,
+    codebases: &[crate::config::FunctionsCodebase],
+    hosts: &EmulatorHosts,
+    runner_secret: &str,
+    callable_trusted_protocol: bool,
+    node_probe_cache: &Arc<NodeProbeCache>,
+    clock_snapshot: fireemu_core_session::clock::ClockSnapshot,
+) -> Vec<(
+    String,
+    tokio::task::JoinHandle<Result<fireemu_adapter_functions::runtime::CodebaseSpec, String>>,
+)> {
+    codebases
+        .iter()
+        .map(|codebase| {
+            let label = codebase.codebase.clone();
+            let cfg = (*cfg).clone();
+            let codebase = codebase.clone();
+            let hosts = hosts.clone();
+            let runner_secret = runner_secret.to_owned();
+            let node_probe_cache = node_probe_cache.clone();
+            let start = tokio::spawn(async move {
+                start_codebase(
+                    &cfg,
+                    &codebase,
+                    &hosts,
+                    &runner_secret,
+                    callable_trusted_protocol,
+                    &node_probe_cache,
+                    clock_snapshot,
+                )
+                .await
+            });
+            (label, start)
+        })
+        .collect()
+}
+
 /// Starts one runner process per configured codebase and the runtime that multiplexes them,
 /// and installs it as the backend's synchronous commit observer (Storage events are wired by
 /// the caller through [`storage_sink`]).
+#[allow(clippy::too_many_lines)] // Keep schedule profile selection with runtime startup.
 pub async fn start(
     cfg: &RuntimeConfig,
     clock: &Arc<Mutex<VirtualClock>>,
@@ -2531,6 +2645,8 @@ pub async fn start(
     runner_secret: &str,
     callable_trusted_protocol: bool,
 ) -> Result<Arc<FunctionsRuntime>, String> {
+    cfg.functions_clock
+        .bind(&mut *clock.lock().map_err(|_| "clock lock poisoned")?)?;
     let codebases = cfg.functions_to_load();
     if codebases.is_empty() {
         return Err("functions.source is not configured".to_owned());
@@ -2558,29 +2674,15 @@ pub async fn start(
     let node_probe_cache = Arc::new(NodeProbeCache::default());
     #[cfg(unix)]
     drop(schedule_orphan_function_snapshot_sweep(std::env::temp_dir()));
-    let starts = codebases
-        .iter()
-        .map(|codebase| {
-            let label = codebase.codebase.clone();
-            let cfg = (*cfg).clone();
-            let codebase = codebase.clone();
-            let hosts = hosts.clone();
-            let runner_secret = runner_secret.to_owned();
-            let node_probe_cache = node_probe_cache.clone();
-            let start = tokio::spawn(async move {
-                start_codebase(
-                    &cfg,
-                    &codebase,
-                    &hosts,
-                    &runner_secret,
-                    callable_trusted_protocol,
-                    &node_probe_cache,
-                )
-                .await
-            });
-            (label, start)
-        })
-        .collect();
+    let starts = launch_codebases(
+        cfg,
+        &codebases,
+        hosts,
+        runner_secret,
+        callable_trusted_protocol,
+        &node_probe_cache,
+        clock.lock().expect("clock lock").snapshot(),
+    );
     let outcomes = join_codebase_starts(starts).await;
     if let Some(error) = outcomes.iter().find_map(|outcome| outcome.as_ref().err()) {
         for spec in outcomes.iter().filter_map(|outcome| outcome.as_ref().ok()) {
@@ -2593,7 +2695,10 @@ pub async fn start(
     let config = FunctionsConfig {
         project: cfg.auth_project.clone(),
         default_bucket: format!("{}.appspot.com", cfg.auth_project),
-        location: "nam5".to_owned(),
+        location: match cfg.profile {
+            CompatibilityProfile::Strict => cfg.firestore_location.clone(),
+            CompatibilityProfile::Emulator => "nam5".to_owned(),
+        },
         session: SessionId::new(u128::from(cfg.seed)),
         max_running: cfg.functions_max_running,
         debug_mode: cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some(),
@@ -2604,13 +2709,27 @@ pub async fn start(
         catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::parse(&cfg.scheduler_catch_up)
             .unwrap_or_default(),
         functions_host: hosts.functions.clone(),
+        clock_policy: cfg.functions_clock,
+        clock_start_pinned: cfg.clock_start_pinned,
         subscription_naming: subscription_naming(cfg.profile),
         auth_context: auth_context_naming(cfg.profile),
     };
     // A function name two codebases both export is fatal here. The runners it collided
     // between are killed rather than left behind a daemon that refuses to serve them.
     let spawned: Vec<Arc<Runner>> = started.iter().map(|c| c.runner.clone()).collect();
-    let runtime = match FunctionsRuntime::with_codebases(started, config, clock.clone()) {
+    let runtime = match FunctionsRuntime::with_codebases(
+        started,
+        config,
+        clock.clone(),
+        match cfg.profile {
+            CompatibilityProfile::Strict => {
+                fireemu_adapter_functions::http::FunctionsHttpProfile::Strict
+            }
+            CompatibilityProfile::Emulator => {
+                fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator
+            }
+        },
+    ) {
         Ok(runtime) => runtime,
         Err(e) => {
             for runner in &spawned {
@@ -2707,6 +2826,7 @@ async fn start_codebase(
     runner_secret: &str,
     callable_trusted_protocol: bool,
     node_probe_cache: &Arc<NodeProbeCache>,
+    clock_snapshot: fireemu_core_session::clock::ClockSnapshot,
 ) -> Result<fireemu_adapter_functions::runtime::CodebaseSpec, String> {
     let source = codebase.source.clone();
     let label = &codebase.codebase;
@@ -2858,6 +2978,12 @@ async fn start_codebase(
             debug_features.to_owned(),
         ));
     }
+    env.push((
+        "FIREEMU_CLOCK_JSON".into(),
+        cfg.functions_clock
+            .runner_options(clock_snapshot)
+            .to_string(),
+    ));
     let spec = SpawnSpec {
         command,
         cwd: Some(source),
@@ -2869,6 +2995,22 @@ async fn start_codebase(
             .await
             .map_err(|e| format!("the Functions codebase {label:?}: {e}"))?,
     );
+    if cfg.functions_clock.date_virtual {
+        let capability = runner.hello().clock.as_ref();
+        let supports = capability.is_some_and(|c| {
+            c["version"] == 1
+                && c["date"] == true
+                && (!cfg.functions_clock.timers_virtual || c["timers"] == true)
+        });
+        if !supports {
+            runner.kill_now();
+            return Err(format!("the Functions codebase {label:?}: runner does not support the requested virtual clock"));
+        }
+        if let Err(error) = runner.sync_clock(clock_snapshot).await {
+            runner.kill_now();
+            return Err(error);
+        }
+    }
     if cfg.functions_inspect_dynamic || cfg.functions_inspect_port.is_some() {
         let actual = runner.hello().inspector_port;
         let port_matches = cfg
@@ -2912,12 +3054,21 @@ async fn start_codebase(
         if let Some(tz) = &cfg.scheduler_default_time_zone {
             apply_default_time_zone(&mut manifest_json, tz);
         }
-        let manifest = manifest_for_profile(cfg.profile, &manifest_json)?;
+        let manifest = manifest_for_profile(cfg.profile, &manifest_json, cfg.clock_start)?;
         // Before anything is served: every export the runner could not serve is either named in a
         // refusal or printed, one line each.
         let policy = UnservedTriggers::parse(&cfg.functions_unserved_triggers).unwrap_or_default();
-        for line in check_ignored(&manifest, policy)? {
-            eprintln!("note: {line}");
+        for (function, line) in manifest
+            .ignored
+            .iter()
+            .zip(check_ignored(&manifest, policy)?)
+        {
+            let level = if function.trigger_type == "schedule" {
+                "warning"
+            } else {
+                "note"
+            };
+            eprintln!("{level}: {line}");
         }
         if cfg.functions_manifest.is_some() {
             // A configured manifest replaces discovery outright. Security-sensitive trigger
@@ -2928,7 +3079,11 @@ async fn start_codebase(
                 .manifest
                 .clone()
                 .ok_or_else(|| "the functions runner did not discover a manifest".to_owned())?;
-            let mut discovered = parse_manifest(&discovered)?;
+            let mut discovered = if cfg.profile == CompatibilityProfile::Emulator {
+                manifest_for_profile(cfg.profile, &discovered, cfg.clock_start)?
+            } else {
+                parse_manifest(&discovered)?
+            };
             serve_blocking_events_for(cfg.profile, &mut discovered);
             check_manifest_agrees_on_blocking_auth(&manifest, &discovered)?;
             if callable_trusted_protocol {
@@ -2954,22 +3109,225 @@ async fn start_codebase(
     configured
 }
 
-/// The manifest `profile` serves: the parsed manifest, refused when the strict profile finds a schedule production
-/// Cloud Scheduler refuses, with the blocking functions the profile does not serve set aside.
+/// The manifest `profile` serves: the parsed manifest, refused when strict finds a declaration production refuses, with unparseable emulator schedules and unserved blocking functions set aside.
+#[allow(clippy::too_many_lines)] // Keep strict schedule normalization and validation together.
 fn manifest_for_profile(
     profile: CompatibilityProfile,
     manifest_json: &serde_json::Value,
+    now: fireemu_core_types::time::LogicalInstant,
 ) -> Result<fireemu_core_functions::manifest::FunctionManifest, String> {
+    let mut unscheduled = BTreeMap::new();
     let defaulted;
     let document = if uses_production_scheduler_defaults(profile) {
         let mut copy = manifest_json.clone();
         apply_first_generation_default_time_zone(&mut copy);
+        // Calendar v6 gr13: synchronized minutes use wall-clock alignment, in both recordings.
+        if let Some(functions) = copy
+            .get_mut("functions")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for function in functions {
+                let Some(trigger) = function.get_mut("trigger") else {
+                    continue;
+                };
+                if trigger.get("type").and_then(serde_json::Value::as_str) != Some("schedule") {
+                    continue;
+                }
+                if let Some(text) = trigger.get("schedule").and_then(serde_json::Value::as_str) {
+                    let lower = text.to_ascii_lowercase();
+                    let words: Vec<&str> = lower.split_whitespace().collect();
+                    if let ["every", n, "minutes", "synchronized"] = words.as_slice() {
+                        // Only divisors of 60: there `*/n` equals the day-aligned interval; others are unrecorded.
+                        if n.parse::<u32>()
+                            .is_ok_and(|n| (1..=60).contains(&n) && 60 % n == 0)
+                        {
+                            trigger["schedule"] =
+                                serde_json::Value::String(format!("*/{n} * * * *"));
+                        }
+                    }
+                }
+            }
+        }
         defaulted = copy;
         &defaulted
     } else {
-        manifest_json
+        let mut copy = manifest_json.clone();
+        if let Some(functions) = copy
+            .get_mut("functions")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for function in functions {
+                let Some(name) = function
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                else {
+                    continue;
+                };
+                let Some(trigger) = function.get_mut("trigger") else {
+                    continue;
+                };
+                if trigger.get("type").and_then(serde_json::Value::as_str) != Some("schedule") {
+                    continue;
+                }
+                let Some(text) = trigger.get("schedule").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let zone = trigger
+                    .get("timeZone")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|z| !z.is_empty());
+                let parsed = fireemu_core_functions::cron::Schedule::parse(text)
+                    .map_err(|e| format!("schedule: {e}"))
+                    .and_then(|_| {
+                        fireemu_adapter_functions::zone::resolve(zone)
+                            .map_err(|e| format!("time zone: {e}"))
+                    });
+                if let Err(reason) = parsed {
+                    unscheduled.insert(name, reason);
+                    // Validate the remaining metadata before moving this export to the ignored inventory.
+                    // This temporary trigger never reaches the runtime or creates a job.
+                    trigger["schedule"] = serde_json::json!("every 5 minutes");
+                    trigger["timeZone"] = serde_json::Value::Null;
+                }
+            }
+        }
+        defaulted = copy;
+        &defaulted
     };
     let mut manifest = parse_manifest(document)?;
+    let ignored = &mut manifest.ignored;
+    manifest.functions.retain(|function| {
+        let Some(reason) = unscheduled.remove(&function.name) else {
+            return true;
+        };
+        ignored.push(fireemu_core_functions::manifest::IgnoredFunction {
+            name: function.name.clone(),
+            region: function.region.clone(),
+            trigger_type: "schedule".to_owned(),
+            scope: fireemu_core_functions::manifest::IgnoredScope::Unsupported,
+            reason: format!("no scheduled job: {reason}"),
+        });
+        false
+    });
+    if profile == CompatibilityProfile::Strict {
+        for function in &mut manifest.functions {
+            if let fireemu_core_functions::manifest::Trigger::Eventarc {
+                channel, filters, ..
+            } = &function.trigger
+            {
+                // EVENTARC packet H v4: only the exact source filter on a custom-event channel is recorded as refused.
+                if channel != fireemu_adapter_functions::eventarc::GOOGLE_CHANNEL
+                    && filters.contains_key("source")
+                {
+                    return Err(format!(
+                        "manifest: function {:?}: Cloud Functions refuses this Eventarc trigger (HTTP 400): Validation failed for trigger projects/<project>/locations/{}/triggers/<trigger-id>: The request was invalid: invalid filter 'source' in trigger.event_filters: filter 'source' is not allowed for this trigger",
+                        function.name, function.region
+                    ));
+                }
+            }
+            let fireemu_core_functions::manifest::Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = &mut function.trigger
+            else {
+                continue;
+            };
+            let text = schedule.as_str();
+            let lower = text.to_ascii_lowercase();
+            let words: Vec<&str> = lower.split_whitespace().collect();
+            // Calendar v6 cr11 and gr11: production rejects aliases and weekday prefixes.
+            let invalid_weekday = match words.as_slice() {
+                ["every", days, time] if time.contains(':') && *days != "day" => {
+                    days.split(',').any(|day| {
+                        !matches!(
+                            day,
+                            "sun"
+                                | "sunday"
+                                | "mon"
+                                | "monday"
+                                | "tue"
+                                | "tuesday"
+                                | "wed"
+                                | "wednesday"
+                                | "thu"
+                                | "thursday"
+                                | "fri"
+                                | "friday"
+                                | "sat"
+                                | "saturday"
+                        )
+                    })
+                }
+                _ => false,
+            };
+            if text.starts_with('@') || invalid_weekday {
+                return Err(format!(
+                    "manifest: function {:?}: schedule: The provided schedule or timezone are invalid.",
+                    function.name
+                ));
+            }
+            // Calendar v6 cr12: a step on a single numeric value does not extend its range.
+            if words.len() == 5 {
+                let normalized = text
+                    .split_whitespace()
+                    .map(|field| {
+                        field
+                            .split(',')
+                            .map(|item| match item.split_once('/') {
+                                Some((value, _)) if value.parse::<u32>().is_ok() => value,
+                                _ => item,
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if normalized != text {
+                    *schedule = fireemu_core_functions::cron::Schedule::parse(&normalized)
+                        .map_err(|e| {
+                            format!("manifest: function {:?}: schedule: {e}", function.name)
+                        })?;
+                }
+            }
+            let zone = fireemu_adapter_functions::zone::resolve(time_zone.as_deref())
+                .map_err(|e| format!("manifest: function {:?}: time zone: {e}", function.name))?;
+            // Calendar v6 cr13 is invalid even without DST; ds01 has no occurrence in its zone.
+            if schedule.next_after_in(now, &*zone).is_none() {
+                // A bounded search cannot prove impossibility. Only the recorded class (cr13: one numeric
+                // day of month, numeric months, any day of week "*") is judged impossible structurally.
+                let fields: Vec<&str> = schedule.as_str().split_whitespace().collect();
+                let impossible = match fields.as_slice() {
+                    [_, _, day, months, "*"] => day.parse::<u32>().is_ok_and(|day| {
+                        months
+                            .split(',')
+                            .map(|month| month.parse::<u32>().ok().filter(|m| (1..=12).contains(m)))
+                            .collect::<Option<Vec<_>>>()
+                            .is_some_and(|months| {
+                                months.iter().all(|month| {
+                                    day > match month {
+                                        2 => 29,
+                                        4 | 6 | 9 | 11 => 30,
+                                        _ => 31,
+                                    }
+                                })
+                            })
+                    }),
+                    _ => false,
+                };
+                let reason = if impossible {
+                    "The provided schedule or timezone are invalid."
+                } else {
+                    "Cannot find next schedule time."
+                };
+                return Err(format!(
+                    "manifest: function {:?}: schedule: {reason}",
+                    function.name
+                ));
+            }
+        }
+    }
     check_scheduler_refusals_for(profile, &manifest, manifest_json)?;
     serve_blocking_events_for(profile, &mut manifest);
     Ok(manifest)
@@ -3000,6 +3358,11 @@ fn check_scheduler_refusals_for(
                         .iter()
                         .find(|(name, _)| *name == function.name)
                         .map(|(_, why)| *why)
+                }).or_else(|| {
+                    // Calendar v6 rt05: both recordings refuse the inverted backoff range.
+                    (retry.min_backoff_seconds > retry.max_backoff_seconds).then_some(
+                        "retryConfig.min_backoff_duration must be less than or equal to retryConfig.max_backoff_duration: invalid argument"
+                    )
                 })
             }
             _ => None,
@@ -4718,6 +5081,18 @@ impl BlockingAuthBridge {
             };
         };
         self.require_selected_target(selection, &target)?;
+        let synchronize_date = self.runtime.application_clock_policy().date_virtual;
+        if synchronize_date {
+            let handle = tokio::runtime::Handle::try_current()
+                .map_err(|_| BlockingFunctionFailure::unhandled())?;
+            handle
+                .block_on(tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(admission_deadline),
+                    self.runtime.sync_blocking_auth_clock(&target),
+                ))
+                .map_err(|_| BlockingFunctionFailure::timeout())?
+                .map_err(|_| BlockingFunctionFailure::unhandled())?;
+        }
         let context = narrow_blocking_auth_credentials(
             context,
             self.forward_inbound_credentials,
@@ -4745,10 +5120,10 @@ impl BlockingAuthBridge {
         // The token the function's firebase-functions decodes into its event, as Identity
         // Platform and the official Auth emulator deliver it.
         let body = serde_json::json!({"data": {"jwt": unsigned_jwt(&claims)}}).to_string();
-        // The platform's deadline covers a cold start; a recovered runner is fireemu's cold start,
-        // so its call waits only for what is left of the deadline. An admitted runner keeps the
-        // whole deadline, and a function whose own timeout equals it still times out first.
-        let budget = if recovered {
+        // Recovery and virtual-clock acknowledgement share the platform's native deadline.
+        // A warm native-clock runner keeps its full budget; a function with an equal own
+        // timeout still times out before the platform envelope.
+        let budget = if recovered || synchronize_date {
             blocking_auth_remaining(admission_deadline)?
         } else {
             self.deadline
@@ -5010,6 +5385,25 @@ fn run_schedule_error(
 pub struct Hook(pub Arc<FunctionsRuntime>);
 
 impl FunctionsHook for Hook {
+    fn validate_clock_target(
+        &self,
+        instant: fireemu_core_types::time::LogicalInstant,
+    ) -> Result<(), String> {
+        self.0.validate_clock(instant)
+    }
+    fn sync_clock(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
+        Box::pin(self.0.sync_clock())
+    }
+    fn run_due(
+        &self,
+        budget: usize,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<serde_json::Value, String>> + Send + '_>,
+    > {
+        Box::pin(self.0.run_due(budget))
+    }
     fn on_clock_changed(&self) {
         self.0.on_clock_changed();
     }
@@ -5042,6 +5436,56 @@ impl FunctionsHook for Hook {
 
     fn project(&self) -> String {
         self.0.project().to_owned()
+    }
+}
+
+/// Whether a schedule's message is published to its topic: the strict profile does, as Cloud Scheduler does, when a
+/// Pub/Sub broker is served to publish into.
+pub(crate) const fn publishes_schedule_messages(
+    pubsub_served: bool,
+    profile: CompatibilityProfile,
+) -> bool {
+    pubsub_served && uses_production_scheduler_defaults(profile)
+}
+
+/// Publishes the message of a first-generation schedule run to its topic in the Pub/Sub broker, as Cloud Scheduler does
+/// in production (strict profile): the message has the attribute `scheduled: "true"` and no data, the id and the publish
+/// time the handler's context reports. The runtime still delivers the schedule event to the handler itself, so the
+/// topic's subscribers are the only other readers; a publication refusal prevents handler invocation.
+pub struct PubSubSchedulePublisher {
+    handle: fireemu_adapter_pubsub::PubSubHandle,
+    project: String,
+}
+
+impl PubSubSchedulePublisher {
+    /// Publishes through `handle` into `project`'s topics.
+    #[must_use]
+    pub fn new(handle: fireemu_adapter_pubsub::PubSubHandle, project: &str) -> Self {
+        Self {
+            handle,
+            project: project.to_owned(),
+        }
+    }
+}
+
+impl fireemu_adapter_functions::runtime::ScheduleTopicPublisher for PubSubSchedulePublisher {
+    fn publish(
+        &self,
+        topic: &str,
+        message_id: &str,
+        at: fireemu_core_types::time::LogicalInstant,
+    ) -> Result<(), String> {
+        let topic = fireemu_core_pubsub::TopicName::new(&self.project, topic)
+            .map_err(|error| error.to_string())?;
+        let message = fireemu_core_pubsub::PubsubMessage {
+            data: Vec::new(),
+            attributes: BTreeMap::from([("scheduled".to_owned(), "true".to_owned())]),
+            ordering_key: String::new(),
+        };
+        self.handle
+            .publish_with_message_ids(&topic, vec![(message, message_id.to_owned())], at)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -5187,14 +5631,15 @@ mod tests {
         load_user_environment, node_engine_matches, owned_pubsub_topic, package_node_engine,
         parse_node_version, provision_function_pubsub_resources, select_node_installation,
         snapshot_functions_source, source_scan_pacing_delay, source_scan_retry_delay,
-        stream_source_chunks, update_watch_hash, validate_functions_codebase_budget,
-        wait_for_fixed_inspector_port_release, warn_reload_once, BlockingAuthBridge,
-        FunctionsSourceByteBudget, FunctionsSourceEntryBudget, FunctionsSourceFileVersion,
-        FunctionsSourceScanBudget, FunctionsSourceSnapshot, FunctionsSourceStamp,
-        FunctionsSourceTraversal, NodeInstallation, PubSubBridge, UserEnvironment,
-        BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_BYTES,
-        MAX_FUNCTIONS_SOURCE_ENTRIES, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND,
-        MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND, SOURCE_IO_BUFFER_BYTES,
+        storage_trigger_buckets, stream_source_chunks, update_watch_hash,
+        validate_functions_codebase_budget, wait_for_fixed_inspector_port_release,
+        warn_reload_once, BlockingAuthBridge, FunctionsSourceByteBudget,
+        FunctionsSourceEntryBudget, FunctionsSourceFileVersion, FunctionsSourceScanBudget,
+        FunctionsSourceSnapshot, FunctionsSourceStamp, FunctionsSourceTraversal, NodeInstallation,
+        PubSubBridge, PubSubSchedulePublisher, UserEnvironment, BLOCKING_AUTH_DEADLINE,
+        MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
+        MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
+        SOURCE_IO_BUFFER_BYTES,
     };
     #[cfg(not(windows))]
     use super::{
@@ -5206,6 +5651,7 @@ mod tests {
         schedule_orphan_function_snapshot_sweep, snapshot_directory_name, snapshot_owned_directory,
         snapshot_owner_pid, sweep_orphan_function_snapshots,
     };
+    use crate::config::CompatibilityProfile;
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
         Filter, PubSubState, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
@@ -5900,6 +6346,105 @@ mod tests {
         assert!(error.contains("local safety budget of 32"), "{error}");
     }
 
+    #[tokio::test]
+    async fn startup_delivers_the_configured_firestore_location_only_under_strict() {
+        use fireemu_adapter_grpc::gateway::Gateway;
+        use fireemu_adapter_grpc::local::{Actor, CommitEvent, LocalBackend};
+        use fireemu_core_firestore::index::{IndexSet, PlanningContext};
+        use fireemu_core_firestore::path::DocumentPath;
+        use fireemu_core_firestore::store::{CommitVersion, Document, DocumentChange};
+        use fireemu_core_types::ids::{DatabaseId, ProjectId};
+
+        let dir =
+            std::env::temp_dir().join(format!("fireemu-event-location-{}", std::process::id()));
+        let source = dir.join("src");
+        std::fs::create_dir_all(&source).unwrap();
+        let manifest_path = dir.join("manifest.json");
+        std::fs::write(&manifest_path, json!({"functions": [{
+            "name": "locationProbe", "generation": 2,
+            "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.created", "document": "items/{id}"}
+        }]}).to_string()).unwrap();
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let hosts = super::EmulatorHosts {
+            firestore: None,
+            auth: None,
+            storage: None,
+            functions: None,
+            eventarc: None,
+            tasks: None,
+            logging: None,
+            pubsub: None,
+            hub: None,
+        };
+        for (profile, firestore, expected) in [
+            ("strict", json!({}), "nam5"),
+            ("strict", json!({"location": "us-central1"}), "us-central1"),
+            ("emulator", json!({}), "nam5"),
+            ("emulator", json!({"location": "us-central1"}), "nam5"),
+        ] {
+            let mut cfg = crate::config::RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1, "profile": profile, "firestore": firestore
+            }))
+            .unwrap();
+            cfg.functions_source = Some(source.display().to_string());
+            cfg.functions_runner = Some(vec!["python3".to_owned(), script.display().to_string()]);
+            cfg.functions_manifest = Some(manifest_path.display().to_string());
+            let clock = Arc::new(Mutex::new(VirtualClock::new(cfg.clock_start)));
+            let backend = Arc::new(LocalBackend::new(
+                Gateway {
+                    ctx: PlanningContext {
+                        edition: cfg.edition,
+                        api_mode: cfg.api_mode,
+                        policy: cfg.index_policy,
+                    },
+                    indexes: IndexSet::default(),
+                    enforce_limits: cfg.enforce_limits,
+                },
+                clock.clone(),
+                cfg.seed,
+            ));
+            let runtime = super::start(&cfg, &clock, &backend, &hosts, "test-secret", false)
+                .await
+                .unwrap();
+            let path = DocumentPath::parse(
+                &ProjectId::try_new("demo-app").unwrap(),
+                &DatabaseId::default_database(),
+                "items/one",
+            )
+            .unwrap();
+            runtime.on_commit(&CommitEvent {
+                actor: Actor::system(),
+                project: "demo-app".to_owned(),
+                database: DatabaseId::DEFAULT.to_owned(),
+                version: 1,
+                commit_time: Some(cfg.clock_start),
+                changes: Arc::from(vec![DocumentChange {
+                    path: path.clone(),
+                    before: None,
+                    after: Some(Arc::new(Document {
+                        path,
+                        fields: BTreeMap::new(),
+                        create_time: cfg.clock_start,
+                        update_time: cfg.clock_start,
+                        version: CommitVersion::default(),
+                    })),
+                }]),
+            });
+            let idle = runtime.await_idle(Duration::from_secs(5)).await;
+            let logs = runtime.runner().logs_since(None);
+            runtime.shutdown().await;
+            idle.unwrap();
+            let log = logs
+                .lines
+                .iter()
+                .find(|line| line.function() == Some("locationProbe"))
+                .expect("the event reached the runner");
+            assert_eq!(log.fields()["location"], expected, "{profile}: {firestore}");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     fn claims_for(
         tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,
@@ -6316,7 +6861,6 @@ mod tests {
         use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
         use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
         use fireemu_core_functions::manifest::Trigger;
-        use fireemu_core_types::ids::SessionId;
         use fireemu_core_types::time::LogicalInstant;
 
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -6350,21 +6894,8 @@ mod tests {
         let runtime = FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
-                session: SessionId::new(7),
-                max_running: 4,
-                debug_mode: false,
                 retry_attempts: 1,
-                max_catch_up_runs: 1,
-                runner_secret: "test-secret".to_owned(),
-                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-                functions_host: None,
-                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
-                ),
-                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1, "test-secret".to_owned())
             },
             clock.clone(),
             Arc::new(runner),
@@ -6874,6 +7405,80 @@ mod tests {
         assert!(error.contains("missing"), "{error}");
     }
 
+    #[test]
+    fn strict_refuses_eventarc_source_filters_with_the_production_message() {
+        for channel in [
+            None,
+            Some("locations/us-central1/channels/custom"),
+            Some("projects/demo-test/locations/us-central1/channels/custom"),
+        ] {
+            let mut document = json!({"functions": [
+                {"name": "accepted", "generation": 2, "trigger": {"type": "http"}},
+                {"name": "customSource", "region": "us-central1", "generation": 2, "trigger": {
+                    "type": "eventarc", "eventType": "com.example.done",
+                    "filters": {"type": "com.example.done", "source": "urn:example:source"}
+                }}
+            ]});
+            if let Some(channel) = channel {
+                document["functions"][1]["trigger"]["channel"] = json!(channel);
+            }
+            let now = crate::config::RuntimeConfig::default().clock_start;
+            assert_eq!(
+                super::manifest_for_profile(CompatibilityProfile::Strict, &document, now)
+                    .unwrap_err(),
+                "manifest: function \"customSource\": Cloud Functions refuses this Eventarc trigger (HTTP 400): Validation failed for trigger projects/<project>/locations/us-central1/triggers/<trigger-id>: The request was invalid: invalid filter 'source' in trigger.event_filters: filter 'source' is not allowed for this trigger"
+            );
+            assert_eq!(
+                super::manifest_for_profile(CompatibilityProfile::Emulator, &document, now)
+                    .unwrap(),
+                parse_manifest(&document).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn eventarc_type_only_and_unrecorded_filters_remain_accepted_by_both_profiles() {
+        for filters in [
+            json!({"type": "com.example.done"}),
+            json!({"type": "com.example.done", "sourcex": "urn:example:source"}),
+            json!({"type": "com.example.done", "Source": "urn:example:source"}),
+            json!({"type": "com.example.done", "subject": "example"}),
+        ] {
+            let document = json!({"functions": [{"name": "custom", "generation": 2,
+                "trigger": {"type": "eventarc", "eventType": "com.example.done", "filters": filters}
+            }]});
+            for profile in [CompatibilityProfile::Strict, CompatibilityProfile::Emulator] {
+                assert_eq!(
+                    super::manifest_for_profile(
+                        profile,
+                        &document,
+                        crate::config::RuntimeConfig::default().clock_start,
+                    )
+                    .unwrap(),
+                    parse_manifest(&document).unwrap(),
+                    "{profile:?}: {filters}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn eventarc_source_refusal_does_not_claim_google_channel_triggers() {
+        let document = json!({"functions": [{"name": "alert", "generation": 2,
+            "trigger": {"type": "eventarc", "eventType": "google.firebase.firebasealerts.alerts.v1.published",
+                "channel": "google", "filters": {"source": "urn:example:source"}}
+        }]});
+        assert_eq!(
+            super::manifest_for_profile(
+                CompatibilityProfile::Strict,
+                &document,
+                crate::config::RuntimeConfig::default().clock_start,
+            )
+            .unwrap(),
+            parse_manifest(&document).unwrap()
+        );
+    }
+
     /// The refusal check over a manifest document: parse it, then ask the profile.
     fn scheduler_check(
         profile: super::CompatibilityProfile,
@@ -7058,18 +7663,28 @@ mod tests {
             {"name": "schedRetryV2", "generation": 2, "trigger": {"type": "schedule", "schedule": "every 5 minutes", "retryConfig": {"retryCount": 6}}},
             {"name": "mail", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeSendEmail"}},
         ]});
-        let error = super::manifest_for_profile(super::CompatibilityProfile::Strict, &declared)
-            .unwrap_err();
+        let error = super::manifest_for_profile(
+            super::CompatibilityProfile::Strict,
+            &declared,
+            crate::config::RuntimeConfig::default().clock_start,
+        )
+        .unwrap_err();
         assert!(error.contains("schedRetryV2"), "{error}");
         assert!(error.contains(COUNT_TEXT), "{error}");
         let nanos = scheduled_with(json!({"maxRetrySeconds": 20.5}));
-        assert!(
-            super::manifest_for_profile(super::CompatibilityProfile::Strict, &nanos)
-                .unwrap_err()
-                .contains(NANOS_TEXT)
-        );
-        let emulator =
-            super::manifest_for_profile(super::CompatibilityProfile::Emulator, &declared).unwrap();
+        assert!(super::manifest_for_profile(
+            super::CompatibilityProfile::Strict,
+            &nanos,
+            crate::config::RuntimeConfig::default().clock_start
+        )
+        .unwrap_err()
+        .contains(NANOS_TEXT));
+        let emulator = super::manifest_for_profile(
+            super::CompatibilityProfile::Emulator,
+            &declared,
+            crate::config::RuntimeConfig::default().clock_start,
+        )
+        .unwrap();
         assert_eq!(
             emulator
                 .functions
@@ -7083,13 +7698,271 @@ mod tests {
             {"name": "ok", "trigger": {"type": "schedule", "schedule": "every 5 minutes", "retryConfig": {"retryCount": 5}}},
             {"name": "mail", "trigger": {"type": "blockingAuth", "eventType": "providers/cloud.auth/eventTypes/user.beforeSendEmail"}},
         ]});
-        let strict =
-            super::manifest_for_profile(super::CompatibilityProfile::Strict, &accepted).unwrap();
+        let strict = super::manifest_for_profile(
+            super::CompatibilityProfile::Strict,
+            &accepted,
+            crate::config::RuntimeConfig::default().clock_start,
+        )
+        .unwrap();
         assert_eq!(
             strict.functions.len(),
             2,
             "strict serves the send-blocking function"
         );
+    }
+
+    #[test]
+    fn calendar_v6_cr11_gr11_rt05_strict_refusals_preserve_emulator_acceptance() {
+        use fireemu_core_types::time::LogicalInstant;
+
+        let mut failures = Vec::new();
+        for (id, schedule, zone, retry, reason) in [
+            ("cr11", "@daily", "UTC", json!({}), "schedule:"),
+            ("gr11", "every mond 09:00", "UTC", json!({}), "schedule:"),
+            ("rt05", "0 9 * * *", "UTC", json!({"minBackoffSeconds": 100, "maxBackoffSeconds": 50}), "retryConfig.min_backoff_duration must be less than or equal to retryConfig.max_backoff_duration: invalid argument"),
+        ] {
+            let document = json!({"functions": [{"name": id, "generation": 2, "trigger": {
+                "type": "schedule", "schedule": schedule, "timeZone": zone, "retryConfig": retry,
+            }}]});
+            for anchor in ["2026-10-04T23:49:00Z", "2026-10-05T00:30:00Z"] {
+                let now = LogicalInstant::parse_rfc3339(anchor).unwrap();
+                let strict = super::manifest_for_profile(CompatibilityProfile::Strict, &document, now);
+                match strict {
+                    Err(error) if error.contains(reason) => {}
+                    other => failures.push(format!("{id}: expected refusal {reason:?}, got {other:?}")),
+                }
+                assert!(super::manifest_for_profile(CompatibilityProfile::Emulator, &document, now).is_ok(), "{id}: official emulator accepts this declaration");
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn calendar_v6_cr13_returns_the_invalid_schedule_message_in_both_recordings() {
+        use fireemu_core_types::time::LogicalInstant;
+
+        let document = json!({"functions": [{"name": "cr13", "generation": 2, "trigger": {
+            "type": "schedule", "schedule": "0 0 30 2 *", "timeZone": "UTC",
+        }}]});
+        for anchor in ["2026-10-04T23:49:19.120Z", "2026-10-05T00:30:30.960Z"] {
+            let now = LogicalInstant::parse_rfc3339(anchor).unwrap();
+            assert_eq!(super::manifest_for_profile(CompatibilityProfile::Strict, &document, now).unwrap_err(),
+                "manifest: function \"cr13\": schedule: The provided schedule or timezone are invalid.");
+            assert!(
+                super::manifest_for_profile(CompatibilityProfile::Emulator, &document, now).is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn a_rare_valid_schedule_is_not_reported_as_invalid() {
+        let document = json!({"functions": [{"name": "rare", "trigger": {
+            "type": "schedule", "schedule": "5th mon of feb 00:00", "timeZone": "UTC",
+        }}]});
+        let now = fireemu_core_types::time::LogicalInstant::parse_rfc3339("2026-10-05T00:30:00Z")
+            .unwrap();
+        if let Err(error) =
+            super::manifest_for_profile(CompatibilityProfile::Strict, &document, now)
+        {
+            assert_eq!(
+                error,
+                "manifest: function \"rare\": schedule: Cannot find next schedule time."
+            );
+        }
+    }
+
+    #[test]
+    fn calendar_v6_days_exceeding_every_listed_month_are_reported_as_invalid() {
+        // The recorded class (cr13) and its numeric generalization get the invalid message;
+        // other shapes are unrecorded and keep the generic one.
+        for (schedule, reason) in [
+            (
+                "0 0 30 2 *",
+                "The provided schedule or timezone are invalid.",
+            ),
+            (
+                "0 0 31 4,6 *",
+                "The provided schedule or timezone are invalid.",
+            ),
+            ("0 0 30,31 2 *", "Cannot find next schedule time."),
+            ("0 0 31 apr,jun *", "Cannot find next schedule time."),
+        ] {
+            let document = json!({"functions": [{"name": "impossible", "trigger": {
+                "type": "schedule", "schedule": schedule, "timeZone": "UTC",
+            }}]});
+            let error = super::manifest_for_profile(
+                CompatibilityProfile::Strict,
+                &document,
+                crate::config::RuntimeConfig::default().clock_start,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error,
+                format!("manifest: function \"impossible\": schedule: {reason}"),
+                "{schedule}"
+            );
+        }
+    }
+
+    #[test]
+    fn calendar_v6_ds01_returns_the_unreachable_schedule_message_in_both_recordings() {
+        use fireemu_core_types::time::LogicalInstant;
+
+        let document = json!({"functions": [{"name": "ds01", "generation": 2, "trigger": {
+            "type": "schedule", "schedule": "2nd sun of mar 2:30", "timeZone": "America/New_York",
+        }}]});
+        for anchor in ["2026-10-04T23:50:07.764Z", "2026-10-05T00:31:16.289Z"] {
+            let now = LogicalInstant::parse_rfc3339(anchor).unwrap();
+            assert_eq!(
+                super::manifest_for_profile(CompatibilityProfile::Strict, &document, now)
+                    .unwrap_err(),
+                "manifest: function \"ds01\": schedule: Cannot find next schedule time."
+            );
+            assert!(
+                super::manifest_for_profile(CompatibilityProfile::Emulator, &document, now).is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn calendar_v6_gr13_strict_accepts_synchronized_minutes_in_both_recordings() {
+        use fireemu_core_types::time::LogicalInstant;
+
+        let document = json!({"functions": [{"name": "gr13", "generation": 2, "trigger": {
+            "type": "schedule", "schedule": "every 20 minutes synchronized", "timeZone": "UTC",
+        }}]});
+        let zone = fireemu_adapter_functions::zone::resolve(Some("UTC")).unwrap();
+        for (anchor, expected) in [
+            ("2026-10-04T23:49:48.953022Z", "2026-10-05T00:00:00Z"),
+            ("2026-10-05T00:30:59.848634Z", "2026-10-05T00:40:00Z"),
+        ] {
+            let now = LogicalInstant::parse_rfc3339(anchor).unwrap();
+            let manifest =
+                super::manifest_for_profile(CompatibilityProfile::Strict, &document, now)
+                    .expect("gr13: both recordings accept synchronized grammar");
+            let (_, schedule, _) = manifest.scheduled().next().unwrap();
+            assert_eq!(
+                schedule.next_after_in(now, &*zone),
+                Some(LogicalInstant::parse_rfc3339(expected).unwrap())
+            );
+        }
+        let emulator = super::manifest_for_profile(
+            CompatibilityProfile::Emulator,
+            &document,
+            crate::config::RuntimeConfig::default().clock_start,
+        )
+        .unwrap();
+        assert_eq!(emulator.scheduled().count(), 0);
+        assert_eq!(
+            super::check_ignored(&emulator, super::UnservedTriggers::Refuse).unwrap(),
+            ["functions[us-central1-gr13]: function ignored (schedule): no scheduled job: schedule: unrecognised schedule \"every 20 minutes synchronized\""]
+        );
+        let unrecorded = json!({"functions": [{"name": "gr13", "generation": 2, "trigger": {
+            "type": "schedule", "schedule": "every 7 minutes synchronized", "timeZone": "UTC",
+        }}]});
+        assert!(super::manifest_for_profile(
+            CompatibilityProfile::Strict,
+            &unrecorded,
+            crate::config::RuntimeConfig::default().clock_start
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn calendar_v6_cr12_numeric_slash_is_a_single_value_only_in_strict() {
+        use fireemu_core_types::time::LogicalInstant;
+
+        let document = json!({"functions": [{"name": "cr12", "generation": 2, "trigger": {
+            "type": "schedule", "schedule": "5/15 * * * *", "timeZone": "UTC",
+        }}]});
+        let zone = fireemu_adapter_functions::zone::resolve(Some("UTC")).unwrap();
+        for (anchor, strict_next, emulator_next) in [
+            (
+                "2026-10-04T23:49:16.807Z",
+                "2026-10-05T00:05:00Z",
+                "2026-10-04T23:50:00Z",
+            ),
+            (
+                "2026-10-05T00:30:27.733Z",
+                "2026-10-05T01:05:00Z",
+                "2026-10-05T00:35:00Z",
+            ),
+        ] {
+            let now = LogicalInstant::parse_rfc3339(anchor).unwrap();
+            for (profile, expected) in [
+                (CompatibilityProfile::Strict, strict_next),
+                (CompatibilityProfile::Emulator, emulator_next),
+            ] {
+                let manifest = super::manifest_for_profile(profile, &document, now).unwrap();
+                let (_, schedule, _) = manifest.scheduled().next().unwrap();
+                assert_eq!(
+                    schedule.next_after_in(now, &*zone),
+                    Some(LogicalInstant::parse_rfc3339(expected).unwrap()),
+                    "cr12: {profile:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn calendar_v6_gr01_gr07_gr08_accepted_grammar_matches_both_recordings() {
+        use fireemu_core_types::time::LogicalInstant;
+
+        let zone = fireemu_adapter_functions::zone::resolve(Some("UTC")).unwrap();
+        let mut failures = Vec::new();
+        for (id, schedule, observations) in [
+            (
+                "gr01",
+                "every minute",
+                [
+                    ("2026-10-04T23:49:20.930Z", Some("2026-10-04T23:50:00Z")),
+                    ("2026-10-05T00:30:32.330Z", Some("2026-10-05T00:31:00Z")),
+                ],
+            ),
+            (
+                "gr07",
+                "1,15 of jan,jul 12:34",
+                [
+                    ("2026-10-04T23:49:36.706Z", Some("2027-01-01T12:34:00Z")),
+                    ("2026-10-05T00:30:48.352Z", Some("2027-01-01T12:34:00Z")),
+                ],
+            ),
+            // gr08: creation-minute timing is pinned separately by the runtime tests.
+            (
+                "gr08",
+                "every 25 hours",
+                [
+                    ("2026-10-04T23:49:39.448Z", None),
+                    ("2026-10-05T00:30:50.476Z", None),
+                ],
+            ),
+        ] {
+            let document = json!({"functions": [{"name": id, "generation": 2, "trigger": {
+                "type": "schedule", "schedule": schedule, "timeZone": "UTC",
+            }}]});
+            for (anchor, expected) in observations {
+                let now = LogicalInstant::parse_rfc3339(anchor).unwrap();
+                for profile in [CompatibilityProfile::Strict, CompatibilityProfile::Emulator] {
+                    let manifest = match super::manifest_for_profile(profile, &document, now) {
+                        Ok(manifest) => manifest,
+                        Err(error) => {
+                            failures.push(format!("{id}: {profile:?}: {error}"));
+                            continue;
+                        }
+                    };
+                    let (_, parsed, _) = manifest.scheduled().next().unwrap();
+                    assert_eq!(parsed.as_str(), schedule, "{id}");
+                    if let Some(expected) = expected {
+                        assert_eq!(
+                            parsed.next_after_in(now, &*zone),
+                            Some(LogicalInstant::parse_rfc3339(expected).unwrap()),
+                            "{id}: {profile:?}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     /// The startup path itself: `start_codebase` applies the profile to the manifest it reads (here a configured
@@ -7144,9 +8017,16 @@ mod tests {
                     functions_manifest: Some(manifest_path.display().to_string()),
                     ..crate::config::RuntimeConfig::default()
                 };
-                let started =
-                    super::start_codebase(&cfg, &codebase, &hosts, "test-secret", false, &cache)
-                        .await;
+                let started = super::start_codebase(
+                    &cfg,
+                    &codebase,
+                    &hosts,
+                    "test-secret",
+                    false,
+                    &cache,
+                    VirtualClock::new(cfg.clock_start).snapshot(),
+                )
+                .await;
                 if let (super::CompatibilityProfile::Strict, Some(text)) = (profile, refused_text) {
                     let error = started.err().unwrap();
                     assert!(error.contains(text), "{retry}: {error}");
@@ -7157,6 +8037,241 @@ mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unparseable_emulator_schedules_still_validate_the_remaining_manifest() {
+        let now = crate::config::RuntimeConfig::default().clock_start;
+        let mut document = json!({"functions": [{"name": "job", "trigger": {
+            "type": "schedule", "schedule": "every 0 minutes",
+        }}]});
+        document["functions"][0]["timeoutSeconds"] = json!(0);
+        assert!(
+            super::manifest_for_profile(CompatibilityProfile::Emulator, &document, now)
+                .unwrap_err()
+                .contains("timeoutSeconds")
+        );
+        document["functions"][0]["timeoutSeconds"] = json!(60);
+        document["functions"][0]["trigger"]
+            .as_object_mut()
+            .unwrap()
+            .remove("schedule");
+        assert_eq!(
+            super::manifest_for_profile(CompatibilityProfile::Emulator, &document, now)
+                .unwrap_err(),
+            "manifest: function \"job\": schedule is required"
+        );
+        document["functions"][0]["trigger"]["schedule"] = json!("every 0 minutes");
+        let duplicate = document["functions"][0].clone();
+        document["functions"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        assert!(
+            super::manifest_for_profile(CompatibilityProfile::Emulator, &document, now)
+                .unwrap_err()
+                .contains("declared twice")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)] // Keep the recorded declarations and both profile checks together.
+    async fn recorded_unparseable_schedules_start_with_warnings_and_no_jobs_only_in_emulator() {
+        use fireemu_core_types::time::LogicalInstant;
+
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/codex-out/calendar-startup-{}",
+            std::process::id()
+        ));
+        let source = dir.join("src");
+        std::fs::create_dir_all(&source).unwrap();
+        let manifest_path = dir.join("manifest.json");
+        let codebase = crate::config::FunctionsCodebase {
+            codebase: "default".to_owned(),
+            source: source.display().to_string(),
+            runtime: None,
+            ignore: Vec::new(),
+        };
+        let hosts = super::EmulatorHosts {
+            firestore: None,
+            auth: None,
+            storage: None,
+            functions: None,
+            eventarc: None,
+            tasks: None,
+            logging: None,
+            pubsub: None,
+            hub: None,
+        };
+        let cache = Arc::new(super::NodeProbeCache::default());
+        let mut declarations = vec![
+            (
+                "c07",
+                "0 0 1 4 *",
+                "Invalid/Unknown",
+                "2026-10-05T00:30:00Z",
+                "time zone: unknown time zone \"Invalid/Unknown\"",
+            ),
+            (
+                "c08",
+                "0 0 0 1 4 *",
+                "UTC",
+                "2026-10-05T00:30:00Z",
+                "schedule: unrecognised schedule \"0 0 0 1 4 *\"",
+            ),
+        ];
+        // The seven declarations in each calendar-v6 recording, with their dispatch anchors.
+        for anchors in [
+            [
+                "2026-10-04T23:49:09.759Z",
+                "2026-10-04T23:49:12.680Z",
+                "2026-10-04T23:49:14.058Z",
+                "2026-10-04T23:49:42.509Z",
+                "2026-10-04T23:49:43.888Z",
+                "2026-10-04T23:49:47.812Z",
+                "2026-10-04T23:49:57.990Z",
+            ],
+            [
+                "2026-10-05T00:30:22.138Z",
+                "2026-10-05T00:30:23.568Z",
+                "2026-10-05T00:30:25.004Z",
+                "2026-10-05T00:30:52.982Z",
+                "2026-10-05T00:30:54.319Z",
+                "2026-10-05T00:30:58.776Z",
+                "2026-10-05T00:31:08.658Z",
+            ],
+        ] {
+            for ((name, schedule, zone, reason), anchor) in [
+                (
+                    "cr08",
+                    "0 24 * * *",
+                    "UTC",
+                    "schedule: cron field hour: \"24\" is out of range",
+                ),
+                (
+                    "cr09",
+                    "0 0 1 *",
+                    "UTC",
+                    "schedule: unrecognised schedule \"0 0 1 *\"",
+                ),
+                (
+                    "cr10",
+                    "0 0 L * *",
+                    "UTC",
+                    "schedule: cron field day-of-month: \"L\" is out of range",
+                ),
+                (
+                    "gr09",
+                    "every 0 minutes",
+                    "UTC",
+                    "schedule: unrecognised schedule \"every 0 minutes\"",
+                ),
+                (
+                    "gr10",
+                    "32 of month 09:00",
+                    "UTC",
+                    "schedule: cron field day-of-month: \"32\" is out of range",
+                ),
+                (
+                    "gr13",
+                    "every 20 minutes synchronized",
+                    "UTC",
+                    "schedule: unrecognised schedule \"every 20 minutes synchronized\"",
+                ),
+                (
+                    "tz04",
+                    "0 9 * * *",
+                    "Asia/Tokio",
+                    "time zone: unknown time zone \"Asia/Tokio\"",
+                ),
+            ]
+            .into_iter()
+            .zip(anchors)
+            {
+                declarations.push((name, schedule, zone, anchor, reason));
+            }
+        }
+        assert_eq!(declarations.len(), 16);
+        for (name, schedule, zone, anchor, reason) in declarations {
+            let document = json!({"functions": [
+                {"name": name, "generation": 2, "region": "europe-west1", "trigger": {
+                    "type": "schedule", "schedule": schedule, "timeZone": zone,
+                }},
+                {"name": "parseable", "generation": 2, "trigger": {
+                    "type": "schedule", "schedule": "every 5 minutes", "timeZone": "Asia/Tokyo",
+                }},
+            ]});
+            std::fs::write(&manifest_path, document.to_string()).unwrap();
+            for profile in [CompatibilityProfile::Emulator, CompatibilityProfile::Strict] {
+                let cfg = crate::config::RuntimeConfig {
+                    profile,
+                    clock_start: LogicalInstant::parse_rfc3339(anchor).unwrap(),
+                    functions_runner: Some(if profile == CompatibilityProfile::Emulator {
+                        vec![
+                            "python3".to_owned(), "-c".to_owned(),
+                            "import json,sys\nframe=json.dumps({'type':'hello','runner':'fake','manifest':json.load(open(sys.argv[1],encoding='utf-8'))}).encode()\nsys.stdout.buffer.write(str(len(frame)).encode()+b'\\n'+frame)\nsys.stdout.buffer.flush()\nsys.stdin.read()".to_owned(),
+                            manifest_path.display().to_string(),
+                        ]
+                    } else {
+                        vec!["python3".to_owned(), script.display().to_string()]
+                    }),
+                    functions_manifest: Some(manifest_path.display().to_string()),
+                    ..crate::config::RuntimeConfig::default()
+                };
+                let started = super::start_codebase(
+                    &cfg,
+                    &codebase,
+                    &hosts,
+                    "test-secret",
+                    false,
+                    &cache,
+                    VirtualClock::new(cfg.clock_start).snapshot(),
+                )
+                .await;
+                if profile == CompatibilityProfile::Strict && name != "gr13" {
+                    assert_eq!(
+                        started.err().unwrap(),
+                        format!("manifest: function {name:?}: {reason}")
+                    );
+                    continue;
+                }
+                let spec =
+                    started.unwrap_or_else(|e| panic!("{name} {profile:?} at {anchor}: {e}"));
+                spec.runner.kill_now();
+                let (_, parsed, time_zone) = spec
+                    .manifest
+                    .scheduled()
+                    .find(|(function, _, _)| function.name == "parseable")
+                    .unwrap();
+                assert_eq!(parsed.as_str(), "every 5 minutes");
+                assert_eq!(time_zone, Some("Asia/Tokyo"));
+                if profile == CompatibilityProfile::Emulator {
+                    assert_eq!(
+                        spec.manifest.scheduled().count(),
+                        1,
+                        "{name}: no job for the ignored function"
+                    );
+                    assert_eq!(spec.manifest.ignored.len(), 1);
+                    assert_eq!(
+                        super::check_ignored(&spec.manifest, super::UnservedTriggers::Refuse).unwrap(),
+                        [format!("functions[europe-west1-{name}]: function ignored (schedule): no scheduled job: {reason}")]
+                    );
+                } else {
+                    assert_eq!(spec.manifest.scheduled().count(), 2);
+                    assert!(spec.manifest.ignored.is_empty());
+                }
+            }
+        }
+        // Windows keeps the directory busy for a moment after the fake runner exits (os error 32); the
+        // directory is a per-test temporary, so a failed removal is not a test failure.
+        for _ in 0..20 {
+            if std::fs::remove_dir_all(&dir).is_ok() || !dir.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
     }
 
     /// The time zone of a schedule that names none: the strict profile gives a first-generation one Los Angeles (read
@@ -7173,7 +8288,12 @@ mod tests {
             {"name": "http", "generation": 1, "trigger": {"type": "http"}},
         ]});
         let zones = |profile| {
-            let manifest = super::manifest_for_profile(profile, &document).unwrap();
+            let manifest = super::manifest_for_profile(
+                profile,
+                &document,
+                crate::config::RuntimeConfig::default().clock_start,
+            )
+            .unwrap();
             manifest
                 .scheduled()
                 .map(|(function, _, zone)| (function.name.clone(), zone.map(str::to_owned)))
@@ -7196,14 +8316,22 @@ mod tests {
         // The configured default is applied first and wins over the generation default.
         let mut configured = document.clone();
         super::apply_default_time_zone(&mut configured, "Europe/Paris");
-        let manifest =
-            super::manifest_for_profile(super::CompatibilityProfile::Strict, &configured).unwrap();
+        let manifest = super::manifest_for_profile(
+            super::CompatibilityProfile::Strict,
+            &configured,
+            crate::config::RuntimeConfig::default().clock_start,
+        )
+        .unwrap();
         assert!(manifest
             .scheduled()
             .all(|(_, _, zone)| matches!(zone, Some("Europe/Paris" | "Asia/Tokyo" | "UTC"))));
         // The first run of a Gen1 `0 9 * * *` is 09:00 in Los Angeles: 16:00Z in October (PDT).
-        let strict =
-            super::manifest_for_profile(super::CompatibilityProfile::Strict, &document).unwrap();
+        let strict = super::manifest_for_profile(
+            super::CompatibilityProfile::Strict,
+            &document,
+            crate::config::RuntimeConfig::default().clock_start,
+        )
+        .unwrap();
         let (_, schedule, zone) = strict.scheduled().next().unwrap();
         let rules = fireemu_adapter_functions::zone::resolve(zone).unwrap();
         let now = fireemu_core_types::time::LogicalInstant::parse_rfc3339("2026-10-05T08:00:00Z")
@@ -7584,7 +8712,6 @@ mod tests {
         use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
         use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
         use fireemu_core_functions::manifest::{BlockingAuthSelection, BlockingAuthSelections};
-        use fireemu_core_types::ids::SessionId;
         use fireemu_core_types::time::LogicalInstant;
 
         let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -7600,21 +8727,9 @@ mod tests {
         let runtime = FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
-                session: SessionId::new(7),
                 max_running: 1,
-                debug_mode: false,
                 retry_attempts: 1,
-                max_catch_up_runs: 1,
-                runner_secret: "test-secret".to_owned(),
-                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-                functions_host: None,
-                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
-                ),
-                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1, "test-secret".to_owned())
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -7663,21 +8778,10 @@ mod tests {
         let runtime = FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
                 session: SessionId::new(8),
                 max_running: 1,
-                debug_mode: false,
                 retry_attempts: 1,
-                max_catch_up_runs: 1,
-                runner_secret: "test-secret".to_owned(),
-                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-                functions_host: None,
-                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
-                ),
-                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1, "test-secret".to_owned())
             },
             Arc::new(Mutex::new(VirtualClock::new(
                 LogicalInstant::from_unix_seconds(1_788_004_860),
@@ -7843,7 +8947,6 @@ mod tests {
         use fireemu_core_functions::manifest::BlockingAuthEvent;
         use fireemu_core_session::clock::VirtualClock;
         use fireemu_core_types::determinism::SplitMix64;
-        use fireemu_core_types::ids::SessionId;
         use fireemu_core_types::time::LogicalInstant;
         use std::sync::Mutex;
 
@@ -7875,21 +8978,9 @@ mod tests {
         let runtime = FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
-                session: SessionId::new(7),
                 max_running: 1,
-                debug_mode: false,
                 retry_attempts: 1,
-                max_catch_up_runs: 1,
-                runner_secret: "test-secret".to_owned(),
-                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-                functions_host: None,
-                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
-                ),
-                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1, "test-secret".to_owned())
             },
             Arc::new(Mutex::new(VirtualClock::new(now))),
             Arc::new(runner),
@@ -7971,6 +9062,129 @@ mod tests {
 
         let value = result.expect("the first request waits for runner recovery");
         assert!(value.is_object());
+    }
+
+    fn virtual_date_fake_runner_spec(
+        snapshot: fireemu_core_session::clock::ClockSnapshot,
+    ) -> fireemu_adapter_functions::runner::SpawnSpec {
+        use fireemu_adapter_functions::application_clock::ApplicationClockPolicy;
+        use fireemu_adapter_functions::runner::SpawnSpec;
+        let policy = ApplicationClockPolicy {
+            date_virtual: true,
+            ..Default::default()
+        };
+        SpawnSpec {
+            command: vec![
+                "python3".to_owned(),
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../fireemu-adapter-functions/tests/fake_runner.py")
+                    .display()
+                    .to_string(),
+            ],
+            cwd: None,
+            env: vec![(
+                "FIREEMU_CLOCK_JSON".to_owned(),
+                policy.runner_options(snapshot).to_string(),
+            )],
+            hello_timeout: Duration::from_secs(60),
+        }
+    }
+
+    #[test]
+    fn blocking_auth_synchronizes_a_replacement_loaded_before_the_last_clock_ack() {
+        use fireemu_adapter_functions::application_clock::ApplicationClockPolicy;
+        use fireemu_adapter_functions::runner::Runner;
+        use fireemu_adapter_functions::runtime::{CodebaseSpec, FunctionsConfig, FunctionsRuntime};
+        use fireemu_adapter_http::identity_toolkit::AuthBlockingHook;
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthStore, NewUser};
+        use fireemu_core_functions::manifest::{
+            BlockingAuthEvent, BlockingAuthTokenPolicy, Trigger,
+        };
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
+
+        let executor = tokio::runtime::Runtime::new().unwrap();
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let policy = ApplicationClockPolicy {
+            date_virtual: true,
+            ..Default::default()
+        };
+        let spec = virtual_date_fake_runner_spec(clock.lock().unwrap().snapshot());
+        let (initial, replacement, unrelated) = executor.block_on(async {
+            (
+                Arc::new(Runner::spawn_spec(&spec).await.unwrap()),
+                Arc::new(Runner::spawn_spec(&spec).await.unwrap()),
+                Arc::new(Runner::spawn_spec(&spec).await.unwrap()),
+            )
+        });
+        let mut manifest = parse_manifest(initial.hello().manifest.as_ref().unwrap()).unwrap();
+        let mut guard = manifest.get("echo").unwrap().clone();
+        guard.name = "clockGuard".to_owned();
+        guard.trigger = Trigger::BlockingAuth {
+            event: BlockingAuthEvent::BeforeCreate,
+            token_policy: BlockingAuthTokenPolicy::default(),
+        };
+        manifest.functions.push(guard);
+        // Construct outside an entered executor so the observer cannot mask admission sync.
+        let runtime = FunctionsRuntime::with_codebases(
+            vec![
+                CodebaseSpec {
+                    name: "default".to_owned(),
+                    manifest,
+                    runner: initial,
+                    spawn: Some(spec.clone()),
+                    cleanup_dir: None,
+                },
+                CodebaseSpec {
+                    name: "unrelated".to_owned(),
+                    manifest: fireemu_core_functions::manifest::FunctionManifest::default(),
+                    runner: unrelated.clone(),
+                    spawn: None,
+                    cleanup_dir: None,
+                },
+            ],
+            FunctionsConfig {
+                retry_attempts: 1,
+                clock_policy: policy,
+                ..FunctionsConfig::for_tests(1, "test-secret".to_owned())
+            },
+            clock.clone(),
+            fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+        )
+        .unwrap();
+        let delta = LogicalDuration::from_millis(1);
+        clock.lock().unwrap().advance(delta).unwrap();
+        let snapshot = clock.lock().unwrap().snapshot();
+        executor
+            .block_on(runtime.runner().sync_clock(snapshot))
+            .unwrap();
+        runtime
+            .reload_codebase(CodebaseSpec {
+                name: "default".to_owned(),
+                manifest: runtime.manifest().clone(),
+                runner: replacement,
+                spawn: Some(spec),
+                cleanup_dir: None,
+            })
+            .unwrap();
+        // A dead sibling with an old clock must not affect this admitted handler.
+        unrelated.kill_now();
+        let bridge = super::BlockingAuthBridge::new(runtime.clone());
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(7), TotpPolicy::default());
+        let uid = store
+            .create_user(NewUser::email("clock@example.test"), runtime.now())
+            .unwrap();
+        let user = store.user_by_id(uid.as_str()).unwrap().clone();
+        let result = executor.block_on(async {
+            tokio::task::spawn_blocking(move || {
+                bridge.invoke(BlockingAuthEvent::BeforeCreate, &user)
+            })
+            .await
+            .unwrap()
+        });
+        executor.block_on(runtime.shutdown());
+        assert_eq!(result.unwrap()["clockNowMillis"], 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -9012,6 +10226,29 @@ mod tests {
     }
 
     #[test]
+    fn storage_trigger_buckets_are_the_explicit_buckets_of_the_storage_triggers_only() {
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "onUp", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.finalized", "bucket": "events-bucket"}},
+            {"name": "onGone", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.deleted", "bucket": "events-bucket"}},
+            {"name": "onDefault", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.finalized"}},
+            {"name": "onOther", "trigger": {"type": "storage", "eventType": "google.cloud.storage.object.v1.archived", "bucket": "other-bucket"}},
+            {"name": "worker", "trigger": {"type": "pubsub", "topic": "not-a-bucket"}},
+            {"name": "health", "trigger": {"type": "http"}}
+        ]})).unwrap();
+        assert_eq!(
+            storage_trigger_buckets(&manifest)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["events-bucket".to_owned(), "other-bucket".to_owned()]
+        );
+        let none = parse_manifest(&json!({"functions": [
+            {"name": "health", "trigger": {"type": "http"}}
+        ]}))
+        .unwrap();
+        assert!(storage_trigger_buckets(&none).is_empty());
+    }
+
+    #[test]
     fn pubsub_resources_cover_shared_topics_and_schedules_once() {
         let manifest = parse_manifest(&json!({"functions": [
             {"name": "workerOne", "trigger": {"type": "pubsub", "topic": "shared-jobs"}},
@@ -9024,11 +10261,17 @@ mod tests {
             "demo-app",
             &manifest,
             fireemu_adapter_functions::events::SubscriptionNaming::EmulatorTopic,
+            CompatibilityProfile::Emulator,
         )
         .unwrap();
         let actual: Vec<(String, String)> = resources
             .iter()
-            .map(|resource| (resource.topic.to_full(), resource.subscription.to_full()))
+            .map(|resource| {
+                (
+                    resource.topic.to_full(),
+                    resource.subscription.as_ref().unwrap().to_full(),
+                )
+            })
             .collect();
         assert_eq!(
             actual,
@@ -9087,15 +10330,26 @@ mod tests {
     fn strict_gives_each_second_generation_pubsub_function_its_own_eventarc_subscription() {
         use fireemu_adapter_functions::events::{function_subscription_id, SubscriptionNaming};
         let manifest = mixed_generation_manifest();
-        let resources =
-            function_pubsub_resources("demo-app", &manifest, SubscriptionNaming::Eventarc).unwrap();
+        let resources = function_pubsub_resources(
+            "demo-app",
+            &manifest,
+            SubscriptionNaming::Eventarc,
+            CompatibilityProfile::Strict,
+        )
+        .unwrap();
         let actual: Vec<(String, String)> = resources
             .iter()
-            .map(|resource| (resource.topic.to_full(), resource.subscription.to_full()))
+            .map(|resource| {
+                (
+                    resource.topic.to_full(),
+                    resource.subscription.as_ref().unwrap().to_full(),
+                )
+            })
             .collect();
         // Every second generation Pub/Sub function has a subscription of its own, derived from
-        // the function the way the event names it; the first generation function and the
-        // schedule keep the topic's name (unrecorded, so unchanged).
+        // the function the way the event names it; the first generation function keeps the topic's name; a second
+        // generation schedule has no topic under strict, as production creates none for it (runs 156715222b86ea44 and
+        // f123d4fa2d61c5f5).
         let derived = |name: &str| {
             let function = manifest.get(name).unwrap();
             format!(
@@ -9111,11 +10365,6 @@ mod tests {
         let shared = "projects/demo-app/topics/shared-jobs".to_owned();
         let mut expected = vec![
             (
-                "projects/demo-app/topics/firebase-schedule-dailyReport".to_owned(),
-                "projects/demo-app/subscriptions/emulator-sub-firebase-schedule-dailyReport"
-                    .to_owned(),
-            ),
-            (
                 shared.clone(),
                 "projects/demo-app/subscriptions/emulator-sub-shared-jobs".to_owned(),
             ),
@@ -9127,11 +10376,16 @@ mod tests {
         assert!(derived("workerOne").contains("/eventarc-us-central1-workerone-"));
         assert!(derived("workerTwo").contains("/eventarc-europe-west1-workertwo-"));
         // A deployment keeps its names across runs, and a second call derives the same ones.
-        let again =
-            function_pubsub_resources("demo-app", &manifest, SubscriptionNaming::Eventarc).unwrap();
+        let again = function_pubsub_resources(
+            "demo-app",
+            &manifest,
+            SubscriptionNaming::Eventarc,
+            CompatibilityProfile::Strict,
+        )
+        .unwrap();
         assert_eq!(resources.len(), again.len());
         for (a, b) in resources.iter().zip(&again) {
-            assert_eq!(a.subscription.to_full(), b.subscription.to_full());
+            assert_eq!(a.subscription, b.subscription);
         }
     }
 
@@ -9142,11 +10396,12 @@ mod tests {
             "demo-app",
             &mixed_generation_manifest(),
             SubscriptionNaming::EmulatorTopic,
+            CompatibilityProfile::Emulator,
         )
         .unwrap();
         let names: Vec<String> = resources
             .iter()
-            .map(|resource| resource.subscription.to_full())
+            .map(|resource| resource.subscription.as_ref().unwrap().to_full())
             .collect();
         assert_eq!(
             names,
@@ -9201,6 +10456,7 @@ mod tests {
             "demo-app",
             &mixed_generation_manifest(),
             SubscriptionNaming::Eventarc,
+            CompatibilityProfile::Strict,
         )
         .unwrap();
         let mut state = PubSubState::new(7);
@@ -9213,12 +10469,12 @@ mod tests {
             .collect();
         for resource in &resources {
             assert!(
-                listed.contains(&resource.subscription.to_full()),
+                listed.contains(&resource.subscription.as_ref().unwrap().to_full()),
                 "{listed:?}"
             );
         }
         assert_eq!(listed.len(), resources.len());
-        assert_eq!(state.list_topics("demo-app").len(), 2);
+        assert_eq!(state.list_topics("demo-app").len(), 1);
         // Provisioning again changes nothing; a message published on the topic is not retained by a
         // function's subscription (the Functions bridge delivers it), whatever the subscription's name.
         provision_function_pubsub_resources(&mut state, &resources).unwrap();
@@ -9230,17 +10486,23 @@ mod tests {
             .find(|resource| {
                 resource
                     .subscription
+                    .as_ref()
+                    .unwrap()
                     .to_full()
                     .contains("eventarc-europe-west1-workertwo-")
             })
             .unwrap();
-        state.delete_subscription(&victim.subscription).unwrap();
+        state
+            .delete_subscription(victim.subscription.as_ref().unwrap())
+            .unwrap();
         assert_eq!(
             state.list_subscriptions("demo-app").len(),
             resources.len() - 1
         );
         provision_function_pubsub_resources(&mut state, &resources).unwrap();
-        assert!(state.subscription_config(&victim.subscription).is_ok());
+        assert!(state
+            .subscription_config(victim.subscription.as_ref().unwrap())
+            .is_ok());
         assert_eq!(state.list_subscriptions("demo-app").len(), resources.len());
     }
 
@@ -9256,6 +10518,336 @@ mod tests {
             super::auth_context_naming(CompatibilityProfile::Emulator),
             AuthContextNaming::Official
         );
+    }
+
+    /// Strict: only a first-generation schedule has a topic, named like its Cloud Scheduler job, and no emulator
+    /// subscription; a second-generation schedule has none; a topic a function subscribes to keeps its subscription.
+    #[test]
+    fn strict_pubsub_resources_give_a_first_generation_schedule_its_job_topic_and_no_subscription()
+    {
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "workerOne", "trigger": {"type": "pubsub", "topic": "shared-jobs"}},
+            {"name": "dailyReport", "trigger": {"type": "schedule", "schedule": "0 0 * * *"}},
+            {"name": "weeklyV2", "generation": 2, "trigger": {"type": "schedule", "schedule": "0 0 * * 0"}},
+            {"name": "eastReport", "region": "us-east1", "trigger": {"type": "schedule", "schedule": "0 0 * * *"}},
+            {"name": "health", "trigger": {"type": "http"}}
+        ]}))
+        .unwrap();
+        let resources = function_pubsub_resources(
+            "demo-app",
+            &manifest,
+            fireemu_adapter_functions::events::SubscriptionNaming::Eventarc,
+            CompatibilityProfile::Strict,
+        )
+        .unwrap();
+        let actual: Vec<(String, Option<String>)> = resources
+            .iter()
+            .map(|resource| {
+                (
+                    resource.topic.to_full(),
+                    resource
+                        .subscription
+                        .as_ref()
+                        .map(fireemu_core_pubsub::SubscriptionName::to_full),
+                )
+            })
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    "projects/demo-app/topics/firebase-schedule-dailyReport-us-central1".to_owned(),
+                    None
+                ),
+                (
+                    "projects/demo-app/topics/firebase-schedule-eastReport-us-east1".to_owned(),
+                    None
+                ),
+                (
+                    "projects/demo-app/topics/shared-jobs".to_owned(),
+                    Some("projects/demo-app/subscriptions/emulator-sub-shared-jobs".to_owned())
+                ),
+            ]
+        );
+        // the emulator profile is unchanged: the official name for every schedule, with its subscription
+        let emulator = function_pubsub_resources(
+            "demo-app",
+            &manifest,
+            fireemu_adapter_functions::events::SubscriptionNaming::EmulatorTopic,
+            CompatibilityProfile::Emulator,
+        )
+        .unwrap();
+        let topics: Vec<String> = emulator.iter().map(|r| r.topic.to_full()).collect();
+        assert_eq!(
+            topics,
+            vec![
+                "projects/demo-app/topics/firebase-schedule-dailyReport",
+                "projects/demo-app/topics/firebase-schedule-eastReport",
+                "projects/demo-app/topics/firebase-schedule-weeklyV2",
+                "projects/demo-app/topics/shared-jobs",
+            ]
+        );
+        assert!(emulator.iter().all(|r| r.subscription.is_some()));
+    }
+
+    /// A topic that two functions declare is one resource: the diagnostics name the smaller owner whichever comes first,
+    /// and the emulator subscribes to it when any declaration is a function's own subscription (a schedule's topic that a
+    /// Pub/Sub function also listens on keeps its subscription).
+    #[test]
+    fn a_topic_declared_twice_keeps_the_smaller_owner_and_a_subscription_if_any_declaration_wants_one(
+    ) {
+        for names in [["a", "b"], ["b", "a"]] {
+            let functions: Vec<_> = names
+                .iter()
+                .map(|n| json!({"name": n, "trigger": {"type": "pubsub", "topic": "bad topic"}}))
+                .collect();
+            let manifest = parse_manifest(&json!({ "functions": functions })).unwrap();
+            let error = function_pubsub_resources(
+                "demo-app",
+                &manifest,
+                fireemu_adapter_functions::events::SubscriptionNaming::EmulatorTopic,
+                CompatibilityProfile::Emulator,
+            )
+            .unwrap_err();
+            assert!(error.starts_with("function \"a\" requires"), "{error}");
+        }
+        for names in [["tick", "listener"], ["listener", "tick"]] {
+            let functions: Vec<_> = names
+                .iter()
+                .map(|n| {
+                    if *n == "tick" {
+                        json!({"name": "tick", "trigger": {"type": "schedule", "schedule": "every 5 minutes"}})
+                    } else {
+                        json!({"name": "listener", "trigger": {"type": "pubsub", "topic": "firebase-schedule-tick-us-central1"}})
+                    }
+                })
+                .collect();
+            let manifest = parse_manifest(&json!({ "functions": functions })).unwrap();
+            let resources = function_pubsub_resources(
+                "demo-app",
+                &manifest,
+                fireemu_adapter_functions::events::SubscriptionNaming::Eventarc,
+                CompatibilityProfile::Strict,
+            )
+            .unwrap();
+            assert_eq!(resources.len(), 1);
+            assert!(resources[0].subscription.is_some(), "{names:?}");
+        }
+    }
+
+    /// The strict profile publishes a schedule's message when a broker is served; the emulator profile never does.
+    #[test]
+    fn schedule_messages_are_published_by_the_strict_profile_with_a_broker_only() {
+        use super::publishes_schedule_messages;
+        assert!(publishes_schedule_messages(
+            true,
+            CompatibilityProfile::Strict
+        ));
+        assert!(!publishes_schedule_messages(
+            false,
+            CompatibilityProfile::Strict
+        ));
+        assert!(!publishes_schedule_messages(
+            true,
+            CompatibilityProfile::Emulator
+        ));
+        assert!(!publishes_schedule_messages(
+            false,
+            CompatibilityProfile::Emulator
+        ));
+    }
+
+    /// Provisioning a strict schedule topic creates the topic and no subscription.
+    #[test]
+    fn strict_provisioning_creates_the_schedule_topic_without_a_subscription() {
+        let manifest = parse_manifest(&json!({"functions": [
+            {"name": "dailyReport", "trigger": {"type": "schedule", "schedule": "0 0 * * *"}}
+        ]}))
+        .unwrap();
+        let resources = function_pubsub_resources(
+            "demo-app",
+            &manifest,
+            fireemu_adapter_functions::events::SubscriptionNaming::Eventarc,
+            CompatibilityProfile::Strict,
+        )
+        .unwrap();
+        let mut state = PubSubState::new(7);
+        provision_function_pubsub_resources(&mut state, &resources).unwrap();
+        assert_eq!(state.list_topics("demo-app").len(), 1);
+        assert!(state.list_subscriptions("demo-app").is_empty());
+    }
+
+    /// End to end under the strict profile: an occurrence of a first-generation schedule puts a message with the
+    /// recorded shape on the job's topic (attribute `scheduled: "true"`, no data, the id the event names, the time of the
+    /// occurrence), a manual run puts another, the function is not delivered a second time through the topic, and a
+    /// second-generation schedule puts nothing anywhere.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn a_strict_schedule_publishes_its_message_to_the_job_topic_with_the_id_of_its_event() {
+        use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
+        use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
+        use fireemu_adapter_pubsub::PubSubHandle;
+        use fireemu_core_pubsub::SubscriptionConfig;
+        use fireemu_core_types::ids::SessionId;
+        use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
+        use std::time::Duration;
+
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let spawn = SpawnSpec {
+            command: vec!["python3".to_owned(), script.display().to_string()],
+            cwd: None,
+            env: Vec::new(),
+            hello_timeout: Duration::from_secs(60),
+        };
+        let runner = Runner::spawn_spec(&spawn).await.unwrap();
+        let manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+        let start = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let clock = Arc::new(Mutex::new(VirtualClock::new(start)));
+        let runtime = FunctionsRuntime::new(
+            manifest,
+            FunctionsConfig {
+                project: "demo-app".to_owned(),
+                default_bucket: "demo-app.appspot.com".to_owned(),
+                location: "nam5".to_owned(),
+                session: SessionId::new(7),
+                max_running: 4,
+                debug_mode: false,
+                retry_attempts: 1,
+                max_catch_up_runs: 1000,
+                runner_secret: "test-secret".to_owned(),
+                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+                functions_host: None,
+                clock_policy:
+                    fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
+                clock_start_pinned: false,
+                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
+                ),
+                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            },
+            clock.clone(),
+            Arc::new(runner),
+            Some(spawn),
+        );
+        let state = Arc::new(Mutex::new(PubSubState::new(42)));
+        let resources = function_pubsub_resources(
+            "demo-app",
+            runtime.manifest(),
+            fireemu_adapter_functions::events::SubscriptionNaming::Eventarc,
+            CompatibilityProfile::Strict,
+        )
+        .unwrap();
+        provision_function_pubsub_resources(&mut state.lock().unwrap(), &resources).unwrap();
+        let topic = TopicName::new("demo-app", "firebase-schedule-tick-us-central1").unwrap();
+        let watch = SubscriptionName::new("demo-app", "watch").unwrap();
+        state
+            .lock()
+            .unwrap()
+            .create_subscription(SubscriptionConfig {
+                labels: std::collections::BTreeMap::new(),
+                expiration_policy: None,
+                retain_acked_messages: false,
+                message_retention_duration: None,
+                name: watch.clone(),
+                topic,
+                ack_deadline_seconds: 10,
+                enable_message_ordering: false,
+                filter: Filter::always(),
+                dead_letter_policy: None,
+                retry_policy: None,
+                push_config: PushConfig::default(),
+            })
+            .unwrap();
+        let handle = PubSubHandle::new(
+            state.clone(),
+            clock.clone(),
+            Some(Arc::new(PubSubBridge::new(runtime.clone()))),
+        );
+        runtime.set_schedule_topic_publisher(Arc::new(PubSubSchedulePublisher::new(
+            handle.clone(),
+            "demo-app",
+        )));
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(300))
+            .unwrap();
+        runtime.on_clock_changed();
+        runtime.run_schedule("tick").unwrap();
+        let pulled = handle.pull(&watch, 10).unwrap();
+        assert_eq!(pulled.len(), 2, "one occurrence and one manual run");
+        for received in &pulled {
+            let message = &received.message;
+            assert!(message.message.data.is_empty());
+            assert_eq!(
+                message.message.attributes,
+                BTreeMap::from([("scheduled".to_owned(), "true".to_owned())])
+            );
+            assert!(
+                message.message_id.len() == 17 && message.message_id.starts_with('2'),
+                "{}",
+                message.message_id
+            );
+        }
+        assert_ne!(pulled[0].message.message_id, pulled[1].message.message_id);
+        // the two runs are the only events: nothing was delivered again through the topic
+        let status = runtime.status();
+        assert_eq!(
+            status["causality"]["events"].as_array().unwrap().len(),
+            2,
+            "{status}"
+        );
+        assert_eq!(status["pending"], 2, "{status}");
+        // A deleted topic refuses both natural and manual publications, without invoking a handler or retaining its id.
+        state
+            .lock()
+            .unwrap()
+            .delete_topic(
+                &TopicName::new("demo-app", "firebase-schedule-tick-us-central1").unwrap(),
+            )
+            .unwrap();
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(300))
+            .unwrap();
+        runtime.on_clock_changed();
+        assert_eq!(runtime.status()["pending"], 2);
+        assert_eq!(runtime.dead_letters().len(), 1);
+        assert!(runtime.run_schedule("tick").is_err());
+        assert_eq!(runtime.status()["pending"], 2);
+        assert_eq!(runtime.dead_letters().len(), 2);
+        assert_eq!(
+            runtime.source_event_accounting().unwrap().published_records,
+            2
+        );
+        let dispatcher = tokio::spawn(runtime.clone().dispatch_loop());
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !runtime.is_idle() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            runtime
+                .history()
+                .iter()
+                .filter(|r| r.outcome == "ok")
+                .count(),
+            2
+        );
+        assert_eq!(
+            runtime
+                .history()
+                .iter()
+                .filter(|r| r.outcome.starts_with("failed:"))
+                .count(),
+            2
+        );
+        runtime.shutdown().await;
+        dispatcher.await.unwrap();
     }
 
     #[test]
@@ -9275,7 +10867,6 @@ mod tests {
         use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
         use fireemu_adapter_pubsub::PubSubHandle;
         use fireemu_core_pubsub::{PubsubMessage, SubscriptionConfig};
-        use fireemu_core_types::ids::SessionId;
         use fireemu_core_types::time::LogicalInstant;
         use std::time::Duration;
 
@@ -9294,21 +10885,7 @@ mod tests {
         let runtime = FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
-                session: SessionId::new(7),
-                max_running: 4,
-                debug_mode: false,
-                retry_attempts: 4,
-                max_catch_up_runs: 1000,
-                runner_secret: "test-secret".to_owned(),
-                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-                functions_host: None,
-                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
-                ),
-                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1000, "test-secret".to_owned())
             },
             clock.clone(),
             Arc::new(runner),
@@ -9322,6 +10899,8 @@ mod tests {
             state.create_topic(topic.clone(), BTreeMap::new()).unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                     retain_acked_messages: false,
                     message_retention_duration: None,
                     name: subscription.clone(),
@@ -9381,7 +10960,6 @@ mod tests {
         use fireemu_adapter_pubsub::{serve_pubsub, PubSubHandle};
         use fireemu_core_pubsub::subscription::{DeadLetterPolicy, MIN_DEAD_LETTER_ATTEMPTS};
         use fireemu_core_pubsub::{PubsubMessage, SubscriptionConfig};
-        use fireemu_core_types::ids::SessionId;
         use fireemu_core_types::time::LogicalInstant;
         use std::time::Duration;
 
@@ -9400,21 +10978,7 @@ mod tests {
         let runtime = FunctionsRuntime::new(
             manifest,
             FunctionsConfig {
-                project: "demo-app".to_owned(),
-                default_bucket: "demo-app.appspot.com".to_owned(),
-                location: "nam5".to_owned(),
-                session: SessionId::new(7),
-                max_running: 4,
-                debug_mode: false,
-                retry_attempts: 4,
-                max_catch_up_runs: 1000,
-                runner_secret: "test-secret".to_owned(),
-                overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-                catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-                functions_host: None,
-                subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(
-                ),
-                auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+                ..FunctionsConfig::for_tests(1000, "test-secret".to_owned())
             },
             clock.clone(),
             Arc::new(runner),
@@ -9436,6 +11000,8 @@ mod tests {
                 .unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                     retain_acked_messages: false,
                     message_retention_duration: None,
                     name: source_subscription.clone(),
@@ -9453,6 +11019,8 @@ mod tests {
                 .unwrap();
             state
                 .create_subscription(SubscriptionConfig {
+                    labels: std::collections::BTreeMap::new(),
+                    expiration_policy: None,
                     retain_acked_messages: false,
                     message_retention_duration: None,
                     name: destination_subscription.clone(),
@@ -9551,6 +11119,7 @@ mod tests {
             "demo-app",
             &manifest,
             fireemu_adapter_functions::events::SubscriptionNaming::EmulatorTopic,
+            CompatibilityProfile::Emulator,
         )
         .unwrap();
         let mut state = PubSubState::new(7);
@@ -9571,6 +11140,8 @@ mod tests {
             .unwrap();
         conflicting
             .create_subscription(SubscriptionConfig {
+                labels: std::collections::BTreeMap::new(),
+                expiration_policy: None,
                 retain_acked_messages: false,
                 message_retention_duration: None,
                 name: SubscriptionName::new("demo-app", "emulator-sub-shared-jobs").unwrap(),

@@ -113,21 +113,91 @@ fn backoff_is_capped_and_never_overflows() {
 
 #[test]
 fn scheduler_backoff_becomes_linear_and_obeys_the_retry_window() {
+    // one attempt allowed by the count: the window alone decides (with retries left in the count, the chain goes on
+    // until the window is used up too: see `a_count_and_a_window_keep_the_chain_going_until_both_are_used_up`)
     let p = RetryPolicy::try_with_limits(
-        10,
+        1,
         LogicalDuration::from_seconds(1),
         LogicalDuration::from_seconds(60),
         2,
         Some(LogicalDuration::from_seconds(10)),
     )
     .unwrap();
+    // base 1 s, two doublings: 1, 2, 4, then 2 s more each time (run `ecef353d18975246`: the step after the doublings
+    // was 2 s in every parameter set)
     assert_eq!(p.backoff_for_attempt(1), LogicalDuration::from_seconds(1));
     assert_eq!(p.backoff_for_attempt(2), LogicalDuration::from_seconds(2));
     assert_eq!(p.backoff_for_attempt(3), LogicalDuration::from_seconds(4));
-    assert_eq!(p.backoff_for_attempt(4), LogicalDuration::from_seconds(8));
-    assert_eq!(p.backoff_for_attempt(5), LogicalDuration::from_seconds(12));
+    assert_eq!(p.backoff_for_attempt(4), LogicalDuration::from_seconds(6));
+    assert_eq!(p.backoff_for_attempt(5), LogicalDuration::from_seconds(8));
     assert!(p.allows_retry_after_elapsed(3, LogicalDuration::from_seconds(6)));
     assert!(!p.allows_retry_after_elapsed(3, LogicalDuration::from_seconds(7)));
+}
+
+/// Run `ecef353d18975246`, the gaps between attempts of failing jobs (seconds, the dispatch latency of about 0.55 s per
+/// attempt taken off): min 4 s with one doubling: 4, 8, 10, 12, 14; min 2 s with three doublings: 2, 4, 8, 16, 18; min 4 s
+/// with two doublings (and a cap of 50 s): 4, 8, 16, 18; min 3 s with five doublings: 3, 6, 12, 24, 48. After the
+/// doublings the gap grows by 2 s per step, whatever the minimum or the doubling count, and never passes the cap.
+#[test]
+fn after_the_doublings_the_gap_grows_by_two_seconds_as_recorded() {
+    let gaps = |min: i64, max: i64, doublings: u32, n: u32| -> Vec<i64> {
+        let p = RetryPolicy::try_with_limits(
+            100,
+            LogicalDuration::from_seconds(min),
+            LogicalDuration::from_seconds(max),
+            doublings,
+            None,
+        )
+        .unwrap();
+        (1..=n)
+            .map(|attempt| {
+                i64::try_from(p.backoff_for_attempt(attempt).as_nanos() / 1_000_000_000).unwrap()
+            })
+            .collect()
+    };
+    assert_eq!(gaps(4, 100, 1, 5), vec![4, 8, 10, 12, 14]);
+    assert_eq!(gaps(2, 100, 3, 5), vec![2, 4, 8, 16, 18]);
+    assert_eq!(gaps(4, 50, 2, 4), vec![4, 8, 16, 18]);
+    assert_eq!(gaps(3, 100, 5, 5), vec![3, 6, 12, 24, 48]);
+    // no doubling at all: the step is the whole growth (an unrecorded shape: Cloud Scheduler stores 0 as 5)
+    assert_eq!(gaps(4, 100, 0, 4), vec![4, 6, 8, 10]);
+    // the cap holds in the linear phase
+    assert_eq!(gaps(4, 11, 1, 5), vec![4, 8, 10, 11, 11]);
+}
+
+/// With both a count and a window the chain goes on until both are used up (run `f123d4fa2d61c5f5`: `retryCount 3`, a
+/// window of 20 s, backoff 4 s to 10 s made four attempts, the fourth at about 24 s, past the window).
+#[test]
+fn a_count_and_a_window_keep_the_chain_going_until_both_are_used_up() {
+    let p = RetryPolicy::try_with_limits(
+        4,
+        LogicalDuration::from_seconds(4),
+        LogicalDuration::from_seconds(10),
+        5,
+        Some(LogicalDuration::from_seconds(20)),
+    )
+    .unwrap();
+    let at = |attempt, seconds| {
+        p.allows_retry_after_elapsed(attempt, LogicalDuration::from_seconds(seconds))
+    };
+    // the count has retries left: the window does not matter
+    assert!(at(1, 0));
+    assert!(at(2, 4));
+    assert!(at(3, 12), "the next attempt, at 22 s, is past the window");
+    assert!(at(3, 500));
+    // the count is used up: only a next attempt inside the window continues the chain (the edge is inclusive)
+    assert!(!at(4, 22));
+    assert!(at(4, 10), "10 s + the 10 s gap is the window's edge");
+    assert!(!at(4, 11));
+    // no window: the count alone
+    let by_count = RetryPolicy::try_new(
+        4,
+        LogicalDuration::from_seconds(4),
+        LogicalDuration::from_seconds(10),
+    )
+    .unwrap();
+    assert!(by_count.allows_retry_after_elapsed(3, LogicalDuration::from_seconds(500)));
+    assert!(!by_count.allows_retry_after_elapsed(4, LogicalDuration::ZERO));
 }
 
 #[test]
@@ -156,7 +226,7 @@ fn clock_rewind_saturates_elapsed_time_and_keeps_retryable_work_alive() {
 #[test]
 fn clock_rewind_does_not_create_extra_retry_window() {
     let policy = RetryPolicy::try_with_limits(
-        3,
+        1,
         LogicalDuration::from_seconds(10),
         LogicalDuration::from_seconds(10),
         0,

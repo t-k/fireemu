@@ -1,0 +1,13 @@
+{
+  "kind": "storage#notifications",
+  "items": [
+    {
+      "kind": "storage#notification",
+      "selfLink": "https://www.googleapis.com/storage/v1/b/fireemu-oracle-events.firebasestorage.app/notificationConfigs/cloud-functions-fireemu-oracle-events-tenantprojectid-tp",
+      "id": "cloud-functions-fireemu-oracle-events-tenantprojectid-tp",
+      "topic": "//pubsub.googleapis.com/projects/tenantprojectid-tp/topics/cloud-functions-topicsuffixplaceholder",
+      "etag": "cloud-functions-fireemu-oracle-events-tenantprojectid-tp",
+      "payload_format": "JSON_API_V1"
+    }
+  ]
+}

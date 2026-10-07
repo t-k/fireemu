@@ -1208,18 +1208,20 @@ async fn write_stream_accepts_pipelined_acknowledgements_and_once_targets_are_re
     assert_eq!(first.write_results.len(), 1);
     assert_eq!(second.write_results.len(), 2);
 
-    // A `once` target ends with REMOVE after its consistent snapshot; a resume token
-    // triggers RESET before the replay.
+    // A `once` target ends with REMOVE after its consistent snapshot; a future version triggers RESET before the replay.
     let (ltx, lrx) = mpsc::channel(8);
     let mut listen = client
         .listen(ReceiverStream::new(lrx))
         .await
         .unwrap()
         .into_inner();
+    ltx.send(add_query_target(1, "open")).await.unwrap();
+    let (_, mut future_token) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+    future_token[..8].copy_from_slice(&u64::MAX.to_be_bytes());
     let mut once = add_query_target(3, "open");
     if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut once.target_change {
         t.once = true;
-        t.resume_type = Some(pb::target::ResumeType::ResumeToken(vec![0; 32]));
+        t.resume_type = Some(pb::target::ResumeType::ResumeToken(future_token));
     }
     ltx.send(once).await.unwrap();
     let trace = next_until(&mut listen, "REMOVE[3]").await;
@@ -1806,11 +1808,7 @@ async fn resumed_targets_replay_only_what_changed_since_the_token() {
         .into_inner();
     ltx.send(add_query_target(1, "r")).await.unwrap();
     let (_, token) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
-    assert_eq!(
-        token.len(),
-        32,
-        "version, epoch, database and target binding"
-    );
+    assert_eq!(token.len(), 11, "version and three-byte binding check");
     drop(ltx);
     // Meanwhile: b changes, c is added, a is deleted.
     client
@@ -1839,7 +1837,7 @@ async fn resumed_targets_replay_only_what_changed_since_the_token() {
     // the removal of `a` to its count.
     let (early, _) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
     assert_eq!(early, vec!["ADD[2]", "NO_CHANGE[]"]);
-    let (trace, latest) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+    let (trace, mut latest) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
     assert_eq!(
         trace,
         vec![
@@ -1853,19 +1851,18 @@ async fn resumed_targets_replay_only_what_changed_since_the_token() {
     // Nothing changed: a resume replays nothing but its boundaries and the count.
     let mut again = add_query_target(3, "r");
     if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut again.target_change {
-        t.resume_type = Some(pb::target::ResumeType::ResumeToken(latest));
+        t.resume_type = Some(pb::target::ResumeType::ResumeToken(latest.clone()));
     }
     ltx.send(again).await.unwrap();
     let early = next_until(&mut listen, "NO_CHANGE[]").await;
     assert_eq!(early, vec!["ADD[3]", "NO_CHANGE[]"]);
     let trace = next_until(&mut listen, "NO_CHANGE[]").await;
     assert_eq!(trace, vec!["FILTER 2", "CURRENT[3]", "NO_CHANGE[]"]);
-    // A token this daemon did not issue (here: a version from the future, of no known epoch) resets.
+    // A matching binding with a version from the future still resets.
     let mut future = add_query_target(4, "r");
     if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut future.target_change {
-        t.resume_type = Some(pb::target::ResumeType::ResumeToken(
-            [u64::MAX.to_be_bytes().to_vec(), vec![0; 24]].concat(),
-        ));
+        latest[..8].copy_from_slice(&u64::MAX.to_be_bytes());
+        t.resume_type = Some(pb::target::ResumeType::ResumeToken(latest));
     }
     ltx.send(future).await.unwrap();
     let trace = next_until(&mut listen, "NO_CHANGE[]").await;
@@ -2106,7 +2103,7 @@ async fn partition_query_splits_a_collection_group_at_sampled_keys() {
 }
 
 #[tokio::test]
-async fn resume_tokens_are_refused_after_a_reset_and_for_other_targets() {
+async fn resume_tokens_are_refused_after_a_reset_and_strict_current_tokens_resume_other_targets() {
     let (mut client, handle) = start(false).await;
     let commit = |writes| pb::CommitRequest {
         database: DB.to_owned(),
@@ -2124,18 +2121,19 @@ async fn resume_tokens_are_refused_after_a_reset_and_for_other_targets() {
         .unwrap()
         .into_inner();
     ltx.send(add_query_target(1, "rt")).await.unwrap();
-    // CURRENT carries a token bound to the target (the global one is accepted by every
-    // target, as the SDKs apply it to all of them).
+    // Strict CURRENT carries the snapshot's global token, the same bytes as the NO_CHANGE that
+    // follows (FS-LISTEN-SDK L3 203/203C), and a global token is accepted by every target, as
+    // the SDKs apply it to all of them.
     let (_, token) = trace_and_token(&mut listen, "CURRENT[1]").await;
-    let _ = next_until(&mut listen, "NO_CHANGE[]").await;
-    // The token of the `rt` target does not resume an `other` target: full replay.
+    let (_, global) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+    assert_eq!(token, global);
     let mut other = add_query_target(2, "other");
     if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut other.target_change {
         t.resume_type = Some(pb::target::ResumeType::ResumeToken(token.clone()));
     }
     ltx.send(other).await.unwrap();
     let trace = next_until(&mut listen, "NO_CHANGE[]").await;
-    assert_eq!(trace[..2], ["ADD[2]", "RESET[2]"]);
+    assert_eq!(trace[..2], ["ADD[2]", "NO_CHANGE[]"]);
     drop(ltx);
     // After a reset the same versions come around again: the old token must not line up
     // with the new history.
@@ -2155,14 +2153,14 @@ async fn resume_tokens_are_refused_after_a_reset_and_for_other_targets() {
         t.resume_type = Some(pb::target::ResumeType::ResumeToken(token));
     }
     ltx.send(resumed).await.unwrap();
-    let trace = next_until(&mut listen, "NO_CHANGE[]").await;
-    assert_eq!(trace[..3], ["ADD[3]", "RESET[3]", "CHANGE b"]);
+    let trace = next_until(&mut listen, "REMOVE[3] cause=3").await;
+    assert_eq!(trace, ["REMOVE[3] cause=3"]);
     handle.abort();
 }
 
 #[tokio::test]
 async fn current_boundary_tokens_are_bound_to_their_target() {
-    let (mut client, handle) = start(false).await;
+    let (mut client, handle) = start_profile(Profile::Emulator).await;
     let (tx, rx) = mpsc::channel(8);
     let mut listen = client
         .listen(ReceiverStream::new(rx))
@@ -2180,7 +2178,7 @@ async fn current_boundary_tokens_are_bound_to_their_target() {
     }
     tx.send(other).await.unwrap();
     let trace = next_until(&mut listen, "NO_CHANGE[]").await;
-    assert_eq!(trace[..2], ["ADD[2]", "RESET[2]"]);
+    assert!(trace.iter().any(|line| line == "RESET[2]"), "{trace:?}");
     handle.abort();
 }
 
@@ -3414,7 +3412,9 @@ async fn a_strict_resume_without_an_expected_count_ends_its_replay_with_a_count_
 async fn a_strict_resume_without_an_expected_count_leaves_the_removals_to_the_count() {
     let (mut client, handle) = start(false).await;
     let token = token_after_two_documents(&mut client).await;
+    // Two commits (a one-commit departure is replayed: see `l1b_resume_answers`).
     commit_writes(&mut client, vec![delete_write("r/b")]).await;
+    commit_writes(&mut client, vec![set_write("r/a", &[("v", s("2"))])]).await;
     let trace = resumed_trace(&mut client, resume_request(2, "r", token, None)).await;
     // No DELETE b: the client that holds two documents finds the removal by the count of 1.
     assert_eq!(
@@ -3422,6 +3422,7 @@ async fn a_strict_resume_without_an_expected_count_leaves_the_removals_to_the_co
         vec![
             "ADD[2]",
             "NO_CHANGE[]",
+            "CHANGE a",
             "FILTER 1",
             "CURRENT[2]",
             "NO_CHANGE[]"
@@ -3499,14 +3500,16 @@ async fn no_filter_for_a_fresh_target_a_document_target_a_read_time_or_a_reset()
     assert!(!described(&trace)
         .iter()
         .any(|line| line.starts_with("FILTER")));
-    // A token this daemon did not issue resets and replays: no filter (and one boundary only).
+    // A valid binding with a future version resets and replays: no filter (and one boundary only).
     let (tx, rx) = mpsc::channel(8);
     let mut reset = client
         .listen(ReceiverStream::new(rx))
         .await
         .unwrap()
         .into_inner();
-    tx.send(resume_request(7, "r", vec![0; 32], None))
+    let mut future_token = token;
+    future_token[..8].copy_from_slice(&u64::MAX.to_be_bytes());
+    tx.send(resume_request(7, "r", future_token, None))
         .await
         .unwrap();
     let trace = next_until(&mut reset, "NO_CHANGE[]").await;
@@ -3540,6 +3543,26 @@ async fn a_query_resumed_by_read_time_gets_no_filter() {
         described(&trace)
     );
     handle.abort();
+}
+
+use md5::{Digest, Md5};
+
+/// The SDK's membership check (`BloomFilter.mightContain` of @firebase/firestore 4.17.1),
+/// written out here independently of the crate's own filter.
+fn sdk_might_contain(filter: &pb::BloomFilter, name: &str) -> bool {
+    let bits = filter.bits.as_ref().expect("a bitmap");
+    let bit_count = (u64::try_from(bits.bitmap.len()).unwrap() * 8)
+        .saturating_sub(u64::try_from(bits.padding).unwrap());
+    if bit_count == 0 {
+        return false;
+    }
+    let digest = Md5::digest(name.as_bytes());
+    let h1 = u64::from_le_bytes(digest[0..8].try_into().unwrap());
+    let h2 = u64::from_le_bytes(digest[8..16].try_into().unwrap());
+    (0..u64::try_from(filter.hash_count).unwrap()).all(|i| {
+        let index = usize::try_from(h1.wrapping_add(i.wrapping_mul(h2)) % bit_count).unwrap();
+        bits.bitmap[index / 8] & (1 << (index % 8)) != 0
+    })
 }
 
 mod count_filter_properties {
@@ -3652,7 +3675,27 @@ mod count_filter_properties {
                 }
                 let trace = resumed_trace(&mut client, request).await;
                 let lines = described(&trace);
-                prop_assert!(!lines.iter().any(|l| l.starts_with("FILTER")), "{:?}", lines);
+                // At most a bloom filter, of exactly the documents the target matches, and only when
+                // none left and production recorded its size (1 to 3 documents).
+                let matching_now = present.iter().filter(|(_, included)| **included).count();
+                let sent: Vec<&pb::ExistenceFilter> = trace
+                    .iter()
+                    .filter_map(|item| match &item.response_type {
+                        Some(pb::listen_response::ResponseType::Filter(f)) => Some(f),
+                        _ => None,
+                    })
+                    .collect();
+                prop_assert!(sent.len() <= 1, "{:?}", lines);
+                if let Some(filter) = sent.first() {
+                    prop_assert_eq!(usize::try_from(filter.count).unwrap(), matching_now);
+                    prop_assert!((1..=3).contains(&matching_now));
+                    let bloom = filter.unchanged_names.as_ref().unwrap();
+                    for (name, included) in &present {
+                        if *included {
+                            prop_assert!(sdk_might_contain(bloom, &format!("{DOCS}/q/{name}")), "{name}");
+                        }
+                    }
+                }
                 let mut held: std::collections::BTreeSet<String> = ["seed".to_owned()].into();
                 for line in &lines {
                     if let Some(name) = line.strip_prefix("CHANGE ") {
@@ -3918,30 +3961,1021 @@ mod resume_client_model {
                         _ => None,
                     })
                     .collect();
-                prop_assert_eq!(filters.len(), 1, "one filter, for the resumed target only");
-                prop_assert_eq!(filters[0].target_id, 2);
-                let in_replay = replay.iter().any(|item| matches!(&item.response_type, Some(pb::listen_response::ResponseType::Filter(_))));
-                prop_assert!(in_replay, "the filter is in the resumed target's replay");
-                let count = usize::try_from(filters[0].count).unwrap();
-                prop_assert_eq!(count, now.len(), "the count is what the query matches now");
-
                 let after_replay = applied(&held, 2, &replay);
                 prop_assert!(now.is_subset(&after_replay), "the replay delivers every matching document");
-                if departed.is_empty() {
-                    prop_assert_eq!(after_replay.len(), count, "nothing left: the SDK finds its count equal");
+                if filters.is_empty() {
+                    // The replay of a one-commit departure: the removal message and no filter. The
+                    // client holds exactly what the target matches: nothing to repair.
+                    prop_assert_eq!(departed.len(), 1, "no filter only for exactly one departure");
                     prop_assert_eq!(&after_replay, &now);
                 } else {
-                    prop_assert_eq!(
-                        after_replay.len() - count,
-                        departed.len(),
-                        "the SDK's set exceeds the count by exactly the departed documents"
-                    );
-                    prop_assert_eq!(&after_replay, &now.union(&departed).cloned().collect::<BTreeSet<_>>());
+                    prop_assert_eq!(filters.len(), 1, "one filter, for the resumed target only");
+                    prop_assert_eq!(filters[0].target_id, 2);
+                    let in_replay = replay.iter().any(|item| matches!(&item.response_type, Some(pb::listen_response::ResponseType::Filter(_))));
+                    prop_assert!(in_replay, "the filter is in the resumed target's replay");
+                    let count = usize::try_from(filters[0].count).unwrap();
+                    prop_assert_eq!(count, now.len(), "the count is what the query matches now");
+                    if departed.is_empty() {
+                        prop_assert_eq!(after_replay.len(), count, "nothing left: the SDK finds its count equal");
+                        prop_assert_eq!(&after_replay, &now);
+                    } else {
+                        prop_assert_eq!(
+                            after_replay.len() - count,
+                            departed.len(),
+                            "the SDK's set exceeds the count by exactly the departed documents"
+                        );
+                        prop_assert_eq!(&after_replay, &now.union(&departed).cloned().collect::<BTreeSet<_>>());
+                    }
                 }
                 prop_assert_eq!(applied(&BTreeSet::new(), 3, &fresh), now, "the fresh target holds its matches");
                 handle.abort();
                 Ok(())
             })?;
+        }
+    }
+}
+
+/// The answers production gave to a resume in the L1b recordings (docs.local/submissions/listen-l1b/
+/// reading-l1b-final.md): a real bloom filter for an expected count answered with a diff, and a
+/// replay with the removal message for a one-commit leave or delete.
+mod l1b_resume_answers {
+    use super::*;
+
+    fn filters(trace: &[pb::ListenResponse]) -> Vec<pb::ExistenceFilter> {
+        trace
+            .iter()
+            .filter_map(|item| match &item.response_type {
+                Some(pb::listen_response::ResponseType::Filter(f)) => Some(f.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Documents `r/<name>` written, a stream on `r` listened to its first boundary after CURRENT.
+    async fn token_after(
+        client: &mut FirestoreClient<tonic::transport::Channel>,
+        names: &[&str],
+    ) -> Vec<u8> {
+        commit_writes(
+            client,
+            names
+                .iter()
+                .map(|n| set_write(&format!("r/{n}"), &[("v", s("1"))]))
+                .collect(),
+        )
+        .await;
+        let (tx, rx) = mpsc::channel(8);
+        let mut listen = client
+            .listen(ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        tx.send(add_query_target(1, "r")).await.unwrap();
+        let (_, token) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+        token
+    }
+
+    /// What a resumed stream sends until its `boundaries`-th global boundary.
+    async fn trace_until_boundary(
+        client: &mut FirestoreClient<tonic::transport::Channel>,
+        request: pb::ListenRequest,
+        boundaries: usize,
+    ) -> Vec<pb::ListenResponse> {
+        let (tx, rx) = mpsc::channel(8);
+        let mut listen = client
+            .listen(ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        tx.send(request).await.unwrap();
+        let mut out = Vec::new();
+        let mut seen = 0;
+        while seen < boundaries {
+            let item = tokio::time::timeout(std::time::Duration::from_secs(5), listen.next())
+                .await
+                .expect("listen response within 5 s")
+                .expect("stream open")
+                .unwrap();
+            if describe(&item) == "NO_CHANGE[]" {
+                seen += 1;
+            }
+            out.push(item);
+        }
+        out
+    }
+
+    fn names(documents: &[&str]) -> Vec<String> {
+        documents.iter().map(|n| format!("{DOCS}/r/{n}")).collect()
+    }
+
+    /// The recorded size for each count: (hash count, bitmap bytes, padding).
+    fn recorded(count: usize) -> (i32, usize, i32) {
+        [(12, 3, 7), (13, 5, 3), (14, 8, 5)][count - 1]
+    }
+
+    #[tokio::test]
+    async fn an_expected_count_resume_answered_with_a_diff_ends_with_the_bloom_filter_of_the_matching_documents(
+    ) {
+        for documents in [&["a"][..], &["a", "b"], &["a", "b", "c"]] {
+            let (mut client, handle) = start(false).await;
+            let token = token_after(&mut client, documents).await;
+            commit_writes(&mut client, vec![set_write("r/a", &[("v", s("2"))])]).await;
+            let count = i32::try_from(documents.len()).unwrap();
+            let trace =
+                resumed_trace(&mut client, resume_request(2, "r", token, Some(count))).await;
+            assert_eq!(
+                described(&trace),
+                vec![
+                    "ADD[2]".to_owned(),
+                    "NO_CHANGE[]".to_owned(),
+                    "CHANGE a".to_owned(),
+                    format!("FILTER {count}"),
+                    "CURRENT[2]".to_owned(),
+                    "NO_CHANGE[]".to_owned(),
+                ],
+                "{documents:?}"
+            );
+            let filter = &filters(&trace)[0];
+            assert_eq!(filter.target_id, 2);
+            let bloom = filter.unchanged_names.as_ref().expect("a bloom filter");
+            let (hash_count, bytes, padding) = recorded(documents.len());
+            assert_eq!(bloom.hash_count, hash_count, "{documents:?}");
+            let bits = bloom.bits.as_ref().unwrap();
+            assert_eq!(bits.bitmap.len(), bytes);
+            assert_eq!(bits.padding, padding);
+            for name in names(documents) {
+                assert!(sdk_might_contain(bloom, &name), "{name}");
+            }
+            handle.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_wrong_expected_count_is_answered_exactly_like_the_right_one() {
+        let (mut client, handle) = start(false).await;
+        let token = token_after(&mut client, &["a", "b", "c"]).await;
+        commit_writes(&mut client, vec![set_write("r/a", &[("v", s("2"))])]).await;
+        let right =
+            resumed_trace(&mut client, resume_request(2, "r", token.clone(), Some(3))).await;
+        let wrong = resumed_trace(&mut client, resume_request(2, "r", token, Some(4))).await;
+        assert_eq!(described(&right), described(&wrong));
+        assert_eq!(filters(&right), filters(&wrong));
+        assert_eq!(
+            filters(&wrong)[0].count,
+            3,
+            "the count is what the target matches"
+        );
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn no_bloom_filter_for_a_count_production_did_not_record_one_for() {
+        // Four documents, or none: the diff answers with no filter, as before.
+        for documents in [&["a", "b", "c", "d"][..], &[]] {
+            let (mut client, handle) = start(false).await;
+            let token = token_after(&mut client, documents).await;
+            commit_writes(&mut client, vec![set_write("r/a", &[("v", s("2"))])]).await;
+            let count = i32::try_from(documents.len()).unwrap();
+            let trace =
+                resumed_trace(&mut client, resume_request(2, "r", token, Some(count))).await;
+            assert!(
+                filters(&trace).is_empty() || documents.is_empty(),
+                "{documents:?} {:?}",
+                described(&trace)
+            );
+            if documents.len() == 4 {
+                assert!(filters(&trace).is_empty(), "{:?}", described(&trace));
+            }
+            handle.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_document_that_left_since_the_token_keeps_the_removal_message_and_gets_no_bloom_filter(
+    ) {
+        let (mut client, handle) = start(false).await;
+        let token = token_after(&mut client, &["a", "b", "c"]).await;
+        commit_writes(&mut client, vec![delete_write("r/b")]).await;
+        let trace = resumed_trace(&mut client, resume_request(2, "r", token, Some(3))).await;
+        assert!(
+            described(&trace).contains(&"DELETE b".to_owned()),
+            "{:?}",
+            described(&trace)
+        );
+        assert!(filters(&trace).is_empty(), "{:?}", described(&trace));
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn the_emulator_profile_sends_no_bloom_filter_as_the_official_emulator_does_not() {
+        let (mut client, handle) = start_profile(Profile::Emulator).await;
+        let token = token_after(&mut client, &["a", "b"]).await;
+        commit_writes(&mut client, vec![set_write("r/a", &[("v", s("2"))])]).await;
+        let trace = resumed_trace(&mut client, resume_request(2, "r", token, Some(2))).await;
+        assert!(filters(&trace).is_empty(), "{:?}", described(&trace));
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn no_bloom_filter_for_a_fresh_target_a_document_target_or_a_target_without_a_token() {
+        let (mut client, handle) = start(false).await;
+        let _ = token_after(&mut client, &["a", "b"]).await;
+        // A fresh target that gives an expected count: no resume, no filter.
+        let mut fresh = add_query_target(2, "r");
+        if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut fresh.target_change {
+            t.expected_count = Some(2);
+        }
+        let (tx, rx) = mpsc::channel(8);
+        let mut listen = client
+            .listen(ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        tx.send(fresh).await.unwrap();
+        // A fresh target has no replay boundary: ADD, the documents, CURRENT, one boundary.
+        let trace = next_until(&mut listen, "NO_CHANGE[]").await;
+        assert_eq!(trace.last().map(String::as_str), Some("NO_CHANGE[]"));
+        assert!(
+            !trace.iter().any(|line| line.starts_with("FILTER")),
+            "{trace:?}"
+        );
+        handle.abort();
+    }
+
+    /// A one-commit leave or delete from the token, no expected count: production answered with a
+    /// boundary after the removal message and no filter (kinds/leave and kinds/delete, both runs).
+    #[tokio::test]
+    async fn a_one_commit_delete_is_replayed_with_its_removal_message_and_a_boundary_after_it() {
+        let (mut client, handle) = start(false).await;
+        let token = token_after(&mut client, &["a", "b", "c"]).await;
+        commit_writes(&mut client, vec![delete_write("r/b")]).await;
+        let trace = trace_until_boundary(&mut client, resume_request(2, "r", token, None), 3).await;
+        assert_eq!(
+            described(&trace),
+            vec![
+                "ADD[2]",
+                "NO_CHANGE[]",
+                "DELETE b",
+                "NO_CHANGE[]",
+                "CURRENT[2]",
+                "NO_CHANGE[]"
+            ]
+        );
+        assert!(filters(&trace).is_empty());
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn a_one_commit_leave_is_replayed_with_its_removal_message_and_a_boundary_after_it() {
+        let (mut client, handle) = start(false).await;
+        commit_writes(
+            &mut client,
+            vec![
+                set_write("q/a", &[("state", s("included"))]),
+                set_write("q/b", &[("state", s("included"))]),
+            ],
+        )
+        .await;
+        let (tx, rx) = mpsc::channel(8);
+        let mut listen = client
+            .listen(ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        tx.send(add_filtered_query_target(1, "q")).await.unwrap();
+        let (_, token) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+        commit_writes(
+            &mut client,
+            vec![set_write("q/b", &[("state", s("excluded"))])],
+        )
+        .await;
+        let mut request = add_filtered_query_target(2, "q");
+        if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut request.target_change {
+            t.resume_type = Some(pb::target::ResumeType::ResumeToken(token));
+        }
+        let trace = trace_until_boundary(&mut client, request, 3).await;
+        assert_eq!(
+            described(&trace),
+            vec![
+                "ADD[2]",
+                "NO_CHANGE[]",
+                "LEAVE b",
+                "NO_CHANGE[]",
+                "CURRENT[2]",
+                "NO_CHANGE[]"
+            ]
+        );
+        assert!(filters(&trace).is_empty());
+        handle.abort();
+    }
+
+    /// The scope of the replay is the recorded shape only: anything else keeps rule R.
+    #[tokio::test]
+    async fn the_replay_is_for_exactly_one_commit_with_exactly_one_departure_and_nothing_else() {
+        // Two commits (a delete and a modification): count-only filter, no removal message.
+        let (mut client, handle) = start(false).await;
+        let token = token_after(&mut client, &["a", "b", "c"]).await;
+        commit_writes(&mut client, vec![delete_write("r/b")]).await;
+        commit_writes(&mut client, vec![set_write("r/a", &[("v", s("2"))])]).await;
+        let two = resumed_trace(&mut client, resume_request(2, "r", token, None)).await;
+        assert!(
+            described(&two).contains(&"FILTER 2".to_owned()),
+            "{:?}",
+            described(&two)
+        );
+        assert!(!described(&two).contains(&"DELETE b".to_owned()));
+        handle.abort();
+        // One commit that deletes a document and modifies another: R as well.
+        let (mut client, handle) = start(false).await;
+        let token = token_after(&mut client, &["a", "b", "c"]).await;
+        commit_writes(
+            &mut client,
+            vec![delete_write("r/b"), set_write("r/a", &[("v", s("2"))])],
+        )
+        .await;
+        let mixed = resumed_trace(&mut client, resume_request(2, "r", token, None)).await;
+        assert!(
+            described(&mixed).contains(&"FILTER 2".to_owned()),
+            "{:?}",
+            described(&mixed)
+        );
+        assert!(!described(&mixed).contains(&"DELETE b".to_owned()));
+        handle.abort();
+        // One commit that deletes two documents: R.
+        let (mut client, handle) = start(false).await;
+        let token = token_after(&mut client, &["a", "b", "c"]).await;
+        commit_writes(&mut client, vec![delete_write("r/b"), delete_write("r/c")]).await;
+        let both = resumed_trace(&mut client, resume_request(2, "r", token, None)).await;
+        assert!(
+            described(&both).contains(&"FILTER 1".to_owned()),
+            "{:?}",
+            described(&both)
+        );
+        handle.abort();
+        // One commit that only modifies: the replay is not for it (R's diff and filter).
+        let (mut client, handle) = start(false).await;
+        let token = token_after(&mut client, &["a", "b", "c"]).await;
+        commit_writes(&mut client, vec![set_write("r/a", &[("v", s("2"))])]).await;
+        let modify = resumed_trace(&mut client, resume_request(2, "r", token, None)).await;
+        assert_eq!(
+            described(&modify),
+            vec![
+                "ADD[2]",
+                "NO_CHANGE[]",
+                "CHANGE a",
+                "FILTER 3",
+                "CURRENT[2]",
+                "NO_CHANGE[]"
+            ]
+        );
+        handle.abort();
+        // A commit elsewhere in between: not one commit since the token, so R.
+        let (mut client, handle) = start(false).await;
+        let token = token_after(&mut client, &["a", "b", "c"]).await;
+        commit_writes(
+            &mut client,
+            vec![set_write("elsewhere/x", &[("v", s("1"))])],
+        )
+        .await;
+        commit_writes(&mut client, vec![delete_write("r/b")]).await;
+        let between = resumed_trace(&mut client, resume_request(2, "r", token, None)).await;
+        assert!(
+            described(&between).contains(&"FILTER 2".to_owned()),
+            "{:?}",
+            described(&between)
+        );
+        assert!(!described(&between).contains(&"DELETE b".to_owned()));
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn the_emulator_profile_keeps_its_answer_to_a_one_commit_departure() {
+        let (mut client, handle) = start_profile(Profile::Emulator).await;
+        let token = token_after(&mut client, &["a", "b", "c"]).await;
+        commit_writes(&mut client, vec![delete_write("r/b")]).await;
+        let trace = resumed_trace(&mut client, resume_request(2, "r", token, None)).await;
+        // The profile's exact diff: the removal message, no filter, no boundary after it (the
+        // official emulator resets and replays; it sends neither).
+        assert_eq!(
+            described(&trace),
+            vec![
+                "ADD[2]",
+                "NO_CHANGE[]",
+                "DELETE b",
+                "CURRENT[2]",
+                "NO_CHANGE[]"
+            ]
+        );
+        handle.abort();
+    }
+
+    mod one_commit {
+        use super::*;
+        use proptest::prelude::*;
+
+        #[derive(Debug, Clone, Copy)]
+        enum Op {
+            Delete(u8),
+            Leave(u8),
+            Modify(u8),
+            Enter,
+            Rewrite(u8),
+        }
+
+        fn ops() -> impl Strategy<Value = Op> {
+            prop_oneof![
+                (0_u8..4).prop_map(Op::Delete),
+                (0_u8..4).prop_map(Op::Leave),
+                (0_u8..4).prop_map(Op::Modify),
+                Just(Op::Enter),
+                (0_u8..4).prop_map(Op::Rewrite),
+            ]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(40))]
+
+            /// One commit since the token, no expected count: a delete or a leave of one document
+            /// is replayed (the removal message, a boundary after it, no filter); every other
+            /// commit keeps rule R (the diff, and a count-only filter of what the target matches).
+            #[test]
+            fn only_a_one_commit_departure_is_replayed(documents in 2_u8..5, op in ops()) {
+                let runtime = tokio::runtime::Runtime::new().unwrap();
+                runtime.block_on(async {
+                    let (mut client, handle) = start(false).await;
+                    let seed: Vec<pb::Write> = (0..documents)
+                        .map(|i| set_write(&format!("q/d{i}"), &[("state", s("included")), ("v", s("1"))]))
+                        .collect();
+                    commit_writes(&mut client, seed).await;
+                    let (tx, rx) = mpsc::channel(8);
+                    let mut listen = client.listen(ReceiverStream::new(rx)).await.unwrap().into_inner();
+                    tx.send(add_filtered_query_target(1, "q")).await.unwrap();
+                    let (_, token) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+                    let (write, matching) = match op {
+                        Op::Delete(i) | Op::Leave(i) | Op::Modify(i) | Op::Rewrite(i) if i >= documents => {
+                            (set_write("q/d0", &[("state", s("included")), ("v", s("1"))]), usize::from(documents))
+                        }
+                        Op::Delete(i) => (delete_write(&format!("q/d{i}")), usize::from(documents) - 1),
+                        Op::Leave(i) => (
+                            set_write(&format!("q/d{i}"), &[("state", s("excluded")), ("v", s("1"))]),
+                            usize::from(documents) - 1,
+                        ),
+                        Op::Modify(i) => (
+                            set_write(&format!("q/d{i}"), &[("state", s("included")), ("v", s("2"))]),
+                            usize::from(documents),
+                        ),
+                        Op::Enter => (
+                            set_write("q/new", &[("state", s("included")), ("v", s("1"))]),
+                            usize::from(documents) + 1,
+                        ),
+                        Op::Rewrite(i) => (
+                            set_write(&format!("q/d{i}"), &[("state", s("included")), ("v", s("1"))]),
+                            usize::from(documents),
+                        ),
+                    };
+                    commit_writes(&mut client, vec![write]).await;
+                    let mut request = add_filtered_query_target(2, "q");
+                    if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut request.target_change {
+                        t.resume_type = Some(pb::target::ResumeType::ResumeToken(token));
+                    }
+                    let departure = matches!(op, Op::Delete(i) | Op::Leave(i) if i < documents);
+                    let trace = trace_until_boundary(&mut client, request, if departure { 3 } else { 2 }).await;
+                    let lines = described(&trace);
+                    if departure {
+                        prop_assert_eq!(lines.len(), 6, "{:?}", lines);
+                        prop_assert_eq!(&lines[1], "NO_CHANGE[]");
+                        prop_assert!(lines[2].starts_with("DELETE ") || lines[2].starts_with("LEAVE "), "{:?}", lines);
+                        prop_assert_eq!(&lines[3], "NO_CHANGE[]");
+                        prop_assert_eq!(&lines[4], "CURRENT[2]");
+                        prop_assert!(filters(&trace).is_empty());
+                    } else {
+                        let filter = filters(&trace);
+                        prop_assert_eq!(filter.len(), 1, "{:?}", lines);
+                        prop_assert_eq!(usize::try_from(filter[0].count).unwrap(), matching);
+                        prop_assert!(!lines.iter().any(|l| l.starts_with("DELETE ") || l.starts_with("LEAVE ")), "{:?}", lines);
+                    }
+                    handle.abort();
+                    Ok(())
+                })?;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_resume_token_lengths_follow_the_profile_and_global_tokens_resume_any_target() {
+    for (profile, length) in [(Profile::Strict, 11), (Profile::Emulator, 32)] {
+        let (mut client, handle) = start_profile(profile).await;
+        let (tx, rx) = mpsc::channel(8);
+        let mut listen = client
+            .listen(ReceiverStream::new(rx))
+            .await
+            .unwrap()
+            .into_inner();
+        tx.send(add_query_target(1, "first")).await.unwrap();
+        let (_, current) = trace_and_token(&mut listen, "CURRENT[1]").await;
+        let (_, global) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+        assert_eq!(current.len(), length);
+        assert_eq!(global.len(), length);
+        if length == 11 {
+            assert_eq!(current, global);
+        } else {
+            assert_ne!(current[8..], global[8..]);
+        }
+        let resume = if length == 11 {
+            current.clone()
+        } else {
+            global.clone()
+        };
+        tx.send(resume_request(2, "second", resume.clone(), None))
+            .await
+            .unwrap();
+        let (early, echoed) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+        assert_eq!(early, ["ADD[2]", "NO_CHANGE[]"]);
+        assert_eq!(echoed, resume);
+        let trace = next_until(&mut listen, "NO_CHANGE[]").await;
+        assert!(!trace.iter().any(|line| line.starts_with("RESET")));
+        handle.abort();
+        handle.await.unwrap_err();
+    }
+}
+
+#[tokio::test]
+async fn foreign_resume_tokens_are_removed_in_strict_and_reset_in_emulator() {
+    // Production's answer for a foreign token is unrecorded. Strict treats a mismatched check like recorded junk bytes;
+    // a token from another target of the same database is not foreign in strict (see the target case below).
+    for profile in [Profile::Strict, Profile::Emulator] {
+        for foreign in ["target", "database", "epoch"] {
+            let (mut client, mut handle) = start_profile(profile).await;
+            if foreign == "epoch" {
+                BACKEND.with(|b| b.borrow().as_ref().unwrap().reset());
+            }
+            let (tx, rx) = mpsc::channel(8);
+            let mut listen = client
+                .listen(ReceiverStream::new(rx))
+                .await
+                .unwrap()
+                .into_inner();
+            tx.send(add_query_target(1, "first")).await.unwrap();
+            let (_, token) = trace_and_token(&mut listen, "CURRENT[1]").await;
+            next_until(&mut listen, "NO_CHANGE[]").await;
+            drop(tx);
+            drop(listen);
+            if foreign == "epoch" {
+                // Reconnect to a fresh backend: only the epoch differs, while both database generations are zero.
+                handle.abort();
+                handle.await.unwrap_err();
+                (client, handle) = start_profile(profile).await;
+            }
+            let (tx, rx) = mpsc::channel(8);
+            let mut listen = client
+                .listen(ReceiverStream::new(rx))
+                .await
+                .unwrap()
+                .into_inner();
+            let mut request = resume_request(
+                2,
+                if foreign == "target" {
+                    "second"
+                } else {
+                    "first"
+                },
+                token,
+                None,
+            );
+            if foreign == "database" {
+                BACKEND.with(|b| {
+                    b.borrow()
+                        .as_ref()
+                        .unwrap()
+                        .replace_declared_databases(["other".to_owned()]);
+                });
+                request.database = "projects/demo-app/databases/other".to_owned();
+                if let Some(pb::listen_request::TargetChange::AddTarget(target)) =
+                    &mut request.target_change
+                {
+                    if let Some(pb::target::TargetType::Query(query)) = &mut target.target_type {
+                        query.parent = format!("{}/documents", request.database);
+                    }
+                }
+            }
+            tx.send(request).await.unwrap();
+            if matches!(profile, Profile::Strict) && foreign == "target" {
+                // A strict CURRENT token is the snapshot's global token (FS-LISTEN-SDK L3 203/203C:
+                // CURRENT and the following global NO_CHANGE carry the same bytes), and a global token
+                // resumes any target of the database, so it is not foreign to another target.
+                let trace = next_until(&mut listen, "NO_CHANGE[]").await;
+                assert_eq!(trace[..2], ["ADD[2]", "NO_CHANGE[]"], "{foreign}");
+            } else if matches!(profile, Profile::Strict) {
+                let first = tokio::time::timeout(std::time::Duration::from_secs(5), listen.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    describe(&first),
+                    "REMOVE[2] cause=3",
+                    "no ADD comes first: {foreign}"
+                );
+                let Some(pb::listen_response::ResponseType::TargetChange(change)) =
+                    first.response_type
+                else {
+                    panic!("expected a removal")
+                };
+                assert_eq!(change.cause.unwrap().message, "bad resume token");
+            } else {
+                let trace = next_until(&mut listen, "NO_CHANGE[]").await;
+                assert_eq!(trace[..2], ["ADD[2]", "RESET[2]"], "{foreign}");
+            }
+            handle.abort();
+            handle.await.unwrap_err();
+        }
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn webchannel_resume_token_lengths_follow_the_profile() {
+    use std::fmt::Write as _;
+
+    use fireemu_adapter_grpc::rest::json::{base64_decode, base64_encode};
+    use fireemu_adapter_grpc::rest::RestState;
+    use fireemu_adapter_grpc::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
+    use serde_json::json;
+
+    for (profile, length) in [(Profile::Strict, 11), (Profile::Emulator, 32)] {
+        let (_, handle) = start_profile(profile).await;
+        let local = BACKEND.with(|b| b.borrow().as_ref().unwrap().clone());
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: if matches!(profile, Profile::Strict) {
+                    IndexValidationPolicy::Production
+                } else {
+                    IndexValidationPolicy::Emulator
+                },
+            },
+            indexes: IndexSet::default(),
+        };
+        let hub = Hub::new(Arc::new(RestState {
+            local,
+            gateway: Arc::new(gateway),
+            rules: None,
+            app_check: None,
+            control_token: None,
+        }));
+        let target = json!({"database": DB, "addTarget": {"targetId": 1, "documents": {"documents": [format!("{DOCS}/open/missing")]}}}).to_string();
+        let encoded = target.bytes().fold(String::new(), |mut encoded, b| {
+            write!(&mut encoded, "%{b:02X}").unwrap();
+            encoded
+        });
+        let ChannelResponse::Full {
+            status, headers, ..
+        } = hub.handle(&ChannelRequest {
+            kind: StreamKind::Listen,
+            method: "POST".to_owned(),
+            params: BTreeMap::from([
+                ("database".to_owned(), DB.to_owned()),
+                ("VER".to_owned(), "8".to_owned()),
+                ("RID".to_owned(), "1".to_owned()),
+            ]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: format!("count=1&ofs=0&req0___data__={encoded}"),
+        })
+        else {
+            panic!("expected handshake")
+        };
+        assert_eq!(status, 200);
+        let sid = headers
+            .into_iter()
+            .find(|(key, _)| *key == "x-http-session-id")
+            .unwrap()
+            .1;
+        let mut aid = 0;
+        let mut tokens = 0;
+        while tokens < 2 {
+            let ChannelResponse::Stream { mut body, .. } = hub.handle(&ChannelRequest {
+                kind: StreamKind::Listen,
+                method: "GET".to_owned(),
+                params: BTreeMap::from([
+                    ("SID".to_owned(), sid.clone()),
+                    ("RID".to_owned(), "rpc".to_owned()),
+                    ("AID".to_owned(), aid.to_string()),
+                    ("CI".to_owned(), "1".to_owned()),
+                    ("TO".to_owned(), "1000".to_owned()),
+                    ("TYPE".to_owned(), "xmlhttp".to_owned()),
+                ]),
+                authorization: None,
+                app_check: Vec::new(),
+                origin: None,
+                body: String::new(),
+            }) else {
+                panic!("expected back channel")
+            };
+            let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), body.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let (_, payload) = std::str::from_utf8(&chunk)
+                .unwrap()
+                .split_once('\n')
+                .unwrap();
+            let arrays: serde_json::Value = serde_json::from_str(payload).unwrap();
+            for array in arrays.as_array().unwrap() {
+                aid = array[0].as_u64().unwrap();
+                if let Some(token) = array[1][0]["targetChange"]["resumeToken"].as_str() {
+                    let decoded = base64_decode(token).unwrap();
+                    assert_eq!(decoded.len(), length);
+                    assert_eq!(token.len(), if length == 11 { 16 } else { 44 });
+                    assert_eq!(base64_encode(&decoded), token);
+                    tokens += 1;
+                }
+            }
+        }
+        hub.handle(&ChannelRequest {
+            kind: StreamKind::Listen,
+            method: "POST".to_owned(),
+            params: BTreeMap::from([
+                ("SID".to_owned(), sid),
+                ("TYPE".to_owned(), "terminate".to_owned()),
+            ]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: String::new(),
+        });
+        handle.abort();
+        handle.await.unwrap_err();
+    }
+}
+
+mod resume_token_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 32, failure_persistence: None, ..ProptestConfig::default() })]
+
+        #[test]
+        fn strict_tokens_round_trip_random_versions_and_bindings_and_refuse_different_checks(
+            version in 1_u8..9,
+            epoch in 0_u8..4,
+            database in any::<u32>(),
+            target in any::<u32>(),
+        ) {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.block_on(async {
+                let (mut client, handle) = start(false).await;
+                let backend = BACKEND.with(|b| b.borrow().as_ref().unwrap().clone());
+                for _ in 0..epoch { backend.reset(); }
+                backend.replace_declared_databases([format!("db{database}"), "other".to_owned()]);
+                let database_id = format!("db{database}");
+                let database = format!("projects/demo-app/databases/{database_id}");
+                let collection = format!("c{target}");
+                for value in 0..version {
+                    client.commit(pb::CommitRequest {
+                        database: database.clone(),
+                        writes: vec![pb::Write { operation: Some(pb::write::Operation::Update(pb::Document { name: format!("{database}/documents/{collection}/a"), fields: std::collections::HashMap::from([("v".to_owned(), s(&value.to_string()))]), ..Default::default() })), ..Default::default() }],
+                        ..Default::default()
+                    }).await.unwrap();
+                }
+                let (tx, rx) = mpsc::channel(8);
+                let mut listen = client.listen(ReceiverStream::new(rx)).await.unwrap().into_inner();
+                let mut request = add_query_target(1, &collection);
+                request.database.clone_from(&database);
+                if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut request.target_change {
+                    if let Some(pb::target::TargetType::Query(q)) = &mut t.target_type { q.parent = format!("{database}/documents"); }
+                }
+                tx.send(request.clone()).await.unwrap();
+                let (_, bound) = trace_and_token(&mut listen, "CURRENT[1]").await;
+                let (_, global) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+                assert_eq!(bound.len(), 11);
+                assert_eq!(bound, global);
+                assert_eq!(u64::from_be_bytes(bound[..8].try_into().unwrap()), u64::from(version));
+                if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut request.target_change {
+                    t.target_id = 2;
+                    t.resume_type = Some(pb::target::ResumeType::ResumeToken(bound.clone()));
+                }
+                tx.send(request.clone()).await.unwrap();
+                let (early, echoed) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+                assert_eq!(early, ["ADD[2]", "NO_CHANGE[]"]);
+                assert_eq!(echoed, global);
+                next_until(&mut listen, "NO_CHANGE[]").await;
+
+                // The 3-byte checks can collide across databases or epochs (about 2^-24 per case).
+                let mut other_database = add_query_target(3, &collection);
+                other_database.database = "projects/demo-app/databases/other".to_owned();
+                if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut other_database.target_change {
+                    t.resume_type = Some(pb::target::ResumeType::ResumeToken(bound.clone()));
+                    if let Some(pb::target::TargetType::Query(q)) = &mut t.target_type {
+                        q.parent = "projects/demo-app/databases/other/documents".to_owned();
+                    }
+                }
+                tx.send(other_database).await.unwrap();
+                let rejected = tokio::time::timeout(std::time::Duration::from_secs(5), listen.next()).await.unwrap().unwrap().unwrap();
+                assert_eq!(describe(&rejected), "REMOVE[3] cause=3");
+                backend.reset();
+                backend.replace_declared_databases([database_id]);
+                let (tx, rx) = mpsc::channel(8);
+                let mut listen = client.listen(ReceiverStream::new(rx)).await.unwrap().into_inner();
+                let mut stale_epoch = add_query_target(4, &collection);
+                stale_epoch.database.clone_from(&database);
+                if let Some(pb::listen_request::TargetChange::AddTarget(t)) = &mut stale_epoch.target_change {
+                    t.resume_type = Some(pb::target::ResumeType::ResumeToken(bound));
+                    if let Some(pb::target::TargetType::Query(q)) = &mut t.target_type { q.parent = format!("{database}/documents"); }
+                }
+                tx.send(stale_epoch).await.unwrap();
+                let rejected = tokio::time::timeout(std::time::Duration::from_secs(5), listen.next()).await.unwrap().unwrap().unwrap();
+                assert_eq!(describe(&rejected), "REMOVE[4] cause=3");
+                handle.abort();
+                handle.await.unwrap_err();
+            });
+        }
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn strict_webchannel_current_and_following_global_boundary_share_a_token() {
+    use std::fmt::Write as _;
+
+    use fireemu_adapter_grpc::rest::json::{base64_decode, base64_encode};
+    use fireemu_adapter_grpc::rest::RestState;
+    use fireemu_adapter_grpc::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
+    use serde_json::json;
+
+    for (profile, length) in [(Profile::Strict, 11)] {
+        let (_, handle) = start_profile(profile).await;
+        let local = BACKEND.with(|b| b.borrow().as_ref().unwrap().clone());
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: if matches!(profile, Profile::Strict) {
+                    IndexValidationPolicy::Production
+                } else {
+                    IndexValidationPolicy::Emulator
+                },
+            },
+            indexes: IndexSet::default(),
+        };
+        let hub = Hub::new(Arc::new(RestState {
+            local,
+            gateway: Arc::new(gateway),
+            rules: None,
+            app_check: None,
+            control_token: None,
+        }));
+        let target = json!({"database": DB, "addTarget": {"targetId": 1, "documents": {"documents": [format!("{DOCS}/open/missing")]}}}).to_string();
+        let encoded = target.bytes().fold(String::new(), |mut encoded, b| {
+            write!(&mut encoded, "%{b:02X}").unwrap();
+            encoded
+        });
+        let ChannelResponse::Full {
+            status, headers, ..
+        } = hub.handle(&ChannelRequest {
+            kind: StreamKind::Listen,
+            method: "POST".to_owned(),
+            params: BTreeMap::from([
+                ("database".to_owned(), DB.to_owned()),
+                ("VER".to_owned(), "8".to_owned()),
+                ("RID".to_owned(), "1".to_owned()),
+            ]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: format!("count=1&ofs=0&req0___data__={encoded}"),
+        })
+        else {
+            panic!("expected handshake")
+        };
+        assert_eq!(status, 200);
+        let sid = headers
+            .into_iter()
+            .find(|(key, _)| *key == "x-http-session-id")
+            .unwrap()
+            .1;
+        let mut aid = 0;
+        let mut tokens = 0;
+        let mut current_token = None;
+        while tokens < 2 {
+            let ChannelResponse::Stream { mut body, .. } = hub.handle(&ChannelRequest {
+                kind: StreamKind::Listen,
+                method: "GET".to_owned(),
+                params: BTreeMap::from([
+                    ("SID".to_owned(), sid.clone()),
+                    ("RID".to_owned(), "rpc".to_owned()),
+                    ("AID".to_owned(), aid.to_string()),
+                    ("CI".to_owned(), "1".to_owned()),
+                    ("TO".to_owned(), "1000".to_owned()),
+                    ("TYPE".to_owned(), "xmlhttp".to_owned()),
+                ]),
+                authorization: None,
+                app_check: Vec::new(),
+                origin: None,
+                body: String::new(),
+            }) else {
+                panic!("expected back channel")
+            };
+            let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), body.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let (_, payload) = std::str::from_utf8(&chunk)
+                .unwrap()
+                .split_once('\n')
+                .unwrap();
+            let arrays: serde_json::Value = serde_json::from_str(payload).unwrap();
+            for array in arrays.as_array().unwrap() {
+                aid = array[0].as_u64().unwrap();
+                if let Some(token) = array[1][0]["targetChange"]["resumeToken"].as_str() {
+                    let decoded = base64_decode(token).unwrap();
+                    assert_eq!(decoded.len(), length);
+                    assert_eq!(token.len(), if length == 11 { 16 } else { 44 });
+                    assert_eq!(base64_encode(&decoded), token);
+                    let change = &array[1][0]["targetChange"];
+                    if change["targetChangeType"] == "CURRENT" {
+                        assert_eq!(change["targetIds"], json!([1]));
+                        current_token = Some(decoded);
+                    } else {
+                        assert!(change["targetIds"].is_null() || change["targetIds"] == json!([]));
+                        assert_eq!(current_token.as_ref().unwrap(), &decoded);
+                    }
+                    tokens += 1;
+                }
+            }
+        }
+        hub.handle(&ChannelRequest {
+            kind: StreamKind::Listen,
+            method: "POST".to_owned(),
+            params: BTreeMap::from([
+                ("SID".to_owned(), sid),
+                ("TYPE".to_owned(), "terminate".to_owned()),
+            ]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: String::new(),
+        });
+        handle.abort();
+        handle.await.unwrap_err();
+    }
+}
+
+mod current_boundary_properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 32, failure_persistence: None, ..ProptestConfig::default() })]
+
+        #[test]
+        fn strict_current_boundaries_share_tokens_and_resume_without_replay(
+            history in prop::collection::vec((0_u8..4, prop::option::of(any::<u8>())), 0..16),
+        ) {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime.block_on(async {
+                let (mut client, handle) = start(false).await;
+                for step in std::iter::once(None).chain(history.into_iter().map(Some)) {
+                    if let Some((id, value)) = step {
+                        let path = format!("shared/d{id}");
+                        let write = match value {
+                            Some(value) => set_write(&path, &[("v", s(&value.to_string()))]),
+                            None => delete_write(&path),
+                        };
+                        client.commit(pb::CommitRequest {
+                            database: DB.to_owned(),
+                            writes: vec![write],
+                            ..Default::default()
+                        }).await.unwrap();
+                    }
+                    let (tx, rx) = mpsc::channel(8);
+                    let mut listen = client.listen(ReceiverStream::new(rx)).await.unwrap().into_inner();
+                    tx.send(add_query_target(1, "shared")).await.unwrap();
+                    let (_, current) = trace_and_token(&mut listen, "CURRENT[1]").await;
+                    let (following, boundary) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+                    assert_eq!(following, ["NO_CHANGE[]"]);
+                    assert_eq!(current, boundary);
+                    tx.send(resume_request(2, "shared", boundary.clone(), None)).await.unwrap();
+                    let (early, echoed) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+                    assert_eq!(early, ["ADD[2]", "NO_CHANGE[]"]);
+                    assert_eq!(echoed, boundary);
+                    let (replay, resumed_current) = trace_and_token(&mut listen, "CURRENT[2]").await;
+                    assert!(replay.iter().all(|line| line.starts_with("FILTER ") || line == "CURRENT[2]"));
+                    let (following, resumed_boundary) = trace_and_token(&mut listen, "NO_CHANGE[]").await;
+                    assert_eq!(following, ["NO_CHANGE[]"]);
+                    assert_eq!(resumed_current, resumed_boundary);
+                }
+                handle.abort();
+                handle.await.unwrap_err();
+            });
         }
     }
 }

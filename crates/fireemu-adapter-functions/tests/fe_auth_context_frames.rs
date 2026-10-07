@@ -143,3 +143,78 @@ fn official_naming_is_the_two_constants_the_official_emulator_sends_for_every_wr
         );
     }
 }
+
+/// Production prints the credential's own identity: the operator's email for a user credential
+/// (recorded, with `authType` `unknown`). This test pins that the mapping keeps whatever id it is
+/// given, so an actor that carried an email would be named by it, and that the local `owner`
+/// bearer, which has none, keeps `owner` (the declared divergence of the admin-write row: the
+/// comparator masks the value of an `unknown` row's id; FUNCTIONS-EVENTS scope decision E10).
+///
+/// It does not say what production names a real service account. That is documented as
+/// `authType` `service_account` with the account's email, not `unknown`, and is UNRECORDED and
+/// not modelled: no local principal is a service account (`Principal::Owner` is the only one
+/// that becomes a `service_account` actor, always with the id `owner`). The email below is a
+/// stand-in identity used to show that the id is kept, not a claim about the type.
+#[test]
+fn a_credential_that_carries_an_identity_is_named_by_it_and_the_owner_bearer_stays_owner() {
+    let email = "ops@demo-project.iam.gserviceaccount.com";
+    assert_eq!(
+        auth_context_for(
+            AuthContextNaming::Production,
+            "service_account",
+            Some(email)
+        ),
+        ("unknown", Some(email))
+    );
+    assert_eq!(
+        auth_context_for(
+            AuthContextNaming::Production,
+            "service_account",
+            Some("owner")
+        ),
+        ("unknown", Some("owner"))
+    );
+    // Near misses: the id is never swapped for the other form, and a missing id stays missing.
+    assert_ne!(
+        auth_context_for(
+            AuthContextNaming::Production,
+            "service_account",
+            Some(email)
+        )
+        .1,
+        Some("owner")
+    );
+    assert_eq!(
+        auth_context_for(AuthContextNaming::Production, "service_account", None),
+        ("unknown", None)
+    );
+}
+
+mod properties {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        // Strict never changes the id it is given, only the type, for the two recorded kinds; the
+        // emulator profile ignores the id altogether and sends the official constants.
+        #[test]
+        fn the_id_is_kept_by_the_production_naming_and_dropped_by_the_official_one(
+            id in "[ -~]{0,40}",
+        ) {
+            prop_assert_eq!(
+                auth_context_for(AuthContextNaming::Production, "service_account", Some(&id)),
+                ("unknown", Some(id.as_str()))
+            );
+            prop_assert_eq!(
+                auth_context_for(AuthContextNaming::Production, "app_user", Some(&id)),
+                ("api_key", Some(id.as_str()))
+            );
+            for kind in ["app_user", "service_account", "unauthenticated", "system"] {
+                prop_assert_eq!(
+                    auth_context_for(AuthContextNaming::Official, kind, Some(&id)),
+                    ("unknown", Some("fake-auth-id@gmail.com"))
+                );
+            }
+        }
+    }
+}

@@ -3894,7 +3894,10 @@ fn rest_empty_commit_answers_the_first_read_time_in_production_only() {
                     let (status, body) = call(
                         &s,
                         "GET",
-                        &format!("{DOCS}/empty-time/doc?transaction={transaction}"),
+                        &format!(
+                            "{DOCS}/empty-time/doc?transaction={}",
+                            transaction.replace('+', "%2B")
+                        ),
                         Value::Null,
                     );
                     assert_eq!(status, 200, "{body}");

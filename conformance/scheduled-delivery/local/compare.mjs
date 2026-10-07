@@ -43,6 +43,7 @@ const maskProject = (name) => String(name).replace(/^projects\/[^/]+\//, "projec
 const v1Prod = (digest) => digest.frames.filter((f) => f.generation === 1);
 /** An RFC 3339 instant (with an offset, and a fraction of up to nine digits) as seconds since the epoch. */
 export const secondsOf = (instant) => {
+  if (typeof instant !== "string") return NaN;
   const fraction = /\.(\d+)/.exec(instant)?.[1] ?? "";
   return Date.parse(instant.replace(/\.\d+/, "")) / 1000 + (fraction ? Number("0." + fraction) : 0);
 };
@@ -50,8 +51,13 @@ export const secondsOf = (instant) => {
 /** Seconds a forced run's first frame may trail (or, by a clock step, lead) the request that forced it. */
 const FORCED_FRAME_WINDOW = [-1, 5];
 
-/** The seconds the lag of a natural start against its own schedule time may vary by (production's varied by 0.8 s). */
-const ON_TIME_SPREAD = 5;
+/**
+ * The seconds the lag of a natural start against its own schedule time may vary by. Production's varied by 0.8 s in run
+ * `156715222b86ea44` and by up to about 12.6 s in run `f123d4fa2d61c5f5` (the slow job's revision started cold); a queue
+ * starts each occurrence after the run it waited for, so with a 100 s handler on a 60 s cadence its lag grows by 40 s or
+ * more from one start to the next. 20 s separates the two: it is above what production did and below what a queue does.
+ */
+const ON_TIME_SPREAD = 20;
 
 /**
  * What a job whose handler outlasts its cadence did about overlap, from its `start` and `end` frames (`at` in
@@ -64,9 +70,9 @@ const ON_TIME_SPREAD = 5;
  * - `occurrencesSkipped`: whether two consecutive natural starts are more than one and a half cadences apart, so that
  *   an occurrence in between never started;
  * - `forcedStartsInFlight`: whether a forced run began while another run was in flight (production: yes);
- * - `startsOnTime`: whether every natural start came when its own occurrence was due, to within a few seconds of the
- *   others' lag. A queue also leaves two starts a cadence or more apart and none inside a run, but it starts each
- *   occurrence late, after the run it waited for; a skip never delays one (production: no start more than 0.8 s off
+ * - `startsOnTime`: whether every natural start came when its own occurrence was due, to within `ON_TIME_SPREAD` seconds
+ *   of the others' lag. A queue also leaves two starts a cadence or more apart and none inside a run, but it starts each
+ *   occurrence late, after the run it waited for; a skip never delays one (production: no start more than 12.6 s off
  *   the others' lag). A start with no schedule time is not on time.
  */
 export function inFlightFacts(frames, forcedAt, cadenceSeconds) {
@@ -102,11 +108,98 @@ export function inFlightFacts(frames, forcedAt, cadenceSeconds) {
   };
 }
 
+/** Pure production predicates shared by the comparator and closure generator. */
+export function productionDeliveryFacts(digest) {
+  const frames = digest.frames.filter(
+    (f) =>
+      f.handler === "schedRetryV2" &&
+      !f.headers?.["x-cloudscheduler-jobname"]?.startsWith("fe-sd-"),
+  );
+  const groups = new Map();
+  for (const f of frames.toSorted((a, b) => a.at - b.at)) {
+    const key = `${f.headers?.["x-cloudscheduler-jobname"]}|${f.headers?.["x-cloudscheduler-scheduletime"]}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(f);
+  }
+  const chains = [...groups.values()];
+  const recovery = chains.find((g) => g[0].failing === true && g.some((f) => f.failing === false));
+  const successful = chains.filter((g) => g.some((f) => f.failing === false));
+  const repeated = chains.filter((g) => g.length > 1);
+  const finished = (handler) =>
+    (digest.attempts?.[`firebase-schedule-${handler}-us-central1`] ?? []).filter(
+      (a) => a.kind === "AttemptFinished",
+    );
+  const ok = finished("schedOkV2");
+  const failures = finished("schedRetryV2");
+  const observations = {
+    "handler-success-ack":
+      ok.length && ok.every((a) => Object.hasOwn(a, "status") && typeof a.debugInfo === "string")
+        ? ok.every((a) => a.status === null && (a.debugInfo ?? "").endsWith("code number = 200"))
+        : null,
+    "handler-throw-ack":
+      failures.length &&
+      repeated.length &&
+      failures.every((a) => Object.hasOwn(a, "status") && typeof a.debugInfo === "string") &&
+      chains.every((g) => typeof g[0].failing === "boolean")
+        ? failures.some(
+            (a) => a.status !== null && (a.debugInfo ?? "").endsWith("code number = 500"),
+          ) && repeated.some((g) => g[0].failing === true)
+        : null,
+    "success-stops-retry":
+      recovery && chains.every((g) => g.every((f) => typeof f.failing === "boolean"))
+        ? successful.every((g) => g.findIndex((f) => f.failing === false) === g.length - 1)
+        : null,
+    "next-schedule-after-failure":
+      chains.length &&
+      Array.isArray(digest.forced) &&
+      chains.every((g) => g.every((f) => typeof f.failing === "boolean" && Number.isFinite(f.at)))
+        ? chains.some(
+            (g) =>
+              g.every((f) => f.failing === true) &&
+              chains.some(
+                (next) =>
+                  next[0].at > g.at(-1).at &&
+                  secondsOf(next[0].event.scheduleTime) > secondsOf(g[0].event.scheduleTime) &&
+                  !(digest.forced ?? []).some(
+                    (f) => f.job === next[0].event.jobName && Math.abs(f.atMs - next[0].at) <= 5000,
+                  ),
+              ),
+          )
+        : null,
+    "retry-stable-occurrence-identity":
+      repeated.length &&
+      frames.every(
+        (f) =>
+          typeof f.event?.jobName === "string" &&
+          f.event.jobName.length > 0 &&
+          typeof f.headers?.["x-cloudscheduler-jobname"] === "string" &&
+          typeof f.event?.scheduleTime === "string" &&
+          Number.isFinite(Date.parse(f.event.scheduleTime)) &&
+          typeof f.headers?.["x-cloudscheduler-scheduletime"] === "string" &&
+          Number.isFinite(Date.parse(f.headers["x-cloudscheduler-scheduletime"])),
+      )
+        ? frames.every(
+            (f) =>
+              f.event.jobName === f.headers["x-cloudscheduler-jobname"] &&
+              f.event.scheduleTime === f.headers["x-cloudscheduler-scheduletime"],
+          )
+        : null,
+  };
+  return { observations, successShape: recovery?.map((f) => f.failing) ?? null };
+}
+
 /** The recorded retry chains: the attempt offsets (seconds from the first attempt) of each job's first chain. */
 export function productionChains(digest) {
   const groups = new Map();
   for (const f of digest.frames) {
-    if (f.handler !== "schedRetryV2") continue;
+    if (
+      f.handler !== "schedRetryV2" ||
+      typeof f.headers?.["x-cloudscheduler-jobname"] !== "string" ||
+      !f.headers["x-cloudscheduler-jobname"] ||
+      typeof f.headers?.["x-cloudscheduler-scheduletime"] !== "string" ||
+      !Number.isFinite(Date.parse(f.headers["x-cloudscheduler-scheduletime"]))
+    )
+      continue;
     const key =
       f.headers["x-cloudscheduler-jobname"] + "|" + f.headers["x-cloudscheduler-scheduletime"];
     if (!groups.has(key)) groups.set(key, []);
@@ -122,6 +215,11 @@ export function productionChains(digest) {
       zero: "retryZero",
       duration: "retryDuration",
       retry5: "retryFive",
+      count: "retryCountWindow",
+      zerobackoff: "retryZeroBackoff",
+      double0: "retryDouble0",
+      double1: "retryDouble1",
+      double3: "retryDouble3",
     }[job];
     // A job's longest chain: a retried failure is the recording of its retry rule (a lone attempt is not one).
     if (name && (chains[name]?.length ?? 0) < offsets.length) chains[name] = offsets;
@@ -133,7 +231,14 @@ export function productionChains(digest) {
 export function localChains(timeline) {
   const occurrences = new Map();
   for (const line of timeline.lines.filter((x) => x.kind === "PROBE")) {
-    const key = line.value.handler + "|" + (line.value.scheduleTime ?? "");
+    if (
+      typeof line.value.handler !== "string" ||
+      !line.value.handler ||
+      typeof line.value.scheduleTime !== "string" ||
+      !Number.isFinite(Date.parse(line.value.scheduleTime))
+    )
+      continue;
+    const key = line.value.handler + "|" + line.value.scheduleTime;
     if (!occurrences.has(key)) occurrences.set(key, { handler: line.value.handler, times: [] });
     occurrences.get(key).times.push(Date.parse(line.at) / 1000);
   }
@@ -149,8 +254,21 @@ export function localChains(timeline) {
 
 const verdict = (match) => (match ? "MATCH" : "DIVERGES");
 
-/** The rows for one profile. */
-export function rows(production, local) {
+/** The chains only some recordings hold (the extra REST jobs of later runs): no recording of them, no row. */
+const OPTIONAL_CHAINS = new Set([
+  "retryCountWindow",
+  "retryZeroBackoff",
+  "retryDouble0",
+  "retryDouble1",
+  "retryDouble3",
+]);
+
+/**
+ * The rows for one profile. `alsoRecorded` lists other recordings whose optional retry chains (the extra REST jobs of a
+ * later run) are compared as well, when `production` has none of its own: run `ecef353d18975246` ran a different fixture,
+ * so only its chains join the comparison, not its cadence or frames.
+ */
+export function rows(production, local, alsoRecorded = []) {
   const out = [];
   const add = (id, area, condition, p, l, match, note = "") =>
     out.push({
@@ -414,7 +532,201 @@ export function rows(production, local) {
       JSON.stringify(unique(lv1.map((f) => Object.keys(f.context).toSorted()))),
   );
 
+  // ---- Gen1: the message published to the job's topic ----
+  // Cloud Scheduler publishes one message to the job's topic for each occurrence (and each forced run); the handler's
+  // context names that message. The recording holds what pull subscriptions on the topics held (`published`), the local
+  // run what the same kind of subscription held on the broker (`natural.pulled`). A recording without any (run 2) has
+  // no such rows.
+  const published = production.published ?? [];
+  if (published.length > 0) {
+    const TOPIC = /^firebase-schedule-(.+)-us-central1$/;
+    const asMessage = (fn, m) => ({
+      fn,
+      id: String(m.messageId),
+      time: String(m.publishTime),
+      hasData: Boolean(m.data ?? m.hasData),
+      attributes: m.attributes ?? {},
+    });
+    const pMsgs = published.map((m) => asMessage(m.function, m));
+    // only a topic of the job's own id (the official emulator's has no region) that answered and held messages counts
+    const lMsgs = (local.natural.pulled ?? []).flatMap((t) => {
+      const fn = TOPIC.exec(String(t.topic))?.[1];
+      return t.status === 200 && fn ? (t.messages ?? []).map((m) => asMessage(fn, m)) : [];
+    });
+    // what the recording holds is never empty here (`published` is), so an empty local list never equals it
+    const same = (p, l) => JSON.stringify(p) === JSON.stringify(l);
+    const pTopics = unique(pMsgs.map((m) => m.fn));
+    const lTopics = unique(lMsgs.map((m) => m.fn));
+    add(
+      "v1.published.topic",
+      "v1-pubsub-delivery",
+      "context-resource-topic-versus-job",
+      pTopics,
+      lTopics,
+      same(pTopics, lTopics),
+      "each first-generation function's topic has the job's id (`firebase-schedule-<name>-<region>`) and holds its messages",
+    );
+    const pData = unique(pMsgs.map((m) => m.hasData));
+    const lData = unique(lMsgs.map((m) => m.hasData));
+    add(
+      "v1.published.data",
+      "v1-pubsub-delivery",
+      "published-data",
+      pData,
+      lData,
+      same(pData, lData),
+      "the published message has no data",
+    );
+    const attributesOf = (m) => Object.fromEntries(Object.entries(m.attributes).toSorted());
+    const pAttributes = unique(pMsgs.map(attributesOf));
+    const lAttributes = unique(lMsgs.map(attributesOf));
+    add(
+      "v1.published.attributes",
+      "v1-pubsub-delivery",
+      "published-attributes",
+      pAttributes,
+      lAttributes,
+      same(pAttributes, lAttributes),
+      'the published message\'s only attribute is `scheduled: "true"`',
+    );
+    // the handler frame that reports a message: the one of the same function whose context event id is the message id
+    const frameOf = (frames) => (m) =>
+      frames.find((f) => f.handler === m.fn && f.context?.eventId === m.id);
+    const pFrame = frameOf(pv1);
+    const lFrame = frameOf(lv1);
+    const idFacts = (frame) => (m) => ({
+      form: /^\d{17}$/.test(m.id) ? "<17 digits>" : "<other>",
+      namedByAHandler: frame(m) !== undefined,
+    });
+    const pIds = unique(pMsgs.map(idFacts(pFrame)));
+    const lIds = unique(lMsgs.map(idFacts(lFrame)));
+    add(
+      "v1.published.messageId",
+      "v1-pubsub-delivery",
+      "message-id-presence",
+      pIds,
+      lIds,
+      same(pIds, lIds) &&
+        lv1.every(
+          (f) =>
+            lMsgs.filter((m) => m.fn === f.handler && m.id === f.context?.eventId).length === 1,
+        ) &&
+        lMsgs.every((m) => lv1.some((f) => f.handler === m.fn && f.context?.eventId === m.id)),
+      "the message id is a Pub/Sub message id and is the event id of the handler's context",
+    );
+    // an instant to the nanosecond, written however many digits: the whole second and the fraction without trailing zeros
+    const exact = (instant) => {
+      const m = /^(.*?)(?:\.(\d+))?Z$/.exec(String(instant));
+      return m ? `${Date.parse(m[1] + "Z")}.${(m[2] ?? "").replace(/0+$/, "")}` : null;
+    };
+    const timeFacts = (frame) => (m) => {
+      const f = frame(m);
+      return f ? exact(f.context.timestamp) === exact(m.time) : "no handler reports it";
+    };
+    const pTimes = unique(pMsgs.map(timeFacts(pFrame)));
+    const lTimes = unique(lMsgs.map(timeFacts(lFrame)));
+    add(
+      "v1.published.publishTime",
+      "v1-pubsub-delivery",
+      "publishTime",
+      pTimes,
+      lTimes,
+      same(pTimes, lTimes),
+      "the handler's context time is the publish time of its message",
+    );
+  }
+
   // ---- failure handling ----
+  const { observations, successShape } = productionDeliveryFacts(production);
+  const delivery = [{ ...observations }, {}];
+  const grouped = new Map();
+  const retryFrames = handlerLines(local.natural, "schedRetryV2").toSorted(
+    (a, b) => Date.parse(a.at) - Date.parse(b.at),
+  );
+  for (const { value: f } of retryFrames) {
+    const key = `${f.event.jobName}|${f.event.scheduleTime}`;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(f);
+  }
+  const chains = [...grouped.values()];
+  const successful = chains.filter((g) => g.some((f) => f.failing === false));
+  delivery[1]["success-stops-retry"] =
+    successful.length && chains.every((g) => g.every((f) => typeof f.failing === "boolean"))
+      ? successful.every((g) => g.findIndex((f) => f.failing === false) === g.length - 1) &&
+        successful.some(
+          (g) => JSON.stringify(g.map((f) => f.failing)) === JSON.stringify(successShape),
+        )
+      : null;
+  const identity = local.probe.lines.filter(
+    (l) => l.kind === "PROBE" && l.value.handler === "retryFour",
+  );
+  delivery[1]["retry-stable-occurrence-identity"] =
+    identity.length &&
+    identity.every(
+      (l) =>
+        typeof l.value.scheduleTime === "string" &&
+        Number.isFinite(Date.parse(l.value.scheduleTime)),
+    )
+      ? (localChains(local.probe).retryFour?.length ?? 0) > 1
+      : null;
+  for (const [id, handler, code] of [
+    ["handler-success-ack", "schedOkV2", 200],
+    ["handler-throw-ack", "schedRetryV2", 500],
+  ]) {
+    const history = (local.natural.history ?? []).filter((r) => r.function === handler);
+    delivery[1][id] =
+      history.length && history.every((r) => typeof r.outcome === "string")
+        ? code === 200
+          ? history.every((r) => r.outcome === "ok")
+          : chains.every((g) => typeof g[0].failing === "boolean")
+            ? chains.some((g) => g.length > 1 && g[0].failing === true) &&
+              history.some((r) => r.outcome.startsWith("failed:"))
+            : null
+        : null;
+  }
+  const failedOccurrences = new Map();
+  for (const line of local.probe.lines.filter(
+    (l) => l.kind === "PROBE" && l.value.handler === "retryFour",
+  )) {
+    if (!line.value.scheduleTime) continue;
+    if (!failedOccurrences.has(line.value.scheduleTime))
+      failedOccurrences.set(line.value.scheduleTime, []);
+    failedOccurrences.get(line.value.scheduleTime).push(secondsOf(line.at));
+  }
+  const failedChains = [...failedOccurrences.entries()].toSorted((a, b) => a[1][0] - b[1][0]);
+  const failures = (local.probe.history ?? []).filter((r) => r.function === "retryFour");
+  const firstFailures = failures.filter((r) => r.eventId === failures[0]?.eventId);
+  delivery[1]["next-schedule-after-failure"] =
+    failedChains.length &&
+    firstFailures.length === failedChains[0][1].length &&
+    firstFailures.every((r) => r.outcome?.startsWith("failed:"))
+      ? failedChains
+          .slice(1)
+          .some(
+            ([scheduled, times]) =>
+              secondsOf(scheduled) > secondsOf(failedChains[0][0]) &&
+              times[0] > failedChains[0][1].at(-1) &&
+              !(local.probe.manual ?? []).some(
+                (m) => m.name === "retryFour" && Math.abs(secondsOf(m.at) - times[0]) <= 5,
+              ),
+          )
+      : null;
+  for (const [id, p] of Object.entries(delivery[0])) {
+    const l = delivery[1][id];
+    add(
+      `delivery.${id}`,
+      id.startsWith("handler-") ? "v2-http-delivery" : "v2-retry-limits",
+      id,
+      p,
+      l,
+      p === null || l === null ? null : p === l,
+      p === null
+        ? "Missing production measurement in attempts.*.kind/status/debugInfo or frames.failing/at/event.scheduleTime and forced.job/atMs."
+        : l === null
+          ? "Missing local measurement in natural.history/lines or probe.history/lines."
+          : "Recorded attempt outcomes and occurrence chains compared with local completion history and timelines; acknowledgements mean successful or failed completion.",
+    );
+  }
   // An occurrence is told by its message id, which a redelivery keeps: a retry some seconds later is the same one.
   const perOccurrence = (frames, key) => {
     const counts = new Map();
@@ -438,6 +750,26 @@ export function rows(production, local) {
     JSON.stringify(pFail) === JSON.stringify(lFail),
     "a Gen1 handler that throws is attempted once per occurrence",
   );
+
+  if (pv1.some((f) => f.handler === "schedRetryV1")) {
+    const pRetry = perOccurrence(
+      pv1.filter((f) => f.handler === "schedRetryV1"),
+      (f) => f.context.eventId,
+    );
+    const lRetry = perOccurrence(
+      handlerLines(local.natural, "schedRetryV1"),
+      (line) => line.value.context.eventId,
+    );
+    add(
+      "v1.retry-declaration-no-retry",
+      "v1-two-stage-retry",
+      "handler-retry-declaration",
+      pRetry,
+      lRetry,
+      JSON.stringify(pRetry) === JSON.stringify(lRetry),
+      "a Gen1 function declared with `retryCount` 1 whose handler throws is attempted once per occurrence: its job's retry covers the publish, never the handler",
+    );
+  }
 
   // ---- cadence ----
   const natural = (frames, handler, timeOf) =>
@@ -479,7 +811,7 @@ export function rows(production, local) {
       .filter(
         (f) =>
           f.handler === "schedRetryV2" &&
-          f.headers["x-cloudscheduler-jobname"].startsWith("firebase-schedule-"),
+          f.headers?.["x-cloudscheduler-jobname"]?.startsWith("firebase-schedule-"),
       )
       .map((f) => f.event.scheduleTime),
   )
@@ -543,14 +875,45 @@ export function rows(production, local) {
 
   // ---- retry chains ----
   const pChains = productionChains(production);
+  for (const other of alsoRecorded)
+    for (const [name, offsets] of Object.entries(productionChains(other)))
+      if (OPTIONAL_CHAINS.has(name) && pChains[name] === undefined) pChains[name] = offsets;
   const lChains = localChains(local.probe);
   for (const [name, label, expected] of [
     ["retryFour", "retryCount 4, min 4s, max 50s, 2 doublings", "finite-retry-count"],
     ["retryFive", "retryCount 5, defaults", "retryCount-boundary"],
     ["retryZero", "retryCount 0", "zero-no-retry"],
     ["retryDuration", "maxRetryDuration 30s, min 4s, max 10s, no count", "duration-only"],
+    // run f123d4fa2d61c5f5 only: a recording without these chains has no such rows
+    [
+      "retryCountWindow",
+      "retryCount 3 and maxRetryDuration 20s, min 4s, max 10s: four attempts, the fourth past the window",
+      "count-and-duration-interaction",
+    ],
+    [
+      "retryZeroBackoff",
+      "min 0s and max 0s with maxRetryDuration 10s: stored as 5s and 3600s, two attempts",
+      "zero-min-backoff",
+    ],
+    // run ecef353d18975246 only: the gap grows by 2 s after the doublings, and `maxDoublings 0` is stored as 5
+    [
+      "retryDouble0",
+      "retryCount 5, min 3s, max 100s, maxDoublings 0 (stored as 5): every gap doubles",
+      "exponential-doubling",
+    ],
+    [
+      "retryDouble1",
+      "retryCount 5, min 4s, max 100s, 1 doubling: 4, 8, then 2 s more each time",
+      "linear-after-doublings",
+    ],
+    [
+      "retryDouble3",
+      "retryCount 5, min 2s, max 100s, 3 doublings: 2, 4, 8, 16, then 18",
+      "linear-after-doublings",
+    ],
   ]) {
     const p = pChains[name];
+    if (p === undefined && OPTIONAL_CHAINS.has(name)) continue;
     const l = lChains[name] ?? [];
     const sameCount = p && l.length === p.length;
     // Production's offsets carry dispatch latency (about half a second per attempt) that a logical clock does not:
@@ -563,7 +926,11 @@ export function rows(production, local) {
       expected,
       p,
       l,
-      Boolean(within),
+      name === "retryFour" &&
+        (observations["retry-stable-occurrence-identity"] !== true ||
+          delivery[1]["retry-stable-occurrence-identity"] !== true)
+        ? null
+        : Boolean(within),
       `${label}; offsets in seconds from the first attempt`,
     );
   }
@@ -571,9 +938,9 @@ export function rows(production, local) {
 }
 
 /** The two profiles' rows side by side (a row's verdict per profile). */
-export function compareProfiles(production, strict, emulator) {
-  const s = rows(production, strict);
-  const e = rows(production, emulator);
+export function compareProfiles(production, strict, emulator, alsoRecorded = []) {
+  const s = rows(production, strict, alsoRecorded);
+  const e = rows(production, emulator, alsoRecorded);
   return s.map((row, i) => ({
     id: row.id,
     area: row.area,

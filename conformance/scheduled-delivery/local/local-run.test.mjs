@@ -10,10 +10,10 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+
 import { join } from "node:path";
 import test from "node:test";
-import { runLocal } from "./local-run.mjs";
+import { parseTimeline, runLocal } from "./local-run.mjs";
 
 function fake(dir, body = "") {
   const path = join(dir, "fake-fireemu.mjs");
@@ -51,8 +51,18 @@ const field = (output, name) =>
     .find((l) => l.startsWith(name + " "))
     ?.slice(name.length + 1);
 
+test("completion history is retained separately from handler frames and absence is explicit", () => {
+  const history = [
+    { eventId: "1", function: "schedRetryV2", attempt: 1, outcome: "failed: HTTP 500" },
+  ];
+  assert.deepEqual(parseTimeline(`HISTORY ${JSON.stringify(history)}\n`).history, history);
+  assert.equal(parseTimeline("").history, null);
+});
+
 test("it copies the fixture, links the dependencies, writes the pinned-clock config and runs the daemon once", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "local-run-test-"));
+  const dir = mkdtempSync(
+    new URL("../../../target/codex-out/local-run-test-", import.meta.url).pathname,
+  );
   try {
     const deps = join(dir, "deps");
     mkdirSync(deps);
@@ -84,12 +94,12 @@ test("it copies the fixture, links the dependencies, writes the pinned-clock con
       "eventarc",
       "tasks",
       "pubsub",
-      "ui",
       "hub",
       "logging",
     ])
       assert.equal(args[args.indexOf("--" + name + "-port") + 1], "0", name);
     assert.match(args[args.indexOf("--http-port") + 1], /^[1-9]\d{3,4}$/);
+    assert.match(args[args.indexOf("--ui-port") + 1], /^[1-9]\d{3,4}$/);
     assert.deepEqual(JSON.parse(field(result.output, "CONFIG")), {
       schemaVersion: 1,
       profile: "emulator",
@@ -106,6 +116,7 @@ test("it copies the fixture, links the dependencies, writes the pinned-clock con
     assert.deepEqual(env, {
       PATH: "/usr/local/bin:/usr/bin:/bin",
       LOCAL_START: "2026-10-05T08:40:30Z",
+      LOCAL_UI_URL: `http://127.0.0.1:${args[args.indexOf("--ui-port") + 1]}/ui/api/functions`,
       LOCAL_SECONDS: "7",
       LOCAL_AWAIT_IDLE: "0",
       LOCAL_PAUSE_MS: "150",
@@ -117,6 +128,9 @@ test("it copies the fixture, links the dependencies, writes the pinned-clock con
     assert.deepEqual(result.state, { pending: 0 });
     // the work directory is gone, and the source fixture is untouched
     const work = JSON.parse(field(result.output, "WORK"));
+    assert.ok(
+      work.config.startsWith(new URL("../../../target/codex-out/", import.meta.url).pathname),
+    );
     assert.equal(existsSync(work.config), false);
     assert.equal(existsSync(work.home), false);
     assert.equal(
@@ -129,7 +143,9 @@ test("it copies the fixture, links the dependencies, writes the pinned-clock con
 });
 
 test("the defaults: the source is copied as it is, the runtime is waited for after each step, and the pause is 40 ms", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "local-run-test-"));
+  const dir = mkdtempSync(
+    new URL("../../../target/codex-out/local-run-test-", import.meta.url).pathname,
+  );
   try {
     const deps = join(dir, "deps");
     mkdirSync(deps);
@@ -156,7 +172,9 @@ test("the defaults: the source is copied as it is, the runtime is waited for aft
 });
 
 test("a daemon that exits non-zero is reported with its output, and the work directory is still removed", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "local-run-test-"));
+  const dir = mkdtempSync(
+    new URL("../../../target/codex-out/local-run-test-", import.meta.url).pathname,
+  );
   try {
     const deps = join(dir, "deps");
     mkdirSync(deps);
@@ -178,7 +196,9 @@ test("a daemon that exits non-zero is reported with its output, and the work dir
 });
 
 test("manual runs at a step and a clock file are passed to the child, and the patch is told where the clock file is", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "local-run-test-"));
+  const dir = mkdtempSync(
+    new URL("../../../target/codex-out/local-run-test-", import.meta.url).pathname,
+  );
   try {
     const deps = join(dir, "deps");
     mkdirSync(deps);
@@ -221,7 +241,9 @@ test("manual runs at a step and a clock file are passed to the child, and the pa
 });
 
 test("without manualAt and clockFile the child is given neither, and the patch gets no clock file", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "local-run-test-"));
+  const dir = mkdtempSync(
+    new URL("../../../target/codex-out/local-run-test-", import.meta.url).pathname,
+  );
   try {
     const deps = join(dir, "deps");
     mkdirSync(deps);
@@ -247,4 +269,79 @@ test("without manualAt and clockFile the child is given neither, and the patch g
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("pull topics put the Pub/Sub broker on the daemon and the topics and the project in the child's environment", async () => {
+  const dir = mkdtempSync(
+    new URL("../../../target/codex-out/local-run-test-", import.meta.url).pathname,
+  );
+  try {
+    const deps = join(dir, "deps");
+    mkdirSync(deps);
+    const result = await runLocal({
+      fireemu: fake(dir, 'console.log("STEP 2026-10-05T08:40:31Z");'),
+      node: "/usr/local/bin/node22",
+      depsDir: deps,
+      fixtureDir: fixtureDir(dir),
+      profile: "strict",
+      start: "2026-10-05T08:40:30Z",
+      seconds: 1,
+      pullTopics: ["firebase-schedule-a-us-central1", "firebase-schedule-b-us-central1"],
+    });
+    const args = JSON.parse(field(result.output, "ARGS"));
+    assert.deepEqual(args.slice(0, 5), [
+      "exec",
+      "--project",
+      "demo-sched",
+      "--only",
+      "functions,pubsub",
+    ]);
+    const env = JSON.parse(field(result.output, "ENV"));
+    assert.equal(
+      env.LOCAL_PULL_TOPICS,
+      "firebase-schedule-a-us-central1,firebase-schedule-b-us-central1",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("parseTimeline keeps what the pull subscriptions held, whatever step the lines follow", async () => {
+  const { parseTimeline } = await import("./local-run.mjs");
+  const output = [
+    "SUBSCRIBED t1 200",
+    "STEP 2026-10-05T08:40:31Z",
+    'PULLED {"topic":"t1","status":200,"messages":[{"messageId":"2111","publishTime":"2026-10-05T08:40:31Z","attributes":{"scheduled":"true"}}]}',
+    'PULLED {"topic":"t2","status":404,"messages":[]}',
+    'PULLED {"topic": cut',
+    'STATE {"pending":0}',
+  ].join("\n");
+  const timeline = parseTimeline(output);
+  assert.deepEqual(timeline.pulled, [
+    {
+      topic: "t1",
+      status: 200,
+      messages: [
+        {
+          messageId: "2111",
+          publishTime: "2026-10-05T08:40:31Z",
+          attributes: { scheduled: "true" },
+        },
+      ],
+    },
+    { topic: "t2", status: 404, messages: [] },
+  ]);
+  assert.deepEqual(parseTimeline("").pulled, []);
+});
+
+test("the loaded manifest is retained before delivery and missing diagnostics stay explicit", () => {
+  const manifest = [
+    {
+      name: "schedOkV2",
+      trigger: { kind: "schedule", schedule: "every 1 minutes" },
+      nextRun: "2026-10-05T08:41:00Z",
+    },
+  ];
+  assert.deepEqual(parseTimeline(`MANIFEST ${JSON.stringify(manifest)}\n`).manifest, manifest);
+  assert.equal(parseTimeline("").manifest, null);
 });

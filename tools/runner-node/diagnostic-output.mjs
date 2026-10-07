@@ -257,3 +257,5 @@ export function installDiagnosticOutput(stream, options) {
   };
   return writer;
 }
+import timers from 'node:timers';
+const {setTimeout, clearTimeout} = timers;

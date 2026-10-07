@@ -22,7 +22,6 @@ use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_storage::etag::production_etag;
 use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent, StorageState};
-use fireemu_core_types::ids::SessionId;
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::json;
 
@@ -50,20 +49,7 @@ fn spawn_spec_debug_redacts_environment_and_command_arguments() {
 #[test]
 fn functions_config_debug_redacts_runner_secret() {
     let config = FunctionsConfig {
-        project: "demo-app".to_owned(),
-        default_bucket: "demo-app.appspot.com".to_owned(),
-        location: "nam5".to_owned(),
-        session: SessionId::new(7),
-        max_running: 4,
-        debug_mode: false,
-        retry_attempts: 4,
-        max_catch_up_runs: 10,
-        runner_secret: "runtime-sentinel-49".to_owned(),
-        overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-        catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-        functions_host: None,
-        subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-        auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+        ..FunctionsConfig::for_tests(10, "runtime-sentinel-49".to_owned())
     };
 
     let config_debug = format!("{config:?}");
@@ -251,20 +237,10 @@ async fn start_runtime(
     let runtime = FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
             max_running,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs,
-            runner_secret: "s".into(),
             overlap,
             catch_up,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(max_catch_up_runs, "s".into())
         },
         clock.clone(),
         Arc::new(runner),
@@ -637,6 +613,25 @@ async fn start_task_runtime_with_policy_and_env(
     configure: impl Fn(&str) -> (TaskRetryConfig, TaskRateLimits),
     extra_env: Vec<(String, String)>,
 ) -> Arc<FunctionsRuntime> {
+    start_task_runtime_using_clock(
+        probe,
+        max_running,
+        configure,
+        extra_env,
+        Arc::new(Mutex::new(VirtualClock::new(START))),
+        fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
+    )
+    .await
+}
+
+async fn start_task_runtime_using_clock(
+    probe: &Path,
+    max_running: usize,
+    configure: impl Fn(&str) -> (TaskRetryConfig, TaskRateLimits),
+    extra_env: Vec<(String, String)>,
+    clock: Arc<Mutex<VirtualClock>>,
+    clock_policy: fireemu_adapter_functions::application_clock::ApplicationClockPolicy,
+) -> Arc<FunctionsRuntime> {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let mut env = vec![(
         "FIREEMU_FAKE_TASK_PROBE".to_owned(),
@@ -663,22 +658,13 @@ async fn start_task_runtime_with_policy_and_env(
     let runtime = FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
             max_running,
-            debug_mode: false,
             retry_attempts: 1,
-            max_catch_up_runs: 1,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
             functions_host: Some("127.0.0.1:5001".into()),
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            clock_policy,
+            ..FunctionsConfig::for_tests(1, "s".into())
         },
-        Arc::new(Mutex::new(VirtualClock::new(START))),
+        clock,
         Arc::new(runner),
         Some(spec),
     );
@@ -1093,22 +1079,11 @@ async fn multi_codebase_runtime_exposes_and_stops_every_current_runner() {
             },
         ],
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
             retry_attempts: 1,
-            max_catch_up_runs: 1,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
     )
     .unwrap();
 
@@ -1569,20 +1544,7 @@ async fn failed_blocking_auth_respawn_releases_recovery_ownership() {
     let runtime = FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         runner,
@@ -1728,20 +1690,9 @@ async fn a_blocking_restart_cannot_replace_a_newer_hot_reload_generation() {
     let runtime = FunctionsRuntime::new(
         manifest.clone(),
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
             max_running: 1,
-            debug_mode: false,
             retry_attempts: 1,
-            max_catch_up_runs: 1,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         Arc::new(initial),
@@ -1825,6 +1776,114 @@ async fn max_instances_caps_http_admission_before_the_global_limit() {
     assert!(second.contains("concurrency limit"), "{second}");
     assert_eq!(first.await.unwrap().unwrap().status, 204);
     runtime.runner().shutdown().await;
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn strict_second_gen_retry_deliveries_renew_both_trace_ids_at_the_runner() {
+    use fireemu_adapter_functions::http::FunctionsHttpProfile;
+    let log = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../target/codex-out/retry-frames-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+    let spec = SpawnSpec {
+        command: vec![
+            "python3".to_owned(),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py").to_owned(),
+        ],
+        cwd: None,
+        env: vec![(
+            "FIREEMU_FAKE_FRAME_LOG".to_owned(),
+            log.display().to_string(),
+        )],
+        hello_timeout: RUNNER_HELLO_TIMEOUT,
+    };
+    let runner = Arc::new(Runner::spawn_spec(&spec).await.unwrap());
+    let mut manifest = parse_manifest(runner.hello().manifest.as_ref().unwrap()).unwrap();
+    manifest
+        .functions
+        .retain(|function| function.name == "fail");
+    manifest.functions[0].generation = FunctionGeneration::Second;
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let runtime = FunctionsRuntime::with_codebases(
+        vec![CodebaseSpec {
+            name: "default".to_owned(),
+            manifest,
+            runner,
+            spawn: None,
+            cleanup_dir: None,
+        }],
+        FunctionsConfig {
+            retry_attempts: 2,
+            ..FunctionsConfig::for_tests(1, "s".into())
+        },
+        clock.clone(),
+        FunctionsHttpProfile::Strict,
+    )
+    .unwrap();
+    let dispatch = tokio::spawn(runtime.clone().dispatch_loop());
+    runtime.on_commit(&commit(vec![DocumentChange {
+        path: doc("items/retry-trace", 1).path,
+        before: None,
+        after: Some(doc("items/retry-trace", 1).into()),
+    }]));
+    let first = tokio::time::timeout(Duration::from_secs(5), async {
+        while runtime.history().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(60))
+        .unwrap();
+    runtime.on_clock_changed();
+    let idle = runtime.await_idle(Duration::from_secs(5)).await;
+    runtime.shutdown().await;
+    dispatch.await.unwrap();
+    let frames: Vec<serde_json::Value> = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    std::fs::remove_file(&log).unwrap();
+    assert!(first.is_ok(), "first runner failure was not recorded");
+    assert!(idle.is_ok(), "retry did not exhaust its attempt budget");
+    assert_eq!(frames.len(), 2);
+    assert_eq!(runtime.dead_letters().len(), 1);
+    assert_eq!(
+        runtime
+            .history()
+            .iter()
+            .map(|record| record.attempt)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    assert!(runtime
+        .history()
+        .iter()
+        .all(|record| record.outcome.starts_with("failed")));
+    assert_eq!(frames[0]["event"]["id"], frames[1]["event"]["id"]);
+    let mut parts = Vec::new();
+    for frame in &frames {
+        let trace = frame["event"]["traceparent"].as_str().unwrap();
+        let fields: Vec<_> = trace.split('-').collect();
+        assert_eq!(fields.len(), 4);
+        assert_eq!(fields[0], "00");
+        assert_eq!(fields[3], "01");
+        for (id, length) in [(fields[1], 32), (fields[2], 16)] {
+            assert_eq!(id.len(), length);
+            assert!(id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+            assert!(id.bytes().any(|byte| byte != b'0'));
+        }
+        parts.push(fields);
+    }
+    assert_ne!(parts[0][1], parts[1][1]);
+    assert_ne!(parts[0][2], parts[1][2]);
 }
 
 #[tokio::test]
@@ -2233,20 +2292,7 @@ async fn a_spontaneous_recovery_cannot_replace_a_newer_reload() {
     let runtime = FunctionsRuntime::new(
         manifest.clone(),
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         initial.clone(),
@@ -2370,20 +2416,7 @@ async fn reload_generation_wins_over_an_older_reset_respawn() {
     let runtime = FunctionsRuntime::new(
         manifest.clone(),
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         clock,
         Arc::new(initial),
@@ -2425,20 +2458,7 @@ async fn a_crash_fault_still_kills_a_runner_that_cannot_be_respawned() {
     let runtime = FunctionsRuntime::new(
         manifest,
         FunctionsConfig {
-            project: "demo-app".into(),
-            default_bucket: "demo-app.appspot.com".into(),
-            location: "nam5".into(),
-            session: SessionId::new(7),
-            max_running: 4,
-            debug_mode: false,
-            retry_attempts: 4,
-            max_catch_up_runs: 1000,
-            runner_secret: "s".into(),
-            overlap: fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
-            catch_up: fireemu_adapter_functions::runtime::CatchUpPolicy::All,
-            functions_host: None,
-            subscription_naming: fireemu_adapter_functions::events::SubscriptionNaming::default(),
-            auth_context: fireemu_adapter_functions::events::AuthContextNaming::default(),
+            ..FunctionsConfig::for_tests(1000, "s".into())
         },
         Arc::new(Mutex::new(VirtualClock::new(START))),
         Arc::new(runner),
@@ -2475,7 +2495,8 @@ async fn a_crash_fault_still_kills_a_runner_that_cannot_be_respawned() {
 
 #[tokio::test]
 async fn schedule_retry_options_control_attempts_and_logical_backoff() {
-    // a second-generation schedule: a first-generation handler is never retried
+    // a second-generation schedule: a first-generation handler is never retried. The window of the fake manifest's job
+    // is taken off: with a count and a window the chain goes on until both are used up (the test after the next one).
     let (runtime, clock) = start_runtime(
         fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
         fireemu_adapter_functions::runtime::CatchUpPolicy::All,
@@ -2484,12 +2505,17 @@ async fn schedule_retry_options_control_attempts_and_logical_backoff() {
         Vec::new(),
         1000,
         |manifest| {
-            manifest
+            let spec = manifest
                 .functions
                 .iter_mut()
                 .find(|f| f.name == "failSchedule")
-                .unwrap()
-                .generation = FunctionGeneration::Second;
+                .unwrap();
+            spec.generation = FunctionGeneration::Second;
+            if let fireemu_core_functions::manifest::Trigger::Schedule { retry, .. } =
+                &mut spec.trigger
+            {
+                retry.max_retry_seconds = 0;
+            }
         },
     )
     .await;
@@ -2623,11 +2649,174 @@ async fn a_second_generation_retry_window_without_a_count_retries_until_the_wind
     runtime.runner().shutdown().await;
 }
 
-/// A retry window with no backoff at all (not recorded: production's answer to `minBackoffDuration: "0s"` is unknown) is
-/// not a hot loop: one retry is released per clock change, so a failing handler is attempted once per clock move until
-/// the window ends, and never after it.
+/// Recorded (run `f123d4fa2d61c5f5`, the REST job `count`): `retryCount 3`, `maxRetryDuration 20s`, `minBackoff 4s`,
+/// `maxBackoff 10s` was attempted four times in both passes, at 0, 4.65, 13.26 and 23.88 s: the window of 20 s did not stop
+/// the fourth attempt (the count was used up there). On the logical clock the attempts are at 0, 4, 12 and 22.
 #[tokio::test]
-async fn a_zero_backoff_window_retries_once_per_clock_change_until_the_window_ends() {
+async fn a_second_generation_count_and_window_retry_until_both_are_used_up() {
+    use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            let spec = manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap();
+            let Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = spec.trigger.clone()
+            else {
+                panic!("failSchedule is scheduled");
+            };
+            spec.trigger = Trigger::Schedule {
+                schedule,
+                time_zone,
+                retry: ScheduleRetryConfig {
+                    retry_count: 3,
+                    max_retry_seconds: 20,
+                    max_backoff_seconds: 10,
+                    max_doublings: 5,
+                    min_backoff_seconds: 4,
+                },
+            };
+            spec.retry = true;
+            spec.generation = FunctionGeneration::Second;
+        },
+    )
+    .await;
+    let attempts = |runtime: &FunctionsRuntime| -> Vec<u32> {
+        runtime
+            .history()
+            .iter()
+            .filter(|record| record.function == "failSchedule")
+            .map(|record| record.attempt)
+            .collect()
+    };
+    runtime.run_schedule("failSchedule").unwrap();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), vec![1]);
+    // 4, 8 and the 10 s cap: attempts 2, 3 and 4 at 4, 12 and 22 seconds; the last is past the window.
+    for (advance, expected) in [(3, 1), (1, 2), (7, 2), (1, 3), (9, 3), (1, 4)] {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(advance))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+        assert_eq!(attempts(&runtime).len(), expected, "after +{advance}s");
+    }
+    // the count is used up and the next attempt, at 32 s, is past the window: no fifth attempt
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(600))
+        .unwrap();
+    runtime.on_clock_changed();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), vec![1, 2, 3, 4]);
+    runtime.runner().shutdown().await;
+}
+
+/// Recorded (run `ecef353d18975246`, the REST job `double1`): `retryCount 5`, `minBackoff 4s`, `maxBackoff 100s`,
+/// `maxDoublings 1` was attempted six times, the gaps 4, 8, 10, 12 and 14 s (latency taken off): one doubling, then 2 s more
+/// each time. On the logical clock the attempts are at 0, 4, 12, 22, 34 and 48.
+#[tokio::test]
+async fn a_second_generation_chain_grows_by_two_seconds_after_its_doublings() {
+    use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};
+    let (runtime, clock) = start_runtime(
+        fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
+        fireemu_adapter_functions::runtime::CatchUpPolicy::All,
+        4,
+        false,
+        Vec::new(),
+        1000,
+        |manifest| {
+            let spec = manifest
+                .functions
+                .iter_mut()
+                .find(|f| f.name == "failSchedule")
+                .unwrap();
+            let Trigger::Schedule {
+                schedule,
+                time_zone,
+                ..
+            } = spec.trigger.clone()
+            else {
+                panic!("failSchedule is scheduled");
+            };
+            spec.trigger = Trigger::Schedule {
+                schedule,
+                time_zone,
+                retry: ScheduleRetryConfig {
+                    retry_count: 5,
+                    max_retry_seconds: 0,
+                    max_backoff_seconds: 100,
+                    max_doublings: 1,
+                    min_backoff_seconds: 4,
+                },
+            };
+            spec.retry = true;
+            spec.generation = FunctionGeneration::Second;
+        },
+    )
+    .await;
+    let attempts = |runtime: &FunctionsRuntime| -> usize {
+        runtime
+            .history()
+            .iter()
+            .filter(|record| record.function == "failSchedule")
+            .count()
+    };
+    runtime.run_schedule("failSchedule").unwrap();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), 1);
+    // the attempts are due at 4, 12, 22, 34 and 48 seconds: move to one second before each, then onto it
+    let mut at = 0;
+    for (index, due) in [4, 12, 22, 34, 48].into_iter().enumerate() {
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(due - 1 - at))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+        assert_eq!(attempts(&runtime), index + 1, "one second before {due} s");
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(1))
+            .unwrap();
+        runtime.on_clock_changed();
+        let _ = runtime.await_idle(Duration::from_millis(300)).await;
+        assert_eq!(attempts(&runtime), index + 2, "at {due} s");
+        at = due;
+    }
+    // the count is used up: no seventh attempt
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(600))
+        .unwrap();
+    runtime.on_clock_changed();
+    let _ = runtime.await_idle(Duration::from_millis(300)).await;
+    assert_eq!(attempts(&runtime), 6);
+    runtime.runner().shutdown().await;
+}
+
+/// A zero minimum and maximum backoff together are stored by Cloud Scheduler as 5 s and 3600 s (run `f123d4fa2d61c5f5`,
+/// the job asked for `0s` and `0s` with a window of 10 s: two attempts, 5.62 s apart, in both passes). With a window of 5 s
+/// the first retry is at 5 s, inside it, and the second would be at 15 s: two attempts, however far the clock goes.
+#[tokio::test]
+async fn a_zero_backoff_window_is_the_default_backoff_as_recorded() {
     use fireemu_core_functions::manifest::{ScheduleRetryConfig, Trigger};
     let (runtime, clock) = start_runtime(
         fireemu_adapter_functions::runtime::OverlapPolicy::Allow,
@@ -2687,10 +2876,9 @@ async fn a_zero_backoff_window_retries_once_per_clock_change_until_the_window_en
         let _ = runtime.await_idle(Duration::from_millis(300)).await;
         counts.push(attempts(&runtime));
     }
-    // One more attempt per one-second move, then none, however many moves follow. The retry that the attempt at 5 s
-    // decides (5 + 0 <= 5, inside the window) is released by the next move, at 6 s; its failure decides none. Pins
-    // today's behaviour, which is not necessarily the intended one: the last attempt runs one move past the window.
-    assert_eq!(counts, vec![1, 2, 3, 4, 5, 6, 7, 7, 7, 7]);
+    // The first retry waits the default 5 s (the move to 5 s releases it); its own backoff, 10 s, would end past the
+    // window of 5 s: no third attempt, however many moves follow.
+    assert_eq!(counts, vec![1, 1, 1, 1, 1, 2, 2, 2, 2, 2]);
     runtime.runner().shutdown().await;
 }
 
@@ -5327,6 +5515,105 @@ fn a_schedule_run_refusal_displays_its_message() {
         ScheduleRunError::Refused("function \"ok\" is not scheduled".to_owned()).to_string(),
         "function \"ok\" is not scheduled"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn virtual_task_exact_retry_expiry_retires_rate_wait_and_long_backoff() {
+    for backoff in [10, 10_000] {
+        let dir = std::env::temp_dir().join(format!(
+            "virtual-task-expiry-{}-{backoff}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let probe = dir.join("entries");
+        let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+        let runtime = start_task_runtime_using_clock(
+            &probe,
+            1,
+            |_| {
+                (
+                    TaskRetryConfig {
+                        max_attempts: 1,
+                        max_retry_millis: Some(1000),
+                        max_backoff_millis: backoff,
+                        max_doublings: 0,
+                        min_backoff_millis: backoff,
+                    },
+                    TaskRateLimits {
+                        max_concurrent_dispatches: 1,
+                        max_dispatches_per_second: 0.1,
+                    },
+                )
+            },
+            Vec::new(),
+            clock.clone(),
+            fireemu_adapter_functions::application_clock::ApplicationClockPolicy {
+                tasks_virtual: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        runtime
+            .enqueue_task("demo-app", "us-central1", "taskA", &task_body("failing"))
+            .unwrap();
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(10))
+            .unwrap();
+        let _ = wait_for_task_entries(&probe, 1).await;
+        // The fake response is recorded before its HTTP response reaches the attempt loop.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(1))
+            .unwrap();
+        runtime
+            .await_idle(Duration::from_secs(2))
+            .await
+            .expect("exact expiry must release retry capacity");
+        assert_eq!(std::fs::read_to_string(&probe).unwrap().lines().count(), 1);
+        runtime.shutdown().await;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn virtual_tasks_accept_extreme_clock_moves_without_host_instant_overflow() {
+    let dir = std::env::temp_dir().join(format!("virtual-task-extreme-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let runtime = start_task_runtime_using_clock(
+        &dir.join("entries"),
+        1,
+        |_| {
+            (
+                TaskRetryConfig::default(),
+                TaskRateLimits {
+                    max_concurrent_dispatches: 1,
+                    max_dispatches_per_second: 1.0,
+                },
+            )
+        },
+        Vec::new(),
+        clock.clone(),
+        fireemu_adapter_functions::application_clock::ApplicationClockPolicy {
+            tasks_virtual: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(i64::MAX))
+        .unwrap();
+    assert!(runtime.task_queue_stats().is_object());
+    runtime.reset();
+    assert!(runtime.task_queue_stats().is_object());
+    runtime.shutdown().await;
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 // ---------------------------------------------------------------------------------------------

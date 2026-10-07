@@ -16,6 +16,58 @@ use serde_json::{json, Value};
 
 use crate::tasks::Task;
 
+/// Retry and rate deadlines use native time or a host-independent elapsed axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum TaskTime {
+    Real(Instant),
+    Virtual(u128),
+}
+
+impl From<Instant> for TaskTime {
+    fn from(value: Instant) -> Self {
+        Self::Real(value)
+    }
+}
+
+impl TaskTime {
+    pub(crate) fn checked_add(self, duration: Duration) -> Option<Self> {
+        match self {
+            Self::Real(instant) => instant.checked_add(duration).map(Self::Real),
+            Self::Virtual(nanos) => nanos.checked_add(duration.as_nanos()).map(Self::Virtual),
+        }
+    }
+    fn duration_since(self, earlier: Self) -> Duration {
+        self.saturating_duration_since(earlier)
+    }
+    pub(crate) fn saturating_duration_since(self, earlier: Self) -> Duration {
+        match (self, earlier) {
+            (Self::Real(now), Self::Real(before)) => now.saturating_duration_since(before),
+            (Self::Virtual(now), Self::Virtual(before)) => {
+                let nanos = now.saturating_sub(before);
+                let seconds = nanos / 1_000_000_000;
+                match u64::try_from(seconds) {
+                    Ok(seconds) => Duration::new(
+                        seconds,
+                        u32::try_from(nanos % 1_000_000_000).expect("nanosecond remainder"),
+                    ),
+                    Err(_) => Duration::MAX,
+                }
+            }
+            _ => unreachable!("one task scheduler never changes its clock policy"),
+        }
+    }
+}
+
+impl std::ops::Add<Duration> for TaskTime {
+    type Output = Self;
+    fn add(self, duration: Duration) -> Self {
+        match self {
+            Self::Real(instant) => Self::Real(instant + duration),
+            Self::Virtual(nanos) => Self::Virtual(nanos.saturating_add(duration.as_nanos())),
+        }
+    }
+}
+
 /// The pinned emulator's `Queue` default capacity.
 pub(crate) const MAX_PENDING_PER_QUEUE: usize = 10_000;
 /// A local safety ceiling across pending, running and retry-waiting tasks.
@@ -42,7 +94,7 @@ pub(crate) enum AdmissionError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RetryToken {
     Ready,
-    WaitUntil(Instant),
+    WaitUntil(TaskTime),
     Gone,
 }
 
@@ -63,7 +115,7 @@ struct ActiveTask {
 
 #[derive(Debug)]
 struct StatisticBucket {
-    recorded_at: Instant,
+    recorded_at: TaskTime,
     count: u64,
 }
 
@@ -81,7 +133,7 @@ impl StatisticWindow {
         }
     }
 
-    fn prune(&mut self, now: Instant) {
+    fn prune(&mut self, now: TaskTime) {
         while self
             .buckets
             .front()
@@ -91,7 +143,8 @@ impl StatisticWindow {
         }
     }
 
-    fn record(&mut self, now: Instant) {
+    fn record(&mut self, now: impl Into<TaskTime>) {
+        let now = now.into();
         self.prune(now);
         if let Some(bucket) = self.buckets.back_mut() {
             if bucket.recorded_at == now {
@@ -108,7 +161,8 @@ impl StatisticWindow {
         });
     }
 
-    fn count(&mut self, now: Instant) -> u64 {
+    fn count(&mut self, now: impl Into<TaskTime>) -> u64 {
+        let now = now.into();
         self.prune(now);
         self.buckets
             .iter()
@@ -132,14 +186,14 @@ struct QueueState {
     active: BTreeMap<u64, ActiveTask>,
     names: BTreeSet<Arc<str>>,
     tokens: f64,
-    last_refill: Instant,
+    last_refill: TaskTime,
     added_times: StatisticWindow,
     completed_times: StatisticWindow,
     failed_times: StatisticWindow,
 }
 
 impl QueueState {
-    fn new(limits: TaskRateLimits, now: Instant) -> Self {
+    fn new(limits: TaskRateLimits, now: TaskTime) -> Self {
         Self {
             limits,
             pending: VecDeque::new(),
@@ -153,7 +207,7 @@ impl QueueState {
         }
     }
 
-    fn refill(&mut self, now: Instant) {
+    fn refill(&mut self, now: TaskTime) {
         if now.duration_since(self.last_refill) < TOKEN_REFRESH_INTERVAL {
             return;
         }
@@ -165,7 +219,7 @@ impl QueueState {
         self.last_refill = now;
     }
 
-    fn next_refill(&self) -> Option<Instant> {
+    fn next_refill(&self) -> Option<TaskTime> {
         (self.limits.max_concurrent_dispatches > 0
             && self.limits.max_dispatches_per_second > 0.0
             && !self.pending.is_empty())
@@ -200,7 +254,8 @@ pub(crate) struct TaskScheduler {
 }
 
 impl TaskScheduler {
-    pub(crate) fn from_manifest(manifest: &FunctionManifest, now: Instant) -> Self {
+    pub(crate) fn from_manifest(manifest: &FunctionManifest, now: impl Into<TaskTime>) -> Self {
+        let now = now.into();
         let queues = manifest
             .functions
             .iter()
@@ -224,6 +279,7 @@ impl TaskScheduler {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn enqueue(
         &mut self,
         queue: &str,
@@ -234,14 +290,15 @@ impl TaskScheduler {
         self.enqueue_at(queue, task, retry, retained_bytes, Instant::now())
     }
 
-    fn enqueue_at(
+    pub(crate) fn enqueue_at(
         &mut self,
         queue: &str,
         task: Task,
         retry: TaskRetryConfig,
         retained_bytes: usize,
-        now: Instant,
+        now: impl Into<TaskTime>,
     ) -> Result<(), AdmissionError> {
+        let now = now.into();
         if self.closed {
             return Err(AdmissionError::Closed);
         }
@@ -281,6 +338,7 @@ impl TaskScheduler {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn dispatch_ready(
         &mut self,
         now: Instant,
@@ -288,6 +346,25 @@ impl TaskScheduler {
         region_for: impl Fn(&str) -> Option<String>,
         maximum: usize,
     ) -> (Vec<Dispatch>, Option<Instant>) {
+        let (dispatches, next) = self.dispatch_ready_at(now, None, project, region_for, maximum);
+        (
+            dispatches,
+            next.map(|value| match value {
+                TaskTime::Real(instant) => instant,
+                TaskTime::Virtual(_) => unreachable!(),
+            }),
+        )
+    }
+
+    pub(crate) fn dispatch_ready_at(
+        &mut self,
+        now: impl Into<TaskTime>,
+        epoch_nanos: Option<i128>,
+        project: &str,
+        region_for: impl Fn(&str) -> Option<String>,
+        maximum: usize,
+    ) -> (Vec<Dispatch>, Option<TaskTime>) {
+        let now = now.into();
         let mut dispatches = Vec::new();
         for queue in self.queues.values_mut() {
             queue.refill(now);
@@ -308,7 +385,15 @@ impl TaskScheduler {
                 {
                     continue;
                 }
-                let Some(queued) = queue.pending.pop_front() else {
+                let ready = queue.pending.iter().position(|queued| {
+                    epoch_nanos.is_none_or(|epoch| {
+                        queued.task.schedule_time.as_deref().is_none_or(|text| {
+                            fireemu_core_types::time::LogicalInstant::parse_rfc3339(text)
+                                .is_ok_and(|instant| instant.as_nanos() <= epoch)
+                        })
+                    })
+                });
+                let Some(queued) = ready.and_then(|position| queue.pending.remove(position)) else {
                     continue;
                 };
                 let Some(region) = region_for(function) else {
@@ -355,6 +440,7 @@ impl TaskScheduler {
         self.finish_with_outcome(queue, id, generation, false)
     }
 
+    #[cfg(test)]
     pub(crate) fn finish_with_outcome(
         &mut self,
         queue: &str,
@@ -365,14 +451,15 @@ impl TaskScheduler {
         self.finish_with_outcome_at(queue, id, generation, failed, Instant::now())
     }
 
-    fn finish_with_outcome_at(
+    pub(crate) fn finish_with_outcome_at(
         &mut self,
         queue: &str,
         id: u64,
         generation: u64,
         failed: bool,
-        now: Instant,
+        now: impl Into<TaskTime>,
     ) -> bool {
+        let now = now.into();
         if generation != self.generation {
             return false;
         }
@@ -419,8 +506,9 @@ impl TaskScheduler {
         queue: &str,
         id: u64,
         generation: u64,
-        now: Instant,
+        now: impl Into<TaskTime>,
     ) -> RetryToken {
+        let now = now.into();
         if generation != self.generation {
             return RetryToken::Gone;
         }
@@ -460,6 +548,7 @@ impl TaskScheduler {
         self.queues.values().map(|queue| queue.active.len()).sum()
     }
 
+    #[cfg(test)]
     pub(crate) fn statistics(
         &mut self,
         project: &str,
@@ -469,12 +558,13 @@ impl TaskScheduler {
     }
 
     #[allow(clippy::cast_precision_loss)] // queueStats publishes the official floating-point rate shape
-    fn statistics_at(
+    pub(crate) fn statistics_at(
         &mut self,
         project: &str,
         region_for: impl Fn(&str) -> Option<String>,
-        now: Instant,
+        now: impl Into<TaskTime>,
     ) -> Value {
+        let now = now.into();
         let mut statistics = serde_json::Map::new();
         for (function, queue) in &mut self.queues {
             let key = region_for(function).map_or_else(
@@ -514,7 +604,8 @@ impl TaskScheduler {
             .sum()
     }
 
-    pub(crate) fn reset(&mut self, now: Instant) {
+    pub(crate) fn reset(&mut self, now: impl Into<TaskTime>) {
+        let now = now.into();
         self.generation = self.generation.wrapping_add(1);
         self.outstanding = 0;
         self.retained_bytes = 0;
@@ -533,7 +624,8 @@ impl TaskScheduler {
         }
     }
 
-    pub(crate) fn close(&mut self, now: Instant) {
+    pub(crate) fn close(&mut self, now: impl Into<TaskTime>) {
+        let now = now.into();
         self.reset(now);
         self.closed = true;
     }
@@ -596,6 +688,42 @@ mod tests {
             schedule_time: None,
             dispatch_deadline_seconds: 60,
         }
+    }
+
+    #[test]
+    fn virtual_schedule_time_gates_dispatch_at_the_exact_instant() {
+        let start = Instant::now();
+        let mut scheduler = TaskScheduler::from_manifest(
+            &manifest(TaskRateLimits {
+                max_concurrent_dispatches: 2,
+                max_dispatches_per_second: 2.0,
+            }),
+            start,
+        );
+        let mut future = task("future");
+        future.schedule_time = Some("2026-02-01T00:00:00Z".into());
+        scheduler
+            .enqueue_at("queue", future, TaskRetryConfig::default(), 64, start)
+            .unwrap();
+        let end = fireemu_core_types::time::LogicalInstant::parse_rfc3339("2026-02-01T00:00:00Z")
+            .unwrap();
+        let (early, _) = scheduler.dispatch_ready_at(
+            start + Duration::from_secs(1),
+            Some(end.as_nanos() - 1),
+            "demo-app",
+            |_| Some(DEFAULT_REGION.into()),
+            2,
+        );
+        assert!(early.is_empty());
+        let (due, _) = scheduler.dispatch_ready_at(
+            start + Duration::from_secs(1),
+            Some(end.as_nanos()),
+            "demo-app",
+            |_| Some(DEFAULT_REGION.into()),
+            2,
+        );
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].task.name, "future");
     }
 
     #[test]
@@ -743,7 +871,10 @@ mod tests {
             "failed history grew to {} entries without a statistics read",
             queue.failed_times.buckets.len()
         );
-        assert!(scheduler.statistics_retained_bytes() <= 512 * 3 * 32);
+        assert!(
+            scheduler.statistics_retained_bytes()
+                <= 512 * 3 * std::mem::size_of::<super::StatisticBucket>()
+        );
     }
 
     #[test]
@@ -1171,7 +1302,7 @@ mod tests {
                 initial[0].generation,
                 start + Duration::from_secs(3)
             ),
-            super::RetryToken::WaitUntil(start + Duration::from_secs(4))
+            super::RetryToken::WaitUntil((start + Duration::from_secs(4)).into())
         );
         assert_eq!(
             scheduler.reserve_retry(
@@ -1248,5 +1379,28 @@ mod tests {
         scheduler
             .enqueue("b", task("runtime-full"), TaskRetryConfig::default(), 1)
             .expect("a count-refused task name remains reusable");
+    }
+}
+
+#[cfg(test)]
+mod virtual_time_properties {
+    use super::TaskTime;
+    use proptest::prelude::*;
+    use std::time::Duration;
+    proptest! {
+        #[test]
+        fn virtual_deadlines_and_elapsed_are_independent_of_host_instant_bounds(start: u128, nanos: u64) {
+            let end = TaskTime::Virtual(start) + Duration::from_nanos(nanos);
+            prop_assert_eq!(end, TaskTime::Virtual(start.saturating_add(u128::from(nanos))));
+            prop_assert_eq!(end.saturating_duration_since(TaskTime::Virtual(start)).as_nanos(), start.saturating_add(u128::from(nanos))-start);
+        }
+    }
+    #[test]
+    fn huge_virtual_elapsed_refills_without_host_time_conversion() {
+        let clock = TaskTime::Virtual(0) + Duration::MAX + Duration::MAX;
+        assert_eq!(
+            clock.saturating_duration_since(TaskTime::Virtual(0)),
+            Duration::MAX
+        );
     }
 }

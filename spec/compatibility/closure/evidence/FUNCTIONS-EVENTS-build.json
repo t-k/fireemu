@@ -1,0 +1,7 @@
+{
+ "sourceCommit": "8d5f9eb8102447be91afe3f8a543288a2944812a",
+ "gitStatusOutsideBuildOutput": [],
+ "cargoVersion": "cargo 1.94.0 (85eff7c80 2026-01-15)",
+ "locked": true,
+ "binarySha256": "c9d8b4d7b6f3035fd65ec80e3a6b3030720e5037a9ceef47d04d355c2a7d8f3f"
+}

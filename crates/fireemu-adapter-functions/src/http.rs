@@ -1247,7 +1247,7 @@ fn deliver_strict(
         // The event passed the recorded checks, so production accepted it; what the emulator cannot
         // convert (no `time`, a `ceBytes` attribute: stage B rows 89 and 102) is not delivered and
         // is not an error of the publisher.
-        match crate::eventarc::convert(event) {
+        match crate::eventarc::convert_strict(event) {
             Ok(event) => published.push(event),
             Err(why) => {
                 eprintln!("[functions] eventarc: an event on {channel} was not delivered: {why}");
@@ -1299,11 +1299,24 @@ async fn respond_eventarc_strict(
     let declared_channel = |channel: &str| runtime.eventarc_channel_declared(channel);
     let declared_in =
         |project: &str, location: &str| runtime.eventarc_channels_declared_in(project, location);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| {
-            u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
-        });
+    let now = if runtime.config.clock_start_pinned {
+        match u64::try_from(runtime.now().as_nanos()) {
+            Ok(now) => now,
+            Err(_) => {
+                return json_answer(&crate::eventarc_strict::failure(
+                    400,
+                    "INVALID_ARGUMENT",
+                    "The pinned clock is outside the Eventarc channel timestamp range.",
+                ));
+            }
+        }
+    } else {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| {
+                u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
+            })
+    };
     let world = World {
         project: runtime.project(),
         request_id: &request_id,

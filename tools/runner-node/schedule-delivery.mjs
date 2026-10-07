@@ -178,6 +178,11 @@ export function pubsubMessageId(eventId) {
   return "2" + number.toString().padStart(16, "0");
 }
 
+/** The id of the message the runtime published for this occurrence, when it published one and the id has the recorded form. */
+function publishedMessageId(value) {
+  return typeof value === "string" && /^2\d{16}$/.test(value) ? value : null;
+}
+
 /** A publish time as Pub/Sub prints it to a Gen1 handler: milliseconds at most, trailing zeros dropped. */
 function publishTime(instant) {
   const { millis, digits } = parseInstant(instant, "publish time");
@@ -190,7 +195,7 @@ export function v1ScheduleContext(event) {
   const id = schedulerJobId(event?.data?.jobName);
   const project = String(event.data.jobName).match(/^projects\/([^/]+)\//)?.[1];
   return {
-    eventId: pubsubMessageId(event.id),
+    eventId: publishedMessageId(event.data.messageId) ?? pubsubMessageId(event.id),
     eventType: "google.pubsub.topic.publish",
     resource: {
       name: project ? `projects/${project}/topics/${id}` : id,

@@ -5,12 +5,14 @@
 //
 //   node src/fs-listen/compare.mjs --production A.json B.json --local L.json [--divergences D.json]
 //        [--settlements S.json]
+// Browser pair: --production P.json --local L.json --out report.json [--md summary.md]
 // S.json: a list of the coordinator's A2 read-backs (the output of `record.mjs readback`), one per
 // recording whose own cleanup was not complete.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
+import { captureFrames } from "./browser-driver.mjs";
 
 const DOCUMENT_ROWS = new Set(["documentChange", "documentDelete", "documentRemove"]);
 
@@ -180,6 +182,186 @@ function byPlace(row) {
 
 /** What a row says when compared: no conditions, no timings, document runs as sets. */
 export function canonicalRow(row) {
+  if (row.l3)
+    return {
+      l3: true,
+      observed: (row.observed ?? []).map((e) => {
+        const timestamps = new Map(),
+          tokens = new Map();
+        for (const event of e.wire ?? [])
+          for (const item of [...(event.targets ?? []), ...(event.boundaries ?? [])]) {
+            const relation = item.resumeToken?.relation;
+            if (relation != null && !tokens.has(relation)) tokens.set(relation, tokens.size + 1);
+          }
+        return {
+          phases: (e.phases ?? []).map((p) => ({
+            phase: p.phase,
+            cacheRead: p.cacheRead
+              ? {
+                  outcome: p.cacheRead.outcome,
+                  docs: p.cacheRead.docs,
+                  code: p.cacheRead.code,
+                  fromCache: p.cacheRead.fromCache,
+                  hasPendingWrites: p.cacheRead.hasPendingWrites,
+                }
+              : null,
+            snapshots: (p.snapshots ?? [])
+              .map((s) => ({
+                docs: s.docs,
+                changes: s.changes,
+                fromCache: s.fromCache,
+                hasPendingWrites: s.hasPendingWrites,
+              }))
+              .filter((s, i, all) => i === 0 || !isDeepStrictEqual(s, all[i - 1])),
+            errors: p.errors,
+            enableCalls: p.enableCalls,
+          })),
+          markers: e.markers,
+          uninterrupted: e.uninterrupted,
+          cacheMode: e.cacheMode,
+          sameProfile: e.sameProfile,
+          processExited: e.processExited,
+          terminate: e.terminate?.map((t) => ({
+            dispatched: t.dispatched,
+            outcome: t.outcome,
+            status: t.status,
+          })),
+          // Relationships are local to a recording; independent runs never compare token bytes.
+          resume: e.wire
+            ? [...new Set(e.wire.filter((w) => w.targets?.length).map((w) => w.phase))].map(
+                (phase) => {
+                  const w = e.wire.find((w) => w.phase === phase && w.targets?.length);
+                  const b = e.wire.find((b) => b.phase === phase && b.boundaryComplete);
+                  const databases = (w.addTargetBodies ?? []).map(
+                    (body) => JSON.parse(body).database,
+                  );
+                  const boundaryContents =
+                    b?.body == null
+                      ? undefined
+                      : e.wire
+                          .slice(0, e.wire.indexOf(b) + 1)
+                          .filter((event) => event.phase === phase && event.body != null)
+                          .flatMap((event) => {
+                            const decoded = captureFrames(
+                              event === b
+                                ? Buffer.from(event.body)
+                                    .subarray(0, b.boundaryBodyBytes)
+                                    .toString()
+                                : event.body,
+                            );
+                            if (!decoded.complete) return [{ invalidFrame: true }];
+                            let boundaryIndex = 0;
+                            return decoded.frames.map(({ sequence, message }) => {
+                              const boundary =
+                                message.targetChange &&
+                                (message.targetChange.resumeToken || message.targetChange.readTime)
+                                  ? event.boundaries?.[boundaryIndex++]
+                                  : undefined;
+                              const masked = structuredClone(message);
+                              if (
+                                Array.isArray(masked) &&
+                                masked[0] === "c" &&
+                                typeof masked[1] === "string"
+                              )
+                                masked[1] = `<string:session-id:length=${masked[1].length}>`;
+                              const document = masked.documentChange?.document;
+                              const identity = document?.name?.match(/-(alpha|beta)$/)?.[1];
+                              if (identity) {
+                                document.name = document.name.replace(
+                                  /[^/]+$/,
+                                  `<string:document-id:${identity}>`,
+                                );
+                                if (typeof document.fields?.owner?.stringValue === "string")
+                                  document.fields.owner.stringValue = "<string:run-id:mode-owner>";
+                                if (
+                                  typeof document.fields?.rank?.integerValue === "string" &&
+                                  /^-?\d+$/.test(document.fields.rank.integerValue)
+                                )
+                                  document.fields.rank.integerValue = `<integer-string:rank:${identity}>`;
+                              }
+                              return {
+                                sequence,
+                                message: JSON.parse(
+                                  JSON.stringify(masked, (key, value) => {
+                                    if (typeof value !== "string") return value;
+                                    if (
+                                      [
+                                        "createTime",
+                                        "updateTime",
+                                        "readTime",
+                                        "timestampValue",
+                                      ].includes(key) &&
+                                      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value)
+                                    ) {
+                                      if (!timestamps.has(value))
+                                        timestamps.set(value, timestamps.size + 1);
+                                      return `<timestamp:T${timestamps.get(value)}>`;
+                                    }
+                                    if (key === "resumeToken") {
+                                      const relation = boundary?.resumeToken?.relation ?? value;
+                                      if (!tokens.has(relation))
+                                        tokens.set(relation, tokens.size + 1);
+                                      return `<base64:resume-token:length=${value.length}:R${tokens.get(relation)}>`;
+                                    }
+                                    if (
+                                      ["name", "document"].includes(key) &&
+                                      value.includes("/documents/conf_listen/")
+                                    )
+                                      value = value.replace(
+                                        /[^/]+-(alpha|beta)$/,
+                                        "<string:document-id:$1>",
+                                      );
+                                    for (const database of new Set(databases)) {
+                                      value = value.replaceAll(
+                                        database,
+                                        "projects/project/databases/database",
+                                      );
+                                      if (value === database.split("/")[1]) value = "project";
+                                    }
+                                    return value;
+                                  }),
+                                ),
+                              };
+                            });
+                          });
+                  return {
+                    phase,
+                    boundaryContents,
+                    status: b?.status,
+                    targets: w.targets.map((t) => ({
+                      tokenPresent: Boolean(t.resumeToken),
+                      tokenLength: t.resumeToken?.length ?? 0,
+                      tokenRelation: tokens.get(t.resumeToken?.relation) ?? null,
+                      readTimeFormat: t.readTime?.replace(/\d/g, "0") ?? null,
+                      reused: Boolean(
+                        t.resumeToken &&
+                        e.wire.some(
+                          (b) =>
+                            b.event < w.event &&
+                            b.boundaries?.some(
+                              (v) => v.resumeToken?.relation === t.resumeToken.relation,
+                            ),
+                        ),
+                      ),
+                    })),
+                    boundaryFields: b?.boundaries
+                      ?.filter((v) => v.readTime)
+                      .slice(0, 1)
+                      .map((v) => ({
+                        type: v.type,
+                        tokenLength: v.resumeToken?.length ?? 0,
+                        readTimeFormat: v.readTime.replace(/\d/g, "0"),
+                      })),
+                    boundary: Boolean(b),
+                  };
+                },
+              )
+            : undefined,
+        };
+      }),
+      failures: row.failures,
+      end: null,
+    };
   return {
     ...(row.rows ? { rows: sortDocumentRuns(withoutFilters(row.rows)) } : {}),
     ...(row.groups ? { groups: row.groups.map((g) => ({ ...g, docs: g.docs.toSorted() })) } : {}),
@@ -251,7 +433,19 @@ export function isUnfinished(row) {
 /** MATCH, DIFFER or INDETERMINATE for two rows. */
 export function classifyRow(a, b) {
   if (isUnfinished(a) || isUnfinished(b)) return "INDETERMINATE";
-  if (!isDeepStrictEqual(canonicalRow(a), canonicalRow(b))) return "DIFFER";
+  const canonicalA = canonicalRow(a),
+    canonicalB = canonicalRow(b);
+  if (
+    [canonicalA, canonicalB].some(
+      (row) =>
+        row.l3 &&
+        row.observed.some((e) =>
+          e.resume?.some((r) => r.boundaryContents?.some((f) => f.invalidFrame)),
+        ),
+    )
+  )
+    return "INDETERMINATE";
+  if (!isDeepStrictEqual(canonicalA, canonicalB)) return "DIFFER";
   // A filter only one of the rows has is optional (production shows it both ways); two rows that
   // both have a filter in the same place must say the same.
   const [placesA, placesB] = [byPlace(a), byPlace(b)];
@@ -339,7 +533,11 @@ function withProgramErrors(recording) {
 function divergenceOf(entry) {
   return typeof entry === "string"
     ? { reason: entry, coversLocalTimeout: false }
-    : { reason: entry.reason, coversLocalTimeout: entry.coversLocalTimeout === true };
+    : {
+        reason: entry.reason,
+        fireemu: entry.fireemu,
+        coversLocalTimeout: entry.coversLocalTimeout === true,
+      };
 }
 
 /**
@@ -362,11 +560,13 @@ export function classifyLocal(first, second, local) {
 }
 
 /**
- * Whether a declared divergence may cover this row: the rows differ, or (only for an entry that
+ * Whether the local row equals the registration's quoted sequence and the rows differ, or (only for an entry that
  * says `coversLocalTimeout`) the local wait ran out for an answer that production gave: the
  * production rows are finished, the local stream is a loopback port, and the rows differ.
  */
 function isKnownDivergence(verdict, production, local, entry) {
+  const quoted = entry.fireemu ?? entry.reason.match(/fireemu strict sends: ([^.]+)\./)?.[1];
+  if (quoted == null || describeRow(local) !== quoted) return false;
   if (verdict === "DIFFER") return true;
   return (
     verdict === "INDETERMINATE" &&
@@ -381,7 +581,7 @@ const GOOD = new Set(["MATCH", "KNOWN_DIVERGENCE"]);
 /**
  * `productions` are the two recordings of production, `local` the one of fireemu. A production
  * pair that disagrees is NONDETERMINISTIC (the row proves nothing about local); a divergence is
- * accepted only for a row that differs, and only with a reason.
+ * accepted only for a row that differs, with a reason and the quoted local sequence.
  */
 export function compareRecordings({ productions, local, divergences = {}, settlements = [] }) {
   if (productions.length !== 2) throw new Error("two production recordings are required");
@@ -437,13 +637,134 @@ export function compareRecordings({ productions, local, divergences = {}, settle
 function main(argv) {
   const args = { production: [] };
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === "--production") args.production.push(argv[(i += 1)], argv[(i += 1)]);
-    else if (argv[i] === "--local") args.local = argv[(i += 1)];
+    if (argv[i] === "--production") {
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("--"))
+        args.production.push(argv[(i += 1)]);
+    } else if (argv[i] === "--local") args.local = argv[(i += 1)];
+    else if (argv[i] === "--out") args.out = argv[(i += 1)];
+    else if (argv[i] === "--md") args.md = argv[(i += 1)];
     else if (argv[i] === "--divergences") args.divergences = argv[(i += 1)];
     else if (argv[i] === "--settlements") args.settlements = argv[(i += 1)];
     else throw new Error(`unexpected argument ${argv[i]}`);
   }
   const read = (file) => JSON.parse(readFileSync(file, "utf8"));
+  if (args.production.length === 1 || args.out || args.md) {
+    if (args.production.length !== 1 || !args.local || !args.out)
+      throw new Error(
+        "browser comparison requires --production P.json --local L.json --out report.json",
+      );
+    const production = read(args.production[0]);
+    const local = read(args.local);
+    if (production.kind !== "browser" || local.kind !== "browser")
+      throw new Error("browser comparison requires browser recordings");
+    const productionProblems = recordingProblems(production);
+    const localProblems = recordingProblems(local);
+    const problems = [...productionProblems, ...localProblems];
+    const rows = {};
+    const summary = { MATCH: 0, DIVERGES: 0, NOT_COMPARABLE: 0 };
+    for (const id of [
+      ...new Set([...Object.keys(production.rows), ...Object.keys(local.rows)]),
+    ].toSorted()) {
+      const p = production.rows[id];
+      const l = local.rows[id];
+      const comparatorResult = problems.length || !p || !l ? null : classifyRow(p, l);
+      const status =
+        comparatorResult === "MATCH"
+          ? "MATCH"
+          : comparatorResult === "DIFFER"
+            ? "DIVERGES"
+            : "NOT_COMPARABLE";
+      const reason = problems.length
+        ? `Recording problems: ${problems.join("; ")}.`
+        : !p || !l
+          ? `Row missing from ${!p ? "production" : "local"} recording.`
+          : comparatorResult === "INDETERMINATE"
+            ? "Recorded observations are unfinished under classifyRow."
+            : `Canonical recorded observations ${status === "MATCH" ? "match" : "differ"} under classifyRow.`;
+      rows[id] = { status, comparatorResult, reason };
+      if (p?.l3 || l?.l3) {
+        rows[id].bodyBytes = Object.fromEntries(
+          [
+            ["production", p],
+            ["local", l],
+          ].map(([name, row]) => [
+            name,
+            (row?.observed ?? []).flatMap((e) =>
+              (e.wire ?? [])
+                .filter((w) => w.targets?.length)
+                .map((w) => ({
+                  phase: w.phase,
+                  request: w.requestBodyBytes,
+                  response: e.wire.find((b) => b.phase === w.phase && b.boundaryComplete)
+                    ?.boundaryBodyBytes,
+                })),
+            ),
+          ]),
+        );
+        if (status === "DIVERGES") {
+          const pMessages = canonicalRow(p).observed.flatMap((e) =>
+            (e.resume ?? []).flatMap((r) => r.boundaryContents ?? []),
+          );
+          const lMessages = canonicalRow(l).observed.flatMap((e) =>
+            (e.resume ?? []).flatMap((r) => r.boundaryContents ?? []),
+          );
+          for (const [code, predicate, explanation] of [
+            [
+              "D4",
+              (f) => f.message?.filter != null,
+              "existence-filter presence differs at restart",
+            ],
+            [
+              "D5",
+              (f) => f.message?.targetChange?.targetChangeType === "RESET",
+              "RESET/replay message count or placement differs",
+            ],
+          ]) {
+            const sites = (messages) =>
+              messages.map((f, i) => (predicate(f) ? i : null)).filter((i) => i !== null);
+            if (!isDeepStrictEqual(sites(pMessages), sites(lMessages)))
+              rows[id].reason += ` ${code}: ${explanation}.`;
+          }
+        }
+        rows[id].reason += ` Raw body bytes: ${JSON.stringify(rows[id].bodyBytes)}.`;
+      }
+      summary[status] += 1;
+    }
+    const ok = problems.length === 0 && Object.values(rows).every((r) => r.status === "MATCH");
+    const report = {
+      production: { run: production.run },
+      local: { run: local.run },
+      method:
+        "classifyRow: one observed production recording, without an independent production repeat; compareRecordings requires two production recordings and is not invoked with a duplicated run",
+      normalization:
+        "Request byte counts are RECORDED_NOT_JUDGED under docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1): normalized retained content is identical; the remaining 27 bytes are unretained client fields. Compare decoded messages from the handshake through the complete boundary batch, masking configured project/database names, run/document IDs, owner/rank values, timestamps and token bytes while retaining types, token lengths and recorded token relationships. Resume request tokens remain judged directly.",
+      rows,
+      summary,
+      productionProblems,
+      localProblems,
+      ok,
+    };
+    writeFileSync(args.out, `${JSON.stringify(report, null, 2)}\n`);
+    if (args.md)
+      writeFileSync(
+        args.md,
+        [
+          "| Row | Result | Reason |",
+          "| --- | --- | --- |",
+          ...Object.entries(rows).map(([id, r]) =>
+            `| ${id} | ${r.status} | ${r.reason} |`.replace(/\n/g, " "),
+          ),
+          "",
+          JSON.stringify(summary),
+          "",
+          report.normalization,
+          "",
+        ].join("\n"),
+      );
+    console.log(JSON.stringify(summary), ok ? "OK" : "NOT OK");
+    process.exitCode = ok ? 0 : 1;
+    return;
+  }
   const report = compareRecordings({
     productions: args.production.map(read),
     local: read(args.local),

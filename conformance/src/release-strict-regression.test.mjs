@@ -437,10 +437,44 @@ test("the excluded kinds are exactly the ones the release discloses", () => {
   // Removing an exclusion means adding its run; adding one means a disclosure of its own.
   assert.deepEqual(EXCLUDED_KINDS.map((exclusion) => exclusion.kind).toSorted(), [
     "auth-fs-cross-stage2-comparison-v1",
+    "fs-listen-sdk-comparison-v1",
+    "functions-events-comparison",
+    "scheduled-functions-calendar-comparison-v1",
+    "scheduled-functions-comparison-v1",
     "storage-object-comparison-v1",
     "storage-rules-comparison-v2",
     "storage-rules-management-comparison-v1",
   ]);
+});
+
+test("scheduled exclusions are used by a verified closure", () => {
+  const scheduledKinds = EXCLUDED_KINDS.filter(({ kind }) =>
+    kind.startsWith("scheduled-functions-"),
+  );
+  assert.equal(scheduledKinds.length, 2);
+  const closures = committedClosures();
+  const scheduled = closures.find(({ closure }) => closure.parent === "SCHEDULED-FUNCTIONS");
+  assert.equal(scheduled.closure.parentStatus, "COMPAT_VERIFIED");
+  const plan = planComparisons(closures, readJson);
+  assert.deepEqual(plan.errors, []);
+  const excluded = plan.excluded.filter(({ parents }) => parents.includes("SCHEDULED-FUNCTIONS"));
+  assert.deepEqual(
+    excluded.map(({ kind }) => kind).toSorted(),
+    scheduledKinds.map(({ kind }) => kind).toSorted(),
+  );
+  assert.ok(excluded.every(({ parents }) => parents.length === 1));
+  scheduled.closure.integratedRegression.comparisons.pop();
+  assert.ok(
+    planComparisons(closures, readJson).errors.some((error) =>
+      error.includes("no verified closure names it"),
+    ),
+  );
+  assert.ok(
+    planComparisons(
+      closures.filter((entry) => entry !== scheduled),
+      readJson,
+    ).errors.some((error) => error.includes("scheduled-functions")),
+  );
 });
 
 test("every kind exclusion names its reason and an issue by file name only", () => {
@@ -1760,4 +1794,13 @@ test("the historical FS-DATA-WRITE replay waits for a held writer longer than st
       `${command.mode}: ${timeout} ms is not above ${strictWaitMs} ms`,
     );
   }
+});
+
+test("FS-LISTEN-SDK uses its disclosed exclusion as a verified closure", () => {
+  const closures = committedClosures();
+  const listen = closures.find((entry) => entry.closure.parent === "FS-LISTEN-SDK");
+  assert.equal(listen.closure.parentStatus, "COMPAT_VERIFIED");
+  const reviewed = planComparisons(closures, readJson);
+  assert.deepEqual(reviewed.errors, []);
+  assert.ok(reviewed.excluded.some((entry) => entry.kind === "fs-listen-sdk-comparison-v1"));
 });

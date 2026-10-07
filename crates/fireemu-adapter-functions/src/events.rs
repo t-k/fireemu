@@ -211,6 +211,13 @@ pub const OFFICIAL_AUTH_ID: &str = "fake-auth-id@gmail.com";
 /// Under [`AuthContextNaming::Production`] an `app_user` is `api_key` and a `service_account` is
 /// `unknown`, each keeping its id; the principals production was not recorded with (`unauthenticated`
 /// and `system`) are named as they are.
+///
+/// What this pins is that the id is kept: the local `owner` bearer has none and stays `owner` (the
+/// declared difference against production's operator email), and an actor that did carry an
+/// identity would be named by it. It does not model a real service account. Production documents a
+/// write by one as `authType` `service_account` with the account's email, not `unknown`; that type
+/// is UNRECORDED and not modelled, because no local principal carries a service account (only
+/// `Principal::Owner` becomes a `service_account` actor, always with the id `owner`).
 #[must_use]
 pub fn auth_context_for<'a>(
     naming: AuthContextNaming,

@@ -973,6 +973,8 @@ pub struct RuntimeConfig {
     pub edition: FirestoreEdition,
     /// API mode.
     pub api_mode: FirestoreApiMode,
+    /// `firestore.location`: opaque database location used by strict second-generation Firestore events. Defaults to `nam5`; the emulator profile keeps `nam5`. Unknown identifiers are accepted, but whitespace and control characters are refused; this value does not control routing.
+    pub firestore_location: String,
     /// Index validation policy, derived from the profile (no key of its own).
     pub index_policy: IndexValidationPolicy,
     /// Whether a Standard query limit violation refuses the query
@@ -1178,6 +1180,8 @@ pub struct RuntimeConfig {
     pub functions_loaded: Vec<FunctionsCodebase>,
     /// Runner command (`functions.runner`); default: the bundled Node runner.
     pub functions_runner: Option<Vec<String>>,
+    /// Explicit application-clock modes; omitted policies retain native time.
+    pub functions_clock: fireemu_adapter_functions::application_clock::ApplicationClockPolicy,
     /// Node inspector port requested by `--inspect-functions`; applied after executable selection.
     pub functions_inspect_port: Option<u16>,
     /// Whether `--inspect-functions` requested one dynamic inspector port per codebase.
@@ -1365,6 +1369,7 @@ impl Default for RuntimeConfig {
             storage_addr: "127.0.0.1:9199".to_owned(),
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
+            firestore_location: "nam5".to_owned(),
             index_policy: profile.index_policy(),
             enforce_limits: profile.enforce_limits(),
             token_acceptance: profile.token_acceptance(),
@@ -1439,6 +1444,8 @@ impl Default for RuntimeConfig {
             functions_codebases: Vec::new(),
             functions_loaded: Vec::new(),
             functions_runner: None,
+            functions_clock:
+                fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default(),
             functions_inspect_port: None,
             functions_inspect_dynamic: false,
             functions_manifest: None,
@@ -3234,10 +3241,40 @@ impl RuntimeConfig {
                 "runner",
                 "maxGlobalConcurrency",
                 "unservedTriggers",
+                "clock",
             ]
             .contains(&key.as_str())
             {
                 return Err(ConfigError(format!("unknown config key functions.{key}")));
+            }
+        }
+        if let Some(value) = f.get("clock") {
+            let modes = value
+                .as_object()
+                .ok_or_else(|| ConfigError("functions.clock must be an object".into()))?;
+            for (name, value) in modes {
+                let mode = value.as_str().ok_or_else(|| {
+                    ConfigError(format!("functions.clock.{name} must be real or virtual"))
+                })?;
+                if !["real", "virtual"].contains(&mode) {
+                    return Err(ConfigError(format!(
+                        "functions.clock.{name} must be real or virtual"
+                    )));
+                }
+                let flag = match name.as_str() {
+                    "date" => &mut cfg.functions_clock.date_virtual,
+                    "timers" => &mut cfg.functions_clock.timers_virtual,
+                    "tasks" => &mut cfg.functions_clock.tasks_virtual,
+                    _ => {
+                        return Err(ConfigError(format!(
+                            "unknown config key functions.clock.{name}"
+                        )))
+                    }
+                };
+                *flag = mode == "virtual";
+            }
+            if cfg.functions_clock.timers_virtual && !cfg.functions_clock.date_virtual {
+                return Err(ConfigError("virtual timers require virtual Date".into()));
             }
         }
         if let Some(m) = f.get("manifest").and_then(Value::as_str) {
@@ -3503,6 +3540,18 @@ impl RuntimeConfig {
             loopback_host(bind, "bind")?;
         }
         if let Some(fs) = obj.get("firestore").and_then(Value::as_object) {
+            if let Some(value) = fs.get("location") {
+                value
+                    .as_str()
+                    .filter(|location| {
+                        !location.is_empty()
+                            && !location.chars().any(|c| c.is_whitespace() || c.is_control())
+                    })
+                    .ok_or_else(|| {
+                        ConfigError("firestore.location must be a non-empty string without whitespace or control characters".to_owned())
+                    })?
+                    .clone_into(&mut cfg.firestore_location);
+            }
             if let Some(e) = fs.get("edition").and_then(Value::as_str) {
                 cfg.edition = FirestoreEdition::parse_config_str(e)
                     .ok_or_else(|| ConfigError(format!("unknown firestore.edition {e:?}")))?;
@@ -3965,6 +4014,14 @@ impl RuntimeConfig {
                 .ok_or_else(|| ConfigError("appCheck must be an object".to_owned()))?;
             cfg.app_check = Self::parse_app_check(app_check)?;
         }
+        if cfg.functions_clock.any_virtual() && !cfg.clock_start_pinned {
+            return Err(ConfigError(
+                "functions.clock virtual policies require daemon.clockStart".into(),
+            ));
+        }
+        cfg.functions_clock
+            .validate(cfg.clock_start)
+            .map_err(ConfigError)?;
         Ok(cfg)
     }
 }
@@ -3974,6 +4031,43 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn functions_application_clock_is_explicit_and_requires_a_pinned_start() {
+        let input = json!({"schemaVersion":1,"firestore":{"edition":"standard","apiMode":"native"},
+            "functions":{"clock":{"date":"virtual","timers":"real","tasks":"virtual"}},
+            "daemon":{"clockStart":"2026-01-31T23:59:00Z"}});
+        let config = RuntimeConfig::from_json(&input).unwrap();
+        assert!(config.functions_clock.date_virtual);
+        assert!(!config.functions_clock.timers_virtual);
+        assert!(config.functions_clock.tasks_virtual);
+        let mut missing = input.clone();
+        missing.as_object_mut().unwrap().remove("daemon");
+        assert!(RuntimeConfig::from_json(&missing)
+            .unwrap_err()
+            .0
+            .contains("clockStart"));
+        let mut invalid = input.clone();
+        invalid["functions"]["clock"] = json!({"date":"real","timers":"virtual"});
+        assert!(RuntimeConfig::from_json(&invalid)
+            .unwrap_err()
+            .0
+            .contains("virtual Date"));
+        for bad in [
+            json!({"date":false}),
+            json!({"date":"warp"}),
+            json!({"other":"real"}),
+            Value::Null,
+        ] {
+            invalid["functions"]["clock"] = bad;
+            assert!(RuntimeConfig::from_json(&invalid).is_err());
+        }
+        let default = RuntimeConfig::default();
+        assert_eq!(
+            default.functions_clock,
+            fireemu_adapter_functions::application_clock::ApplicationClockPolicy::default()
+        );
+    }
 
     fn parse(auth: &Value) -> Result<RuntimeConfig, ConfigError> {
         RuntimeConfig::from_json(&json!({
@@ -4000,6 +4094,83 @@ mod tests {
             base.insert(k, v);
         }
         RuntimeConfig::from_json(&json)
+    }
+
+    #[test]
+    fn firestore_event_location_defaults_to_nam5_and_accepts_configuration() {
+        for profile in ["strict", "emulator"] {
+            for (firestore, expected) in [
+                (json!({}), "nam5"),
+                (json!({"location": "us-central1"}), "us-central1"),
+                (json!({"location": "unknown-location"}), "unknown-location"),
+            ] {
+                let cfg = RuntimeConfig::from_json(&json!({
+                    "schemaVersion": 1, "profile": profile, "firestore": firestore
+                }))
+                .unwrap();
+                assert_eq!(cfg.firestore_location, expected);
+            }
+        }
+        for bad in [
+            json!(null),
+            json!(1),
+            json!(true),
+            json!([]),
+            json!({}),
+            json!(""),
+            json!(" us-central1 "),
+            json!("us central1"),
+            json!("us\tcentral1"),
+            json!("us\ncentral1"),
+            json!("us\0central1"),
+            json!("us\u{7f}central1"),
+            json!("us\u{85}central1"),
+            json!("us\u{a0}central1"),
+            json!("us\u{2003}central1"),
+        ] {
+            let error = RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1, "firestore": {"location": bad}
+            }))
+            .unwrap_err();
+            assert!(error.0.contains("firestore.location"), "{error}");
+        }
+    }
+
+    #[test]
+    fn firestore_location_schema_and_example_match_the_loader_contract() {
+        let schema: Value =
+            serde_json::from_str(include_str!("../../../spec/config/fireemu.schema.json")).unwrap();
+        let location = &schema["properties"]["firestore"]["properties"]["location"];
+        assert_eq!(location["type"], "string");
+        assert_eq!(
+            location["default"],
+            RuntimeConfig::default().firestore_location
+        );
+        assert_eq!(location["minLength"], 1);
+        assert!(location["pattern"].as_str().is_some());
+        let description = location["description"].as_str().unwrap();
+        for policy in [
+            "strict",
+            "emulator",
+            "nam5",
+            "opaque",
+            "whitespace",
+            "control",
+            "routing",
+        ] {
+            assert!(description.contains(policy), "missing {policy}");
+        }
+        let example: Value = serde_json::from_str(include_str!(
+            "../../../spec/config/examples/standard-minimal.json"
+        ))
+        .unwrap();
+        assert_eq!(example["firestore"]["location"], "us-central1");
+        assert_eq!(
+            RuntimeConfig::from_json(&example)
+                .unwrap()
+                .firestore_location,
+            "us-central1"
+        );
     }
 
     #[test]

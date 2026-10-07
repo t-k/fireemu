@@ -20,12 +20,14 @@ function invocation(overrides = {}) {
 }
 const source = `
 const {appendFileSync} = require('node:fs');
+const importedTime = Date.now();
 const record = value => appendFileSync(__dirname+'/calls.jsonl',JSON.stringify(value)+'\\n');
 function schedule(name, secret) {
   const fn = async data => {
     record({name,value:data?.value,identity:process.env.FUNCTION_TARGET,
       secret:process.env.ALPHA_SECRET ?? null});
     switch(data?.mode) {
+      case 'clock': record({clockNow:Date.now(),clockDate:new Date().getTime(),importedTime}); break;
       case 'wait': await new Promise(r=>setTimeout(r,180)); break;
       case 'error': throw new Error('ordinary error');
       case 'throwing-stack': {
@@ -58,11 +60,12 @@ auth.__endpoint={platform:'gcfv1',eventTrigger:{eventType:'providers/firebase.au
 module.exports={alpha,beta,auth};
 `;
 
-async function started(t, { secrets = false } = {}) {
+async function started(t, { secrets = false, clock } = {}) {
   const dir = await mkdtemp(join(tmpdir(),'fireemu-ipc-'));
   await writeFile(join(dir,'package.json'),JSON.stringify({private:true,main:'index.cjs'}));
   await writeFile(join(dir,'index.cjs'),source);
   const env={PATH:process.env.PATH,GCLOUD_PROJECT:'demo-ipc'};
+  if(clock) env.FIREEMU_CLOCK_JSON=JSON.stringify(clock);
   if(secrets) env.FIREEMU_LOCAL_SECRETS_JSON=JSON.stringify({ALPHA_SECRET:'fixture-only-secret'});
   const child=spawn(process.execPath,[runner,'--source',dir],{env,stdio:['pipe','pipe','pipe']});
   let buffer=Buffer.alloc(0), issue=null, result=null, stderr='';
@@ -86,7 +89,7 @@ async function started(t, { secrets = false } = {}) {
     const end=Date.now()+timeout;
     while(Date.now()<end){
       if(issue)throw Error(issue);
-      const value=predicate(); if(value)return value;
+      const value=await predicate(); if(value)return value;
       if(result)throw Error(`${label}: runner exited ${JSON.stringify(result)}; ${stderr.slice(-300)}`);
       await new Promise(r=>setTimeout(r,5));
     }
@@ -128,6 +131,39 @@ const malformed=[
   ['missing event',encode(invocation({event:undefined}))],
   ['scalar event',encode(invocation({event:7}))],
 ];
+
+test('runner installs the clock before imports and acknowledges live Date updates', async t => {
+  const s = await started(t, {clock:{date:'virtual',timers:'real',instantNanos:'1000000000',elapsedNanos:'0'}});
+  assert.equal(s.hello.clock?.version, 1);
+  s.child.stdin.write(encode({type:'clock:set',invocationId:'clock-1',instantNanos:'2000000000',elapsedNanos:'1000000000',revision:'1'}));
+  assert.equal((await s.waitFor(() => s.messages.find(m => m.type==='result' && m.invocationId==='clock-1'),'clock ack')).ok, true);
+  s.child.stdin.write(encode(invocation({event:{data:{mode:'clock'}}})));
+  await s.waitFor(() => s.messages.find(m => m.type==='result' && m.invocationId==='test-1'),'clock handler');
+  assert.deepEqual((await s.calls()).at(-1), {clockNow:2000,clockDate:2000,importedTime:1000});
+  s.child.stdin.write(encode({type:'clock:runDue',invocationId:'clock-2',budget:10}));
+  const due = await s.waitFor(() => s.messages.find(m => m.type==='result' && m.invocationId==='clock-2'),'timer ack');
+  assert.equal(due.ok, true);
+  assert.equal(due.timers.instantNanos, '2000000000');
+  s.child.stdin.write(encode({type:'clock:set',invocationId:'clock-3',instantNanos:'3000000000',elapsedNanos:'2000000000',revision:'0'}));
+  assert.equal((await s.waitFor(() => s.messages.find(m => m.type==='result' && m.invocationId==='clock-3'),'stale ack')).ok, false);
+  s.child.stdin.write(encode({type:'shutdown'}));
+  assert.equal((await s.exited()).code, 0);
+});
+
+test('virtual user timers await explicit draining while shutdown remains native', async t => {
+  const s = await started(t, {clock:{date:'virtual',timers:'virtual',instantNanos:'1000000000',elapsedNanos:'0'}});
+  s.child.stdin.write(encode(invocation({event:{data:{mode:'wait'}}})));
+  await s.waitFor(async () => (await s.calls()).length, 'handler entered');
+  await new Promise(resolve => setTimeout(resolve,20));
+  assert.equal(s.messages.some(m => m.type==='result' && m.invocationId==='test-1'),false);
+  s.child.stdin.write(encode({type:'clock:set',invocationId:'set',instantNanos:'1200000000',elapsedNanos:'200000000',revision:'1'}));
+  await s.waitFor(() => s.messages.find(m => m.invocationId==='set'),'set');
+  s.child.stdin.write(encode({type:'clock:runDue',invocationId:'due',budget:10}));
+  await s.waitFor(() => s.messages.find(m => m.invocationId==='test-1'),'virtual completion');
+  s.child.stdin.write(encode(invocation({invocationId:'pending',event:{data:{mode:'wait'}}})));
+  s.child.stdin.write(encode({type:'shutdown'}));
+  assert.equal((await s.exited()).code,0);
+});
 for(const [name,bytes] of malformed){
   test(`IPC rejects ${name} without invoking a callback`,{timeout:7000},async t=>{
     const f=await started(t);f.child.stdin.end(bytes);

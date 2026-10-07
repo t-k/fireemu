@@ -54,6 +54,25 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
 }
 
 #[test]
+fn checked_clock_set_rejection_is_reported_even_when_rewinds_are_allowed() {
+    let state = state(Arc::new(AtomicUsize::new(0)));
+    let before = {
+        let mut clock = state.clock.lock().unwrap();
+        let now = clock.now_for_test();
+        clock.restrict_range(now, now).unwrap();
+        clock.snapshot()
+    };
+    let response = handle(
+        &state,
+        "POST",
+        "/v1/sessions/default/clock:set",
+        &json!({"instant":"2027-01-01T00:00:00Z","allowBackwards":true}),
+    );
+    assert_eq!(response.status, 400, "{}", response.body);
+    assert_eq!(state.clock.lock().unwrap().snapshot(), before);
+}
+
+#[test]
 fn rules_can_be_loaded_replaced_and_dropped_at_runtime() {
     let s = state(Arc::new(AtomicUsize::new(0)));
     let r = handle(&s, "GET", "/v1/rules", &json!({}));

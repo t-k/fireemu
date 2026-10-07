@@ -355,6 +355,24 @@ export const EXCLUDED_PARTS = [
  */
 export const EXCLUDED_KINDS = [
   {
+    kind: "scheduled-functions-calendar-comparison-v1",
+    reason:
+      "The calendar rows were compared on the v0.13.0 closure-base release binary against two private v6 journals; publishing the recordings and adding installed-binary release check/export modes is required before the release job can replay them",
+    issue: "scheduled-functions-calendar-comparison-needs-release-replay.md",
+  },
+  {
+    kind: "scheduled-functions-comparison-v1",
+    reason:
+      "The delivery table was rerun on the v0.13.0 closure-base release binary and bound to its SHA-256 and runner manifest; the producer still needs installed-binary release check/export modes before the release job can replay it",
+    issue: "scheduled-functions-delivery-comparison-needs-release-replay.md",
+  },
+  {
+    kind: "functions-events-comparison",
+    reason:
+      "the comparison pairs the local answers of the Functions runner with frames of the two passes of one private production recording (FE v7) that is not published, made by a harness that drives a deployed Functions codebase through the Node runner and the Admin SDKs; the recordings must be published and the harness given a check and an export-comparison mode before the release job can rerun it; the rows were compared on the release binary of the integration commit named by the closure",
+    issue: "functions-events-comparison-needs-the-recordings-in-the-release-job.md",
+  },
+  {
     kind: "auth-fs-cross-stage2-comparison-v1",
     reason:
       "the stage-2 local window keeps production's timeline in real time (about 61 minutes on the v0.9.0 final artifact) and drives a browser client, which the 45-minute release job and its runner do not allow; the local tenant setup is no longer a reason (it runs outside the recorded harness), and the rows were compared on the final artifact",
@@ -377,6 +395,12 @@ export const EXCLUDED_KINDS = [
     reason:
       "the comparison is made from a rehearsal of the STORAGE-OBJECT recorder (26 recipes, 2,436 exchanges) that lives on its own branch and not in this tree, and it runs under a Rules file kept outside the repository; both must be published and the tool given a check and an export-comparison mode before the release job can rerun it; the rows were compared on the closure-base binary named by the closure",
     issue: "storage-object-comparison-needs-the-recorder-in-the-release-job.md",
+  },
+  {
+    kind: "fs-listen-sdk-comparison-v1",
+    reason:
+      "the final release artifact was compared with private native, SDK and browser production recordings that are unavailable to the release job; the native expired-token case also waits 35 minutes and the browser cache and lifecycle cases require Chromium; publish the recordings and provide a long browser-enabled release job before reproducing this comparison",
+    issue: "fs-listen-sdk-comparison-needs-private-recordings-and-a-long-browser-release-job.md",
   },
 ];
 

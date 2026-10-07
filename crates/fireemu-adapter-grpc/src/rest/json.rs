@@ -1854,9 +1854,10 @@ fn target_change_type_name(t: i32) -> &'static str {
 
 /// `ListenResponse` → JSON.
 #[must_use]
-pub fn listen_response_to_json(r: &pb::ListenResponse) -> Value {
+#[allow(clippy::too_many_lines)]
+pub fn listen_response_to_json(r: &pb::ListenResponse, production: bool) -> String {
     use pb::listen_response::ResponseType as R;
-    match &r.response_type {
+    let mut value = match &r.response_type {
         Some(R::TargetChange(t)) => {
             let mut v = json!({
                 "targetChange": {
@@ -1898,7 +1899,77 @@ pub fn listen_response_to_json(r: &pb::ListenResponse) -> Value {
         }),
         Some(R::Filter(f)) => json!({"filter": {"targetId": f.target_id, "count": f.count}}),
         None => json!({}),
+    };
+    if !production {
+        return value.to_string();
     }
+    if let Some(change) = value
+        .get_mut("documentChange")
+        .and_then(Value::as_object_mut)
+    {
+        if change.get("removedTargetIds") == Some(&json!([])) {
+            change.remove("removedTargetIds");
+        }
+    }
+    if let Some(change) = value.get_mut("targetChange").and_then(Value::as_object_mut) {
+        if change.get("targetChangeType") == Some(&json!("NO_CHANGE")) {
+            change.remove("targetChangeType");
+        }
+        if change.get("targetIds") == Some(&json!([])) {
+            change.remove("targetIds");
+        }
+    }
+    // Serialize proto members by field number; map entries retain their existing order.
+    let mut output = String::new();
+    let mut pending = vec![(Some(&value), "", String::new())];
+    while let Some((value, message, literal)) = pending.pop() {
+        let Some(value) = value else {
+            output.push_str(&literal);
+            continue;
+        };
+        let Value::Object(object) = value else {
+            output.push_str(&value.to_string());
+            continue;
+        };
+        let order: &[&str] = match message {
+            "document" => &["name", "fields", "createTime", "updateTime"],
+            "documentChange" => &["document", "targetIds", "removedTargetIds"],
+            "documentDelete" => &["document", "readTime", "removedTargetIds"],
+            "documentRemove" => &["document", "removedTargetIds", "readTime"],
+            "targetChange" => &[
+                "targetChangeType",
+                "targetIds",
+                "cause",
+                "resumeToken",
+                "readTime",
+            ],
+            "cause" => &["code", "message", "details"],
+            "filter" => &["targetId", "count", "unchangedNames"],
+            _ => &[],
+        };
+        let mut members: Vec<_> = object.iter().collect();
+        members.sort_by_key(|(key, _)| {
+            order
+                .iter()
+                .position(|field| field == key)
+                .unwrap_or(order.len())
+        });
+        output.push('{');
+        pending.push((None, "", "}".to_owned()));
+        for (index, (key, value)) in members.into_iter().enumerate().rev() {
+            pending.push((
+                Some(value),
+                if message == "fields" { "" } else { key },
+                String::new(),
+            ));
+            pending.push((
+                None,
+                "",
+                format!("{}{}:", if index == 0 { "" } else { "," }, json!(key)),
+            ));
+        }
+    }
+    output
 }
 
 /// `WriteResponse` → JSON.

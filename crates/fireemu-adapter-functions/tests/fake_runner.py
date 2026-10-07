@@ -20,6 +20,8 @@ import sys
 import threading
 import time
 
+clock = json.loads(os.environ.get("FIREEMU_CLOCK_JSON", "{}"))
+
 if probe := os.environ.get("FIREEMU_SANDBOX_PROBE"):
     pathlib.Path(probe).write_text(
         os.environ.get("CLOUDSDK_CONFIG", ""),
@@ -112,6 +114,8 @@ class Echo(http.server.BaseHTTPRequestHandler):
                 # Every instance, in wire order: what the proxy actually sent.
                 "headers": [[k.lower(), v] for k, v in self.headers.items()],
                 "body": body.decode("utf-8", "replace"),
+                **({"clockNowMillis": int(clock["instantNanos"]) // 1_000_000}
+                   if clock.get("date") == "virtual" else {}),
             }
         ).encode()
         self.send_response(200)
@@ -151,6 +155,8 @@ time.sleep(int(os.environ.get("FIREEMU_FAKE_HELLO_DELAY_MS", "0")) / 1000)
 send({
     "type": "hello",
     "runner": "fake",
+    "clock": {"version": 1, "date": True, "timers": False}
+        if clock.get("date") == "virtual" else None,
     "httpPort": echo.server_address[1],
     "appCheck": {
         "firebaseFunctionsVersion": "0.0.0-fake",
@@ -188,6 +194,10 @@ while True:
     msg = read_frame()
     if msg is None or msg.get("type") == "shutdown":
         break
+    if msg.get("type") == "clock:set":
+        clock.update(msg)
+        send({"type": "result", "invocationId": msg["invocationId"], "ok": True})
+        continue
     if msg.get("type") != "invoke":
         continue
     frame_log = os.environ.get("FIREEMU_FAKE_FRAME_LOG")
@@ -211,7 +221,9 @@ while True:
         "invocationId": msg["invocationId"],
         "functionName": name,
         "user": True,
-        "fields": {"code": 47, "nested": {"attempts": [1, 2]}},
+        "fields": {"code": 47, "nested": {"attempts": [1, 2]}, **(
+            {"location": msg["event"]["location"]} if name == "locationProbe" else {}
+        )},
     })
     if "fail" in name:
         send({"type": "result", "invocationId": msg["invocationId"], "ok": False, "error": f"{name} failed"})

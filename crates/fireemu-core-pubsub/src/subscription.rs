@@ -72,6 +72,37 @@ pub struct RetryPolicy {
 pub struct PushConfig {
     /// The endpoint messages are delivered to by HTTP POST; empty means this is a pull subscription.
     pub push_endpoint: String,
+    /// Push protocol attributes, retained independently from delivery transport admission.
+    pub attributes: BTreeMap<String, String>,
+}
+
+/// Subscription idle-expiration configuration. An absent policy uses the service default;
+/// a policy with no TTL requests no expiration. Wall-clock idle expiry is outside this model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpirationPolicy {
+    /// Requested lifetime since the last subscription activity.
+    pub ttl: Option<LogicalDuration>,
+}
+
+/// A field-mask-selected update. Nested options distinguish clearing a field from preserving it.
+#[derive(Debug, Clone, Default)]
+pub struct SubscriptionUpdate {
+    /// Replaces the ack deadline when selected.
+    pub ack_deadline_seconds: Option<u32>,
+    /// Replaces the complete labels map when selected.
+    pub labels: Option<BTreeMap<String, String>>,
+    /// Replaces acknowledged-message retention when selected.
+    pub retain_acked_messages: Option<bool>,
+    /// Replaces or resets the message-retention window when selected.
+    pub message_retention_duration: Option<Option<LogicalDuration>>,
+    /// Replaces or resets the idle-expiration policy when selected.
+    pub expiration_policy: Option<Option<ExpirationPolicy>>,
+    /// Replaces or clears the retry policy when selected.
+    pub retry_policy: Option<Option<RetryPolicy>>,
+    /// Replaces or clears the dead-letter policy when selected.
+    pub dead_letter_policy: Option<Option<DeadLetterPolicy>>,
+    /// Replaces the complete push configuration when selected.
+    pub push_config: Option<PushConfig>,
 }
 
 /// Validated subscription configuration.
@@ -83,6 +114,10 @@ pub struct SubscriptionConfig {
     pub topic: TopicName,
     /// Ack deadline, in seconds.
     pub ack_deadline_seconds: u32,
+    /// User-defined resource labels.
+    pub labels: BTreeMap<String, String>,
+    /// Idle-expiration configuration; absence preserves the default policy.
+    pub expiration_policy: Option<ExpirationPolicy>,
     /// Whether acknowledged-message retention was requested. Configuration only; the retention window and replay behavior are not enforced by the delivery state machine yet.
     pub retain_acked_messages: bool,
     /// The explicitly requested retention window; `None` preserves an omitted request without synthesizing a resolved production default. Expiry enforcement is not implemented yet.
@@ -102,47 +137,70 @@ pub struct SubscriptionConfig {
 impl SubscriptionConfig {
     /// Validates the numeric fields of the configuration.
     pub fn validate(&self) -> Result<()> {
-        if self.ack_deadline_seconds < MIN_ACK_DEADLINE_SECONDS
-            || self.ack_deadline_seconds > MAX_ACK_DEADLINE_SECONDS
-        {
+        if self.ack_deadline_seconds == 0 || self.ack_deadline_seconds > MAX_ACK_DEADLINE_SECONDS {
             return Err(PubSubError::invalid_argument(format!(
-                "ackDeadlineSeconds must be {MIN_ACK_DEADLINE_SECONDS}..={MAX_ACK_DEADLINE_SECONDS}"
+                "ackDeadlineSeconds must be 1..={MAX_ACK_DEADLINE_SECONDS}"
             )));
         }
-        // The Subscription API schema bounds the requested window to 10 minutes through 31 days.
         if let Some(duration) = self.message_retention_duration {
-            if duration < LogicalDuration::from_seconds(600)
-                || duration > LogicalDuration::from_seconds(31 * 24 * 60 * 60)
-            {
-                return Err(PubSubError::invalid_argument(
-                    "messageRetentionDuration must be between 600 and 2678400 seconds",
-                ));
-            }
+            crate::configuration::validate_retention(duration)?;
         }
         if let Some(dl) = &self.dead_letter_policy {
-            if dl.max_delivery_attempts < MIN_DEAD_LETTER_ATTEMPTS
-                || dl.max_delivery_attempts > MAX_DEAD_LETTER_ATTEMPTS
-            {
-                return Err(PubSubError::invalid_argument(format!(
-                    "maxDeliveryAttempts must be {MIN_DEAD_LETTER_ATTEMPTS}..={MAX_DEAD_LETTER_ATTEMPTS}"
-                )));
+            if dl.max_delivery_attempts < MIN_DEAD_LETTER_ATTEMPTS {
+                return Err(PubSubError::invalid_argument(format!("The value for max_delivery_attempts is too small. You passed {} in the request, but the minimum value is {MIN_DEAD_LETTER_ATTEMPTS}.",dl.max_delivery_attempts)));
+            }
+            if dl.max_delivery_attempts > MAX_DEAD_LETTER_ATTEMPTS {
+                return Err(PubSubError::invalid_argument(format!("The value for max_delivery_attempts is too large. You passed {} in the request, but the maximum value is {MAX_DEAD_LETTER_ATTEMPTS}.",dl.max_delivery_attempts)));
             }
         }
         if let Some(rp) = &self.retry_policy {
             let maximum = LogicalDuration::from_seconds(MAX_RETRY_BACKOFF_SECONDS);
-            if rp.minimum_backoff.as_nanos() < 0
-                || rp.maximum_backoff.as_nanos() < 0
-                || rp.minimum_backoff > maximum
-                || rp.maximum_backoff > maximum
-            {
-                return Err(PubSubError::invalid_argument(
-                    "retry policy backoff must be between 0 and 600 seconds",
-                ));
+            for (value, field) in [
+                (rp.minimum_backoff, "minimum_backoff"),
+                (rp.maximum_backoff, "maximum_backoff"),
+            ] {
+                if value < LogicalDuration::ZERO || value > maximum {
+                    return Err(PubSubError::invalid_argument(format!("The value for {field} is out of bounds. You passed {} in the request, but the value must be between 0 and 10m.",crate::configuration::human_duration(value))));
+                }
             }
             if rp.minimum_backoff > rp.maximum_backoff {
-                return Err(PubSubError::invalid_argument(
-                    "retry policy minimumBackoff must not exceed maximumBackoff",
-                ));
+                return Err(PubSubError::invalid_argument(format!(
+                    "The specified maximum_backoff {} cannot be smaller than minimum_backoff {}.",
+                    crate::configuration::human_duration(rp.maximum_backoff),
+                    crate::configuration::human_duration(rp.minimum_backoff)
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The production-resolved retention window, independent of expiry enforcement.
+    #[must_use]
+    pub fn resolved_retention(&self) -> LogicalDuration {
+        self.message_retention_duration
+            .unwrap_or_else(|| LogicalDuration::from_seconds(604_800))
+    }
+
+    /// Validates the production expiration and retention relationship before state mutation.
+    pub fn validate_production_configuration(&self) -> Result<()> {
+        if !(MIN_ACK_DEADLINE_SECONDS..=MAX_ACK_DEADLINE_SECONDS)
+            .contains(&self.ack_deadline_seconds)
+        {
+            return Err(PubSubError::invalid_argument(format!("Invalid ack deadline given (ack_deadline={}). The ack deadline must be between 10 and 600 seconds.",self.ack_deadline_seconds)));
+        }
+        crate::configuration::validate_labels(&self.labels)?;
+        let ttl = self
+            .expiration_policy
+            .map_or(Some(LogicalDuration::from_seconds(2_678_400)), |policy| {
+                policy.ttl
+            });
+        if let Some(ttl) = ttl {
+            if ttl < LogicalDuration::from_seconds(86_400) {
+                return Err(PubSubError::invalid_argument(format!("The value for expiration duration is too small. You passed {} in the request, but the minimum value is 24h.", crate::configuration::human_duration(ttl))));
+            }
+            let retention = self.resolved_retention();
+            if retention > ttl {
+                return Err(PubSubError::invalid_argument(format!("The subscription's message retention duration ({} seconds) cannot be greater than the TTL in the subscription's expiration policy ({} seconds), since messages cannot be retained past subscription expiration.", retention.as_nanos() / 1_000_000_000, ttl.as_nanos() / 1_000_000_000)));
             }
         }
         Ok(())
@@ -292,6 +350,11 @@ impl SubscriptionState {
     /// Sets the push configuration (used by `ModifyPushConfig`).
     pub fn set_push_config(&mut self, push: PushConfig) {
         self.config.push_config = push;
+    }
+
+    /// Commits a fully validated replacement without changing retained-message state.
+    pub(crate) fn replace_config(&mut self, config: SubscriptionConfig) {
+        self.config = config;
     }
 
     /// Permanently detaches this subscription from a deleted topic incarnation.
@@ -552,6 +615,7 @@ impl SubscriptionState {
             .map(|d| d.max_delivery_attempts);
         let ordered = self.config.enable_message_ordering;
         let mut blocked_keys = BTreeSet::new();
+        let mut emitted_keys = BTreeSet::new();
 
         for i in self.first_unacked..self.entries.len() {
             if out.received.len() >= max {
@@ -561,21 +625,37 @@ impl SubscriptionState {
                 continue;
             }
             let ordering_key = self.entries[i].stored.message.ordering_key.clone();
-            if ordered && !ordering_key.is_empty() && !blocked_keys.insert(ordering_key.clone()) {
+            if ordered && !ordering_key.is_empty() && blocked_keys.contains(&ordering_key) {
                 continue;
             }
             if !matches!(&self.entries[i].state, Delivery::Available { available_at } if *available_at <= now)
             {
+                if ordered && !ordering_key.is_empty() {
+                    blocked_keys.insert(ordering_key.clone());
+                }
                 continue;
             }
             // Dead-letter: a message that already used its whole attempt budget is forwarded
             // rather than delivered again.
             if let Some(limit) = max_attempts {
                 if self.entries[i].delivery_attempt >= limit {
+                    if ordered && !ordering_key.is_empty() {
+                        blocked_keys.insert(ordering_key.clone());
+                        if emitted_keys.contains(&ordering_key) {
+                            continue;
+                        }
+                    }
                     self.entries[i].state = Delivery::ForwardPending;
                     out.dead_lettered.push(Arc::clone(&self.entries[i].stored));
                     continue;
                 }
+            }
+            if ordered && !ordering_key.is_empty() {
+                // Push sends one message at a time; unsent successors must not use an attempt.
+                if self.config.is_push() {
+                    blocked_keys.insert(ordering_key.clone());
+                }
+                emitted_keys.insert(ordering_key);
             }
             let ack_id = next_ack_id();
             let entry = &mut self.entries[i];
@@ -838,10 +918,13 @@ impl SubscriptionState {
 mod tests {
     use super::*;
     use crate::message::PubsubMessage;
+    use proptest::prelude::*;
     use std::cell::Cell;
 
     fn cfg() -> SubscriptionConfig {
         SubscriptionConfig {
+            labels: std::collections::BTreeMap::new(),
+            expiration_policy: None,
             retain_acked_messages: false,
             message_retention_duration: None,
             name: SubscriptionName::new("demo-app", "sub-one").unwrap(),
@@ -852,6 +935,33 @@ mod tests {
             dead_letter_policy: None,
             retry_policy: None,
             push_config: PushConfig::default(),
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn strict_ttl_and_retention_relation_matches_reference(ttl in 86_399i64..604_802, delta in -1i64..=1, never in any::<bool>()) {
+            let mut config = cfg();
+            config.expiration_policy = Some(ExpirationPolicy { ttl: (!never).then(|| LogicalDuration::from_seconds(ttl)) });
+            config.message_retention_duration = Some(LogicalDuration::from_seconds(ttl + delta));
+            prop_assert_eq!(config.validate_production_configuration().is_ok(), never || (ttl >= 86_400 && delta <= 0));
+        }
+    }
+
+    #[test]
+    fn strict_ttl_and_retention_exact_boundaries() {
+        for (ttl, retention, accepted) in [
+            (86_399, 600, false),
+            (86_400, 600, true),
+            (86_400, 86_400, true),
+            (86_400, 86_401, false),
+        ] {
+            let mut config = cfg();
+            config.expiration_policy = Some(ExpirationPolicy {
+                ttl: Some(LogicalDuration::from_seconds(ttl)),
+            });
+            config.message_retention_duration = Some(LogicalDuration::from_seconds(retention));
+            assert_eq!(config.validate_production_configuration().is_ok(), accepted);
         }
     }
 
@@ -879,6 +989,29 @@ mod tests {
             .is_err());
         // An unset window is not validated against the bounds.
         assert!(cfg().validate().is_ok());
+    }
+
+    #[test]
+    fn recorded_policy_refusal_diagnostics() {
+        let mut config = cfg();
+        config.retry_policy = Some(RetryPolicy {
+            minimum_backoff: LogicalDuration::from_seconds(100),
+            maximum_backoff: LogicalDuration::from_seconds(50),
+        });
+        assert_eq!(
+            config.validate().unwrap_err().message(),
+            "The specified maximum_backoff 50s cannot be smaller than minimum_backoff 1m40s."
+        );
+        config.retry_policy = Some(RetryPolicy {
+            minimum_backoff: LogicalDuration::from_seconds(10),
+            maximum_backoff: LogicalDuration::from_seconds(601),
+        });
+        assert_eq!(config.validate().unwrap_err().message(),"The value for maximum_backoff is out of bounds. You passed 10m1s in the request, but the value must be between 0 and 10m.");
+        config.retry_policy = None;
+        for (attempts,description) in [(4,"The value for max_delivery_attempts is too small. You passed 4 in the request, but the minimum value is 5."),(101,"The value for max_delivery_attempts is too large. You passed 101 in the request, but the maximum value is 100.")] {
+            config.dead_letter_policy=Some(DeadLetterPolicy {dead_letter_topic:TopicName::new("demo-test","dead").unwrap(),max_delivery_attempts:attempts});
+            assert_eq!(config.validate().unwrap_err().message(),description);
+        }
     }
 
     fn stored(id: &str, data: &[u8], t: i64) -> StoredMessage {
@@ -1220,6 +1353,115 @@ mod tests {
     }
 
     #[test]
+    fn ordered_exhausted_successor_waits_for_the_emitted_predecessor() {
+        let mut config = cfg();
+        config.enable_message_ordering = true;
+        config.dead_letter_policy = Some(DeadLetterPolicy {
+            dead_letter_topic: TopicName::new("demo-app", "dead-letters").unwrap(),
+            max_delivery_attempts: MIN_DEAD_LETTER_ATTEMPTS,
+        });
+        let mut sub = SubscriptionState::new(config);
+        let now = LogicalInstant::from_unix_seconds(100);
+        for (id, key) in [("1", "same"), ("2", "same"), ("3", "other")] {
+            let mut message = stored(id, b"data", 100);
+            message.message.ordering_key = key.to_owned();
+            sub.enqueue(message, now).unwrap();
+        }
+        // Seed a retained entry at the budget boundary; this is a local state-safety check.
+        sub.entries[1].delivery_attempt = MIN_DEAD_LETTER_ATTEMPTS;
+        let mut ids = counter();
+        let first = sub.pull(3, now, &mut ids);
+        assert_eq!(
+            first
+                .received
+                .iter()
+                .map(|item| item.message.message_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["1", "3"]
+        );
+        assert!(first.dead_lettered.is_empty());
+        sub.acknowledge(&[first.received[0].ack_id.clone()]);
+        let second = sub.pull(3, now, &mut ids);
+        assert!(second.received.is_empty());
+        assert_eq!(
+            second
+                .dead_lettered
+                .iter()
+                .map(|item| item.message_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["2"]
+        );
+    }
+
+    #[test]
+    fn ordered_pull_batches_same_key_and_blocks_later_batches_until_ack() {
+        let mut config = cfg();
+        config.enable_message_ordering = true;
+        let mut sub = SubscriptionState::new(config);
+        let now = LogicalInstant::from_unix_seconds(100);
+        for index in 1..=3 {
+            let mut message = stored(&index.to_string(), b"data", 100);
+            message.message.ordering_key = "same-key".to_owned();
+            sub.enqueue(message, now).unwrap();
+        }
+        let mut ids = counter();
+        let first = sub.pull(2, now, &mut ids).received;
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].message.message_id, "1");
+        assert_eq!(first[1].message.message_id, "2");
+        assert!(sub.pull(2, now, &mut ids).received.is_empty());
+        sub.acknowledge(&[first[0].ack_id.clone()]);
+        assert!(sub.pull(2, now, &mut ids).received.is_empty());
+        sub.acknowledge(&[first[1].ack_id.clone()]);
+        assert_eq!(
+            sub.pull(2, now, &mut ids).received[0].message.message_id,
+            "3"
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn ordered_pull_traces_match_reference_model(push in any::<bool>(), keys in proptest::collection::vec(0u8..4,1..16), commands in proptest::collection::vec((0u8..4,1usize..9),1..80)) {
+            let mut config = cfg();config.enable_message_ordering = true;
+            if push { config.push_config.push_endpoint = "http://127.0.0.1:8181/push".to_owned(); }
+            let mut sub = SubscriptionState::new(config);
+            let now = LogicalInstant::from_unix_seconds(100);
+            for (index,key) in keys.iter().enumerate() {
+                let mut message = stored(&index.to_string(),b"data",100);
+                message.message.ordering_key = if *key==0 {String::new()} else {key.to_string()};
+                sub.enqueue(message,now).unwrap();
+            }
+            // 0: available, 1: outstanding, 2: acknowledged. IDs remain bound to entries.
+            let mut reference = vec![0u8;keys.len()];
+            let mut acknowledgements = vec![String::new();keys.len()];
+            let mut ids = counter();
+            for (kind,limit) in commands {
+                if kind==0 {
+                    let mut blocked = BTreeSet::new();let mut expected = Vec::new();
+                    for (index,key) in keys.iter().enumerate() {
+                        if reference[index]==2 {continue;}
+                        if *key!=0 && blocked.contains(key) {continue;}
+                        if reference[index]==1 {if *key!=0 {blocked.insert(*key);} continue;}
+                        if expected.len()==limit {break;}
+                        expected.push(index.to_string());reference[index]=1;
+                        if push && *key!=0 {blocked.insert(*key);}
+                    }
+                    let actual = sub.pull(limit,now,&mut ids).received;
+                    let actual_ids: Vec<_> = actual.iter().map(|message|message.message.message_id.clone()).collect();
+                    prop_assert_eq!(actual_ids,expected);
+                    for message in actual {let index: usize=message.message.message_id.parse().unwrap();acknowledgements[index]=message.ack_id;}
+                } else {
+                    let selected: Vec<_> = reference.iter().enumerate().filter_map(|(index,state)|(*state==1 && index%3==usize::from(kind-1)).then_some(index)).collect();
+                    let ids: Vec<_> = selected.iter().map(|index|acknowledgements[*index].clone()).collect();
+                    prop_assert_eq!(sub.acknowledge(&ids),selected.len());
+                    for index in selected {reference[index]=2;}
+                }
+                prop_assert_eq!(sub.outstanding_count(),reference.iter().fold(0, |count, state| count + usize::from(*state == 1)));
+            }
+        }
+    }
+
+    #[test]
     fn ordering_holds_key_until_ack() {
         let mut c = cfg();
         c.enable_message_ordering = true;
@@ -1232,8 +1474,8 @@ mod tests {
         s.enqueue(m1, now).unwrap();
         s.enqueue(m2, now).unwrap();
         let mut ids = counter();
-        // Only the first message of the key is delivered.
-        let out = s.pull(10, now, &mut ids);
+        // A one-message request leaves the next batch blocked until this batch is acknowledged.
+        let out = s.pull(1, now, &mut ids);
         assert_eq!(out.received.len(), 1);
         assert_eq!(out.received[0].message.message_id, "1");
         let ack = out.received[0].ack_id.clone();
@@ -1293,6 +1535,7 @@ mod tests {
     fn push_cfg() -> SubscriptionConfig {
         let mut config = cfg();
         config.push_config = PushConfig {
+            attributes: std::collections::BTreeMap::new(),
             push_endpoint: "http://127.0.0.1:1/push".to_owned(),
         };
         config
@@ -1467,6 +1710,7 @@ mod tests {
             CONFIGURED_INTERVAL_MILLIS,
         ));
         s.set_push_config(PushConfig {
+            attributes: std::collections::BTreeMap::new(),
             push_endpoint: "http://127.0.0.1:1/push".to_owned(),
         });
         let now = LogicalInstant::from_unix_seconds(100);

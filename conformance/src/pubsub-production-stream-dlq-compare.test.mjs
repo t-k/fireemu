@@ -1463,7 +1463,16 @@ test("field normalization replays redacted actual two-run bodies and format near
     const first = a.find((r) => r.n === n),
       second = b.find((r) => r.n === n);
     assert.equal(
-      core.judgeRow(first, second, { fieldNormalization: policy }).verdict,
+      core.judgeRow(
+        {
+          ...first,
+          response: { ...first.response, body: policy.normalize(first.response.body, first) },
+        },
+        {
+          ...second,
+          response: { ...second.response, body: policy.normalize(second.response.body, second) },
+        },
+      ).verdict,
       "MATCH",
       `n=${n}`,
     );
@@ -1472,7 +1481,16 @@ test("field normalization replays redacted actual two-run bodies and format near
     const first = a.find((r) => r.n === n),
       second = b.find((r) => r.n === n);
     assert.equal(
-      core.judgeRow(first, second, { fieldNormalization: policy }).verdict,
+      core.judgeRow(
+        {
+          ...first,
+          response: { ...first.response, body: policy.normalize(first.response.body, first) },
+        },
+        {
+          ...second,
+          response: { ...second.response, body: policy.normalize(second.response.body, second) },
+        },
+      ).verdict,
       "DIVERGES",
       `ACK format n=${n}`,
     );
@@ -1505,7 +1523,16 @@ test("field normalization replays redacted actual two-run bodies and format near
   const first = a.find((r) => r.n === 4),
     second = b.find((r) => r.n === 4);
   assert.equal(
-    core.judgeRow(first, second, { fieldNormalization: policy }).verdict,
+    core.judgeRow(
+      {
+        ...first,
+        response: { ...first.response, body: policy.normalize(first.response.body, first) },
+      },
+      {
+        ...second,
+        response: { ...second.response, body: policy.normalize(second.response.body, second) },
+      },
+    ).verdict,
     "DIVERGES",
     "different page members remain a proposal",
   );

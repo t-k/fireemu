@@ -40,6 +40,11 @@ export function encodeRequest(service, method, request) {
   const definition = SERVICES[service]?.methods[method];
   if (!definition) throw new Error("unlisted unary method");
   const body = requestToWire(request);
+  if (request.name !== undefined) {
+    if (["GetTopic", "DeleteTopic"].includes(method)) body.topic = request.name;
+    if (["GetSubscription", "DeleteSubscription"].includes(method))
+      body.subscription = request.name;
+  }
   if (request.updateMask !== undefined)
     body.updateMask = {
       paths: String(request.updateMask)

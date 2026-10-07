@@ -93,7 +93,8 @@ impl Publisher for PublisherService {
         &self,
         request: Request<pb::GetTopicRequest>,
     ) -> Result<Response<pb::Topic>, Status> {
-        let name = TopicName::parse(&request.into_inner().topic).map_err(|e| status(&e))?;
+        let req = request.into_inner();
+        let name = TopicName::parse(&req.topic).map_err(|e| status(&e))?;
         let state = self.handle.state();
         let labels = state.topic_labels(&name).map_err(|e| status(&e))?;
         Ok(Response::new(topic_to_proto(&name, labels)))
@@ -114,9 +115,13 @@ impl Publisher for PublisherService {
                 topic_to_proto(n, &labels)
             })
             .collect();
+        let page = self
+            .handle
+            .page(topics, req.page_size, &req.page_token, |t| t.name.clone())
+            .map_err(|e| status(&e))?;
         Ok(Response::new(pb::ListTopicsResponse {
-            topics,
-            next_page_token: String::new(),
+            topics: page.resources,
+            next_page_token: page.next_page_token,
         }))
     }
 
@@ -124,7 +129,8 @@ impl Publisher for PublisherService {
         &self,
         request: Request<pb::ListTopicSubscriptionsRequest>,
     ) -> Result<Response<pb::ListTopicSubscriptionsResponse>, Status> {
-        let name = TopicName::parse(&request.into_inner().topic).map_err(|e| status(&e))?;
+        let req = request.into_inner();
+        let name = TopicName::parse(&req.topic).map_err(|e| status(&e))?;
         let state = self.handle.state();
         if !state.topic_exists(&name) {
             return Err(Status::not_found(format!(
@@ -132,9 +138,18 @@ impl Publisher for PublisherService {
                 name.to_full()
             )));
         }
+        let page = self
+            .handle
+            .page(
+                state.topic_subscriptions(&name),
+                req.page_size,
+                &req.page_token,
+                Clone::clone,
+            )
+            .map_err(|e| status(&e))?;
         Ok(Response::new(pb::ListTopicSubscriptionsResponse {
-            subscriptions: state.topic_subscriptions(&name),
-            next_page_token: String::new(),
+            subscriptions: page.resources,
+            next_page_token: page.next_page_token,
         }))
     }
 
@@ -142,16 +157,21 @@ impl Publisher for PublisherService {
         &self,
         request: Request<pb::ListTopicSnapshotsRequest>,
     ) -> Result<Response<pb::ListTopicSnapshotsResponse>, Status> {
-        let name = TopicName::parse(&request.into_inner().topic).map_err(|e| status(&e))?;
+        let req = request.into_inner();
+        let name = TopicName::parse(&req.topic).map_err(|e| status(&e))?;
         let now = self.handle.now();
         let snapshots = self
             .handle
             .state()
             .list_topic_snapshots(&name, now)
             .map_err(|e| status(&e))?;
+        let page = self
+            .handle
+            .page(snapshots, req.page_size, &req.page_token, Clone::clone)
+            .map_err(|e| status(&e))?;
         Ok(Response::new(pb::ListTopicSnapshotsResponse {
-            snapshots,
-            next_page_token: String::new(),
+            snapshots: page.resources,
+            next_page_token: page.next_page_token,
         }))
     }
 

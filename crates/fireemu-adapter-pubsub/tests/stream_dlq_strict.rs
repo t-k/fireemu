@@ -9,6 +9,7 @@ use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 use pb::publisher_client::PublisherClient;
 use pb::subscriber_client::SubscriberClient;
+use prost::Message as _;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -520,7 +521,7 @@ async fn strict_recorded_negative_stream_deadline_has_recorded_status() {
         Some(pb::streaming_pull_response::SubscriptionProperties::default())
     );
     let ack = response.received_messages[0].ack_id.clone();
-    assert_eq!(ack.len(), 196);
+    assert_eq!(ack.len(), 190);
     tx.send(pb::StreamingPullRequest {
         modify_deadline_ack_ids: vec![ack],
         modify_deadline_seconds: vec![-1],
@@ -801,4 +802,365 @@ async fn streaming_properties_follow_profile_and_subscription_configuration() {
             drop(tx);
         }
     }
+}
+
+#[tokio::test]
+#[allow(deprecated, clippy::too_many_lines)]
+async fn strict_stream_ack_has_recorded_layout_and_cross_route_decode() {
+    let server = Server::new(PubSubProfile::Strict).await;
+    *server.clock.lock().unwrap() =
+        VirtualClock::new(LogicalInstant::from_nanos(1_700_000_000_350_000_000));
+    resources(&server).await;
+    PublisherClient::new(server.channel().await)
+        .publish(pb::PublishRequest {
+            topic: TOPIC.into(),
+            messages: vec![pb::PubsubMessage {
+                data: vec![b'x'; 28],
+                ..Default::default()
+            }],
+        })
+        .await
+        .unwrap();
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    tx.send(pb::StreamingPullRequest {
+        subscription: SUB.into(),
+        stream_ack_deadline_seconds: 10,
+        max_outstanding_messages: 1,
+        max_outstanding_bytes: 1024,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let mut client = SubscriberClient::new(server.channel().await);
+    let mut stream = client
+        .streaming_pull(tokio_stream::wrappers::ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    let response = tokio::time::timeout(Duration::from_secs(2), stream.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let received = &response.received_messages[0];
+    assert_eq!(received.ack_id.len(), 190);
+    assert_eq!(received.message.as_ref().unwrap().message_id.len(), 17);
+    assert_eq!(response.encoded_len(), 263);
+    assert_eq!(
+        response.subscription_properties,
+        Some(pb::streaming_pull_response::SubscriptionProperties::default())
+    );
+    let path = format!("/v1/{SUB}:modifyAckDeadline");
+    assert_eq!(
+        server
+            .rest(
+                "POST",
+                &path,
+                json!({"ackIds":[received.ack_id],"ackDeadlineSeconds":60})
+            )
+            .await
+            .0,
+        200
+    );
+    drop(tx);
+    drop(stream);
+    server
+        .clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(11))
+        .unwrap();
+    assert!(client
+        .pull(pb::PullRequest {
+            subscription: SUB.into(),
+            return_immediately: true,
+            max_messages: 1
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages
+        .is_empty());
+    assert_eq!(
+        server
+            .rest(
+                "POST",
+                &format!("/v1/{SUB}:acknowledge"),
+                json!({"ackIds":[received.ack_id]})
+            )
+            .await
+            .0,
+        200
+    );
+    server
+        .clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(60))
+        .unwrap();
+    assert!(client
+        .pull(pb::PullRequest {
+            subscription: SUB.into(),
+            return_immediately: true,
+            max_messages: 1
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages
+        .is_empty());
+}
+
+async fn pagination_resources(server: &Server) {
+    let mut publisher = PublisherClient::new(server.channel().await);
+    let mut subscriber = SubscriberClient::new(server.channel().await);
+    for i in 0..3 {
+        let topic = format!("projects/demo-paging/topics/topic{i}");
+        let sub = format!("projects/demo-paging/subscriptions/sub{i}");
+        publisher
+            .create_topic(pb::Topic {
+                name: topic.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        subscriber
+            .create_subscription(pb::Subscription {
+                name: sub.clone(),
+                topic: "projects/demo-paging/topics/topic0".into(),
+                ack_deadline_seconds: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        subscriber
+            .create_snapshot(pb::CreateSnapshotRequest {
+                name: format!("projects/demo-paging/snapshots/snap{i}"),
+                subscription: sub,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn strict_pagination_all_rest_and_native_lists_and_emulator_controls() {
+    for profile in [PubSubProfile::Strict, PubSubProfile::Emulator] {
+        let server = Server::new(profile).await;
+        pagination_resources(&server).await;
+        let mut publisher = PublisherClient::new(server.channel().await);
+        let mut subscriber = SubscriberClient::new(server.channel().await);
+        let expected_count = if profile == PubSubProfile::Strict {
+            1
+        } else {
+            3
+        };
+        let topics = publisher
+            .list_topics(pb::ListTopicsRequest {
+                project: "projects/demo-paging".into(),
+                page_size: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(topics.topics.len(), expected_count);
+        assert_eq!(
+            topics.next_page_token.len(),
+            if profile == PubSubProfile::Strict {
+                26
+            } else {
+                0
+            }
+        );
+        let subs = subscriber
+            .list_subscriptions(pb::ListSubscriptionsRequest {
+                project: "projects/demo-paging".into(),
+                page_size: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(subs.subscriptions.len(), expected_count);
+        let topic_subs = publisher
+            .list_topic_subscriptions(pb::ListTopicSubscriptionsRequest {
+                topic: "projects/demo-paging/topics/topic0".into(),
+                page_size: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(topic_subs.subscriptions.len(), expected_count);
+        assert_eq!(topic_subs.next_page_token, subs.next_page_token);
+        let snaps = subscriber
+            .list_snapshots(pb::ListSnapshotsRequest {
+                project: "projects/demo-paging".into(),
+                page_size: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(snaps.snapshots.len(), expected_count);
+        let topic_snaps = publisher
+            .list_topic_snapshots(pb::ListTopicSnapshotsRequest {
+                topic: "projects/demo-paging/topics/topic0".into(),
+                page_size: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(topic_snaps.snapshots.len(), expected_count);
+        for (route, member) in [
+            ("topics", "topics"),
+            ("subscriptions", "subscriptions"),
+            ("snapshots", "snapshots"),
+            ("topics/topic0/subscriptions", "subscriptions"),
+            ("topics/topic0/snapshots", "snapshots"),
+        ] {
+            let (status, bytes) = server
+                .rest(
+                    "GET",
+                    &format!("/v1/projects/demo-paging/{route}?pageSize=1"),
+                    json!({}),
+                )
+                .await;
+            if profile == PubSubProfile::Emulator && route.contains('/') {
+                assert_eq!(status, 404);
+                continue;
+            }
+            assert_eq!(status, 200, "{route}");
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                body[member].as_array().unwrap().len(),
+                expected_count,
+                "{route}"
+            );
+            if profile == PubSubProfile::Strict {
+                assert_eq!(body["nextPageToken"].as_str().unwrap().len(), 26);
+            }
+        }
+        for size in [-1, 1001] {
+            let result = publisher
+                .list_topics(pb::ListTopicsRequest {
+                    project: "projects/demo-paging".into(),
+                    page_size: size,
+                    ..Default::default()
+                })
+                .await;
+            let (status, bytes) = server
+                .rest(
+                    "GET",
+                    &format!("/v1/projects/demo-paging/topics?pageSize={size}"),
+                    json!({}),
+                )
+                .await;
+            if profile == PubSubProfile::Strict {
+                let message=format!("The value for page_size is out of bounds. You passed {size} in the request, but the value must be between 0 and 1000.");
+                assert_eq!(result.unwrap_err().message(), message);
+                assert_eq!(status, 400);
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&bytes).unwrap()["error"]["message"],
+                    message
+                );
+            } else {
+                assert_eq!(result.unwrap().into_inner().topics.len(), 3);
+                assert_eq!(status, 200);
+            }
+        }
+        let result = publisher
+            .list_topics(pb::ListTopicsRequest {
+                project: "projects/demo-paging".into(),
+                page_size: 1,
+                page_token: "garbage".into(),
+            })
+            .await;
+        if profile == PubSubProfile::Strict {
+            assert_eq!(
+                result.unwrap_err().message(),
+                "Invalid page token given (token=garbage)."
+            );
+        } else {
+            assert_eq!(result.unwrap().into_inner().topics.len(), 3);
+        }
+        let all = publisher
+            .list_topics(pb::ListTopicsRequest {
+                project: "projects/demo-paging".into(),
+                page_size: 0,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(all.topics.len(), 3);
+        assert!(all.next_page_token.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn strict_deleted_issued_cursor_continues_across_transport_and_empty_snapshots_omit_members()
+{
+    let server = Server::new(PubSubProfile::Strict).await;
+    pagination_resources(&server).await;
+    let mut publisher = PublisherClient::new(server.channel().await);
+    let first = publisher
+        .list_topics(pb::ListTopicsRequest {
+            project: "projects/demo-paging".into(),
+            page_size: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(first.topics.len(), 1);
+    publisher
+        .delete_topic(pb::DeleteTopicRequest {
+            topic: first.topics[0].name.clone(),
+        })
+        .await
+        .unwrap();
+    let (status, bytes) = server
+        .rest(
+            "GET",
+            &format!(
+                "/v1/projects/demo-paging/topics?pageSize=1&pageToken={}",
+                first.next_page_token
+            ),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["topics"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        body["topics"][0]["name"],
+        "projects/demo-paging/topics/topic1"
+    );
+    assert_eq!(body["nextPageToken"].as_str().unwrap().len(), 26);
+    let second = publisher
+        .list_topics(pb::ListTopicsRequest {
+            project: "projects/demo-paging".into(),
+            page_size: 1,
+            page_token: body["nextPageToken"].as_str().unwrap().into(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(second.topics.len(), 1);
+    assert_eq!(second.topics[0].name, "projects/demo-paging/topics/topic2");
+    assert!(second.next_page_token.is_empty());
+    let (status, bytes) = server
+        .rest(
+            "GET",
+            "/v1/projects/empty-project/snapshots?pageSize=1",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), json!({}));
 }

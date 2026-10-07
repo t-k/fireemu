@@ -248,13 +248,13 @@ test("causal bindings refuse missing, conflicting and ambiguous identities again
   );
 });
 
-test("list judgments ignore item order but cursor binding requires the identical ordered page", () => {
+test("list judgments and cursor bindings preserve exact page membership independent of order", () => {
   assert.equal(typeof core.createBindings, "function");
   const expected = { topics: [{ name: "a" }, { name: "b" }], nextPageToken: "abcdefgh" };
   const actual = { topics: [{ name: "b" }, { name: "a" }], nextPageToken: "ijklmnop" };
   assert.equal(core.judgeRow(exchange(expected), exchange(actual)).verdict, "MATCH");
   const binding = core.createBindings();
-  assert.throws(() => binding.linkCursor(expected, actual), /ordered/);
+  assert.doesNotThrow(() => binding.linkCursor(expected, actual));
   actual.topics.reverse();
   binding.linkCursor(expected, actual);
   assert.equal(binding.get("cursor", "abcdefgh"), "ijklmnop");
@@ -1306,4 +1306,223 @@ test("early timer re-arms the remaining window at an aged monotonic origin", () 
   assert.equal(o.snapshot().durationMs, 30000);
   o.close();
   assert.equal(pending.size, 0);
+});
+
+test("DLQ empty production windows remain observation debt without masking status or shape gaps", () => {
+  for (const caseId of ["dlq-no-grant/rest", "dlq-grant-window/rest"]) {
+    const source = exchange({}, { case: caseId, op: "pull" });
+    const local = exchange({ receivedMessages: [{ ackId: "a", message: { data: "eA==" } }] });
+    const result = core.judgeRow(source, local);
+    assert.equal(result.verdict, "NOT_COMPARABLE");
+    assert.equal(result.reason, "本番の配送が観測窓内に起きなかった。IAM反映の時間は未記録");
+    assert.equal(
+      core.judgeRow({ ...source, response: { ...source.response, status: 403 } }, local).verdict,
+      "DIVERGES",
+    );
+    assert.equal(
+      core.judgeRow({ ...source, response: { ...source.response, unknown: true } }, local).reason,
+      "unknown response",
+    );
+    assert.equal(
+      core.judgeRow({ ...source, case: "rest-layout-routes/rest" }, local).verdict,
+      "DIVERGES",
+    );
+    assert.equal(
+      core.judgeRow(
+        { ...source, response: { ...source.response, body: { unexpected: true } } },
+        local,
+      ).verdict,
+      "DIVERGES",
+    );
+    assert.equal(core.judgeRow(source, exchange({})).verdict, "MATCH");
+  }
+});
+
+test("cursor binding compares exact member multiset and cardinality independent of order", () => {
+  for (let seed = 0; seed < 64; seed += 1) {
+    const names = Array.from(
+      { length: 2 + (seed % 8) },
+      (_, i) => `projects/demo/topics/topic${i}`,
+    );
+    const source = { topics: names.map((name) => ({ name })), nextPageToken: `source${seed}` };
+    const local = {
+      topics: names.toReversed().map((name) => ({ name })),
+      nextPageToken: `local${seed}`,
+    };
+    const bindings = core.createBindings();
+    bindings.linkCursor(source, local);
+    assert.equal(bindings.get("cursor", source.nextPageToken), local.nextPageToken);
+    for (const topics of [
+      local.topics.slice(1),
+      [...local.topics, local.topics[0]],
+      [{ name: "projects/demo/topics/different" }, ...local.topics.slice(1)],
+    ])
+      assert.throws(() => core.createBindings().linkCursor(source, { ...local, topics }), /cursor/);
+  }
+});
+
+test("two-run field normalization requires equal shapes and retains format and producer bindings", () => {
+  assert.equal(typeof core.createFieldNormalization, "function");
+  for (let seed = 0; seed < 64; seed += 1) {
+    const runs = [seed.toString(16).padStart(12, "0"), (seed + 100).toString(16).padStart(12, "0")];
+    const make = (run, width = 196) => [
+      { note: "run-start", suite: "stream-dlq-v2", runId: run, project: "demo-project" },
+      {
+        n: 99,
+        case: "dlq-grant-window/rest",
+        step: 12,
+        op: "publish",
+        transport: "rest",
+        response: { status: 200 },
+        request: {
+          body: {
+            messages: [
+              {
+                data: Buffer.from(`dlq-${run}-identity`).toString("base64"),
+                attributes: { recorderRun: run, identity: "original" },
+              },
+            ],
+          },
+        },
+      },
+      {
+        n: 100,
+        case: "dlq-grant-window/rest",
+        step: 13,
+        op: "pull",
+        transport: "rest",
+        request: { path: `/v1/projects/demo-project/subscriptions/fe${run}-da-r-source:pull` },
+        response: {
+          status: 200,
+          bodyBytes: 537,
+          body: {
+            receivedMessages: [
+              {
+                ackId: "a".repeat(width),
+                message: {
+                  messageId: "1".repeat(17),
+                  data: Buffer.from(`dlq-${run}-identity`).toString("base64"),
+                  attributes: { recorderRun: run, identity: "original" },
+                },
+              },
+            ],
+          },
+        },
+      },
+    ];
+    const [a, b] = runs.map((r) => make(r));
+    const policy = core.createFieldNormalization(a, b);
+    const row = a[2];
+    assert.deepEqual(
+      policy.normalize(row.response.body, row),
+      policy.normalize(b[2].response.body, b[2]),
+    );
+    assert.ok(policy.evidence.some((e) => e.path.endsWith("/data")));
+    assert.ok(policy.evidence.some((e) => e.path.endsWith("/attributes/recorderRun")));
+    const near = structuredClone(row.response.body);
+    near.receivedMessages[0].message.data = Buffer.from(`dlq-${runs[0]}-changed!`).toString(
+      "base64",
+    );
+    assert.notDeepEqual(policy.normalize(row.response.body, row), policy.normalize(near, row));
+    const changedShape = make(runs[1], 195);
+    const shaped = core.createFieldNormalization(a, changedShape);
+    assert.notDeepEqual(
+      core.normalizeBody(shaped.normalize(row.response.body, row)),
+      core.normalizeBody(shaped.normalize(changedShape[2].response.body, changedShape[2])),
+    );
+    const wrong = make(runs[1]);
+    wrong[2].response.body.receivedMessages[0].message.attributes.recorderRun = "f".repeat(12);
+    const refused = core.createFieldNormalization(a, wrong);
+    assert.ok(!refused.evidence.some((e) => e.path.endsWith("/attributes/recorderRun")));
+  }
+});
+
+test("field normalization replays redacted actual two-run bodies and format near misses", () => {
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL(
+        "./pubsub-production/fixtures/stream-dlq-normalization-recorded.json",
+        import.meta.url,
+      ),
+    ),
+  );
+  const [a, b] = fixture.captures;
+  const policy = core.createFieldNormalization(a, b);
+  const paths = new Set(policy.evidence.map((e) => e.path));
+  for (const suffix of [
+    "/data",
+    "/attributes/recorderRun",
+    "/attributes/CloudPubSubDeadLetterSourceSubscription",
+    "/attributes/CloudPubSubDeadLetterSourceTopicPublishTime",
+  ])
+    assert.ok(
+      [...paths].some((path) => path.endsWith(suffix)),
+      suffix,
+    );
+  for (const n of [26, 28, 30, 32, 34, 36, 38, 40, 42, 80]) {
+    const first = a.find((r) => r.n === n),
+      second = b.find((r) => r.n === n);
+    assert.equal(
+      core.judgeRow(first, second, { fieldNormalization: policy }).verdict,
+      "MATCH",
+      `n=${n}`,
+    );
+  }
+  for (const n of [85, 100, 102, 104, 106, 108, 114]) {
+    const first = a.find((r) => r.n === n),
+      second = b.find((r) => r.n === n);
+    assert.equal(
+      core.judgeRow(first, second, { fieldNormalization: policy }).verdict,
+      "DIVERGES",
+      `ACK format n=${n}`,
+    );
+  }
+  const row = a.find((r) => r.n === 114),
+    body = row.response.body;
+  const normalized = policy.normalize(body, row);
+  for (const change of [
+    (m) => (m.data = Buffer.from("other-payload").toString("base64")),
+    (m) => (m.data = m.data.replace(/==$/, "=")),
+    (m) => (m.attributes.recorderRun = "F".repeat(12)),
+    (m) => (m.attributes.recorderRun = "a".repeat(13)),
+    (m) => (m.attributes.identity = "changed"),
+    (m) => (m.attributes.extra = "unexpected"),
+    (m) => delete m.attributes.recorderRun,
+    (m) => (m.attributes.CloudPubSubDeadLetterSourceSubscription += "x"),
+    (m) =>
+      (m.attributes.CloudPubSubDeadLetterSourceTopicPublishTime =
+        m.attributes.CloudPubSubDeadLetterSourceTopicPublishTime.replace("+00:00", "Z")),
+    (m) =>
+      (m.attributes.CloudPubSubDeadLetterSourceTopicPublishTime =
+        m.attributes.CloudPubSubDeadLetterSourceTopicPublishTime.replace(/\.\d{3}/, ".123456")),
+    (m) => (m.attributes.CloudPubSubDeadLetterSourceTopicPublishTime = "invalid"),
+  ]) {
+    const changed = structuredClone(body);
+    change(changed.receivedMessages[0].message);
+    assert.notDeepEqual(policy.normalize(changed, row), normalized);
+  }
+  const first = a.find((r) => r.n === 4),
+    second = b.find((r) => r.n === 4);
+  assert.equal(
+    core.judgeRow(first, second, { fieldNormalization: policy }).verdict,
+    "DIVERGES",
+    "different page members remain a proposal",
+  );
+  const frames = a.filter((r) => r.note === "stream-frame" && r.direction === "in");
+  assert.equal(frames.length, 1);
+  const nativeRow = {
+    case: "stream-invalid-deadline/grpc",
+    step: frames[0].step,
+    op: "streamingPull",
+    transport: "grpc",
+  };
+  assert.deepEqual(
+    core.normalizeBody(policy.normalize(frames[0].body, nativeRow)),
+    core.normalizeBody(
+      policy.normalize(
+        b.find((r) => r.note === "stream-frame" && r.direction === "in").body,
+        nativeRow,
+      ),
+    ),
+  );
 });

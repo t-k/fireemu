@@ -1,5 +1,6 @@
 // Adapted from comparison-v8-final's row replay/bindings and PAGING-RECREATE's exact-status judge.
 import { isDeepStrictEqual } from "node:util";
+export { createFieldNormalization } from "./stream-dlq-normalization.mjs";
 import { createIamOwnership, readPolicy } from "./iam.mjs";
 import { createOwnership } from "./names.mjs";
 import { timestampFromWire } from "./grpc.mjs";
@@ -123,8 +124,12 @@ export function recordedSilenceProbe(expected, frames = [], frameVerified = () =
   );
 }
 
-export function judgeRow(expected, actual, { frames = [], frameVerified = () => false } = {}) {
-  const response = judgeResponse(expected, actual);
+export function judgeRow(
+  expected,
+  actual,
+  { frames = [], frameVerified = () => false, fieldNormalization } = {},
+) {
+  const response = judgeResponse(expected, actual, fieldNormalization);
   if (!recordedSilenceProbe(expected, frames, frameVerified)) return response;
   const observed = actual?.nativeObservation;
   const valid =
@@ -156,7 +161,7 @@ export function judgeRow(expected, actual, { frames = [], frameVerified = () => 
   };
 }
 
-function judgeResponse(expected, actual) {
+function judgeResponse(expected, actual, fieldNormalization) {
   if (expected.op === "getIamPolicy" || expected.op === "setIamPolicy") {
     let valid = false;
     try {
@@ -200,7 +205,23 @@ function judgeResponse(expected, actual) {
       return result("NOT_COMPARABLE", "unknown HTTP response");
     if (a.status !== b.status) return result("DIVERGES", "HTTP status gap");
   }
-  if (!isDeepStrictEqual(normalizeBody(a.body), normalizeBody(b.body)))
+  if (
+    ["dlq-no-grant/rest", "dlq-grant-window/rest"].includes(expected.case) &&
+    expected.op === "pull" &&
+    expected.transport === "rest" &&
+    a.status === 200 &&
+    b.status === 200 &&
+    isDeepStrictEqual(a.body, {}) &&
+    Array.isArray(b.body?.receivedMessages) &&
+    b.body.receivedMessages.length > 0
+  )
+    return result("NOT_COMPARABLE", "本番の配送が観測窓内に起きなかった。IAM反映の時間は未記録");
+  if (
+    !isDeepStrictEqual(
+      normalizeBody(fieldNormalization ? fieldNormalization.normalize(a.body, expected) : a.body),
+      normalizeBody(fieldNormalization ? fieldNormalization.normalize(b.body, expected) : b.body),
+    )
+  )
     return result("DIVERGES", "body shape gap");
   if (expected.op === "streamingPull") {
     for (const key of ["inboundFrames", "outboundFrames", "followUpSent"])
@@ -282,11 +303,11 @@ export function createBindings() {
   function linkCursor(source, local) {
     if (source?.nextPageToken === undefined) return;
     const names = (body) =>
-      (body.topics ?? body.subscriptions ?? body.snapshots ?? []).map((v) =>
-        typeof v === "string" ? v : v.name,
-      );
+      (body.topics ?? body.subscriptions ?? body.snapshots ?? [])
+        .map((v) => (typeof v === "string" ? v : v.name))
+        .toSorted();
     if (!isDeepStrictEqual(names(source), names(local)))
-      throw new Error("cursor requires identical ordered page");
+      throw new Error("cursor requires identical page member set and cardinality");
     if (!bind("cursor", source.nextPageToken, local.nextPageToken))
       throw new Error("conflicting cursor binding");
   }
@@ -431,7 +452,7 @@ export function recordingTimingDebts(capture) {
 
 export async function compareRecording(
   { capture, issued, iam },
-  { replay, frameVerified = () => false } = {},
+  { replay, frameVerified = () => false, fieldNormalization } = {},
 ) {
   const bindings = createBindings(),
     rows = [],
@@ -592,7 +613,7 @@ export async function compareRecording(
           frames,
           dispatch: dispatch[0],
         });
-        judgment = judgeRow(original, actual, { frames, frameVerified });
+        judgment = judgeRow(original, actual, { frames, frameVerified, fieldNormalization });
         if (original.op === "publish" && original.response.status === 200)
           bindings.linkPublish(original.request.body, original.response.body, actual.response.body);
         if (original.op === "pull" && original.response.status === 200)
@@ -608,8 +629,16 @@ export async function compareRecording(
                 frames[i].direction !== actual.frames[i].direction ||
                 frames[i].bodyBytes !== actual.frames[i].bodyBytes ||
                 !isDeepStrictEqual(
-                  normalizeBody(frames[i].body),
-                  normalizeBody(actual.frames[i].body),
+                  normalizeBody(
+                    fieldNormalization
+                      ? fieldNormalization.normalize(frames[i].body, original)
+                      : frames[i].body,
+                  ),
+                  normalizeBody(
+                    fieldNormalization
+                      ? fieldNormalization.normalize(actual.frames[i].body, original)
+                      : actual.frames[i].body,
+                  ),
                 )
               )
                 judgment = result("DIVERGES", "native frame shape or wire length gap");

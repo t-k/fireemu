@@ -415,6 +415,7 @@ pub struct PubSubHandle {
     bridge: Option<Arc<dyn TopicDelivery>>,
     publication_gate: Arc<Mutex<()>>,
     dead_letter_gate: Arc<Mutex<()>>,
+    cursors: Arc<Mutex<fireemu_core_pubsub::pagination::CursorCatalog>>,
     push_dispatch: Arc<Mutex<PushDispatchState>>,
     push_dispatcher: Arc<Mutex<PushDispatcherLifecycle>>,
     dead_letter_dispatcher: Arc<Mutex<DeadLetterDispatcherLifecycle>>,
@@ -439,6 +440,9 @@ impl PubSubHandle {
             bridge,
             publication_gate: Arc::new(Mutex::new(())),
             dead_letter_gate: Arc::new(Mutex::new(())),
+            cursors: Arc::new(Mutex::new(
+                fireemu_core_pubsub::pagination::CursorCatalog::default(),
+            )),
             push_dispatch: Arc::new(Mutex::new(PushDispatchState::default())),
             push_dispatcher: Arc::new(Mutex::new(PushDispatcherLifecycle::default())),
             dead_letter_dispatcher: Arc::new(Mutex::new(DeadLetterDispatcherLifecycle::default())),
@@ -483,6 +487,35 @@ impl PubSubHandle {
                 wire.delivery_attempt = 0;
             }
         }
+        wire
+    }
+
+    pub(crate) fn page<T>(
+        &self,
+        resources: Vec<T>,
+        size: i32,
+        token: &str,
+        name: impl Fn(&T) -> String,
+    ) -> fireemu_core_pubsub::Result<fireemu_core_pubsub::pagination::Page<T>> {
+        if self.profile == PubSubProfile::Emulator {
+            return Ok(fireemu_core_pubsub::pagination::Page {
+                resources,
+                next_page_token: String::new(),
+            });
+        }
+        self.cursors
+            .lock()
+            .expect("cursor catalogue lock")
+            .paginate(resources, size, token, name)
+    }
+
+    pub(crate) fn wire_stream_received(
+        &self,
+        received: &fireemu_core_pubsub::ReceivedMessage,
+        report_attempt: bool,
+    ) -> fireemu_proto_pubsub::google::pubsub::v1::ReceivedMessage {
+        let mut wire = self.wire_received(received, report_attempt);
+        wire.ack_id = ack_token::stream_wire(&received.ack_id, self.profile);
         wire
     }
 

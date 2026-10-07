@@ -18,8 +18,10 @@ pub mod error;
 pub mod filter;
 pub mod message;
 pub mod name;
+pub mod pagination;
 pub mod state;
 pub mod subscription;
+pub mod wire_ack;
 
 pub use error::{Code, PubSubError, Result};
 pub use filter::Filter;

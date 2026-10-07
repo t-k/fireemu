@@ -4,35 +4,39 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 
 const PAYLOAD_BYTES: usize = 147;
+const STREAM_PAYLOAD_BYTES: usize = 142;
 
-fn encode(seed: u64) -> String {
-    let mut bytes = [0u8; PAYLOAD_BYTES];
-    bytes[..8].copy_from_slice(&seed.to_be_bytes());
-    for (index, byte) in bytes[8..].iter_mut().enumerate() {
-        let offset = u64::try_from(index).expect("bounded token payload");
-        let mixed = seed.rotate_left(u32::try_from(index % 64).expect("bounded rotation"))
-            ^ offset.wrapping_mul(0x9e37_79b9_7f4a_7c15);
-        *byte = mixed.to_le_bytes()[index % 8];
-    }
-    URL_SAFE_NO_PAD.encode(bytes)
+fn encode(seed: u64, length: usize) -> String {
+    URL_SAFE_NO_PAD.encode(fireemu_core_pubsub::wire_ack::encode(
+        seed,
+        length == STREAM_PAYLOAD_BYTES,
+    ))
 }
 
 pub(crate) fn wire(id: &str, policy: PubSubProfile) -> String {
+    wire_with_length(id, policy, PAYLOAD_BYTES)
+}
+
+pub(crate) fn stream_wire(id: &str, policy: PubSubProfile) -> String {
+    wire_with_length(id, policy, STREAM_PAYLOAD_BYTES)
+}
+
+fn wire_with_length(id: &str, policy: PubSubProfile, length: usize) -> String {
     if policy == PubSubProfile::Emulator {
         return id.to_owned();
     }
     id.strip_prefix("ack-")
         .and_then(|value| u64::from_str_radix(value, 16).ok())
-        .map_or_else(|| id.to_owned(), encode)
+        .map_or_else(|| id.to_owned(), |seed| encode(seed, length))
 }
 
 pub(crate) fn decode(id: &str) -> Option<String> {
     let bytes = URL_SAFE_NO_PAD.decode(id).ok()?;
-    if bytes.len() != PAYLOAD_BYTES {
+    if ![PAYLOAD_BYTES, STREAM_PAYLOAD_BYTES].contains(&bytes.len()) {
         return None;
     }
-    let seed = u64::from_be_bytes(bytes[..8].try_into().ok()?);
-    (encode(seed) == id).then(|| format!("ack-{seed:016x}"))
+    let seed = fireemu_core_pubsub::wire_ack::decode(&bytes)?;
+    (encode(seed, bytes.len()) == id).then(|| format!("ack-{seed:016x}"))
 }
 
 // Streaming keeps its existing unknown-ID semantics while decoding its own issued IDs.

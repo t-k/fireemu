@@ -102,6 +102,7 @@ impl RestError {
 pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
+    let query = request.uri().query().unwrap_or_default().to_owned();
     let body = match to_bytes(request.into_body(), MAX_JSON_BYTES).await {
         Ok(body) => body,
         Err(error) => {
@@ -125,7 +126,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
         }
     };
 
-    match dispatch(&method, &path, &value, &handle) {
+    match dispatch(&method, &path, &query, &value, &handle) {
         Ok((status, response)) => json_response(
             status,
             strict_response_defaults(response, handle.profile, schema_for(&path)),
@@ -139,6 +140,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
 fn dispatch(
     method: &Method,
     path: &str,
+    query: &str,
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
@@ -152,13 +154,13 @@ fn dispatch(
     }
     let project = parts[1];
     if parts[2] == "topics" {
-        return dispatch_topic(method, &parts[3..], project, body, handle);
+        return dispatch_topic(method, &parts[3..], project, query, body, handle);
     }
     if parts[2] == "subscriptions" {
-        return dispatch_subscription(method, &parts[3..], project, body, handle);
+        return dispatch_subscription(method, &parts[3..], project, query, body, handle);
     }
     if parts[2] == "snapshots" {
-        return dispatch_snapshot(method, &parts[3..], project, body, handle);
+        return dispatch_snapshot(method, &parts[3..], project, query, body, handle);
     }
     Err(RestError::not_found("unknown Pub/Sub REST resource"))
 }
@@ -167,6 +169,7 @@ fn dispatch_topic(
     method: &Method,
     parts: &[&str],
     project: &str,
+    query: &str,
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
@@ -183,7 +186,40 @@ fn dispatch_topic(
                 topic_json(&name, &labels)
             })
             .collect::<Vec<_>>();
-        return Ok((StatusCode::OK, collection_json("topics", topics)));
+        return Ok((
+            StatusCode::OK,
+            paged_collection_json("topics", topics, query, handle)?,
+        ));
+    }
+    if handle.profile == PubSubProfile::Strict
+        && parts.len() == 2
+        && *method == Method::GET
+        && matches!(parts[1], "subscriptions" | "snapshots")
+    {
+        let topic = TopicName::new(project, parts[0]).map_err(RestError::from_core)?;
+        let mut state = handle.state();
+        if !state.topic_exists(&topic) {
+            return Err(RestError::not_found(format!(
+                "Resource not found (resource={}).",
+                parts[0]
+            )));
+        }
+        let names = if parts[1] == "subscriptions" {
+            state.topic_subscriptions(&topic)
+        } else {
+            state
+                .list_topic_snapshots(&topic, handle.now())
+                .map_err(RestError::from_core)?
+        };
+        return Ok((
+            StatusCode::OK,
+            paged_collection_json(
+                parts[1],
+                names.into_iter().map(Value::String).collect(),
+                query,
+                handle,
+            )?,
+        ));
     }
     if parts.len() != 1 {
         return Err(RestError::not_found("invalid topic resource path"));
@@ -238,6 +274,75 @@ fn collection_json(field: &str, resources: Vec<Value>) -> Value {
     Value::Object(response)
 }
 
+fn paged_collection_json(
+    field: &str,
+    resources: Vec<Value>,
+    query: &str,
+    handle: &PubSubHandle,
+) -> Result<Value, RestError> {
+    if handle.profile == PubSubProfile::Emulator {
+        return Ok(collection_json(field, resources));
+    }
+    let mut size = 0;
+    let mut token = String::new();
+    for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let decoded =
+            decode_query(key).and_then(|key| decode_query(value).map(|value| (key, value)));
+        let (key, value) = match decoded {
+            Ok(pair) => pair,
+            Err(_) if handle.profile == PubSubProfile::Emulator => continue,
+            Err(error) => return Err(error),
+        };
+        match key.as_str() {
+            "pageSize" | "page_size" => match value.parse::<i32>() {
+                Ok(parsed) => size = parsed,
+                Err(_) if handle.profile == PubSubProfile::Emulator => {}
+                Err(_) => return Err(RestError::invalid("pageSize must be an integer")),
+            },
+            "pageToken" | "page_token" => token = value,
+            _ => {}
+        }
+    }
+    let page = handle
+        .page(resources, size, &token, |resource| {
+            resource
+                .as_str()
+                .or_else(|| resource.get("name").and_then(Value::as_str))
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .map_err(RestError::from_core)?;
+    let mut response = collection_json(field, page.resources);
+    if !page.next_page_token.is_empty() {
+        response.as_object_mut().expect("collection object").insert(
+            "nextPageToken".to_owned(),
+            Value::String(page.next_page_token),
+        );
+    }
+    Ok(response)
+}
+
+fn decode_query(value: &str) -> Result<String, RestError> {
+    let mut decoded = Vec::with_capacity(value.len());
+    let mut bytes = value.bytes();
+    while let Some(byte) = bytes.next() {
+        decoded.push(match byte {
+            b'+' => b' ',
+            b'%' => {
+                let high = bytes.next().and_then(|b| char::from(b).to_digit(16));
+                let low = bytes.next().and_then(|b| char::from(b).to_digit(16));
+                let (Some(high), Some(low)) = (high, low) else {
+                    return Err(RestError::invalid("invalid percent encoding in query"));
+                };
+                u8::try_from(high * 16 + low).expect("decoded byte")
+            }
+            other => other,
+        });
+    }
+    String::from_utf8(decoded).map_err(|_| RestError::invalid("query must be UTF-8"))
+}
+
 fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), RestError> {
     let topic_body = field(body, "topic").unwrap_or(body);
     let topic_options = topic_from_json(topic, topic_body)?;
@@ -262,6 +367,7 @@ fn dispatch_subscription(
     method: &Method,
     parts: &[&str],
     project: &str,
+    query: &str,
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
@@ -277,7 +383,7 @@ fn dispatch_subscription(
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
-            collection_json("subscriptions", subscriptions),
+            paged_collection_json("subscriptions", subscriptions, query, handle)?,
         ));
     }
     if parts.len() != 1 {
@@ -314,6 +420,7 @@ fn dispatch_snapshot(
     method: &Method,
     parts: &[&str],
     project: &str,
+    query: &str,
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
@@ -329,7 +436,11 @@ fn dispatch_snapshot(
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
-            json!({"snapshots": snapshots, "nextPageToken": ""}),
+            if handle.profile == PubSubProfile::Strict {
+                paged_collection_json("snapshots", snapshots, query, handle)?
+            } else {
+                json!({"snapshots": snapshots, "nextPageToken": ""})
+            },
         ));
     }
     if parts.len() != 1 {

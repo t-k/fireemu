@@ -211,9 +211,15 @@ impl Subscriber for SubscriberService {
                 subscription_to_proto_for_profile(c, &reported, self.handle.profile)
             })
             .collect();
+        let page = self
+            .handle
+            .page(subscriptions, req.page_size, &req.page_token, |s| {
+                s.name.clone()
+            })
+            .map_err(|e| status(&e))?;
         Ok(Response::new(pb::ListSubscriptionsResponse {
-            subscriptions,
-            next_page_token: String::new(),
+            subscriptions: page.resources,
+            next_page_token: page.next_page_token,
         }))
     }
 
@@ -371,7 +377,7 @@ impl Subscriber for SubscriberService {
                         match pulled {
                             Ok(msgs) if !msgs.is_empty() => {
                                 let resp = pb::StreamingPullResponse {
-                                    received_messages: msgs.iter().map(|r| handle.wire_received(r, report_attempt)).collect(),
+                                    received_messages: msgs.iter().map(|r| handle.wire_stream_received(r, report_attempt)).collect(),
                                     subscription_properties,
                                     ..pb::StreamingPullResponse::default()
                                 };
@@ -445,9 +451,15 @@ impl Subscriber for SubscriberService {
             .iter()
             .map(snapshot_to_proto)
             .collect();
+        let page = self
+            .handle
+            .page(snapshots, req.page_size, &req.page_token, |s| {
+                s.name.clone()
+            })
+            .map_err(|e| status(&e))?;
         Ok(Response::new(pb::ListSnapshotsResponse {
-            snapshots,
-            next_page_token: String::new(),
+            snapshots: page.resources,
+            next_page_token: page.next_page_token,
         }))
     }
 

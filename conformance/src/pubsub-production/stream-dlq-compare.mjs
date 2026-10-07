@@ -13,6 +13,7 @@ import { createRest } from "./rest.mjs";
 import { createCapture, createBudget } from "./capture.mjs";
 import {
   compareRecording,
+  createFieldNormalization,
   recordingTimingDebts,
   recordedRequestInstant,
   recordedSilenceProbe,
@@ -130,6 +131,8 @@ function options(argv) {
     "iam-sha256",
     "build-pin",
     "out",
+    "peer-capture",
+    "peer-capture-sha256",
   ]);
   const parsed = {};
   for (let i = 0; i < argv.length; i += 2) {
@@ -140,8 +143,10 @@ function options(argv) {
       );
     parsed[key] = argv[i + 1];
   }
-  if ([...allowed].some((key) => !parsed[key]))
+  if ([...allowed].filter((key) => !key.startsWith("peer-")).some((key) => !parsed[key]))
     throw new Error("all comparison inputs and pins are required");
+  if (Boolean(parsed["peer-capture"]) !== Boolean(parsed["peer-capture-sha256"]))
+    throw new Error("peer capture path and SHA256 required together");
   return parsed;
 }
 function inputs(opts) {
@@ -306,6 +311,7 @@ export async function replayLocal(input, environment, pin) {
   try {
     await advance({ at: input.metadata.at, ms: 0 });
     const report = await compareRecording(input, {
+      fieldNormalization: input.fieldNormalization,
       frameVerified: (frame) => input.verifiedFrames.has(frame),
       async replay(original, request, { bindings, frames, dispatch }) {
         if (original.op === "streamingPull") validateStreamFrames(original, frames);
@@ -425,6 +431,15 @@ export async function main(argv = process.argv.slice(2), environment = process.e
   const worker = launch !== null;
   const opts = options(argv);
   const input = inputs(opts);
+  if (opts["peer-capture"]) {
+    const peer = readPinnedJsonl(opts["peer-capture"], opts["peer-capture-sha256"]);
+    if (recordingTimingDebts(peer).length || peer.filter((r) => r.note === "run-end").length !== 1)
+      throw new Error("closed peer recording required");
+    const verified = verifyFrames(peer, opts["peer-capture"]);
+    if (peer.some((r) => r.note === "stream-frame" && !verified.has(r)))
+      throw new Error("peer native raw provenance missing");
+    input.fieldNormalization = createFieldNormalization(input.capture, peer);
+  }
   const pin = JSON.parse(readFileSync(opts["build-pin"], "utf8"));
   // Pin validation happens before starting a server as well as inside its child.
   validateRuntime(pin, {
@@ -466,7 +481,9 @@ export async function main(argv = process.argv.slice(2), environment = process.e
       capture: opts["capture-sha256"],
       issued: opts["issued-sha256"],
       iam: opts["iam-sha256"],
+      ...(opts["peer-capture"] ? { peerCapture: opts["peer-capture-sha256"] } : {}),
     };
+    report.fieldNormalization = input.fieldNormalization?.evidence ?? [];
     report.build = {
       head: pin.head,
       sha256: pin.sha256,

@@ -1050,11 +1050,11 @@ impl PubSubState {
         now: LogicalInstant,
     ) -> Result<PreparedPublication> {
         let topic_key = topic.to_full();
-        let topic_incarnation = self
-            .topics
-            .get(&topic_key)
-            .ok_or_else(|| PubSubError::not_found(format!("topic {topic_key} not found")))?
-            .incarnation;
+        if !self.topics.contains_key(&topic_key) {
+            return Err(PubSubError::not_found(format!(
+                "topic {topic_key} not found"
+            )));
+        }
         if messages.len() > MAX_MESSAGES_PER_PUBLISH {
             return Err(PubSubError::invalid_argument(format!(
                 "a publish request carries at most {MAX_MESSAGES_PER_PUBLISH} messages"
@@ -1063,6 +1063,51 @@ impl PubSubState {
         for message in &messages {
             message.validate()?;
         }
+        self.prepare_validated_publication(topic, messages, now)
+    }
+
+    /// Prepares a strict dead-letter envelope from an admitted source message.
+    /// Broker attribution does not consume the publisher's input limits; destination retention
+    /// and snapshot admission still account for the complete forwarded envelope.
+    pub fn prepare_dead_letter_publish(
+        &mut self,
+        forward: &DeadLetterForward,
+        now: LogicalInstant,
+    ) -> Result<PreparedPublication> {
+        let retained = self
+            .subscriptions
+            .get(&forward.source_subscription.to_full())
+            .is_some_and(|subscription| {
+                subscription
+                    .pending_forwards()
+                    .iter()
+                    .any(|message| Arc::ptr_eq(message, &forward.message))
+            });
+        if !retained {
+            return Err(PubSubError::failed_precondition(
+                "dead-letter source message is no longer pending",
+            ));
+        }
+        let message = crate::dead_letter::forwarded_message(
+            &forward.message,
+            &forward.source_subscription,
+            forward.source_delivery_count,
+        )?;
+        self.prepare_validated_publication(&forward.dead_letter_topic, vec![message], now)
+    }
+
+    fn prepare_validated_publication(
+        &mut self,
+        topic: &TopicName,
+        messages: Vec<PubsubMessage>,
+        now: LogicalInstant,
+    ) -> Result<PreparedPublication> {
+        let topic_key = topic.to_full();
+        let topic_incarnation = self
+            .topics
+            .get(&topic_key)
+            .ok_or_else(|| PubSubError::not_found(format!("topic {topic_key} not found")))?
+            .incarnation;
         self.remove_expired_snapshots(now);
 
         let initial_message_counter = self.message_counter;
@@ -1953,6 +1998,10 @@ mod tests {
         assert_eq!(pending.len(), 1);
         let forward = &pending[0];
         assert_eq!(forward.source_delivery_count, MIN_DEAD_LETTER_ATTEMPTS);
+        let mut forged = forward.clone();
+        forged.message = Arc::new((*forward.message).clone());
+        assert!(state.prepare_dead_letter_publish(&forged, now).is_err());
+        assert!(state.prepare_dead_letter_publish(forward, now).is_ok());
         state
             .publish(
                 &forward.dead_letter_topic,
@@ -1963,6 +2012,7 @@ mod tests {
         assert!(state
             .complete_dead_letter(&forward.source_subscription, &forward.message.message_id)
             .unwrap());
+        assert!(state.prepare_dead_letter_publish(forward, now).is_err());
         assert!(state.pending_dead_letters().is_empty());
         let dead = state.pull(&dead_sub, 10, now).unwrap();
         assert_eq!(dead.len(), 1);

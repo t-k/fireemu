@@ -1222,37 +1222,69 @@ async fn strict_list_resource_defaults_use_the_recorded_empty_label_omission() {
     }
 }
 
+async fn forwarding_resources(server: &Server) -> (String, String, String) {
+    let project = "demo-oracle-masks0";
+    let source_topic = format!("projects/{project}/topics/source-topic");
+    let sink_topic = format!("projects/{project}/topics/sink-topic");
+    let source = format!("projects/{project}/subscriptions/source-sub");
+    let sink = format!("projects/{project}/subscriptions/sink-sub");
+    for topic in [&source_topic, &sink_topic] {
+        assert_eq!(
+            server
+                .rest("PUT", &format!("/v1/{topic}"), json!({}))
+                .await
+                .0,
+            200
+        );
+    }
+    for (name, body) in [
+        (
+            &source,
+            json!({"topic":source_topic,"ackDeadlineSeconds":10,"deadLetterPolicy":{"deadLetterTopic":sink_topic,"maxDeliveryAttempts":5}}),
+        ),
+        (&sink, json!({"topic":sink_topic,"ackDeadlineSeconds":10})),
+    ] {
+        assert_eq!(
+            server.rest("PUT", &format!("/v1/{name}"), body).await.0,
+            200
+        );
+    }
+    (source_topic, source, sink)
+}
+
+async fn nack_five_deliveries_over_rest(server: &Server, source: &str) {
+    for _ in 0..5 {
+        let (status, bytes) = server
+            .rest(
+                "POST",
+                &format!("/v1/{source}:pull"),
+                json!({"maxMessages":1,"returnImmediately":true}),
+            )
+            .await;
+        assert_eq!(status, 200);
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        let ack = body["receivedMessages"][0]["ackId"].as_str().unwrap();
+        assert_eq!(
+            server
+                .rest(
+                    "POST",
+                    &format!("/v1/{source}:modifyAckDeadline"),
+                    json!({"ackIds":[ack],"ackDeadlineSeconds":0})
+                )
+                .await
+                .0,
+            200
+        );
+    }
+}
+
 #[tokio::test]
 async fn forwarded_identity_attributes_follow_the_recorded_strict_shape_only() {
     // The paired sink receipts are run1/run2 n114; values remain causal, not fixture literals.
     for profile in [PubSubProfile::Strict, PubSubProfile::Emulator] {
         let server = Server::new(profile).await;
         let project = "demo-oracle-masks0";
-        let source_topic = format!("projects/{project}/topics/source-topic");
-        let sink_topic = format!("projects/{project}/topics/sink-topic");
-        let source = format!("projects/{project}/subscriptions/source-sub");
-        let sink = format!("projects/{project}/subscriptions/sink-sub");
-        for topic in [&source_topic, &sink_topic] {
-            assert_eq!(
-                server
-                    .rest("PUT", &format!("/v1/{topic}"), json!({}))
-                    .await
-                    .0,
-                200
-            );
-        }
-        for (name, body) in [
-            (
-                &source,
-                json!({"topic":source_topic,"ackDeadlineSeconds":10,"deadLetterPolicy":{"deadLetterTopic":sink_topic,"maxDeliveryAttempts":5}}),
-            ),
-            (&sink, json!({"topic":sink_topic,"ackDeadlineSeconds":10})),
-        ] {
-            assert_eq!(
-                server.rest("PUT", &format!("/v1/{name}"), body).await.0,
-                200
-            );
-        }
+        let (source_topic, source, sink) = forwarding_resources(&server).await;
         let original_attributes = json!({"recorderRun":"000000000001","user":"keep"});
         let (status, published) = server
             .rest(
@@ -1263,29 +1295,7 @@ async fn forwarded_identity_attributes_follow_the_recorded_strict_shape_only() {
             .await;
         assert_eq!(status, 200);
         let published: Value = serde_json::from_slice(&published).unwrap();
-        for _ in 0..5 {
-            let (status, bytes) = server
-                .rest(
-                    "POST",
-                    &format!("/v1/{source}:pull"),
-                    json!({"maxMessages":1,"returnImmediately":true}),
-                )
-                .await;
-            assert_eq!(status, 200);
-            let body: Value = serde_json::from_slice(&bytes).unwrap();
-            let ack = body["receivedMessages"][0]["ackId"].as_str().unwrap();
-            assert_eq!(
-                server
-                    .rest(
-                        "POST",
-                        &format!("/v1/{source}:modifyAckDeadline"),
-                        json!({"ackIds":[ack],"ackDeadlineSeconds":0})
-                    )
-                    .await
-                    .0,
-                200
-            );
-        }
+        nack_five_deliveries_over_rest(&server, &source).await;
         // This triggers the existing local transfer decision; no production timing claim.
         assert_eq!(
             server
@@ -1432,4 +1442,380 @@ fn paired_recorded_sink_bodies_replay_through_the_forward_metadata_generator() {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
     }
+}
+
+#[tokio::test]
+async fn valid_publish_boundaries_forward_without_loosening_public_admission() {
+    use fireemu_core_pubsub::message::{MAX_ATTRIBUTES, MAX_DATA_BYTES};
+    use fireemu_core_pubsub::{PubsubMessage, SubscriptionName, TopicName};
+    for profile in [PubSubProfile::Strict, PubSubProfile::Emulator] {
+        for attribute_boundary in [true, false] {
+            let server = Server::new(profile).await;
+            let (topic, source, sink) = forwarding_resources(&server).await;
+            let message = PubsubMessage {
+                data: if attribute_boundary {
+                    b"valid".to_vec()
+                } else {
+                    vec![b'x'; MAX_DATA_BYTES]
+                },
+                attributes: if attribute_boundary {
+                    (0..MAX_ATTRIBUTES)
+                        .map(|i| (format!("user{i}"), "value".to_owned()))
+                        .collect()
+                } else {
+                    std::collections::BTreeMap::default()
+                },
+                ..Default::default()
+            };
+            assert!(message.validate().is_ok());
+            let published = server
+                .handle
+                .publish(&TopicName::parse(&topic).unwrap(), vec![message.clone()])
+                .unwrap();
+            let source_name = SubscriptionName::parse(&source).unwrap();
+            for _ in 0..5 {
+                let pulled = server.handle.pull(&source_name, 1).unwrap();
+                assert_eq!(pulled.len(), 1);
+                assert_eq!(
+                    server
+                        .rest(
+                            "POST",
+                            &format!("/v1/{source}:modifyAckDeadline"),
+                            json!({"ackIds":[pulled[0].ack_id],"ackDeadlineSeconds":0})
+                        )
+                        .await
+                        .0,
+                    200
+                );
+            }
+            assert!(server.handle.pull(&source_name, 1).unwrap().is_empty());
+            let delivered = server
+                .handle
+                .pull(&SubscriptionName::parse(&sink).unwrap(), 1)
+                .unwrap();
+            assert_eq!(delivered.len(), 1);
+            let forwarded = &delivered[0].message;
+            assert_eq!(forwarded.message.data, message.data);
+            assert_ne!(forwarded.message_id, published[0].message_id);
+            for (key, value) in &message.attributes {
+                assert_eq!(forwarded.message.attributes[key], *value);
+            }
+            if profile == PubSubProfile::Strict {
+                assert_eq!(
+                    forwarded.message.attributes.len(),
+                    message.attributes.len() + 4
+                );
+                assert!(forwarded.message.validate().is_err());
+                assert!(server
+                    .handle
+                    .publish(
+                        &TopicName::parse(&topic).unwrap(),
+                        vec![forwarded.message.clone()]
+                    )
+                    .is_err());
+            } else {
+                assert_eq!(forwarded.message.attributes, message.attributes);
+            }
+            // ACK invokes the normal pending-transfer retry path; it must not duplicate the transfer.
+            assert_eq!(
+                server
+                    .rest(
+                        "POST",
+                        &format!("/v1/{sink}:acknowledge"),
+                        json!({"ackIds":[delivered[0].ack_id]})
+                    )
+                    .await
+                    .0,
+                200
+            );
+            assert!(server.handle.pull(&source_name, 1).unwrap().is_empty());
+            assert!(server
+                .handle
+                .pull(&SubscriptionName::parse(&sink).unwrap(), 1)
+                .unwrap()
+                .is_empty());
+        }
+    }
+}
+
+fn compact_alias(ack: &str, profile: PubSubProfile) -> String {
+    use base64::Engine as _;
+    let seed = if profile == PubSubProfile::Strict {
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(ack)
+            .unwrap();
+        u64::from_be_bytes(bytes[..8].try_into().unwrap())
+    } else {
+        u64::from_str_radix(ack.strip_prefix("ack-").unwrap(), 16).unwrap()
+    };
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(fireemu_core_pubsub::wire_ack::encode_compact_unary(seed))
+}
+
+async fn control_ack(server: &Server, native: bool, operation: &str, ack: &str, seconds: i32) {
+    if native {
+        let mut client = SubscriberClient::new(server.channel().await);
+        if operation == "acknowledge" {
+            client
+                .acknowledge(pb::AcknowledgeRequest {
+                    subscription: SUB.into(),
+                    ack_ids: vec![ack.into()],
+                })
+                .await
+                .unwrap();
+        } else {
+            client
+                .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                    subscription: SUB.into(),
+                    ack_ids: vec![ack.into()],
+                    ack_deadline_seconds: seconds,
+                })
+                .await
+                .unwrap();
+        }
+    } else {
+        let body = if operation == "acknowledge" {
+            json!({"ackIds":[ack]})
+        } else {
+            json!({"ackIds":[ack],"ackDeadlineSeconds":seconds})
+        };
+        assert_eq!(
+            server
+                .rest("POST", &format!("/v1/{SUB}:{operation}"), body)
+                .await
+                .0,
+            200
+        );
+    }
+}
+
+#[tokio::test]
+async fn compact_ack_controls_follow_causal_rest_native_effects_and_emulator_control() {
+    use base64::Engine as _;
+    use fireemu_core_pubsub::{PubsubMessage, SubscriptionName, TopicName};
+    for profile in [PubSubProfile::Strict, PubSubProfile::Emulator] {
+        for native in [false, true] {
+            let server = Server::new(profile).await;
+            resources(&server).await;
+            server
+                .handle
+                .publish(
+                    &TopicName::parse(TOPIC).unwrap(),
+                    vec![PubsubMessage {
+                        data: b"causal".to_vec(),
+                        ..Default::default()
+                    }],
+                )
+                .unwrap();
+            let sub = SubscriptionName::parse(SUB).unwrap();
+            let first = server.handle.pull(&sub, 1).unwrap();
+            let seed =
+                u64::from_str_radix(first[0].ack_id.strip_prefix("ack-").unwrap(), 16).unwrap();
+            let compact = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(fireemu_core_pubsub::wire_ack::encode_compact_unary(seed));
+            let mut altered = compact.clone().into_bytes();
+            altered[12] = if altered[12] == b'A' { b'B' } else { b'A' };
+            for invalid in [
+                String::from_utf8(altered).unwrap(),
+                compact[..compact.len() - 1].to_owned(),
+            ] {
+                control_ack(&server, native, "acknowledge", &invalid, 0).await;
+            }
+            let compact = if profile == PubSubProfile::Strict {
+                control_ack(&server, native, "modifyAckDeadline", &compact, 0).await;
+                let still_owned = server.handle.pull(&sub, 1).unwrap();
+                assert_eq!(still_owned.len(), 1);
+                assert_eq!(
+                    still_owned[0].message.message_id,
+                    first[0].message.message_id
+                );
+                compact_alias(&still_owned[0].ack_id, PubSubProfile::Emulator)
+            } else {
+                compact
+            };
+            control_ack(&server, native, "modifyAckDeadline", &compact, 60).await;
+            server
+                .clock
+                .lock()
+                .unwrap()
+                .advance(LogicalDuration::from_seconds(11))
+                .unwrap();
+            let replayed = server.handle.pull(&sub, 1).unwrap();
+            if profile == PubSubProfile::Strict {
+                assert!(replayed.is_empty());
+                control_ack(&server, !native, "acknowledge", &compact, 0).await;
+                server
+                    .clock
+                    .lock()
+                    .unwrap()
+                    .advance(LogicalDuration::from_seconds(60))
+                    .unwrap();
+                assert!(server.handle.pull(&sub, 1).unwrap().is_empty());
+            } else {
+                assert_eq!(replayed.len(), 1);
+                assert_eq!(replayed[0].message.message.data, b"causal");
+                control_ack(&server, !native, "acknowledge", &replayed[0].ack_id, 0).await;
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn compact_stream_deadline_control_redelivers_the_bound_message() {
+    let server = Server::new(PubSubProfile::Strict).await;
+    resources(&server).await;
+    PublisherClient::new(server.channel().await)
+        .publish(pb::PublishRequest {
+            topic: TOPIC.into(),
+            messages: vec![pb::PubsubMessage {
+                data: b"stream-causal".to_vec(),
+                ..Default::default()
+            }],
+        })
+        .await
+        .unwrap();
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    tx.send(pb::StreamingPullRequest {
+        subscription: SUB.into(),
+        stream_ack_deadline_seconds: 10,
+        max_outstanding_messages: 1,
+        max_outstanding_bytes: 1024,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let mut client = SubscriberClient::new(server.channel().await);
+    let mut stream = client
+        .streaming_pull(tokio_stream::wrappers::ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    let first = tokio::time::timeout(Duration::from_secs(2), stream.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let original = &first.received_messages[0];
+    assert_eq!(original.ack_id.len(), 190);
+    let alias = compact_alias(&original.ack_id, PubSubProfile::Strict);
+    assert_eq!(alias.len(), 195);
+    tx.send(pb::StreamingPullRequest {
+        modify_deadline_ack_ids: vec![alias],
+        modify_deadline_seconds: vec![0],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let second = tokio::time::timeout(Duration::from_secs(2), stream.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let repeated = &second.received_messages[0];
+    assert_eq!(repeated.message, original.message);
+    assert_ne!(repeated.ack_id, original.ack_id);
+    let fresh = compact_alias(&repeated.ack_id, PubSubProfile::Strict);
+    control_ack(&server, true, "acknowledge", &fresh, 0).await;
+    drop(tx);
+    drop(stream);
+    server
+        .clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_seconds(11))
+        .unwrap();
+    assert!(server
+        .handle
+        .pull(
+            &fireemu_core_pubsub::SubscriptionName::parse(SUB).unwrap(),
+            1
+        )
+        .unwrap()
+        .is_empty());
+}
+
+fn exhaust_by_deadline(server: &Server, subscription: &str) {
+    let name = fireemu_core_pubsub::SubscriptionName::parse(subscription).unwrap();
+    for _ in 0..5 {
+        assert_eq!(server.handle.pull(&name, 1).unwrap().len(), 1);
+        server
+            .clock
+            .lock()
+            .unwrap()
+            .advance(LogicalDuration::from_seconds(11))
+            .unwrap();
+    }
+    assert!(server.handle.pull(&name, 1).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn attributed_boundary_message_can_forward_again_from_its_retained_source() {
+    use fireemu_core_pubsub::{PubsubMessage, SubscriptionName, TopicName};
+    let server = Server::new(PubSubProfile::Strict).await;
+    let (topic, source, sink) = forwarding_resources(&server).await;
+    let final_topic = "projects/demo-oracle-masks0/topics/final-topic";
+    let final_sub = "projects/demo-oracle-masks0/subscriptions/final-sub";
+    assert_eq!(
+        server
+            .rest("PUT", &format!("/v1/{final_topic}"), json!({}))
+            .await
+            .0,
+        200
+    );
+    assert_eq!(
+        server
+            .rest(
+                "PUT",
+                &format!("/v1/{final_sub}"),
+                json!({"topic":final_topic,"ackDeadlineSeconds":10})
+            )
+            .await
+            .0,
+        200
+    );
+    assert_eq!(
+        server
+            .rest("DELETE", &format!("/v1/{sink}"), json!({}))
+            .await
+            .0,
+        200
+    );
+    assert_eq!(server.rest("PUT",&format!("/v1/{sink}"),json!({"topic":"projects/demo-oracle-masks0/topics/sink-topic","ackDeadlineSeconds":10,"deadLetterPolicy":{"deadLetterTopic":final_topic,"maxDeliveryAttempts":5}})).await.0,200);
+    let original = PubsubMessage {
+        data: b"twice".to_vec(),
+        attributes: (0..100)
+            .map(|i| (format!("user{i}"), "keep".into()))
+            .collect(),
+        ..Default::default()
+    };
+    assert!(original.validate().is_ok());
+    server
+        .handle
+        .publish(&TopicName::parse(&topic).unwrap(), vec![original.clone()])
+        .unwrap();
+    exhaust_by_deadline(&server, &source);
+    exhaust_by_deadline(&server, &sink);
+    let final_name = SubscriptionName::parse(final_sub).unwrap();
+    let delivered = server.handle.pull(&final_name, 1).unwrap();
+    assert_eq!(delivered.len(), 1);
+    let message = &delivered[0].message.message;
+    assert_eq!(message.data, original.data);
+    assert_eq!(message.attributes.len(), 104);
+    for (key, value) in &original.attributes {
+        assert_eq!(message.attributes[key], *value);
+    }
+    assert_eq!(
+        message.attributes["CloudPubSubDeadLetterSourceSubscription"],
+        "sink-sub"
+    );
+    assert!(server
+        .handle
+        .pull(&SubscriptionName::parse(&source).unwrap(), 1)
+        .unwrap()
+        .is_empty());
+    assert!(server
+        .handle
+        .pull(&SubscriptionName::parse(&sink).unwrap(), 1)
+        .unwrap()
+        .is_empty());
 }

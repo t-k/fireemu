@@ -35,7 +35,7 @@
     "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-local-shadow-v3.json": "937e70181230f449003de66facd0bec82387f8832df0ac367a83d23a9e518a33",
     "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-manifest-v4.json": "0b4e5370f57d4c84fb68de0ac2ba01602c1594de3d54898550d1310323d5d070",
     "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-manifest-v5.json": "3b95ef9e1ff7992684285ce562a6bda4a9ba3177d6a325c9d846a7eb5e8e3375",
-    "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json": "f1cac3843aa4f5856899244b6a563cbb6b5c02fe8f02277a2b7508b1b32aa55a",
+    "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json": "67072839b2027bc245da0dc874e8723a6ac587f59bc12a140ed36149f4b06046",
     "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json": "c0d0c19fb7f06c0047f60a921aaf50ea51b58ddb77fea0d80b93fad5f550b84c",
     "spec/compatibility/broad-runs/fs-transaction-p01-recorded-comparison-v1.json": "c7649a0297f333e522d499965fe281ae7a62bdd8e632b03f6a75c2a22a285cca",
     "spec/compatibility/broad-runs/fs-transaction-p01-recorded-observations-v1.json": "b700b5b4f5cc11e8972e964d066ec1df73318a5e068d60d3a05b087824e32f0d",

@@ -149,6 +149,21 @@ test("unknown 418 and unknown flags never become MATCH", () => {
     assert.equal(result(f, f).cells.find((c) => c.id === "R3").verdict, "NOT_COMPARABLE");
   }
 });
+test("successful UpdateSubscription missing or foreign identity remains unknown", () => {
+  const name = "projects/p/subscriptions/own";
+  for (const body of [{}, { name: "projects/p/subscriptions/foreign" }, { name }]) {
+    const f = fixture("UpdateSubscription");
+    f.rows[1].request = { subscription: { name, labels: { env: "probe" } }, updateMask: "labels" };
+    f.rows[2].reply.body = body;
+    const p = prepared(f),
+      row = p.cells.find((c) => c.id === "R3").exchanges[0];
+    assert.equal(row.response.unknown, body.name !== name);
+    assert.equal(
+      result(f, f).cells.find((c) => c.id === "R3").verdict,
+      body.name === name ? "MATCH" : "NOT_COMPARABLE",
+    );
+  }
+});
 test("different requests and routeName cannot be paired by position", () => {
   for (const update of [
     (f) => (f.rows[1].routeName = "projects/p/topics/other"),

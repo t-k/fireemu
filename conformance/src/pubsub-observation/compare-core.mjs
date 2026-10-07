@@ -107,6 +107,14 @@ export function prepareObservation(input) {
       if (!Number.isFinite(row.durationMs) || row.durationMs < 0)
         throw new Error("invalid duration");
       answered.add(row.requestId);
+      const response = normalizeOutcome(row.reply);
+      if (
+        row.method === "UpdateSubscription" &&
+        response.ok === true &&
+        (typeof dispatch.request.subscription?.name !== "string" ||
+          response.body?.name !== dispatch.request.subscription.name)
+      )
+        response.unknown = true;
       cell.exchanges.push({
         n: row.n,
         dispatchN: dispatch.n,
@@ -121,7 +129,7 @@ export function prepareObservation(input) {
           body: dispatch.request,
           ...(dispatch.routeName ? { routeName: dispatch.routeName } : {}),
         },
-        response: normalizeOutcome(row.reply),
+        response,
       });
     } else if (row.event === "case-result") {
       if (!cell || cell.result) throw new Error("duplicate case result");

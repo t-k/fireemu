@@ -1339,6 +1339,10 @@ test("REST cancellation uses the absolute remaining deadline after durable persi
       );
     },
   });
+  context.after(() => {
+    wire.abortSource();
+    wire.close();
+  });
   const pending = wire.call({
     category: "get",
     transport: "rest",
@@ -1351,9 +1355,65 @@ test("REST cancellation uses the absolute remaining deadline after durable persi
   assert.equal(aborted, false);
   clock += 25000;
   context.mock.timers.tick(1);
-  const reply = await pending;
   assert.equal(aborted, true);
+  const reply = await pending;
   assert.equal(reply.unknown, true);
   assert.equal(reply.durationMs, 30000);
   wire.close();
+});
+
+test("stream dispatch persistence clips the effective window within the original cell", async () => {
+  let clock = 0;
+  const meter = createMeter({ now: () => clock });
+  meter.enter(makePlan().cells[0]);
+  const rpc = new EventEmitter();
+  rpc.write = () => true;
+  rpc.cancel = () => {};
+  rpc.end = () => {};
+  const stream = await openStream({
+    meter,
+    credential: async () => "fake",
+    client: { makeBidiStreamRequest: () => rpc },
+    journal: {
+      write(row) {
+        if (row.event === "stream-dispatch") clock += 100000;
+      },
+      frame() {},
+    },
+    cellId: "S01",
+    opener: {},
+  });
+  try {
+    assert.equal(stream.state().windowMs, 39999);
+    assert.equal(stream.state().preDispatchMs, 100000);
+    assert.equal(stream.state().incomplete, true);
+  } finally {
+    stream.dispose();
+  }
+});
+
+test("intentional local cancellation is distinct from unrelated uncertain transport statuses", async () => {
+  for (const code of [1, 2, 4, 13, 14, 15]) {
+    const meter = createMeter({ now: () => 0 });
+    meter.enter(makePlan().cells[0]);
+    const rpc = new EventEmitter();
+    rpc.write = () => true;
+    rpc.cancel = () => {};
+    rpc.end = () => {};
+    const stream = await openStream({
+      meter,
+      credential: async () => "fake",
+      client: { makeBidiStreamRequest: () => rpc },
+      journal: { write() {}, frame() {} },
+      cellId: "S01",
+      opener: {},
+    });
+    try {
+      stream.cancel("unacked-owned-delivery");
+      rpc.emit("status", { code });
+      assert.equal(stream.state().incomplete, code !== 1);
+    } finally {
+      stream.dispose();
+    }
+  }
 });

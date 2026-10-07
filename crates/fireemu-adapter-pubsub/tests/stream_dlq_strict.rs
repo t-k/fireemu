@@ -1164,3 +1164,48 @@ async fn strict_deleted_issued_cursor_continues_across_transport_and_empty_snaps
     assert_eq!(status, 200);
     assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), json!({}));
 }
+
+#[tokio::test]
+async fn strict_list_resource_defaults_use_the_recorded_empty_label_omission() {
+    for profile in [PubSubProfile::Strict, PubSubProfile::Emulator] {
+        let server = Server::new(profile).await;
+        pagination_resources(&server).await;
+        for (kind, member) in [("topics", "topics"), ("snapshots", "snapshots")] {
+            let (status, bytes) = server
+                .rest(
+                    "GET",
+                    &format!("/v1/projects/demo-paging/{kind}?pageSize=1"),
+                    json!({}),
+                )
+                .await;
+            assert_eq!(status, 200);
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            let first = &body[member][0];
+            if profile == PubSubProfile::Strict {
+                assert!(first.get("labels").is_none(), "{kind}");
+            } else {
+                assert_eq!(first["labels"], json!({}));
+            }
+        }
+        server
+            .rest(
+                "PUT",
+                "/v1/projects/demo-paging/topics/labelled",
+                json!({"labels":{"label":"value"}}),
+            )
+            .await;
+        let (_, bytes) = server
+            .rest("GET", "/v1/projects/demo-paging/topics", json!({}))
+            .await;
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            body["topics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == "projects/demo-paging/topics/labelled")
+                .unwrap()["labels"],
+            json!({"label":"value"})
+        );
+    }
+}

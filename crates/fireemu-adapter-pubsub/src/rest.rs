@@ -1406,6 +1406,19 @@ fn schema_for(path: &str) -> Schema {
 
 fn strict_response_defaults(mut value: Value, profile: PubSubProfile, schema: Schema) -> Value {
     if profile == PubSubProfile::Strict {
+        let collection = match schema {
+            Schema::Topics => Some(("topics", Schema::Topic)),
+            Schema::Snapshots => Some(("snapshots", Schema::Snapshot)),
+            _ => None,
+        };
+        if let Some((field, child_schema)) = collection {
+            if let Some(resources) = value.get_mut(field).and_then(Value::as_array_mut) {
+                for resource in resources {
+                    *resource =
+                        strict_response_defaults(std::mem::take(resource), profile, child_schema);
+                }
+            }
+        }
         if matches!(schema, Schema::Topic | Schema::Snapshot)
             && value
                 .get("labels")

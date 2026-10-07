@@ -87,25 +87,110 @@ const hostOf = (authority) => new URL(`https://${authority.replace(/^https?:\/\/
  * Routes `fetch` and every HTTP/2 session through `ledger` for the life of the process. Returns a
  * function that restores both. A refused request throws before anything is sent.
  */
-export function installWireGuard(ledger, { fetchImpl = globalThis.fetch } = {}) {
+export function installWireGuard(
+  ledger,
+  { fetchImpl = globalThis.fetch, onTransaction, decodeGrpc } = {},
+) {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init = {}) => {
     const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
     const requestHeaders = input instanceof Request ? input.headers : undefined;
     const headers = new Headers(init.headers ?? requestHeaders ?? {});
-    ledger.admit(url.hostname, url.pathname, headers.get("authorization"));
-    return fetchImpl(input, init);
+    const record = ledger.admit(url.hostname, url.pathname, headers.get("authorization"));
+    const method = transactionMethod(url.pathname);
+    const response = await fetchImpl(input, init);
+    if (onTransaction && method) {
+      try {
+        const requestBody =
+          init.body ?? (input instanceof Request ? await input.clone().text() : undefined);
+        const body = await boundedResponse(response.clone());
+        onTransaction({
+          n: record.n,
+          ...transactionWireEvidence(method, requestBody, body, response.status),
+        });
+      } catch {
+        onTransaction({ n: record.n, method, complete: false, reason: "capture-failed" });
+      }
+    }
+    return response;
   };
   const originalConnect = http2.connect;
   http2.connect = function connect(authority, ...rest) {
     const host = hostOf(String(authority));
-    // No connection is opened for a client whose ledger is closed.
     ledger.connect(host);
     const session = originalConnect.call(this, authority, ...rest);
     const request = session.request.bind(session);
     session.request = (headers = {}, options) => {
-      ledger.admit(host, headers[":path"] ?? "", headers.authorization);
-      return request(headers, options);
+      const record = ledger.admit(host, headers[":path"] ?? "", headers.authorization);
+      const stream = request(headers, options);
+      const method = transactionMethod(headers[":path"] ?? "");
+      if (onTransaction && decodeGrpc && method) {
+        const sent = [],
+          received = [];
+        let sentBytes = 0,
+          receivedBytes = 0,
+          status,
+          code;
+        const collect = (chunks, chunk, encoding, outbound) => {
+          const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
+          if (outbound) sentBytes += bytes.length;
+          else receivedBytes += bytes.length;
+          if ((outbound ? sentBytes : receivedBytes) <= TRANSACTION_BODY_LIMIT) chunks.push(bytes);
+        };
+        const write = stream.write.bind(stream),
+          end = stream.end.bind(stream);
+        stream.write = (chunk, ...args) => {
+          collect(sent, chunk, typeof args[0] === "string" ? args[0] : undefined, true);
+          return write(chunk, ...args);
+        };
+        stream.end = (chunk, ...args) => {
+          if (chunk != null && typeof chunk !== "function")
+            collect(sent, chunk, typeof args[0] === "string" ? args[0] : undefined, true);
+          return end(chunk, ...args);
+        };
+        stream.on("response", (h) => {
+          status = Number(h[":status"]);
+          code = h["grpc-status"];
+        });
+        stream.on("trailers", (h) => {
+          code = h["grpc-status"];
+        });
+        stream.on("data", (chunk) => collect(received, chunk, undefined, false));
+        let emitted = false;
+        const finish = () => {
+          if (emitted) return;
+          emitted = true;
+          try {
+            if (
+              sentBytes > TRANSACTION_BODY_LIMIT ||
+              receivedBytes > TRANSACTION_BODY_LIMIT ||
+              code === undefined
+            )
+              throw new Error("cap-or-missing-status");
+            const req = decodeGrpc(method, Buffer.concat(sent), false);
+            const res =
+              code !== undefined && Number(code) !== 0
+                ? { error: { code: Number(code) } }
+                : decodeGrpc(method, Buffer.concat(received), true);
+            onTransaction({
+              n: record.n,
+              ...transactionWireEvidence(
+                method,
+                req,
+                res,
+                status,
+                code === undefined ? undefined : Number(code),
+              ),
+            });
+          } catch {
+            onTransaction({ n: record.n, method, complete: false, reason: "capture-failed" });
+          }
+        };
+        stream.on("end", finish);
+        stream.on("error", finish);
+        stream.on("aborted", finish);
+      }
+      return stream;
     };
     return session;
   };
@@ -113,6 +198,122 @@ export function installWireGuard(ledger, { fetchImpl = globalThis.fetch } = {}) 
     globalThis.fetch = originalFetch;
     http2.connect = originalConnect;
   };
+}
+
+export const TRANSACTION_BODY_LIMIT = 65_536;
+
+/** Only optimistic transaction RPCs are observed; query strings are never retained. */
+export function transactionMethod(path) {
+  if (/^\/google\.firestore\.v1\.Firestore\/(BatchGetDocuments|Commit)$/.test(path))
+    return path.split("/").at(-1);
+  const match = /^\/v1\/projects\/[^/]+\/databases\/[^/]+\/documents:(batchGet|commit)$/.exec(path);
+  return match ? (match[1] === "batchGet" ? "BatchGetDocuments" : "Commit") : null;
+}
+
+/** Whitelisted evidence excludes headers, tokens, URL parameters and arbitrary document fields. */
+export function transactionWireEvidence(method, request, response, status, grpcCode) {
+  if (!["BatchGetDocuments", "Commit"].includes(method)) return null;
+  try {
+    const parse = (value) => {
+      if (typeof value === "string") {
+        if (Buffer.byteLength(value) > TRANSACTION_BODY_LIMIT) throw new Error("cap");
+        return JSON.parse(value);
+      }
+      if (!value || typeof value !== "object") throw new Error("missing");
+      return value;
+    };
+    const req = parse(request),
+      res = parse(response);
+    const timestamp = (value) =>
+      typeof value === "string"
+        ? value
+        : value && typeof value === "object"
+          ? { seconds: String(value.seconds ?? 0), nanos: Number(value.nanos ?? 0) }
+          : null;
+    const document = (value) => ({
+      name: value?.name ?? null,
+      updateTime: timestamp(value?.updateTime),
+    });
+    const writes = (req.writes ?? []).map((w) => ({
+      update: w.update ? document(w.update) : null,
+      currentDocument: w.currentDocument
+        ? {
+            ...(w.currentDocument.updateTime
+              ? { updateTime: timestamp(w.currentDocument.updateTime) }
+              : {}),
+            ...(typeof w.currentDocument.exists === "boolean"
+              ? { exists: w.currentDocument.exists }
+              : {}),
+          }
+        : null,
+    }));
+    const shapedRequest =
+      method === "Commit"
+        ? { writes, transactionPresent: Boolean(req.transaction) }
+        : {
+            documents: (req.documents ?? []).filter((v) => typeof v === "string"),
+            transactionPresent: Boolean(req.transaction || req.newTransaction),
+          };
+    const shapedResponse = res.error
+      ? { error: { code: res.error.code ?? null, status: res.error.status ?? null } }
+      : method === "BatchGetDocuments"
+        ? {
+            documents: (Array.isArray(res) ? res : [res]).map((row) =>
+              row.found ? document(row.found) : { missing: row.missing ?? null },
+            ),
+          }
+        : {
+            writeResults: (res.writeResults ?? []).map((w) => ({
+              updateTime: timestamp(w.updateTime),
+            })),
+            commitTime: timestamp(res.commitTime),
+          };
+    const known =
+      (status >= 200 && status < 300 && (grpcCode === undefined || Number.isInteger(grpcCode))) ||
+      (status >= 400 && status < 500 && Boolean(res.error));
+    const shape =
+      method === "Commit"
+        ? writes.length > 0 &&
+          (Boolean(res.error?.code) ||
+            (Boolean(shapedResponse.commitTime) &&
+              shapedResponse.writeResults.length === writes.length))
+        : shapedRequest.documents.length > 0 && shapedResponse.documents?.length > 0;
+    return {
+      method,
+      status,
+      ...(grpcCode === undefined ? {} : { grpcCode }),
+      request: shapedRequest,
+      response: shapedResponse,
+      complete: Boolean(known && shape),
+    };
+  } catch {
+    return { method, status, complete: false, reason: "missing-malformed-or-capped-body" };
+  }
+}
+
+/** Bounds the cloned response without consuming or replacing the SDK's response. */
+async function boundedResponse(response) {
+  const reader = response.body.getReader();
+  const chunks = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      let timer;
+      const { done, value } = await Promise.race([
+        reader.read(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("capture timeout")), 2000);
+        }),
+      ]).finally(() => clearTimeout(timer));
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > TRANSACTION_BODY_LIMIT) throw new Error("cap");
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  } finally {
+    reader.cancel().catch(() => {});
+  }
 }
 
 /** The host a `net.Socket#connect` call is for. */

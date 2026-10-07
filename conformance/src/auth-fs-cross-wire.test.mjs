@@ -166,3 +166,114 @@ test("the connection past the cap is destroyed before it connects, and closes th
   assert.deepEqual(refused, [{ host: "127.0.0.1", path: "", reason: "connection cap 2 reached" }]);
   assert.equal(ledger.connections(), 2);
 });
+
+test("S5b transaction capture whitelists only the two RPCs and fails closed", async () => {
+  const { transactionWireEvidence } = await import("./auth-fs-cross/sdk-wire.mjs");
+  const secret = { authorization: "Bearer SECRET", apiKey: "SECRET", query: "SECRET" };
+  for (let i = 0; i < 50; i += 1) {
+    const name = `projects/demo-p/databases/(default)/documents/s5b/d${i}`;
+    const version = `2026-10-07T00:00:00.${String(i).padStart(9, "0")}Z`;
+    const evidence = transactionWireEvidence(
+      "Commit",
+      {
+        ...secret,
+        writes: [
+          {
+            ...secret,
+            update: { name, fields: { value: { integerValue: String(i), ...secret } } },
+            currentDocument: { updateTime: version, ...secret },
+          },
+        ],
+      },
+      { ...secret, writeResults: [{ updateTime: version, ...secret }], commitTime: version },
+      200,
+    );
+    assert.equal(evidence.complete, true);
+    assert.equal(evidence.request.writes[0].currentDocument?.updateTime, version);
+    assert.doesNotMatch(JSON.stringify(evidence), /SECRET|authorization|apiKey|query/);
+    assert.equal(transactionWireEvidence("Listen", {}, {}, 200), null);
+    for (const response of [null, "{", "x".repeat(65537)])
+      assert.equal(transactionWireEvidence("Commit", {}, response, 200).complete, false);
+    assert.equal(transactionWireEvidence("Commit", {}, {}, 503).complete, false);
+  }
+});
+
+test("S5b capture is opt-in, observes fetch once and preserves the original response", async () => {
+  const observed = [];
+  let calls = 0;
+  const ledger = createWireLedger({ hosts: ["127.0.0.1"], cap: 5 });
+  const response = new Response(JSON.stringify([{ found: { name: "n", updateTime: "v" } }]), {
+    status: 200,
+  });
+  const restore = installWireGuard(ledger, {
+    fetchImpl: async () => {
+      calls += 1;
+      return response;
+    },
+    onTransaction: (e) => observed.push(e),
+  });
+  try {
+    const answer = await fetch(
+      "http://127.0.0.1/v1/projects/demo-p/databases/(default)/documents:batchGet?key=SECRET",
+      { method: "POST", body: JSON.stringify({ documents: ["n"], apiKey: "SECRET" }) },
+    );
+    assert.equal(answer, response);
+    assert.equal((await answer.json())[0].found.updateTime, "v");
+  } finally {
+    restore();
+  }
+  assert.equal(calls, 1);
+  assert.equal(ledger.records.length, 1);
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].n, 1);
+  assert.deepEqual(observed[0].response.documents, [{ name: "n", updateTime: "v" }]);
+  assert.doesNotMatch(JSON.stringify(observed), /SECRET/);
+});
+
+test("S5b request/response size boundaries and malformed shapes remain incomplete", async () => {
+  const { transactionMethod, transactionWireEvidence } =
+    await import("./auth-fs-cross/sdk-wire.mjs");
+  assert.equal(
+    transactionMethod("/v1/projects/demo-p/databases/(default)/documents:commit"),
+    "Commit",
+  );
+  for (const path of [
+    "/v1/accounts:lookup",
+    "/v1/projects/p/databases/d/documents:commit?key=secret",
+    "/google.firestore.v1.Firestore/Listen",
+    "/Commit",
+  ])
+    assert.equal(transactionMethod(path), null);
+  const request = { documents: ["n"] },
+    response = [{ found: { name: "n", updateTime: "v" } }];
+  assert.equal(transactionWireEvidence("BatchGetDocuments", request, response, 200).complete, true);
+  for (const status of [0, 199, 302, 503])
+    assert.equal(
+      transactionWireEvidence("BatchGetDocuments", request, response, status).complete,
+      false,
+    );
+  for (const malformed of [{}, [], { documents: null }, { documents: [] }])
+    assert.equal(
+      transactionWireEvidence("BatchGetDocuments", malformed, response, 200).complete,
+      false,
+    );
+  const prefix = JSON.stringify(request);
+  assert.equal(
+    transactionWireEvidence(
+      "BatchGetDocuments",
+      prefix + " ".repeat(65536 - prefix.length),
+      response,
+      200,
+    ).complete,
+    true,
+  );
+  assert.equal(
+    transactionWireEvidence(
+      "BatchGetDocuments",
+      prefix + " ".repeat(65537 - prefix.length),
+      response,
+      200,
+    ).complete,
+    false,
+  );
+});

@@ -28,7 +28,7 @@ export function graph(cell, runId) {
         name: sink,
         topic: deadTopic,
         ackDeadlineSeconds: 10,
-        messageRetentionDuration: "600s",
+        messageRetentionDuration: "3600s",
       },
     },
     {
@@ -38,7 +38,7 @@ export function graph(cell, runId) {
         name: subscription,
         topic,
         ackDeadlineSeconds: 10,
-        messageRetentionDuration: "600s",
+        messageRetentionDuration: "3600s",
         deadLetterPolicy: { deadLetterTopic: deadTopic, maxDeliveryAttempts: 5 },
       },
     },

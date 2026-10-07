@@ -78,6 +78,8 @@ function world(
     empty = false,
     tick = { value: clockEpoch },
     meterOverride = null,
+    forwarding = true,
+    countDispatch = true,
   } = {},
 ) {
   let serial = 0,
@@ -90,10 +92,14 @@ function world(
   if (!meterOverride) meter.enter(cell);
   const journal = { write: (r) => rows.push(structuredClone(r)) };
   const ledger = createLedger();
-  let sourceId, data, attributes;
+  let sourceId,
+    data,
+    attributes,
+    publishedAt,
+    leaseUntil = 0;
   const wire = {
     async call(call) {
-      meter.start(call.category, call.transport);
+      if (countDispatch) meter.start(call.category, call.transport);
       calls.push({ ...structuredClone(call), at: tick.value });
       const { method, request: r } = call;
       tick.value += latency
@@ -134,6 +140,7 @@ function world(
       } else if (method.startsWith("Delete")) {
         resources.delete(name);
       } else if (method === "Publish") {
+        publishedAt = tick.value;
         sourceId = String(++serial);
         data = r.messages[0].data;
         attributes = r.messages[0].attributes;
@@ -141,7 +148,15 @@ function world(
       } else if (method === "Pull") {
         assert.equal(r.returnImmediately, call.category === "sinkPull");
         body = { receivedMessages: [] };
-        if (!empty && call.category === "sourcePull" && sourceDeliveries < 5) {
+        if (
+          !empty &&
+          call.category === "sourcePull" &&
+          sourceDeliveries < (forwarding ? 5 : 60) &&
+          tick.value >= leaseUntil &&
+          tick.value - publishedAt <
+            Number(resources.get(name).messageRetentionDuration.slice(0, -1)) * 1000
+        ) {
+          leaseUntil = tick.value + 10000;
           sourceDeliveries++;
           body.receivedMessages = [
             {
@@ -156,7 +171,13 @@ function world(
             },
           ];
         }
-        if (!empty && call.category === "sinkPull" && sourceDeliveries >= 5 && serial === 1) {
+        if (
+          !empty &&
+          forwarding &&
+          call.category === "sinkPull" &&
+          sourceDeliveries >= 5 &&
+          serial === 1
+        ) {
           serial++;
           body.receivedMessages = [
             {
@@ -177,8 +198,10 @@ function world(
             },
           ];
         }
-      } else if (method === "ModifyAckDeadline") assert.equal(r.ackDeadlineSeconds, 0);
-      else assert.equal(method, "Acknowledge");
+      } else if (method === "ModifyAckDeadline") {
+        assert.equal(r.ackDeadlineSeconds, 0);
+        leaseUntil = tick.value;
+      } else assert.equal(method, "Acknowledge");
       return {
         ok: status === 200,
         unknown: false,
@@ -803,5 +826,425 @@ test("D pure generated near misses keep source tokens and recovery age closed", 
   for (const c of makePlan().cells) {
     assert.equal(c.cellMs, c.arm === "no-new-grant" ? 900000 : 1800000);
     assert.equal(c.cleanupReserveMs, c.arm === "no-new-grant" ? 60000 : 120000);
+  }
+});
+
+test("D source survives a completed720second pause in a publish-age retention model", async () => {
+  for (const cell of makePlan().cells.filter(
+    (c) => c.mode === "720-second-source-inactivity" && !c.reserve,
+  )) {
+    const w = world(cell, { forwarding: false }),
+      result = await runCell(w);
+    assert.equal(result.complete, true);
+    const resumed = result.observations
+      .filter((o) => o.stage === "source-delivery")
+      .find((o) => o.attempt === 10);
+    assert.equal(resumed.items.length, 1, "retention-expired absence cannot witness reset");
+    assert.equal(
+      resumed.items[0].message.messageId,
+      result.observations.find((o) => o.stage === "publication-binding").messageIds[0],
+    );
+    assert.ok(
+      result.observations.find((o) => o.stage === "inactivity-completed").elapsedMs >= 720000,
+    );
+    const source = graph(cell, w.runId).resources.find(
+      (r) => r.method === "CreateSubscription" && r.name === graph(cell, w.runId).subscription,
+    );
+    assert.ok(Number(source.request.messageRetentionDuration.slice(0, -1)) * 1000 >= cell.cellMs);
+  }
+});
+
+import grpcLib from "@grpc/grpc-js";
+import { decode } from "./pubsub-observation-d/wire.mjs";
+import { SERVICES, requestToWire } from "./pubsub-production/grpc.mjs";
+const ordinary = () =>
+  JSON.parse(
+    readFileSync(
+      new URL("./pubsub-observation-d/fixtures/recorded-ordinary.json", import.meta.url),
+    ),
+  ).rows;
+const categoryFor = (method) =>
+  method.startsWith("Create")
+    ? "create"
+    : method.startsWith("Get")
+      ? "resourceGet"
+      : method.startsWith("Delete")
+        ? "cleanupDelete"
+        : method === "Publish"
+          ? "publish"
+          : method === "Pull"
+            ? "sourcePull"
+            : method === "ModifyAckDeadline"
+              ? "nack"
+              : "ownAck";
+const serviceFor = (method) => (/Topic|Publish/.test(method) ? "Publisher" : "Subscriber");
+function recordedCall(row) {
+  const method = row.op[0].toUpperCase() + row.op.slice(1);
+  let request = structuredClone(row.request.body ?? {});
+  if (row.transport === "rest") {
+    const resource = row.request.path.replace(/^\/v1\//, "").split(":")[0];
+    request = method.startsWith("Create")
+      ? { name: resource, ...request }
+      : method.startsWith("Get") || method.startsWith("Delete")
+        ? { name: resource }
+        : method === "Publish"
+          ? { topic: resource, ...request }
+          : { subscription: resource, ...request };
+  }
+  return {
+    cellId: "fixture",
+    category: categoryFor(method),
+    transport: row.transport,
+    service: serviceFor(method),
+    method,
+    request,
+  };
+}
+function nativeReply(clientFunction) {
+  return {
+    close() {},
+    makeUnaryRequest(path, _serialize, _deserialize, raw, _metadata, _options, callback) {
+      const rpc = new EventEmitter();
+      let done = false;
+      const finish = (reply) => {
+        if (done) return;
+        done = true;
+        rpc.emit("metadata", new grpcLib.Metadata());
+        if (reply.ok) {
+          const service = path.includes("Publisher") ? "Publisher" : "Subscriber",
+            method = path.split("/").at(-1),
+            Type = typeOf(SERVICES[service].methods[method][1]);
+          callback(
+            null,
+            Buffer.from(Type.encode(Type.fromObject(requestToWire(reply.body))).finish()),
+          );
+        } else
+          callback({
+            code: reply.code === "NOT_FOUND" ? 5 : 1,
+            details: reply.body?.error?.message ?? "recorded error",
+          });
+        rpc.emit("status", {
+          code: reply.ok ? 0 : reply.code === "NOT_FOUND" ? 5 : 1,
+          details: "",
+          metadata: new grpcLib.Metadata(),
+        });
+      };
+      rpc.cancel = () => finish({ ok: false, code: "CANCELLED", body: {} });
+      queueMicrotask(async () => {
+        const service = path.includes("Publisher") ? "Publisher" : "Subscriber",
+          method = path.split("/").at(-1),
+          request = decode(typeOf(SERVICES[service].methods[method][0]), raw);
+        finish(await clientFunction(method, request));
+      });
+      return rpc;
+    },
+  };
+}
+
+test("D actual REST/native wire replays52same-route ordinary replies and required native fields", async () => {
+  for (const row of ordinary()) {
+    const call = recordedCall(row),
+      cell = makePlan().cells.find(
+        (c) => c.transport === call.transport && c.arm === "no-new-grant",
+      ),
+      m = createMeter({ now: () => 0 }),
+      captured = [];
+    m.enter(cell);
+    const ok =
+      row.transport === "rest"
+        ? row.response.status === 200
+        : [0, "OK"].includes(row.response.code);
+    const wire = createWire({
+      meter: m,
+      journal: { write: (r) => captured.push(r) },
+      getToken: async () => "fixture",
+      fetch: async () =>
+        new Response(JSON.stringify(row.response.body), { status: row.response.status ?? 200 }),
+      client: nativeReply(async (method, request) => {
+        assert.equal(method, call.method);
+        if (method === "CreateSubscription") {
+          assert.equal(request.name, call.request.name);
+          assert.equal(request.topic, call.request.topic);
+          assert.equal(request.ackDeadlineSeconds, call.request.ackDeadlineSeconds);
+          assert.equal(request.messageRetentionDuration, call.request.messageRetentionDuration);
+        }
+        return { ok, code: ok ? "OK" : "NOT_FOUND", body: row.response.body };
+      }),
+    });
+    try {
+      const answer = await wire.call(call);
+      assert.equal(answer.ok, ok);
+      assert.equal(answer.unknown, false);
+      if (
+        ok &&
+        call.method !== "Acknowledge" &&
+        call.method !== "ModifyAckDeadline" &&
+        !call.method.startsWith("Delete")
+      ) {
+        if (call.method === "Pull")
+          assert.deepEqual(
+            answer.body.receivedMessages ?? [],
+            row.response.body.receivedMessages ?? [],
+          );
+        else if (call.method === "Publish")
+          assert.deepEqual(answer.body.messageIds, row.response.body.messageIds);
+        else assert.equal(answer.body.name, row.response.body.name);
+      }
+      if (!ok) assert.equal(answer.code, "NOT_FOUND");
+      assert.match(row.layoutVerdict, /NOT_COMPARABLE/);
+      assert.equal(captured.filter((r) => r.event === "response").length, 1);
+      if (call.transport === "grpc") {
+        const request = captured.find((r) => r.event === "request-dispatch"),
+          raw = Buffer.from(request.requestBodyBase64, "base64");
+        assert.equal(raw.length, request.requestBodyBytes);
+        assert.equal(sha256(raw), request.requestSha256);
+      }
+    } finally {
+      wire.close();
+    }
+  }
+  for (const cell of makePlan().cells) {
+    const g = graph(cell, "123456abcdef");
+    for (const r of g.resources.filter((r) => r.method === "CreateSubscription")) {
+      const body = decode(
+        typeOf("Subscription"),
+        encodeRequest("Subscriber", "CreateSubscription", r.request),
+      );
+      assert.equal(body.topic, r.request.topic);
+      assert.equal(body.ackDeadlineSeconds, 10);
+      assert.equal(body.messageRetentionDuration, "3600s");
+      if (r.name === g.subscription)
+        assert.deepEqual(body.deadLetterPolicy, {
+          deadLetterTopic: g.deadTopic,
+          maxDeliveryAttempts: 5,
+        });
+      assert.deepEqual(
+        route(r.method, r.request).body,
+        Object.fromEntries(Object.entries(r.request).filter(([key]) => key !== "name")),
+      );
+    }
+  }
+});
+
+function modelThroughRecordedWire(w) {
+  const rows = ordinary(),
+    calls = [];
+  const execute = async (method, request) => {
+    const selectors = {
+      GetTopic: "topic",
+      DeleteTopic: "topic",
+      GetSubscription: "subscription",
+      DeleteSubscription: "subscription",
+    };
+    if (selectors[method] && request[selectors[method]])
+      request = { name: request[selectors[method]] };
+    const name = request.name ?? request.subscription ?? request.topic;
+    const category =
+      method === "Pull"
+        ? name === graph(w.cell, w.runId).sink
+          ? "sinkPull"
+          : "sourcePull"
+        : method.startsWith("Get") && !method.includes("Iam")
+          ? w.resources.has(name)
+            ? "resourceGet"
+            : "cleanupGet"
+          : method.includes("Iam")
+            ? method === "GetIamPolicy"
+              ? "baselineIamGet"
+              : "iamSetupWrite"
+            : categoryFor(method);
+    const answer = await w.wire.call({
+      category,
+      method,
+      request,
+      transport: method.includes("Iam") ? "rest" : w.cell.transport,
+    });
+    calls.push({ method, request });
+    if (method.includes("Iam")) return answer;
+    const fixture = rows.find(
+      (r) =>
+        r.transport === w.cell.transport &&
+        r.op === method[0].toLowerCase() + method.slice(1) &&
+        (r.response.status === 200 || [0, "OK"].includes(r.response.code)) === answer.ok,
+    );
+    assert.ok(fixture, method);
+    // Keep recorded output-only fields. Only owned identity/configuration values are parameterized for this fresh graph; this is not a production-format or byte-layout assertion.
+    const body = { ...structuredClone(fixture.response.body), ...answer.body };
+    return { ...answer, body };
+  };
+  const client = nativeReply(execute);
+  const wire = createWire({
+    meter: w.meter,
+    journal: w.journal,
+    getToken: async () => "fixture",
+    client,
+    fetch: async (url, options) => {
+      const match = /\/v1\/(.+?)(?::(\w+))?(?:\?.*)?$/.exec(url);
+      const resource = decodeURIComponent(match[1]);
+      let method = match[2]
+        ? match[2][0].toUpperCase() + match[2].slice(1)
+        : `${options.method === "PUT" ? "Create" : options.method === "DELETE" ? "Delete" : "Get"}${resource.includes("/topics/") ? "Topic" : "Subscription"}`;
+      const body = options.body ? JSON.parse(options.body) : {};
+      const request = method.includes("Iam")
+        ? { resource, ...body }
+        : method.startsWith("Create")
+          ? { name: resource, ...body }
+          : method.startsWith("Get") || method.startsWith("Delete")
+            ? { name: resource }
+            : method === "Publish"
+              ? { topic: resource, ...body }
+              : { subscription: resource, ...body };
+      const answer = await execute(method, request);
+      return new Response(JSON.stringify(answer.body), { status: answer.status });
+    },
+  });
+  return { wire, calls };
+}
+
+test("D real wire carries recorded ordinary structures through own lifecycle and read-only A2", async () => {
+  for (const transport of ["rest", "grpc"]) {
+    const cell = makePlan().cells.find(
+        (c) => c.transport === transport && c.arm === "no-new-grant",
+      ),
+      w = world(cell, { countDispatch: false }),
+      adapter = modelThroughRecordedWire(w);
+    try {
+      const result = await runCell({ ...w, wire: adapter.wire });
+      assert.equal(result.complete, true, JSON.stringify(result));
+      assert.equal(result.cleanupClosed, true);
+      assert.equal(w.resources.size, 0);
+      assert.ok(adapter.calls.some((c) => c.method === "ModifyAckDeadline"));
+      assert.ok(adapter.calls.some((c) => c.method === "Acknowledge"));
+    } finally {
+      adapter.wire.close();
+    }
+    const name = graph(cell, w.runId).topic,
+      ledger = createLedger();
+    const id = ledger.sent({ name, action: "create", transport });
+    ledger.answered({ name, action: "create", transport, requestId: id, kind: "ok" });
+    const m = createMeter({ now: () => 0, a2: true });
+    m.enter({ id: "A2", group: "G7", transport: "rest" });
+    const fixture = ordinary().find(
+      (r) => r.transport === "rest" && r.op === "getTopic" && r.response.status === 404,
+    );
+    const wire = createWire({
+      meter: m,
+      journal: { write() {} },
+      client: { close() {} },
+      getToken: async () => "fixture",
+      fetch: async () => new Response(JSON.stringify(fixture.response.body), { status: 404 }),
+    });
+    try {
+      const result = await recoverA2({ wire, meter: m, ledger, runId: w.runId, elapsedMs: 600000 });
+      assert.equal(result.closed, true);
+      assert.equal(result.resourceReads, 1);
+    } finally {
+      wire.close();
+    }
+  }
+});
+
+test("D native callback waits for terminal status; unknown decode,cancel and timeout cannot confirm reads", async (t) => {
+  const cell = makePlan().cells.find((c) => c.transport === "grpc"),
+    call = {
+      cellId: cell.id,
+      category: "resourceGet",
+      transport: "grpc",
+      service: "Publisher",
+      method: "GetTopic",
+      request: { name: graph(cell, "123456abcdef").topic },
+    };
+  for (const variant of ["delayed-status", "bad-protobuf", "cancelled", "timeout"]) {
+    const m = createMeter({ now: () => 0 });
+    m.enter(cell);
+    let rpc,
+      callback,
+      cancelled = 0,
+      finished = false;
+    const captured = [];
+    const client = {
+      close() {},
+      makeUnaryRequest(_path, _serializer, _decoder, _raw, _meta, _options, cb) {
+        callback = cb;
+        rpc = new EventEmitter();
+        rpc.cancel = () => {
+          cancelled++;
+          callback({ code: 1, details: "cancelled" });
+          rpc.emit("status", { code: 1, metadata: new grpcLib.Metadata() });
+        };
+        return rpc;
+      },
+    };
+    if (variant === "timeout") t.mock.timers.enable({ apis: ["setTimeout"] });
+    const wire = createWire({
+      meter: m,
+      journal: { write: (r) => captured.push(r) },
+      client,
+      getToken: async () => "fixture",
+    });
+    try {
+      const promise = wire.call(call).then((r) => {
+        finished = true;
+        return r;
+      });
+      for (let i = 0; i < 12; i++) await Promise.resolve();
+      assert.ok(rpc);
+      if (variant === "timeout") t.mock.timers.tick(30001);
+      else if (variant === "cancelled") wire.abortSource();
+      else {
+        callback(
+          null,
+          variant === "bad-protobuf"
+            ? Buffer.from([255])
+            : Buffer.from(typeOf("Topic").encode({ name: call.request.name }).finish()),
+        );
+        await Promise.resolve();
+        assert.equal(finished, false);
+        rpc.emit("status", { code: 0, metadata: new grpcLib.Metadata() });
+      }
+      const answer = await promise;
+      assert.equal(answer.unknown, variant !== "delayed-status");
+      assert.equal(answer.ok, variant === "delayed-status");
+      if (["cancelled", "timeout"].includes(variant)) assert.equal(cancelled, 1);
+      assert.equal(m.snapshot().requests, 1);
+      assert.equal(captured.filter((r) => r.event === "response").length, 1);
+    } finally {
+      wire.close();
+      if (variant === "timeout") t.mock.timers.reset();
+    }
+  }
+});
+
+test("D actual REST unreadable and3xx5xx answers remain unknown", async () => {
+  for (const [status, body] of [
+    [302, "{}"],
+    [503, "{}"],
+    [200, "not-json"],
+    [200, "[]"],
+  ]) {
+    const cell = makePlan().cells[0],
+      m = createMeter({ now: () => 0 });
+    m.enter(cell);
+    const wire = createWire({
+      meter: m,
+      journal: { write() {} },
+      client: { close() {} },
+      getToken: async () => "fixture",
+      fetch: async () => new Response(body, { status }),
+    });
+    try {
+      const answer = await wire.call({
+        cellId: cell.id,
+        category: "resourceGet",
+        transport: "rest",
+        service: "Publisher",
+        method: "GetTopic",
+        request: { name: graph(cell, "123456abcdef").topic },
+      });
+      assert.equal(answer.unknown, true);
+      assert.equal(m.snapshot().requests, 1);
+    } finally {
+      wire.close();
+    }
   }
 });

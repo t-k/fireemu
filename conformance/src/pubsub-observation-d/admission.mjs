@@ -21,6 +21,7 @@ export const SOURCE_FILES = Object.freeze([
     "conformance/src/pubsub-production-observation-d.test.mjs",
     "conformance/src/pubsub-observation-c/fixtures/recorded-delivery.json",
     "conformance/src/pubsub-observation-d/fixtures/recorded-forwarding.json",
+    "conformance/src/pubsub-observation-d/fixtures/recorded-ordinary.json",
   ]),
 ]);
 const git = (...args) =>

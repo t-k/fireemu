@@ -471,3 +471,16 @@ test("Task24 each selected wire captures unexpected replies and refuses later so
     wire.close();
   }
 });
+
+test("Task24 final recovery persistence failure is explicit and cannot be labelled closed", async () => {
+  const failures = await protectCell({
+    body() {},
+    report() {},
+    finalize() {},
+    persist() {
+      throw new Error("recovery persistence refused");
+    },
+  });
+  assert.equal(failures.persistenceFailed, true);
+  assert.equal(failures.length, 1);
+});

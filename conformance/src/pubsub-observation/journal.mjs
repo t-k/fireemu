@@ -12,7 +12,11 @@ export function createJournal(out, runId) {
     recovery = createRecoveryJournal(out, runId);
     recovery.write({ event: "recovery-open", obligations: [], iam: [] });
   } catch (error) {
-    closeSync(fd);
+    try {
+      recovery?.close();
+    } finally {
+      closeSync(fd);
+    }
     throw error;
   }
   let n = 0,

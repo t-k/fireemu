@@ -117,6 +117,9 @@ export async function main(args = process.argv.slice(2), deps = {}) {
   };
   const wire = (deps.createWire ?? createWire)({ meter, journal, getToken: guardedToken });
   let signalled = false;
+  let activeStream;
+  const interrupted = new AbortController();
+  const signals = deps.signals ?? process;
   const originalCall = wire.call,
     originalOpen = wire.open;
   wire.call = (value) => {
@@ -124,17 +127,38 @@ export async function main(args = process.argv.slice(2), deps = {}) {
     admission.check();
     return originalCall(value);
   };
-  wire.open = (value) => {
+  wire.open = async (value) => {
     if (signalled) throw new Error("source signal stop");
     admission.check();
-    return originalOpen(value);
+    activeStream = await originalOpen(value);
+    if (signalled) activeStream.cancel("source-signal");
+    return activeStream;
   };
   const stop = () => {
     signalled = true;
+    interrupted.abort();
+    wire.abortSource?.();
+    activeStream?.cancel("source-signal");
     journal.write({ event: "signal-stop" });
   };
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
+  signals.on("SIGINT", stop);
+  signals.on("SIGTERM", stop);
+  const sleep = (ms) =>
+    new Promise((resolve, reject) => {
+      if (interrupted.signal.aborted) {
+        reject(new Error("source wait stopped"));
+        return;
+      }
+      const abort = () => {
+        clearTimeout(timer);
+        reject(new Error("source wait stopped"));
+      };
+      const timer = setTimeout(() => {
+        interrupted.signal.removeEventListener("abort", abort);
+        resolve();
+      }, ms);
+      interrupted.signal.addEventListener("abort", abort, { once: true });
+    });
   const results = [];
   let resourcesClosed = false,
     recordingComplete = false,
@@ -164,7 +188,15 @@ export async function main(args = process.argv.slice(2), deps = {}) {
       for (const cell of makePlan().cells.filter((item) => !item.reserve)) {
         if (signalled) break;
         meter.enter(cell);
-        const result = await runCell({ cell, meter, wire, ledger, runId: options.runId, journal });
+        const result = await runCell({
+          cell,
+          meter,
+          wire,
+          ledger,
+          runId: options.runId,
+          journal,
+          sleep,
+        });
         results.push(result);
         if (!result.complete || !result.cleanupClosed) break;
       }
@@ -175,8 +207,8 @@ export async function main(args = process.argv.slice(2), deps = {}) {
     error = failure.message;
     journal.write({ event: "run-incomplete", error });
   } finally {
-    process.removeListener("SIGINT", stop);
-    process.removeListener("SIGTERM", stop);
+    signals.removeListener("SIGINT", stop);
+    signals.removeListener("SIGTERM", stop);
     wire.close();
     journal.close();
     closeSync(ledgerFd);
@@ -201,7 +233,13 @@ export async function main(args = process.argv.slice(2), deps = {}) {
     issuedSha256: sha256(readFileSync(resolve(options.out, `issued-${options.runId}.jsonl`))),
   };
   writeExclusive(resolve(options.out, `summary-${options.runId}.json`), summary);
-  if (!summary.resourcesClosed || (!options.a2 && !summary.recordingComplete)) process.exitCode = 2;
+  if (!summary.resourcesClosed || (!options.a2 && !summary.recordingComplete))
+    (
+      deps.setExitCode ??
+      ((code) => {
+        process.exitCode = code;
+      })
+    )(2);
   return summary;
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))

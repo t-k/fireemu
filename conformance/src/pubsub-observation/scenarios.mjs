@@ -86,6 +86,7 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
       (!names.includes(reply.body?.name) || "done" in reply.body)
     )
       kind = "unknown";
+    if (method.startsWith("Get") && kind === "ok" && reply.body?.name !== name) kind = "unknown";
     for (const intent of intents)
       ledger.answered({
         ...intent,
@@ -242,8 +243,16 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
       if (cell.variant === "future-publications") await publish(0);
       if (cell.variant === "invalid-ack-silence") stream.write({ ackIds: [cell.invalidAck] });
       if (cell.variant === "half-close") stream.end();
-      const firstFrame = await stream.next();
-      const first = selectOwn(firstFrame, published)[0];
+      const nextOwned = async () => {
+        for (let frame = 0; frame < 6; frame++) {
+          const body = await stream.next();
+          if (!body) return [];
+          const items = selectOwn(body, published);
+          if (items.length) return items;
+        }
+        return [];
+      };
+      const first = (await nextOwned())[0];
       journal.write({ event: "first-owned-delivery", cellId: cell.id, bound: Boolean(first) });
       if (["in-stream-ack", "future-publications"].includes(cell.variant)) {
         if (!first) throw new Error("missing owned token");
@@ -271,7 +280,7 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
                   : [20];
         stream.write({ modifyDeadlineAckIds: [first.ackId], modifyDeadlineSeconds: seconds });
         if (cell.variant === "in-stream-nack") {
-          const repeated = selectOwn(await stream.next(), published).find(
+          const repeated = (await nextOwned()).find(
             (item) => item.message.messageId === first.message.messageId,
           );
           if (!repeated) throw new Error("redelivery not observed");
@@ -297,7 +306,7 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
         stream.write({ ackIds: [first.ackId] });
         const seen = new Set([first.message.messageId]);
         for (let attempt = 0; attempt < 2; attempt++)
-          for (const item of selectOwn(await stream.next(), published)) {
+          for (const item of await nextOwned()) {
             if (!seen.has(item.message.messageId)) {
               seen.add(item.message.messageId);
               stream.write({ ackIds: [item.ackId] });
@@ -320,6 +329,9 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
           );
         }
         if (!repeated) throw new Error("cancel redelivery not observed");
+      }
+      if (cell.variant === "half-close") {
+        for (let frame = 0; frame < 6; frame++) if (!(await stream.next())) break;
       }
       const state = stream.state();
       journal.write({

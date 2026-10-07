@@ -5,6 +5,7 @@ const zero = () => ({ requests: 0, rest: 0, grpc: 0, streams: 0 });
 export function createMeter({ now = () => performance.now(), a2 = false } = {}) {
   const begun = now();
   const groups = { G1: zero(), G4: zero(), G7: zero() };
+  const visited = new Set();
   let cell,
     end,
     requests = 0,
@@ -29,6 +30,7 @@ export function createMeter({ now = () => performance.now(), a2 = false } = {}) 
     return left;
   };
   const api = {
+    clock: time,
     enter(value) {
       if (
         a2
@@ -36,7 +38,8 @@ export function createMeter({ now = () => performance.now(), a2 = false } = {}) 
           : !makePlan().cells.some((item) => JSON.stringify(item) === JSON.stringify(value))
       )
         throw new Limit("undeclared cell");
-      if (cell && value.id === cell.id) throw new Limit("cell cannot reopen");
+      if (visited.has(value.id)) throw new Limit("cell cannot reopen");
+      visited.add(value.id);
       cell = {
         ...value,
         categories: Object.fromEntries(

@@ -2,6 +2,19 @@
 export const SUITE = "pubsub-observation-a-v1";
 export const TASK = "PUBSUB-OBSERVATION-A";
 export const PROJECT = "fireemu-oracle-idp";
+// Five seconds above observed successful same-route maxima, rounded up.
+export const minimumCallMs = (method) =>
+  method === "CreateTopic"
+    ? 43000
+    : method === "CreateSubscription"
+      ? 19000
+      : method.startsWith("Delete")
+        ? 13000
+        : method === "Publish"
+          ? 6000
+          : method === "Pull"
+            ? 25000
+            : 10000;
 export const CAPS = Object.freeze({
   G1: { requests: 240, rest: 120, grpc: 120, streams: 0, cellMs: 120000 },
   G4: { requests: 306, rest: 289, grpc: 0, streams: 17, cellMs: 180000 },
@@ -113,6 +126,16 @@ export function makePlan() {
     spendStopUsd: 2,
     campaignLimitUsd: 10,
     iam: false,
+    timeoutPolicy: {
+      createMs: 80000,
+      otherMs: 30000,
+      minimumCreateTopicMs: 43000,
+      minimumCreateSubscriptionMs: 19000,
+      minimumDeleteMs: 13000,
+      minimumPublishMs: 6000,
+      minimumPullMs: 25000,
+      minimumOtherMs: 10000,
+    },
   };
 }
 export function validatePlan(value) {

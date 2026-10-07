@@ -2,7 +2,7 @@ import grpc from "@grpc/grpc-js";
 import { protos } from "@google-cloud/pubsub";
 import { SERVICES, requestToWire, responseFromWire } from "../pubsub-production/grpc.mjs";
 import { sha256 } from "../pubsub-production/admission.mjs";
-import { CAPS, PROJECT } from "./plan.mjs";
+import { CAPS, PROJECT, minimumCallMs } from "./plan.mjs";
 import { encodedSizes } from "./payload.mjs";
 import { openStream } from "./stream.mjs";
 
@@ -11,6 +11,29 @@ const statusNames = Object.fromEntries(
 );
 const unsure = new Set(["UNKNOWN", "INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED", "CANCELLED"]);
 const types = protos.google.pubsub.v1;
+// This reservation is for framing overhead, not an assertion about TCP retransmissions.
+const FRAMING_RESERVE = 4096;
+const headerBytes = (headers) =>
+  [...(headers?.entries?.() ?? [])].reduce(
+    (sum, [name, value]) => sum + Buffer.byteLength(name) + Buffer.byteLength(value) + 4,
+    0,
+  );
+const grpcHeaderBytes = (metadata) =>
+  Object.keys(metadata?.getMap?.() ?? {}).reduce(
+    (sum, key) =>
+      sum +
+      metadata
+        .get(key)
+        .reduce(
+          (n, value) =>
+            n +
+            Buffer.byteLength(key) +
+            (Buffer.isBuffer(value) ? 4 * Math.ceil(value.length / 3) : Buffer.byteLength(value)) +
+            4,
+          0,
+        ),
+    0,
+  );
 export const typeOf = (name) => (name === "Empty" ? protos.google.protobuf.Empty : types[name]);
 export const decode = (Type, raw) =>
   responseFromWire(
@@ -64,6 +87,8 @@ function route(method, request, routeName) {
   return { url: `${url}:${suffix}`, verb: "POST", body };
 }
 export async function readResponse(response) {
+  const cap = CAPS.metadataBytesEachDirection - headerBytes(response.headers) - FRAMING_RESERVE;
+  if (cap < 0) throw new Error("response byte cap");
   const reader = response.body?.getReader();
   if (!reader) return Buffer.alloc(0);
   const chunks = [];
@@ -73,7 +98,7 @@ export async function readResponse(response) {
       const { done, value } = await reader.read();
       if (done) break;
       length += value.byteLength;
-      if (length > CAPS.metadataBytesEachDirection) {
+      if (length > cap) {
         await reader.cancel();
         throw new Error("response byte cap");
       }
@@ -97,12 +122,28 @@ export function createWire({
   now = Date.now,
 } = {}) {
   let sequence = 0;
+  const controllers = new Map();
+  let sourceStopped = false,
+    activeStream;
+  const controllerFor = (maintenance) => {
+    if (sourceStopped && !maintenance) throw new Error("source stopped");
+    const controller = new AbortController();
+    controllers.set(controller, maintenance);
+    return controller;
+  };
   const credential = async (maintenance) => {
     const timeout = Math.min(30000, meter.remaining(maintenance));
     let timer;
-    const controller = new AbortController();
+    const controller = controllerFor(maintenance);
     try {
       return await Promise.race([
+        new Promise((_, reject) =>
+          controller.signal.addEventListener(
+            "abort",
+            () => reject(new Error("credential aborted")),
+            { once: true },
+          ),
+        ),
         getToken({ timeoutMs: timeout, signal: controller.signal }),
         new Promise((_, reject) => {
           timer = setTimeout(() => {
@@ -113,6 +154,7 @@ export function createWire({
       ]);
     } finally {
       clearTimeout(timer);
+      controllers.delete(controller);
     }
   };
   const api = {
@@ -122,11 +164,19 @@ export function createWire({
     credential,
     now,
     close: () => client.close(),
+    abortSource() {
+      sourceStopped = true;
+      for (const [controller, maintenance] of controllers) if (!maintenance) controller.abort();
+      activeStream?.cancel("source-signal");
+    },
     async call(call) {
       const { category, transport, service, method, request, routeName, cellId } = call;
       const maintenance =
         category.startsWith("cleanup") || ["resourceRead", "unknownDeleteRead"].includes(category);
+      if (sourceStopped && !maintenance) throw new Error("source stopped");
       meter.start(category, transport);
+      if (meter.remaining(maintenance) < minimumCallMs(method))
+        throw new Error("recorded latency margin unavailable");
       let raw, address;
       if (transport === "rest") {
         address = route(method, request, routeName);
@@ -137,11 +187,22 @@ export function createWire({
       else if (raw.length > CAPS.metadataBytesEachDirection)
         throw new Error("request metadata byte cap");
       const token = await credential(maintenance);
+      if (meter.remaining(maintenance) < minimumCallMs(method))
+        throw new Error("recorded latency margin unavailable after credentials");
+      const metadataBytesOut = Buffer.byteLength(token) + 256 + FRAMING_RESERVE;
+      const payloadBytes =
+        method === "Publish" ? encodedSizes(request.topic, request.messages).payload : 0;
+      if (
+        Math.max(0, raw.length - payloadBytes) + metadataBytesOut >
+        CAPS.metadataBytesEachDirection
+      )
+        throw new Error("outbound metadata byte cap");
       const timeoutMs = Math.min(
         method.startsWith("Create") ? 80000 : 30000,
         meter.remaining(maintenance),
       );
       const started = now(),
+        monotonicStarted = meter.clock(),
         requestId = ++sequence;
       journal.write({
         event: "request-dispatch",
@@ -153,10 +214,13 @@ export function createWire({
         request,
         ...(routeName ? { routeName } : {}),
         requestBodyBytes: raw.length,
+        metadataBytesOut,
         requestSha256: sha256(raw),
         requestDeadlineAt: new Date(started + timeoutMs).toISOString(),
       });
       let reply;
+      const controller = controllerFor(maintenance);
+      const requestTimer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         if (transport === "rest") {
           const response = await fetch(address.url, {
@@ -168,12 +232,14 @@ export function createWire({
               "x-goog-user-project": PROJECT,
             },
             ...(address.body === undefined ? {} : { body: raw }),
-            signal: AbortSignal.timeout(timeoutMs),
+            signal: controller.signal,
           });
           const bytes = await readResponse(response);
           let body;
           try {
             body = bytes.length === 0 ? {} : JSON.parse(bytes);
+            if (body === null || typeof body !== "object" || Array.isArray(body))
+              throw new Error("unreadable response object");
           } catch {
             throw new Error("unreadable response");
           }
@@ -183,6 +249,7 @@ export function createWire({
             code: body?.error?.status ?? (response.ok ? "OK" : "UNKNOWN"),
             body,
             bodyBytes: bytes.length,
+            metadataBytesIn: headerBytes(response.headers) + FRAMING_RESERVE,
             bodySha256: sha256(bytes),
             unknown:
               response.status < 200 ||
@@ -195,8 +262,9 @@ export function createWire({
           const metadata = new grpc.Metadata();
           metadata.add("authorization", `Bearer ${token}`);
           metadata.add("x-goog-user-project", PROJECT);
-          reply = await new Promise((resolve) =>
-            client.makeUnaryRequest(
+          let metadataBytesIn = FRAMING_RESERVE;
+          reply = await new Promise((resolve) => {
+            const rpc = client.makeUnaryRequest(
               `${SERVICES[service].path}/${method}`,
               (value) => value,
               (value) => value,
@@ -206,15 +274,34 @@ export function createWire({
               (error, bytes) => {
                 if (error) {
                   const code = statusNames[error.code] ?? "UNKNOWN";
-                  resolve({ ok: false, code, unknown: unsure.has(code), body: {} });
+                  metadataBytesIn += grpcHeaderBytes(error.metadata);
+                  const details =
+                    typeof error.details === "string" &&
+                    Buffer.byteLength(error.details) + metadataBytesIn <=
+                      CAPS.metadataBytesEachDirection
+                      ? error.details
+                      : null;
+                  resolve({
+                    ok: false,
+                    code,
+                    unknown: unsure.has(code) || details === null,
+                    body: details === null ? {} : { error: { status: code, message: details } },
+                    bodyBytes: null,
+                  });
                 } else {
                   try {
+                    if (
+                      !Buffer.isBuffer(bytes) ||
+                      bytes.length + metadataBytesIn > CAPS.metadataBytesEachDirection
+                    )
+                      throw new Error("native response byte cap");
                     resolve({
                       ok: true,
                       code: "OK",
                       unknown: false,
                       body: decode(typeOf(definition[1]), bytes),
                       bodyBytes: bytes.length,
+                      metadataBytesIn,
                       bodySha256: sha256(bytes),
                     });
                   } catch {
@@ -222,24 +309,38 @@ export function createWire({
                   }
                 }
               },
-            ),
-          );
+            );
+            rpc.on("metadata", (value) => {
+              metadataBytesIn += grpcHeaderBytes(value);
+              if (metadataBytesIn > CAPS.metadataBytesEachDirection) rpc.cancel();
+            });
+            controller.signal.addEventListener("abort", () => rpc.cancel(), { once: true });
+          });
         }
       } catch {
         reply = { ok: false, code: "UNKNOWN", unknown: true, body: {} };
+      } finally {
+        clearTimeout(requestTimer);
+        controllers.delete(controller);
       }
+      reply.durationMs = meter.clock() - monotonicStarted;
       journal.write({
         event: "response",
         cellId,
         requestId,
         transport,
         method,
-        durationMs: now() - started,
+        durationMs: reply.durationMs,
         reply,
       });
       return reply;
     },
-    open: (options) => openStream({ ...api, ...options }),
+    async open(options) {
+      if (sourceStopped) throw new Error("source stopped");
+      activeStream = await openStream({ ...api, ...options });
+      if (sourceStopped) activeStream.cancel("source-signal");
+      return activeStream;
+    },
   };
   return api;
 }

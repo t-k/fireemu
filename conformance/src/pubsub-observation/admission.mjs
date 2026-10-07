@@ -71,6 +71,7 @@ const fields = [
   "expiresAt",
   "plan",
   "recoveryBindings",
+  "previousAttempt",
 ];
 const projectScope = (value) => Object.fromEntries(fields.map((key) => [key, value[key]]));
 export const scopeDigest = (value) =>
@@ -187,6 +188,11 @@ export function admit(options, now = Date.now()) {
   };
   check();
   if (!options.a2 && options.runId === scope.runIds[1]) {
+    if (
+      scope.previousAttempt?.path !==
+      resolve(scope.runOutputs[scope.runIds[0]], `summary-${scope.runIds[0]}.json`)
+    )
+      throw new Error("run2 prior summary path mismatch");
     const previous = readJson(scope.previousAttempt?.path);
     if (
       previous.sha256 !== scope.previousAttempt?.sha256 ||

@@ -304,9 +304,9 @@ function fakeWorld({ clock, unknown = null } = {}) {
       if (clock)
         clock.value +=
           call.method === "CreateTopic"
-            ? 37100
+            ? 37666
             : call.method === "CreateSubscription"
-              ? 13000
+              ? 13024
               : 700;
       if (call.method === unknown) return { ok: false, unknown: true, code: "UNKNOWN", body: {} };
       const name =
@@ -637,4 +637,372 @@ test("late absence and sticky unknown delete require the original aged A2 read",
     assert.equal(world.calls.length, 1);
     assert.equal(world.calls[0].method, "GetTopic");
   }
+});
+
+test("nonadjacent cell reuse and source clock exhaustion refuse a new dispatch", () => {
+  let clock = 0;
+  const meter = createMeter({ now: () => clock });
+  const plan = makePlan();
+  meter.enter(plan.cells[0]);
+  meter.enter(plan.cells[1]);
+  assert.throws(() => meter.enter(plan.cells[0]), /reopen/);
+  clock = plan.caps.sourceWallMs;
+  assert.throws(() => meter.enter(plan.cells[2]), /time/);
+  assert.equal(meter.snapshot().requests, 0);
+});
+test("foreign creation bodies and unknown path aliases never authorize a DELETE", async () => {
+  for (const variant of ["foreign", "unknown"]) {
+    const meter = createMeter({ now: () => 0 }),
+      cell = makePlan().cells.find((item) => item.id === "R1");
+    meter.enter(cell);
+    const world = fakeWorld();
+    const original = world.call;
+    world.call = async (call) =>
+      call.method === "CreateTopic"
+        ? variant === "foreign"
+          ? { ok: true, code: "OK", body: { name: "projects/foreign/topics/do-not-adopt" } }
+          : { ok: false, unknown: true, code: "UNKNOWN", body: {} }
+        : original(call);
+    const result = await runCell({
+      cell,
+      meter,
+      wire: world,
+      ledger: createLedger(),
+      runId: "123456abcdef",
+      journal: { write() {} },
+    });
+    assert.equal(result.complete, false);
+    assert.equal(result.cleanupClosed, false);
+    assert.equal(world.calls.filter((call) => call.method.startsWith("Delete")).length, 0);
+  }
+});
+
+test("all baseline cell drivers execute their exact requests and causal stream stimuli inside vectors", async () => {
+  for (const cell of makePlan().cells.filter((item) => !item.reserve)) {
+    const clock = { value: Number(process.env.OBSERVATION_TEST_CLOCK_MS ?? 0) },
+      meter = createMeter({ now: () => clock.value });
+    meter.enter(cell);
+    const world = fakeWorld(),
+      original = world.call,
+      published = [];
+    let delivered = [],
+      credit = true,
+      terminal = null,
+      update = null;
+    world.call = async (call) => {
+      meter.start(call.category, call.transport);
+      clock.value += 50;
+      if (call.method === "Publish") {
+        meter.payload(encodedSizes(call.request.topic, call.request.messages).payload);
+        const messageId = `message-${published.length + 1}`;
+        published.push({ messageId, data: call.request.messages[0].data });
+        return { ok: true, code: "OK", body: { messageIds: [messageId] } };
+      }
+      if (call.method === "Pull")
+        return { ok: true, code: "OK", body: { receivedMessages: delivered.slice(0, 1) } };
+      return original(call);
+    };
+    const inputs = [],
+      events = [];
+    world.open = async ({ opener }) => {
+      let controlSent = false;
+      meter.start("stream", "streams");
+      const begin = clock.value;
+      const write = (body) => {
+        meter.frame(
+          "out",
+          protos.google.pubsub.v1.StreamingPullRequest.encode(
+            protos.google.pubsub.v1.StreamingPullRequest.fromObject(body),
+          ).finish().length,
+        );
+        inputs.push(body);
+        if (body.ackIds) credit = true;
+        if (body.modifyDeadlineAckIds) {
+          update = body.modifyDeadlineSeconds;
+          if (update[0] === 0) delivered = [];
+        }
+      };
+      write(opener);
+      if (
+        !opener.subscription ||
+        opener.streamAckDeadlineSeconds === 601 ||
+        cell.variant === "missing-subscription"
+      )
+        terminal = { code: 3 };
+      if (opener.streamAckDeadlineSeconds === 0) terminal = { code: 0 };
+      return {
+        write,
+        end: () => events.push("end"),
+        cancel: () => events.push("cancel"),
+        dispose() {},
+        state: () => ({ windowMs: 90000, incomplete: false, terminal }),
+        next: async (delay = 90000) => {
+          if (terminal) return null;
+          if (!controlSent && published.length) {
+            controlSent = true;
+            meter.frame("in", 0);
+            return {};
+          }
+          const next = published.find(
+            (message) => !delivered.some((item) => item.message.messageId === message.messageId),
+          );
+          if (credit && next) {
+            const item = { ackId: `received-${next.messageId}`, message: next };
+            delivered.push(item);
+            credit = cell.variant !== "flow-control";
+            meter.frame(
+              "in",
+              protos.google.pubsub.v1.StreamingPullResponse.encode(
+                protos.google.pubsub.v1.StreamingPullResponse.fromObject({
+                  receivedMessages: [item],
+                }),
+              ).finish().length,
+            );
+            return { receivedMessages: [item] };
+          }
+          clock.value = Math.min(begin + 90000, clock.value + delay);
+          return null;
+        },
+      };
+    };
+    const result = await runCell({
+      cell,
+      meter,
+      wire: world,
+      ledger: createLedger(),
+      runId: "123456abcdef",
+      journal: { write() {} },
+      sleep: async (ms) => {
+        clock.value += ms;
+      },
+    });
+    assert.equal(result.complete, true, `${cell.id}: ${result.reason}`);
+    assert.equal(result.cleanupClosed, true, cell.id);
+    assert.ok(meter.snapshot().requests <= (cell.group === "G4" ? 18 : 12));
+    if (cell.variant === "half-close") assert.ok(events.includes("end"));
+    if (cell.variant === "client-cancel") assert.ok(events.includes("cancel"));
+    if (cell.variant === "in-stream-nack") assert.deepEqual(update, [0]);
+    if (cell.variant === "invalid-update-frame") assert.deepEqual(update, [-1]);
+    if (cell.variant === "update-array-length") assert.deepEqual(update, []);
+    if (cell.variant === "update-deadline-601") assert.deepEqual(update, [601]);
+    if (cell.variant === "invalid-ack-silence")
+      assert.deepEqual(inputs.at(-1), { ackIds: ["invalid-ack-for-stream-observation"] });
+  }
+});
+
+test("native unary rejects a valid oversized protobuf response before decoding it", async () => {
+  const meter = createMeter({ now: () => 0 });
+  meter.enter(makePlan().cells.find((item) => item.id === "N3"));
+  const response = Buffer.from(
+    protos.google.pubsub.v1.Topic.encode(
+      protos.google.pubsub.v1.Topic.fromObject({
+        name: "projects/fixture/topics/fe123456abcdef-a",
+        labels: { huge: "a".repeat(65536) },
+      }),
+    ).finish(),
+  );
+  const wire = createWire({
+    meter,
+    journal: { write() {} },
+    getToken: async () => "fake",
+    client: {
+      close() {},
+      makeUnaryRequest(...args) {
+        args.at(-1)(null, response);
+        return new EventEmitter();
+      },
+    },
+  });
+  const reply = await wire.call({
+    category: "get",
+    transport: "grpc",
+    service: "Publisher",
+    method: "GetTopic",
+    request: { name: "projects/fixture/topics/fe123456abcdef-a" },
+  });
+  assert.equal(reply.unknown, true);
+  wire.close();
+});
+
+test("prior-run closure pin is part of the ledger-approved proof scope", () => {
+  const scope = { envelopeId: "PUBSUB-OBSERVATION-A-V1", previousAttempt: null };
+  const row = { ...scope, kind: "E", state: "APPROVED" };
+  const line = `| PUBSUB-OBSERVATION-A envelope | decision=APPROVE; envelopeId=${scope.envelopeId}; scopeSha256=${scopeDigest(row)} |`;
+  verifyProof(row, line, scope, "E");
+  assert.throws(
+    () =>
+      verifyProof(
+        { ...row, previousAttempt: { path: "/fixture/forged", sha256: "a".repeat(64) } },
+        line,
+        scope,
+        "E",
+      ),
+    /scope/,
+  );
+});
+
+test("source abort cancels an actual pending REST request while permitting bounded cleanup", async () => {
+  const meter = createMeter({ now: () => 0 });
+  meter.enter(makePlan().cells[0]);
+  let dispatched = false;
+  const wire = createWire({
+    meter,
+    journal: { write() {} },
+    getToken: async () => "fake",
+    client: { close() {} },
+    fetch: async (_url, { signal, method }) => {
+      if (method === "GET") return new Response("{}", { status: 200 });
+      dispatched = true;
+      return new Promise((_, reject) =>
+        signal.addEventListener("abort", () => reject(new Error("test aborted")), { once: true }),
+      );
+    },
+  });
+  const call = {
+    category: "create",
+    transport: "rest",
+    service: "Publisher",
+    method: "CreateTopic",
+    request: { name: "projects/fixture/topics/fe123456abcdef-a" },
+  };
+  const pending = wire.call(call);
+  while (!dispatched) await new Promise((resolve) => setImmediate(resolve));
+  wire.abortSource();
+  const reply = await pending;
+  assert.equal(reply.unknown, true);
+  await assert.rejects(wire.call(call), /source stopped/);
+  await wire.call({ ...call, category: "cleanupGet", method: "GetTopic" });
+  assert.equal(meter.snapshot().requests, 2);
+  wire.close();
+});
+
+test("REST metadata reservation includes headers and response framing reserve", async () => {
+  const response = new Response("a".repeat(62000), { headers: { etag: "e".repeat(1000) } });
+  await assert.rejects(readResponse(response), /response byte/);
+});
+
+test("native request duration uses the meter clock rather than wall clock adjustments", async () => {
+  let clock = 0;
+  const meter = createMeter({ now: () => clock });
+  meter.enter(makePlan().cells.find((item) => item.id === "N3"));
+  const raw = Buffer.from(
+    protos.google.pubsub.v1.Topic.encode({
+      name: "projects/fixture/topics/fe123456abcdef-a",
+    }).finish(),
+  );
+  const wire = createWire({
+    meter,
+    journal: { write() {} },
+    getToken: async () => "fake",
+    now: () => 1000,
+    client: {
+      close() {},
+      makeUnaryRequest(...args) {
+        clock += 5;
+        args.at(-1)(null, raw);
+        return new EventEmitter();
+      },
+    },
+  });
+  const reply = await wire.call({
+    category: "get",
+    transport: "grpc",
+    service: "Publisher",
+    method: "GetTopic",
+    request: { name: "projects/fixture/topics/fe123456abcdef-a" },
+  });
+  assert.equal(reply.durationMs, 5);
+  wire.close();
+});
+
+test("a mutation with less than the recorded latency margin is refused before credentials", async () => {
+  let clock = 0;
+  const meter = createMeter({ now: () => clock });
+  meter.enter(makePlan().cells.find((item) => item.id === "R3"));
+  clock = 50000;
+  let tokens = 0,
+    dispatches = 0;
+  const wire = createWire({
+    meter,
+    journal: { write() {} },
+    getToken: async () => {
+      tokens++;
+      return "fake";
+    },
+    client: { close() {} },
+    fetch: async () => {
+      dispatches++;
+      return new Response("{}");
+    },
+  });
+  await assert.rejects(
+    wire.call({
+      category: "create",
+      transport: "rest",
+      service: "Publisher",
+      method: "CreateTopic",
+      request: { name: "projects/fixture/topics/fe123456abcdef-a" },
+    }),
+    /latency margin/,
+  );
+  assert.equal(tokens, 0);
+  assert.equal(dispatches, 0);
+  wire.close();
+});
+
+test("late native lifecycle callbacks cannot write a disposed journal", async () => {
+  const meter = createMeter({ now: () => 0 });
+  meter.enter(makePlan().cells[0]);
+  const rpc = new EventEmitter();
+  rpc.write = () => true;
+  rpc.cancel = () => {};
+  rpc.end = () => {};
+  let closed = false;
+  const journal = {
+    write() {
+      if (closed) throw new Error("closed journal");
+    },
+    frame() {},
+  };
+  const stream = await openStream({
+    meter,
+    client: { makeBidiStreamRequest: () => rpc },
+    journal,
+    credential: async () => "fake",
+    now: () => 1,
+    cellId: "S01",
+    opener: {
+      subscription: "projects/fixture/subscriptions/fe123456abcdef-a",
+      streamAckDeadlineSeconds: 10,
+    },
+  });
+  stream.dispose();
+  closed = true;
+  for (const event of ["status", "end", "close", "error"])
+    assert.doesNotThrow(() => rpc.emit(event, { code: 1 }));
+});
+
+test("setup GET with a foreign response name stops before target writes", async () => {
+  const meter = createMeter({ now: () => 0 }),
+    cell = makePlan().cells.find((item) => item.id === "R3");
+  meter.enter(cell);
+  const world = fakeWorld(),
+    original = world.call;
+  world.call = async (call) =>
+    call.category === "get"
+      ? { ok: true, code: "OK", body: { name: "projects/foreign/topics/other" } }
+      : original(call);
+  const result = await runCell({
+    cell,
+    meter,
+    wire: world,
+    ledger: createLedger(),
+    runId: "123456abcdef",
+    journal: { write() {} },
+  });
+  assert.equal(result.complete, false);
+  assert.equal(
+    world.calls.some((call) => call.category === "target"),
+    false,
+  );
 });

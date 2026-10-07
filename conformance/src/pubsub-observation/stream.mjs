@@ -21,6 +21,7 @@ export async function openStream({
   metadata.add("authorization", `Bearer ${token}`);
   metadata.add("x-goog-user-project", PROJECT);
   const startedAt = now();
+  const monotonicStarted = meter.clock();
   journal.write({
     event: "stream-dispatch",
     cellId,
@@ -54,8 +55,10 @@ export async function openStream({
     waiter = null;
     callback?.();
   };
-  const event = (name, value = {}) =>
-    journal.write({ event: name, cellId, elapsedMs: now() - startedAt, ...value });
+  const elapsed = () => meter.clock() - monotonicStarted;
+  const event = (name, value = {}) => {
+    if (!disposed) journal.write({ event: name, cellId, elapsedMs: elapsed(), ...value });
+  };
   const cancel = (reason) => {
     if (!cancelled && !state.terminal) {
       cancelled = true;
@@ -83,7 +86,7 @@ export async function openStream({
         event: "stream-frame",
         cellId,
         direction: "in",
-        elapsedMs: now() - startedAt,
+        elapsedMs: elapsed(),
         body,
       });
       state.received++;
@@ -124,7 +127,7 @@ export async function openStream({
         event: "stream-frame",
         cellId,
         direction: "out",
-        elapsedMs: now() - startedAt,
+        elapsedMs: elapsed(),
         body,
       });
       const writable = rpc.write(raw);
@@ -141,11 +144,7 @@ export async function openStream({
     async next(timeoutMs = windowMs) {
       if (queue.length) return queue.shift();
       if (cancelled || state.terminal || state.inboundEnded || disposed) return null;
-      const delay = Math.min(
-        timeoutMs,
-        meter.remaining(),
-        Math.max(0, windowMs - (now() - startedAt)),
-      );
+      const delay = Math.min(timeoutMs, meter.remaining(), Math.max(0, windowMs - elapsed()));
       if (delay <= 0) return null;
       let nextTimer;
       try {

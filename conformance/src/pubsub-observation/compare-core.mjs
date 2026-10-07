@@ -126,6 +126,10 @@ export function prepareObservation(input) {
     } else if (row.event === "case-result") {
       if (!cell || cell.result) throw new Error("duplicate case result");
       cell.result = row;
+    } else if (row.event === "case-budget-overrun") {
+      if (!cell?.result || row.complete !== false || row.budgetOverrun !== true)
+        throw new Error("invalid post-persistence case result");
+      cell.result = row;
     } else if (row.event === "stream-frame") {
       if (!cell || !["in", "out"].includes(row.direction)) throw new Error("invalid stream frame");
       cell.frames.push({ ...row, verified: verifiedFrames.has(row.n) });

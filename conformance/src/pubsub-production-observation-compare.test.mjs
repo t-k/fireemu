@@ -176,6 +176,24 @@ test("summary result cannot silently disagree with the captured case result", ()
   f.summary.results[0].complete = false;
   assert.throws(() => prepared(f), /result/);
 });
+test("post-persistence case budget overrun preserves incomplete evidence and known gaps", () => {
+  for (const gap of [false, true]) {
+    const f = fixture();
+    const final = {
+      ...f.summary.results[0],
+      complete: false,
+      budgetOverrun: true,
+      reason: "cell or source budget exceeded during persistence",
+    };
+    f.summary.results[0] = final;
+    f.rows.push({ ...final, n: 5, at: new Date(5000).toISOString(), event: "case-budget-overrun" });
+    const local = fixture();
+    if (gap) local.rows[2].reply.body = { x: 1 };
+    const r = result(f, local).cells.find((c) => c.id === "R3");
+    assert.equal(r.verdict, gap ? "DIVERGES" : "NOT_COMPARABLE");
+    assert.ok(r.debts.some((d) => d.includes("incomplete")));
+  }
+});
 test("ACK selector remains NOT_COMPARABLE even for identical successful Pull", () => {
   const f = fixture("Pull");
   f.rows[2].reply.body = {
@@ -290,6 +308,30 @@ test("hash and summary capture near misses refuse before parsing or output", (t)
       ]),
     /hash/,
   );
+});
+test("production loader requires exact coordinator pins and summary journal digests", (t) => {
+  const d = diskFixture(t);
+  d.bundle.evidenceKind = "production";
+  const manifest =
+    ["capture", "issued", "summary"]
+      .map((k) => `${d.bundle[k].sha256}  ${d.bundle[k].path.split("/").at(-1)}`)
+      .join("\n") + "\n";
+  d.bundle.coordinatorManifest = { path: join(d.dir, "manifest.txt"), sha256: sha(manifest) };
+  writeFileSync(d.bundle.coordinatorManifest.path, manifest);
+  assert.equal(readPinnedBundle(d.bundle).rows.length, 4);
+  writeFileSync(
+    d.bundle.coordinatorManifest.path,
+    manifest.replace(d.bundle.capture.sha256, "0".repeat(64)),
+  );
+  d.bundle.coordinatorManifest.sha256 = sha(readFileSync(d.bundle.coordinatorManifest.path));
+  assert.throws(() => readPinnedBundle(d.bundle), /manifest/);
+  d.bundle.evidenceKind = "fixture";
+  d.bundle.summary = d.pin("mismatch.json", {
+    ...d.f.summary,
+    captureSha256: "0".repeat(64),
+    issuedSha256: d.bundle.issued.sha256,
+  });
+  assert.throws(() => readPinnedBundle(d.bundle), /summary journal hash/);
 });
 test("native frame verification requires matching raw bytes and decoded body", (t) => {
   const d = diskFixture(t),

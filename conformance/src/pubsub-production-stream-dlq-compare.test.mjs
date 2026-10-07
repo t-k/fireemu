@@ -1495,7 +1495,8 @@ test("field normalization replays redacted actual two-run bodies and format near
     (m) =>
       (m.attributes.CloudPubSubDeadLetterSourceTopicPublishTime =
         m.attributes.CloudPubSubDeadLetterSourceTopicPublishTime.replace(/\.\d{3}/, ".123456")),
-    (m) => (m.attributes.CloudPubSubDeadLetterSourceTopicPublishTime = "invalid"),
+    (m) =>
+      (m.attributes.CloudPubSubDeadLetterSourceTopicPublishTime = "2026-02-31T03:04:05.123+00:00"),
   ]) {
     const changed = structuredClone(body);
     change(changed.receivedMessages[0].message);

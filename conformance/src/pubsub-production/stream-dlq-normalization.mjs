@@ -6,7 +6,8 @@ const read = (object, path) => path.reduce((value, key) => value?.[key], object)
 const timeShape = (value) =>
   typeof value === "string" &&
   /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}\+00:00$/.test(value) &&
-  Number.isFinite(Date.parse(value))
+  Number.isFinite(Date.parse(value)) &&
+  new Date(value).toISOString() === value.replace("+00:00", "Z")
     ? { type: "RFC3339", width: 29, precision: 3, zone: "+00:00" }
     : null;
 

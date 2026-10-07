@@ -62,11 +62,13 @@ export async function protectCell({ body, report, dispose, finalize, persist }) 
     try {
       await finalize();
     } catch (error) {
+      failures.finalizationFailed = true;
       failures.push(error);
     }
     try {
       await persist();
     } catch (error) {
+      failures.persistenceFailed = true;
       failures.push(error);
     }
   }

@@ -420,7 +420,12 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
     complete = false;
     reason ??= failures[0].message;
   }
-  if (obligations(ledger, tracked).length) cleanupClosed = false;
+  if (
+    failures.finalizationFailed ||
+    failures.persistenceFailed ||
+    obligations(ledger, tracked).length
+  )
+    cleanupClosed = false;
   try {
     meter.remaining(true);
   } catch {

@@ -677,6 +677,7 @@ async fn the_emulator_profile_ignores_the_credential_as_the_official_emulator_do
     server.stop().await;
 }
 
+#[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn strict_pinned_channel_clock_refuses_unrepresentable_instants_and_keeps_active_channels_after_rewind(
 ) {

@@ -54,6 +54,35 @@ export const owned = (name, runId) =>
   /^[a-f0-9]{12}$/.test(runId) &&
   makePlan().cells.some((c) => graph(c, runId).resources.some((r) => r.name === name));
 
+export function parsePage(body, { kind, allowed, pageSize }) {
+  if (
+    !body ||
+    typeof body !== "object" ||
+    Array.isArray(body) ||
+    !Object.hasOwn(kinds, kind) ||
+    !Array.isArray(allowed) ||
+    !Number.isSafeInteger(pageSize) ||
+    pageSize < 0
+  )
+    throw new Error("invalid page parser inputs");
+  const members = body[kind] ?? [];
+  if (
+    !Array.isArray(members) ||
+    members.some((r) => typeof r?.name !== "string" || !allowed.includes(r.name))
+  )
+    throw new Error("foreign or unreadable list member");
+  const names = members.map((r) => r.name);
+  if (new Set(names).size !== names.length || names.length > pageSize)
+    throw new Error("page cardinality invalid");
+  const nextPageToken = body.nextPageToken ?? null;
+  if (
+    nextPageToken !== null &&
+    (typeof nextPageToken !== "string" || !nextPageToken.length || nextPageToken.length > 4096)
+  )
+    throw new Error("unrecordable token shape");
+  return { names, nextPageToken };
+}
+
 export async function runCell({ cell, meter, wire, ledger, runId, journal }) {
   const manifest = graph(cell, runId),
     allowed = new Set(manifest.resources.map((r) => r.name));
@@ -148,21 +177,11 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal }) {
       if (required) throw new Error("required page refused");
       return observation;
     }
-    const members = reply.body[cell.kind] ?? [];
-    if (
-      !Array.isArray(members) ||
-      members.some((r) => typeof r?.name !== "string" || !manifest.members.includes(r.name))
-    )
-      throw new Error("foreign or unreadable list member");
-    const names = members.map((r) => r.name);
-    if (new Set(names).size !== names.length || names.length > page.pageSize)
-      throw new Error("page cardinality invalid");
-    const nextPageToken = reply.body.nextPageToken ?? null;
-    if (
-      nextPageToken !== null &&
-      (typeof nextPageToken !== "string" || !nextPageToken.length || nextPageToken.length > 4096)
-    )
-      throw new Error("unrecordable token shape");
+    const { names, nextPageToken } = parsePage(reply.body, {
+      kind: cell.kind,
+      allowed: manifest.members,
+      pageSize: page.pageSize,
+    });
     const observation = {
       event: "page-observation",
       cellId: cell.id,

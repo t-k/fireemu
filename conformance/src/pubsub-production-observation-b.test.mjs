@@ -156,7 +156,8 @@ test("B REST list query and snapshot creation match the recorded route shape", (
   });
 });
 
-const { graph, owned, runCell, recoverA2 } = await import("./pubsub-observation-b/scenarios.mjs");
+const { graph, owned, runCell, recoverA2, parsePage } =
+  await import("./pubsub-observation-b/scenarios.mjs");
 const { createLedger } = await import("./pubsub-production/ledger.mjs");
 test("B resource manifests bind the alternate-prefix sentinel and all exact prerequisites", () => {
   for (const cell of makePlan().cells) {
@@ -213,6 +214,9 @@ function pageWorld({ unknown, foreign = false, clock = { value: 0 }, slow = fals
       if (c.method === unknown) return { ok: false, code: "UNKNOWN", unknown: true, body: {} };
       const name = c.request.name;
       if (c.method.startsWith("Create")) {
+        assert.equal(typeof c.request.name, "string");
+        if (c.method === "CreateSubscription") assert.ok(resources.has(c.request.topic));
+        if (c.method === "CreateSnapshot") assert.ok(resources.has(c.request.subscription));
         const body = { ...c.request };
         resources.set(name, body);
         return { ok: true, code: "OK", body };
@@ -766,4 +770,277 @@ test("B recorded same-route snapshot and list fixtures replay actual SDK and RES
     "listSubscriptions",
   ])
     for (const transport of ["rest", "grpc"]) assert.ok(pairs.has(`${operation}/${transport}`));
+});
+
+const { main, parseArgs } = await import("./pubsub-observation-b/record.mjs");
+const { verifyProof } = await import("./pubsub-observation-b/admission.mjs");
+test("B default entrypoint prepares only and refuses incomplete or widening send options", async () => {
+  const events = [];
+  const value = await main([], {
+    describe: () => ({ suite: "prepared" }),
+    print: (v) => events.push(v.suite),
+    createCredentials: () => {
+      throw new Error("credential execution forbidden");
+    },
+    createWire: () => {
+      throw new Error("wire execution forbidden");
+    },
+  });
+  assert.equal(value.suite, "prepared");
+  assert.deepEqual(events, ["prepared"]);
+  assert.throws(() => parseArgs(["--record"]), /required/);
+  assert.throws(() => parseArgs(["--max-requests", "695"]), /unknown/);
+  assert.throws(() => parseArgs(["--prepare", "--out", "/fixture"]));
+});
+test("B proofs reject DRAFT and bind prior packet review data to the exact E/V scope SHA", () => {
+  const scope = {
+    taskId: "PUBSUB-OBSERVATION-B",
+    suite: "pubsub-observation-b-v1",
+    envelopeId: "PUBSUB-OBSERVATION-B-FIXED",
+    plan: makePlan(),
+    priorPacket: priorProof().value,
+  };
+  for (const kind of ["E", "V"]) {
+    const row = { ...scope, kind, state: "APPROVED" };
+    const line = `| PUBSUB-OBSERVATION-B${kind === "E" ? " envelope" : ""} | decision=APPROVE; envelopeId=${scope.envelopeId}; scopeSha256=${scopeDigest(row)} |`;
+    verifyProof(row, line, scope, kind);
+    assert.throws(() => verifyProof({ ...row, state: "DRAFT" }, line, scope, kind), /scope/);
+    assert.throws(
+      () => verifyProof(row, line.replace("decision=APPROVE", "decision=DRAFT"), scope, kind),
+      /approve/,
+    );
+    const changed = structuredClone(row);
+    changed.priorPacket.reviewed = false;
+    assert.throws(() => verifyProof(changed, line, scope, kind), /scope/);
+  }
+});
+
+test("B durable dispatch rechecks authority after credentials and persistence", async () => {
+  for (const changedAt of ["credential", "persistence"]) {
+    let valid = true,
+      sent = 0;
+    const meter = createMeter({ now: () => 0 });
+    meter.enter(makePlan().cells[0]);
+    const wire = createWire({
+      meter,
+      beforeDispatch: () => {
+        if (!valid) throw new Error("authority changed");
+      },
+      journal: {
+        write: (r) => {
+          if (changedAt === "persistence" && r.event === "request-dispatch") valid = false;
+        },
+      },
+      getToken: async () => {
+        if (changedAt === "credential") valid = false;
+        return "fake";
+      },
+      client: { close() {} },
+      fetch: async () => {
+        sent++;
+        return new Response("{}");
+      },
+    });
+    try {
+      const reply = await wire.call({
+        category: "create",
+        transport: "rest",
+        service: "Publisher",
+        method: "CreateTopic",
+        request: { name: "projects/fixture-project/topics/fe123456abcdef-x" },
+      });
+      assert.equal(reply.unknown, true);
+      assert.equal(sent, 0);
+    } finally {
+      wire.close();
+    }
+  }
+});
+test("B persistence expiry prevents a physical request and cannot turn settled cleanup into recording completeness", async () => {
+  let clock = 0,
+    sent = 0;
+  const meter = createMeter({ now: () => clock });
+  meter.enter(makePlan().cells[0]);
+  const wire = createWire({
+    meter,
+    journal: {
+      write: (r) => {
+        if (r.event === "request-dispatch") clock = 80000;
+      },
+    },
+    getToken: async () => "fake",
+    client: { close() {} },
+    fetch: async () => {
+      sent++;
+      return new Response("{}");
+    },
+  });
+  try {
+    const reply = await wire.call({
+      category: "create",
+      transport: "rest",
+      service: "Publisher",
+      method: "CreateTopic",
+      request: { name: "projects/fixture-project/topics/fe123456abcdef-x" },
+    });
+    assert.equal(reply.unknown, true);
+    assert.equal(sent, 0);
+  } finally {
+    wire.close();
+  }
+  const cell = makePlan().cells[0],
+    world = pageWorld(),
+    other = createMeter({ now: () => world.clock.value });
+  other.enter(cell);
+  const result = await runCell({
+    cell,
+    meter: other,
+    wire: {
+      call: async (c) => {
+        other.start(c.category, c.transport);
+        return world.call(c);
+      },
+    },
+    ledger: createLedger(),
+    runId: "123456abcdef",
+    journal: {
+      write: (r) => {
+        if (r.event === "case-result") world.clock.value += 120000;
+      },
+    },
+  });
+  assert.equal(result.cleanupClosed, true);
+  assert.equal(result.complete, false);
+  assert.equal(result.budgetOverrun, true);
+});
+
+test("B pure page parser preserves recorded order, exact membership and token shape without adopting names", () => {
+  for (const row of recorded.rows.filter(
+    (r) => r.op.startsWith("list") && (r.response.code === "OK" || r.response.status === 200),
+  )) {
+    const kind = row.op.slice(4).toLowerCase(),
+      body = row.response.body;
+    const declared = (body[kind] ?? []).map((r) => r.name);
+    // Explicit fixture inputs test structural parsing; source manifests never derive ownership from a list.
+    const result = parsePage(body, { kind, allowed: declared, pageSize: 1000 });
+    assert.deepEqual(result.names, declared);
+    assert.equal(result.nextPageToken, body.nextPageToken ?? null);
+    if (declared.length)
+      assert.throws(() => parsePage(body, { kind, allowed: [], pageSize: 1000 }), /foreign/);
+  }
+  for (let seed = 1; seed <= 300; seed++) {
+    const allowed = ["a", "b", "c", "d"],
+      names = [...allowed]
+        .sort((a, b) => ((a.charCodeAt(0) * seed) % 11) - ((b.charCodeAt(0) * seed) % 11))
+        .slice(0, seed % 5);
+    const body = {
+      topics: names.map((name) => ({ name })),
+      nextPageToken: seed % 2 ? "opaque+/=" : undefined,
+    };
+    const value = parsePage(body, { kind: "topics", allowed, pageSize: 4 });
+    assert.deepEqual(value.names, names);
+    if (names.length)
+      assert.throws(
+        () => parsePage(body, { kind: "topics", allowed, pageSize: names.length - 1 }),
+        /cardinality/,
+      );
+    assert.throws(
+      () =>
+        parsePage(
+          { ...body, topics: [{ name: "foreign" }] },
+          { kind: "topics", allowed, pageSize: 4 },
+        ),
+      /foreign/,
+    );
+  }
+  for (const token of [false, [], {}, "", "R".repeat(4097)])
+    assert.throws(
+      () =>
+        parsePage(
+          { topics: [], nextPageToken: token },
+          { kind: "topics", allowed: [], pageSize: 1 },
+        ),
+      /token/,
+    );
+  assert.equal(
+    parsePage(
+      { topics: [], nextPageToken: "R".repeat(4096) },
+      { kind: "topics", allowed: [], pageSize: 1 },
+    ).nextPageToken.length,
+    4096,
+  );
+});
+
+test("B actual main connects the counted baseline to exclusive journals and preserves parent closure debt", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs"),
+    { tmpdir } = await import("node:os"),
+    { join } = await import("node:path");
+  for (const unknown of [null, "CreateTopic"]) {
+    const out = mkdtempSync(join(tmpdir(), "pubsub-observation-b-main-")),
+      world = pageWorld({ unknown }),
+      signals = new EventEmitter();
+    let exitCode = 0,
+      checks = 0;
+    try {
+      const args = [
+        "--record",
+        ...Object.entries({
+          authority: "fixture",
+          descriptor: "fixture",
+          packet: "fixture",
+          E: "fixture",
+          V: "fixture",
+          lock: "fixture",
+          "run-id": "123456abcdef",
+          out,
+        }).flatMap(([k, v]) => [`--${k}`, v]),
+      ];
+      const summary = await main(args, {
+        admit: () => ({
+          check: () => {
+            checks++;
+          },
+          descriptor: { head: "a".repeat(40) },
+          descriptorSha256: "b".repeat(64),
+          scope: { envelopeId: "FIXTURE-B", packetSha256: "c".repeat(64) },
+        }),
+        signals,
+        createCredentials: () => async () => "fake",
+        createWire: (options) => ({
+          close() {},
+          call: (c) => {
+            options.meter.start(c.category, c.transport);
+            options.beforeDispatch();
+            return world.call(c);
+          },
+        }),
+        setExitCode: (v) => {
+          exitCode = v;
+        },
+      });
+      assert.equal(summary.recordingComplete, unknown === null);
+      assert.equal(summary.resourcesClosed, unknown === null);
+      assert.equal(summary.parentClosureReady, false);
+      assert.equal(summary.closureReady, false);
+      assert.equal(summary.results.length, unknown === null ? 18 : 1);
+      assert.equal(exitCode, unknown === null ? 0 : 2);
+      assert.equal(summary.meter.requests, world.calls.length);
+      assert.ok(checks >= world.calls.length);
+      assert.equal(
+        summary.issuedSha256,
+        sha256(readFileSync(join(out, "issued-123456abcdef.jsonl"))),
+      );
+      assert.equal(signals.listenerCount("SIGTERM"), 0);
+      await assert.rejects(
+        main(args, {
+          admit: () => {
+            throw new Error("no rerun");
+          },
+        }),
+        /rerun/,
+      );
+    } finally {
+      rmSync(out, { recursive: true });
+    }
+  }
 });

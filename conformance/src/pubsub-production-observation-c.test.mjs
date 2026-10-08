@@ -1,4 +1,6 @@
 import {
+  admit,
+  describeSource,
   verifyPriorPacket,
   verifyPreviousAttempt,
   scopeDigest,
@@ -9,7 +11,7 @@ import {
 import { sha256 } from "./pubsub-production/admission.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { makePlan, CAPS, categoryCaps } from "./pubsub-observation-c/plan.mjs";
+import { makePlan, validatePlan, CAPS, categoryCaps } from "./pubsub-observation-c/plan.mjs";
 import { createMeter } from "./pubsub-observation-c/meter.mjs";
 import { route, encodeRequest, typeOf } from "./pubsub-observation-c/wire.mjs";
 import { SERVICES } from "./pubsub-production/grpc.mjs";
@@ -22,6 +24,11 @@ import { main } from "./pubsub-observation-c/record.mjs";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import fs from "node:fs";
+import childProcess from "node:child_process";
+import { createRequire, syncBuiltinESMExports } from "node:module";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import { minimumCallMs } from "./pubsub-observation-c/plan.mjs";
 
 test("C complete main requires all26baseline cells and closes each own graph", async () => {
@@ -45,6 +52,7 @@ test("C complete main requires all26baseline cells and closes each own graph", a
         createCredentials: () => async () => "fake",
         print() {},
         admit: () => ({
+          plan: makePlan(),
           descriptor: { head: "a".repeat(40) },
           descriptorSha256: "b".repeat(64),
           scope: { envelopeId: "PUBSUB-OBSERVATION-C-TEST", packetSha256: "c".repeat(64) },
@@ -768,4 +776,179 @@ test("C proofs reject DRAFT and bind prior packet review data to the exact E/V s
     changed.priorPacket.reviewed = false;
     assert.throws(() => verifyProof(changed, line, scope, kind), /scope/);
   }
+});
+
+const gapIds = ["R1", "R2", "R3", "R4", "R5", "R6", "R8", "R10", "R11", "N1", "N2", "N3", "N4", "N5", "N6", "N8", "N10", "N11"];
+test("C fixed remaining-gap selection preserves original cell order and closed caps", () => {
+  const full = makePlan(), gap = makePlan({ selection: "remaining-gap" });
+  assert.deepEqual(gap.cells.map((c) => c.id), gapIds);
+  assert.deepEqual(gap.cells, full.cells.filter((c) => gapIds.includes(c.id)));
+  assert.deepEqual(gap.caps.G2, { requests: 666, rest: 333, grpc: 333, streams: 0, cellMs: 180000 });
+  assert.equal(gap.caps.totalRequests, 680);
+  assert.equal(gap.caps.sourceRequests, 666);
+  assert.equal(gap.caps.sourceWallMs, 3240000);
+  assert.equal(gap.caps.smallPublishes, 54);
+  assert.equal(gap.caps.largePublishes, 0);
+  assert.equal(gap.caps.cleanupReserveMs, 40000);
+  assert.deepEqual(validatePlan(gap), gap);
+  assert.deepEqual(makePlan(), full);
+  for (const change of [
+    (v) => v.cells.reverse(),
+    (v) => v.cells.push(v.cells[0]),
+    (v) => v.cells.splice(0, 1),
+    (v) => v.cells.push(full.cells.find((c) => c.id === "R7")),
+    (v) => v.caps.totalRequests++,
+    (v) => v.selection = "arbitrary",
+  ]) {
+    const altered = structuredClone(gap); change(altered);
+    assert.throws(() => validatePlan(altered), /plan|selection/);
+  }
+});
+
+async function withCAdmission(t, plan, packetPlan, use) {
+  const root = fileURLToPath(new URL("../..", import.meta.url));
+  const mainRoot = resolve(root, "../..");
+  const realRead = fs.readFileSync, realReadDir = fs.readdirSync;
+  const fixtureOut = mkdtempSync(join(tmpdir(), "pubsub-c-admit-"));
+  const files = new Map();
+  const put = (path, value) => { const bytes = Buffer.from(JSON.stringify(value)); files.set(path, bytes); return sha256(bytes); };
+  const options = { runId: "123456abcdef", out: fixtureOut, descriptor: "/fixture/descriptor", authority: "/fixture/authority", packet: "/fixture/packet", E: "/fixture/E", V: "/fixture/V", lock: resolve(mainRoot, "docs.local/runs/sandbox-locks/fireemu-oracle-idp.lock"), a2: false };
+  // Runtime identity inputs are synthetic; admission and recording predicates remain real.
+  const require = createRequire(import.meta.url), sdkPackage = require.resolve("@google-cloud/pubsub/package.json");
+  const sdkRoot = dirname(sdkPackage), sdkRequire = createRequire(sdkPackage);
+  const runtimePackages = [sdkPackage, sdkRequire.resolve("google-gax/package.json"), require.resolve("@grpc/grpc-js/package.json")];
+  const runtimeRoots = new Set(runtimePackages.map((path) => fs.realpathSync(dirname(path))));
+  for (const path of runtimePackages) {
+    const { name } = JSON.parse(realRead(path));
+    put(path, { name, version: "0.0.0-fixture", dependencies: {} });
+  }
+  for (const path of [process.execPath, resolve(sdkRoot, "build/protos/protos.js"), require.resolve("@google-cloud/pubsub"), require.resolve("@grpc/grpc-js"), sdkRequire.resolve("google-gax")])
+    files.set(path, Buffer.from("offline-runtime-identity-fixture"));
+  const savedExecArgv = process.execArgv; process.execArgv = [];
+  t.mock.method(childProcess, "execFileSync", (_command, args, opts) => {
+    const operation = args.slice(2);
+    if (operation[0] === "show") return realRead(resolve(root, operation[1].slice(41)));
+    if (operation[0] === "verify-commit") return "";
+    if (operation[0] === "rev-parse") return operation.includes("--git-common-dir") ? resolve(mainRoot, ".git") : "a".repeat(40);
+    throw new Error("unexpected fixture git operation");
+  });
+  t.mock.method(fs, "readFileSync", (path, options) => {
+    const bytes = files.get(String(path));
+    if (bytes) return options === "utf8" ? bytes.toString() : bytes;
+    if (String(path).includes("docs.local/")) throw new Error("live admission input forbidden in fixture");
+    if (String(path).includes("/node_modules/")) throw new Error("unexpected runtime fixture read");
+    return realRead(path, options);
+  });
+  files.set(resolve(mainRoot, "docs.local/runs/sandbox-ledger.jsonl"), Buffer.alloc(0));
+  t.mock.method(fs, "readdirSync", (path, options) => String(path) === resolve(mainRoot, "docs.local/runs") || runtimeRoots.has(String(path)) ? [] : realReadDir(path, options));
+  syncBuiltinESMExports();
+  try {
+    const descriptor = describeSource(), descriptorSha256 = put(options.descriptor, descriptor);
+    const prior = priorProof();
+    for (const [path, bytes] of Object.entries(prior.summaries)) files.set(path, bytes);
+    const scope = { taskId: "PUBSUB-OBSERVATION-C", suite: "pubsub-observation-c-v1", project: "fireemu-oracle-idp", envelopeId: "PUBSUB-OBSERVATION-C-GAP-TEST", sourceHead: descriptor.head, descriptorSha256, runIds: [options.runId, "abcdef123456"], runOutputs: { [options.runId]: options.out, abcdef123456: "/fixture/c-second" }, recoveryOutputs: { [options.runId]: "/fixture/c-first-a2", abcdef123456: "/fixture/c-second-a2" }, expiresAt: "2099-01-01T00:00:00Z", plan, priorPacket: prior.value };
+    scope.packetSha256 = put(options.packet, { schema: 1, taskId: scope.taskId, version: "v1", sourceHead: descriptor.head, descriptorSha256, runIds: scope.runIds, runOutputs: scope.runOutputs, recoveryOutputs: scope.recoveryOutputs, plan: packetPlan });
+    const lines = [];
+    for (const kind of ["E", "V"]) {
+      const row = { ...scope, kind, state: "APPROVED", ledgerLine: lines.length + 1 };
+      const line = `| PUBSUB-OBSERVATION-C${kind === "E" ? " envelope" : ""} | decision=APPROVE; envelopeId=${scope.envelopeId}; scopeSha256=${scopeDigest(row)} |`;
+      row.ledgerLineSha256 = sha256(line); lines.push(line); scope[kind] = { sha256: put(options[kind], row) };
+    }
+    files.set(resolve(mainRoot, "docs.local/instructions/owner-decisions.md"), Buffer.from(lines.join("\n")));
+    put(options.lock, { pid: process.pid, envelopeId: scope.envelopeId, sourceCommit: descriptor.head, acquiredAt: "2026-10-08T00:00:00Z" });
+    put(options.authority, scope);
+    return await use({ admit, options });
+  } finally { process.execArgv = savedExecArgv; t.mock.restoreAll(); syncBuiltinESMExports(); if (fs.existsSync(fixtureOut)) rmSync(fixtureOut, { recursive: true }); }
+}
+
+test("C admitted gap reaches actual recorder and selected meter without restoring full cells", async (t) => {
+  const plan = makePlan({ selection: "remaining-gap" });
+  await withCAdmission(t, plan, plan, async ({ admit, options }) => {
+    const admitted = admit(options);
+    assert.deepEqual(admitted.plan, plan);
+    const out = options.out, signals = new EventEmitter(), worlds = [];
+    let credentials = 0;
+    try {
+      const summary = await main(["--record", ...["authority", "descriptor", "packet", "E", "V", "lock", "run-id", "out"].flatMap((key) => [`--${key}`, key === "run-id" ? options.runId : key === "out" ? out : options[key]])], {
+        admit: () => admitted, sleep: async () => {}, signals, print() {}, setExitCode() {},
+        createCredentials: () => { credentials++; return async () => "fake"; },
+        createWire: (o) => { const world = referenceWorld(); worlds.push(world); return referenceWire(o.meter, world, o.journal); },
+      });
+      assert.equal(credentials, 1);
+      assert.deepEqual(summary.results.map((r) => r.cellId), gapIds);
+      assert.equal(summary.recordingComplete, true);
+      assert.equal(summary.resourcesClosed, true);
+      assert.equal(summary.parentClosureReady, false);
+      assert.equal(summary.error, null);
+      assert.equal(worlds[0].resources.size, 0);
+      assert.equal(signals.listenerCount("SIGTERM") + signals.listenerCount("SIGINT"), 0);
+      assert.ok(summary.meter.requests <= 666);
+      assert.ok(summary.meter.smallPublishes <= 54);
+    } finally { rmSync(out, { recursive: true }); }
+  });
+});
+
+
+test("C actual admission refuses edited or differently selected packet plans before credentials", async (t) => {
+  const gap = makePlan({ selection: "remaining-gap" }), reordered = structuredClone(gap);
+  reordered.cells.reverse();
+  for (const [scopePlan, packetPlan] of [[gap, makePlan()], [makePlan(), gap], [gap, reordered]]) {
+    await withCAdmission(t, scopePlan, packetPlan, async ({ admit, options }) => {
+      let credentials = 0;
+      await assert.rejects(() => main(["--record", ...["authority", "descriptor", "packet", "E", "V", "lock", "run-id", "out"].flatMap((key) => [`--${key}`, key === "run-id" ? options.runId : options[key]])], {
+        admit: () => admit(options),
+        createCredentials: () => { credentials++; throw new Error("credentials must not start"); },
+      }), /plan/);
+      assert.equal(credentials, 0);
+      assert.deepEqual(fs.readdirSync(options.out), []);
+    });
+  }
+});
+
+test("C gap meter enforces selected starts payload and cleanup without admitting omitted cells", () => {
+  const plan = makePlan({ selection: "remaining-gap" }), meter = createMeter({ plan, now: () => 0 });
+  for (const cell of plan.cells) {
+    meter.enter(cell);
+    for (const [category, count] of Object.entries(categoryCaps("G2")))
+      for (let i = 0; i < count; i++) meter.start(category, cell.transport);
+  }
+  assert.equal(meter.snapshot().requests, 666);
+  assert.equal(meter.snapshot().groups.G2.rest, 333);
+  assert.equal(meter.snapshot().groups.G2.grpc, 333);
+  assert.throws(() => meter.enter(makePlan().cells.find((c) => c.id === "R7")), /undeclared/);
+  for (let i = 0; i < 54; i++) meter.payload(1024);
+  assert.throws(() => meter.payload(1), /payload cap/);
+  assert.equal(meter.snapshot().smallPublishes, 54);
+  assert.throws(() => meter.frame(), /frame scope/);
+  const recovery = createMeter({ plan, a2: true, now: () => 0 });
+  recovery.enter({ id: "A2", group: "G7", transport: "rest" });
+  for (const category of ["resourceRead", "unknownDeleteRead"])
+    for (let i = 0; i < 6; i++) recovery.start(category, "rest");
+  assert.equal(recovery.snapshot().requests, 12);
+  assert.throws(() => recovery.start("resourceRead", "rest"), /category/);
+  let clock = 0;
+  const timed = createMeter({ plan, now: () => clock }); timed.enter(plan.cells[0]);
+  clock = 140000; assert.throws(() => timed.start("pull", "rest"), /time/);
+  assert.equal(timed.remaining(true), 40000);
+  clock = 180000; assert.throws(() => timed.remaining(true), /time/);
+});
+
+test("C admitted gap retains unknown CREATE obligations and stops before the next selected cell", async (t) => {
+  const plan = makePlan({ selection: "remaining-gap" });
+  await withCAdmission(t, plan, plan, async ({ admit, options }) => {
+    const admitted = admit(options), world = referenceWorld({ unknown: "CreateTopic" }), signals = new EventEmitter();
+    const summary = await main(["--record", ...["authority", "descriptor", "packet", "E", "V", "lock", "run-id", "out"].flatMap((key) => [`--${key}`, key === "run-id" ? options.runId : options[key]])], {
+      admit: () => admitted, sleep: async () => {}, signals, print() {}, setExitCode() {},
+      createCredentials: () => async () => "fake",
+      createWire: (o) => referenceWire(o.meter, world, o.journal),
+    });
+    assert.equal(summary.recordingComplete, false);
+    assert.equal(summary.resourcesClosed, false);
+    assert.equal(summary.parentClosureReady, false);
+    assert.deepEqual(summary.results.map((r) => r.cellId), ["R1"]);
+    const issued = readFileSync(join(options.out, "issued-123456abcdef.jsonl"), "utf8");
+    assert.ok(issued.includes('"unknown"'));
+    assert.equal(signals.listenerCount("SIGTERM") + signals.listenerCount("SIGINT"), 0);
+    assert.throws(() => admit({ ...options, runId: "abcdef123456", out: "/fixture/c-second" }), /run2/);
+  });
 });

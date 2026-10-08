@@ -45,7 +45,9 @@ export const categoryCaps = (group) =>
         cleanupGet: 5,
       }
     : { resourceRead: 6, unknownDeleteRead: 6 };
-export function makePlan() {
+export function makePlan({ selection = "full" } = {}) {
+  if (!["full", "remaining-gap"].includes(selection))
+    throw new Error("fixed observation selection mismatch");
   const cells = [];
   const coordinates = {
     "multiple-subscriptions": ["/conditions/8/cases/3", "/conditions/8/cases/4"],
@@ -95,14 +97,21 @@ export function makePlan() {
       predecessor: original,
       activation: "explicit reason and settled predecessor only",
     });
+  const gap = selection === "remaining-gap";
+  const selected = gap
+    ? cells.filter((cell) => !cell.reserve && [1, 2, 3, 4, 5, 6, 8, 10, 11].includes(Number(cell.id.slice(1))))
+    : cells;
   return {
     schema: 1,
+    ...(gap ? { selection } : {}),
     suite: SUITE,
     project: PROJECT,
     groups: ["G2", "G7"],
     recordings: 2,
-    caps: structuredClone(CAPS),
-    cells,
+    caps: gap
+      ? { ...structuredClone(CAPS), G2: { ...CAPS.G2, requests: 666, rest: 333, grpc: 333 }, sourceRequests: 666, totalRequests: 680, smallPublishes: 54, sourceWallMs: 3240000 }
+      : structuredClone(CAPS),
+    cells: selected,
     ackSelector: "NOT_COMPARABLE-until-observed",
     a2: { minAgeMs: 600000, resourceReads: 6, unknownDeleteReads: 6, iamReadsUnused: 2 },
     spendStopUsd: 2,
@@ -122,7 +131,7 @@ export function makePlan() {
   };
 }
 export function validatePlan(value) {
-  if (JSON.stringify(value) !== JSON.stringify(makePlan()))
+  if (JSON.stringify(value) !== JSON.stringify(makePlan({ selection: value?.selection ?? "full" })))
     throw new Error("fixed observation plan mismatch");
   return value;
 }

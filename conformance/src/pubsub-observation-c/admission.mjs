@@ -10,7 +10,7 @@ import {
   verifyLiveLock,
 } from "../pubsub-production/admission.mjs";
 import { SOURCE_FILES as inheritedSources } from "../pubsub-observation/admission.mjs";
-import { SUITE, TASK, PROJECT, makePlan, validatePlan } from "./plan.mjs";
+import { SUITE, TASK, PROJECT, validatePlan } from "./plan.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 export const SOURCE_FILES = Object.freeze([
   ...new Set([
@@ -29,7 +29,7 @@ export function describeSource() {
   return {
     schema: 1,
     requestBudgetAuthority:
-      "hash-bound packet.plan.caps; ceilings include unused fresh cells and two IAM read reservations",
+      "hash-bound packet.plan.caps; unused reservations cannot be reassigned",
     suite: SUITE,
     head: git("rev-parse", "HEAD"),
     runtime: runtimeIdentity(),
@@ -220,6 +220,8 @@ export function admit(options, now = Date.now()) {
   )
     throw new Error("packet identity mismatch");
   validatePlan(packet.value.plan);
+  if (JSON.stringify(packet.value.plan) !== JSON.stringify(scope.plan))
+    throw new Error("packet and scope plan mismatch");
   const main = dirname(git("rev-parse", "--path-format=absolute", "--git-common-dir"));
   const ledgerPath = resolve(main, "docs.local/instructions/owner-decisions.md");
   for (const kind of ["E", "V"]) {
@@ -265,7 +267,7 @@ export function admit(options, now = Date.now()) {
     descriptor,
     descriptorSha256: descriptorFile.sha256,
     check,
-    plan: makePlan(),
+    plan: structuredClone(scope.plan),
     preflightUnusedRun: () =>
       unusedRunPreflight({
         runId: options.runId,

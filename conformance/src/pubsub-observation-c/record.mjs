@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { sha256, claimSourceRun } from "../pubsub-production/admission.mjs";
 import { createLedger, readLedger } from "../pubsub-observation/ledger.mjs";
 import { describeSource, admit } from "./admission.mjs";
-import { makePlan, PROJECT, SUITE } from "./plan.mjs";
+import { validatePlan, PROJECT, SUITE } from "./plan.mjs";
 import { createMeter } from "./meter.mjs";
 import { createWire } from "./wire.mjs";
 import { createCredentials } from "../pubsub-observation/credentials.mjs";
@@ -96,6 +96,7 @@ export async function main(args = process.argv.slice(2), deps = {}) {
     return descriptor;
   }
   const admission = (deps.admit ?? admit)(options);
+  const plan = validatePlan(admission.plan);
   const input = options.a2 ? recoveryInput(admission, options.runId) : null;
   // The default source path has no contingency activation switch and never silently retries a cell.
   const noncePreflight = options.a2 ? null : admission.preflightUnusedRun?.();
@@ -124,7 +125,7 @@ export async function main(args = process.argv.slice(2), deps = {}) {
     const ledger = input
       ? readLedger(input.ledgerPath).withJournal(issuedJournal)
       : createLedger({ journal: issuedJournal });
-    const meter = createMeter({ a2: options.a2 });
+    const meter = createMeter({ a2: options.a2, plan });
     const token = (deps.createCredentials ?? createCredentials)();
     const guardedToken = (value) => {
       admission.check();
@@ -208,7 +209,7 @@ export async function main(args = process.argv.slice(2), deps = {}) {
       resourcesClosed = recovery.closed;
       results.push(recovery);
     } else {
-      for (const cell of makePlan().cells.filter((item) => !item.reserve)) {
+      for (const cell of plan.cells.filter((item) => !item.reserve)) {
         if (signalled) break;
         meter.enter(cell);
         const result = await runCell({
@@ -225,7 +226,7 @@ export async function main(args = process.argv.slice(2), deps = {}) {
       }
       resourcesClosed = results.length > 0 && results.every((item) => item.cleanupClosed);
       recordingComplete =
-        results.length === makePlan().cells.filter((item) => !item.reserve).length &&
+        results.length === plan.cells.filter((item) => !item.reserve).length &&
         results.every((item) => item.complete);
     }
   } catch (failure) {

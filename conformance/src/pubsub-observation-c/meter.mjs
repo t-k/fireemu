@@ -1,8 +1,9 @@
-import { CAPS, makePlan, categoryCaps } from "./plan.mjs";
+import { makePlan, validatePlan, categoryCaps } from "./plan.mjs";
 
 export class Limit extends Error {}
 const zero = () => ({ requests: 0, rest: 0, grpc: 0, streams: 0 });
-export function createMeter({ now = () => performance.now(), a2 = false } = {}) {
+export function createMeter({ now = () => performance.now(), a2 = false, plan = makePlan() } = {}) {
+  const admittedPlan = structuredClone(validatePlan(plan)), caps = admittedPlan.caps;
   const begun = now();
   const groups = { G2: zero(), G7: zero() };
   const visited = new Set();
@@ -22,9 +23,9 @@ export function createMeter({ now = () => performance.now(), a2 = false } = {}) 
   };
   const remaining = (maintenance = false) => {
     if (!cell) throw new Limit("cell required");
-    const reserve = maintenance || a2 ? 0 : CAPS.cleanupReserveMs;
+    const reserve = maintenance || a2 ? 0 : caps.cleanupReserveMs;
     const left = Math.floor(
-      Math.min(end - reserve, begun + (a2 ? 600000 : CAPS.sourceWallMs)) - time(),
+      Math.min(end - reserve, begun + (a2 ? 600000 : caps.sourceWallMs)) - time(),
     );
     if (left <= 0) throw new Limit("cell or source time exhausted");
     return left;
@@ -36,7 +37,7 @@ export function createMeter({ now = () => performance.now(), a2 = false } = {}) 
       if (
         a2
           ? value.group !== "G7"
-          : !makePlan().cells.some((item) => JSON.stringify(item) === JSON.stringify(value))
+          : !admittedPlan.cells.some((item) => JSON.stringify(item) === JSON.stringify(value))
       )
         throw new Limit("undeclared cell");
       if (visited.has(value.id)) throw new Limit("cell cannot reopen");
@@ -49,7 +50,7 @@ export function createMeter({ now = () => performance.now(), a2 = false } = {}) 
         out: 0,
         in: 0,
       };
-      end = time() + (a2 ? 600000 : CAPS[value.group].cellMs);
+      end = time() + (a2 ? 600000 : caps[value.group].cellMs);
       remaining();
     },
     remaining,
@@ -66,11 +67,11 @@ export function createMeter({ now = () => performance.now(), a2 = false } = {}) 
       )
         throw new Limit("transport outside cell");
       const group = groups[cell.group],
-        caps = CAPS[cell.group];
+        groupCaps = caps[cell.group];
       if (
-        group.requests >= caps.requests ||
-        group[transport] >= caps[transport] ||
-        requests >= (a2 ? CAPS.G7.requests : CAPS.sourceRequests)
+        group.requests >= groupCaps.requests ||
+        group[transport] >= groupCaps[transport] ||
+        requests >= (a2 ? caps.G7.requests : caps.sourceRequests)
       )
         throw new Limit("request cap exhausted");
       cell.categories[category]++;
@@ -86,8 +87,8 @@ export function createMeter({ now = () => performance.now(), a2 = false } = {}) 
       if (
         !Number.isSafeInteger(bytes) ||
         bytes < 0 ||
-        bytes > CAPS[large ? "largeEncodedPayloadBytes" : "smallEncodedPayloadBytes"] ||
-        (large ? largePublishes >= CAPS.largePublishes : smallPublishes >= CAPS.smallPublishes)
+        bytes > caps[large ? "largeEncodedPayloadBytes" : "smallEncodedPayloadBytes"] ||
+        (large ? largePublishes >= caps.largePublishes : smallPublishes >= caps.smallPublishes)
       )
         throw new Limit("publish payload cap exhausted");
       if (large) largePublishes++;

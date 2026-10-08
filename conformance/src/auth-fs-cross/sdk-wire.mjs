@@ -176,7 +176,10 @@ export function installWireGuard(
               stream.destroy(new Error("transaction admission body capped"));
               return false;
             }
+            const callback = typeof args.at(-1) === "function" ? args.pop() : undefined;
             pendingWrites.push([snapshot, ...args]);
+            // Local immutable-buffer acceptance lets gRPC half-close; admission still gates DATA/end.
+            if (callback) queueMicrotask(callback);
             return true;
           }
           return write(chunk, ...args);

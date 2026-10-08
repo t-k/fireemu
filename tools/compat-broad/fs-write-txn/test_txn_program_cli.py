@@ -583,5 +583,5 @@ def test_presend_generator_describes_the_finalized_query_baseline():
 
 
 def test_the_s5b_successor_uses_a_fresh_fixed_envelope_without_changing_p17():
-    assert cli.table_for("s5b-web-sdk-retry")["envelopeId"] == "FS-TRANSACTION-s5b-web-sdk-retry-002"
+    assert cli.table_for("s5b-web-sdk-retry")["envelopeId"] == "FS-TRANSACTION-s5b-web-sdk-retry-003"
     assert cli.table_for("p17-admin-sdk-retry")["envelopeId"] == "FS-TRANSACTION-p17-admin-sdk-retry-003"

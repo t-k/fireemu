@@ -3,7 +3,12 @@ import { createHash } from "node:crypto";
 import http2 from "node:http2";
 import { test } from "node:test";
 
-import { bearerHash, createWireLedger, installWireGuard } from "./auth-fs-cross/sdk-wire.mjs";
+import {
+  bearerHash,
+  createWireLedger,
+  installWireGuard,
+  TRANSACTION_BODY_LIMIT,
+} from "./auth-fs-cross/sdk-wire.mjs";
 
 const sha = (text) => createHash("sha256").update(text).digest("hex");
 
@@ -352,9 +357,11 @@ test("HTTP2 transaction payload is buffered until decoded admission resolves", a
   const payload = [];
   const original = http2.connect;
   let acknowledge;
+  let callbacks = 0;
   const stream = new EventEmitter();
-  stream.write = (chunk) => {
+  stream.write = (chunk, ...args) => {
     payload.push(String(chunk));
+    if (typeof args.at(-1) === "function") args.at(-1)();
     return true;
   };
   stream.end = (chunk) => {
@@ -385,20 +392,107 @@ test("HTTP2 transaction payload is buffered until decoded admission resolves", a
       .request({ ":path": "/google.firestore.v1.Firestore/BatchGetDocuments" });
     const first = Buffer.from("first"),
       second = Buffer.from("second");
-    actual.write(first);
-    actual.end(second);
+    actual.write(first, "utf8", (error) => {
+      assert.equal(error, undefined);
+      callbacks += 1;
+      actual.end(second);
+      second.fill(0);
+    });
+    assert.equal(callbacks, 0);
     first.fill(0);
-    second.fill(0);
-    await Promise.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(callbacks, 1);
     assert.deepEqual(payload, []);
     acknowledge();
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(payload, ["ack", "first", "second", "end"]);
+    assert.equal(callbacks, 1);
   } finally {
     restore();
     http2.connect = original;
   }
 });
+
+for (const size of [TRANSACTION_BODY_LIMIT, TRANSACTION_BODY_LIMIT + 1]) {
+  test(`HTTP2 local write acceptance preserves the ${size}-byte cap and refused admission`, async () => {
+    const { EventEmitter } = await import("node:events");
+    const original = http2.connect;
+    const payload = [],
+      errors = [];
+    let callbacks = 0,
+      admissions = 0;
+    const stream = new EventEmitter();
+    stream.write = (chunk, ...args) => {
+      payload.push(chunk);
+      if (typeof args.at(-1) === "function") args.at(-1)();
+      return true;
+    };
+    stream.end = () => {
+      payload.push("end");
+      return stream;
+    };
+    stream.destroy = (error) => {
+      stream.destroyed = true;
+      stream.emit("error", error);
+    };
+    stream.on("error", (error) => errors.push(error));
+    http2.connect = () => ({ request: () => stream });
+    const restore = installWireGuard(
+      createWireLedger({ hosts: ["firestore.googleapis.com"], cap: 1 }),
+      {
+        onTransaction: () => {},
+        decodeGrpc: (_method, bytes) => {
+          assert.equal(bytes.length, size);
+          return {};
+        },
+        beforeTransaction: async () => {
+          admissions += 1;
+          throw new Error("parent refused");
+        },
+      },
+    );
+    try {
+      const actual = http2
+        .connect("https://firestore.googleapis.com")
+        .request({ ":path": "/google.firestore.v1.Firestore/BatchGetDocuments" });
+      const first = Buffer.alloc(TRANSACTION_BODY_LIMIT - 1, 1),
+        second = Buffer.alloc(size - first.length, 2);
+      assert.equal(
+        actual.write(first, () => {
+          callbacks += 1;
+        }),
+        true,
+      );
+      assert.equal(
+        actual.write(second, "utf8", () => {
+          callbacks += 1;
+        }),
+        size === TRANSACTION_BODY_LIMIT,
+      );
+      assert.equal(callbacks, 0);
+      first.fill(0);
+      second.fill(0);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(callbacks, size === TRANSACTION_BODY_LIMIT ? 2 : 1);
+      assert.deepEqual(payload, []);
+      if (size === TRANSACTION_BODY_LIMIT) {
+        actual.end();
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(admissions, 1);
+        assert.match(errors[0].message, /admission refused/);
+      } else {
+        assert.equal(admissions, 0);
+        assert.match(errors[0].message, /body capped/);
+      }
+      assert.deepEqual(payload, []);
+      assert.equal(callbacks, size === TRANSACTION_BODY_LIMIT ? 2 : 1);
+      assert.equal(stream.destroyed, true);
+    } finally {
+      restore();
+      http2.connect = original;
+    }
+  });
+}
 
 test("transaction operation opts into two attempts and preserves the default SDK call", async () => {
   const { createOperations } = await import("./auth-fs-cross/sdk-operations.mjs");

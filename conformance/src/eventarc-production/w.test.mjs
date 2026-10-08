@@ -425,6 +425,27 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
                   : native(200, {});
               if (mode === "shape-counter-success") return native(200, {});
               if (mode === "shape-unmeasured") return native(400, nativeSizeRefusal);
+              const generic = /^shape-detailed-(400|413)-(1000000[01])$/.exec(mode);
+              if (generic) {
+                const refusal = template(
+                  (r) => r.status === 400 && r.body.error?.message === "No events provided.",
+                );
+                refusal.error.code = Number(generic[1]);
+                refusal.error.status =
+                  generic[1] === "400" ? "INVALID_ARGUMENT" : "RESOURCE_EXHAUSTED";
+                refusal.error.message = `The value for request_size is too large. You passed ${generic[2]} in the request, but the maximum value is 10000000.`;
+                refusal.error.details[0].fieldViolations[0].description = refusal.error.message;
+                return native(Number(generic[1]), refusal);
+              }
+              if (mode === "shape-detail-free-boundary")
+                return native(400, {
+                  error: {
+                    code: 400,
+                    message:
+                      "The value for request_size is too large. You passed 10000000 in the request, but the maximum value is 10000000.",
+                    status: "INVALID_ARGUMENT",
+                  },
+                });
               return native(400, {
                 error: {
                   code: 400,
@@ -749,6 +770,40 @@ test("W shape preserves mismatched measurements and stops on unknown or unmeasur
     assert.equal(result.cleanupReady, true);
     assert.match(result.stopped, /needs-review/);
     assert.equal(calls.filter((c) => c.method === "DELETE").length, 1);
+  }
+});
+
+test("W shape measurements reject generic detailed refusals and the maximum boundary", async () => {
+  for (const mode of [
+    "shape-detailed-400-10000001",
+    "shape-detailed-413-10000001",
+    "shape-detailed-400-10000000",
+    "shape-detailed-413-10000000",
+    "shape-detail-free-boundary",
+  ]) {
+    const { result, calls } = await replay("w-shape", mode);
+    const counter = result.publishes[1];
+    const spec = calls.find((c) => c.recipe?.purpose === "N99");
+    assert.equal(
+      wAcceptance(counter.answer, spec),
+      mode === "shape-detail-free-boundary" ? null : false,
+    );
+    assert.equal(result.evidenceComplete, false, mode);
+    assert.equal(result.counts.publish, 2, mode);
+    assert.equal(result.cleanupReady, true, mode);
+    assert.equal(result.closureReady, false, mode);
+    assert.match(result.stopped, /needs-review/, mode);
+    assert.equal(counter.observedRequestSize, undefined, mode);
+    assert.equal(counter.predictionMatches, undefined, mode);
+    assert.deepEqual(
+      result.publishes.map((p) => p.purpose),
+      ["before-control", "N99"],
+      mode,
+    );
+    assert.equal(calls.filter((c) => c.method === "DELETE").length, 1, mode);
+    const bytes = Buffer.from(counter.answer.bodyBase64, "base64");
+    assert.equal(bytes.length, counter.answer.bodyBytes, mode);
+    assert.equal(bytes.toString(), `${JSON.stringify(counter.answer.body, null, 2)}\n`, mode);
   }
 });
 

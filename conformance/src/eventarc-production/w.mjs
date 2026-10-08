@@ -507,7 +507,17 @@ export async function recordW({
               /^The value for request_size is too large\. You passed ([1-9][0-9]{7}) in the request, but the maximum value is 10000000\.(?![\s\S])/.exec(
                 entry.observation ?? "",
               );
-            if (answer !== false || measured === null) return false;
+            if (
+              answer !== false ||
+              measured === null ||
+              reply.status !== 400 ||
+              JSON.stringify(Object.keys(reply.body)) !== '["error"]' ||
+              JSON.stringify(Object.keys(reply.body.error)) !== '["code","message","status"]' ||
+              reply.body.error.code !== 400 ||
+              reply.body.error.status !== "INVALID_ARGUMENT" ||
+              Number(measured[1]) <= 10000000
+            )
+              return false;
             entry.observedRequestSize = Number(measured[1]);
             entry.predictionMatches = entry.observedRequestSize === built.predictedRequestSize;
           }

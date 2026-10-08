@@ -117,7 +117,7 @@ def web_event(event, *, state, plan, budget, wire, bearer, journal, check, web_c
         from broad_contract import digest
         if not isinstance(web_config, dict) or set(web_config) != {'apiKey', 'authDomain', 'projectId'} or web_config['projectId'] != 'fireemu-oracle-query' or not isinstance(web_config['apiKey'], str) or not web_config['apiKey'] or digest(web_config) != web_baseline['webConfigSha256']: raise ValueError('S5b reviewed private configuration differs')
         state['ready'] = True
-        return {**reply, 'nonce': plan['nonce'], 'ownerId': plan['ownerId'], 'web': web_config, 'origin': web_baseline['origin'], 'bindings': bindings}
+        return {**reply, 'nonce': plan['nonce'], 'ownerId': plan['ownerId'], 'web': web_config, 'origin': web_baseline['origin'], 'bindings': bindings, 'observationRemaining': budget.observation_deadline - time.monotonic()}
     if not state.get('ready'): raise ValueError('S5b event before ready')
     if event['event'] == 'check': return reply
     if event['event'] == 'driver-lifecycle':

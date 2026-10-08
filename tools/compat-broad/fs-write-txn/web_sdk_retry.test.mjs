@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, readFile } from "node:fs/promises";
 import { test } from "node:test";
+import { PassThrough } from "node:stream";
 import { localConfig, runLocalRetry, scenarioComplete, versionKey } from "./web_sdk_retry.mjs";
 
 function fixture(scenario, salt = 0) {
@@ -437,10 +438,10 @@ test("production Web entry refuses missing admission before driver or parent cal
   assert.equal(sends, 0);
 });
 
-function productionFixture({ refuseProbe = false } = {}) {
+function productionFixture({ refuseProbe = false, afterTransaction = () => {} } = {}) {
   const nonce = "a".repeat(32), ownerId = "b".repeat(32);
   const database = "projects/fireemu-oracle-query/databases/(default)";
-  const docs = new Map(), parent = [], sdkCalls = [], drivers = [], journals = [];
+  const docs = new Map(), parent = [], sdkCalls = [], drivers = [], journals = [], sdkCommands = [];
   let clock = 0;
   const version = () => `2030-01-01T00:00:${String(++clock).padStart(2, "0")}.000000001Z`;
   const fields = (data) => Object.fromEntries(Object.entries(data).map(([key, value]) => [key, typeof value === "number" ? { integerValue: String(value) } : { stringValue: value }]));
@@ -467,7 +468,8 @@ function productionFixture({ refuseProbe = false } = {}) {
     };
     const sdk = {
       pid, events, waitFor, ready: async () => {}, close: async () => exit,
-      send: async (op, command = {}) => {
+      send: async (op, command = {}, sendOptions) => {
+        sdkCommands.push({ op, client: config.s5bAdmission, command, options: sendOptions });
         if (op === "shutdown") { exit = { code: 0 }; emit({ event: "exit", code: 0 }); return { ok: true }; }
         if (op === "continueTransaction") { assert.equal(config.s5bAdmission.probe, false); paused.get(command.name)(); paused.delete(command.name); return { ok: true }; }
         assert.equal(op, "transaction"); assert.equal(command.maxAttempts, 2);
@@ -483,7 +485,7 @@ function productionFixture({ refuseProbe = false } = {}) {
           const conflict = docs.get(name)?.updateTime !== readVersion;
           const updated = conflict ? null : version();
           await wire("Commit", { database, writes: [write] }, conflict ? { error: { code: 9, status: "FAILED_PRECONDITION" } } : { writeResults: [{ updateTime: updated }], commitTime: updated }, conflict ? 9 : 0);
-          if (!conflict) { docs.set(name, { name, fields: write.update.fields, updateTime: updated }); return { ok: true, attempts: attempt }; }
+          if (!conflict) { docs.set(name, { name, fields: write.update.fields, updateTime: updated }); await afterTransaction(command); return { ok: true, attempts: attempt }; }
         }
         return { ok: false, attempts: 2 };
       },
@@ -503,8 +505,8 @@ function productionFixture({ refuseProbe = false } = {}) {
     assert.equal(call.method, "DeleteDocument"); assert.equal(docs.get(call.request.name).updateTime, call.request.currentDocument.updateTime);
     docs.delete(call.request.name); return { complete: true, code: 0, response: {} };
   };
-  return { admission: { authorized: true, nonce, ownerId, web: { apiKey: "fixture-key", projectId: "fireemu-oracle-query", authDomain: "fixture.invalid" }, origin: "http://127.0.0.1:4567", bindings: { corpus: "fixture" } }, parentCall, spawn,
-    authorizeSdk: async () => true, statusSdk: async () => {}, journal: async (event) => journals.push(structuredClone(event)), check: async () => {}, parent, sdkCalls, drivers, docs, journals };
+  return { admission: { authorized: true, nonce, ownerId, web: { apiKey: "fixture-key", projectId: "fireemu-oracle-query", authDomain: "fixture.invalid" }, origin: "http://127.0.0.1:4567", observationDeadlineMs: performance.now() + 180_000, bindings: { corpus: "fixture" } }, parentCall, spawn,
+    authorizeSdk: async () => true, statusSdk: async () => {}, journal: async (event) => journals.push(structuredClone(event)), check: async () => {}, parent, sdkCalls, sdkCommands, drivers, docs, journals };
 }
 
 test("production fixed corpus accounts for 52 data calls plus 11 management/credential slots", async () => {
@@ -648,4 +650,123 @@ test("fixed parent transport validates only six marked writes and version-bound 
     { ...deletion, request: { ...deletion.request, name: deletion.request.name.replace("node_conflict", "node_probe") } },
     { ...deletion, request: { ...deletion.request, currentDocument: { exists: true } } },
   ]) assert.throws(() => validateCall(changed));
+});
+
+
+test("production main command uses the original remaining window after more than fifteen seconds", async (t) => {
+  const { recordWebRetries } = await import("./web_sdk_retry.mjs");
+  let now = 1000;
+  t.mock.method(performance, "now", () => now);
+  const fixture = productionFixture({ afterTransaction: () => { now += 18_000; } });
+  const receipt = await recordWebRetries(fixture);
+  assert.equal(receipt.complete, true);
+  assert.equal(fixture.docs.size, 0);
+  const main = fixture.sdkCommands.filter((row) => row.op === "transaction" && !row.client.probe);
+  assert.deepEqual(main.map((row) => row.options?.timeout), [180_000, 162_000, 144_000, 126_000]);
+  for (const row of receipt.transports.flatMap((report) => report.scenarios)) {
+    assert.equal(row.command.deadlineMs, 181_000);
+    assert.equal(row.command.result.resultMs - row.command.startedMs, 18_000);
+    assert.equal(row.command.result.state, "resolved");
+  }
+  assert.equal(fixture.sdkCommands.filter((row) => row.op === "transaction" && row.client.probe).every((row) => row.options === undefined), true);
+  assert.equal(fixture.sdkCommands.filter((row) => row.op === "continueTransaction").every((row) => row.options === undefined), true);
+  assert.equal(fixture.sdkCommands.filter((row) => row.op === "shutdown").every((row) => row.options.timeout === 3000), true);
+});
+
+for (const lateMs of [0, 1]) {
+  test(`production result at observation deadline plus ${lateMs}ms fails and still cleans owned names`, async (t) => {
+    const { recordWebRetries } = await import("./web_sdk_retry.mjs");
+    let now = 1000;
+    t.mock.method(performance, "now", () => now);
+    const fixture = productionFixture({ afterTransaction: () => { now = 181_000 + lateMs; } });
+    const receipt = await recordWebRetries(fixture);
+    assert.equal(receipt.complete, false);
+    assert.equal(fixture.docs.size, 0);
+    assert.equal(fixture.sdkCommands.filter((row) => row.op === "transaction" && !row.client.probe).length, 1);
+    const report = receipt.transports[0], outcome = report.scenarios[0];
+    assert.equal(outcome.command.result.state, "rejected");
+    assert.equal(outcome.command.result.reason, "observation-deadline");
+    assert.equal(report.failure.stage, "transaction-result");
+    assert.equal(report.closed, true);
+    assert.equal(receipt.cleanup.length, 2);
+    assert.equal(receipt.cleanup.every((row) => row.deleted && row.absent), true);
+    assert.equal(fixture.parent.filter((row) => row.method === "DeleteDocument").every((row) => row.phase === "documentCleanup"), true);
+  });
+}
+
+test("production deadline admission refuses missing invalid expired and expanded windows before I/O", async (t) => {
+  const { recordWebRetries } = await import("./web_sdk_retry.mjs");
+  t.mock.method(performance, "now", () => 1000);
+  for (const deadline of [undefined, null, NaN, Infinity, -Infinity, 0, 1000, 181_001, "181000"]) {
+    const fixture = productionFixture();
+    fixture.admission.observationDeadlineMs = deadline;
+    await assert.rejects(recordWebRetries(fixture), /admission/);
+    assert.equal(fixture.parent.length, 0);
+    assert.equal(fixture.drivers.length, 0);
+  }
+});
+
+test("production expired remaining command budget sends no transaction and cleans the seed", async (t) => {
+  const { recordWebRetries } = await import("./web_sdk_retry.mjs");
+  let now = 1000;
+  t.mock.method(performance, "now", () => now);
+  const fixture = productionFixture(), parentCall = fixture.parentCall;
+  fixture.parentCall = async (row) => {
+    const answer = await parentCall(row);
+    if (row.method === "Commit" && row.phase === "observation") now = 181_000;
+    return answer;
+  };
+  const receipt = await recordWebRetries(fixture);
+  assert.equal(receipt.complete, false);
+  assert.equal(fixture.sdkCommands.filter((row) => row.op === "transaction" && !row.client.probe).length, 0);
+  assert.equal(fixture.docs.size, 0);
+  assert.equal(receipt.transports[0].failure.stage, "transaction-send");
+  assert.equal(receipt.cleanup.length, 1);
+});
+
+test("production existing receipt channel durably retains safe main diagnostics and conservative ready anchor", async (t) => {
+  const { recordWebRetries } = await import("./web_sdk_retry.mjs");
+  let now = 1000;
+  t.mock.method(performance, "now", () => now);
+  const secret = "fixture-key bearer-secret https://fixture.invalid/?key=secret sensitive-body";
+  const fixture = productionFixture({ afterTransaction: () => { throw Object.assign(new Error(secret), { name: "FirebaseError", code: "unavailable" }); } });
+  const spawn = fixture.spawn;
+  fixture.spawn = (...args) => {
+    const sdk = spawn(...args);
+    if (!args[0].s5bAdmission.probe) sdk.events.push(...Array.from({ length: 40 }, (_, n) => ({ event: "driver-error", n, name: "FirebaseError", code: "unavailable", message: secret, host: secret, body: secret })));
+    sdk.stderr = () => secret;
+    return sdk;
+  };
+  const source = await readFile(new URL("./web_sdk_retry.mjs", import.meta.url), "utf8");
+  const body = source.slice(source.indexOf("async function productionEntry()"), source.indexOf("\n\n\nif (process.argv"));
+  const stdin = new PassThrough(), rows = [];
+  const processStub = { stdin, stdout: { write(text) {
+    const row = JSON.parse(text); rows.push(row);
+    if (row.event === "ready") {
+      now = 4000;
+      const { observationDeadlineMs, ...admission } = fixture.admission;
+      stdin.write(JSON.stringify({ ...admission, observationRemaining: 177, id: row.id }) + "\n");
+    }
+  } }, exitCode: undefined };
+  let receivedDeadline;
+  const entry = new Function("process", "recordWebRetries", "performance", `return (${body})`)(processStub, async ({ admission }) => {
+    receivedDeadline = admission.observationDeadlineMs;
+    return recordWebRetries({ ...fixture, admission });
+  }, performance);
+  await entry(); stdin.destroy();
+  assert.equal(receivedDeadline, 178_000, "the IPC duration is conservatively deducted without a fresh180s window");
+  assert.deepEqual(rows.map((row) => row.event), ["ready", "receipt"]);
+  assert.equal(processStub.exitCode, 1);
+  const saved = JSON.parse(JSON.stringify(rows[1].receipt));
+  const report = saved.transports[0], command = report.scenarios[0].command;
+  assert.deepEqual(report.failure, { stage: "transaction-result", name: "FirebaseError", code: "unavailable" });
+  assert.equal(command.startedMs, 4000);
+  assert.equal(command.deadlineMs, 178_000);
+  assert.equal(command.timeoutMs, 174_000);
+  assert.equal(command.result.state, "rejected");
+  assert.equal(command.result.reason, "sdk-result-rejected");
+  assert.equal(report.diagnostics.length <= 32, true);
+  assert.equal(report.diagnostics.some((row) => row.event === "driver-error" && row.code === "unavailable"), true);
+  for (const word of secret.split(" ")) assert.equal(JSON.stringify(saved).includes(word), false);
+  assert.equal(fixture.docs.size, 0);
 });

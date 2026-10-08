@@ -1108,6 +1108,7 @@ def test_s5b_parent_charge_and_journal_precede_payload_and_ack():
     baseline = {'webConfigSha256': digest(web), 'origin': 'http://127.0.0.1:4567'}
     order, state = [], {}
     class Budget:
+        observation_deadline = runner.time.monotonic() + 180
         def charge(self, phase): order.append('charge')
         def begin_recovery(self): order.append('recovery')
     class Wire:
@@ -1137,6 +1138,7 @@ def test_s5b_unknown_sdk_status_blocks_observation_and_ownerless_delete():
     web = {'apiKey': 'fixture-key', 'authDomain': 'fixture.invalid', 'projectId': plan['project']}
     state = {}
     class Budget:
+        observation_deadline = runner.time.monotonic() + 180
         failed = False
         def charge(self, _phase): pass
         def begin_recovery(self): pass
@@ -1284,6 +1286,7 @@ def test_s5b_web_event_records_owned_get_with_actual_value_type():
     plan = compile_plan(table_for('s5b-web-sdk-retry'), 'a'*32, 'b'*32)
     snapshot = s5b_recovery_fixture(); name = snapshot['documents']['node_control']['name']; state = {'ready': True}
     class Budget:
+        observation_deadline = runner.time.monotonic() + 180
         def charge(self, phase): pass
         def begin_recovery(self): pass
     class Wire:
@@ -1371,3 +1374,44 @@ def test_s5b_recovery_rejects_unowned_or_incomplete_successful_write_lineage(cha
     if change == 'missing-version': row['evidence']['response']['writeResults'] = []
     if change == 'unknown-write': row['evidence']['complete'] = False
     with pytest.raises(ValueError): runner.sdk_document_action(snapshot, 'cleanup', lambda *_: pytest.fail('must not dispatch'), now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+
+
+def test_s5b_ready_returns_the_original_remaining_observation_after_preflight(monkeypatch):
+    from txn_program_cli import table_for
+    from broad_contract import digest
+    plan = compile_plan(table_for('s5b-web-sdk-retry'), 'a' * 32, 'b' * 32)
+    clock = [100.0]
+    monkeypatch.setattr(runner.time, 'monotonic', lambda: clock[0])
+    counts = []
+    budget = runner.SessionBudget(plan, table_for('s5b-web-sdk-retry'), lambda: None, counts.append)
+    clock[0] = 137.0
+    web = {'apiKey': 'fixture-key', 'authDomain': 'fixture.invalid', 'projectId': plan['project']}
+    reply = runner.web_event({'event': 'ready', 'id': 'web-1'}, state={}, plan=plan, budget=budget, wire=None, bearer='fixture', journal=lambda _: pytest.fail('ready has no new journal event'), check=lambda: None, web_config=web, web_baseline={'webConfigSha256': digest(web), 'origin': 'http://127.0.0.1:4567'}, bindings={})
+    assert reply['observationRemaining'] == 143.0
+    assert budget.observation_deadline == 280.0
+    assert budget.total == 0 and counts == []
+
+
+@pytest.mark.parametrize('recovery_start', [280.0, 293.0])
+def test_s5b_deadline_preserves_recovery_reservation_and_global_cap(monkeypatch, recovery_start):
+    from txn_program_cli import table_for
+    table = table_for('s5b-web-sdk-retry')
+    plan = compile_plan(table, 'a' * 32, 'b' * 32)
+    clock = [100.0]
+    monkeypatch.setattr(runner.time, 'monotonic', lambda: clock[0])
+    counts = []
+    budget = runner.SessionBudget(plan, table, lambda: None, counts.append)
+    clock[0] = 251.0
+    with pytest.raises(TimeoutError, match='deadline'):
+        budget.charge('observation')
+    assert budget.total == 0 and not counts
+    clock[0] = recovery_start
+    budget.begin_recovery()
+    assert budget.recovery_deadline == 400.0
+    with pytest.raises(ValueError, match='observation'):
+        budget.charge('observation')
+    budget.charge('documentCleanup')
+    clock[0] = 371.0
+    with pytest.raises(TimeoutError, match='deadline'):
+        budget.charge('documentCleanup')
+    assert budget.used['documentCleanup'] == 1

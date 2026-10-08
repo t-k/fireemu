@@ -127,10 +127,11 @@ export function loadHRecording(directory, cleanupClose) {
       runId,
       closed,
       sha256: hash(
-        JSON.stringify(
-          { journals: digests, fixtureSources: empirical.sources,
-            ...(cleanupProof ? { cleanupCloseSha256: cleanupProof.sha256 } : {}) },
-        ),
+        JSON.stringify({
+          journals: digests,
+          fixtureSources: empirical.sources,
+          ...(cleanupProof ? { cleanupCloseSha256: cleanupProof.sha256 } : {}),
+        }),
       ),
       journals: digests,
       fixtureSources: empirical.sources,
@@ -184,94 +185,191 @@ const validFrame = (f) =>
   sameJson(f.eventKeys, Object.keys(f.event)) &&
   /^00-(?!0{32}-)[a-f0-9]{32}-(?!0{16}-)[a-f0-9]{16}-[a-f0-9]{2}$/.test(f.event.traceparent ?? "");
 
-const selectedFrames = (o, capture) => capture.frames.filter(({ frame }) =>
-  (o.body?.events ?? []).some((e) => e.id === frame?.event?.id && e.source === frame?.event?.source));
-const recipientConflict = (o, wanted) => !o.refused && !o.shape &&
-  Array.isArray(o.expectedRecipients) && wanted.some(({ frame }) =>
-    !o.expectedRecipients.some((r) => r.handler === frame.handler &&
-      r.id === frame.event.id && r.source === frame.event.source));
+const selectedFrames = (o, capture) =>
+  capture.frames.filter(({ frame }) =>
+    (o.body?.events ?? []).some(
+      (e) => e.id === frame?.event?.id && e.source === frame?.event?.source,
+    ),
+  );
+const recipientConflict = (o, wanted) =>
+  !o.refused &&
+  !o.shape &&
+  Array.isArray(o.expectedRecipients) &&
+  wanted.some(
+    ({ frame }) =>
+      !o.expectedRecipients.some(
+        (r) =>
+          r.handler === frame.handler && r.id === frame.event.id && r.source === frame.event.source,
+      ),
+  );
 
 /** Bind contrary positive witnesses to existing fixture, deployment and raw stdout receipts. */
 function bindEmpiricalDeliveries(directory, observed, issued, rows) {
-  const bindings = observed.publishes.map(() => undefined), sources = [];
+  const bindings = observed.publishes.map(() => undefined),
+    sources = [];
   if (!observed.publishes.some((o) => recipientConflict(o, selectedFrames(o, observed.capture))))
     return { bindings, sources };
   try {
     const fixture = join(directory, "source-core");
-    const checksums = new Map(readFileSync(join(directory, "SHA256SUMS-coordinator"), "utf8")
-      .trim().split("\n").map((line) => {
-        const [digest, name] = line.trim().split(/\s+/);
-        return [name?.replace(/^\.\//, ""), digest];
-      }));
+    const checksums = new Map(
+      readFileSync(join(directory, "SHA256SUMS-coordinator"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const [digest, name] = line.trim().split(/\s+/);
+          return [name?.replace(/^\.\//, ""), digest];
+        }),
+    );
     for (const name of ["index.js", "package.json", "firebase.json"]) {
-      const file = `source-core/${name}`, digest = hash(readFileSync(join(directory, file)));
+      const file = `source-core/${name}`,
+        digest = hash(readFileSync(join(directory, file)));
       if (checksums.get(file) !== digest) return { bindings, sources: [] };
       sources.push({ file, sha256: digest });
     }
     const debug = readFileSync(join(fixture, "firebase-debug.log"), "utf8");
     sources.push({ file: "source-core/firebase-debug.log", sha256: hash(debug) });
     if (!debug.includes(join(fixture, "firebase.json"))) return { bindings, sources };
-    const deployments = debug.split("\n").filter((line) => line.includes("[body]"))
+    const deployments = debug
+      .split("\n")
+      .filter((line) => line.includes("[body]"))
       .flatMap((line) => {
-        try { return [JSON.parse(line.slice(line.indexOf("{")))]; } catch { return []; }
-      }).filter((d) => d.buildConfig?.source?.storageSource && d.labels?.["firebase-functions-hash"]);
+        try {
+          return [JSON.parse(line.slice(line.indexOf("{")))];
+        } catch {
+          return [];
+        }
+      })
+      .filter((d) => d.buildConfig?.source?.storageSource && d.labels?.["firebase-functions-hash"]);
     for (const [i, o] of observed.publishes.entries()) {
       const wanted = selectedFrames(o, observed.capture);
       if (!recipientConflict(o, wanted)) continue;
       const originalEvidence = observed.evidence?.observations?.filter((e) => e.case === o.case);
-      if (originalEvidence?.length !== 1 || originalEvidence[0].complete !== false ||
-          originalEvidence[0].outcome !== "incomplete" || !o.known || o.status < 200 || o.status >= 300 ||
-          !observed.capture.complete || !observed.capture.finalRead ||
-          !(o.windowMs > 0 && o.endedAt - o.sentAt >= o.windowMs)) continue;
+      if (
+        originalEvidence?.length !== 1 ||
+        originalEvidence[0].complete !== false ||
+        originalEvidence[0].outcome !== "incomplete" ||
+        !o.known ||
+        o.status < 200 ||
+        o.status >= 300 ||
+        !observed.capture.complete ||
+        !observed.capture.finalRead ||
+        !(o.windowMs > 0 && o.endedAt - o.sentAt >= o.windowMs)
+      )
+        continue;
       const origins = [];
       const bound = wanted.every((wrapper) => {
-        const frame = wrapper.frame, input = o.body.events.find((e) =>
-          e.id === frame.event.id && e.source === frame.event.source);
-        if (!validFrame(frame) || frame.attempt !== "succeeded" ||
-            frame.run !== observed.manifest.runId || frame.recording !== observed.manifest.recording ||
-            frame.case !== o.case || frame.event.type !== input.type || frame.event.specversion !== input.specVersion ||
-            !sameJson(frame.event.data, JSON.parse(input.textData)) ||
-            !Object.entries(input.attributes ?? {}).every(([key, value]) =>
-              ["datacontenttype", "convbytes"].includes(key) || frame.event[key] === (value.ceString ?? value.ceTimestamp)) ||
-            observed.capture.frames.filter((w) => w.insertId === wrapper.insertId).length !== 1 ||
-            observed.capture.frames.filter((w) => w.frame.invocationId === frame.invocationId).length !== 1 ||
-            ![wrapper.logTimestamp, wrapper.readAt].every((time) =>
-              Date.parse(time) >= o.sentAt && Date.parse(time) <= o.endedAt)) return false;
-        const readiness = issued.filter((r) => r.kind === "h-readiness-lists" &&
-          r.at <= o.sentAt).flatMap((r) => r.value.functions ?? []).filter((f) =>
-          f.name === `projects/${observed.manifest.project}/locations/${observed.manifest.location}/functions/${frame.handler}`);
-        const f = readiness.at(-1), env = f?.serviceConfig?.environmentVariables;
-        if (!f || f.state !== "ACTIVE" || f.environment !== "GEN_2" ||
-            env?.EVENTARC_H_RUN_ID !== frame.run || env?.EVENTARC_H_RECORDING !== frame.recording ||
-            env?.EVENTARC_H_SEGMENT !== o.segment || !f.buildConfig?.sourceProvenance?.resolvedStorageSource ||
-            f.eventTrigger?.channel !== o.channel || f.eventTrigger?.eventType !== input.type ||
-            !deployments.some((d) => d.labels["firebase-functions-hash"] === f.labels?.["firebase-functions-hash"] &&
+        const frame = wrapper.frame,
+          input = o.body.events.find(
+            (e) => e.id === frame.event.id && e.source === frame.event.source,
+          );
+        if (
+          !validFrame(frame) ||
+          frame.attempt !== "succeeded" ||
+          frame.run !== observed.manifest.runId ||
+          frame.recording !== observed.manifest.recording ||
+          frame.case !== o.case ||
+          frame.event.type !== input.type ||
+          frame.event.specversion !== input.specVersion ||
+          !sameJson(frame.event.data, JSON.parse(input.textData)) ||
+          !Object.entries(input.attributes ?? {}).every(
+            ([key, value]) =>
+              ["datacontenttype", "convbytes"].includes(key) ||
+              frame.event[key] === (value.ceString ?? value.ceTimestamp),
+          ) ||
+          observed.capture.frames.filter((w) => w.insertId === wrapper.insertId).length !== 1 ||
+          observed.capture.frames.filter((w) => w.frame.invocationId === frame.invocationId)
+            .length !== 1 ||
+          ![wrapper.logTimestamp, wrapper.readAt].every(
+            (time) => Date.parse(time) >= o.sentAt && Date.parse(time) <= o.endedAt,
+          )
+        )
+          return false;
+        const readiness = issued
+          .filter((r) => r.kind === "h-readiness-lists" && r.at <= o.sentAt)
+          .flatMap((r) => r.value.functions ?? [])
+          .filter(
+            (f) =>
+              f.name ===
+              `projects/${observed.manifest.project}/locations/${observed.manifest.location}/functions/${frame.handler}`,
+          );
+        const f = readiness.at(-1),
+          env = f?.serviceConfig?.environmentVariables;
+        if (
+          !f ||
+          f.state !== "ACTIVE" ||
+          f.environment !== "GEN_2" ||
+          env?.EVENTARC_H_RUN_ID !== frame.run ||
+          env?.EVENTARC_H_RECORDING !== frame.recording ||
+          env?.EVENTARC_H_SEGMENT !== o.segment ||
+          !f.buildConfig?.sourceProvenance?.resolvedStorageSource ||
+          f.eventTrigger?.channel !== o.channel ||
+          f.eventTrigger?.eventType !== input.type ||
+          !deployments.some(
+            (d) =>
+              d.labels["firebase-functions-hash"] === f.labels?.["firebase-functions-hash"] &&
               d.serviceConfig?.environmentVariables?.EVENTARC_H_RUN_ID === frame.run &&
-              d.serviceConfig?.environmentVariables?.EVENTARC_H_RECORDING === frame.recording)) return false;
-        const matches = rows.filter((r) => r.op === "h.logs" && r.response.status === 200 &&
-          Date.parse(r.at) >= o.sentAt && Date.parse(r.at) <= Date.parse(wrapper.readAt))
-          .flatMap((r) => r.response.body?.entries ?? []).filter((e) => e.insertId === wrapper.insertId);
-        if (!matches.length || !matches.every((e) => {
-          const labels = e.resource?.labels;
-          let logged;
-          try { logged = JSON.parse(e.textPayload.split("FE_EVENTS_FRAME ")[1]); } catch { return false; }
-          return e.logName === `projects/${observed.manifest.project}/logs/run.googleapis.com%2Fstdout` &&
-            e.resource?.type === "cloud_run_revision" && labels?.project_id === observed.manifest.project &&
-            labels?.location === observed.manifest.location &&
-            f.serviceConfig.service === `projects/${observed.manifest.project}/locations/${observed.manifest.location}/services/${labels?.service_name}` &&
-            typeof labels?.revision_name === "string" && labels.revision_name.length > 0 &&
-            typeof f.serviceConfig.revision === "string" && f.serviceConfig.revision.length > 0 &&
-            labels.revision_name === f.serviceConfig.revision && e.timestamp === wrapper.logTimestamp &&
-            e.labels?.execution_id === wrapper.executionId && sameJson(logged, frame);
-        })) return false;
-        origins.push({ handler: frame.handler, insertId: wrapper.insertId,
-          service: f.serviceConfig.service, revision: f.serviceConfig.revision,
-          deploymentHash: f.labels["firebase-functions-hash"] });
+              d.serviceConfig?.environmentVariables?.EVENTARC_H_RECORDING === frame.recording,
+          )
+        )
+          return false;
+        const matches = rows
+          .filter(
+            (r) =>
+              r.op === "h.logs" &&
+              r.response.status === 200 &&
+              Date.parse(r.at) >= o.sentAt &&
+              Date.parse(r.at) <= Date.parse(wrapper.readAt),
+          )
+          .flatMap((r) => r.response.body?.entries ?? [])
+          .filter((e) => e.insertId === wrapper.insertId);
+        if (
+          !matches.length ||
+          !matches.every((e) => {
+            const labels = e.resource?.labels;
+            let logged;
+            try {
+              logged = JSON.parse(e.textPayload.split("FE_EVENTS_FRAME ")[1]);
+            } catch {
+              return false;
+            }
+            return (
+              e.logName ===
+                `projects/${observed.manifest.project}/logs/run.googleapis.com%2Fstdout` &&
+              e.resource?.type === "cloud_run_revision" &&
+              labels?.project_id === observed.manifest.project &&
+              labels?.location === observed.manifest.location &&
+              f.serviceConfig.service ===
+                `projects/${observed.manifest.project}/locations/${observed.manifest.location}/services/${labels?.service_name}` &&
+              typeof labels?.revision_name === "string" &&
+              labels.revision_name.length > 0 &&
+              typeof f.serviceConfig.revision === "string" &&
+              f.serviceConfig.revision.length > 0 &&
+              labels.revision_name === f.serviceConfig.revision &&
+              e.timestamp === wrapper.logTimestamp &&
+              e.labels?.execution_id === wrapper.executionId &&
+              sameJson(logged, frame)
+            );
+          })
+        )
+          return false;
+        origins.push({
+          handler: frame.handler,
+          insertId: wrapper.insertId,
+          service: f.serviceConfig.service,
+          revision: f.serviceConfig.revision,
+          deploymentHash: f.labels["firebase-functions-hash"],
+        });
         return true;
       });
-      if (bound) bindings[i] = { reason: "production-witness-overrides-recorder-negative-hypothesis",
-        originalEvidence: originalEvidence[0], sources, origins,
-        observationSha256: hash(JSON.stringify(o)), framesSha256: hash(JSON.stringify(wanted)) };
+      if (bound)
+        bindings[i] = {
+          reason: "production-witness-overrides-recorder-negative-hypothesis",
+          originalEvidence: originalEvidence[0],
+          sources,
+          origins,
+          observationSha256: hash(JSON.stringify(o)),
+          framesSha256: hash(JSON.stringify(wanted)),
+        };
     }
   } catch {
     // Missing or malformed source-bound evidence remains incomparable.
@@ -286,8 +384,12 @@ export function compareDelivery(o, recorded, local, observations = [], empirical
   const wanted = selectedFrames(o, recorded),
     got = selectedFrames(o, local);
   const conflict = recipientConflict(o, wanted);
-  if (conflict && (!empirical || empirical.observationSha256 !== hash(JSON.stringify(o)) ||
-      empirical.framesSha256 !== hash(JSON.stringify(wanted))))
+  if (
+    conflict &&
+    (!empirical ||
+      empirical.observationSha256 !== hash(JSON.stringify(o)) ||
+      empirical.framesSha256 !== hash(JSON.stringify(wanted)))
+  )
     return result("NOT_COMPARABLE", "original-recipient-criterion-conflict");
   const controls = (position) =>
     observations.filter(
@@ -372,9 +474,12 @@ export function compareDelivery(o, recorded, local, observations = [], empirical
         return result("DIVERGES", "retry-identity");
     }
   }
-  return { ...result("MATCH", wanted.length ? "handler-delivery" : "bounded-non-delivery", [
-    ...declarations,
-  ]), ...(conflict ? { adjudication: empirical } : {}) };
+  return {
+    ...result("MATCH", wanted.length ? "handler-delivery" : "bounded-non-delivery", [
+      ...declarations,
+    ]),
+    ...(conflict ? { adjudication: empirical } : {}),
+  };
 }
 
 /** Replay only the captured publications, including SDK-emitted bodies; never invoke a production SDK. */

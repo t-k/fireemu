@@ -1629,7 +1629,7 @@ fn received_json(
     report_attempt: bool,
     policy: crate::PagingPolicy,
 ) -> Value {
-    let mut value = json!({"ackId":crate::ack_token::wire(&received.ack_id,policy),"message":stored_message_json(&received.message)});
+    let mut value = json!({"ackId":crate::ack_token::rest_wire(&received.ack_id,policy),"message":stored_message_json(&received.message)});
     if report_attempt {
         value["deliveryAttempt"] = json!(received.delivery_attempt);
     }

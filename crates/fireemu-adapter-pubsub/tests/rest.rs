@@ -3273,7 +3273,12 @@ async fn recorded_opaque_ack_ids_roundtrip_across_both_wires_and_profiles() {
         .await;
         assert_eq!(code, 200);
         let renewed = second["receivedMessages"][0]["ackId"].as_str().unwrap();
-        assert_eq!(renewed.len(), expected_length);
+        let rest_length = if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
+            195
+        } else {
+            20
+        };
+        assert_eq!(renewed.len(), rest_length);
         assert_ne!(renewed, issued);
         assert_eq!(
             second["receivedMessages"][0]["message"]["messageId"],
@@ -3311,13 +3316,18 @@ async fn recorded_opaque_ack_ids_roundtrip_across_both_wires_and_profiles() {
         );
         let current = third["receivedMessages"][0]["ackId"].as_str().unwrap();
         assert_ne!(current, renewed);
-        subscriber
-            .acknowledge(pb::AcknowledgeRequest {
-                subscription: subscription.to_owned(),
-                ack_ids: vec![current.to_owned()],
-            })
+        assert_eq!(current.len(), rest_length);
+        assert_eq!(
+            rest_request(
+                address,
+                "POST",
+                &format!("/v1/{subscription}:acknowledge"),
+                json!({"ackIds":[current]})
+            )
             .await
-            .unwrap();
+            .0,
+            200
+        );
         let (_, empty) = rest_request(
             address,
             "POST",

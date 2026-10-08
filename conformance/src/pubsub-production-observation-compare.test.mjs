@@ -446,3 +446,200 @@ test("executed native verdict requires exact raw/action coverage and measured in
     false,
   );
 });
+
+// Synthetic controls model the two recorded incomplete zero-deadline shapes.
+export function zeroOutcomeFixture(details) {
+  const input = fixture();
+  input.packet.plan = makePlan("s10-diagnostic");
+  const subscription = `projects/fireemu-oracle-idp/subscriptions/fe${runId}-s10-sub`;
+  const body = {
+    subscription,
+    streamAckDeadlineSeconds: 0,
+    maxOutstandingMessages: "1",
+    maxOutstandingBytes: "1024",
+  };
+  const result = {
+    cellId: "S10",
+    complete: false,
+    cleanupClosed: true,
+    budgetOverrun: false,
+    outstanding: [],
+    names: [subscription],
+  };
+  input.rows = [
+    input.rows[0],
+    { event: "stream-dispatch", cellId: "S10" },
+    {
+      event: "stream-frame",
+      cellId: "S10",
+      direction: "out",
+      elapsedMs: 1,
+      body,
+      blob: { bytes: 73, sha256: "d".repeat(64) },
+    },
+    { event: "stream-open-local", cellId: "S10", elapsedMs: 2, windowMs: 90000 },
+    {
+      event: "stream-error",
+      cellId: "S10",
+      elapsedMs: 117,
+      code: 13,
+      ...(details === undefined ? {} : { details }),
+    },
+    {
+      event: "stream-status",
+      cellId: "S10",
+      elapsedMs: 118,
+      code: 13,
+      ...(details === undefined ? {} : { details }),
+    },
+    { event: "stream-inbound-end", cellId: "S10", elapsedMs: 119 },
+    {
+      event: "stream-case-observation",
+      cellId: "S10",
+      state: {
+        terminal: { code: 13 },
+        inboundEnded: true,
+        incomplete: true,
+        windowExpired: false,
+        windowMs: 90000,
+        received: 0,
+      },
+    },
+    { event: "case-result", ...result },
+  ].map((r, i) => ({ ...r, n: i + 1, at: new Date(1000 + i * 1000).toISOString() }));
+  input.summary.results = [result];
+  input.verifiedFrames = new Set([3]);
+  return input;
+}
+
+test("fixed selected plan admits only its exact declared cells", () => {
+  const input = zeroOutcomeFixture();
+  assert.deepEqual(
+    prepareObservation(input).cells.map((c) => c.id),
+    ["S10"],
+  );
+  input.packet.plan.cells[0].variant += "-foreign";
+  assert.throws(() => prepareObservation(input), /binding/);
+});
+
+test("exact S10 natural outcome preserves incomplete debt and message availability", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  for (const details of [
+    undefined,
+    "A service error has occurred. Please retry your request. If the error persists, please report it. [code=e8c0]",
+  ]) {
+    const source = prepareObservation(zeroOutcomeFixture(details));
+    source.evidenceKind = "production";
+    for (const suffix of ["Subscription", "Topic"]) {
+      const name = `projects/fireemu-oracle-idp/${suffix === "Topic" ? "topics" : "subscriptions"}/fe${runId}-s10-${suffix === "Topic" ? "topic" : "sub"}`;
+      for (const method of [`Delete${suffix}`, `Get${suffix}`])
+        source.cells[0].exchanges.push({
+          method,
+          transport: "rest",
+          category: method.startsWith("Delete") ? "cleanupDelete" : "cleanupGet",
+          request: { body: { name } },
+          response: {
+            ok: method.startsWith("Delete"),
+            status: method.startsWith("Delete") ? 200 : 404,
+            code: method.startsWith("Delete") ? "OK" : "NOT_FOUND",
+            body: {},
+            unknown: false,
+          },
+          n: 10 + 2 * source.cells[0].exchanges.length,
+          dispatchN: 9 + 2 * source.cells[0].exchanges.length,
+        });
+    }
+    const local = structuredClone(source);
+    local.evidenceKind = "local";
+    const cell = local.cells[0];
+    cell.events = cell.events.map((e) =>
+      e.event === "stream-error" || e.event === "stream-status"
+        ? {
+            ...e,
+            details:
+              "A service error has occurred. Please retry your request. If the error persists, please report it.",
+          }
+        : e,
+    );
+    const proof = {
+      completed: false,
+      sourceFrames: [3],
+      actions: [{ sourceN: 8, event: "stream-case-observation", elapsedMs: 120 }],
+      zeroOutcome: {
+        state: structuredClone(
+          cell.events.find((e) => e.event === "stream-case-observation").state,
+        ),
+        observedElapsedMs: 120,
+      },
+    };
+    const result = compareExecutedObservation(source, local, { S10: proof });
+    const outcome = result.cells[0].nativeOutcome;
+    assert.equal(outcome.verdict, "MATCH");
+    assert.equal(outcome.details.source.available, details !== undefined);
+    assert.equal(outcome.details.verdict, details === undefined ? "NOT_COMPARABLE" : "DIVERGES");
+    assert.equal(result.cells[0].verdict, "NOT_COMPARABLE");
+    assert.equal(result.parentClosureReady, false);
+    assert.ok(result.cells[0].debts.some((d) => d.includes("completion/cleanup")));
+    assert.ok(result.cells[0].debts.some((d) => d.includes("details")));
+    for (let seed = 1; seed <= 64; seed++) {
+      for (const [field, value] of [
+        ["streamAckDeadlineSeconds", seed % 2 ? seed : -seed],
+        ["maxOutstandingMessages", String(seed + 1)],
+        ["maxOutstandingBytes", String(1024 + seed)],
+      ]) {
+        const adjacent = structuredClone(source);
+        adjacent.cells[0].frames[0].body[field] = value;
+        assert.equal(
+          compareExecutedObservation(adjacent, local, { S10: proof }).cells[0].nativeOutcome
+            .verdict,
+          "NOT_COMPARABLE",
+          `${field}/${seed}`,
+        );
+      }
+    }
+    for (const mutate of [
+      (s, _l, _p) => (s.cells[0].coordinate = "/conditions/13/cases/8"),
+      (s, _l, _p) => (s.cells[0].variant = "half-close"),
+      (s, _l, _p) => (s.cells[0].frames[0].body.streamAckDeadlineSeconds = 10),
+      (s, _l, _p) => (s.cells[0].frames[0].body.maxOutstandingMessages = "2"),
+      (s, _l, _p) => (s.cells[0].frames[0].body.maxOutstandingBytes = "1025"),
+      (s, _l, _p) => (s.cells[0].frames[0].body.subscription += "-foreign"),
+      (s, _l, _p) => (s.cells[0].frames[0].verified = false),
+      (s, _l, _p) =>
+        (s.cells[0].events = s.cells[0].events.filter((e) => e.event !== "stream-status")),
+      (s, _l, _p) =>
+        (s.cells[0].events = s.cells[0].events.filter((e) => e.event !== "stream-inbound-end")),
+      (s, _l, _p) => (s.cells[0].events.find((e) => e.event === "stream-error").code = 3),
+      (s, _l, _p) => s.cells[0].events.push({ event: "stream-cancel" }),
+      (s, _l, _p) => s.cells[0].events.push({ event: "stream-observation-window-end" }),
+      (s, _l, _p) => (s.cells[0].result.cleanupClosed = false),
+      (s, _l, _p) => (s.cells[0].result.budgetOverrun = true),
+      (s, _l, _p) => s.cells[0].result.outstanding.push("unresolved"),
+      (s, l, _p) => l.cells[0].exchanges.pop(),
+      (_s, l, _p) => (l.cells[0].exchanges[0].response.ok = false),
+      (_s, l, _p) => (l.cells[0].frames[0].blob.sha256 = "0".repeat(64)),
+      (_s, _l, p) => (p.zeroOutcome.observedElapsedMs = 118),
+      (_s, l, _p) => (l.cells[0].events.find((e) => e.event === "stream-dispatch").n = 99),
+      (_s, _l, p) => (p.sourceFrames = []),
+      (_s, _l, p) => (p.actions = []),
+      (_s, _l, p) => delete p.zeroOutcome,
+      (s, l, _p) => l.cells[0].events.push({ event: "stream-cancel" }),
+      (s, l, _p) =>
+        l.cells[0].frames.push({
+          direction: "in",
+          verified: true,
+          body: { receivedMessages: [{}] },
+        }),
+      (_s, _l, p) => (p.zeroOutcome.state.received = 1),
+    ]) {
+      const s = structuredClone(source),
+        l = structuredClone(local),
+        p = structuredClone(proof);
+      mutate(s, l, p);
+      assert.equal(
+        compareExecutedObservation(s, l, { S10: p }).cells[0].nativeOutcome.verdict,
+        "NOT_COMPARABLE",
+      );
+    }
+  }
+});

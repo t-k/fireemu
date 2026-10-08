@@ -745,3 +745,70 @@ test("deadline update requires its own finite corresponding outbound receipt aft
       }
     }
 });
+
+test("natural zero outcome is measured separately while generic native13 remains incomplete", async () => {
+  const { createNativeReplay } = await import("./pubsub-observation/replay-native.mjs");
+  const { zeroOutcomeFixture } = await import("./pubsub-production-observation-compare.test.mjs");
+  const { makePlan } = await import("./pubsub-observation/plan.mjs");
+  for (const received of [0, 1]) {
+    let now = 0;
+    const state = {
+      incomplete: true,
+      terminal: { code: 13 },
+      inboundEnded: true,
+      received,
+      windowExpired: false,
+      windowMs: 90000,
+    };
+    const replay = createNativeReplay({
+      wire: { open: async () => ({ state: () => state, dispose() {} }) },
+      bindings: createBindings(),
+      cells: makePlan("s10-diagnostic").cells,
+      clock: createActionClock({
+        now: () => now,
+        wait: async (ms) => (now += ms),
+        advance: async () => {},
+      }),
+    });
+    const input = zeroOutcomeFixture();
+    await replay.frame(input.rows[2]);
+    await replay.action(input.rows[7]);
+    const proof = replay.witnesses.get("S10");
+    assert.equal(proof.completed, false);
+    assert.deepEqual(proof.zeroOutcome.state, state);
+    assert.ok(proof.zeroOutcome.observedElapsedMs >= 0);
+    replay.close();
+  }
+});
+
+test("loopback replay retains bounded actual terminal details without inventing absent values", async () => {
+  const grpc = (await import("@grpc/grpc-js")).default;
+  const { EventEmitter } = await import("node:events");
+  const { createReplayClient } = await import("./pubsub-observation/replay-native.mjs");
+  const original = grpc.Client.prototype.makeBidiStreamRequest;
+  const rpc = new EventEmitter(),
+    seen = [];
+  grpc.Client.prototype.makeBidiStreamRequest = () => rpc;
+  const client = createReplayClient("127.0.0.1:1234", {
+    onTerminalDetails: (event, details) => seen.push([event, details]),
+  });
+  try {
+    client.makeBidiStreamRequest(
+      "fixture",
+      () => {},
+      () => {},
+      new grpc.Metadata(),
+    );
+    rpc.emit("error", { code: 13, details: "actual service error" });
+    rpc.emit("status", { code: 13, details: "actual service error" });
+    rpc.emit("status", { code: 13 });
+    assert.deepEqual(seen, [
+      ["stream-error", "actual service error"],
+      ["stream-status", "actual service error"],
+      ["stream-status", undefined],
+    ]);
+  } finally {
+    client.close();
+    grpc.Client.prototype.makeBidiStreamRequest = original;
+  }
+});

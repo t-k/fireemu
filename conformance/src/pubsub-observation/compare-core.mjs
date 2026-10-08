@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { makePlan, SUITE } from "./plan.mjs";
+import { makePlan, PROJECT, SUITE } from "./plan.mjs";
 import { normalizeOutcome } from "../pubsub-production/outcome.mjs";
 import {
   canonicalStatus,
@@ -57,7 +57,7 @@ export function prepareObservation(input) {
     starts.length !== 1 ||
     start !== rows[0] ||
     packet.suite !== SUITE ||
-    !isDeepStrictEqual(packet.plan, makePlan()) ||
+    !isDeepStrictEqual(packet.plan, makePlan(packet.plan.selection ?? "full")) ||
     descriptor.head !== packet.sourceHead ||
     packet.descriptorSha256 !== descriptorSha256 ||
     !packet.runIds.includes(start.runId) ||
@@ -290,6 +290,154 @@ export function compareObservation(source, local) {
   };
 }
 
+function zeroShape(cell, runId) {
+  const frame = cell?.frames[0],
+    body = frame?.body;
+  return (
+    cell?.id === "S10" &&
+    cell.coordinate === "/conditions/13/cases/9" &&
+    cell.variant === "invalid-opening-frame" &&
+    cell.group === "G4" &&
+    cell.frames.length === 1 &&
+    frame.direction === "out" &&
+    frame.verified === true &&
+    /^[a-f0-9]{64}$/.test(frame.blob?.sha256 ?? "") &&
+    frame.blob.bytes > 0 &&
+    isDeepStrictEqual(body, {
+      subscription: `projects/${PROJECT}/subscriptions/fe${runId}-s10-sub`,
+      streamAckDeadlineSeconds: 0,
+      maxOutstandingMessages: "1",
+      maxOutstandingBytes: "1024",
+    })
+  );
+}
+function naturalZero(cell, state) {
+  const events = cell?.events ?? [];
+  const one = (event) => events.filter((e) => e.event === event);
+  const error = one("stream-error"),
+    status = one("stream-status"),
+    end = one("stream-inbound-end");
+  return (
+    state?.terminal?.code === 13 &&
+    state.inboundEnded === true &&
+    state.received === 0 &&
+    state.windowExpired === false &&
+    state.windowMs === 90000 &&
+    one("stream-dispatch").length === 1 &&
+    one("stream-open-local").length === 1 &&
+    one("stream-open-local")[0].windowMs === 90000 &&
+    error.length === 1 &&
+    status.length === 1 &&
+    end.length === 1 &&
+    error[0].code === 13 &&
+    status[0].code === 13 &&
+    [error[0], status[0], end[0]].every(
+      (e) => Number.isFinite(e.elapsedMs) && e.elapsedMs >= 0 && e.elapsedMs < 90000,
+    ) &&
+    one("stream-dispatch")[0].n < one("stream-open-local")[0].n &&
+    one("stream-open-local")[0].n < error[0].n &&
+    error[0].n < status[0].n &&
+    status[0].n < end[0].n &&
+    !events.some((e) =>
+      [
+        "stream-cancel",
+        "stream-observation-window-end",
+        "stream-frame-refused",
+        "stream-write-end",
+      ].includes(e.event),
+    ) &&
+    cell.result?.cleanupClosed === true &&
+    cell.result.budgetOverrun === false &&
+    Array.isArray(cell.result.outstanding) &&
+    cell.result.outstanding.length === 0
+  );
+}
+function zeroCleanup(cell, runId) {
+  return ["Subscription", "Topic"].every((suffix) => {
+    const name = `projects/${PROJECT}/${suffix === "Topic" ? "topics" : "subscriptions"}/fe${runId}-s10-${suffix === "Topic" ? "topic" : "sub"}`;
+    const rows = cell?.exchanges ?? [];
+    const deletes = rows.filter(
+      (e) =>
+        e.method === `Delete${suffix}` &&
+        e.category === "cleanupDelete" &&
+        e.request.body.name === name,
+    );
+    const gets = rows.filter(
+      (e) =>
+        e.method === `Get${suffix}` && e.category === "cleanupGet" && e.request.body.name === name,
+    );
+    return (
+      deletes.length === 1 &&
+      gets.length === 1 &&
+      deletes[0].response.ok === true &&
+      deletes[0].response.unknown !== true &&
+      gets[0].response.unknown !== true &&
+      gets[0].response.ok === false &&
+      gets[0].response.status === 404 &&
+      deletes[0].n < gets[0].dispatchN
+    );
+  });
+}
+function nativeDetails(cell) {
+  const rows =
+    cell?.events.filter((e) => ["stream-error", "stream-status"].includes(e.event)) ?? [];
+  return {
+    available: rows.length === 2 && rows.every((e) => typeof e.details === "string"),
+    error: rows.find((e) => e.event === "stream-error")?.details ?? null,
+    status: rows.find((e) => e.event === "stream-status")?.details ?? null,
+  };
+}
+function compareZeroOutcome(source, local, original, actual, proof) {
+  const observations = original.events.filter((e) => e.event === "stream-case-observation"),
+    observation = observations[0],
+    localDetails = nativeDetails(actual),
+    sourceDetails = nativeDetails(original);
+  const details = {
+    source: sourceDetails,
+    local: localDetails,
+    verdict:
+      !sourceDetails.available || !localDetails.available
+        ? "NOT_COMPARABLE"
+        : isDeepStrictEqual(sourceDetails, localDetails)
+          ? "MATCH"
+          : "DIVERGES",
+  };
+  const exact =
+    source.evidenceKind === "production" &&
+    local.evidenceKind === "local" &&
+    zeroShape(original, source.runId) &&
+    zeroShape(actual, source.runId) &&
+    observations.length === 1 &&
+    naturalZero(original, observation?.state) &&
+    naturalZero(actual, proof?.zeroOutcome?.state) &&
+    zeroCleanup(original, source.runId) &&
+    zeroCleanup(actual, source.runId) &&
+    original.frames[0].blob.sha256 === actual.frames[0].blob.sha256 &&
+    original.frames[0].blob.bytes === actual.frames[0].blob.bytes &&
+    original.events.find((e) => e.event === "stream-inbound-end")?.n < observation?.n &&
+    isDeepStrictEqual(
+      proof?.sourceFrames,
+      original.frames.map((f) => f.n),
+    ) &&
+    isDeepStrictEqual(
+      proof?.actions?.map((a) => [a.sourceN, a.event]),
+      [[observation?.n, "stream-case-observation"]],
+    ) &&
+    proof.actions.every((a) => Number.isFinite(a.elapsedMs) && a.elapsedMs >= 0) &&
+    Number.isFinite(proof?.zeroOutcome?.observedElapsedMs) &&
+    proof.zeroOutcome.observedElapsedMs >= 0 &&
+    actual.events.find((e) => e.event === "stream-inbound-end").elapsedMs <=
+      proof.zeroOutcome.observedElapsedMs;
+  return {
+    verdict: exact ? "MATCH" : "NOT_COMPARABLE",
+    details,
+    sourceRunId: source.runId,
+    sourceHead: source.sourceHead,
+    scope:
+      "explicit-zero natural native13 without delivery; whole cell completion remains separate",
+  };
+}
+
 export function compareExecutedObservation(source, local, nativeWitnesses) {
   const report = compareObservation(source, local);
   const nativeDebt =
@@ -302,6 +450,13 @@ export function compareExecutedObservation(source, local, nativeWitnesses) {
       ["stream-write-end", "stream-cancel", "stream-case-observation"].includes(e.event),
     );
     const observation = actions.find((e) => e.event === "stream-case-observation");
+    if (cell.id === "S10") {
+      cell.nativeOutcome = compareZeroOutcome(source, local, original, actual, proof);
+      if (cell.nativeOutcome.details.verdict !== "MATCH")
+        cell.debts.push(
+          `native error details ${cell.nativeOutcome.details.verdict}: availability and exact recorded values retained`,
+        );
+    }
     const exact =
       proof?.completed === true &&
       Array.isArray(proof.actions) &&

@@ -249,6 +249,11 @@ export function createNativeReplay({ wire, bindings, clock, cells }) {
           proof.observedUntilMs = observedUntilMs;
           proof.deadlineUntilMs = active.deadlineUntilMs;
         }
+        if (active.cellId === "S10")
+          proof.zeroOutcome = {
+            state: structuredClone(state),
+            observedElapsedMs: clock.elapsed(row.cellId),
+          };
         proof.completed = !state.incomplete;
       } else throw new Error("unlisted native action");
       proof.actions.push({
@@ -276,7 +281,7 @@ export function anonymousLocalMetadata(original) {
   metadata.remove("authorization");
   return metadata;
 }
-export function createReplayClient(target) {
+export function createReplayClient(target, { onTerminalDetails = () => {} } = {}) {
   if (!/^127\.0\.0\.1:[1-9]\d{0,4}$/.test(target) || Number(target.split(":")[1]) > 65535)
     throw new Error("replay loopback target required");
   class ReplayClient extends grpc.Client {
@@ -286,7 +291,10 @@ export function createReplayClient(target) {
     }
     makeBidiStreamRequest(...args) {
       args[3] = anonymousLocalMetadata(args[3]);
-      return super.makeBidiStreamRequest(...args);
+      const rpc = super.makeBidiStreamRequest(...args);
+      for (const name of ["error", "status"])
+        rpc.on(name, (value) => onTerminalDetails(`stream-${name}`, value.details));
+      return rpc;
     }
   }
   return new ReplayClient(target, grpc.credentials.createInsecure(), {

@@ -15,7 +15,7 @@ import { readPinnedBundle } from "./compare.mjs";
 import { compareExecutedObservation } from "./compare-core.mjs";
 import { createWire } from "./wire.mjs";
 import { createMeter } from "./meter.mjs";
-import { makePlan, PROJECT } from "./plan.mjs";
+import { PROJECT } from "./plan.mjs";
 import { boundaryPayload } from "./payload.mjs";
 import { sanitize } from "../pubsub-production/capture.mjs";
 import { createBindings } from "../pubsub-production/stream-dlq-compare-core.mjs";
@@ -74,7 +74,7 @@ export async function replayA(
 ) {
   validateRuntime(pin, environment);
   const source = validateReplaySource(input),
-    cells = makePlan().cells;
+    cells = input.packet.plan.cells;
   const bindings = createBindings(),
     meter = createMeter(),
     raw = [],
@@ -83,6 +83,7 @@ export async function replayA(
       exchanges: [],
       frames: [],
       events: [],
+      result: structuredClone(c.result),
       debts: [...c.debts],
     }));
   let currentCell,
@@ -112,6 +113,7 @@ export async function replayA(
         await response.arrayBuffer();
       }),
   });
+  const terminalDetails = new Map();
   let sequence = 0,
     frame = 0;
   const journal = {
@@ -120,9 +122,17 @@ export async function replayA(
         n: ++sequence,
         at: new Date().toISOString(),
         sourceDispatchN: dispatchN,
-        ...sanitize(value),
+        ...sanitize({
+          ...value,
+          ...(["stream-error", "stream-status"].includes(value.event) &&
+          terminalDetails.has(value.event)
+            ? { details: terminalDetails.get(value.event) }
+            : {}),
+        }),
       };
       raw.push(entry);
+      if (entry.event?.startsWith("stream-"))
+        localCells.find((c) => c.id === entry.cellId)?.events.push(entry);
       persist(entry);
     },
     frame(bytes, value) {
@@ -139,7 +149,13 @@ export async function replayA(
         ?.frames.push({ ...value, blob: identity, verified: true });
     },
   };
-  const client = createReplayClient(environment.PUBSUB_EMULATOR_HOST);
+  const client = createReplayClient(environment.PUBSUB_EMULATOR_HOST, {
+    onTerminalDetails: (event, details) => {
+      if (typeof details === "string" && Buffer.byteLength(details) <= 20480)
+        terminalDetails.set(event, details);
+      else terminalDetails.delete(event);
+    },
+  });
   try {
     wire = wireFactory({
       meter,
@@ -223,10 +239,18 @@ export async function replayA(
           request: rewritten,
           response: reply,
           n: raw.at(-1)?.n ?? 0,
+          dispatchN:
+            raw.findLast(
+              (entry) => entry.event === "request-dispatch" && entry.sourceDispatchN === row.n,
+            )?.n ?? null,
           durationMs: reply.durationMs,
         });
-      } else if (row.event === "stream-frame") await native.frame(row);
-      else if (["stream-write-end", "stream-cancel", "stream-case-observation"].includes(row.event))
+      } else if (row.event === "stream-frame") {
+        if (row.direction === "out" && !native.witnesses.has(row.cellId)) terminalDetails.clear();
+        await native.frame(row);
+      } else if (
+        ["stream-write-end", "stream-cancel", "stream-case-observation"].includes(row.event)
+      )
         await native.action(row);
       else if (row.event === "case-result" || row.event === "case-budget-overrun")
         native.closeCell(row.cellId);

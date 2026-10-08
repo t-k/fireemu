@@ -7,7 +7,7 @@
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
     "decision": "PENDING",
-    "note": "Pending the complete frozen condition map and independent closure review. Thirteen conditions are VERIFIED by recordedComparison on one strict release artifact; S5a/P17, S5b, the native Listen comparison, final-artifact-regression and independent closure-review remain outstanding. The parent stays IMPLEMENTING; this preparation does not approve closure."
+    "note": "Sixteen domain conditions have genuine final-binary comparisons. R19 names the public semantic replay interface, but its actual release comparison and independent final closure review remain pending; the parent stays IMPLEMENTING."
   },
   "scopeDecisions": [
     {
@@ -170,8 +170,8 @@
             "run": "fs-transaction-p02b-readonly-refused-956ffb45"
           }
         ],
-        "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-        "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
         "comparisonPaths": [
           "spec/compatibility/broad-runs/fs-transaction-p01-recorded-comparison-v1.json",
           "spec/compatibility/broad-runs/fs-transaction-p02b-recorded-comparison-v1.json"
@@ -248,8 +248,8 @@
             "run": "fs-transaction-p02b-readonly-refused-956ffb45"
           }
         ],
-        "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-        "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
         "comparisonPaths": [
           "spec/compatibility/broad-runs/fs-transaction-p02-recorded-comparison-v1.json",
           "spec/compatibility/broad-runs/fs-transaction-p02b-recorded-comparison-v1.json"
@@ -314,8 +314,8 @@
             "run": "fs-transaction-p03-readtime-70b0ae21"
           }
         ],
-        "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-        "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
         "comparisonPaths": [
           "spec/compatibility/broad-runs/fs-transaction-p03-recorded-comparison-v1.json"
         ],
@@ -406,8 +406,8 @@
             "run": "fs-transaction-p16-foreign-tokens-b584f896"
           }
         ],
-        "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-        "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
         "comparisonPaths": [
           "spec/compatibility/broad-runs/fs-transaction-p01-recorded-comparison-v1.json",
           "spec/compatibility/broad-runs/fs-transaction-p14-recorded-comparison-v1.json",
@@ -474,8 +474,8 @@
             "run": "fs-transaction-p05-readlock-66e77ae5"
           }
         ],
-        "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-        "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
         "comparisonPaths": [
           "spec/compatibility/broad-runs/fs-transaction-p05-recorded-comparison-v1.json"
         ],
@@ -540,8 +540,8 @@
             "run": "fs-transaction-p14-stage2-498faaea"
           }
         ],
-        "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-        "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
         "comparisonPaths": [
           "spec/compatibility/broad-runs/fs-transaction-p14-recorded-comparison-v1.json"
         ],
@@ -604,8 +604,8 @@
             "run": "fs-transaction-p14-stage2-498faaea"
           }
         ],
-        "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-        "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
         "comparisonPaths": [
           "spec/compatibility/broad-runs/fs-transaction-p14-recorded-comparison-v1.json"
         ],
@@ -664,11 +664,12 @@
         ],
         "releaseReplay": {
           "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
-          "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-          "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+          "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+          "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
           "rows": {
             "MATCH": 6
-          }
+          },
+          "sha256": "49ade9155915bfe953c57540ce6279b791433ff4d88bbe6a4309b25841e734fc"
         }
       },
       "productionObservation": "RECORDED_TWICE_STRICT_COMPARED",
@@ -707,8 +708,8 @@
             "run": "fs-transaction-p09-879d71f8"
           }
         ],
-        "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-        "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
         "comparisonPaths": [
           "spec/compatibility/broad-runs/fs-transaction-p08-recorded-comparison-v1.json",
           "spec/compatibility/broad-runs/fs-transaction-p09-recorded-comparison-v1.json"
@@ -718,11 +719,12 @@
         },
         "e04ReleaseReplay": {
           "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
-          "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-          "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+          "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+          "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
           "rows": {
             "MATCH": 6
-          }
+          },
+          "sha256": "49ade9155915bfe953c57540ce6279b791433ff4d88bbe6a4309b25841e734fc"
         }
       }
     },
@@ -784,11 +786,12 @@
         ],
         "releaseReplay": {
           "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
-          "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-          "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+          "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+          "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
           "rows": {
             "MATCH": 10
-          }
+          },
+          "sha256": "49ade9155915bfe953c57540ce6279b791433ff4d88bbe6a4309b25841e734fc"
         }
       },
       "productionObservation": "RECORDED_TWICE_STRICT_COMPARED",
@@ -827,8 +830,8 @@
             "run": "fs-transaction-p13b-retry-answers-e6d6b209"
           }
         ],
-        "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-        "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
         "comparisonPaths": [
           "spec/compatibility/broad-runs/fs-transaction-p09-recorded-comparison-v1.json",
           "spec/compatibility/broad-runs/fs-transaction-p13b-recorded-comparison-v1.json"
@@ -838,11 +841,12 @@
         },
         "e04ReleaseReplay": {
           "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
-          "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-          "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+          "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+          "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
           "rows": {
             "MATCH": 10
-          }
+          },
+          "sha256": "49ade9155915bfe953c57540ce6279b791433ff4d88bbe6a4309b25841e734fc"
         }
       }
     },
@@ -904,11 +908,12 @@
         ],
         "releaseReplay": {
           "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
-          "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-          "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+          "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+          "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
           "rows": {
             "MATCH": 20
-          }
+          },
+          "sha256": "49ade9155915bfe953c57540ce6279b791433ff4d88bbe6a4309b25841e734fc"
         }
       },
       "productionObservation": "RECORDED_TWICE_STRICT_COMPARED",
@@ -974,8 +979,8 @@
             "run": "fs-transaction-p13a-inferred-answers-da25f2aa"
           }
         ],
-        "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-        "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
         "comparisonPaths": [
           "spec/compatibility/broad-runs/fs-transaction-p10a-recorded-comparison-v1.json",
           "spec/compatibility/broad-runs/fs-transaction-p10b-recorded-comparison-v1.json",
@@ -987,11 +992,12 @@
         },
         "e04ReleaseReplay": {
           "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
-          "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-          "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+          "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+          "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
           "rows": {
             "MATCH": 20
-          }
+          },
+          "sha256": "49ade9155915bfe953c57540ce6279b791433ff4d88bbe6a4309b25841e734fc"
         }
       }
     },
@@ -1075,8 +1081,8 @@
             "run": "fs-transaction-p13a-inferred-answers-da25f2aa"
           }
         ],
-        "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-        "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
         "comparisonPaths": [
           "spec/compatibility/broad-runs/fs-transaction-p11-recorded-comparison-v1.json",
           "spec/compatibility/broad-runs/fs-transaction-p12-recorded-comparison-v1.json",
@@ -1139,8 +1145,8 @@
             "run": "fs-transaction-p14-stage2-498faaea"
           }
         ],
-        "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-        "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
         "comparisonPaths": [
           "spec/compatibility/broad-runs/fs-transaction-p14-recorded-comparison-v1.json"
         ],
@@ -1156,7 +1162,7 @@
         "fs-transaction/web-sdk-optimistic-retry"
       ],
       "recipeStatus": "PROPOSED",
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "observation": {
         "method": "Firebase Web SDK 12.18.0 runTransaction in Node and a real browser: observe BatchGetDocuments followed by precondition Commit, concurrent-write Commit refusal code, callback count, final state, and nonconflicting control. Confirm actual wire locally before corpus freeze.",
         "existingCaseOrCampaignRefs": [],
@@ -1171,7 +1177,7 @@
         "references": [
           "docs/compatibility/fs-transaction-next-campaign-preparation.md"
         ],
-        "productionExecuted": false
+        "productionExecuted": true
       },
       "historicalProductionReferences": [],
       "verification": {
@@ -1182,8 +1188,23 @@
         "recordingsRequired": 2,
         "recordingsRequiredPerTransport": 2
       },
-      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
-      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+      "note": "Two original production recordings and the genuine final-binary local comparisons verify this frozen condition. The parent remains not COMPAT_VERIFIED until independent closure review and final regression approval.",
+      "productionObservation": "RECORDED_TWICE_STRICT_COMPARED",
+      "evidence": {
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
+        "producerSourceCommit": "73b2c2b99b8f8d35a245ab795d2b09e7d9dd9399",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/FS-TRANSACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 8
+        },
+        "productionRecordings": {
+          "recordings": 2
+        },
+        "domain": "web-sdk-optimistic-retry"
+      }
     },
     {
       "conditionId": "FS-TRANSACTION/paging-and-cancellation",
@@ -1237,8 +1258,8 @@
             "run": "fs-transaction-p14-stage2-498faaea"
           }
         ],
-        "finalArtifactSha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874",
-        "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
         "comparisonPaths": [
           "spec/compatibility/broad-runs/fs-transaction-p14-recorded-comparison-v1.json"
         ],
@@ -1254,7 +1275,7 @@
         "fs-transaction/admin-sdk-server-retry"
       ],
       "recipeStatus": "PROPOSED",
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "observation": {
         "method": "firebase-admin 14.3.0 server-side read-write runTransaction and retryTransaction: confirm BeginTransaction, embedded newTransaction and retry token wire locally, then compare conflict code, callback count and final state.",
         "credentials": "Admin OAuth; server transaction bypasses Firestore Rules.",
@@ -1265,7 +1286,7 @@
       },
       "localEvidence": {
         "references": [],
-        "productionExecuted": false
+        "productionExecuted": true
       },
       "historicalProductionReferences": [],
       "verification": {
@@ -1276,8 +1297,23 @@
         "recordingsRequired": 2,
         "recordingsRequiredPerTransport": 2
       },
-      "note": "A finite sandbox corpus, two recordings, complete cleanup and final-artifact comparison remain required. The 13-case recorded expiry/retry corpus supplies no production observation for this condition.",
-      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+      "note": "Two original production recordings and the genuine final-binary local comparisons verify this frozen condition. The parent remains not COMPAT_VERIFIED until independent closure review and final regression approval.",
+      "productionObservation": "RECORDED_TWICE_STRICT_COMPARED",
+      "evidence": {
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
+        "producerSourceCommit": "ada7e1767bf0277f396b121702466cf536ea6e3b",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/FS-TRANSACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 20
+        },
+        "productionRecordings": {
+          "recordings": 2
+        },
+        "domain": "admin-sdk-server-retry"
+      }
     },
     {
       "conditionId": "FS-TRANSACTION/commit-atomic-visibility",
@@ -1286,7 +1322,7 @@
         "fs-transaction/commit-atomic-visibility"
       ],
       "recipeStatus": "PROPOSED",
-      "status": "PENDING_CORPUS",
+      "status": "VERIFIED",
       "observation": {
         "method": "On native gRPC Listen, a multi-document transaction commit must appear as one snapshot at one commit time; compare document values and notification ordering with a nontransaction control. SDK callback form belongs to FS-LISTEN-SDK.",
         "credentials": "Admin OAuth for transaction commit; no user credential for public native Listen target.",
@@ -1296,7 +1332,7 @@
       },
       "localEvidence": {
         "references": [],
-        "productionExecuted": false
+        "productionExecuted": true
       },
       "historicalProductionReferences": [],
       "verification": {
@@ -1307,8 +1343,23 @@
         "recordingsRequired": 2,
         "recordingsRequiredPerTransport": 2
       },
-      "note": "The listen lane recorded native/commit-atomic-visibility twice in conformance/fixtures/fs-listen/l1-production-rows.json. A source-bound native Listen comparison on the final transaction artifact and binding to this condition remain required; no additional production packet is needed for those saved rows. The stage 1/P14/P16 replay does not cover native Listen.",
-      "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
+      "note": "Two original production recordings and the genuine final-binary local comparisons verify this frozen condition. The parent remains not COMPAT_VERIFIED until independent closure review and final regression approval.",
+      "productionObservation": "RECORDED_TWICE_STRICT_COMPARED",
+      "evidence": {
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
+        "producerSourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
+        "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/FS-TRANSACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 4
+        },
+        "productionRecordings": {
+          "recordings": 2
+        },
+        "domain": "commit-atomic-visibility"
+      }
     },
     {
       "conditionId": "FS-TRANSACTION/final-artifact-regression",
@@ -1324,7 +1375,10 @@
         "credentials": "No production credential; independent review only."
       },
       "localEvidence": {
-        "references": [],
+        "references": [
+          "spec/compatibility/closure/evidence/FS-TRANSACTION-build.json",
+          "spec/compatibility/closure/evidence/FS-TRANSACTION-comparison.json"
+        ],
         "productionExecuted": false
       },
       "historicalProductionReferences": [],
@@ -1334,7 +1388,7 @@
         ],
         "recordingsRequired": 0
       },
-      "note": "Stage 3 preparation replayed both saved recordings of all 16 stage 1/P14/P16 programs and the supplementary E04 corpus against one release artifact, with no mismatches. This condition stays PENDING_REVIEW until S5a/P17 and S5b recordings and native Listen commit-atomic-visibility have final source-bound comparisons, integratedRegression and the release RUNS entry are bound, and the required independent approval is obtained.",
+      "note": "All saved transaction programs, supplementary E04, Admin SDK, Web SDK and the four native Listen atomic visibility rows have genuine comparisons against one release binary. R19 registers the public semantic check/export route. This condition stays PENDING_REVIEW until its actual replay output, integratedRegression binding and independent final regression approval are complete.",
       "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     },
     {
@@ -1361,7 +1415,7 @@
         ],
         "recordingsRequired": 0
       },
-      "note": "Independent review remains PENDING_REVIEW. Reviewers must approve the exact final artifact, every frozen condition, comparison and cleanup after S5a/P17, S5b, native Listen comparison and final-artifact-regression are complete. This stage 3 preparation supplies no self-approval.",
+      "note": "Independent approval of the exact final evidence, all eighteen frozen conditions, source and cleanup remains pending. This candidate supplies no self-approval.",
       "productionObservation": "UNOBSERVED_BY_RECORDED_CORPUS"
     }
   ],
@@ -1434,7 +1488,7 @@
       "OPTIMISTIC mode follow-up issue"
     ]
   },
-  "note": "The frozen denominator remains 18 behavioral conditions. Thirteen conditions are VERIFIED on strict by two agreeing saved production recordings per program, replayed against the one source-bound release artifact named in recordedComparison. Stage 1, P14 and P16 cover lifecycle, snapshots, conflicts, rollback, retry tokens, expiry, write atomicity, range locks, retention, cancellation and token validation/ownership; E04 supplementary REST rows are replayed on that same artifact. The remaining recording requirements are S5a/P17 for admin-sdk-server-retry and S5b for web-sdk-optimistic-retry in Node and a real browser. Native Listen commit-atomic-visibility was recorded by the listen lane and still needs its final-artifact comparison and binding here. final-artifact-regression and closure-review remain PENDING_REVIEW; all new SDK recordings, the native Listen comparison, integratedRegression and the release RUNS entry must be complete before independent approval and parent promotion. The official-emulator-only comparison remains a separate track (owner decision, 2026-10-04). Unrecorded inferred answers remain outside the verification of the recorded conditions.",
+  "note": "All sixteen domain conditions have genuine comparisons on one Rust artifact. Final-artifact-regression and independent closure review remain pending; this candidate is not COMPAT_VERIFIED.",
   "profileComparison": {
     "profile": "strict",
     "emulatorCompatibilityCheck": "SEPARATE_TRACK",

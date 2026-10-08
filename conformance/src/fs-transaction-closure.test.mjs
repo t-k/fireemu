@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
+import { RUNS, planComparisons } from "./release-strict-regression.mjs";
 
 const closureUrl = new URL("../../spec/compatibility/closure/FS-TRANSACTION.json", import.meta.url);
 const required = new Set([
@@ -60,10 +61,83 @@ const recordedConditions = new Map([
   ["FS-TRANSACTION/paging-and-cancellation", ["P14"]],
 ]);
 
-test("FS-TRANSACTION published records verify thirteen conditions and not the parent", () => {
+test("FS-TRANSACTION approved regression is rerun through the public recipe route", () => {
+  const path = "spec/compatibility/broad-runs/fs-transaction-integrated-regression-v1.json";
+  const plan = planComparisons(
+    [{ closure: { parent: "FS-TRANSACTION", parentStatus: "COMPAT_VERIFIED", integratedRegression: { comparisons: [{ path }] } } }],
+    () => ({ kind: "fs-transaction-integrated-regression-v1", rows: [{ row: "recipe/control", status: "MATCH" }] }),
+    { excludedKinds: [] },
+  );
+  assert.deepEqual(plan.errors, []);
+  assert.equal(plan.excluded.length, 0);
+  assert.deepEqual(plan.comparisons[0].runIds, ["R19"]);
+  const run = RUNS.find(({ id }) => id === "R19");
+  assert.deepEqual(run.commands.map(({ mode }) => mode), ["check", "export-comparison"]);
+  assert.ok(run.commands.every(({ argv }) => argv.includes("{bin}") && argv.includes("--binary")));
+  assert.ok(run.commands.every(({ expectedExitCodes }) => expectedExitCodes.length === 1 && expectedExitCodes[0] === 0));
+});
+
+test("FS-TRANSACTION final domain evidence retains genuine replay coverage on one binary", () => {
+  const root = new URL("../../", import.meta.url);
+  const build = JSON.parse(readFileSync(new URL("spec/compatibility/closure/evidence/FS-TRANSACTION-build.json", root), "utf8"));
+  const comparison = JSON.parse(readFileSync(new URL("spec/compatibility/closure/evidence/FS-TRANSACTION-comparison.json", root), "utf8"));
+  assert.equal(comparison.artifactSha256, build.binarySha256);
+  assert.equal(comparison.sourceCommit, build.sourceCommit);
+  assert.equal(build.buildInputs.scheme, "binary-v1");
+  assert.equal(build.buildInputs.inputCount, 337);
+  assert.equal(comparison.programReplay.recordings, 32);
+  assert.equal(comparison.programReplay.publisherRows, 1302);
+  assert.equal(comparison.programReplay.tokenAgeRows, 142);
+  assert.equal(comparison.programReplay.matchedRows, 1444);
+  assert.equal(comparison.adminSdk.comparisons.length, 4);
+  assert.deepEqual(comparison.adminSdk.productionSha256, [
+    "e6e754055db0555a77d67faf79ffad97b564de56781c1640d6a666d62c9ed0d9",
+    "50ec52e2c1f17f497928c2c6b75fe6931d31a70d96c54c10643872d254f5f227",
+  ]);
+  assert.equal(comparison.adminSdk.localReceipts.length, 2);
+  assert.ok(comparison.adminSdk.localReceipts.every(({ remainingOwnedProcesses }) => Object.keys(remainingOwnedProcesses).length === 0));
+  for (const record of comparison.adminSdk.comparisons) {
+    assert.equal(record.complete, true);
+    assert.equal(record.attempts.length, 5);
+    assert.ok(record.attempts.every(({ match }) => match === true));
+  }
+  assert.equal(comparison.webSdk.comparisons.length, 2);
+  assert.deepEqual(comparison.webSdk.production.map(({ sha256 }) => sha256), [
+    "2d3518a8c275f0b9f2e219cdbb0ce1c22c4a55dc169ddd290e1e14c556b8e819",
+    "2ad186b4a3aa35a41b501316feb1cf7d9e54f043dfa2b7d92eb56edc47fa4773",
+  ]);
+  assert.ok(comparison.webSdk.production.every(({ complete, sandboxRequests }) => complete && sandboxRequests === 63));
+  assert.equal(comparison.webSdk.localReceipt.complete, true);
+  assert.equal(comparison.webSdk.localReceipt.exitCode, 0);
+  assert.equal(comparison.webSdk.lifecycle.observedProcessesAbsent, true);
+  assert.equal(comparison.webSdk.lifecycle.readyDescriptorWithdrawn, true);
+  for (const record of comparison.webSdk.comparisons) {
+    assert.equal(record.cases.length, 4);
+    for (const row of record.cases) {
+      assert.equal(row.status, "MATCH");
+      assert.equal(row.production.scenarioComplete, true);
+      assert.equal(row.local.scenarioComplete, true);
+      assert.equal(row.production.reportClosed, true);
+      assert.equal(row.local.reportClosed, true);
+      assert.deepEqual(row.production.semantic, row.local.semantic);
+      assert.ok(row.production.semantic.wire.every(({ complete }) => complete === true));
+      assert.equal(row.production.semantic.attempts, row.scenario === "control" ? 1 : 2);
+    }
+  }
+  assert.equal(comparison.atomicVisibility.rows.length, 4);
+  assert.ok(comparison.atomicVisibility.rows.every(({ status }) => status === "MATCH"));
+  assert.equal(comparison.atomicVisibility.fullCorpusOk, false);
+  assert.equal(comparison.expiryRetry.summary.rows, 36);
+  assert.equal(comparison.expiryRetry.summary.mismatches, 0);
+  for (const domain of [comparison.programReplay, comparison.adminSdk, comparison.webSdk, comparison.atomicVisibility, comparison.expiryRetry]) {
+    assert.equal(domain.artifactSha256, comparison.artifactSha256);
+  }
+});
+
+test("FS-TRANSACTION published program records retain thirteen condition mappings", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   const root = new URL("../../", import.meta.url);
-  assert.equal(closure.conditions.filter(({ status }) => status === "VERIFIED").length, 13);
+  assert.equal(closure.conditions.filter(({ status }) => status === "VERIFIED").length, closure.closureReview.decision === "APPROVED" ? 18 : 16);
   for (const condition of closure.conditions) {
     const expected = recordedConditions.get(condition.conditionId);
     if (!expected) {
@@ -98,6 +172,11 @@ test("FS-TRANSACTION published records verify thirteen conditions and not the pa
       assert.equal(comparison.productionRequests, 0);
       assert.deepEqual(comparison.summary, { recordings: 2, rows: entry.rows, mismatches: 0 });
       assert.equal(comparison.recordings.length, 2);
+      if (comparison.program === "FS-TRANSACTION-P16-FOREIGN-TOKENS") {
+        assert.equal(comparison.comparer.replaySetup.managementLifecycleReplayed, false);
+        assert.match(comparison.comparer.replaySetup.operationalLauncherSha256, /^[0-9a-f]{64}$/);
+        assert.equal(comparison.comparer.replaySetup.configurationFiles.length, 2);
+      }
       assert.equal(observations.corpora[0].agree, true);
       assert.match(comparison.artifact.sourceCommit, /^[0-9a-f]{40}$/);
       assert.match(comparison.artifact.binarySha256, /^[0-9a-f]{64}$/);
@@ -150,7 +229,7 @@ test("FS-TRANSACTION published records verify thirteen conditions and not the pa
   assert.equal(artifacts.size, 1);
 });
 
-test("FS-TRANSACTION recorded REST subset leaves the other frozen conditions open", () => {
+test("FS-TRANSACTION supplementary REST evidence stays partial beside independent domain evidence", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   const partial = new Map([
     ["FS-TRANSACTION/idle-expiry", 5],
@@ -163,7 +242,7 @@ test("FS-TRANSACTION recorded REST subset leaves the other frozen conditions ope
   for (const condition of closure.conditions) {
     assert.equal(
       condition.status === "VERIFIED",
-      recordedConditions.has(condition.conditionId),
+      recordedConditions.has(condition.conditionId) || ["FS-TRANSACTION/admin-sdk-server-retry", "FS-TRANSACTION/web-sdk-optimistic-retry", "FS-TRANSACTION/commit-atomic-visibility"].includes(condition.conditionId) || closure.closureReview.decision === "APPROVED",
       condition.conditionId,
     );
     if (partial.has(condition.conditionId)) {
@@ -175,7 +254,7 @@ test("FS-TRANSACTION recorded REST subset leaves the other frozen conditions ope
       assert.equal(condition.partialEvidence.caseIds.length, partial.get(condition.conditionId));
       assert.ok(condition.partialEvidence.remainingBoundaries.length);
       observed.push(...condition.partialEvidence.caseIds);
-    } else if (recordedConditions.has(condition.conditionId)) {
+    } else if (recordedConditions.has(condition.conditionId) || ["FS-TRANSACTION/admin-sdk-server-retry", "FS-TRANSACTION/web-sdk-optimistic-retry", "FS-TRANSACTION/commit-atomic-visibility"].includes(condition.conditionId)) {
       assert.equal(condition.productionObservation, "RECORDED_TWICE_STRICT_COMPARED");
     } else {
       assert.equal(condition.productionObservation, "UNOBSERVED_BY_RECORDED_CORPUS");
@@ -183,8 +262,8 @@ test("FS-TRANSACTION recorded REST subset leaves the other frozen conditions ope
   }
   assert.equal(observed.length, 13);
   assert.equal(new Set(observed).size, 13);
-  assert.equal(closure.parentStatus, "IMPLEMENTING");
-  assert.equal(closure.closureReview.decision, "PENDING");
+  assert.equal(closure.parentStatus, closure.closureReview.decision === "APPROVED" ? "COMPAT_VERIFIED" : "IMPLEMENTING");
+  assert.ok(["PENDING", "APPROVED"].includes(closure.closureReview.decision));
   assert.equal(closure.profileComparison.emulatorCompatibilityCheck, "SEPARATE_TRACK");
   assert.equal(closure.productionPlan.preparedCampaign.authorizesProduction, false);
   assert.deepEqual(closure.productionPlan.preparedCampaign.actualRequestsPerRecording, [75, 75]);
@@ -326,6 +405,8 @@ test("FS-TRANSACTION E04 rows of the verified conditions are replayed on the rel
     assert.equal(record.kind, "fs-transaction-expiry-retry-04-release-replay-v1");
     assert.equal(record.artifact.binarySha256, condition.evidence.finalArtifactSha256, id);
     assert.equal(record.artifact.sourceCommit, condition.evidence.sourceCommit, id);
+    assert.equal(releaseReplay.finalArtifactSha256, record.artifact.binarySha256, id);
+    assert.equal(releaseReplay.sourceCommit, record.artifact.sourceCommit, id);
     assert.equal(record.summary.mismatches, 0);
     const rows = record.recordings
       .flatMap((entry) => entry.rows)

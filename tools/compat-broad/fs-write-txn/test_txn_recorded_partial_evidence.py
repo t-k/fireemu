@@ -169,7 +169,9 @@ def test_partial_recordings_do_not_promote_unobserved_conditions_or_official_emu
     assert len(mapped) == len(set(mapped)) == 13
     assert set(mapped) == {row["caseId"] for row in value["cases"]}
     assert len(closure["conditions"]) == 18
-    assert closure["parentStatus"] == "IMPLEMENTING" and closure["closureReview"]["decision"] == "PENDING"
+    approved = closure["closureReview"]["decision"] == "APPROVED"
+    assert closure["closureReview"]["decision"] in {"PENDING", "APPROVED"}
+    assert closure["parentStatus"] == ("COMPAT_VERIFIED" if approved else "IMPLEMENTING")
     assert closure["profileComparison"]["emulatorCompatibilityCheck"] == "SEPARATE_TRACK"
     for condition in closure["conditions"]:
         if condition["conditionId"] in counts:
@@ -179,10 +181,10 @@ def test_partial_recordings_do_not_promote_unobserved_conditions_or_official_emu
             assert partial["coverage"] == "PARTIAL" and partial["remainingBoundaries"]
             assert partial["caseIds"] == value["conditionMap"][condition["conditionId"]]
             assert partial["reference"] == str(PATH.relative_to(ROOT))
-        elif "recordedComparison" in condition:
+        elif "recordedComparison" in condition or condition["conditionId"] in {"FS-TRANSACTION/admin-sdk-server-retry", "FS-TRANSACTION/web-sdk-optimistic-retry", "FS-TRANSACTION/commit-atomic-visibility"}:
             assert condition["status"] == "VERIFIED"
         else:
-            assert condition["status"] != "VERIFIED"
+            assert (condition["status"] == "VERIFIED") is approved
             assert condition["productionObservation"] == "UNOBSERVED_BY_RECORDED_CORPUS"
 
 

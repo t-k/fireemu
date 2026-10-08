@@ -15,8 +15,8 @@
   "productionRequests": 0,
   "profile": "strict",
   "artifact": {
-    "sourceCommit": "538d6b06d99f544a6d3cef7f22cd47fd2d5567b4",
-    "binarySha256": "50e9c170e7d36b667a10d7e8203cb41eb90c24da6043ac5d76c1b4c49b262874"
+    "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
+    "binarySha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612"
   },
   "comparer": {
     "sha256": "195c812433fc5cbecb73f95801df5c5fa28e40d6b83b5f9d684967c414700b21",

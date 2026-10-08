@@ -321,6 +321,26 @@ export const RUNS = [
     ),
     localSetup: true,
   },
+  {
+    // Public semantic inputs replay every transaction recipe against the installed binary.
+    id: "R19",
+    kind: "fs-transaction-integrated-regression-v1",
+    clear: ["fs-transaction"],
+    commands: [
+      {
+        mode: "check",
+        argv: ["python3", "tools/compat-broad/fs-write-txn/fs_txn_release.py", "check", "--binary", "{bin}", "--out", "{runDir}/fs-transaction/check"],
+        env: {},
+        expectedExitCodes: [0],
+      },
+      {
+        mode: "export-comparison",
+        argv: ["python3", "tools/compat-broad/fs-write-txn/fs_txn_release.py", "export", "--binary", "{bin}", "--out", "{export}"],
+        env: {},
+        expectedExitCodes: [0],
+      },
+    ],
+  },
 ];
 
 /** Composite comparison files: which part each run covers. Other keys are metadata. */

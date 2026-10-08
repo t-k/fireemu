@@ -272,9 +272,9 @@ export const WAIVED_FIXTURES = [
  */
 export const KNOWN_UNCONNECTED = {
   "auth-fs-cross-stage2": {
-    currentScheme2: "a9fde65ea34a9079af75ca37839d8e215a1f78d949a29b1f839c800f3c225b08",
+    currentScheme2: "259d8e746461e4d8c6ad755d131e6b7caed3ca3660005469c7758fb912b69cba",
     reason:
-      "the stop-time cleanup of stage2-session.mjs changed after the rows were recorded (3a7777242); no hop is written until a stage-2 rerun is planned and the owner decides on it",
+      "the stop-time cleanup of stage2-session.mjs changed after the rows were recorded (3a7777242); shared sdk-wire.mjs then changed local buffered-write callback acceptance for S5b admission (682afb4412), a branch enabled only by s5bAdmission; neither change is connected to the recorded stage-2 digest, and no hop is written until a stage-2 rerun is planned and the owner decides on it",
   },
 };
 

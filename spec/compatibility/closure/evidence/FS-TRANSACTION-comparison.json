@@ -1,0 +1,3130 @@
+{
+  "kind": "fs-transaction-comparison-v1",
+  "artifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+  "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
+  "buildInputs": {
+    "scheme": "binary-v1",
+    "inputsSha256": "6df67f0ffad566b23ddf5fb94b0611bb72209c856797de45133d7fa9a28e9d55",
+    "inputCount": 337,
+    "dirty": false
+  },
+  "sourceBound": true,
+  "producerSourceCommit": "73b2c2b99b8f8d35a245ab795d2b09e7d9dd9399",
+  "programReplay": {
+    "artifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+    "recordings": 32,
+    "programs": 16,
+    "publisherRows": 1302,
+    "tokenAgeRows": 142,
+    "matchedRows": 1444,
+    "replays": [
+      {
+        "program": "FS-TRANSACTION-P01-LIFECYCLE",
+        "recording": 1,
+        "resultSha256": "008653de219298c6434c3e04c0195026ce2c482ba697de9e0c6019b6bee72913",
+        "productionSha256": "82395ae3806774df6ec35bf781f5b978a59528c6cf02433c899b576479acf559",
+        "matchedRows": 45
+      },
+      {
+        "program": "FS-TRANSACTION-P01-LIFECYCLE",
+        "recording": 2,
+        "resultSha256": "03e56879a4c3ffe8754ac8c01b68c48d5a5454db6955a9edb7b01b004a4ec8bf",
+        "productionSha256": "63d8a1725b9202929f22343823e597ae98b9e811bff4772379ae8cf1b88185d7",
+        "matchedRows": 45
+      },
+      {
+        "program": "FS-TRANSACTION-P02-READONLY",
+        "recording": 1,
+        "resultSha256": "3a621848abe020ec859c8a55d8e90b400991951f979bf6438c92aad8f609f070",
+        "productionSha256": "27005c100521b05fd8c4c82d914621005e5c514c2458dfc7c932aab9e985f489",
+        "matchedRows": 42
+      },
+      {
+        "program": "FS-TRANSACTION-P02-READONLY",
+        "recording": 2,
+        "resultSha256": "35ebddc726cddc23ccd373451f3eb9c049f30bacc3061153455499b093d98e44",
+        "productionSha256": "6fed8bbf10edaab96e44957ec754aeed69bff0942a9e229a5228d1ccf14cd6f0",
+        "matchedRows": 42
+      },
+      {
+        "program": "FS-TRANSACTION-P02B-READONLY-REFUSED",
+        "recording": 1,
+        "resultSha256": "a1815fb18a863fd4988bc1db32aee3cada60b1c740d200d1f9f5a9cdf37e7b65",
+        "productionSha256": "240d434d6f16111d7fd9c875e7799fbda79eb3b55d72a2a238f718d230798cc8",
+        "matchedRows": 46
+      },
+      {
+        "program": "FS-TRANSACTION-P02B-READONLY-REFUSED",
+        "recording": 2,
+        "resultSha256": "c35e32df39eb1711ceb69870ccfe62e87dca9a8cd313264294f0a8e4431df738",
+        "productionSha256": "bd6b1e27d5aa319b3672a65c952d874a1ca31d9fe06780ae75750611742a7823",
+        "matchedRows": 46
+      },
+      {
+        "program": "FS-TRANSACTION-P03-READTIME",
+        "recording": 1,
+        "resultSha256": "7f0b3fb696dc2efe43a4f0e6d9f92b031f806fbbf71737bceb322c95d459bb17",
+        "productionSha256": "9e60fc867d4b5363b0b8860e48d02fa88be50b8a6a9df2357e715a38f16656ba",
+        "matchedRows": 37
+      },
+      {
+        "program": "FS-TRANSACTION-P03-READTIME",
+        "recording": 2,
+        "resultSha256": "b6dc92e9d17cd230b7c952f1067ce56c8f4d211ddd7b445285cf76f5a6be10d4",
+        "productionSha256": "74092fe65c0a86492d205ecf63dc18bba14ce2d6a223bbf315abf7e9f09adbc3",
+        "matchedRows": 37
+      },
+      {
+        "program": "FS-TRANSACTION-P05-READLOCK",
+        "recording": 1,
+        "resultSha256": "d0049ccb1df926aa65a4f3d99e3e2b3cfab4c9b169e94716d7468fdcc3cb1548",
+        "productionSha256": "101667ad79498a33eca1cee6e4b8fa82fed33f6a436596cbfeb9235db6a233e9",
+        "matchedRows": 45
+      },
+      {
+        "program": "FS-TRANSACTION-P05-READLOCK",
+        "recording": 2,
+        "resultSha256": "2615cbdb3cdfb532ec273a40d0ada545f2d6aea45df36aedca9e138bb7ae60ff",
+        "productionSha256": "3ade56ca7ebb3526cae596a89e4a7b3d6c4ee1c49024810cb10eca4b05677822",
+        "matchedRows": 45
+      },
+      {
+        "program": "FS-TRANSACTION-P08-FAILED-COMMIT",
+        "recording": 1,
+        "resultSha256": "3235023f0799baafb22d40d17c225050b24fe0da87ab3686a05ced1a4a11fd68",
+        "productionSha256": "c9d1dc8f081c1f18f9fc7872729b7f21a6c79e95c83938425ff9112c9de99214",
+        "matchedRows": 49
+      },
+      {
+        "program": "FS-TRANSACTION-P08-FAILED-COMMIT",
+        "recording": 2,
+        "resultSha256": "3465c61b384f44e1dff05b27d9be0662dc660bcf2fb176debc7f85167da62660",
+        "productionSha256": "40fe3fe74e6dd11c98fe1a1950f8ec46ebab9b29c703d67530a105196b576bf6",
+        "matchedRows": 49
+      },
+      {
+        "program": "FS-TRANSACTION-P09-GRPC-RETRY",
+        "recording": 1,
+        "resultSha256": "c644ccfcdbff211d42099853ea415e4b1ffbaf591356625279a319dd2dd928c0",
+        "productionSha256": "b129f425d3b8ac8cb3e7d40654b4e68f57172d9973a8406518fb81764bcc2e84",
+        "matchedRows": 14
+      },
+      {
+        "program": "FS-TRANSACTION-P09-GRPC-RETRY",
+        "recording": 2,
+        "resultSha256": "0189b0795c2840ee8535c3f8699925af957df877473b0efda7bcf8baadf0af25",
+        "productionSha256": "d6d8fd9c1a793a34f61eeab9389bf6cbbf085348df2f2f6e6f995c0ab68e9506",
+        "matchedRows": 14
+      },
+      {
+        "program": "FS-TRANSACTION-P10-A-GRPC-IDLE",
+        "recording": 1,
+        "resultSha256": "d82ce9fa67ea6c6ba0d4d382c0dac783330eca9c406ef6468c68bcea849827ca",
+        "productionSha256": "b51b7eef2f013d6e9acd427ed6973a0ba52e3e262c75a5a66a655c9aeaeb5e43",
+        "matchedRows": 22
+      },
+      {
+        "program": "FS-TRANSACTION-P10-A-GRPC-IDLE",
+        "recording": 2,
+        "resultSha256": "7d3a238b5eff99236a862411ca9345d1d0be172c78c1a9ddc7ef7f3266c826b5",
+        "productionSha256": "e010620ee5504f26085786e98282a27cd4ff08979ea5d8792672570f932d4569",
+        "matchedRows": 22
+      },
+      {
+        "program": "FS-TRANSACTION-P10-B-GRPC-BOUNDARY",
+        "recording": 1,
+        "resultSha256": "146a0abcb0c2e6ace426678f7323dcd71807beea422190a4b3d7b1222cf8454c",
+        "productionSha256": "4f4e65c0426d707776e2705e45e7ab59b7bd0c2b1ae42c95a25892424c9bd1b5",
+        "matchedRows": 25
+      },
+      {
+        "program": "FS-TRANSACTION-P10-B-GRPC-BOUNDARY",
+        "recording": 2,
+        "resultSha256": "a8106afcc711cf1a980a783b2d70356ce08384a6fd6a5c16e7f50f8b3fb21f5d",
+        "productionSha256": "2141615b4b8d3c9eae1a5eb2ec564d2b3163b31e77ef5947c24001d09297c656",
+        "matchedRows": 25
+      },
+      {
+        "program": "FS-TRANSACTION-P10-C-GRPC-BOUNDARY",
+        "recording": 1,
+        "resultSha256": "4fc22cd29dbd78042ee9265db6b51243ad35250661a99067aa5569ff524c9965",
+        "productionSha256": "3ff2787a3c2fca1e185ad3568449b1f6fdbc4ce1550373863216e3d88bc5a49e",
+        "matchedRows": 28
+      },
+      {
+        "program": "FS-TRANSACTION-P10-C-GRPC-BOUNDARY",
+        "recording": 2,
+        "resultSha256": "2827d66d1d449e314f1fb23d488db8f3e0582d3aabaff027ab796d2309dce898",
+        "productionSha256": "5e2fd291a3c26ddbb695189ed36e7fcc27c4ba0d03c8571c919e0b08600cdb61",
+        "matchedRows": 28
+      },
+      {
+        "program": "FS-TRANSACTION-P11-LIFETIME",
+        "recording": 1,
+        "resultSha256": "4ff33d4fef5074029ecbecacd5f8ac415b34784843ec8a78dbfe28df36e0dcc9",
+        "productionSha256": "2673bc8bdb57c1aee6825e53ac9c444bf88943dcdd2ad5586a0ebb85652921b9",
+        "matchedRows": 57
+      },
+      {
+        "program": "FS-TRANSACTION-P11-LIFETIME",
+        "recording": 2,
+        "resultSha256": "141e5be1ab12d50e35c85b1735d16fd718e81fd80e3d584902bcdc82c2d73324",
+        "productionSha256": "51cd84c1b0f29f4ec8bfe882e2b0de0710e2807d2083f0094492c409effe5487",
+        "matchedRows": 57
+      },
+      {
+        "program": "FS-TRANSACTION-P12-FIRST-REQUEST",
+        "recording": 1,
+        "resultSha256": "2bb67d2d367cd1e420b4a9a26223fc3afbe590c7f1ac66f467227bfb1685757f",
+        "productionSha256": "682409fff83d58ed64cf3354c977f380db934d8e4f78c49e735b4cecb0a1a922",
+        "matchedRows": 53
+      },
+      {
+        "program": "FS-TRANSACTION-P12-FIRST-REQUEST",
+        "recording": 2,
+        "resultSha256": "c245951b585ae8da9d9a415108297e7b090d0e49bc998d9ac7c7e966b85f9226",
+        "productionSha256": "8ebde4df4b3938aedf4c3d4851a33dbd31352eaaceda800290bda80a1444f802",
+        "matchedRows": 53
+      },
+      {
+        "program": "FS-TRANSACTION-P13A-INFERRED-ANSWERS",
+        "recording": 1,
+        "resultSha256": "e7db9e943a56fcabbede30aa283ac0578521312202744d658dc075a62cd1db0f",
+        "productionSha256": "75f590e6aaa41ed07942c08772b15ccfbc15570a752df76d66e69af0f43842f2",
+        "matchedRows": 66
+      },
+      {
+        "program": "FS-TRANSACTION-P13A-INFERRED-ANSWERS",
+        "recording": 2,
+        "resultSha256": "bc58bda53951bcab4a41603bdc93aef3bb0192d26f7b3e95dd032fc5428ba127",
+        "productionSha256": "1f45127faa57e36591f5afd242cba821dec056536f239e922eb9e5d0c3b4c4b9",
+        "matchedRows": 66
+      },
+      {
+        "program": "FS-TRANSACTION-P13B-RETRY-ANSWERS",
+        "recording": 1,
+        "resultSha256": "59e6b7e49baf67d41c5873d427012b8371b531dfc7617cbca4971ca52d847a3b",
+        "productionSha256": "0c3d167857686716f8d2ecb0b65e37cd82e3fab04676e8c8ebe0c2fc2b5d22d5",
+        "matchedRows": 36
+      },
+      {
+        "program": "FS-TRANSACTION-P13B-RETRY-ANSWERS",
+        "recording": 2,
+        "resultSha256": "e3ad5e692ffd2c950f40a3fe4481c3ae99989c5e2c90972c5324d736ed48fe04",
+        "productionSha256": "1621e5c5822245d65da750d139d879c6c07a1d41e187790341ff5232de6be8cd",
+        "matchedRows": 36
+      },
+      {
+        "program": "FS-TRANSACTION-P14-STAGE2",
+        "recording": 1,
+        "resultSha256": "f78accd36e6f2a4ef8f2becd90095b30ec65bb607df717fe82d411884a95626f",
+        "productionSha256": "7c0140520950899a7372191b5c332b960e4bf0c7eb21434104e4079292fc7028",
+        "matchedRows": 104
+      },
+      {
+        "program": "FS-TRANSACTION-P14-STAGE2",
+        "recording": 2,
+        "resultSha256": "0e68ca8038bb39666d19325341f148370d68be1261eadc9911e4f6f8889e1c9d",
+        "productionSha256": "1406145e09be855cc1ab4915dddce250da06d75a031b97e45f63c79030e995fa",
+        "matchedRows": 104
+      },
+      {
+        "program": "FS-TRANSACTION-P16-FOREIGN-TOKENS",
+        "recording": 1,
+        "resultSha256": "587acf356819f36d694dbfa3addf32787cdaa044ed2904219587ca3965222668",
+        "productionSha256": "d4bd18e670b784fb48d26f5d18c59598eb789539ccc28b9d049e8a608e0a1a97",
+        "matchedRows": 53
+      },
+      {
+        "program": "FS-TRANSACTION-P16-FOREIGN-TOKENS",
+        "recording": 2,
+        "resultSha256": "c8f38cd51fb6690dcb452a62024febd54f7f68b5d789cfef95cac48d27721761",
+        "productionSha256": "31f10c6b24892674449931aeea40aee363b8bc1d8075960fb301ff492c30f733",
+        "matchedRows": 53
+      }
+    ]
+  },
+  "adminSdk": {
+    "artifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+    "producerSourceCommit": "ada7e1767bf0277f396b121702466cf536ea6e3b",
+    "comparisons": [
+      {
+        "localRecording": 1,
+        "productionRecording": 1,
+        "comparisonSha256": "333bdf97c80bd7db7ccc1a4237e3c2d3a4bdb2046b358623a803e2f475e5d0b7",
+        "kind": "txn-admin-sdk-comparison-v1",
+        "complete": true,
+        "attempts": [
+          {
+            "caseId": "conflict",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "control",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "writer"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "writer"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "retry",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "retry-older",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 10,
+              "refusalMessage": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+              "finalState": {
+                "a": "writer",
+                "b": "baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 10
+                },
+                {
+                  "rpc": "Rollback",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 10,
+              "refusalMessage": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+              "finalState": {
+                "a": "writer",
+                "b": "baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 10
+                },
+                {
+                  "rpc": "Rollback",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "retry-older",
+            "callbackCount": 2,
+            "production": {
+              "callbackCount": 2,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "writer",
+                "b": "transaction-writer",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 2,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "writer",
+                "b": "transaction-writer",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          }
+        ],
+        "mismatches": 0,
+        "timing": {
+          "deadlineSeconds": "NOT_COMPARABLE",
+          "dispatchMonotonic": "NOT_COMPARABLE",
+          "responseMonotonic": "NOT_COMPARABLE",
+          "dispatchUtc": "NOT_COMPARABLE",
+          "responseUtc": "NOT_COMPARABLE",
+          "elapsedSeconds": "NOT_COMPARABLE",
+          "writerDispatchMargin": "NOT_COMPARABLE",
+          "sdkBackoff": "NOT_COMPARABLE"
+        },
+        "provenance": {
+          "production": {
+            "binding": "archived-production",
+            "sourceDigest": "19a35e4a878987ba47c6c6d950c7076b2bb1298c740e0ea10490a57ad8795af2",
+            "files": {
+              "tools/compat-broad/fs-write-txn/admin_sdk_retry.mjs": "d1d61c26fe4f104decc94b0ab28f442b60a11e37c65dea6a737b3f561e6fbdc8",
+              "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs": "1cd755958d1fe8293ecefc0c0d0d18ba455db803e6dbaad7eb4d2545af3c3e19",
+              "tools/compat-broad/fs-write-txn/txn_program_transport.mjs": "dea5c1f59b8054888cff5244975c894fa622a7787db64bce343fe10ead783f50"
+            },
+            "runtimeManifestSha256": "072bf56b670e8c6c8e2868f2b6e8de9646291ba84f41b7d51519cb5ee449be84",
+            "receiptDigest": "722b3e9e513be7551199f0dd13a1f16d71cbce9856d7f728121ccee9cae7a690",
+            "canonicalReceiptSha256": "d3a1ad6e4db4b3a9641d0b3f9d26415d553108e1eee8a5ed90d3a4d1e2884919"
+          },
+          "local": {
+            "binding": "current",
+            "sourceDigest": "6ff06994d9b5dac6f4af587141514dcf2b0286fe458159d703deafcba77a6dc5",
+            "receiptDigest": "5a7eaea2b4e12190b4bf80f80829d7d08b9bf327bfb360bf3b31995db924416f",
+            "canonicalReceiptSha256": "e3e553515915270b86e0f6a38af2638c0cabefa2224f132425813b239ec2e820"
+          },
+          "currentValidator": {
+            "sourceDigest": "6ff06994d9b5dac6f4af587141514dcf2b0286fe458159d703deafcba77a6dc5",
+            "fileSha256": "45445aa9532d64012ccebc1b96923885221f2dd121062200dfc43da4a2abcf02",
+            "transportSha256": "feb137de75279cac7eaa1efdab9a8d79b31bb4bfc7aaaee3ceeec785ec6ff272",
+            "runtimeManifestSha256": "01fbb0a110f38470c5bba303454cafaaef6a61038d68a42235923f2d5964387d"
+          },
+          "corpusDigest": "3f02ce95433b9dc49c70a0ca6c5f8c677d51897a6001cc0cf77f12c675bceb62",
+          "runtime": {
+            "nodeSha256": "20a18709f0154d668f1bd6f6ea8c2a7ae001447b4b2c339732f22e57a8767a55",
+            "lockSha256": "04f7f2526af7ce07ca39ceffd0712eec9b5e5e212503c7cb791ab5021a49dc60",
+            "dependenciesSha256": "4ecdfc56ca6e0dcca75a59fb0194fc6a3501c9edd2bd3aeb1007accd1cf92461"
+          }
+        }
+      },
+      {
+        "localRecording": 1,
+        "productionRecording": 2,
+        "comparisonSha256": "33d7114e99c9201f2dad4a25d6f2b0e5a47c155201e65586263f205e056113c8",
+        "kind": "txn-admin-sdk-comparison-v1",
+        "complete": true,
+        "attempts": [
+          {
+            "caseId": "conflict",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "control",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "writer"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "writer"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "retry",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "retry-older",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 10,
+              "refusalMessage": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+              "finalState": {
+                "a": "writer",
+                "b": "baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 10
+                },
+                {
+                  "rpc": "Rollback",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 10,
+              "refusalMessage": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+              "finalState": {
+                "a": "writer",
+                "b": "baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 10
+                },
+                {
+                  "rpc": "Rollback",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "retry-older",
+            "callbackCount": 2,
+            "production": {
+              "callbackCount": 2,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "writer",
+                "b": "transaction-writer",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 2,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "writer",
+                "b": "transaction-writer",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          }
+        ],
+        "mismatches": 0,
+        "timing": {
+          "deadlineSeconds": "NOT_COMPARABLE",
+          "dispatchMonotonic": "NOT_COMPARABLE",
+          "responseMonotonic": "NOT_COMPARABLE",
+          "dispatchUtc": "NOT_COMPARABLE",
+          "responseUtc": "NOT_COMPARABLE",
+          "elapsedSeconds": "NOT_COMPARABLE",
+          "writerDispatchMargin": "NOT_COMPARABLE",
+          "sdkBackoff": "NOT_COMPARABLE"
+        },
+        "provenance": {
+          "production": {
+            "binding": "archived-production",
+            "sourceDigest": "19a35e4a878987ba47c6c6d950c7076b2bb1298c740e0ea10490a57ad8795af2",
+            "files": {
+              "tools/compat-broad/fs-write-txn/admin_sdk_retry.mjs": "d1d61c26fe4f104decc94b0ab28f442b60a11e37c65dea6a737b3f561e6fbdc8",
+              "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs": "1cd755958d1fe8293ecefc0c0d0d18ba455db803e6dbaad7eb4d2545af3c3e19",
+              "tools/compat-broad/fs-write-txn/txn_program_transport.mjs": "dea5c1f59b8054888cff5244975c894fa622a7787db64bce343fe10ead783f50"
+            },
+            "runtimeManifestSha256": "072bf56b670e8c6c8e2868f2b6e8de9646291ba84f41b7d51519cb5ee449be84",
+            "receiptDigest": "1635874d06d050e24d315a21bd7df39db3ba2aafe1f1b916e873d3521f65a5dc",
+            "canonicalReceiptSha256": "d88e35aedb56cb9ce2134d0ea114c41baacdad284de53ef384a7258d9b7a3b55"
+          },
+          "local": {
+            "binding": "current",
+            "sourceDigest": "6ff06994d9b5dac6f4af587141514dcf2b0286fe458159d703deafcba77a6dc5",
+            "receiptDigest": "5a7eaea2b4e12190b4bf80f80829d7d08b9bf327bfb360bf3b31995db924416f",
+            "canonicalReceiptSha256": "e3e553515915270b86e0f6a38af2638c0cabefa2224f132425813b239ec2e820"
+          },
+          "currentValidator": {
+            "sourceDigest": "6ff06994d9b5dac6f4af587141514dcf2b0286fe458159d703deafcba77a6dc5",
+            "fileSha256": "45445aa9532d64012ccebc1b96923885221f2dd121062200dfc43da4a2abcf02",
+            "transportSha256": "feb137de75279cac7eaa1efdab9a8d79b31bb4bfc7aaaee3ceeec785ec6ff272",
+            "runtimeManifestSha256": "01fbb0a110f38470c5bba303454cafaaef6a61038d68a42235923f2d5964387d"
+          },
+          "corpusDigest": "3f02ce95433b9dc49c70a0ca6c5f8c677d51897a6001cc0cf77f12c675bceb62",
+          "runtime": {
+            "nodeSha256": "20a18709f0154d668f1bd6f6ea8c2a7ae001447b4b2c339732f22e57a8767a55",
+            "lockSha256": "04f7f2526af7ce07ca39ceffd0712eec9b5e5e212503c7cb791ab5021a49dc60",
+            "dependenciesSha256": "4ecdfc56ca6e0dcca75a59fb0194fc6a3501c9edd2bd3aeb1007accd1cf92461"
+          }
+        }
+      },
+      {
+        "localRecording": 2,
+        "productionRecording": 1,
+        "comparisonSha256": "f236e3248180f8a5209f189888ba56bd5ad7e9869658d9101ba1d4bbfd480de4",
+        "kind": "txn-admin-sdk-comparison-v1",
+        "complete": true,
+        "attempts": [
+          {
+            "caseId": "conflict",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "control",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "writer"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "writer"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "retry",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "retry-older",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 10,
+              "refusalMessage": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+              "finalState": {
+                "a": "writer",
+                "b": "baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 10
+                },
+                {
+                  "rpc": "Rollback",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 10,
+              "refusalMessage": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+              "finalState": {
+                "a": "writer",
+                "b": "baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 10
+                },
+                {
+                  "rpc": "Rollback",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "retry-older",
+            "callbackCount": 2,
+            "production": {
+              "callbackCount": 2,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "writer",
+                "b": "transaction-writer",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 2,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "writer",
+                "b": "transaction-writer",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          }
+        ],
+        "mismatches": 0,
+        "timing": {
+          "deadlineSeconds": "NOT_COMPARABLE",
+          "dispatchMonotonic": "NOT_COMPARABLE",
+          "responseMonotonic": "NOT_COMPARABLE",
+          "dispatchUtc": "NOT_COMPARABLE",
+          "responseUtc": "NOT_COMPARABLE",
+          "elapsedSeconds": "NOT_COMPARABLE",
+          "writerDispatchMargin": "NOT_COMPARABLE",
+          "sdkBackoff": "NOT_COMPARABLE"
+        },
+        "provenance": {
+          "production": {
+            "binding": "archived-production",
+            "sourceDigest": "19a35e4a878987ba47c6c6d950c7076b2bb1298c740e0ea10490a57ad8795af2",
+            "files": {
+              "tools/compat-broad/fs-write-txn/admin_sdk_retry.mjs": "d1d61c26fe4f104decc94b0ab28f442b60a11e37c65dea6a737b3f561e6fbdc8",
+              "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs": "1cd755958d1fe8293ecefc0c0d0d18ba455db803e6dbaad7eb4d2545af3c3e19",
+              "tools/compat-broad/fs-write-txn/txn_program_transport.mjs": "dea5c1f59b8054888cff5244975c894fa622a7787db64bce343fe10ead783f50"
+            },
+            "runtimeManifestSha256": "072bf56b670e8c6c8e2868f2b6e8de9646291ba84f41b7d51519cb5ee449be84",
+            "receiptDigest": "722b3e9e513be7551199f0dd13a1f16d71cbce9856d7f728121ccee9cae7a690",
+            "canonicalReceiptSha256": "d3a1ad6e4db4b3a9641d0b3f9d26415d553108e1eee8a5ed90d3a4d1e2884919"
+          },
+          "local": {
+            "binding": "current",
+            "sourceDigest": "6ff06994d9b5dac6f4af587141514dcf2b0286fe458159d703deafcba77a6dc5",
+            "receiptDigest": "636a6e524182ad54ebfe83fa4456ded0c3c391eaf5c73012d86d2e7d779d1782",
+            "canonicalReceiptSha256": "3197128df3427309120aa9767dfccf2d445c5b17f45e86343cee76413248cce4"
+          },
+          "currentValidator": {
+            "sourceDigest": "6ff06994d9b5dac6f4af587141514dcf2b0286fe458159d703deafcba77a6dc5",
+            "fileSha256": "45445aa9532d64012ccebc1b96923885221f2dd121062200dfc43da4a2abcf02",
+            "transportSha256": "feb137de75279cac7eaa1efdab9a8d79b31bb4bfc7aaaee3ceeec785ec6ff272",
+            "runtimeManifestSha256": "01fbb0a110f38470c5bba303454cafaaef6a61038d68a42235923f2d5964387d"
+          },
+          "corpusDigest": "3f02ce95433b9dc49c70a0ca6c5f8c677d51897a6001cc0cf77f12c675bceb62",
+          "runtime": {
+            "nodeSha256": "20a18709f0154d668f1bd6f6ea8c2a7ae001447b4b2c339732f22e57a8767a55",
+            "lockSha256": "04f7f2526af7ce07ca39ceffd0712eec9b5e5e212503c7cb791ab5021a49dc60",
+            "dependenciesSha256": "4ecdfc56ca6e0dcca75a59fb0194fc6a3501c9edd2bd3aeb1007accd1cf92461"
+          }
+        }
+      },
+      {
+        "localRecording": 2,
+        "productionRecording": 2,
+        "comparisonSha256": "68c2656abe03efa6b4ee80fc0251ccf0088ff51975414a9f04c3d78ce7738bf1",
+        "kind": "txn-admin-sdk-comparison-v1",
+        "complete": true,
+        "attempts": [
+          {
+            "caseId": "conflict",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "control",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "writer"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "writer"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "retry",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "baseline",
+                "b": "transaction-baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 10,
+                "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 10,
+                    "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+                  },
+                  {
+                    "rpc": "Rollback",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "retry-older",
+            "callbackCount": 1,
+            "production": {
+              "callbackCount": 1,
+              "refusalCode": 10,
+              "refusalMessage": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+              "finalState": {
+                "a": "writer",
+                "b": "baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 10
+                },
+                {
+                  "rpc": "Rollback",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 1,
+              "refusalCode": 10,
+              "refusalMessage": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+              "finalState": {
+                "a": "writer",
+                "b": "baseline",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 10
+                },
+                {
+                  "rpc": "Rollback",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          },
+          {
+            "caseId": "retry-older",
+            "callbackCount": 2,
+            "production": {
+              "callbackCount": 2,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "writer",
+                "b": "transaction-writer",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "local": {
+              "callbackCount": 2,
+              "refusalCode": 0,
+              "refusalMessage": "",
+              "finalState": {
+                "a": "writer",
+                "b": "transaction-writer",
+                "c": "baseline"
+              },
+              "rpcSequence": [
+                {
+                  "rpc": "BatchGetDocuments",
+                  "code": 0
+                },
+                {
+                  "rpc": "Commit",
+                  "code": 0
+                }
+              ],
+              "writer": {
+                "code": 0,
+                "message": "",
+                "rpcSequence": [
+                  {
+                    "rpc": "BatchGetDocuments",
+                    "code": 0,
+                    "message": ""
+                  },
+                  {
+                    "rpc": "Commit",
+                    "code": 0,
+                    "message": ""
+                  }
+                ]
+              }
+            },
+            "match": true
+          }
+        ],
+        "mismatches": 0,
+        "timing": {
+          "deadlineSeconds": "NOT_COMPARABLE",
+          "dispatchMonotonic": "NOT_COMPARABLE",
+          "responseMonotonic": "NOT_COMPARABLE",
+          "dispatchUtc": "NOT_COMPARABLE",
+          "responseUtc": "NOT_COMPARABLE",
+          "elapsedSeconds": "NOT_COMPARABLE",
+          "writerDispatchMargin": "NOT_COMPARABLE",
+          "sdkBackoff": "NOT_COMPARABLE"
+        },
+        "provenance": {
+          "production": {
+            "binding": "archived-production",
+            "sourceDigest": "19a35e4a878987ba47c6c6d950c7076b2bb1298c740e0ea10490a57ad8795af2",
+            "files": {
+              "tools/compat-broad/fs-write-txn/admin_sdk_retry.mjs": "d1d61c26fe4f104decc94b0ab28f442b60a11e37c65dea6a737b3f561e6fbdc8",
+              "tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs": "1cd755958d1fe8293ecefc0c0d0d18ba455db803e6dbaad7eb4d2545af3c3e19",
+              "tools/compat-broad/fs-write-txn/txn_program_transport.mjs": "dea5c1f59b8054888cff5244975c894fa622a7787db64bce343fe10ead783f50"
+            },
+            "runtimeManifestSha256": "072bf56b670e8c6c8e2868f2b6e8de9646291ba84f41b7d51519cb5ee449be84",
+            "receiptDigest": "1635874d06d050e24d315a21bd7df39db3ba2aafe1f1b916e873d3521f65a5dc",
+            "canonicalReceiptSha256": "d88e35aedb56cb9ce2134d0ea114c41baacdad284de53ef384a7258d9b7a3b55"
+          },
+          "local": {
+            "binding": "current",
+            "sourceDigest": "6ff06994d9b5dac6f4af587141514dcf2b0286fe458159d703deafcba77a6dc5",
+            "receiptDigest": "636a6e524182ad54ebfe83fa4456ded0c3c391eaf5c73012d86d2e7d779d1782",
+            "canonicalReceiptSha256": "3197128df3427309120aa9767dfccf2d445c5b17f45e86343cee76413248cce4"
+          },
+          "currentValidator": {
+            "sourceDigest": "6ff06994d9b5dac6f4af587141514dcf2b0286fe458159d703deafcba77a6dc5",
+            "fileSha256": "45445aa9532d64012ccebc1b96923885221f2dd121062200dfc43da4a2abcf02",
+            "transportSha256": "feb137de75279cac7eaa1efdab9a8d79b31bb4bfc7aaaee3ceeec785ec6ff272",
+            "runtimeManifestSha256": "01fbb0a110f38470c5bba303454cafaaef6a61038d68a42235923f2d5964387d"
+          },
+          "corpusDigest": "3f02ce95433b9dc49c70a0ca6c5f8c677d51897a6001cc0cf77f12c675bceb62",
+          "runtime": {
+            "nodeSha256": "20a18709f0154d668f1bd6f6ea8c2a7ae001447b4b2c339732f22e57a8767a55",
+            "lockSha256": "04f7f2526af7ce07ca39ceffd0712eec9b5e5e212503c7cb791ab5021a49dc60",
+            "dependenciesSha256": "4ecdfc56ca6e0dcca75a59fb0194fc6a3501c9edd2bd3aeb1007accd1cf92461"
+          }
+        }
+      }
+    ],
+    "localReceipts": [
+      {
+        "local": 1,
+        "ownedPidCount": 3,
+        "receiptSha256": "2e768f96b784b354a43d42b2a937cc484d86a4e6e079eb46f11d108909f7a6fd",
+        "remainingOwnedProcesses": {},
+        "requestCount": 89
+      },
+      {
+        "local": 2,
+        "ownedPidCount": 3,
+        "receiptSha256": "dbcaccbecba16bc1e4697f9bbd41f9fb1cef231af1807ac0cb9b49f6aff1a1de",
+        "remainingOwnedProcesses": {},
+        "requestCount": 89
+      }
+    ],
+    "productionSha256": [
+      "e6e754055db0555a77d67faf79ffad97b564de56781c1640d6a666d62c9ed0d9",
+      "50ec52e2c1f17f497928c2c6b75fe6931d31a70d96c54c10643872d254f5f227"
+    ]
+  },
+  "webSdk": {
+    "artifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+    "producerSourceCommit": "73b2c2b99b8f8d35a245ab795d2b09e7d9dd9399",
+    "comparisonSha256": "d3b5a3e6e99efbac390cbbf1e36c861eefa42242cc6709a14f192f4ceb67bf79",
+    "localComplete": true,
+    "comparisons": [
+      {
+        "productionRecording": 1,
+        "productionSha256": "2d3518a8c275f0b9f2e219cdbb0ce1c22c4a55dc169ddd290e1e14c556b8e819",
+        "cases": [
+          {
+            "transport": "node",
+            "scenario": "control",
+            "status": "MATCH",
+            "production": {
+              "transport": "node",
+              "originalTransport": "node",
+              "scenario": "control",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 1,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            },
+            "local": {
+              "transport": "node",
+              "originalTransport": "node-sdk",
+              "scenario": "control",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 1,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "transport": "node",
+            "scenario": "conflict",
+            "status": "MATCH",
+            "production": {
+              "transport": "node",
+              "originalTransport": "node",
+              "scenario": "conflict",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 2,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": 9,
+                    "complete": true,
+                    "refusal": {
+                      "code": 9,
+                      "status": null
+                    }
+                  },
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            },
+            "local": {
+              "transport": "node",
+              "originalTransport": "node-sdk",
+              "scenario": "conflict",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 2,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": 9,
+                    "complete": true,
+                    "refusal": {
+                      "code": 9,
+                      "status": null
+                    }
+                  },
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "transport": "browser",
+            "scenario": "control",
+            "status": "MATCH",
+            "production": {
+              "transport": "browser",
+              "originalTransport": "browser",
+              "scenario": "control",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 1,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            },
+            "local": {
+              "transport": "browser",
+              "originalTransport": "browser",
+              "scenario": "control",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 1,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "transport": "browser",
+            "scenario": "conflict",
+            "status": "MATCH",
+            "production": {
+              "transport": "browser",
+              "originalTransport": "browser",
+              "scenario": "conflict",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 2,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 400,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": {
+                      "code": 400,
+                      "status": "FAILED_PRECONDITION"
+                    }
+                  },
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            },
+            "local": {
+              "transport": "browser",
+              "originalTransport": "browser",
+              "scenario": "conflict",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 2,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 400,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": {
+                      "code": 400,
+                      "status": "FAILED_PRECONDITION"
+                    }
+                  },
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      {
+        "productionRecording": 2,
+        "productionSha256": "2ad186b4a3aa35a41b501316feb1cf7d9e54f043dfa2b7d92eb56edc47fa4773",
+        "cases": [
+          {
+            "transport": "node",
+            "scenario": "control",
+            "status": "MATCH",
+            "production": {
+              "transport": "node",
+              "originalTransport": "node",
+              "scenario": "control",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 1,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            },
+            "local": {
+              "transport": "node",
+              "originalTransport": "node-sdk",
+              "scenario": "control",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 1,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "transport": "node",
+            "scenario": "conflict",
+            "status": "MATCH",
+            "production": {
+              "transport": "node",
+              "originalTransport": "node",
+              "scenario": "conflict",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 2,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": 9,
+                    "complete": true,
+                    "refusal": {
+                      "code": 9,
+                      "status": null
+                    }
+                  },
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            },
+            "local": {
+              "transport": "node",
+              "originalTransport": "node-sdk",
+              "scenario": "conflict",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 2,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": 9,
+                    "complete": true,
+                    "refusal": {
+                      "code": 9,
+                      "status": null
+                    }
+                  },
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": 0,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "transport": "browser",
+            "scenario": "control",
+            "status": "MATCH",
+            "production": {
+              "transport": "browser",
+              "originalTransport": "browser",
+              "scenario": "control",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 1,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            },
+            "local": {
+              "transport": "browser",
+              "originalTransport": "browser",
+              "scenario": "control",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 1,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "transport": "browser",
+            "scenario": "conflict",
+            "status": "MATCH",
+            "production": {
+              "transport": "browser",
+              "originalTransport": "browser",
+              "scenario": "conflict",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 2,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 400,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": {
+                      "code": 400,
+                      "status": "FAILED_PRECONDITION"
+                    }
+                  },
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            },
+            "local": {
+              "transport": "browser",
+              "originalTransport": "browser",
+              "scenario": "conflict",
+              "scenarioComplete": true,
+              "declaredComplete": true,
+              "reportClosed": true,
+              "semantic": {
+                "attempts": 2,
+                "finalValue": 3,
+                "wire": [
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 400,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": {
+                      "code": 400,
+                      "status": "FAILED_PRECONDITION"
+                    }
+                  },
+                  {
+                    "method": "BatchGetDocuments",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  },
+                  {
+                    "method": "Commit",
+                    "status": 200,
+                    "grpcCode": null,
+                    "complete": true,
+                    "refusal": null
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ],
+    "independentReviewSha256": "21458387c31e4057b6da9a58a606cc2ae8aaee99738502662991a15b587a601d",
+    "localReceipt": {
+      "sha256": "2d45dd8d9ffd0b6db0196609c25535581ac46bd701594ac79738d0f7ee165f89",
+      "complete": true,
+      "exitCode": 0
+    },
+    "lifecycle": {
+      "observedProcessCount": 4,
+      "observedProcessesAbsent": true,
+      "driverReportsClosed": [
+        true,
+        true
+      ],
+      "readyDescriptorWithdrawn": true
+    },
+    "production": [
+      {
+        "sha256": "2d3518a8c275f0b9f2e219cdbb0ce1c22c4a55dc169ddd290e1e14c556b8e819",
+        "complete": true,
+        "sandboxRequests": 63
+      },
+      {
+        "sha256": "2ad186b4a3aa35a41b501316feb1cf7d9e54f043dfa2b7d92eb56edc47fa4773",
+        "complete": true,
+        "sandboxRequests": 63
+      }
+    ]
+  },
+  "atomicVisibility": {
+    "artifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+    "comparisonSha256": "068a19781c89f62311e64d687343faf34aca97cfb8ac35e673a34e6703ec7acd",
+    "productionInputs": [
+      {
+        "sha256": "2caf305a7f4e39073c744c7bd13075e1c461a32848e3a5fd8f897ac288678ec7",
+        "cleanupComplete": true
+      },
+      {
+        "sha256": "5885be4b077864a09bff2c42131c48fdb2bd06c58d93d4b39689caacee19eb1f",
+        "cleanupComplete": true
+      }
+    ],
+    "local": {
+      "sha256": "8db2007344aba9ede90f527c2cae91121cee0682bfd708ba22782ec2596a9e7d",
+      "cleanupComplete": true,
+      "provenance": {
+        "target": "local",
+        "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
+        "buildInputs": {
+          "scheme": "crates-without-test-trees-v1",
+          "inputsSha256": "0e7b9e9ed6df00abb3c1c11b28da08fec5a3c2fdff1f8970cd144825cc694a25",
+          "cargoLockSha256": "309ff496ced5d61b27c1fccc65f42d9a9f90229e09f850269ee8b513852733ac",
+          "dirty": false
+        },
+        "binarySha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+        "binaryBuiltAfterSource": true,
+        "profile": "strict"
+      }
+    },
+    "rows": [
+      {
+        "row": "native/commit-atomic-visibility/open",
+        "status": "MATCH"
+      },
+      {
+        "row": "native/commit-atomic-visibility/transaction",
+        "status": "MATCH"
+      },
+      {
+        "row": "native/commit-atomic-visibility/single-commit",
+        "status": "MATCH"
+      },
+      {
+        "row": "native/commit-atomic-visibility/separate-commits",
+        "status": "MATCH"
+      }
+    ],
+    "fullCorpusOk": false,
+    "fullCorpusSummary": {
+      "MATCH": 30,
+      "MISMATCH": 2,
+      "MISSING": 3
+    },
+    "scope": "Only the four native commit-atomic-visibility rows are bound here; this is not approval of the full Listen corpus."
+  },
+  "expiryRetry": {
+    "artifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+    "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
+    "sha256": "49ade9155915bfe953c57540ce6279b791433ff4d88bbe6a4309b25841e734fc",
+    "summary": {
+      "recordings": 2,
+      "rows": 36,
+      "mismatches": 0
+    },
+    "coverage": "PARTIAL"
+  },
+  "summary": {
+    "MATCH": 1512,
+    "DIVERGES": 0,
+    "NOT_COMPARABLE": 0
+  },
+  "rows": [
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P01-LIFECYCLE/recording-1",
+      "status": "MATCH",
+      "matchedRows": 45,
+      "resultSha256": "008653de219298c6434c3e04c0195026ce2c482ba697de9e0c6019b6bee72913"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P01-LIFECYCLE/recording-2",
+      "status": "MATCH",
+      "matchedRows": 45,
+      "resultSha256": "03e56879a4c3ffe8754ac8c01b68c48d5a5454db6955a9edb7b01b004a4ec8bf"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P02-READONLY/recording-1",
+      "status": "MATCH",
+      "matchedRows": 42,
+      "resultSha256": "3a621848abe020ec859c8a55d8e90b400991951f979bf6438c92aad8f609f070"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P02-READONLY/recording-2",
+      "status": "MATCH",
+      "matchedRows": 42,
+      "resultSha256": "35ebddc726cddc23ccd373451f3eb9c049f30bacc3061153455499b093d98e44"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P02B-READONLY-REFUSED/recording-1",
+      "status": "MATCH",
+      "matchedRows": 46,
+      "resultSha256": "a1815fb18a863fd4988bc1db32aee3cada60b1c740d200d1f9f5a9cdf37e7b65"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P02B-READONLY-REFUSED/recording-2",
+      "status": "MATCH",
+      "matchedRows": 46,
+      "resultSha256": "c35e32df39eb1711ceb69870ccfe62e87dca9a8cd313264294f0a8e4431df738"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P03-READTIME/recording-1",
+      "status": "MATCH",
+      "matchedRows": 37,
+      "resultSha256": "7f0b3fb696dc2efe43a4f0e6d9f92b031f806fbbf71737bceb322c95d459bb17"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P03-READTIME/recording-2",
+      "status": "MATCH",
+      "matchedRows": 37,
+      "resultSha256": "b6dc92e9d17cd230b7c952f1067ce56c8f4d211ddd7b445285cf76f5a6be10d4"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P05-READLOCK/recording-1",
+      "status": "MATCH",
+      "matchedRows": 45,
+      "resultSha256": "d0049ccb1df926aa65a4f3d99e3e2b3cfab4c9b169e94716d7468fdcc3cb1548"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P05-READLOCK/recording-2",
+      "status": "MATCH",
+      "matchedRows": 45,
+      "resultSha256": "2615cbdb3cdfb532ec273a40d0ada545f2d6aea45df36aedca9e138bb7ae60ff"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P08-FAILED-COMMIT/recording-1",
+      "status": "MATCH",
+      "matchedRows": 49,
+      "resultSha256": "3235023f0799baafb22d40d17c225050b24fe0da87ab3686a05ced1a4a11fd68"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P08-FAILED-COMMIT/recording-2",
+      "status": "MATCH",
+      "matchedRows": 49,
+      "resultSha256": "3465c61b384f44e1dff05b27d9be0662dc660bcf2fb176debc7f85167da62660"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P09-GRPC-RETRY/recording-1",
+      "status": "MATCH",
+      "matchedRows": 14,
+      "resultSha256": "c644ccfcdbff211d42099853ea415e4b1ffbaf591356625279a319dd2dd928c0"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P09-GRPC-RETRY/recording-2",
+      "status": "MATCH",
+      "matchedRows": 14,
+      "resultSha256": "0189b0795c2840ee8535c3f8699925af957df877473b0efda7bcf8baadf0af25"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P10-A-GRPC-IDLE/recording-1",
+      "status": "MATCH",
+      "matchedRows": 22,
+      "resultSha256": "d82ce9fa67ea6c6ba0d4d382c0dac783330eca9c406ef6468c68bcea849827ca"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P10-A-GRPC-IDLE/recording-2",
+      "status": "MATCH",
+      "matchedRows": 22,
+      "resultSha256": "7d3a238b5eff99236a862411ca9345d1d0be172c78c1a9ddc7ef7f3266c826b5"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P10-B-GRPC-BOUNDARY/recording-1",
+      "status": "MATCH",
+      "matchedRows": 25,
+      "resultSha256": "146a0abcb0c2e6ace426678f7323dcd71807beea422190a4b3d7b1222cf8454c"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P10-B-GRPC-BOUNDARY/recording-2",
+      "status": "MATCH",
+      "matchedRows": 25,
+      "resultSha256": "a8106afcc711cf1a980a783b2d70356ce08384a6fd6a5c16e7f50f8b3fb21f5d"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P10-C-GRPC-BOUNDARY/recording-1",
+      "status": "MATCH",
+      "matchedRows": 28,
+      "resultSha256": "4fc22cd29dbd78042ee9265db6b51243ad35250661a99067aa5569ff524c9965"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P10-C-GRPC-BOUNDARY/recording-2",
+      "status": "MATCH",
+      "matchedRows": 28,
+      "resultSha256": "2827d66d1d449e314f1fb23d488db8f3e0582d3aabaff027ab796d2309dce898"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P11-LIFETIME/recording-1",
+      "status": "MATCH",
+      "matchedRows": 57,
+      "resultSha256": "4ff33d4fef5074029ecbecacd5f8ac415b34784843ec8a78dbfe28df36e0dcc9"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P11-LIFETIME/recording-2",
+      "status": "MATCH",
+      "matchedRows": 57,
+      "resultSha256": "141e5be1ab12d50e35c85b1735d16fd718e81fd80e3d584902bcdc82c2d73324"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P12-FIRST-REQUEST/recording-1",
+      "status": "MATCH",
+      "matchedRows": 53,
+      "resultSha256": "2bb67d2d367cd1e420b4a9a26223fc3afbe590c7f1ac66f467227bfb1685757f"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P12-FIRST-REQUEST/recording-2",
+      "status": "MATCH",
+      "matchedRows": 53,
+      "resultSha256": "c245951b585ae8da9d9a415108297e7b090d0e49bc998d9ac7c7e966b85f9226"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P13A-INFERRED-ANSWERS/recording-1",
+      "status": "MATCH",
+      "matchedRows": 66,
+      "resultSha256": "e7db9e943a56fcabbede30aa283ac0578521312202744d658dc075a62cd1db0f"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P13A-INFERRED-ANSWERS/recording-2",
+      "status": "MATCH",
+      "matchedRows": 66,
+      "resultSha256": "bc58bda53951bcab4a41603bdc93aef3bb0192d26f7b3e95dd032fc5428ba127"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P13B-RETRY-ANSWERS/recording-1",
+      "status": "MATCH",
+      "matchedRows": 36,
+      "resultSha256": "59e6b7e49baf67d41c5873d427012b8371b531dfc7617cbca4971ca52d847a3b"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P13B-RETRY-ANSWERS/recording-2",
+      "status": "MATCH",
+      "matchedRows": 36,
+      "resultSha256": "e3ad5e692ffd2c950f40a3fe4481c3ae99989c5e2c90972c5324d736ed48fe04"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P14-STAGE2/recording-1",
+      "status": "MATCH",
+      "matchedRows": 104,
+      "resultSha256": "f78accd36e6f2a4ef8f2becd90095b30ec65bb607df717fe82d411884a95626f"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P14-STAGE2/recording-2",
+      "status": "MATCH",
+      "matchedRows": 104,
+      "resultSha256": "0e68ca8038bb39666d19325341f148370d68be1261eadc9911e4f6f8889e1c9d"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P16-FOREIGN-TOKENS/recording-1",
+      "status": "MATCH",
+      "matchedRows": 53,
+      "resultSha256": "587acf356819f36d694dbfa3addf32787cdaa044ed2904219587ca3965222668"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "FS-TRANSACTION-P16-FOREIGN-TOKENS/recording-2",
+      "status": "MATCH",
+      "matchedRows": 53,
+      "resultSha256": "c8f38cd51fb6690dcb452a62024febd54f7f68b5d789cfef95cac48d27721761"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/admin-sdk-server-retry",
+      "row": "admin/1",
+      "status": "MATCH",
+      "comparisonSha256": "333bdf97c80bd7db7ccc1a4237e3c2d3a4bdb2046b358623a803e2f475e5d0b7"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/admin-sdk-server-retry",
+      "row": "admin/2",
+      "status": "MATCH",
+      "comparisonSha256": "33d7114e99c9201f2dad4a25d6f2b0e5a47c155201e65586263f205e056113c8"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/admin-sdk-server-retry",
+      "row": "admin/3",
+      "status": "MATCH",
+      "comparisonSha256": "f236e3248180f8a5209f189888ba56bd5ad7e9869658d9101ba1d4bbfd480de4"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/admin-sdk-server-retry",
+      "row": "admin/4",
+      "status": "MATCH",
+      "comparisonSha256": "68c2656abe03efa6b4ee80fc0251ccf0088ff51975414a9f04c3d78ce7738bf1"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/web-sdk-optimistic-retry",
+      "row": "web/1",
+      "status": "MATCH",
+      "comparisonSha256": "d3b5a3e6e99efbac390cbbf1e36c861eefa42242cc6709a14f192f4ceb67bf79"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/web-sdk-optimistic-retry",
+      "row": "web/2",
+      "status": "MATCH",
+      "comparisonSha256": "d3b5a3e6e99efbac390cbbf1e36c861eefa42242cc6709a14f192f4ceb67bf79"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/commit-atomic-visibility",
+      "row": "native/commit-atomic-visibility/open",
+      "status": "MATCH"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/commit-atomic-visibility",
+      "row": "native/commit-atomic-visibility/transaction",
+      "status": "MATCH"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/commit-atomic-visibility",
+      "row": "native/commit-atomic-visibility/single-commit",
+      "status": "MATCH"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/commit-atomic-visibility",
+      "row": "native/commit-atomic-visibility/separate-commits",
+      "status": "MATCH"
+    },
+    {
+      "conditionId": "FS-TRANSACTION/final-artifact-regression",
+      "row": "supplementary-E04",
+      "status": "MATCH",
+      "matchedRows": 36,
+      "resultSha256": "49ade9155915bfe953c57540ce6279b791433ff4d88bbe6a4309b25841e734fc"
+    }
+  ],
+  "scopeNotes": [
+    "The final binary build source and SDK producer source are distinct and explicitly bound.",
+    "E04 remains supplementary partial evidence; official-emulator compatibility remains a separate track.",
+    "Independent closure review and the release regression entry remain pending in this candidate."
+  ]
+}

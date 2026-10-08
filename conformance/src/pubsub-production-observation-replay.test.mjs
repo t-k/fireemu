@@ -752,6 +752,7 @@ test("natural zero outcome is measured separately while generic native13 remains
   const { makePlan } = await import("./pubsub-observation/plan.mjs");
   for (const received of [0, 1]) {
     let now = 0;
+    const observations = [];
     const state = {
       incomplete: true,
       terminal: { code: 13 },
@@ -761,11 +762,18 @@ test("natural zero outcome is measured separately while generic native13 remains
       windowMs: 90000,
     };
     const replay = createNativeReplay({
+      journal: {
+        write: (value) => {
+          const receipt = { ...value, n: 5001 };
+          observations.push(receipt);
+          return receipt;
+        },
+      },
       wire: { open: async () => ({ state: () => state, dispose() {} }) },
       bindings: createBindings(),
       cells: makePlan("s10-diagnostic").cells,
       clock: createActionClock({
-        now: () => now,
+        now: () => now++,
         wait: async (ms) => (now += ms),
         advance: async () => {},
       }),
@@ -777,6 +785,9 @@ test("natural zero outcome is measured separately while generic native13 remains
     assert.equal(proof.completed, false);
     assert.deepEqual(proof.zeroOutcome.state, state);
     assert.ok(proof.zeroOutcome.observedElapsedMs >= 0);
+    assert.equal(proof.zeroOutcome.observationN, 5001);
+    assert.equal(observations[0].elapsedMs, proof.zeroOutcome.observedElapsedMs);
+    assert.deepEqual(observations[0].state, proof.zeroOutcome.state);
     replay.close();
   }
 });

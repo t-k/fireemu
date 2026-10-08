@@ -352,7 +352,8 @@ function naturalZero(cell, state) {
     cell.result.outstanding.length === 0
   );
 }
-function zeroCleanup(cell, runId) {
+function zeroCleanup(cell, runId, observationN) {
+  if (!Number.isSafeInteger(observationN) || observationN < 1) return false;
   return ["Subscription", "Topic"].every((suffix) => {
     const name = `projects/${PROJECT}/${suffix === "Topic" ? "topics" : "subscriptions"}/fe${runId}-s10-${suffix === "Topic" ? "topic" : "sub"}`;
     const rows = cell?.exchanges ?? [];
@@ -369,6 +370,7 @@ function zeroCleanup(cell, runId) {
     return (
       deletes.length === 1 &&
       gets.length === 1 &&
+      deletes[0].dispatchN > observationN &&
       deletes[0].response.ok === true &&
       deletes[0].response.unknown !== true &&
       gets[0].response.unknown !== true &&
@@ -390,6 +392,8 @@ function nativeDetails(cell) {
 function compareZeroOutcome(source, local, original, actual, proof) {
   const observations = original.events.filter((e) => e.event === "stream-case-observation"),
     observation = observations[0],
+    localObservations = actual?.events.filter((e) => e.event === "stream-case-observation") ?? [],
+    localObservation = localObservations[0],
     localDetails = nativeDetails(actual),
     sourceDetails = nativeDetails(original);
   const details = {
@@ -410,8 +414,12 @@ function compareZeroOutcome(source, local, original, actual, proof) {
     observations.length === 1 &&
     naturalZero(original, observation?.state) &&
     naturalZero(actual, proof?.zeroOutcome?.state) &&
-    zeroCleanup(original, source.runId) &&
-    zeroCleanup(actual, source.runId) &&
+    zeroCleanup(original, source.runId, observation.n) &&
+    localObservations.length === 1 &&
+    localObservation.n === proof.zeroOutcome.observationN &&
+    localObservation.elapsedMs === proof.zeroOutcome.observedElapsedMs &&
+    isDeepStrictEqual(localObservation.state, proof.zeroOutcome.state) &&
+    zeroCleanup(actual, source.runId, localObservation.n) &&
     original.frames[0].blob.sha256 === actual.frames[0].blob.sha256 &&
     original.frames[0].blob.bytes === actual.frames[0].blob.bytes &&
     original.events.find((e) => e.event === "stream-inbound-end")?.n < observation?.n &&
@@ -426,6 +434,7 @@ function compareZeroOutcome(source, local, original, actual, proof) {
     proof.actions.every((a) => Number.isFinite(a.elapsedMs) && a.elapsedMs >= 0) &&
     Number.isFinite(proof?.zeroOutcome?.observedElapsedMs) &&
     proof.zeroOutcome.observedElapsedMs >= 0 &&
+    actual.events.find((e) => e.event === "stream-inbound-end").n < localObservation.n &&
     actual.events.find((e) => e.event === "stream-inbound-end").elapsedMs <=
       proof.zeroOutcome.observedElapsedMs;
   return {

@@ -561,6 +561,13 @@ test("exact S10 natural outcome preserves incomplete debt and message availabili
           }
         : e,
     );
+    for (const event of cell.events) event.n += 1000;
+    for (const frame of cell.frames) frame.n += 1000;
+    for (const exchange of cell.exchanges) {
+      exchange.n += 1000;
+      exchange.dispatchN += 1000;
+    }
+    cell.events.find((e) => e.event === "stream-case-observation").elapsedMs = 120;
     const proof = {
       completed: false,
       sourceFrames: [3],
@@ -570,6 +577,7 @@ test("exact S10 natural outcome preserves incomplete debt and message availabili
           cell.events.find((e) => e.event === "stream-case-observation").state,
         ),
         observedElapsedMs: 120,
+        observationN: 1008,
       },
     };
     const result = compareExecutedObservation(source, local, { S10: proof });
@@ -581,6 +589,30 @@ test("exact S10 natural outcome preserves incomplete debt and message availabili
     assert.equal(result.parentClosureReady, false);
     assert.ok(result.cells[0].debts.some((d) => d.includes("completion/cleanup")));
     assert.ok(result.cells[0].debts.some((d) => d.includes("details")));
+    for (const side of ["source", "local"])
+      for (const phase of ["before-opening", "before-terminal", "before-observation"]) {
+        const s = structuredClone(source),
+          l = structuredClone(local),
+          p = structuredClone(proof);
+        const target = (side === "source" ? s : l).cells[0];
+        const threshold =
+          (side === "source" ? 0 : 1000) +
+          (phase === "before-opening" ? 2 : phase === "before-terminal" ? 5 : 8);
+        for (const event of target.events) if (event.n >= threshold) event.n += 30;
+        for (const frame of target.frames) if (frame.n >= threshold) frame.n += 30;
+        if (side === "source") {
+          p.sourceFrames = target.frames.map((f) => f.n);
+          p.actions[0].sourceN = target.events.find((e) => e.event === "stream-case-observation").n;
+        } else
+          p.zeroOutcome.observationN = target.events.find(
+            (e) => e.event === "stream-case-observation",
+          ).n;
+        assert.equal(
+          compareExecutedObservation(s, l, { S10: p }).cells[0].nativeOutcome.verdict,
+          "NOT_COMPARABLE",
+          `${side}/${phase}`,
+        );
+      }
     for (let seed = 1; seed <= 64; seed++) {
       for (const [field, value] of [
         ["streamAckDeadlineSeconds", seed % 2 ? seed : -seed],
@@ -619,7 +651,21 @@ test("exact S10 natural outcome preserves incomplete debt and message availabili
       (_s, l, _p) => (l.cells[0].exchanges[0].response.ok = false),
       (_s, l, _p) => (l.cells[0].frames[0].blob.sha256 = "0".repeat(64)),
       (_s, _l, p) => (p.zeroOutcome.observedElapsedMs = 118),
-      (_s, l, _p) => (l.cells[0].events.find((e) => e.event === "stream-dispatch").n = 99),
+      (_s, _l, p) => delete p.zeroOutcome.observationN,
+      (_s, _l, p) => (p.zeroOutcome.observationN = 8),
+      (_s, l, p) => {
+        l.cells[0].events.find((e) => e.event === "stream-case-observation").n = 1006;
+        p.zeroOutcome.observationN = 1006;
+      },
+      (_s, l, _p) =>
+        (l.cells[0].events.find((e) => e.event === "stream-case-observation").elapsedMs = 121),
+      (_s, l, _p) =>
+        (l.cells[0].events.find((e) => e.event === "stream-case-observation").state.received = 1),
+      (_s, l, _p) =>
+        (l.cells[0].events = l.cells[0].events.filter(
+          (e) => e.event !== "stream-case-observation",
+        )),
+      (_s, l, _p) => (l.cells[0].events.find((e) => e.event === "stream-dispatch").n = 9999),
       (_s, _l, p) => (p.sourceFrames = []),
       (_s, _l, p) => (p.actions = []),
       (_s, _l, p) => delete p.zeroOutcome,

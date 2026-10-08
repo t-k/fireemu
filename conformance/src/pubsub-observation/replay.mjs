@@ -134,6 +134,7 @@ export async function replayA(
       if (entry.event?.startsWith("stream-"))
         localCells.find((c) => c.id === entry.cellId)?.events.push(entry);
       persist(entry);
+      return entry;
     },
     frame(bytes, value) {
       native?.recordFrame(value);
@@ -178,7 +179,7 @@ export async function replayA(
         });
       },
     });
-    native = createNativeReplay({ wire, bindings, clock, cells });
+    native = createNativeReplay({ wire, bindings, clock, cells, journal });
     await clock.dispatch(input.rows[0]);
     for (const row of input.rows) {
       if (row.event === "request-dispatch" || row.event === "stream-frame") {

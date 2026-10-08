@@ -65,7 +65,7 @@ export function createActionClock({
 }
 
 // A finite action connector; all token substitutions come from an actual owned receive.
-export function createNativeReplay({ wire, bindings, clock, cells }) {
+export function createNativeReplay({ wire, bindings, clock, cells, journal = null }) {
   let active = null;
   const witnesses = new Map();
   const receivedAt = new WeakMap();
@@ -249,11 +249,20 @@ export function createNativeReplay({ wire, bindings, clock, cells }) {
           proof.observedUntilMs = observedUntilMs;
           proof.deadlineUntilMs = active.deadlineUntilMs;
         }
-        if (active.cellId === "S10")
+        if (active.cellId === "S10") {
+          const observedElapsedMs = clock.elapsed(row.cellId);
+          const observation = journal?.write({
+            event: "stream-case-observation",
+            cellId: active.cellId,
+            state: structuredClone(state),
+            elapsedMs: observedElapsedMs,
+          });
           proof.zeroOutcome = {
             state: structuredClone(state),
-            observedElapsedMs: clock.elapsed(row.cellId),
+            observedElapsedMs,
+            observationN: observation?.n ?? null,
           };
+        }
         proof.completed = !state.incomplete;
       } else throw new Error("unlisted native action");
       proof.actions.push({

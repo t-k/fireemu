@@ -359,7 +359,6 @@ export async function recordWebRetries({ admission, parentCall, authorizeSdk, st
     doc.fields?.nonce?.stringValue === nonce && doc.fields?.case?.stringValue === role.split("_").slice(1).join("_") && versionKey(doc.updateTime);
   const dispatch = async (method, request, phase = "observation") => {
     if (phase === "observation" && observationStopped) throw new Error("S5b observations stopped");
-    await check();
     const answer = await parentCall({ method, request, phase });
     calls.push({ method, phase, complete: answer?.complete, code: answer?.code });
     if (!answer?.complete || !Number.isInteger(answer.code) || [1, 2, 4, 13, 14].includes(answer.code)) {

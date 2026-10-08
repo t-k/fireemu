@@ -527,6 +527,38 @@ test("production fixed corpus accounts for 52 data calls plus 11 management/cred
   assert.equal(JSON.stringify(receipt).includes("fixture-key"), false);
 });
 
+test("production parent calls rely on receiver guards while SDK admission still checks", async () => {
+  const { recordWebRetries } = await import("./web_sdk_retry.mjs");
+  const fixture = productionFixture();
+  let checked = false, checks = 0, startups = 0, admissions = 0;
+  const missingChecks = [];
+  fixture.check = async () => { checked = true; checks += 1; };
+  const spawn = fixture.spawn;
+  fixture.spawn = (...args) => {
+    if (!checked) missingChecks.push("SDK startup");
+    checked = false; startups += 1;
+    return spawn(...args);
+  };
+  fixture.authorizeSdk = async () => {
+    if (!checked) missingChecks.push("SDK admission");
+    checked = false; admissions += 1;
+    return true;
+  };
+  const parentCall = fixture.parentCall;
+  fixture.parentCall = async (call) => {
+    assert.equal(checked, false, "parent receiver performs the before-send guard");
+    return parentCall(call);
+  };
+  const receipt = await recordWebRetries(fixture);
+  assert.equal(receipt.complete, true);
+  assert.equal(startups, 4);
+  assert.equal(admissions, 14);
+  assert.deepEqual(missingChecks, []);
+  assert.equal(checks, startups + admissions);
+  assert.equal(fixture.parent.length, 38);
+  assert.equal(fixture.docs.size, 0);
+});
+
 test("production cleanup continues across an ownership mismatch without deleting that name", async () => {
   const { recordWebRetries } = await import("./web_sdk_retry.mjs");
   const fixture = productionFixture();

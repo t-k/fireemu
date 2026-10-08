@@ -68,13 +68,13 @@ def discover_runtime(executable, *, web_sdk=False):
 
 def _stamp(path):
     try:
-        info = Path(path).lstat()
+        info = os.lstat(path)
     except FileNotFoundError:
         return None
     def identity(value):
         return (value.st_dev, value.st_ino, value.st_mode, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
     try:
-        referent = Path(path).stat()
+        referent = os.stat(path)
     except FileNotFoundError:
         referent = None
     # Both the link and the bytes opened through it must remain unchanged.

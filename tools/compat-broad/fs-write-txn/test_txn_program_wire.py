@@ -372,3 +372,44 @@ def test_local_rebase_does_not_convert_undeclared_database_prefixes(runtime, mon
     monkeypatch.setattr(wire, "_child", lambda spec, timeout: (seen.append(spec) or receipt(), {"childReaped": True}))
     wire.send("grpc", "Rollback", {"database": foreign, "transaction": "aXNzdWVk"}, nonce=NONCE, owner_id=OWNER, bearer="owner")
     assert seen[0]["request"]["database"] == foreign
+
+
+@pytest.mark.parametrize('shape', ['absent', 'dangling'])
+def test_runtime_stamp_distinguishes_absent_path_from_dangling_link(tmp_path, shape):
+    import txn_program_wire as module
+    path = tmp_path / shape
+    if shape == 'dangling': path.symlink_to(tmp_path / 'missing-referent')
+    value = module._stamp(path)
+    if shape == 'absent':
+        assert value is None
+    else:
+        info = path.lstat()
+        assert value == ((info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns), None)
+
+
+@pytest.mark.parametrize('stage', ['link', 'referent'])
+@pytest.mark.parametrize('error_type', [PermissionError, NotADirectoryError])
+def test_runtime_stamp_propagates_other_filesystem_errors_in_order(tmp_path, monkeypatch, stage, error_type):
+    import os
+    import txn_program_wire as module
+    path = tmp_path / 'watched'
+    path.write_bytes(b'fixture')
+    original_lstat, original_stat = os.lstat, os.stat
+    calls = []
+    error = error_type('fixture failure')
+    def observe(operation, fn, candidate, *args, **kwargs):
+        if os.fspath(candidate) == str(path):
+            calls.append(operation)
+            if operation == stage: raise error
+        return fn(candidate, *args, **kwargs)
+    def lstat(candidate, *args, **kwargs):
+        return observe('link', original_lstat, candidate, *args, **kwargs)
+    def stat(candidate, *args, **kwargs):
+        operation = 'referent' if kwargs.get('follow_symlinks', True) else 'link'
+        return observe(operation, original_stat, candidate, *args, **kwargs)
+    with monkeypatch.context() as patched:
+        patched.setattr(os, 'lstat', lstat)
+        patched.setattr(os, 'stat', stat)
+        with pytest.raises(error_type) as caught: module._stamp(path)
+    assert caught.value is error
+    assert calls == (['link'] if stage == 'link' else ['link', 'referent'])

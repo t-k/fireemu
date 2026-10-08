@@ -580,3 +580,8 @@ def test_presend_generator_describes_the_finalized_query_baseline():
     strings = [node.value for node in ast.walk(ast.parse(path.read_text())) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
     descriptions = [value for value in strings if "query/(default) expectations" in value]
     assert descriptions == ["Finalized recorded query/(default) expectations with field sources and a validated runtime schema; preflight checks every pinned identity and database setting"]
+
+
+def test_the_s5b_successor_uses_a_fresh_fixed_envelope_without_changing_p17():
+    assert cli.table_for("s5b-web-sdk-retry")["envelopeId"] == "FS-TRANSACTION-s5b-web-sdk-retry-002"
+    assert cli.table_for("p17-admin-sdk-retry")["envelopeId"] == "FS-TRANSACTION-p17-admin-sdk-retry-003"

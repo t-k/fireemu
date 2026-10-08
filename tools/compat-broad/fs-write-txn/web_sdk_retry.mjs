@@ -207,11 +207,11 @@ export async function runLocalRetry(target, { artifact, artifactSource, receiptP
   const sources = {};
   for (const path of SOURCE_PATHS) sources[path] = sha(await readFile(new URL(path, ROOT)));
   receipt.bindings.sources = sources;
-  if (!artifact || !/^[0-9a-f]{40}$/.test(artifactSource ?? ""))
-    throw new Error("an artifact and its source commit are required");
+  if (!artifact || (artifactSource != null && !/^[0-9a-f]{40}$/.test(artifactSource)))
+    throw new Error("an artifact and a valid supplied source commit are required");
   receipt.bindings.artifact = {
     sha256: sha(await readFile(artifact)),
-    sourceCommit: artifactSource,
+    sourceCommit: artifactSource ?? null,
   };
   const collection = `s5b_${randomUUID().replaceAll("-", "")}`;
   const base = `http://${target.firestoreHost}/v1/projects/${target.projectId}/databases/(default)/documents`;

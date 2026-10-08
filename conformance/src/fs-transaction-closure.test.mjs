@@ -48,16 +48,22 @@ const recordedConditions = new Map([
   ["FS-TRANSACTION/read-write-lifecycle", ["P01", "P02B"]],
   ["FS-TRANSACTION/read-only-snapshot", ["P02", "P02B"]],
   ["FS-TRANSACTION/read-time-snapshot", ["P03"]],
+  ["FS-TRANSACTION/token-validation-and-ownership", ["P01", "P14", "P16"]],
   ["FS-TRANSACTION/read-set-conflict", ["P05"]],
+  ["FS-TRANSACTION/write-set-atomicity", ["P14"]],
+  ["FS-TRANSACTION/query-range-lock", ["P14"]],
   ["FS-TRANSACTION/failed-commit-and-rollback", ["P08", "P09"]],
   ["FS-TRANSACTION/retry-token-lifecycle", ["P09", "P13B"]],
   ["FS-TRANSACTION/idle-expiry", ["P10-A", "P10-B", "P10-C", "P13A"]],
   ["FS-TRANSACTION/total-lifetime-expiry", ["P11", "P12", "P13A"]],
+  ["FS-TRANSACTION/read-time-retention", ["P14"]],
+  ["FS-TRANSACTION/paging-and-cancellation", ["P14"]],
 ]);
 
-test("FS-TRANSACTION published records verify eight conditions and not the parent", () => {
+test("FS-TRANSACTION published records verify thirteen conditions and not the parent", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   const root = new URL("../../", import.meta.url);
+  assert.equal(closure.conditions.filter(({ status }) => status === "VERIFIED").length, 13);
   for (const condition of closure.conditions) {
     const expected = recordedConditions.get(condition.conditionId);
     if (!expected) {
@@ -111,7 +117,7 @@ test("FS-TRANSACTION published records verify eight conditions and not the paren
     );
     for (const run of evidence.productionRecordings) {
       assert.equal(run.recordings, 2, run.program);
-      assert.match(run.project, /^fireemu-oracle-(sbx|txn)$/, run.program);
+      assert.match(run.project, /^fireemu-oracle-(sbx|txn|query)$/, run.program);
     }
     assert.deepEqual(
       evidence.comparisonPaths,

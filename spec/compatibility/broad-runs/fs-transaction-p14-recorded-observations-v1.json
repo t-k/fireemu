@@ -1,0 +1,690 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-observations-v1",
+  "parent": "FS-TRANSACTION",
+  "condition": [
+    "FS-TRANSACTION/write-set-atomicity",
+    "FS-TRANSACTION/query-range-lock",
+    "FS-TRANSACTION/paging-and-cancellation",
+    "FS-TRANSACTION/read-time-retention",
+    "FS-TRANSACTION/token-validation-and-ownership"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "decodedSemanticsValidated": true,
+  "rawRestWireLayoutValidated": false,
+  "normalization": "Only the declared run identities (nonce, owner marker, issued token values, project number) are replaced by roles; codes, diagnostics, read states, token ends and cleanup are the program's own projection.",
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open.",
+    "Held writers: production refused a writer held behind a read lock with ABORTED after about 20.6 s (REST and gRPC, both recordings, measured from dispatch to answer and including the worker's own start-up of about 1 s); strict waits 20 s, so a replay of the writer rows judges that a held writer is refused, not the exact second. The writer order rows record whether a writer answered before or after its anchor was sent.",
+    "Read-time retention: the replay's database is younger than the read time asked for, so the clock is advanced once (3700 s, hidden from the recording) after the other chains, and the 59 and 61 minute reads are judged by accepted/refused class (a read at a time before a document existed answers not-found, which is accepted); production's database was older than the hour and the replay's is not, so a found document is compared only when both sides found one.",
+    "Token validation: P14 observes malformed (REST) and unknown tokens; P16 records foreign-project and foreign-database uses, and P01 records finished-token uses."
+  ],
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P14-STAGE2",
+      "packetName": "p14-stage2",
+      "corpusDigest": "2ffcbddb8531442ac0d2c44acd21beeb70eb098dfbe8dfa04cdecb19849c9ca5",
+      "recordings": 2,
+      "agree": true,
+      "productionFileSha256": [
+        "7c0140520950899a7372191b5c332b960e4bf0c7eb21434104e4079292fc7028",
+        "1406145e09be855cc1ab4915dddce250da06d75a031b97e45f63c79030e995fa"
+      ],
+      "projection": {
+        "program": "FS-TRANSACTION-P14-STAGE2",
+        "packetName": "p14-stage2",
+        "corpusDigest": "2ffcbddb8531442ac0d2c44acd21beeb70eb098dfbe8dfa04cdecb19849c9ca5",
+        "cases": [
+          {
+            "caseId": "rest/w/writer-bc",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/w/release",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/w/writer-ab",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "Too much contention on these documents. Please try again."
+          },
+          {
+            "caseId": "rest/w/plain-a",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/w/plain-b",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/w/writer-bc",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/w/release",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/w/writer-ab",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "Too much contention on these documents. Please try again."
+          },
+          {
+            "caseId": "grpc/w/plain-a",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/w/plain-b",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/q1/release",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/q1/writer",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/q2/release",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/q2/writer",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/q/post-query-in",
+            "transport": "rest",
+            "rpc": "RunQuery",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/q/post-read-p",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/q/post-read-o",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/q/release",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/q/writer",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/q/post-query-in",
+            "transport": "grpc",
+            "rpc": "RunQuery",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/pg/query-cancelled",
+            "transport": "grpc",
+            "rpc": "RunQuery",
+            "code": 1,
+            "outcomeClass": "CLIENT_CANCEL",
+            "details": "cancelled by the client after 1 frame(s)"
+          },
+          {
+            "caseId": "grpc/pg/read-after-cancel",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/pg/commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/pg/writer",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/tv/release",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/tv/get-malformed",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          {
+            "caseId": "rest/tv/batch-malformed",
+            "transport": "rest",
+            "rpc": "BatchGetDocuments",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          {
+            "caseId": "rest/tv/commit-malformed",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          {
+            "caseId": "rest/tv/rollback-malformed",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid value at 'transaction' (TYPE_BYTES), Base64 decoding failed for \"not base64!\""
+          },
+          {
+            "caseId": "rest/tv/get-unknown",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "rest/tv/batch-unknown",
+            "transport": "rest",
+            "rpc": "BatchGetDocuments",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "rest/tv/commit-unknown",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "rest/tv/rollback-unknown",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "grpc/tv/get-unknown",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "grpc/tv/commit-unknown",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "grpc/tv/rollback-unknown",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "rest/ret/get-59",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 5,
+            "outcomeClass": "REFUSED",
+            "details": "Document \"projects/fireemu-oracle-txn/databases/(default)/documents/oracle/<nonce>/txn-p14/a\" not found."
+          },
+          {
+            "caseId": "rest/ret/batch-59",
+            "transport": "rest",
+            "rpc": "BatchGetDocuments",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/ret/get-61",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 9,
+            "outcomeClass": "REFUSED",
+            "details": "The requested 'read_time' is too old."
+          },
+          {
+            "caseId": "rest/ret/batch-61",
+            "transport": "rest",
+            "rpc": "BatchGetDocuments",
+            "code": 9,
+            "outcomeClass": "REFUSED",
+            "details": "The requested 'read_time' is too old."
+          },
+          {
+            "caseId": "grpc/ret/get-59",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 5,
+            "outcomeClass": "REFUSED",
+            "details": "Document \"projects/fireemu-oracle-txn/databases/(default)/documents/oracle/<nonce>/txn-p14/a\" not found."
+          },
+          {
+            "caseId": "grpc/ret/get-61",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 9,
+            "outcomeClass": "REFUSED",
+            "details": "The requested 'read_time' is too old."
+          },
+          {
+            "caseId": "grpc/ret/batch-61",
+            "transport": "grpc",
+            "rpc": "BatchGetDocuments",
+            "code": 9,
+            "outcomeClass": "REFUSED",
+            "details": "The requested 'read_time' is too old."
+          },
+          {
+            "caseId": "rest/ret/begin-59",
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/ret/release-59",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/ret/begin-61",
+            "transport": "rest",
+            "rpc": "BeginTransaction",
+            "code": 9,
+            "outcomeClass": "REFUSED",
+            "details": "The requested 'read_time' is too old."
+          }
+        ],
+        "reads": [
+          {
+            "site": "setup/absence-a",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "setup/absence-b",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "setup/absence-c",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "setup/absence-d",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "setup/absence-h",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "setup/absence-p",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "setup/absence-o",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "setup/absence-p2",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "rest/w/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/w/plain-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/w/plain-b",
+            "code": 0,
+            "state": "rest-bc"
+          },
+          {
+            "site": "grpc/w/read-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "grpc/w/plain-a",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "grpc/w/plain-b",
+            "code": 0,
+            "state": "grpc-bc"
+          },
+          {
+            "site": "rest/q1/query-in",
+            "code": 0,
+            "documents": {
+              "h": "q-in"
+            }
+          },
+          {
+            "site": "rest/q2/query-in",
+            "code": 0,
+            "documents": {
+              "h": "q-in"
+            }
+          },
+          {
+            "site": "rest/q/post-query-in",
+            "code": 0,
+            "documents": {
+              "h": "q-in",
+              "p": "q-in"
+            }
+          },
+          {
+            "site": "rest/q/post-read-p",
+            "code": 0,
+            "state": "q-in"
+          },
+          {
+            "site": "rest/q/post-read-o",
+            "code": 0,
+            "state": "q-out"
+          },
+          {
+            "site": "grpc/q/query-in",
+            "code": 0,
+            "documents": {
+              "h": "q-in",
+              "p": "q-in"
+            }
+          },
+          {
+            "site": "grpc/q/post-query-in",
+            "code": 0,
+            "documents": {
+              "h": "q-in",
+              "p": "q-in",
+              "p2": "q-in"
+            }
+          },
+          {
+            "site": "grpc/pg/query-cancelled",
+            "code": 1,
+            "documents": {
+              "a": "created"
+            }
+          },
+          {
+            "site": "grpc/pg/read-after-cancel",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "grpc/pg/post-read-h",
+            "code": 0,
+            "state": "pg-writer"
+          },
+          {
+            "site": "rest/tv/read-control",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/tv/get-malformed",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "rest/tv/batch-malformed",
+            "code": 3,
+            "documents": null
+          },
+          {
+            "site": "rest/tv/get-unknown",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "rest/tv/batch-unknown",
+            "code": 3,
+            "documents": null
+          },
+          {
+            "site": "grpc/tv/get-unknown",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "rest/ret/get-59",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "rest/ret/batch-59",
+            "code": 0,
+            "documents": {
+              "a": null
+            }
+          },
+          {
+            "site": "rest/ret/get-61",
+            "code": 9,
+            "state": null
+          },
+          {
+            "site": "rest/ret/batch-61",
+            "code": 9,
+            "documents": null
+          },
+          {
+            "site": "grpc/ret/get-59",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "grpc/ret/get-61",
+            "code": 9,
+            "state": null
+          },
+          {
+            "site": "grpc/ret/batch-61",
+            "code": 9,
+            "documents": null
+          }
+        ],
+        "tokens": {
+          "rest-w": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "grpc-w": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "rest-q1": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-q2": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "grpc-q": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-pg": {
+            "transport": "grpc",
+            "state": "committed"
+          },
+          "rest-v": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "ro-59": {
+            "transport": "rest",
+            "state": "rolled-back"
+          }
+        },
+        "expectedStates": {
+          "a": "created",
+          "b": "grpc-bc",
+          "c": "rest-bc",
+          "d": "grpc-bc",
+          "h": "pg-writer",
+          "p": "q-in",
+          "o": "q-out",
+          "p2": "q-in"
+        },
+        "cleanup": {
+          "absent": true
+        },
+        "waits": [
+          {
+            "site": "rest/w/release",
+            "seconds": 45
+          },
+          {
+            "site": "grpc/w/release",
+            "seconds": 45
+          },
+          {
+            "site": "rest/q1/release",
+            "seconds": 5
+          },
+          {
+            "site": "rest/q2/release",
+            "seconds": 5
+          },
+          {
+            "site": "grpc/q/release",
+            "seconds": 5
+          },
+          {
+            "site": "grpc/pg/commit",
+            "seconds": 5
+          }
+        ]
+      }
+    }
+  ]
+}

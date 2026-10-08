@@ -2,10 +2,9 @@
   "schemaVersion": 1,
   "kind": "fs-transaction-recorded-comparison-v1",
   "parent": "FS-TRANSACTION",
-  "program": "FS-TRANSACTION-P02B-READONLY-REFUSED",
+  "program": "FS-TRANSACTION-P16-FOREIGN-TOKENS",
   "condition": [
-    "FS-TRANSACTION/read-only-snapshot",
-    "FS-TRANSACTION/read-write-lifecycle"
+    "FS-TRANSACTION/token-validation-and-ownership"
   ],
   "coverage": "PARTIAL",
   "authorizesProduction": false,
@@ -17,248 +16,38 @@
   },
   "comparer": {
     "sha256": "195c812433fc5cbecb73f95801df5c5fa28e40d6b83b5f9d684967c414700b21",
-    "replayClock": "real"
+    "replayClock": "real",
+    "replaySetup": {
+      "identityPolicy": "The local plan uses each recording nonce to declare its named database before startup; owner identities remain fresh and NodeWire rebases every project to a local demo project.",
+      "launchAdapterPath": "target/codex-out/p16-runall-launch.py",
+      "launchAdapterSha256": "9b103afc93a6210b906b3d8c5c60040b44efc703d75e82671095e069d74b77ef",
+      "configurationFiles": [
+        {
+          "recording": 1,
+          "configSha256": "544899d02ea724c5d2340184b69e097f64a7294e9e8bffbd20965883534931d7",
+          "firebaseJsonSha256": "fcc3908a0615f0f103e0490e918db6881929b9c6b5f08d648986fa1919f0eed1"
+        },
+        {
+          "recording": 2,
+          "configSha256": "660bd45cdb628174203a11f55d9bc3c441d84bf109ebc373cceb96d155f69c14",
+          "firebaseJsonSha256": "594d4ba8dd3919797e6935995a8bc10440c0419cdd70b97c3a3a321f3e093826"
+        }
+      ],
+      "managementLifecycleReplayed": false
+    }
   },
   "table": {
-    "path": "tools/compat-broad/fs-write-txn/fs_txn_table_p02b.py",
-    "sha256": "5ee2f8fe09b73cf9a60a6504eb6ffd46a34563f2673e5d89271b8c716608f47f"
+    "path": "tools/compat-broad/fs-write-txn/fs_txn_table_p16.py",
+    "sha256": "02e832bd5d608754cac786de588ff5d5ddb7be0c1862ee8611512e1547d75ac2"
   },
   "recordings": [
     {
       "recording": 1,
-      "productionFileSha256": "240d434d6f16111d7fd9c875e7799fbda79eb3b55d72a2a238f718d230798cc8",
+      "productionFileSha256": "d4bd18e670b784fb48d26f5d18c59598eb789539ccc28b9d049e8a608e0a1a97",
       "mismatches": 0,
       "cases": [
         {
-          "caseId": "rest/x-ro-write",
-          "production": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "local": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/x-get-after",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/x-commit-empty",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/x-rollback",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/y-ro-write",
-          "production": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "local": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/y-commit-empty",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/y-get-after",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/y-rollback",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/x-ro-write",
-          "production": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "local": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/x-get-after",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/x-commit-empty",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/x-rollback",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/y-ro-write",
-          "production": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "local": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/y-commit-empty",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/y-get-after",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/y-rollback",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/z-writer",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/z-first-read",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/z-commit",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/z-rollback",
+          "caseId": "rest/named/GetDocument",
           "production": {
             "code": 10,
             "details": "The referenced transaction has expired or is no longer valid."
@@ -270,7 +59,7 @@
           "match": true
         },
         {
-          "caseId": "grpc/z-writer",
+          "caseId": "rest/named/GetDocument/release",
           "production": {
             "code": 0,
             "details": ""
@@ -282,31 +71,7 @@
           "match": true
         },
         {
-          "caseId": "grpc/z-first-read",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/z-commit",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/z-rollback",
+          "caseId": "rest/named/BatchGetDocuments",
           "production": {
             "code": 10,
             "details": "The referenced transaction has expired or is no longer valid."
@@ -314,6 +79,258 @@
           "local": {
             "code": 10,
             "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/named/BatchGetDocuments/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/named/Commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/named/Commit/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/named/Rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/named/Rollback/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/foreign/GetDocument",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/foreign/GetDocument/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/foreign/BatchGetDocuments",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/foreign/BatchGetDocuments/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/foreign/Rollback",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/foreign/Rollback/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/named/GetDocument",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/named/GetDocument/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/named/Commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/named/Commit/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/named/Rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/named/Rollback/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/foreign/GetDocument",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/foreign/GetDocument/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/foreign/Rollback",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/foreign/Rollback/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
           },
           "match": true
         }
@@ -334,7 +351,35 @@
           "match": true
         },
         {
-          "site": "rest/x/read-a",
+          "site": "setup/absence-b",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-m",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/valid/get",
           "production": {
             "code": 0,
             "state": "created",
@@ -348,7 +393,123 @@
           "match": true
         },
         {
-          "site": "rest/x/get-after",
+          "site": "rest/valid/batch",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "b": "created"
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "b": "created"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "rest/named/GetDocument/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/named/GetDocument",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/named/BatchGetDocuments/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/named/BatchGetDocuments",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/named/Commit/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/named/Rollback/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/foreign/GetDocument/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/foreign/GetDocument",
           "production": {
             "code": 3,
             "state": null,
@@ -362,7 +523,7 @@
           "match": true
         },
         {
-          "site": "rest/x/post-read-a",
+          "site": "rest/foreign/BatchGetDocuments/control",
           "production": {
             "code": 0,
             "state": "created",
@@ -376,21 +537,7 @@
           "match": true
         },
         {
-          "site": "rest/y/read-a",
-          "production": {
-            "code": 0,
-            "state": "created",
-            "documents": null
-          },
-          "local": {
-            "code": 0,
-            "state": "created",
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "rest/y/get-after",
+          "site": "rest/foreign/BatchGetDocuments",
           "production": {
             "code": 3,
             "state": null,
@@ -404,7 +551,7 @@
           "match": true
         },
         {
-          "site": "rest/y/post-read-a",
+          "site": "rest/foreign/Rollback/control",
           "production": {
             "code": 0,
             "state": "created",
@@ -418,7 +565,7 @@
           "match": true
         },
         {
-          "site": "grpc/x/read-a",
+          "site": "grpc/valid/get",
           "production": {
             "code": 0,
             "state": "created",
@@ -432,7 +579,95 @@
           "match": true
         },
         {
-          "site": "grpc/x/get-after",
+          "site": "grpc/valid/batch",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "b": "created"
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "b": "created"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/named/GetDocument/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/named/GetDocument",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/named/Commit/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/named/Rollback/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/foreign/GetDocument/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/foreign/GetDocument",
           "production": {
             "code": 3,
             "state": null,
@@ -446,7 +681,7 @@
           "match": true
         },
         {
-          "site": "grpc/x/post-read-a",
+          "site": "grpc/foreign/Rollback/control",
           "production": {
             "code": 0,
             "state": "created",
@@ -455,104 +690,6 @@
           "local": {
             "code": 0,
             "state": "created",
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "grpc/y/read-a",
-          "production": {
-            "code": 0,
-            "state": "created",
-            "documents": null
-          },
-          "local": {
-            "code": 0,
-            "state": "created",
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "grpc/y/get-after",
-          "production": {
-            "code": 3,
-            "state": null,
-            "documents": null
-          },
-          "local": {
-            "code": 3,
-            "state": null,
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "grpc/y/post-read-a",
-          "production": {
-            "code": 0,
-            "state": "created",
-            "documents": null
-          },
-          "local": {
-            "code": 0,
-            "state": "created",
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "rest/z/first-read",
-          "production": {
-            "code": 0,
-            "state": "rest-z-w",
-            "documents": null
-          },
-          "local": {
-            "code": 0,
-            "state": "rest-z-w",
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "rest/z/post-read-a",
-          "production": {
-            "code": 0,
-            "state": "rest-z-commit",
-            "documents": null
-          },
-          "local": {
-            "code": 0,
-            "state": "rest-z-commit",
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "grpc/z/first-read",
-          "production": {
-            "code": 0,
-            "state": "grpc-z-w",
-            "documents": null
-          },
-          "local": {
-            "code": 0,
-            "state": "grpc-z-w",
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "grpc/z/post-read-a",
-          "production": {
-            "code": 0,
-            "state": "grpc-z-commit",
-            "documents": null
-          },
-          "local": {
-            "code": 0,
-            "state": "grpc-z-commit",
             "documents": null
           },
           "match": true
@@ -572,7 +709,7 @@
           "match": true
         },
         {
-          "site": "rest/z/writer",
+          "site": "setup/create-b",
           "production": {
             "commitTime": true,
             "relation": null
@@ -584,7 +721,7 @@
           "match": true
         },
         {
-          "site": "rest/z/commit",
+          "site": "rest/valid/commit",
           "production": {
             "commitTime": true,
             "relation": null
@@ -596,19 +733,7 @@
           "match": true
         },
         {
-          "site": "grpc/z/writer",
-          "production": {
-            "commitTime": true,
-            "relation": null
-          },
-          "local": {
-            "commitTime": true,
-            "relation": null
-          },
-          "match": true
-        },
-        {
-          "site": "grpc/z/commit",
+          "site": "grpc/valid/commit",
           "production": {
             "commitTime": true,
             "relation": null
@@ -624,239 +749,11 @@
     },
     {
       "recording": 2,
-      "productionFileSha256": "bd6b1e27d5aa319b3672a65c952d874a1ca31d9fe06780ae75750611742a7823",
+      "productionFileSha256": "31f10c6b24892674449931aeea40aee363b8bc1d8075960fb301ff492c30f733",
       "mismatches": 0,
       "cases": [
         {
-          "caseId": "rest/x-ro-write",
-          "production": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "local": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/x-get-after",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/x-commit-empty",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/x-rollback",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/y-ro-write",
-          "production": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "local": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/y-commit-empty",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/y-get-after",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/y-rollback",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/x-ro-write",
-          "production": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "local": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/x-get-after",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/x-commit-empty",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/x-rollback",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/y-ro-write",
-          "production": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "local": {
-            "code": 3,
-            "details": "Cannot modify entities in a read-only transaction."
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/y-commit-empty",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/y-get-after",
-          "production": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "local": {
-            "code": 3,
-            "details": "The referenced transaction has expired or is no longer valid."
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/y-rollback",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/z-writer",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/z-first-read",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/z-commit",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "rest/z-rollback",
+          "caseId": "rest/named/GetDocument",
           "production": {
             "code": 10,
             "details": "The referenced transaction has expired or is no longer valid."
@@ -868,7 +765,7 @@
           "match": true
         },
         {
-          "caseId": "grpc/z-writer",
+          "caseId": "rest/named/GetDocument/release",
           "production": {
             "code": 0,
             "details": ""
@@ -880,31 +777,7 @@
           "match": true
         },
         {
-          "caseId": "grpc/z-first-read",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/z-commit",
-          "production": {
-            "code": 0,
-            "details": ""
-          },
-          "local": {
-            "code": 0,
-            "details": ""
-          },
-          "match": true
-        },
-        {
-          "caseId": "grpc/z-rollback",
+          "caseId": "rest/named/BatchGetDocuments",
           "production": {
             "code": 10,
             "details": "The referenced transaction has expired or is no longer valid."
@@ -912,6 +785,258 @@
           "local": {
             "code": 10,
             "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/named/BatchGetDocuments/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/named/Commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/named/Commit/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/named/Rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/named/Rollback/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/foreign/GetDocument",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/foreign/GetDocument/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/foreign/BatchGetDocuments",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/foreign/BatchGetDocuments/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/foreign/Rollback",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "rest/foreign/Rollback/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/named/GetDocument",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/named/GetDocument/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/named/Commit",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/named/Commit/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/named/Rollback",
+          "production": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "local": {
+            "code": 10,
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/named/Rollback/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/foreign/GetDocument",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/foreign/GetDocument/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/foreign/Rollback",
+          "production": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "local": {
+            "code": 3,
+            "details": "Invalid transaction."
+          },
+          "match": true
+        },
+        {
+          "caseId": "grpc/foreign/Rollback/release",
+          "production": {
+            "code": 0,
+            "details": ""
+          },
+          "local": {
+            "code": 0,
+            "details": ""
           },
           "match": true
         }
@@ -932,7 +1057,35 @@
           "match": true
         },
         {
-          "site": "rest/x/read-a",
+          "site": "setup/absence-b",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "setup/absence-m",
+          "production": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 5,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/valid/get",
           "production": {
             "code": 0,
             "state": "created",
@@ -946,7 +1099,123 @@
           "match": true
         },
         {
-          "site": "rest/x/get-after",
+          "site": "rest/valid/batch",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "b": "created"
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "b": "created"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "rest/named/GetDocument/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/named/GetDocument",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/named/BatchGetDocuments/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/named/BatchGetDocuments",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/named/Commit/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/named/Rollback/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/foreign/GetDocument/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "rest/foreign/GetDocument",
           "production": {
             "code": 3,
             "state": null,
@@ -960,7 +1229,7 @@
           "match": true
         },
         {
-          "site": "rest/x/post-read-a",
+          "site": "rest/foreign/BatchGetDocuments/control",
           "production": {
             "code": 0,
             "state": "created",
@@ -974,21 +1243,7 @@
           "match": true
         },
         {
-          "site": "rest/y/read-a",
-          "production": {
-            "code": 0,
-            "state": "created",
-            "documents": null
-          },
-          "local": {
-            "code": 0,
-            "state": "created",
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "rest/y/get-after",
+          "site": "rest/foreign/BatchGetDocuments",
           "production": {
             "code": 3,
             "state": null,
@@ -1002,7 +1257,7 @@
           "match": true
         },
         {
-          "site": "rest/y/post-read-a",
+          "site": "rest/foreign/Rollback/control",
           "production": {
             "code": 0,
             "state": "created",
@@ -1016,7 +1271,7 @@
           "match": true
         },
         {
-          "site": "grpc/x/read-a",
+          "site": "grpc/valid/get",
           "production": {
             "code": 0,
             "state": "created",
@@ -1030,7 +1285,95 @@
           "match": true
         },
         {
-          "site": "grpc/x/get-after",
+          "site": "grpc/valid/batch",
+          "production": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "b": "created"
+            }
+          },
+          "local": {
+            "code": 0,
+            "state": null,
+            "documents": {
+              "b": "created"
+            }
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/named/GetDocument/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/named/GetDocument",
+          "production": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "local": {
+            "code": 10,
+            "state": null,
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/named/Commit/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/named/Rollback/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/foreign/GetDocument/control",
+          "production": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "local": {
+            "code": 0,
+            "state": "created",
+            "documents": null
+          },
+          "match": true
+        },
+        {
+          "site": "grpc/foreign/GetDocument",
           "production": {
             "code": 3,
             "state": null,
@@ -1044,7 +1387,7 @@
           "match": true
         },
         {
-          "site": "grpc/x/post-read-a",
+          "site": "grpc/foreign/Rollback/control",
           "production": {
             "code": 0,
             "state": "created",
@@ -1053,104 +1396,6 @@
           "local": {
             "code": 0,
             "state": "created",
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "grpc/y/read-a",
-          "production": {
-            "code": 0,
-            "state": "created",
-            "documents": null
-          },
-          "local": {
-            "code": 0,
-            "state": "created",
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "grpc/y/get-after",
-          "production": {
-            "code": 3,
-            "state": null,
-            "documents": null
-          },
-          "local": {
-            "code": 3,
-            "state": null,
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "grpc/y/post-read-a",
-          "production": {
-            "code": 0,
-            "state": "created",
-            "documents": null
-          },
-          "local": {
-            "code": 0,
-            "state": "created",
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "rest/z/first-read",
-          "production": {
-            "code": 0,
-            "state": "rest-z-w",
-            "documents": null
-          },
-          "local": {
-            "code": 0,
-            "state": "rest-z-w",
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "rest/z/post-read-a",
-          "production": {
-            "code": 0,
-            "state": "rest-z-commit",
-            "documents": null
-          },
-          "local": {
-            "code": 0,
-            "state": "rest-z-commit",
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "grpc/z/first-read",
-          "production": {
-            "code": 0,
-            "state": "grpc-z-w",
-            "documents": null
-          },
-          "local": {
-            "code": 0,
-            "state": "grpc-z-w",
-            "documents": null
-          },
-          "match": true
-        },
-        {
-          "site": "grpc/z/post-read-a",
-          "production": {
-            "code": 0,
-            "state": "grpc-z-commit",
-            "documents": null
-          },
-          "local": {
-            "code": 0,
-            "state": "grpc-z-commit",
             "documents": null
           },
           "match": true
@@ -1170,7 +1415,7 @@
           "match": true
         },
         {
-          "site": "rest/z/writer",
+          "site": "setup/create-b",
           "production": {
             "commitTime": true,
             "relation": null
@@ -1182,7 +1427,7 @@
           "match": true
         },
         {
-          "site": "rest/z/commit",
+          "site": "rest/valid/commit",
           "production": {
             "commitTime": true,
             "relation": null
@@ -1194,19 +1439,7 @@
           "match": true
         },
         {
-          "site": "grpc/z/writer",
-          "production": {
-            "commitTime": true,
-            "relation": null
-          },
-          "local": {
-            "commitTime": true,
-            "relation": null
-          },
-          "match": true
-        },
-        {
-          "site": "grpc/z/commit",
+          "site": "grpc/valid/commit",
           "production": {
             "commitTime": true,
             "relation": null
@@ -1223,12 +1456,13 @@
   ],
   "summary": {
     "recordings": 2,
-    "rows": 92,
+    "rows": 106,
     "mismatches": 0
   },
   "remainingBoundaries": [
     "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
     "The closure review and the final-artifact regression are separate conditions and stay open.",
-    "The artifact is the strict profile of the commit named; a later source change needs a new replay."
+    "The artifact is the strict profile of the commit named; a later source change needs a new replay.",
+    "The named database is declared in local configuration before replay; the production create/delete lifecycle and deletion readback are retained in the saved recordings, while this replay compares the data-plane token behavior."
   ]
 }

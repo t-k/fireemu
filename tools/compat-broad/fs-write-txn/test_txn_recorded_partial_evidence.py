@@ -1,6 +1,8 @@
 """Recorded production parity stays distinct from the frozen parent closure."""
 
+import copy
 import json
+import pytest
 import re
 import sys
 from pathlib import Path
@@ -158,6 +160,34 @@ def test_repaired_cases_preserve_the_committed_rollback_refusal():
         assert profile["beforeRepair"]["classification"] == comparison.SEMANTIC_MISMATCH
 
 
+def assert_parent_review(closure):
+    review = closure["closureReview"]
+    approved = review["decision"] == "APPROVED"
+    if review["decision"] == "APPROVED_WITH_BOUNDED_QUALIFICATIONS":
+        assert review["reviewScope"] == "FINAL_DEBUG_ARTIFACT_EVIDENCE"
+        assert closure["parentStatus"] == "IMPLEMENTING"
+        assert review["pendingGates"] == {
+            "sameTreeCi": "PENDING",
+            "shippedReleaseProfileValidation": "PENDING",
+            "stagingAndSignatureChecks": "PENDING",
+            "formalClosurePromotion": "PENDING",
+            "releasePromotion": "PENDING",
+        }
+        conditions = {row["conditionId"]: row for row in closure["conditions"]}
+        assert conditions["FS-TRANSACTION/closure-review"]["status"] == "PENDING_REVIEW"
+        final = conditions["FS-TRANSACTION/final-artifact-regression"]
+        assert final["status"] == "VERIFIED"
+        assert final["productionObservation"] == "UNOBSERVED_BY_RECORDED_CORPUS"
+        assert final["evidence"]["reviewScope"] == review["reviewScope"]
+        assert final["evidence"]["reviewStatus"] == review["decision"]
+        assert final["evidence"]["reviewSha256"] == review["reviewSha256"]
+        assert final["evidence"]["finalArtifactSha256"] == review["finalArtifactSha256"]
+    else:
+        assert review["decision"] in {"PENDING", "APPROVED"}
+    assert closure["parentStatus"] == ("COMPAT_VERIFIED" if approved else "IMPLEMENTING")
+    return approved
+
+
 def test_partial_recordings_do_not_promote_unobserved_conditions_or_official_emulator():
     value = evidence()
     closure = json.loads(CLOSURE.read_bytes())
@@ -169,9 +199,7 @@ def test_partial_recordings_do_not_promote_unobserved_conditions_or_official_emu
     assert len(mapped) == len(set(mapped)) == 13
     assert set(mapped) == {row["caseId"] for row in value["cases"]}
     assert len(closure["conditions"]) == 18
-    approved = closure["closureReview"]["decision"] == "APPROVED"
-    assert closure["closureReview"]["decision"] in {"PENDING", "APPROVED"}
-    assert closure["parentStatus"] == ("COMPAT_VERIFIED" if approved else "IMPLEMENTING")
+    approved = assert_parent_review(closure)
     assert closure["profileComparison"]["emulatorCompatibilityCheck"] == "SEPARATE_TRACK"
     for condition in closure["conditions"]:
         if condition["conditionId"] in counts:
@@ -183,8 +211,13 @@ def test_partial_recordings_do_not_promote_unobserved_conditions_or_official_emu
             assert partial["reference"] == str(PATH.relative_to(ROOT))
         elif "recordedComparison" in condition or condition["conditionId"] in {"FS-TRANSACTION/admin-sdk-server-retry", "FS-TRANSACTION/web-sdk-optimistic-retry", "FS-TRANSACTION/commit-atomic-visibility"}:
             assert condition["status"] == "VERIFIED"
+        elif condition["conditionId"] == "FS-TRANSACTION/final-artifact-regression" and closure["closureReview"]["decision"] == "APPROVED_WITH_BOUNDED_QUALIFICATIONS":
+            assert condition["status"] == "VERIFIED"
+            assert condition["productionObservation"] == "UNOBSERVED_BY_RECORDED_CORPUS"
         else:
             assert (condition["status"] == "VERIFIED") is approved
+            if not approved and condition["conditionId"] == "FS-TRANSACTION/closure-review":
+                assert condition["status"] == "PENDING_REVIEW"
             assert condition["productionObservation"] == "UNOBSERVED_BY_RECORDED_CORPUS"
 
 
@@ -194,3 +227,26 @@ def test_public_partial_summary_retains_no_credentials_or_absolute_paths():
     prefixes = tuple('"/' + name for name in ("Users/", "home/", "private/", "tmp/"))
     for marker in comparison.CREDENTIAL_MARKERS + prefixes + ('"pythonExecutable":', 'rulesetName', 'client.apiKey'):
         assert marker not in rendered
+
+
+def test_bounded_debug_review_remains_unapproved_and_rejects_incomplete_gates():
+    closure = json.loads(CLOSURE.read_bytes())
+    assert assert_parent_review(closure) is False
+    for key in ("sameTreeCi", "shippedReleaseProfileValidation", "stagingAndSignatureChecks", "formalClosurePromotion", "releasePromotion"):
+        changed = copy.deepcopy(closure)
+        changed["closureReview"]["pendingGates"][key] = "PASS"
+        with pytest.raises(AssertionError):
+            assert_parent_review(changed)
+    for key, value in (("reviewScope", "FULL_PARENT"), ("reviewSha256", "0" * 64), ("finalArtifactSha256", "0" * 64)):
+        changed = copy.deepcopy(closure)
+        changed["closureReview"][key] = value
+        with pytest.raises(AssertionError):
+            assert_parent_review(changed)
+    changed = copy.deepcopy(closure)
+    changed["parentStatus"] = "COMPAT_VERIFIED"
+    with pytest.raises(AssertionError):
+        assert_parent_review(changed)
+    changed = copy.deepcopy(closure)
+    next(row for row in changed["conditions"] if row["conditionId"] == "FS-TRANSACTION/closure-review")["status"] = "VERIFIED"
+    with pytest.raises(AssertionError):
+        assert_parent_review(changed)

@@ -198,8 +198,17 @@ test("every comparison a verified closure names is run or excluded with a reason
     assert.ok(comparison.runIds.length > 0, comparison.path);
     for (const id of comparison.runIds) assert.ok(runIds.has(id), `${comparison.path}: ${id}`);
   }
-  // Each run serves a comparison: no run is kept for nothing.
-  const used = new Set(plan.comparisons.flatMap((c) => c.runIds));
+  // Every executed run serves a committed comparison, including parents awaiting formal closure.
+  const executionPlan = planComparisons(
+    committedClosures().map((entry) => {
+      const copy = clone(entry);
+      copy.closure.parentStatus = "COMPAT_VERIFIED";
+      return copy;
+    }),
+    readJson,
+    { excludedKinds: [] },
+  );
+  const used = new Set(executionPlan.comparisons.flatMap((c) => c.runIds));
   for (const run of RUNS) assert.ok(used.has(run.id), run.id);
 });
 
@@ -1803,4 +1812,13 @@ test("FS-LISTEN-SDK uses its disclosed exclusion as a verified closure", () => {
   const reviewed = planComparisons(closures, readJson);
   assert.deepEqual(reviewed.errors, []);
   assert.ok(reviewed.excluded.some((entry) => entry.kind === "fs-listen-sdk-comparison-v1"));
+});
+
+test("every release command binds its declared mode to the actual CLI action", () => {
+  for (const run of RUNS) {
+    for (const command of run.commands) {
+      assert.ok(ALLOWED_MODES.has(command.mode), `${run.id}: ${command.mode}`);
+      assert.ok(command.argv.includes(command.mode), `${run.id}: ${command.mode}`);
+    }
+  }
 });

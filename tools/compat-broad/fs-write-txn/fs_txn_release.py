@@ -260,7 +260,7 @@ def interrupt(*_):
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('check', 'export'))
+    parser.add_argument('action', choices=('check', 'export', 'export-comparison'))
     parser.add_argument('--binary', required=True, type=Path)
     parser.add_argument('--out', required=True, type=Path)
     args = parser.parse_args(argv)

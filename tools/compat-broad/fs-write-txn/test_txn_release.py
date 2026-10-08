@@ -292,3 +292,22 @@ def test_release_does_not_copy_oracle_source_to_another_binary(tmp_path, monkeyp
     assert '--commit' not in calls[0][0]
     assert 'S5B_ARTIFACT_SOURCE' not in calls[1][1]
     assert calls[1][1]['S5B_FIREEMU'] == str(actual)
+
+
+def test_export_comparison_alias_uses_the_export_destination(tmp_path, monkeypatch):
+    release = importlib.import_module('fs_txn_release')
+    result = {'summary': {'rows': 1516, 'MATCH': 1516}}
+    observed = []
+    def run(binary, output):
+        observed.append(output)
+        output.mkdir(parents=True)
+        return result
+    monkeypatch.setattr(release, 'run_release', run)
+    monkeypatch.setattr(release.signal, 'signal', lambda *_: None)
+    for action in ('export', 'export-comparison'):
+        destination = tmp_path / f'{action}.json'
+        release.main([action, '--binary', 'unused', '--out', str(destination)])
+        assert destination.is_file()
+        assert observed[-1] == tmp_path / (destination.name + '.replay')
+    with pytest.raises(SystemExit):
+        release.main(['record', '--binary', 'unused', '--out', str(tmp_path / 'refused')])

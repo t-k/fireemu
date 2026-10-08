@@ -346,7 +346,7 @@ export const RUNS = [
         argv: [
           "python3",
           "tools/compat-broad/fs-write-txn/fs_txn_release.py",
-          "export",
+          "export-comparison",
           "--binary",
           "{bin}",
           "--out",

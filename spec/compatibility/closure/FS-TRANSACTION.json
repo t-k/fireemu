@@ -842,7 +842,7 @@
         "remainingBoundaries": [
           "This 13-case REST subset is the earlier partial evidence; the published recordedComparison records cover the refused-commit chain (P08) and native gRPC (P08, P09) recorded since. Its rows were replayed again on the strict release binary (releaseReplay)."
         ],
-        "releaseReplay": {
+        "historicalReleaseReplay": {
           "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
           "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
           "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
@@ -895,15 +895,6 @@
         ],
         "rows": {
           "MATCH": 126
-        },
-        "e04ReleaseReplay": {
-          "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
-          "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
-          "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
-          "rows": {
-            "MATCH": 6
-          },
-          "sha256": "49ade9155915bfe953c57540ce6279b791433ff4d88bbe6a4309b25841e734fc"
         },
         "producerSourceCommit": "f6b0712426767da7dd0f364c849674476757f873"
       },
@@ -999,7 +990,7 @@
         "remainingBoundaries": [
           "This 13-case REST subset is the earlier partial evidence; native gRPC (P09) and the retry chains over REST (P13b) are published in recordedComparison. Its rows were replayed again on the strict release binary (releaseReplay)."
         ],
-        "releaseReplay": {
+        "historicalReleaseReplay": {
           "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
           "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
           "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
@@ -1052,15 +1043,6 @@
         ],
         "rows": {
           "MATCH": 84
-        },
-        "e04ReleaseReplay": {
-          "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
-          "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
-          "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
-          "rows": {
-            "MATCH": 10
-          },
-          "sha256": "49ade9155915bfe953c57540ce6279b791433ff4d88bbe6a4309b25841e734fc"
         },
         "producerSourceCommit": "f6b0712426767da7dd0f364c849674476757f873"
       },
@@ -1156,7 +1138,7 @@
           "The exact idle threshold is not identified: it lies between the last accepted measured idle (lower bound 110.70 s) and the first refused one (upper bound 122.96 s). Strict's 120 s limit lies inside that interval; it accepts the unobserved 113.12 to 120 s gap and refuses the unobserved 120 to 120.54 s gap.",
           "The native gRPC sweeps (P10-A, P10-B, P10-C) are published and bound to this condition in recordedComparison, and the REST idle rows (E04) were replayed at 121 s of idle on the strict release binary (releaseReplay; the recorded idle for the commit and the rollback, a lower idle with the same outcome for the lock release)."
         ],
-        "releaseReplay": {
+        "historicalReleaseReplay": {
           "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
           "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
           "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
@@ -1236,15 +1218,6 @@
         ],
         "rows": {
           "MATCH": 230
-        },
-        "e04ReleaseReplay": {
-          "path": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-release-replay-v1.json",
-          "finalArtifactSha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
-          "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
-          "rows": {
-            "MATCH": 20
-          },
-          "sha256": "49ade9155915bfe953c57540ce6279b791433ff4d88bbe6a4309b25841e734fc"
         },
         "producerSourceCommit": "f6b0712426767da7dd0f364c849674476757f873"
       },

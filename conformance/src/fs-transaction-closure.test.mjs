@@ -117,24 +117,91 @@ test("FS-TRANSACTION approved regression is rerun through the public recipe rout
   assert.equal(regression.productionRequests, 0);
 });
 
-test("FS-TRANSACTION final domain evidence retains genuine replay coverage on one binary", () => {
-  const root = new URL("../../", import.meta.url);
-  const build = JSON.parse(
-    readFileSync(
-      new URL("spec/compatibility/closure/evidence/FS-TRANSACTION-build.json", root),
-      "utf8",
-    ),
-  );
-  const comparison = JSON.parse(
-    readFileSync(
-      new URL("spec/compatibility/closure/evidence/FS-TRANSACTION-comparison.json", root),
-      "utf8",
-    ),
-  );
+function assertCurrentDomainEvidence(comparison, build) {
   assert.equal(comparison.artifactSha256, build.binarySha256);
   assert.equal(comparison.sourceCommit, build.sourceCommit);
+  assert.equal(comparison.binaryProfile, "debug");
+  assert.equal(comparison.sourceBound, true);
   assert.equal(build.buildInputs.scheme, "binary-v1");
   assert.equal(build.buildInputs.inputCount, 337);
+  assert.equal(comparison.programReplay.recordings, 32);
+  assert.equal(comparison.programReplay.publisherRows, 1302);
+  assert.equal(comparison.programReplay.tokenAgeRows, 142);
+  assert.equal(comparison.programReplay.matchedRows, 1444);
+  assert.equal(comparison.adminSdk.comparisons.length, 4);
+  assert.equal(comparison.adminSdk.localReceipts.length, 2);
+  assert.deepEqual(comparison.adminSdk.productionSha256, [
+    "e6e754055db0555a77d67faf79ffad97b564de56781c1640d6a666d62c9ed0d9",
+    "50ec52e2c1f17f497928c2c6b75fe6931d31a70d96c54c10643872d254f5f227",
+  ]);
+  for (const receipt of comparison.adminSdk.localReceipts) {
+    assert.equal(receipt.complete, true);
+    assert.equal(receipt.graphComplete, true);
+    assert.equal(receipt.cleanupAbsent, true);
+    assert.match(receipt.sha256, /^[0-9a-f]{64}$/);
+  }
+  for (const record of comparison.adminSdk.comparisons) {
+    assert.equal(record.complete, true);
+    assert.equal(record.matchedRows, 5);
+    assert.equal(record.rows.length, 5);
+    assert.ok(record.rows.every(({ status }) => status === "MATCH"));
+    assert.match(record.comparisonSha256, /^[0-9a-f]{64}$/);
+  }
+  assert.equal(comparison.webSdk.comparisons.length, 2);
+  assert.deepEqual(
+    comparison.webSdk.production.map(({ sha256 }) => sha256),
+    [
+      "2d3518a8c275f0b9f2e219cdbb0ce1c22c4a55dc169ddd290e1e14c556b8e819",
+      "2ad186b4a3aa35a41b501316feb1cf7d9e54f043dfa2b7d92eb56edc47fa4773",
+    ],
+  );
+  assert.ok(comparison.webSdk.production.every(({ complete }) => complete === true));
+  assert.equal(comparison.webSdk.localComplete, true);
+  assert.equal(comparison.webSdk.localReceipt.complete, true);
+  assert.equal(comparison.webSdk.localReceipt.reportedArtifactSourceCommit, null);
+  assert.equal(comparison.webSdk.lifecycle.processGroupAbsent, true);
+  assert.deepEqual(comparison.webSdk.lifecycle.driverReportsClosed, [true, true]);
+  assert.match(comparison.webSdk.lifecycle.processReceiptSha256, /^[0-9a-f]{64}$/);
+  for (const record of comparison.webSdk.comparisons) {
+    assert.equal(record.matchedRows, 4);
+    assert.equal(record.rows.length, 4);
+    assert.ok(record.rows.every(({ status }) => status === "MATCH"));
+  }
+  assert.equal(comparison.atomicVisibility.rows.length, 4);
+  assert.ok(
+    comparison.atomicVisibility.rows.every(
+      ({ status, matchedRows }) => status === "MATCH" && matchedRows === 2,
+    ),
+  );
+  assert.equal(comparison.atomicVisibility.pairedRows.length, 8);
+  assert.ok(comparison.atomicVisibility.pairedRows.every(({ status }) => status === "MATCH"));
+  assert.equal(
+    comparison.atomicVisibility.fullCorpusComparison,
+    "NOT_EVALUATED_IN_TRANSACTION_RELEASE_SCOPE",
+  );
+  assert.equal(comparison.atomicVisibility.local.cleanupComplete, true);
+  assert.equal(
+    comparison.atomicVisibility.local.provenance.binarySha256,
+    comparison.artifactSha256,
+  );
+  assert.equal(comparison.expiryRetry.summary.rows, 36);
+  assert.equal(comparison.expiryRetry.summary.recordings, 2);
+  assert.equal(comparison.expiryRetry.summary.mismatches, 0);
+  assert.equal(comparison.expiryRetry.coverage, "PARTIAL");
+  assert.match(comparison.expiryRetry.resultSha256, /^[0-9a-f]{64}$/);
+  for (const domain of [
+    comparison.programReplay,
+    comparison.adminSdk,
+    comparison.webSdk,
+    comparison.atomicVisibility,
+    comparison.expiryRetry,
+  ]) {
+    assert.equal(domain.artifactSha256, comparison.artifactSha256);
+  }
+  assert.notEqual(comparison.historicalComparison.artifactSha256, comparison.artifactSha256);
+}
+
+function assertHistoricalDomainEvidence(comparison) {
   assert.equal(comparison.programReplay.recordings, 32);
   assert.equal(comparison.programReplay.publisherRows, 1302);
   assert.equal(comparison.programReplay.tokenAgeRows, 142);
@@ -199,6 +266,203 @@ test("FS-TRANSACTION final domain evidence retains genuine replay coverage on on
   ]) {
     assert.equal(domain.artifactSha256, comparison.artifactSha256);
   }
+}
+
+function assertCurrentProgramBindings(condition, current, fixture, inputs) {
+  const { evidence, historicalEvidence, recordedComparison } = condition;
+  assert.deepEqual(evidence.comparisonPaths, [
+    "spec/compatibility/closure/evidence/FS-TRANSACTION-comparison.json",
+  ]);
+  assert.equal(evidence.finalArtifactSha256, current.artifactSha256);
+  assert.equal(evidence.sourceCommit, current.sourceCommit);
+  assert.equal(evidence.producerSourceCommit, current.producerSourceCommit);
+  assert.deepEqual(evidence.productionRecordings, historicalEvidence.productionRecordings);
+  let total = 0;
+  for (const entry of recordedComparison.programs) {
+    const selected = current.programReplay.replays.filter(
+      ({ program }) => program === entry.program,
+    );
+    const original = current.historicalComparison.programReplay.replays.filter(
+      ({ program }) => program === entry.program,
+    );
+    assert.equal(selected.length, 2, entry.program);
+    assert.deepEqual(selected.map(({ recording }) => recording).toSorted(), [1, 2]);
+    const identities = (rows) =>
+      rows
+        .map(({ program, recording, productionSha256 }) =>
+          JSON.stringify([program, recording, productionSha256]),
+        )
+        .toSorted();
+    assert.deepEqual(identities(selected), identities(original), entry.program);
+    const recipes = inputs.programs.filter(({ recordings }) =>
+      recordings.every(({ expectation }) => expectation.projection.program === entry.program),
+    );
+    assert.equal(recipes.length, 1);
+    const recipe = recipes[0];
+    let publisherRows = 0;
+    for (const replay of selected) {
+      const prefix = `${recipe.key}/r${replay.recording}/`;
+      const rows = fixture.rows.filter(({ row }) => row.startsWith(prefix));
+      const publisher = rows.filter(({ row }) => !row.startsWith(`${prefix}tokenAges/`));
+      const ages = rows.filter(({ row }) => row.startsWith(`${prefix}tokenAges/`));
+      const recordings = recipe.recordings.filter(
+        ({ originSha256 }) => originSha256 === replay.productionSha256,
+      );
+      assert.equal(recordings.length, 1);
+      const expectedIds = Object.entries(recordings[0].inventory)
+        .flatMap(([section, rowIds]) => rowIds.map((identity) => `${prefix}${section}/${identity}`))
+        .toSorted();
+      assert.deepEqual(rows.map(({ row }) => row).toSorted(), expectedIds);
+      assert.ok(rows.every(({ status }) => status === "MATCH"));
+      assert.equal(replay.matchedRows, publisher.length + ages.length);
+      publisherRows += publisher.length;
+      assert.ok(replay.matchedRows > 0);
+      assert.match(replay.resultSha256, /^[0-9a-f]{64}$/);
+      const aggregate = current.rows.filter(
+        ({ row }) => row === `${replay.program}/recording-${replay.recording}`,
+      );
+      assert.equal(aggregate.length, 1);
+      assert.equal(aggregate[0].conditionId, "FS-TRANSACTION/final-artifact-regression");
+      assert.equal(aggregate[0].status, "MATCH");
+      assert.equal(aggregate[0].matchedRows, replay.matchedRows);
+      assert.equal(aggregate[0].resultSha256, replay.resultSha256);
+    }
+    assert.equal(publisherRows, entry.rows);
+    total += publisherRows;
+  }
+  assert.deepEqual(evidence.rows, { MATCH: total });
+  assert.deepEqual(evidence.rows, historicalEvidence.rows);
+}
+
+function assertDebugReview(closure) {
+  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  assert.equal(closure.closureReview.decision, "APPROVED_WITH_BOUNDED_QUALIFICATIONS");
+  assert.equal(closure.closureReview.reviewScope, "FINAL_DEBUG_ARTIFACT_EVIDENCE");
+  assert.equal(
+    closure.conditions.find(({ conditionId }) => conditionId === "FS-TRANSACTION/closure-review")
+      .status,
+    "PENDING_REVIEW",
+  );
+  const final = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-TRANSACTION/final-artifact-regression",
+  );
+  assert.equal(final.status, "VERIFIED");
+  assert.equal(final.evidence.reviewScope, closure.closureReview.reviewScope);
+  assert.equal(final.evidence.reviewStatus, closure.closureReview.decision);
+  assert.equal(final.evidence.reviewSha256, closure.closureReview.reviewSha256);
+  assert.equal(final.evidence.finalArtifactSha256, closure.closureReview.finalArtifactSha256);
+  assert.match(closure.closureReview.reviewSha256, /^[0-9a-f]{64}$/);
+  assert.deepEqual(closure.closureReview.pendingGates, {
+    sameTreeCi: "PENDING",
+    shippedReleaseProfileValidation: "PENDING",
+    stagingAndSignatureChecks: "PENDING",
+    formalClosurePromotion: "PENDING",
+    releasePromotion: "PENDING",
+  });
+}
+
+test("FS-TRANSACTION final domain evidence retains genuine replay coverage on one binary", () => {
+  const root = new URL("../../", import.meta.url);
+  const build = JSON.parse(
+    readFileSync(
+      new URL("spec/compatibility/closure/evidence/FS-TRANSACTION-build.json", root),
+      "utf8",
+    ),
+  );
+  const comparison = JSON.parse(
+    readFileSync(
+      new URL("spec/compatibility/closure/evidence/FS-TRANSACTION-comparison.json", root),
+      "utf8",
+    ),
+  );
+  assertCurrentDomainEvidence(comparison, build);
+  assertHistoricalDomainEvidence(comparison.historicalComparison);
+  for (const mutate of [
+    (value) => {
+      value.adminSdk.localReceipts[0].remainingOwnedProcesses.leaked = 1;
+    },
+    (value) => {
+      value.adminSdk.comparisons[0].attempts[0].match = false;
+    },
+    (value) => {
+      value.webSdk.comparisons[0].cases[0].local.scenarioComplete = false;
+    },
+    (value) => {
+      value.webSdk.comparisons[0].cases[0].local.reportClosed = false;
+    },
+    (value) => {
+      value.webSdk.lifecycle.readyDescriptorWithdrawn = false;
+    },
+  ]) {
+    const changed = structuredClone(comparison.historicalComparison);
+    mutate(changed);
+    assert.throws(() => assertHistoricalDomainEvidence(changed));
+  }
+  const mutations = [
+    (value) => {
+      delete value.adminSdk.localReceipts[0].cleanupAbsent;
+    },
+    (value) => {
+      value.adminSdk.localReceipts[0].cleanupAbsent = false;
+    },
+    (value) => {
+      value.adminSdk.comparisons.pop();
+    },
+    (value) => {
+      value.webSdk.production[0].complete = false;
+    },
+    (value) => {
+      value.webSdk.comparisons[0].rows.pop();
+    },
+    (value) => {
+      value.webSdk.lifecycle.driverReportsClosed[1] = false;
+    },
+    (value) => {
+      value.atomicVisibility.fullCorpusComparison = "APPROVED";
+    },
+    (value) => {
+      value.expiryRetry.coverage = "FULL";
+    },
+    (value) => {
+      value.artifactSha256 = value.historicalComparison.artifactSha256;
+    },
+  ];
+  for (const mutate of mutations) {
+    const changed = structuredClone(comparison);
+    mutate(changed);
+    assert.throws(() => assertCurrentDomainEvidence(changed, build));
+  }
+});
+
+test("FS-TRANSACTION bounded debug approval cannot promote formal closure", () => {
+  const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
+  assertDebugReview(closure);
+  for (const mutate of [
+    (value) => {
+      value.parentStatus = "COMPAT_VERIFIED";
+    },
+    (value) => {
+      value.closureReview.decision = "APPROVED";
+    },
+    (value) => {
+      value.closureReview.reviewScope = "FULL_PARENT";
+    },
+    (value) => {
+      value.closureReview.pendingGates.shippedReleaseProfileValidation = "PASS";
+    },
+    (value) => {
+      delete value.closureReview.reviewSha256;
+    },
+    (value) => {
+      value.conditions.find(
+        ({ conditionId }) => conditionId === "FS-TRANSACTION/closure-review",
+      ).status = "VERIFIED";
+    },
+  ]) {
+    const changed = structuredClone(closure);
+    mutate(changed);
+    assert.throws(() => assertDebugReview(changed));
+  }
 });
 
 test("FS-TRANSACTION published program records retain thirteen condition mappings", () => {
@@ -206,7 +470,7 @@ test("FS-TRANSACTION published program records retain thirteen condition mapping
   const root = new URL("../../", import.meta.url);
   assert.equal(
     closure.conditions.filter(({ status }) => status === "VERIFIED").length,
-    closure.closureReview.decision === "APPROVED" ? 18 : 16,
+    closure.closureReview.decision === "APPROVED" ? 18 : 17,
   );
   for (const condition of closure.conditions) {
     const expected = recordedConditions.get(condition.conditionId);
@@ -259,7 +523,7 @@ test("FS-TRANSACTION published program records retain thirteen condition mapping
     )
       assert.match(recorded.boundaryRuling, /110\.70, 122\.96.*298\.7, 302\.2/);
     // the evidence block names the recordings, the one artifact and exactly the records above
-    const { evidence } = condition;
+    const evidence = condition.historicalEvidence;
     assert.deepEqual(
       evidence.productionRecordings.map(({ program }) => program),
       recorded.programs.map(({ program }) => program),
@@ -282,8 +546,26 @@ test("FS-TRANSACTION published program records retain thirteen condition mapping
       assert.equal(artifact.binarySha256, evidence.finalArtifactSha256, entry.program);
       assert.equal(artifact.sourceCommit, evidence.sourceCommit, entry.program);
     }
-    if (closure.parentStatus !== "COMPAT_VERIFIED")
-      assert.match(condition.note, /not COMPAT_VERIFIED/);
+    const current = JSON.parse(
+      readFileSync(
+        new URL("spec/compatibility/closure/evidence/FS-TRANSACTION-comparison.json", root),
+        "utf8",
+      ),
+    );
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL("spec/compatibility/broad-runs/fs-transaction-integrated-regression-v1.json", root),
+        "utf8",
+      ),
+    );
+    const inputs = JSON.parse(
+      readFileSync(
+        new URL("spec/compatibility/broad-runs/fs-transaction-release-replay-inputs-v1.json", root),
+        "utf8",
+      ),
+    );
+    assertCurrentProgramBindings(condition, current, fixture, inputs);
+    assertDebugReview(closure);
     assert.doesNotMatch(condition.note, /not a published redacted record yet/i);
   }
   // one strict artifact per publication: every record names the same commit and binary
@@ -298,6 +580,79 @@ test("FS-TRANSACTION published program records retain thirteen condition mapping
     ),
   );
   assert.equal(artifacts.size, 1);
+});
+
+test("FS-TRANSACTION current program identities reject substituted recordings and results", () => {
+  const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
+  const current = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../spec/compatibility/closure/evidence/FS-TRANSACTION-comparison.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const root = new URL("../../", import.meta.url);
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL("spec/compatibility/broad-runs/fs-transaction-integrated-regression-v1.json", root),
+      "utf8",
+    ),
+  );
+  const inputs = JSON.parse(
+    readFileSync(
+      new URL("spec/compatibility/broad-runs/fs-transaction-release-replay-inputs-v1.json", root),
+      "utf8",
+    ),
+  );
+  const condition = closure.conditions[0];
+  assertCurrentProgramBindings(condition, current, fixture, inputs);
+  for (const mutate of [
+    (value) => {
+      value.programReplay.replays[0].recording = 1;
+    },
+    (value) => {
+      value.programReplay.replays[0].productionSha256 = "0".repeat(64);
+    },
+    (value) => {
+      value.programReplay.replays[0].matchedRows -= 1;
+    },
+    (value) => {
+      value.programReplay.replays[0].resultSha256 = "0".repeat(64);
+    },
+    (value) => {
+      value.programReplay.replays.splice(0, 1);
+    },
+    (value) => {
+      value.rows[0].status = "MISMATCH";
+    },
+  ]) {
+    const changed = structuredClone(current);
+    mutate(changed);
+    assert.throws(() => assertCurrentProgramBindings(condition, changed, fixture, inputs));
+  }
+  const retry = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-TRANSACTION/retry-token-lifecycle",
+  );
+  assertCurrentProgramBindings(retry, current, fixture, inputs);
+  const missingAge = structuredClone(fixture);
+  missingAge.rows.splice(
+    missingAge.rows.findIndex(({ row }) => row.startsWith("p13b/r1/tokenAges/")),
+    1,
+  );
+  assert.throws(() => assertCurrentProgramBindings(retry, current, missingAge, inputs));
+  const missingContribution = structuredClone(current);
+  const replay = missingContribution.programReplay.replays.find(
+    ({ program, recording }) => program.includes("P13B-") && recording === 1,
+  );
+  replay.matchedRows -= 1;
+  missingContribution.rows.find(({ row }) => row === `${replay.program}/recording-1`).matchedRows -=
+    1;
+  assert.throws(() => assertCurrentProgramBindings(retry, missingContribution, fixture, inputs));
+  const changedCondition = structuredClone(retry);
+  changedCondition.evidence.rows.MATCH += 16;
+  assert.throws(() => assertCurrentProgramBindings(changedCondition, current, fixture, inputs));
 });
 
 test("FS-TRANSACTION supplementary REST evidence stays partial beside independent domain evidence", () => {
@@ -318,6 +673,7 @@ test("FS-TRANSACTION supplementary REST evidence stays partial beside independen
           "FS-TRANSACTION/admin-sdk-server-retry",
           "FS-TRANSACTION/web-sdk-optimistic-retry",
           "FS-TRANSACTION/commit-atomic-visibility",
+          "FS-TRANSACTION/final-artifact-regression",
         ].includes(condition.conditionId) ||
         closure.closureReview.decision === "APPROVED",
       condition.conditionId,
@@ -350,7 +706,7 @@ test("FS-TRANSACTION supplementary REST evidence stays partial beside independen
     closure.parentStatus,
     closure.closureReview.decision === "APPROVED" ? "COMPAT_VERIFIED" : "IMPLEMENTING",
   );
-  assert.ok(["PENDING", "APPROVED"].includes(closure.closureReview.decision));
+  assertDebugReview(closure);
   assert.equal(closure.profileComparison.emulatorCompatibilityCheck, "SEPARATE_TRACK");
   assert.equal(closure.productionPlan.preparedCampaign.authorizesProduction, false);
   assert.deepEqual(closure.productionPlan.preparedCampaign.actualRequestsPerRecording, [75, 75]);
@@ -475,7 +831,7 @@ test("FS-TRANSACTION notes of VERIFIED conditions do not call the condition open
   }
 });
 
-test("FS-TRANSACTION E04 rows of the verified conditions are replayed on the release binary, the idle cases at 121 s of idle", () => {
+test("FS-TRANSACTION historical E04 rows of the verified conditions retain their original release binary, the idle cases at 121 s of idle", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   const root = new URL("../../", import.meta.url);
   const prefixes = new Map([
@@ -486,12 +842,17 @@ test("FS-TRANSACTION E04 rows of the verified conditions are replayed on the rel
   for (const [id, prefix] of prefixes) {
     const condition = closure.conditions.find(({ conditionId }) => conditionId === id);
     assert.equal(condition.status, "VERIFIED", id);
-    const { releaseReplay } = condition.partialEvidence;
-    assert.deepEqual(condition.evidence.e04ReleaseReplay, releaseReplay, id);
+    const releaseReplay = condition.partialEvidence.historicalReleaseReplay;
+    assert.deepEqual(condition.historicalEvidence.e04ReleaseReplay, releaseReplay, id);
+    assert.equal(condition.evidence.e04ReleaseReplay, undefined, id);
     const record = JSON.parse(readFileSync(new URL(releaseReplay.path, root), "utf8"));
     assert.equal(record.kind, "fs-transaction-expiry-retry-04-release-replay-v1");
-    assert.equal(record.artifact.binarySha256, condition.evidence.finalArtifactSha256, id);
-    assert.equal(record.artifact.sourceCommit, condition.evidence.sourceCommit, id);
+    assert.equal(
+      record.artifact.binarySha256,
+      condition.historicalEvidence.finalArtifactSha256,
+      id,
+    );
+    assert.equal(record.artifact.sourceCommit, condition.historicalEvidence.sourceCommit, id);
     assert.equal(releaseReplay.finalArtifactSha256, record.artifact.binarySha256, id);
     assert.equal(releaseReplay.sourceCommit, record.artifact.sourceCommit, id);
     assert.equal(record.summary.mismatches, 0);

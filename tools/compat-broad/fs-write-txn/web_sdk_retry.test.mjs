@@ -559,6 +559,77 @@ test("production probe refusal stops before seed writes and never resumes either
   assert.equal(fixture.docs.size, 0);
 });
 
+for (const stage of ["ready", "transaction-read", "transaction-wire-status"]) {
+  test(`production probe retains safe diagnostics after ${stage} failure`, async () => {
+    const { recordWebRetries } = await import("./web_sdk_retry.mjs");
+    const fixture = productionFixture();
+    const spawn = fixture.spawn;
+    const secret = "fixture-key bearer-secret https://fixture.invalid/?key=secret";
+    const failure = stage === "transaction-read" ? new Error("timed out waiting for the sdk driver")
+      : Object.assign(new Error(secret), { name: "FirebaseError", code: "unavailable" });
+    fixture.spawn = (...args) => {
+      const sdk = spawn(...args);
+      sdk.events.push({ event: "connection", n: 1, host: secret },
+        { event: "driver-error", message: secret, name: "FirebaseError", code: "unavailable" },
+        { event: "result", ok: false, code: "unavailable", error: secret },
+        { event: "wire-refused", reason: secret, path: secret },
+        { event: "page-error", message: secret },
+        { event: "unparsable-output", length: 42 },
+        { event: secret, code: secret });
+      if (stage === "ready") sdk.ready = async () => { throw failure; };
+      if (stage === "transaction-read") {
+        const waitFor = sdk.waitFor;
+        sdk.waitFor = (match) => match({ event: "transaction-read", name: "node_probe", attempt: 1 })
+          ? Promise.reject(failure) : waitFor(match);
+      }
+      return sdk;
+    };
+    if (stage === "transaction-wire-status") fixture.statusSdk = async () => { throw failure; };
+    const receipt = await recordWebRetries(fixture);
+    const probe = receipt.transports[0].probe;
+    assert.deepEqual(probe.failure, stage === "transaction-read" ? { stage, name: "Error" }
+      : { stage, name: "FirebaseError", code: "unavailable" });
+    assert.equal(probe.closed, true);
+    assert.equal(receipt.failure, "observation-incomplete");
+    assert.equal(receipt.complete, false);
+    assert.equal(fixture.parent.length, 8);
+    assert.equal(fixture.parent.every((call) => call.method === "GetDocument"), true);
+    assert.equal(fixture.drivers.length, 1);
+    assert.equal(fixture.docs.size, 0);
+    assert.equal(JSON.stringify(receipt).includes(secret), false);
+    assert.deepEqual(probe.diagnostics.slice(0, 7), [
+      { event: "ready" }, { event: "connection", n: 1 },
+      { event: "driver-error", name: "FirebaseError", code: "unavailable" },
+      { event: "result", ok: false, code: "unavailable" },
+      { event: "wire-refused" }, { event: "page-error" },
+      { event: "unparsable-output", length: 42 },
+    ]);
+    assert.equal(probe.diagnostics.some((event) => event.event === "exit" && event.code === 0), true);
+  });
+}
+
+test("production probe diagnostic projection rejects arbitrary error labels and bounds events", async () => {
+  const { recordWebRetries } = await import("./web_sdk_retry.mjs");
+  for (const secret of ["secret", "unavailable-secret", "Error-secret", "https://fixture.invalid/?key=secret", "\nsecret"]) {
+    const fixture = productionFixture();
+    const spawn = fixture.spawn;
+    fixture.spawn = (...args) => {
+      const sdk = spawn(...args);
+      const waitFor = sdk.waitFor;
+      sdk.waitFor = (match) => waitFor((event) => event != null && match(event));
+      sdk.events.push(null, false, 42, "untrusted-output", ...Array.from({ length: 100 }, (_, n) => ({ event: "connection", n, host: secret })));
+      sdk.ready = async () => { throw { name: secret, code: secret, message: secret }; };
+      return sdk;
+    };
+    const receipt = await recordWebRetries(fixture);
+    const probe = receipt.transports[0].probe;
+    assert.deepEqual(probe.failure, { stage: "ready", name: "Error" });
+    assert.equal(probe.diagnostics.length, 32);
+    assert.deepEqual(probe.diagnostics.at(-1), { event: "exit", code: 0 });
+    assert.equal(JSON.stringify(probe).includes(secret), false);
+  }
+});
+
 test("fixed parent transport validates only six marked writes and version-bound deletes", async () => {
   const { validateCall } = await import("./txn_program_transport.mjs");
   const nonce = "a".repeat(32), ownerId = "b".repeat(32);

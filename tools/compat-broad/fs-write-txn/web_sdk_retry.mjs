@@ -173,6 +173,27 @@ export function scenarioComplete(scenario) {
   );
 }
 
+// Diagnostic text is omitted: SDK messages, stderr, URLs and arbitrary labels can carry credentials.
+const DIAGNOSTIC_CODES = new Set(["cancelled", "unknown", "invalid-argument", "deadline-exceeded",
+  "not-found", "already-exists", "permission-denied", "resource-exhausted", "failed-precondition",
+  "aborted", "out-of-range", "unimplemented", "internal", "unavailable", "data-loss", "unauthenticated"]);
+const diagnosticCode = (code) => Number.isInteger(code) && code >= 0 && code <= 16 ? code :
+  typeof code === "string" && DIAGNOSTIC_CODES.has(code.replace(/^firestore\//, "")) ? code : undefined;
+const diagnosticName = (name) => ["Error", "TypeError", "RangeError", "SyntaxError", "FirebaseError"].includes(name) ? name : "Error";
+const diagnosticEvents = (events) => events.filter((event) => ["ready", "connection", "wire",
+  "transaction-dispatch", "transaction-wire", "transaction-read", "wire-refused", "driver-error",
+  "page-error", "unparsable-output", "result", "exit"].includes(event?.event)).slice(-32).map((event) => {
+    const safe = { event: event.event };
+    for (const field of ["n", "attempt", "length", "status", "grpcCode"])
+      if (Number.isSafeInteger(event[field]) && event[field] >= 0) safe[field] = event[field];
+    for (const field of ["ok", "complete"])
+      if (typeof event[field] === "boolean") safe[field] = event[field];
+    if (event.name !== undefined && event.event === "driver-error") safe.name = diagnosticName(event.name);
+    const code = diagnosticCode(event.code);
+    if (code !== undefined) safe.code = code;
+    return safe;
+  });
+
 export async function runLocalRetry(target, { artifact, artifactSource, receiptPath } = {}) {
   const config = localConfig(target);
   const receipt = {
@@ -403,21 +424,33 @@ export async function recordWebRetries({ admission, parentCall, authorizeSdk, st
       const report = { transport, probe: {}, scenarios: [], closed: false };
       receipt.transports.push(report);
       const { sdk, reportStatus } = await open(transport, true, report.probe);
+      let stage = "ready";
       try {
         await sdk.ready();
+        stage = "browser-processes";
         if (transport === "browser") await journal({ event: "browser-processes", client: report.probe.client, ...(await sdk.waitFor((event) => event.event === "browser-processes")) });
         const role = `${transport}_probe`, path = names[role].split("/documents/")[1];
+        stage = "transaction-send";
         const result = sdk.send("transaction", { name: role, reads: [path], maxAttempts: 2, write: { path, data: {} } });
         result.catch(() => {});
+        stage = "transaction-read";
         const read = await sdk.waitFor((event) => event.event === "transaction-read" && event.name === role && event.attempt === 1);
+        stage = "transaction-wire-status";
         await reportStatus(1);
         report.probe.events = sdk.events.filter((event) => ["wire", "transaction-wire", "transaction-read"].includes(event.event));
         const evidence = report.probe.events.find((event) => event.event === "transaction-wire");
+        stage = "probe-validation";
         report.probe.complete = read.docs?.length === 1 && read.docs[0].exists === false &&
           evidence?.complete === true && evidence.response?.documents?.length === 1 && evidence.response.documents[0].missing === names[role] &&
           report.probe.events.filter((event) => event.event === "wire").length === 1;
         if (!report.probe.complete) throw new Error("S5b no-write probe refused");
-      } finally { report.probe.closed = await close(sdk); await journal({ event: "driver-lifecycle", client: report.probe.client, phase: "exit", pid: sdk.pid, closed: report.probe.closed }); }
+      } catch (error) {
+        report.probe.failure = { stage, name: diagnosticName(error?.name) };
+        const code = diagnosticCode(error?.code);
+        if (code !== undefined) report.probe.failure.code = code;
+        throw error;
+      } finally { report.probe.closed = await close(sdk);
+        if (report.probe.failure) report.probe.diagnostics = diagnosticEvents(sdk.events); await journal({ event: "driver-lifecycle", client: report.probe.client, phase: "exit", pid: sdk.pid, closed: report.probe.closed }); }
       if (!report.probe.closed) throw new Error("S5b probe driver did not close");
     }
     for (const report of receipt.transports) {

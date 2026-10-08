@@ -427,78 +427,44 @@ export async function replayLocal(input, environment, pin) {
   }
 }
 
-export async function main(argv = process.argv.slice(2), environment = process.env, launch = null) {
-  const worker = launch !== null;
-  const opts = options(argv);
-  const input = inputs(opts);
-  if (opts["peer-capture"]) {
-    const peer = readPinnedJsonl(opts["peer-capture"], opts["peer-capture-sha256"]);
-    if (recordingTimingDebts(peer).length || peer.filter((r) => r.note === "run-end").length !== 1)
-      throw new Error("closed peer recording required");
-    const verified = verifyFrames(peer, opts["peer-capture"]);
-    if (peer.some((r) => r.note === "stream-frame" && !verified.has(r)))
-      throw new Error("peer native raw provenance missing");
-    input.fieldNormalization = createFieldNormalization(input.capture, peer);
-  }
-  const pin = JSON.parse(readFileSync(opts["build-pin"], "utf8"));
-  // Pin validation happens before starting a server as well as inside its child.
+export function verifyStrictWorker({ pin, project, launch }) {
+  if (process.ppid !== launch.serverPid)
+    throw new Error("internal worker must be the pinned fireemu child");
+  const ancestry = execFileSync(
+    "ps",
+    ["-ww", "-p", String(launch.serverPid), "-o", "ppid=,args="],
+    { encoding: "utf8" },
+  ).trim();
+  if (
+    !ancestry.startsWith(`${launch.parentPid} `) ||
+    !ancestry.includes(`${pin.path} exec --config ${launch.config} --only pubsub --`)
+  )
+    throw new Error("internal strict launch provenance refused");
+  const configBytes = pinnedBytes(launch.config, launch.configSha256);
+  const config = JSON.parse(configBytes);
+  if (
+    config.profile !== "strict" ||
+    config.bind !== "127.0.0.1" ||
+    config.daemon.pubsubPort !== 0 ||
+    config.daemon.authProject !== project
+  )
+    throw new Error("internal strict launch config refused");
+}
+
+export async function runStrictRuntime({
+  pin,
+  project,
+  clockStart,
+  argv,
+  environment = process.env,
+  workerModule,
+}) {
   validateRuntime(pin, {
     PUBSUB_EMULATOR_HOST: "127.0.0.1:1",
     FIREEMU_CONTROL_URL: "http://127.0.0.1:2/v1/",
     FIREEMU_CONTROL_TOKEN: "admission-only",
   });
   pinnedBytes(pin.path, pin.sha256, 100_000_000);
-  if (worker) {
-    if (process.ppid !== launch.serverPid)
-      throw new Error("internal worker must be the pinned fireemu child");
-    const ancestry = execFileSync(
-      "ps",
-      ["-ww", "-p", String(launch.serverPid), "-o", "ppid=,args="],
-      { encoding: "utf8" },
-    ).trim();
-    if (
-      !ancestry.startsWith(`${launch.parentPid} `) ||
-      !ancestry.includes(`${pin.path} exec --config ${launch.config} --only pubsub --`)
-    )
-      throw new Error("internal strict launch provenance refused");
-    const configBytes = pinnedBytes(launch.config, launch.configSha256);
-    const config = JSON.parse(configBytes);
-    if (
-      config.profile !== "strict" ||
-      config.bind !== "127.0.0.1" ||
-      config.daemon.pubsubPort !== 0 ||
-      config.daemon.authProject !== input.metadata.project
-    )
-      throw new Error("internal strict launch config refused");
-    input.verifiedFrames = verifyFrames(input.capture, opts.capture);
-    writeFileSync(
-      join(opts.out, "runtime-start.json"),
-      `${JSON.stringify({ serverPid: launch.serverPid, workerPid: process.pid, strictConfigSha256: launch.configSha256 })}\n`,
-      { flag: "wx", mode: 0o600 },
-    );
-    const report = await replayLocal(input, environment, pin);
-    report.inputPins = {
-      capture: opts["capture-sha256"],
-      issued: opts["issued-sha256"],
-      iam: opts["iam-sha256"],
-      ...(opts["peer-capture"] ? { peerCapture: opts["peer-capture-sha256"] } : {}),
-    };
-    report.fieldNormalization = input.fieldNormalization?.evidence ?? [];
-    report.build = {
-      head: pin.head,
-      sha256: pin.sha256,
-      profile: pin.profile,
-      rustcWrapper: pin.rustcWrapper,
-      command: pin.command,
-    };
-    report.runtime = { pinnedExecParent: true, strictConfigSha256: launch.configSha256 };
-    writeFileSync(join(opts.out, "comparison.json"), `${JSON.stringify(report, null, 2)}\n`, {
-      flag: "wx",
-      mode: 0o600,
-    });
-    return 0;
-  }
-  mkdirSync(opts.out, { mode: 0o700 });
   const temporary = mkdtempSync(join(tmpdir(), "fireemu-pubsub-compare-"));
   try {
     const config = join(temporary, "fireemu.json");
@@ -513,12 +479,12 @@ export async function main(argv = process.argv.slice(2), environment = process.e
           httpPort: 0,
           hubPort: 0,
           loggingPort: 0,
-          authProject: input.metadata.project,
-          clockStart: input.metadata.at,
+          authProject: project,
+          clockStart: clockStart,
         },
       }),
     );
-    const bootstrap = `import {readFileSync} from 'node:fs'; import {main} from ${JSON.stringify(import.meta.url)}; const launch=JSON.parse(readFileSync(0,'utf8')); process.exitCode=await main(${JSON.stringify(argv)},process.env,launch);`;
+    const bootstrap = `import {readFileSync} from 'node:fs'; import {main} from ${JSON.stringify(workerModule)}; const launch=JSON.parse(readFileSync(0,'utf8')); process.exitCode=await main(${JSON.stringify(argv)},process.env,launch);`;
     const child = spawn(
       pin.path,
       [
@@ -570,6 +536,69 @@ export async function main(argv = process.argv.slice(2), environment = process.e
     removeTree(temporary);
   }
 }
+
+export async function main(argv = process.argv.slice(2), environment = process.env, launch = null) {
+  const worker = launch !== null;
+  const opts = options(argv);
+  const input = inputs(opts);
+  if (opts["peer-capture"]) {
+    const peer = readPinnedJsonl(opts["peer-capture"], opts["peer-capture-sha256"]);
+    if (recordingTimingDebts(peer).length || peer.filter((r) => r.note === "run-end").length !== 1)
+      throw new Error("closed peer recording required");
+    const verified = verifyFrames(peer, opts["peer-capture"]);
+    if (peer.some((r) => r.note === "stream-frame" && !verified.has(r)))
+      throw new Error("peer native raw provenance missing");
+    input.fieldNormalization = createFieldNormalization(input.capture, peer);
+  }
+  const pin = JSON.parse(readFileSync(opts["build-pin"], "utf8"));
+  // Pin validation happens before starting a server as well as inside its child.
+  validateRuntime(pin, {
+    PUBSUB_EMULATOR_HOST: "127.0.0.1:1",
+    FIREEMU_CONTROL_URL: "http://127.0.0.1:2/v1/",
+    FIREEMU_CONTROL_TOKEN: "admission-only",
+  });
+  pinnedBytes(pin.path, pin.sha256, 100_000_000);
+  if (worker) {
+    verifyStrictWorker({ pin, project: input.metadata.project, launch });
+    input.verifiedFrames = verifyFrames(input.capture, opts.capture);
+    writeFileSync(
+      join(opts.out, "runtime-start.json"),
+      `${JSON.stringify({ serverPid: launch.serverPid, workerPid: process.pid, strictConfigSha256: launch.configSha256 })}\n`,
+      { flag: "wx", mode: 0o600 },
+    );
+    const report = await replayLocal(input, environment, pin);
+    report.inputPins = {
+      capture: opts["capture-sha256"],
+      issued: opts["issued-sha256"],
+      iam: opts["iam-sha256"],
+      ...(opts["peer-capture"] ? { peerCapture: opts["peer-capture-sha256"] } : {}),
+    };
+    report.fieldNormalization = input.fieldNormalization?.evidence ?? [];
+    report.build = {
+      head: pin.head,
+      sha256: pin.sha256,
+      profile: pin.profile,
+      rustcWrapper: pin.rustcWrapper,
+      command: pin.command,
+    };
+    report.runtime = { pinnedExecParent: true, strictConfigSha256: launch.configSha256 };
+    writeFileSync(join(opts.out, "comparison.json"), `${JSON.stringify(report, null, 2)}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+    return 0;
+  }
+  mkdirSync(opts.out, { mode: 0o700 });
+  return runStrictRuntime({
+    pin,
+    project: input.metadata.project,
+    clockStart: input.metadata.at,
+    argv,
+    environment,
+    workerModule: import.meta.url,
+  });
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href)
   main()
     .then((code) => {

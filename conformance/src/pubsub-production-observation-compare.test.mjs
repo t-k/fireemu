@@ -394,3 +394,55 @@ test("native frame verification requires matching raw bytes and decoded body", (
   });
   assert.equal(readPinnedBundle(d.bundle).verifiedFrames.has(2), false);
 });
+
+test("executed native verdict requires exact raw/action coverage and measured invalid-ACK window", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const source = prepared(),
+    local = prepared(),
+    cell = source.cells.find((c) => c.id === "S16"),
+    peer = local.cells.find((c) => c.id === "S16");
+  cell.debts = peer.debts = [
+    "native stream timing and causal witness requires dedicated replay; frame equality alone is insufficient",
+  ];
+  cell.frames = [{ n: 7, direction: "out", verified: true, blob: { bytes: 10 } }];
+  peer.frames = [{ direction: "out", verified: true, blob: { bytes: 10 } }];
+  cell.events = [
+    {
+      event: "stream-case-observation",
+      n: 8,
+      invalidAckObservedMs: 30001,
+      state: { incomplete: false },
+    },
+  ];
+  const witness = {
+    completed: true,
+    sourceFrames: [7],
+    actions: [{ sourceN: 8, event: "stream-case-observation", elapsedMs: 30001 }],
+    silenceMs: 30001,
+  };
+  const verdict = (proof) =>
+    compareExecutedObservation(source, local, { S16: proof }).cells.find((c) => c.id === "S16")
+      .verdict;
+  assert.equal(verdict(witness), "MATCH");
+  for (const update of [
+    { sourceFrames: [] },
+    { completed: false },
+    { actions: [] },
+    { actions: [{ sourceN: 8, event: "stream-case-observation", elapsedMs: NaN }] },
+    { actions: [{ sourceN: 8, event: "stream-cancel", elapsedMs: 30001 }] },
+    { silenceMs: 29999 },
+  ])
+    assert.equal(verdict({ ...witness, ...update }), "NOT_COMPARABLE");
+  peer.frames[0].verified = false;
+  assert.equal(verdict(witness), "NOT_COMPARABLE");
+  peer.frames[0].verified = true;
+  cell.frames[0].verified = false;
+  assert.equal(verdict(witness), "NOT_COMPARABLE");
+  cell.frames[0].verified = true;
+  peer.frames[0].blob.bytes = 11;
+  assert.equal(verdict(witness), "DIVERGES");
+  assert.equal(
+    compareExecutedObservation(source, local, { S16: witness }).localRuntimeVerified,
+    false,
+  );
+});

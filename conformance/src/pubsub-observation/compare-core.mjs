@@ -26,6 +26,18 @@ const successful = (row) =>
     ? canonicalStatus(row.response.code) === "OK"
     : row.response.status >= 200 && row.response.status < 300;
 
+export function observationOutcome(reply, method, request) {
+  const response = normalizeOutcome(reply);
+  if (
+    method === "UpdateSubscription" &&
+    response.ok === true &&
+    (typeof request.subscription?.name !== "string" ||
+      response.body?.name !== request.subscription.name)
+  )
+    response.unknown = true;
+  return response;
+}
+
 export function prepareObservation(input) {
   const {
     rows,
@@ -107,14 +119,7 @@ export function prepareObservation(input) {
       if (!Number.isFinite(row.durationMs) || row.durationMs < 0)
         throw new Error("invalid duration");
       answered.add(row.requestId);
-      const response = normalizeOutcome(row.reply);
-      if (
-        row.method === "UpdateSubscription" &&
-        response.ok === true &&
-        (typeof dispatch.request.subscription?.name !== "string" ||
-          response.body?.name !== dispatch.request.subscription.name)
-      )
-        response.unknown = true;
+      const response = observationOutcome(row.reply, row.method, dispatch.request);
       cell.exchanges.push({
         n: row.n,
         dispatchN: dispatch.n,
@@ -283,4 +288,62 @@ export function compareObservation(source, local) {
     localRuntimeVerified: false,
     parentClosureReady: false,
   };
+}
+
+export function compareExecutedObservation(source, local, nativeWitnesses) {
+  const report = compareObservation(source, local);
+  const nativeDebt =
+    "native stream timing and causal witness requires dedicated replay; frame equality alone is insufficient";
+  for (const cell of report.cells.filter((c) => c.group === "G4")) {
+    const original = source.cells.find((c) => c.id === cell.id),
+      actual = local.cells.find((c) => c.id === cell.id),
+      proof = nativeWitnesses[cell.id];
+    const actions = original.events.filter((e) =>
+      ["stream-write-end", "stream-cancel", "stream-case-observation"].includes(e.event),
+    );
+    const observation = actions.find((e) => e.event === "stream-case-observation");
+    const exact =
+      proof?.completed === true &&
+      Array.isArray(proof.actions) &&
+      proof.actions.every((a) => Number.isFinite(a.elapsedMs) && a.elapsedMs >= 0) &&
+      original.frames.length > 0 &&
+      original.frames.every((f) => f.verified) &&
+      actual?.frames.every((f) => f.verified) &&
+      isDeepStrictEqual(
+        proof.sourceFrames,
+        original.frames.map((f) => f.n),
+      ) &&
+      isDeepStrictEqual(
+        proof.actions.map((a) => [a.sourceN, a.event]),
+        actions.map((a) => [a.n, a.event]),
+      ) &&
+      observation?.state?.incomplete === false &&
+      (observation.invalidAckObservedMs == null ||
+        (observation.invalidAckObservedMs >= 30000 && proof.silenceMs >= 30000));
+    if (!exact) continue;
+    cell.debts = cell.debts.filter((debt) => debt !== nativeDebt);
+    const layoutMatches =
+      original.frames.length === actual.frames.length &&
+      original.frames.every(
+        (f, i) =>
+          f.direction === actual.frames[i].direction &&
+          f.blob?.bytes === actual.frames[i].blob?.bytes,
+      );
+    cell.rows.push({
+      method: "StreamingPull",
+      transport: "grpc",
+      verdict: layoutMatches ? "MATCH" : "DIVERGES",
+      reason: layoutMatches
+        ? "actual causal actions, measured window and physical frame lengths match"
+        : "native frame direction/cardinality/physical length gap",
+    });
+    cell.verdict = aggregate(cell.rows, cell.debts);
+  }
+  report.counts = Object.fromEntries(
+    ["MATCH", "DIVERGES", "NOT_COMPARABLE"].map((v) => [
+      v,
+      report.cells.filter((c) => c.verdict === v).length,
+    ]),
+  );
+  return report;
 }

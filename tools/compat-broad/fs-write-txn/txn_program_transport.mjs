@@ -8,14 +8,20 @@ import http from 'node:http';
 import https from 'node:https';
 
 const require = createRequire(new URL('../../../conformance/package.json', import.meta.url));
-const grpc = require('@grpc/grpc-js');
-const { v1: { FirestoreClient } } = require('@google-cloud/firestore');
-if (require('@grpc/grpc-js/package.json').version !== '1.14.4' || require('@google-cloud/firestore/package.json').version !== '8.7.1') throw new Error('program dependency pin differs');
-const descriptorClient = new FirestoreClient({ projectId: 'demo-descriptors' });
-const protos = descriptorClient._protos;
-const firestore = protos.google.firestore.v1;
-const empty = protos.google.protobuf.Empty;
-const RESPONSES = { BeginTransaction: firestore.BeginTransactionResponse, GetDocument: firestore.Document, BatchGetDocuments: firestore.BatchGetDocumentsResponse, Commit: firestore.CommitResponse, RunQuery: firestore.RunQueryResponse, Rollback: empty, DeleteDocument: empty };
+let nativeDependencies;
+function loadNativeDependencies() {
+  if (nativeDependencies) return nativeDependencies;
+  const grpc = require('@grpc/grpc-js');
+  const { v1: { FirestoreClient } } = require('@google-cloud/firestore');
+  if (require('@grpc/grpc-js/package.json').version !== '1.14.4' || require('@google-cloud/firestore/package.json').version !== '8.7.1') throw new Error('program dependency pin differs');
+  const descriptorClient = new FirestoreClient({ projectId: 'demo-descriptors' });
+  const protos = descriptorClient._protos;
+  const firestore = protos.google.firestore.v1;
+  const empty = protos.google.protobuf.Empty;
+  const RESPONSES = { BeginTransaction: firestore.BeginTransactionResponse, GetDocument: firestore.Document, BatchGetDocuments: firestore.BatchGetDocumentsResponse, Commit: firestore.CommitResponse, RunQuery: firestore.RunQueryResponse, Rollback: empty, DeleteDocument: empty };
+  nativeDependencies = { grpc, descriptorClient, firestore, RESPONSES };
+  return nativeDependencies;
+}
 const REST_METHODS = ['BeginTransaction', 'GetDocument', 'BatchGetDocuments', 'Commit', 'Rollback', 'RunQuery'];
 export const MAX_BATCH_FRAMES = 16;
 export const CHANNEL_OPTIONS = Object.freeze({ 'grpc.enable_retries': 0, 'grpc.max_send_message_length': 16384, 'grpc.max_receive_message_length': 65536 });
@@ -51,6 +57,7 @@ function timestamp(value) {
 }
 
 export function validateCall(spec) {
+  const { RESPONSES } = loadNativeDependencies();
   keys(spec, ['kind', 'transport', 'target', 'projectId', 'nonce', 'ownerId', 'slug', 'documents', 'states', 'method', 'request', 'bearer', 'deadlineMs'], ['cancelAfter', 'databases', 'placements']);
   // A native query stream the call cancels itself after N frames (N within the frame cap); nothing else may carry the key.
   if (spec.cancelAfter !== undefined && (spec.method !== 'RunQuery' || spec.transport !== 'grpc' || !Number.isInteger(spec.cancelAfter) || spec.cancelAfter < 1 || spec.cancelAfter > MAX_BATCH_FRAMES)) throw new Error('program cancel differs');
@@ -198,6 +205,7 @@ export function validateCall(spec) {
 }
 
 export function serviceDefinitions() {
+  const { firestore, RESPONSES } = loadNativeDependencies();
   return Object.fromEntries(Object.entries(RESPONSES).map(([method, response]) => [method, { path: `/google.firestore.v1.Firestore/${method}`, requestStream: false, responseStream: false, requestSerialize: firestore[`${method}Request`].serialize, requestDeserialize: firestore[`${method}Request`].deserialize, responseSerialize: response.serialize, responseDeserialize: response.deserialize }]));
 }
 
@@ -298,6 +306,7 @@ async function runRest(spec, exchange) {
 
 /** The gRPC call metadata: the credential, the user project in production only, and the routing parameter. */
 export function grpcMetadata(spec) {
+  const { grpc } = loadNativeDependencies();
   const metadata = new grpc.Metadata();
   metadata.set('authorization', `Bearer ${spec.bearer}`);
   if (spec.target.kind === 'production') metadata.set('x-goog-user-project', spec.projectId);
@@ -307,6 +316,7 @@ export function grpcMetadata(spec) {
 }
 
 async function runGrpc(spec, createClientOverride) {
+  const { grpc, firestore, RESPONSES } = loadNativeDependencies();
   const production = spec.target.kind === 'production';
   const createClient = createClientOverride ?? ((endpoint, credentials, options) => new grpc.Client(endpoint, credentials, options));
   const client = createClient(production ? 'firestore.googleapis.com:443' : `${spec.target.host}:${spec.target.port}`, production ? grpc.credentials.createSsl() : grpc.credentials.createInsecure(), CHANNEL_OPTIONS);
@@ -352,7 +362,7 @@ export async function runUnary(spec, injected) {
   if (injected !== undefined && (spec.target.kind === 'production' || typeof injected !== 'function')) throw new Error('program test injection requires a local target');
   try {
     return spec.transport === 'rest' ? await runRest(spec, injected ?? httpExchange) : await runGrpc(spec, injected);
-  } finally { await descriptorClient.close(); }
+  } finally { await nativeDependencies.descriptorClient.close(); }
 }
 
 export function runtimeInfo(web = false) {

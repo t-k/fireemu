@@ -107,12 +107,18 @@ async fn unobserved_larger_native_publish_retains_the_local_decoder_boundary() {
 }
 
 async fn start_with_bridge(bridge: Option<Arc<dyn TopicDelivery>>) -> Harness {
+    start_with_bridge_and_policy(bridge, fireemu_adapter_pubsub::PagingPolicy::Strict).await
+}
+
+async fn start_with_bridge_and_policy(
+    bridge: Option<Arc<dyn TopicDelivery>>,
+    policy: fireemu_adapter_pubsub::PagingPolicy,
+) -> Harness {
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_700_000_000),
     )));
     let state = Arc::new(Mutex::new(PubSubState::new(42)));
-    let handle = PubSubHandle::new(state.clone(), clock.clone(), bridge)
-        .with_paging_policy(fireemu_adapter_pubsub::PagingPolicy::Strict);
+    let handle = PubSubHandle::new(state.clone(), clock.clone(), bridge).with_paging_policy(policy);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server_handle = handle.clone();
@@ -1324,6 +1330,148 @@ async fn redelivery_after_ack_deadline_on_virtual_clock() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn streaming_pull_initial_zero_is_strict_only_and_does_not_lease() {
+    use fireemu_adapter_pubsub::PagingPolicy::{Emulator, Strict};
+    use prost::Message as _;
+
+    // Proto3 gives this scalar no presence: omitted and explicit zero decode alike.
+    let default = pb::StreamingPullRequest::default();
+    let explicit_zero = pb::StreamingPullRequest {
+        stream_ack_deadline_seconds: 0,
+        ..Default::default()
+    };
+    assert_eq!(default.encode_to_vec(), explicit_zero.encode_to_vec());
+
+    // Nonzero controls preserve existing local behavior, not a new production contract.
+    for (policy, deadline) in [
+        (Strict, 0),
+        (Emulator, 0),
+        (Strict, -1),
+        (Strict, 1),
+        (Strict, 10),
+        (Strict, 600),
+        (Strict, 601),
+    ] {
+        let h = start_with_bridge_and_policy(None, policy).await;
+        let mut pubc = h.publisher().await;
+        let mut subc = h.subscriber().await;
+        let topic = "projects/demo-app/topics/opening-deadline";
+        let subscription = "projects/demo-app/subscriptions/opening-deadline";
+        pubc.create_topic(pb::Topic {
+            name: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        subc.create_subscription(pb::Subscription {
+            name: subscription.to_owned(),
+            topic: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let publication = pubc
+            .publish(pb::PublishRequest {
+                topic: topic.to_owned(),
+                messages: vec![msg(b"unleased-marker")],
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        tx.send(pb::StreamingPullRequest {
+            subscription: subscription.to_owned(),
+            stream_ack_deadline_seconds: deadline,
+            max_outstanding_messages: 1,
+            max_outstanding_bytes: 1024,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let opened = subc
+            .streaming_pull(tokio_stream::wrappers::ReceiverStream::new(rx))
+            .await;
+        if policy == Strict && deadline == 0 {
+            let error = match opened {
+                Err(error) => error,
+                Ok(response) => {
+                    let mut responses = response.into_inner();
+                    tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+                        .await
+                        .expect("the server terminates naturally before the local bound")
+                        .expect_err("zero opener must refuse without delivering the queued marker")
+                }
+            };
+            assert_eq!(error.code(), tonic::Code::Internal);
+            assert_eq!(error.message(), "A service error has occurred. Please retry your request. If the error persists, please report it.");
+            let pulled = subc
+                .pull(pb::PullRequest {
+                    subscription: subscription.to_owned(),
+                    max_messages: 1,
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(pulled.received_messages.len(), 1);
+            let marker = pulled.received_messages[0].message.as_ref().unwrap();
+            assert_eq!(marker.data, b"unleased-marker");
+            assert_eq!(marker.message_id, publication.message_ids[0]);
+        } else {
+            let mut responses = opened.unwrap().into_inner();
+            let delivered =
+                tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+                    .await
+                    .expect("the preserved opening delivers within the local bound")
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(delivered.received_messages.len(), 1);
+            assert_eq!(
+                delivered.received_messages[0]
+                    .message
+                    .as_ref()
+                    .unwrap()
+                    .message_id,
+                publication.message_ids[0]
+            );
+        }
+        drop(tx);
+        h.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn streaming_pull_zero_preserves_opening_validation_precedence() {
+    let h = start().await;
+    let mut subc = h.subscriber().await;
+    let empty = subc
+        .streaming_pull(tokio_stream::iter(Vec::<pb::StreamingPullRequest>::new()))
+        .await
+        .unwrap_err();
+    assert_eq!(empty.code(), tonic::Code::InvalidArgument);
+    assert_eq!(empty.message(), "streaming pull opened with no request");
+    for (subscription, expected) in [
+        ("", tonic::Code::InvalidArgument),
+        ("malformed", tonic::Code::InvalidArgument),
+        (
+            "projects/demo-app/subscriptions/missing",
+            tonic::Code::NotFound,
+        ),
+    ] {
+        let error = subc
+            .streaming_pull(tokio_stream::iter([pb::StreamingPullRequest {
+                subscription: subscription.to_owned(),
+                ..Default::default()
+            }]))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), expected, "{subscription}");
+    }
+    h.shutdown().await;
+}
+
+#[tokio::test]
 async fn streaming_pull_delivers_and_acks() {
     let h = start().await;
     let mut pubc = h.publisher().await;
@@ -1379,6 +1527,25 @@ async fn streaming_pull_delivers_and_acks() {
     .await
     .unwrap();
     drop(tx);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+            .await
+            .expect("the ACK-only follow-up closes naturally")
+            .unwrap()
+            .is_none()
+    );
+    advance(&h, LogicalDuration::from_seconds(11));
+    let after_ack = subc
+        .pull(pb::PullRequest {
+            subscription: "projects/demo-app/subscriptions/stream-sub".to_owned(),
+            max_messages: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(after_ack.received_messages.is_empty());
+    h.shutdown().await;
 }
 
 #[tokio::test]

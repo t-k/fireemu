@@ -1013,7 +1013,7 @@ async function unorderedFlowFixture({
   reverseActualDirection = false,
   outboundMutation,
   approvedComparison = false,
-  localSeconds = "200",
+  localSeconds = "100",
   localIdentityPrefix = "local",
 } = {}) {
   const { createNativeReplay } = await import("./pubsub-observation/replay-native.mjs");
@@ -1424,7 +1424,7 @@ test("approved comparison consumes executed receive and ACK guards without erasi
     pipeline: true,
     approvedComparison: true,
     order: [1, 0, 2],
-    localSeconds: "101",
+    localSeconds: "100",
     localIdentityPrefix: "actual",
   });
   const cell = matched.cells.find((c) => c.id === "S06");
@@ -1504,14 +1504,23 @@ test("executed receive requires corresponding presence and a legal decoded Times
     { seconds: "-62135596800", nanos: 0 },
     { seconds: "253402300799", nanos: 999999999 },
     { seconds: 1, nanos: 1 },
-  ])
-    await assert.doesNotReject(
-      unorderedFlowFixture({
-        pipeline: true,
-        firstMutation: (body) => {
-          body.receivedMessages[0].message.publishTime = publishTime;
-        },
-      }),
+  ]) {
+    const bindings = createBindings();
+    bindings.linkPublish(
+      { messages: [{ data: "bWFya2Vy" }] },
+      { messageIds: ["source"] },
+      { messageIds: ["local"] },
+    );
+    const source = message("source", "source-ack");
+    const local = message("local", "local-ack");
+    source.receivedMessages[0].message.publishTime = structuredClone(publishTime);
+    local.receivedMessages[0].message.publishTime = structuredClone(publishTime);
+    assert.doesNotThrow(() => matchNativeReceive(source, local, bindings));
+  }
+  for (const localSeconds of ["101", "200"])
+    await assert.rejects(
+      unorderedFlowFixture({ pipeline: true, localSeconds }),
+      /native receive semantic mismatch/,
     );
 });
 

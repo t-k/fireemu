@@ -141,7 +141,7 @@ def packet_value(*, table, source_commit, runtime, baseline_sha256, envelope_sha
             from txn_program_runner import S5B_ALL_RECOVERY_ROLES
             six = 'documentRoles' in sdk_recovery
             if six and sdk_recovery['documentRoles'] != sorted(S5B_ALL_RECOVERY_ROLES): raise ValueError('closed S5b recovery document roles required')
-            value.update(envelopeId='FS-TRANSACTION-s5b-web-sdk-retry-recovery-' + ('002' if six else '001'), recordings=1, requestsPerRecording=29 if six else 20, reserveUsd=0.01, estimatedUsdPerRecording=0.01, observationSeconds=120, recoverySeconds=120, caps={'observation': 0, 'tokenCleanup': 0, 'documentCleanup': 18 if six else 9, 'management': 10, 'credential': 1})
+            value.update(envelopeId='FS-TRANSACTION-s5b-web-sdk-retry-recovery-' + ('003' if six else '001'), recordings=1, requestsPerRecording=29 if six else 20, reserveUsd=0.01, estimatedUsdPerRecording=0.01, observationSeconds=120, recoverySeconds=120, caps={'observation': 0, 'tokenCleanup': 0, 'documentCleanup': 18 if six else 9, 'management': 10, 'credential': 1})
             value['scope'] = {**value['scope'], 'writes': 'owned-version-delete-only' if sdk_recovery['action'] == 'cleanup' else 'none', 'observationSeconds': '120', 'transports': 'grpc', 'timingSource': 'parent-wire-envelope', 'writerDeadlineSeconds': 'none'}
     return value
 

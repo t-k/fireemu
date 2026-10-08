@@ -49,7 +49,7 @@ def _same_amount(text, amount):
 
 
 def _s5b_recovery(pins):
-    return pins.get('packetName') == 's5b-web-sdk-retry' and pins.get('envelopeId') in ('FS-TRANSACTION-s5b-web-sdk-retry-recovery-001', 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-002')
+    return pins.get('packetName') == 's5b-web-sdk-retry' and pins.get('envelopeId') in ('FS-TRANSACTION-s5b-web-sdk-retry-recovery-001', 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-002', 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-003')
 
 
 def _check_scope(pins):

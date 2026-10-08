@@ -600,9 +600,10 @@ def test_s5b_recovery_packet_has_fixed_single_action_reserve_and_scope(monkeypat
     assert value['scope']['writes'] == 'owned-version-delete-only'
 
 
+@pytest.mark.parametrize('envelope', ['001', '002', '003'])
 @pytest.mark.parametrize('outcome', ['reserved', 'stopped-needs-review', 'sdk-recovery-observed'])
-def test_s5b_recovery_envelope_cannot_be_reused_under_a_fresh_packet(outcome):
-    pins = {'packetId': 'fs-transaction-s5b-web-sdk-retry-fresh', 'envelopeId': 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-001'}
+def test_s5b_recovery_envelope_cannot_be_reused_under_a_fresh_packet(outcome, envelope):
+    pins = {'packetId': 'fs-transaction-s5b-web-sdk-retry-fresh', 'envelopeId': 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-' + envelope}
     rows = [{'packetId': 'fs-transaction-s5b-web-sdk-retry-consumed', 'envelopeId': pins['envelopeId'], 'outcome': outcome}]
     with pytest.raises(ValueError, match='envelope already used'):
         cli.verify_sdk_recovery_history(rows, pins, cli.table_for('s5b-web-sdk-retry'))
@@ -624,7 +625,7 @@ def test_s5b_six_recovery_packet_binds_roles_twenty_nine_and_fresh_envelope(monk
     def packet(binding):
         return cli.packet_value(table=cli.table_for('s5b-web-sdk-retry'), source_commit='a' * 40, runtime={'webSdk': True}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-s5b-web-sdk-retry-recovery', envelope_relative='docs.local/reviews/s5b-recovery.md', sdk_recovery=binding)
     value = packet(recovery)
-    assert value['envelopeId'] == 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-002'
+    assert value['envelopeId'] == 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-003'
     assert value['requestsPerRecording'] == 29 and value['caps']['documentCleanup'] == 18
     assert value['recordings'] == 1 and value['reserveUsd'] == 0.01
     for roles in (recovery['documentRoles'][:3], recovery['documentRoles'][:-1], recovery['documentRoles'] + ['browser_probe'], list(reversed(recovery['documentRoles']))):
@@ -643,7 +644,7 @@ def test_s5b_recovery_snapshot_must_match_packet_shape_before_credentials(six_ro
     with pytest.raises(ValueError, match='packet and snapshot'): cli.verify_s5b_recovery_snapshot(snapshot, {'action': 'cleanup', **mismatched})
 
 
-@pytest.mark.parametrize('field', ['requestsPerRecording', 'caps', 'envelopeId', 'documentRoles'])
+@pytest.mark.parametrize('field', ['requestsPerRecording', 'caps', 'envelopeId', 'historicalEnvelopeId', 'documentRoles'])
 def test_s5b_six_packet_tamper_cannot_change_correlated_bounds(tmp_path, monkeypatch, field):
     from test_txn_program_runner import s5b_six_recovery_fixture
     monkeypatch.setattr(cli, 'verify_runtime', lambda _: None)
@@ -655,6 +656,7 @@ def test_s5b_six_packet_tamper_cannot_change_correlated_bounds(tmp_path, monkeyp
     if field == 'requestsPerRecording': value[field] = 20
     if field == 'caps': value[field]['documentCleanup'] = 9
     if field == 'envelopeId': value[field] = 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-001'
+    if field == 'historicalEnvelopeId': value['envelopeId'] = 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-002'
     if field == 'documentRoles': value['sdkRecovery'][field] = value['sdkRecovery'][field][:-1]
     packet = tmp_path/'packet.json'; packet.write_text(json.dumps(value))
     with pytest.raises(ValueError): cli.load_packet(packet, cli.sha(packet.read_bytes()), baseline, envelope, table=table, source_commit='a' * 40, packet_relative='docs.local/reviews/s5b-recovery.json', envelope_relative=value['envelopePath'])

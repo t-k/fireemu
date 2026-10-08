@@ -99,9 +99,11 @@ export function installWireGuard(
       requestBody = await effective.clone().text();
       if (Buffer.byteLength(requestBody) > TRANSACTION_BODY_LIMIT)
         throw new Error("transaction admission body is capped");
-      effective = new Request(effective, { body: requestBody });
+      effective = new Request(effective, { method: effective.method, body: requestBody });
     }
-    const url = new URL(effective?.url ?? (typeof input === "string" || input instanceof URL ? input : input.url));
+    const url = new URL(
+      effective?.url ?? (typeof input === "string" || input instanceof URL ? input : input.url),
+    );
     const requestHeaders = input instanceof Request ? input.headers : undefined;
     const headers = new Headers(effective?.headers ?? init.headers ?? requestHeaders ?? {});
     const record = ledger.admit(url.hostname, url.pathname, headers.get("authorization"));
@@ -113,7 +115,8 @@ export function installWireGuard(
     const response = effective ? await fetchImpl(effective) : await fetchImpl(input, init);
     if (onTransaction && method) {
       try {
-        requestBody ??= init.body ?? (input instanceof Request ? await input.clone().text() : undefined);
+        requestBody ??=
+          init.body ?? (input instanceof Request ? await input.clone().text() : undefined);
         const body = await boundedResponse(response.clone());
         onTransaction({
           n: record.n,
@@ -145,9 +148,12 @@ export function installWireGuard(
           status,
           code;
         const collect = (chunks, chunk, encoding, outbound) => {
-          const bytes = beforeTransaction && outbound
-            ? Buffer.from(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding))
-            : Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
+          const bytes =
+            beforeTransaction && outbound
+              ? Buffer.from(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding))
+              : Buffer.isBuffer(chunk)
+                ? chunk
+                : Buffer.from(chunk, encoding);
           if (outbound) sentBytes += bytes.length;
           else receivedBytes += bytes.length;
           if ((outbound ? sentBytes : receivedBytes) <= TRANSACTION_BODY_LIMIT) chunks.push(bytes);
@@ -159,7 +165,12 @@ export function installWireGuard(
         let admissionStarted = false;
         stream.write = (chunk, ...args) => {
           if (admissionStarted) throw new Error("transaction payload already ended");
-          const snapshot = collect(sent, chunk, typeof args[0] === "string" ? args[0] : undefined, true);
+          const snapshot = collect(
+            sent,
+            chunk,
+            typeof args[0] === "string" ? args[0] : undefined,
+            true,
+          );
           if (beforeTransaction) {
             if (sentBytes > TRANSACTION_BODY_LIMIT) {
               stream.destroy(new Error("transaction admission body capped"));
@@ -172,21 +183,28 @@ export function installWireGuard(
         };
         stream.end = (chunk, ...args) => {
           if (chunk != null && typeof chunk !== "function") {
-            const snapshot = collect(sent, chunk, typeof args[0] === "string" ? args[0] : undefined, true);
+            const snapshot = collect(
+              sent,
+              chunk,
+              typeof args[0] === "string" ? args[0] : undefined,
+              true,
+            );
             if (beforeTransaction) chunk = snapshot;
           }
           if (beforeTransaction) {
             if (admissionStarted) throw new Error("transaction payload already ended");
             admissionStarted = true;
-            Promise.resolve().then(async () => {
-              if (sentBytes > TRANSACTION_BODY_LIMIT)
-                throw new Error("transaction admission body capped");
-              const requestBody = decodeGrpc(method, Buffer.concat(sent), false);
-              await beforeTransaction({ method, request: requestBody, record });
-              if (stream.destroyed) throw new Error("transaction stream closed before admission");
-              for (const queued of pendingWrites) write(...queued);
-              end(chunk, ...args);
-            }).catch(() => stream.destroy(new Error("transaction admission refused")));
+            Promise.resolve()
+              .then(async () => {
+                if (sentBytes > TRANSACTION_BODY_LIMIT)
+                  throw new Error("transaction admission body capped");
+                const requestBody = decodeGrpc(method, Buffer.concat(sent), false);
+                await beforeTransaction({ method, request: requestBody, record });
+                if (stream.destroyed) throw new Error("transaction stream closed before admission");
+                for (const queued of pendingWrites) write(...queued);
+                end(chunk, ...args);
+              })
+              .catch(() => stream.destroy(new Error("transaction admission refused")));
             return stream;
           }
           return end(chunk, ...args);
@@ -393,63 +411,116 @@ export function installSocketGuard(ledger) {
 /** Fixed S5b dispatches use the driver's existing command pipe for parent acknowledgments. */
 export function createS5bAdmission(config, emit) {
   const admitted = config.s5bAdmission;
-  if (config.mode !== "production" || config.web?.projectId !== "fireemu-oracle-query" ||
-      !admitted || Object.keys(admitted).sort().join(",") !== "authorized,nonce,ownerId,probe,transport" ||
-      admitted.authorized !== true || !/^[a-f0-9]{32}$/.test(admitted.nonce) ||
-      !/^[a-f0-9]{32}$/.test(admitted.ownerId) || !["node", "browser"].includes(admitted.transport) ||
-      typeof admitted.probe !== "boolean" || config.wireCap !== (admitted.probe ? 1 : 6) ||
-      config.connectionCap !== 20)
+  if (
+    config.mode !== "production" ||
+    config.web?.projectId !== "fireemu-oracle-query" ||
+    !admitted ||
+    Object.keys(admitted).sort().join(",") !== "authorized,nonce,ownerId,probe,transport" ||
+    admitted.authorized !== true ||
+    !/^[a-f0-9]{32}$/.test(admitted.nonce) ||
+    !/^[a-f0-9]{32}$/.test(admitted.ownerId) ||
+    !["node", "browser"].includes(admitted.transport) ||
+    typeof admitted.probe !== "boolean" ||
+    config.wireCap !== (admitted.probe ? 1 : 6) ||
+    config.connectionCap !== 20
+  )
     throw new Error("S5b fixed production admission differs");
   const database = "projects/fireemu-oracle-query/databases/(default)";
   const prefix = `${database}/documents/conf_txn/s5b_${admitted.nonce}_${admitted.transport}_`;
-  const names = new Set(admitted.probe ? [`${prefix}probe`] : [`${prefix}control`, `${prefix}conflict`]);
+  const names = new Set(
+    admitted.probe ? [`${prefix}probe`] : [`${prefix}control`, `${prefix}conflict`],
+  );
   const pending = new Map();
   let closed = false;
   let sequence = 0;
-  const refuse = (message) => { closed = true; throw new Error(message); };
+  const refuse = (message) => {
+    closed = true;
+    throw new Error(message);
+  };
   return {
     async beforeTransaction({ method, request, record }) {
-      const expectedPath = admitted.transport === "node"
-        ? `/google.firestore.v1.Firestore/${method}`
-        : `/v1/${database}/documents:${method === "BatchGetDocuments" ? "batchGet" : "commit"}`;
-      if (record.path !== expectedPath || closed || record.host !== "firestore.googleapis.com" || record.bearer !== null ||
-          record.n !== sequence + 1 || record.n > config.wireCap ||
-          transactionMethod(record.path) !== method || request.transaction || request.newTransaction ||
-          request.readTime || (request.database !== undefined && request.database !== database))
+      const expectedPath =
+        admitted.transport === "node"
+          ? `/google.firestore.v1.Firestore/${method}`
+          : `/v1/${database}/documents:${method === "BatchGetDocuments" ? "batchGet" : "commit"}`;
+      if (
+        record.path !== expectedPath ||
+        closed ||
+        record.host !== "firestore.googleapis.com" ||
+        record.bearer !== null ||
+        record.n !== sequence + 1 ||
+        record.n > config.wireCap ||
+        transactionMethod(record.path) !== method ||
+        request.transaction ||
+        request.newTransaction ||
+        request.readTime ||
+        (request.database !== undefined && request.database !== database)
+      )
         refuse("S5b dispatch scope differs");
       if (method === "BatchGetDocuments") {
-        if (Object.keys(request).some((key) => !["documents", "database"].includes(key)) ||
-            !Array.isArray(request.documents) || request.documents.length !== 1 || !names.has(request.documents[0]))
+        if (
+          Object.keys(request).some((key) => !["documents", "database"].includes(key)) ||
+          !Array.isArray(request.documents) ||
+          request.documents.length !== 1 ||
+          !names.has(request.documents[0])
+        )
           refuse("S5b exact read name differs");
       } else if (method === "Commit" && !admitted.probe) {
-        if (Object.keys(request).some((key) => !["writes", "database"].includes(key)) ||
-            !Array.isArray(request.writes) || request.writes.length !== 1)
+        if (
+          Object.keys(request).some((key) => !["writes", "database"].includes(key)) ||
+          !Array.isArray(request.writes) ||
+          request.writes.length !== 1
+        )
           refuse("S5b exact write count differs");
-        const write = request.writes[0], update = write.update, fields = update?.fields;
+        const write = request.writes[0],
+          update = write.update,
+          fields = update?.fields;
         const caseId = update?.name?.slice(prefix.length);
-        if (!names.has(update?.name) || Object.keys(update ?? {}).sort().join(",") !== "fields,name" || Object.keys(write).sort().join(",") !== "currentDocument,update" ||
-            Object.keys(write.currentDocument ?? {}).join(",") !== "updateTime" ||
-            !write.currentDocument.updateTime ||
-            (typeof write.currentDocument.updateTime === "string"
-              ? !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(write.currentDocument.updateTime)
-              : typeof write.currentDocument.updateTime !== "object" || Object.keys(write.currentDocument.updateTime).some((key) => !["seconds", "nanos"].includes(key)) || !/^-?\d+$/.test(String(write.currentDocument.updateTime.seconds)) || !Number.isInteger(write.currentDocument.updateTime.nanos ?? 0) || (write.currentDocument.updateTime.nanos ?? 0) < 0 || (write.currentDocument.updateTime.nanos ?? 0) >= 1_000_000_000) || !fields ||
-            Object.keys(fields).sort().join(",") !== "case,nonce,owner,value" ||
-            Object.values(fields).some((field) => !field || Object.keys(field).length !== 1) ||
-            fields.owner?.stringValue !== admitted.ownerId || fields.nonce?.stringValue !== admitted.nonce ||
-            fields.case?.stringValue !== caseId || String(fields.value?.integerValue) !== "3")
+        if (
+          !names.has(update?.name) ||
+          Object.keys(update ?? {})
+            .sort()
+            .join(",") !== "fields,name" ||
+          Object.keys(write).sort().join(",") !== "currentDocument,update" ||
+          Object.keys(write.currentDocument ?? {}).join(",") !== "updateTime" ||
+          !write.currentDocument.updateTime ||
+          (typeof write.currentDocument.updateTime === "string"
+            ? !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/.test(
+                write.currentDocument.updateTime,
+              )
+            : typeof write.currentDocument.updateTime !== "object" ||
+              Object.keys(write.currentDocument.updateTime).some(
+                (key) => !["seconds", "nanos"].includes(key),
+              ) ||
+              !/^-?\d+$/.test(String(write.currentDocument.updateTime.seconds)) ||
+              !Number.isInteger(write.currentDocument.updateTime.nanos ?? 0) ||
+              (write.currentDocument.updateTime.nanos ?? 0) < 0 ||
+              (write.currentDocument.updateTime.nanos ?? 0) >= 1_000_000_000) ||
+          !fields ||
+          Object.keys(fields).sort().join(",") !== "case,nonce,owner,value" ||
+          Object.values(fields).some((field) => !field || Object.keys(field).length !== 1) ||
+          fields.owner?.stringValue !== admitted.ownerId ||
+          fields.nonce?.stringValue !== admitted.nonce ||
+          fields.case?.stringValue !== caseId ||
+          String(fields.value?.integerValue) !== "3"
+        )
           refuse("S5b write ownership or version differs");
       } else refuse("S5b probe cannot commit or resume");
       sequence += 1;
       const id = `s5b-${sequence}`;
       await new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
-          pending.delete(id); closed = true;
+          pending.delete(id);
+          closed = true;
           reject(new Error("S5b parent acknowledgment missing"));
         }, 13_000);
         pending.set(id, { resolve, reject, timer });
-        try { emit({ event: "transaction-dispatch", id, method, request, record }); }
-        catch {
-          clearTimeout(timer); pending.delete(id); closed = true;
+        try {
+          emit({ event: "transaction-dispatch", id, method, request, record });
+        } catch {
+          clearTimeout(timer);
+          pending.delete(id);
+          closed = true;
           reject(new Error("S5b dispatch IPC failed"));
         }
       });
@@ -460,7 +531,10 @@ export function createS5bAdmission(config, emit) {
       if (!waiting) refuse("S5b unknown acknowledgment");
       pending.delete(command.id);
       clearTimeout(waiting.timer);
-      if (Object.keys(command).sort().join(",") !== "authorized,id,op" || command.authorized !== true) {
+      if (
+        Object.keys(command).sort().join(",") !== "authorized,id,op" ||
+        command.authorized !== true
+      ) {
         closed = true;
         waiting.reject(new Error("S5b parent admission refused"));
       } else waiting.resolve();

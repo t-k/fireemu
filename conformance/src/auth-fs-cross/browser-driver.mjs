@@ -118,11 +118,21 @@ async function main() {
     response.end(entry.body ?? readFileSync(entry.file));
   });
   const fixedPort = admission ? Number(new URL(config.origin).port) : 0;
-  if (admission && (!/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(config.origin ?? "") || fixedPort > 65535)) throw new Error("S5b fixed browser origin differs");
-  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(fixedPort, "127.0.0.1", resolve); });
+  if (
+    admission &&
+    (!/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(config.origin ?? "") || fixedPort > 65535)
+  )
+    throw new Error("S5b fixed browser origin differs");
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(fixedPort, "127.0.0.1", resolve);
+  });
   const origin = `http://127.0.0.1:${server.address().port}`;
 
-  const browser = await chromium.launch({ headless: true, ...(admission ? { executablePath: config.chromiumExecutable } : {}) });
+  const browser = await chromium.launch({
+    headless: true,
+    ...(admission ? { executablePath: config.chromiumExecutable } : {}),
+  });
   const context = await browser.newContext();
   const page = await context.newPage();
   let closing = false;
@@ -187,7 +197,11 @@ async function main() {
       if (admission) {
         if (typeof body !== "string" || Buffer.byteLength(body) > TRANSACTION_BODY_LIMIT)
           throw new Error("S5b browser request missing or capped");
-        await admission.beforeTransaction({ method: transactionMethod(parsed.pathname), request: JSON.parse(body), record });
+        await admission.beforeTransaction({
+          method: transactionMethod(parsed.pathname),
+          request: JSON.parse(body),
+          record,
+        });
       }
       if (capture && transactionMethod(parsed.pathname))
         capturedRequests.set(request, {
@@ -269,8 +283,18 @@ async function main() {
   if (admission) {
     const browserSession = await browser.newBrowserCDPSession();
     const processes = await browserSession.send("SystemInfo.getProcessInfo");
-    if (!Array.isArray(processes.processInfo) || processes.processInfo.length > 20 || processes.processInfo.some((value) => !Number.isInteger(value.id) || value.id < 1)) throw new Error("S5b bounded browser process identities missing");
-    emit({ event: "browser-processes", origin, driverPid: process.pid, processes: processes.processInfo.map(({ id, type }) => ({ pid: id, type })) });
+    if (
+      !Array.isArray(processes.processInfo) ||
+      processes.processInfo.length > 20 ||
+      processes.processInfo.some((value) => !Number.isInteger(value.id) || value.id < 1)
+    )
+      throw new Error("S5b bounded browser process identities missing");
+    emit({
+      event: "browser-processes",
+      origin,
+      driverPid: process.pid,
+      processes: processes.processInfo.map(({ id, type }) => ({ pid: id, type })),
+    });
     await browserSession.detach();
   }
 

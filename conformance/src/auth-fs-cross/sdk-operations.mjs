@@ -116,7 +116,9 @@ export function createOperations({
 
   async function transact({ name, reads, write, pauseAttempts = 1, maxAttempts }) {
     if (maxAttempts !== undefined && maxAttempts !== 2)
-      throw Object.assign(new Error("transaction maxAttempts must be 2 when supplied"), { code: "harness" });
+      throw Object.assign(new Error("transaction maxAttempts must be 2 when supplied"), {
+        code: "harness",
+      });
     let attempts = 0;
     let committed;
     try {
@@ -132,9 +134,10 @@ export function createOperations({
         transaction.set(fb.doc(db, write.path), write.data);
         return attempts;
       };
-      committed = maxAttempts === undefined
-        ? await fb.runTransaction(db, update)
-        : await fb.runTransaction(db, update, { maxAttempts });
+      committed =
+        maxAttempts === undefined
+          ? await fb.runTransaction(db, update)
+          : await fb.runTransaction(db, update, { maxAttempts });
     } catch (error) {
       // A failed transaction still reports how many times the update function ran.
       throw Object.assign(error, { attempts });

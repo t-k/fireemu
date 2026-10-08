@@ -14,7 +14,12 @@ export const DRIVERS = {
 
 export function spawnSdk(
   config,
-  { timeoutMs = 60_000, spawnImpl = spawn, driver = DRIVERS["node-sdk"], onTransactionAdmission } = {},
+  {
+    timeoutMs = 60_000,
+    spawnImpl = spawn,
+    driver = DRIVERS["node-sdk"],
+    onTransactionAdmission,
+  } = {},
 ) {
   const child = spawnImpl(process.execPath, [driver], {
     env: { ...process.env, AFC_SDK_CONFIG: JSON.stringify(config) },
@@ -38,14 +43,22 @@ export function spawnSdk(
       const event = JSON.parse(line);
       deliver(event);
       if (event.event === "transaction-dispatch") {
-        Promise.resolve().then(() => onTransactionAdmission?.(event)).then(
-          (authorized) => {
-            if (!exited) child.stdin.write(`${JSON.stringify({ op: "transactionAdmission", id: event.id, authorized: authorized === true })}\n`);
-          },
-          () => {
-            if (!exited) child.stdin.write(`${JSON.stringify({ op: "transactionAdmission", id: event.id, authorized: false })}\n`);
-          },
-        );
+        Promise.resolve()
+          .then(() => onTransactionAdmission?.(event))
+          .then(
+            (authorized) => {
+              if (!exited)
+                child.stdin.write(
+                  `${JSON.stringify({ op: "transactionAdmission", id: event.id, authorized: authorized === true })}\n`,
+                );
+            },
+            () => {
+              if (!exited)
+                child.stdin.write(
+                  `${JSON.stringify({ op: "transactionAdmission", id: event.id, authorized: false })}\n`,
+                );
+            },
+          );
       }
     } catch {
       deliver({ event: "unparsable-output", length: line.length });

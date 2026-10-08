@@ -272,7 +272,7 @@ export const WAIVED_FIXTURES = [
  */
 export const KNOWN_UNCONNECTED = {
   "auth-fs-cross-stage2": {
-    currentScheme2: "e25a081c8e4bb08abe2852357ec2610b7c89518d9512ce94d3474ade2e6cb9bb",
+    currentScheme2: "a9fde65ea34a9079af75ca37839d8e215a1f78d949a29b1f839c800f3c225b08",
     reason:
       "the stop-time cleanup of stage2-session.mjs changed after the rows were recorded (3a7777242); no hop is written until a stage-2 rerun is planned and the owner decides on it",
   },

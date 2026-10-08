@@ -10,7 +10,14 @@
 //   operations are those of sdk-operations.mjs, shared with the browser page.
 
 // Must stay the first import: it installs the wire guard before Firebase loads.
-import { config, emit, local, sha256, tokenOwner, transactionAdmission } from "./sdk-driver-wire.mjs";
+import {
+  config,
+  emit,
+  local,
+  sha256,
+  tokenOwner,
+  transactionAdmission,
+} from "./sdk-driver-wire.mjs";
 
 import { createInterface } from "node:readline";
 

@@ -936,6 +936,8 @@ enum Attribute {
     Timestamp {
         seconds: i64,
         nanos: u32,
+        /// Only the observed canonical whole-second spelling has a known mapped representation.
+        mapped_text: Option<String>,
     },
 }
 
@@ -952,7 +954,7 @@ impl Attribute {
             }
             Self::Text(length) | Self::Bytes(length) => field_len(*length),
             Self::String(value) => field_len(value.len()),
-            Self::Timestamp { seconds, nanos } => {
+            Self::Timestamp { seconds, nanos, .. } => {
                 // A negative int64 is ten bytes on the wire; zero is not written at all.
                 let seconds_len = match seconds.cmp(&0) {
                     std::cmp::Ordering::Less => 1 + 10,
@@ -1017,6 +1019,64 @@ pub fn request_size(channel: &str, events: &[ParsedEvent]) -> usize {
             .iter()
             .map(|event| field_len(event.any_size()))
             .sum::<usize>()
+}
+
+/// The mapped Pub/Sub request size for a ready channel, separate from CloudEvent/Any size.
+///
+/// String values, canonical whole-second timestamps and integer zero cover the observed representation
+/// families. Other types, spellings, empty strings or colliding map keys remain unknown. This helper
+/// does not change publish admission: the upper-payload metric and refusal precedence are unresolved.
+#[must_use]
+pub fn mapped_publish_request_size(channel: &Lookup, events: &[ParsedEvent]) -> Option<usize> {
+    let Lookup::Ready(view) = channel else {
+        return None;
+    };
+    if view.pubsub_topic.is_empty() {
+        return None;
+    }
+    let mut request = field_len(view.pubsub_topic.len());
+    for event in events {
+        let fields = &event.fields;
+        let Data::Text(data) = &fields.data else {
+            return None;
+        };
+        if data.is_empty() {
+            return None;
+        }
+        let mut message = field_len(data.len());
+        for (key, value) in [
+            ("ce-id", &fields.id),
+            ("ce-source", &fields.source),
+            ("ce-specversion", &fields.spec_version),
+            ("ce-type", &fields.event_type),
+        ] {
+            if value.is_empty() {
+                return None;
+            }
+            message += field_len(field_len(key.len()) + field_len(value.len()));
+        }
+        for (index, (key, value)) in fields.attributes.iter().enumerate() {
+            if matches!(key.as_str(), "id" | "source" | "specversion" | "type")
+                || fields.attributes[..index]
+                    .iter()
+                    .any(|(previous, _)| previous == key)
+            {
+                return None;
+            }
+            let text = match value {
+                Attribute::String(text) if !text.is_empty() => text.as_str(),
+                Attribute::Timestamp {
+                    mapped_text: Some(text),
+                    ..
+                } => text.as_str(),
+                Attribute::Integer(0) => "0",
+                _ => return None,
+            };
+            message += field_len(field_len("ce-".len() + key.len()) + field_len(text.len()));
+        }
+        request += field_len(message);
+    }
+    Some(request)
 }
 
 fn publish(place: &Place, channel: &str, body: &[u8], world: &World<'_>) -> Outcome {
@@ -1469,7 +1529,12 @@ fn parse_attribute(path: &str, value: &Ordered) -> Result<Attribute, Outcome> {
             },
             ("ce_bytes", other) => return Err(wrong_type(&at, "TYPE_BYTES", other)),
             ("ce_timestamp", Ordered::String(text)) => match timestamp(text) {
-                Some((seconds, nanos)) => Attribute::Timestamp { seconds, nanos },
+                Some((seconds, nanos)) => Attribute::Timestamp {
+                    seconds,
+                    nanos,
+                    mapped_text: (nanos == 0 && text.len() == 20 && text.ends_with('Z'))
+                        .then(|| text.clone()),
+                },
                 None => {
                     return Err(invalid_value(
                         &at,
@@ -2652,7 +2717,309 @@ mod tests {
             })
     }
 
+    fn mapped_channel() -> Lookup {
+        let channels = ChannelStore::default();
+        let name = "projects/demo-eventarc-shapes1/locations/us-central1/channels/feabcdefabcdef-w";
+        channels.declare(name, 0);
+        channels.lookup(name, 0)
+    }
+
+    fn parsed_samples(samples: &[Sample]) -> Vec<ParsedEvent> {
+        samples
+            .iter()
+            .enumerate()
+            .map(|(index, sample)| {
+                parse_event(index, &parse(sample_json(sample).as_bytes()).unwrap()).unwrap()
+            })
+            .collect()
+    }
+
+    // Evidence-derived, same-width public-safe metadata; the target is CE wire size, not HTTP size.
+    fn mapped_family(count: usize, epoch: bool, probe: bool, target: usize) -> Vec<Sample> {
+        let mut samples: Vec<_> = (0..count)
+            .map(|index| {
+                let mut attributes = vec![
+                    (
+                        "datacontenttype".to_owned(),
+                        Value2::Text("application/json".to_owned()),
+                    ),
+                    (
+                        "time".to_owned(),
+                        Value2::Timestamp(if epoch { 0 } else { 1_791_331_200 }, 0),
+                    ),
+                ];
+                if probe {
+                    attributes.push(("probe".to_owned(), Value2::Integer(0)));
+                }
+                Sample {
+                    id: format!("abcdefabcdef-02-{index:03}"),
+                    source: "//example/w/abcdefabcdef".to_owned(),
+                    spec: "1.0".to_owned(),
+                    kind: "example.w.abcdefabcdef".to_owned(),
+                    attributes,
+                    data: Some(Ok("\"\"".to_owned())),
+                }
+            })
+            .collect();
+        let Lookup::Ready(view) = mapped_channel() else {
+            panic!("ready channel");
+        };
+        let mut padding = 0_isize;
+        for _ in 0..3 {
+            padding +=
+                target as isize - request_size(&view.name, &parsed_samples(&samples)) as isize;
+            let padding = usize::try_from(padding).unwrap();
+            for (index, sample) in samples.iter_mut().enumerate() {
+                sample.data = Some(Ok(serde_json::to_string(
+                    &"x".repeat(padding / count + usize::from(index < padding % count)),
+                )
+                .unwrap()));
+            }
+        }
+        assert_eq!(request_size(&view.name, &parsed_samples(&samples)), target);
+        samples
+    }
+
+    // Explicit protobuf field tags provide an encoder independent of field_len and the metric helper.
+    fn mapped_wire(topic: &str, samples: &[Sample]) -> Vec<u8> {
+        let mut request = Vec::new();
+        put_bytes(&mut request, 1, topic.as_bytes());
+        for sample in samples {
+            let mut message = Vec::new();
+            let Some(Ok(data)) = &sample.data else {
+                panic!("text data");
+            };
+            put_bytes(&mut message, 1, data.as_bytes());
+            let mut attributes = vec![
+                ("ce-id".to_owned(), sample.id.clone()),
+                ("ce-source".to_owned(), sample.source.clone()),
+                ("ce-specversion".to_owned(), sample.spec.clone()),
+                ("ce-type".to_owned(), sample.kind.clone()),
+            ];
+            for (key, value) in &sample.attributes {
+                let value = match value {
+                    Value2::Text(text) => text.clone(),
+                    Value2::Timestamp(seconds, 0) => rfc3339(*seconds, 0),
+                    Value2::Integer(0) => "0".to_owned(),
+                    _ => panic!("unsupported mapped test value"),
+                };
+                attributes.push((format!("ce-{key}"), value));
+            }
+            for (key, value) in attributes {
+                let mut entry = Vec::new();
+                put_bytes(&mut entry, 1, key.as_bytes());
+                put_bytes(&mut entry, 2, value.as_bytes());
+                put_bytes(&mut message, 2, &entry);
+            }
+            put_bytes(&mut request, 2, &message);
+        }
+        request
+    }
+
+    #[test]
+    fn mapped_publish_size_reconstructs_the_three_observed_shapes() {
+        let channel = mapped_channel();
+        let Lookup::Ready(view) = &channel else {
+            panic!("ready channel");
+        };
+        assert_eq!(view.pubsub_topic.len(), 87);
+        for (count, epoch, probe, expected) in [
+            (99, false, false, 10_083_108),
+            (100, true, false, 10_083_721),
+            (100, false, true, 10_083_321),
+        ] {
+            let samples = mapped_family(count, epoch, probe, 10_081_812);
+            let parsed = parsed_samples(&samples);
+            assert_eq!(
+                mapped_publish_request_size(&channel, &parsed),
+                Some(expected)
+            );
+            assert_eq!(mapped_wire(&view.pubsub_topic, &samples).len(), expected);
+        }
+    }
+
+    #[test]
+    fn mapped_publish_size_reconstructs_numeric_refusals_and_the_boundary_prediction() {
+        let channel = mapped_channel();
+        for (ce, expected) in [
+            (10_475_028, 10_476_337),
+            (10_212_884, 10_214_193),
+            (10_081_812, 10_083_121),
+            (10_016_276, 10_017_585),
+            (9_999_892, 10_001_201),
+            (9_998_868, 10_000_177),
+            (9_998_740, 10_000_049),
+            (9_998_708, 10_000_017),
+            (9_998_692, 10_000_001),
+            // Accepted native answers report no internal size; this is the supported model's prediction.
+            (9_998_691, 10_000_000),
+        ] {
+            let samples = mapped_family(100, false, false, ce);
+            assert_eq!(
+                mapped_publish_request_size(&channel, &parsed_samples(&samples)),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn mapped_publish_size_keeps_unobserved_representations_unknown() {
+        let channel = mapped_channel();
+        let mut sample = mapped_family(1, false, false, 1024).pop().unwrap();
+        for value in [
+            Value2::Boolean(false),
+            Value2::Boolean(true),
+            Value2::Integer(1),
+            Value2::Uri("urn:example:test".to_owned()),
+            Value2::UriRef("test".to_owned()),
+            Value2::Bytes(vec![0]),
+            Value2::Timestamp(0, 1),
+            Value2::Text(String::new()),
+        ] {
+            let mut unsupported = sample.clone();
+            unsupported.attributes.push(("extension".to_owned(), value));
+            assert_eq!(
+                mapped_publish_request_size(&channel, &parsed_samples(&[unsupported])),
+                None
+            );
+        }
+        let original = sample_json(&sample);
+        for spelling in ["1970-01-01T00:00:00.000Z", "1970-01-01T00:00:00+00:00"] {
+            let value = original.replace("2026-10-07T00:00:00Z", spelling);
+            let parsed = parse_event(0, &parse(value.as_bytes()).unwrap()).unwrap();
+            assert_eq!(mapped_publish_request_size(&channel, &[parsed]), None);
+        }
+        for key in ["id", "source", "specversion", "type"] {
+            let mut colliding = sample.clone();
+            colliding
+                .attributes
+                .push((key.to_owned(), Value2::Text("extension".to_owned())));
+            assert_eq!(
+                mapped_publish_request_size(&channel, &parsed_samples(&[colliding])),
+                None
+            );
+        }
+        let mut duplicate = sample.clone();
+        duplicate.attributes.push(duplicate.attributes[0].clone());
+        assert_eq!(
+            mapped_publish_request_size(&channel, &parsed_samples(&[duplicate])),
+            None
+        );
+        for field in 0..4 {
+            let mut missing = sample.clone();
+            match field {
+                0 => missing.id.clear(),
+                1 => missing.source.clear(),
+                2 => missing.spec.clear(),
+                _ => missing.kind.clear(),
+            }
+            assert_eq!(
+                mapped_publish_request_size(&channel, &parsed_samples(&[missing])),
+                None
+            );
+        }
+        sample.data = Some(Ok(String::new()));
+        assert_eq!(
+            mapped_publish_request_size(&channel, &parsed_samples(&[sample.clone()])),
+            None
+        );
+        sample.data = None;
+        assert_eq!(
+            mapped_publish_request_size(&channel, &parsed_samples(&[sample.clone()])),
+            None
+        );
+        sample.data = Some(Err(vec![0]));
+        assert_eq!(
+            mapped_publish_request_size(&channel, &parsed_samples(&[sample])),
+            None
+        );
+        let Lookup::Ready(view) = channel else {
+            panic!("ready channel");
+        };
+        for state in [
+            Lookup::Absent,
+            Lookup::Creating(view.clone()),
+            Lookup::Deleting(view),
+        ] {
+            assert_eq!(mapped_publish_request_size(&state, &[]), None);
+        }
+        let Lookup::Ready(mut view) = mapped_channel() else {
+            panic!("ready channel");
+        };
+        view.pubsub_topic.clear();
+        assert_eq!(mapped_publish_request_size(&Lookup::Ready(view), &[]), None);
+    }
+
+    #[test]
+    fn mapped_publish_size_counts_utf8_and_length_prefix_boundaries() {
+        let channel = mapped_channel();
+        let Lookup::Ready(view) = &channel else {
+            panic!("ready channel");
+        };
+        let mut sample = mapped_family(1, false, false, 1024).pop().unwrap();
+        sample.id = "é".repeat(64);
+        sample
+            .attributes
+            .push(("é".repeat(64), Value2::Text("🙂".repeat(32))));
+        for bytes in [2, 126, 127, 128, 16_383, 16_384] {
+            sample.data = Some(Ok(serde_json::to_string(&"x".repeat(bytes - 2)).unwrap()));
+            let samples = [sample.clone()];
+            assert_eq!(
+                mapped_publish_request_size(&channel, &parsed_samples(&samples)),
+                Some(mapped_wire(&view.pubsub_topic, &samples).len())
+            );
+        }
+    }
+
+    fn mapped_sample() -> impl Strategy<Value = Sample> {
+        (
+            ".{1,40}",
+            ".{1,40}",
+            ".{1,40}",
+            ".{1,40}",
+            ".{0,2000}",
+            any::<bool>(),
+            any::<bool>(),
+        )
+            .prop_map(|(id, source, spec, kind, data, epoch, probe)| {
+                let mut attributes = vec![
+                    (
+                        "datacontenttype".to_owned(),
+                        Value2::Text("application/json".to_owned()),
+                    ),
+                    (
+                        "time".to_owned(),
+                        Value2::Timestamp(if epoch { 0 } else { 1_791_331_200 }, 0),
+                    ),
+                ];
+                if probe {
+                    attributes.push(("probe".to_owned(), Value2::Integer(0)));
+                }
+                Sample {
+                    id,
+                    source,
+                    spec,
+                    kind,
+                    attributes,
+                    data: Some(Ok(serde_json::to_string(&data).unwrap())),
+                }
+            })
+    }
+
     proptest! {
+        #[test]
+        fn mapped_publish_size_matches_independent_wire_encoding(
+            samples in proptest::collection::vec(mapped_sample(), 0..4),
+            topic in "projects/demo/topics/[a-z]{1,200}",
+        ) {
+            let Lookup::Ready(mut view) = mapped_channel() else { panic!("ready channel"); };
+            view.pubsub_topic = topic.clone();
+            prop_assert_eq!(
+                mapped_publish_request_size(&Lookup::Ready(view), &parsed_samples(&samples)),
+                Some(mapped_wire(&topic, &samples).len())
+            );
+        }
+
         #[test]
         fn a_varint_is_as_long_as_its_encoding(value in any::<u64>()) {
             let mut out = Vec::new();
@@ -2780,7 +3147,8 @@ mod tests {
         assert_eq!(
             Attribute::Timestamp {
                 seconds: 0,
-                nanos: 0
+                nanos: 0,
+                mapped_text: None,
             }
             .size(),
             2
@@ -2788,7 +3156,8 @@ mod tests {
         assert_eq!(
             Attribute::Timestamp {
                 seconds: -1,
-                nanos: 0
+                nanos: 0,
+                mapped_text: None,
             }
             .size(),
             2 + 1 + 10

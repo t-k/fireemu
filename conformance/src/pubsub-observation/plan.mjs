@@ -75,7 +75,9 @@ const g1Case = (variant) =>
           : variant.startsWith("message-")
             ? [7, 2]
             : [4, 6];
-export function makePlan() {
+export function makePlan(selection = "full") {
+  if (!["full", "s10-diagnostic", "residual"].includes(selection))
+    throw new Error("fixed observation selection required");
   const cells = [...streamCases, ...supplements].map((variant, index) => ({
     id: `S${String(index + 1).padStart(2, "0")}`,
     group: "G4",
@@ -112,7 +114,7 @@ export function makePlan() {
       predecessor: original,
       activation: "explicit reason and settled predecessor only",
     });
-  return {
+  const plan = {
     schema: 1,
     suite: SUITE,
     project: PROJECT,
@@ -137,9 +139,21 @@ export function makePlan() {
       minimumOtherMs: 10000,
     },
   };
+  if (selection === "full") return plan;
+  return {
+    ...plan,
+    selection,
+    cells: cells.filter(
+      (cell) =>
+        !cell.reserve &&
+        (selection === "s10-diagnostic"
+          ? cell.id === "S10"
+          : !/^S0[1-9]$/.test(cell.id) && cell.id !== "S10"),
+    ),
+  };
 }
 export function validatePlan(value) {
-  if (JSON.stringify(value) !== JSON.stringify(makePlan()))
+  if (JSON.stringify(value) !== JSON.stringify(makePlan(value?.selection ?? "full")))
     throw new Error("fixed observation plan mismatch");
   return value;
 }

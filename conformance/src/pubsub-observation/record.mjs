@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { sha256, claimSourceRun } from "../pubsub-production/admission.mjs";
 import { createLedger, readLedger } from "./ledger.mjs";
 import { describeSource, admit } from "./admission.mjs";
-import { makePlan, PROJECT, SUITE } from "./plan.mjs";
+import { validatePlan, PROJECT, SUITE } from "./plan.mjs";
 import { createMeter } from "./meter.mjs";
 import { createWire } from "./wire.mjs";
 import { createCredentials } from "./credentials.mjs";
@@ -86,6 +86,13 @@ function recoveryInput(admission, runId) {
   if (elapsedMs < 600000) throw new Error("A2 minimum age required");
   return { ledgerPath, elapsedMs };
 }
+export function isRecordingComplete(plan, results) {
+  const cells = validatePlan(plan).cells.filter((cell) => !cell.reserve);
+  return (
+    results.length === cells.length &&
+    results.every((result, index) => result.cellId === cells[index].id && result.complete === true)
+  );
+}
 export async function main(args = process.argv.slice(2), deps = {}) {
   const options = parseArgs(args);
   if (options.mode === "prepare") {
@@ -96,6 +103,7 @@ export async function main(args = process.argv.slice(2), deps = {}) {
     return descriptor;
   }
   const admission = (deps.admit ?? admit)(options);
+  const plan = validatePlan(admission.plan);
   const input = options.a2 ? recoveryInput(admission, options.runId) : null;
   // The default source path has no contingency activation switch and never silently retries a cell.
   const noncePreflight = options.a2 ? null : admission.preflightUnusedRun?.();
@@ -216,7 +224,7 @@ export async function main(args = process.argv.slice(2), deps = {}) {
       resourcesClosed = recovery.closed;
       results.push(recovery);
     } else {
-      for (const cell of makePlan().cells.filter((item) => !item.reserve)) {
+      for (const cell of plan.cells.filter((item) => !item.reserve)) {
         if (signalled) break;
         meter.enter(cell);
         const result = await runCell({
@@ -232,7 +240,7 @@ export async function main(args = process.argv.slice(2), deps = {}) {
         if (!result.complete || !result.cleanupClosed) break;
       }
       resourcesClosed = results.length > 0 && results.every((item) => item.cleanupClosed);
-      recordingComplete = results.length === 32 && results.every((item) => item.complete);
+      recordingComplete = isRecordingComplete(plan, results);
     }
   } catch (failure) {
     error = failure.message;
@@ -266,6 +274,14 @@ export async function main(args = process.argv.slice(2), deps = {}) {
     packetSha256: admission.scope.packetSha256,
     resourcesClosed: resourcesClosed && error === null,
     recordingComplete: recordingComplete && !signalled && error === null,
+    ...(plan.selection
+      ? {
+          recordingDomain: {
+            selection: plan.selection,
+            cellIds: plan.cells.filter((cell) => !cell.reserve).map((cell) => cell.id),
+          },
+        }
+      : {}),
     closureReady: false,
     parentClosureReady: false,
     a2: options.a2,

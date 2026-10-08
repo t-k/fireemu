@@ -1025,7 +1025,7 @@ pub fn request_size(channel: &str, events: &[ParsedEvent]) -> usize {
 ///
 /// String values, canonical whole-second timestamps and integer zero cover the observed representation
 /// families. Other types, spellings, empty strings or colliding map keys remain unknown. This helper
-/// does not change publish admission: the upper-payload metric and refusal precedence are unresolved.
+/// supplies publish admission only for these supported representations; `None` leaves that size facet unknown.
 #[must_use]
 pub fn mapped_publish_request_size(channel: &Lookup, events: &[ParsedEvent]) -> Option<usize> {
     let Lookup::Ready(view) = channel else {
@@ -1138,7 +1138,8 @@ fn publish(place: &Place, channel: &str, body: &[u8], world: &World<'_>) -> Outc
         );
     }
     adopt(world, &name);
-    match world.channels.lookup(&name, world.now) {
+    let channel = world.channels.lookup(&name, world.now);
+    match &channel {
         // A channel being created or deleted is not publishable yet or any more (stage C, rows 131 and 145).
         Lookup::Absent | Lookup::Creating(_) | Lookup::Deleting(_) => {
             return error(
@@ -1152,6 +1153,27 @@ fn publish(place: &Place, channel: &str, body: &[u8], world: &World<'_>) -> Outc
     }
     if let Some(refusal) = validate_events(&events) {
         return refusal;
+    }
+    // INFERRED fitted policy for the helper's supported representations: strict upper edge and
+    // payload-before-numeric precedence. Native numeric/payload/LF cases fit it; no exact upper pair
+    // or universal priority was measured. None preserves existing behavior, not a size MATCH.
+    if let Some(size) = mapped_publish_request_size(&channel, &events) {
+        if size > 10_485_760 {
+            return error(
+                400,
+                "INVALID_ARGUMENT",
+                "Request payload size exceeds the limit: 10485760 bytes.",
+                Vec::new(),
+            );
+        }
+        if size > 10_000_000 {
+            return error(
+                400,
+                "INVALID_ARGUMENT",
+                &format!("The value for request_size is too large. You passed {size} in the request, but the maximum value is 10000000."),
+                Vec::new(),
+            );
+        }
     }
     if (world.declared_channel)(&name) {
         return Outcome::Deliver {
@@ -2724,6 +2746,52 @@ mod tests {
         channels.lookup(name, 0)
     }
 
+    fn mapped_publication(samples: &[Sample], exterior_whitespace: bool) -> Outcome {
+        let channels = ChannelStore::default();
+        channels.declare(
+            "projects/demo-eventarc-shapes1/locations/us-central1/channels/feabcdefabcdef-w",
+            0,
+        );
+        let body = format!(
+            "{{\"events\":[{}]}}{}",
+            samples
+                .iter()
+                .map(sample_json)
+                .collect::<Vec<_>>()
+                .join(","),
+            if exterior_whitespace { " " } else { "" }
+        );
+        super::publish(
+            &Place {
+                project: "demo-eventarc-shapes1".to_owned(),
+                location: "us-central1".to_owned(),
+            },
+            "feabcdefabcdef-w",
+            body.as_bytes(),
+            &world(&|_| true, &|_, _| Vec::new(), &channels),
+        )
+    }
+
+    fn assert_aggregate_answer(outcome: Outcome, mapped_size: usize) {
+        if mapped_size <= 10_000_000 {
+            assert!(matches!(outcome, Outcome::Deliver { .. }));
+            return;
+        }
+        let message = if mapped_size > 10_485_760 {
+            "Request payload size exceeds the limit: 10485760 bytes.".to_owned()
+        } else {
+            format!("The value for request_size is too large. You passed {mapped_size} in the request, but the maximum value is 10000000.")
+        };
+        let Outcome::Answer(answer) = outcome else {
+            panic!("aggregate refusal must precede delivery");
+        };
+        assert_eq!(answer.status, 400);
+        assert_eq!(
+            answer.text(),
+            format!("{{\n  \"error\": {{\n    \"code\": 400,\n    \"message\": \"{message}\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }}\n}}\n")
+        );
+    }
+
     fn parsed_samples(samples: &[Sample]) -> Vec<ParsedEvent> {
         samples
             .iter()
@@ -2835,6 +2903,7 @@ mod tests {
                 Some(expected)
             );
             assert_eq!(mapped_wire(&view.pubsub_topic, &samples).len(), expected);
+            assert_aggregate_answer(mapped_publication(&samples, false), expected);
         }
     }
 
@@ -2859,7 +2928,113 @@ mod tests {
                 mapped_publish_request_size(&channel, &parsed_samples(&samples)),
                 Some(expected)
             );
+            assert_aggregate_answer(mapped_publication(&samples, false), expected);
         }
+    }
+
+    #[test]
+    fn aggregate_publish_reconstructs_upper_payload_and_lf_numeric_families() {
+        for (ce, prediction) in [
+            (10_485_200, 10_486_509),
+            (16_766_484, 16_767_793),
+            (12_572_180, 12_573_489),
+        ] {
+            // Payload responses report a limit, not a measured passed size: these are model predictions.
+            let samples = mapped_family(100, false, false, ce);
+            let Lookup::Ready(view) = mapped_channel() else {
+                panic!("ready channel");
+            };
+            assert_eq!(mapped_wire(&view.pubsub_topic, &samples).len(), prediction);
+            assert_aggregate_answer(mapped_publication(&samples, false), prediction);
+        }
+        let mut samples = mapped_family(100, false, false, 10_475_028);
+        let compact_bytes = |samples: &[Sample]| {
+            format!(
+                "{{\"events\":[{}]}}",
+                samples
+                    .iter()
+                    .map(sample_json)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+            .len()
+        };
+        assert_eq!(compact_bytes(&samples), 10_485_760);
+        // Hplus1 changes only the exterior HTTP bytes, preserving the numeric native family.
+        assert_aggregate_answer(mapped_publication(&samples, true), 10_476_337);
+        // Replace one ASCII data byte with leading JSON whitespace: same parsed byte sizes, one extra escape byte.
+        let Some(Ok(text)) = &mut samples[0].data else {
+            panic!("text data");
+        };
+        text.remove(1);
+        text.insert(0, '\n');
+        assert_eq!(compact_bytes(&samples), 10_485_761);
+        let Lookup::Ready(view) = mapped_channel() else {
+            panic!("ready channel");
+        };
+        assert_eq!(
+            request_size(&view.name, &parsed_samples(&samples)),
+            10_475_028
+        );
+        assert_eq!(mapped_wire(&view.pubsub_topic, &samples).len(), 10_476_337);
+        for whitespace in [false, true] {
+            assert_aggregate_answer(mapped_publication(&samples, whitespace), 10_476_337);
+        }
+    }
+
+    #[test]
+    fn aggregate_publish_threshold_edges_are_representation_scoped_local_policy() {
+        // Native lower success/refusal supports the first pair. No native exact-upper-edge pair was measured.
+        // Strict greater-than and upper-first precedence are a fitted policy for the supported representations.
+        let Lookup::Ready(view) = mapped_channel() else {
+            panic!("ready channel");
+        };
+        for target in [10_000_000, 10_000_001, 10_485_760, 10_485_761] {
+            let mut samples = mapped_family(100, false, false, target);
+            for _ in 0..3 {
+                let current = mapped_wire(&view.pubsub_topic, &samples).len();
+                let padding: usize = samples
+                    .iter()
+                    .map(|sample| match &sample.data {
+                        Some(Ok(text)) => text.len() - 2,
+                        _ => panic!("text data"),
+                    })
+                    .sum();
+                let padding =
+                    usize::try_from(padding as isize + target as isize - current as isize).unwrap();
+                for (index, sample) in samples.iter_mut().enumerate() {
+                    sample.data = Some(Ok(serde_json::to_string(
+                        &"x".repeat(padding / 100 + usize::from(index < padding % 100)),
+                    )
+                    .unwrap()));
+                }
+            }
+            assert_eq!(mapped_wire(&view.pubsub_topic, &samples).len(), target);
+            assert_aggregate_answer(mapped_publication(&samples, false), target);
+        }
+    }
+
+    #[test]
+    fn aggregate_unknown_retains_delivery_and_existing_validation_priority() {
+        let mut samples = mapped_family(100, false, false, 10_475_028);
+        samples[0]
+            .attributes
+            .push(("unknown".to_owned(), Value2::Integer(1)));
+        assert_eq!(
+            mapped_publish_request_size(&mapped_channel(), &parsed_samples(&samples)),
+            None
+        );
+        // Existing delivery is preserved; this supplies no aggregate-size MATCH for the unknown representation.
+        assert!(matches!(
+            mapped_publication(&samples, false),
+            Outcome::Deliver { .. }
+        ));
+        samples[0].attributes.pop();
+        samples[0].id.clear();
+        let (status, message) = status_and_message(&mapped_publication(&samples, false));
+        // Mixed-invalid priority is inferred local policy preserving the previous validation order.
+        assert_eq!(status, 400);
+        assert_eq!(message, "Attribute 'id' cannot be empty.");
     }
 
     #[test]

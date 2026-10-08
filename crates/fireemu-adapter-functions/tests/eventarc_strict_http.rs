@@ -268,6 +268,163 @@ fn error_of(body: &str) -> Value {
     serde_json::from_str::<Value>(body).expect("a JSON error body")["error"].clone()
 }
 
+fn aggregate_batch(padding: usize, region: &str) -> Vec<Value> {
+    (0..100)
+        .map(|index| {
+            let mut value = event(region);
+            value["id"] = json!(format!("aggregate-{index:03}"));
+            value["attributes"]["time"] = json!({"ceTimestamp": "2026-10-07T00:00:00Z"});
+            value["textData"] = json!(serde_json::to_string(&"x".repeat(padding)).unwrap());
+            value
+        })
+        .collect()
+}
+
+/// Explicit protobuf tags, independent of the runtime metric, bind the actual listener topic.
+fn aggregate_wire_size(topic: &str, events: &[Value]) -> usize {
+    fn field(out: &mut Vec<u8>, tag: u8, value: &[u8]) {
+        out.push((tag << 3) | 2);
+        let mut length = value.len();
+        while length >= 128 {
+            out.push(u8::try_from(length & 127).unwrap() | 128);
+            length >>= 7;
+        }
+        out.push(u8::try_from(length).unwrap());
+        out.extend_from_slice(value);
+    }
+    let mut request = Vec::new();
+    field(&mut request, 1, topic.as_bytes());
+    for event in events {
+        let mut message = Vec::new();
+        field(
+            &mut message,
+            1,
+            event["textData"].as_str().unwrap().as_bytes(),
+        );
+        for (key, value) in [
+            ("ce-id", event["id"].as_str().unwrap()),
+            ("ce-source", event["source"].as_str().unwrap()),
+            ("ce-specversion", event["specVersion"].as_str().unwrap()),
+            ("ce-type", event["type"].as_str().unwrap()),
+            ("ce-time", "2026-10-07T00:00:00Z"),
+            ("ce-datacontenttype", "application/json"),
+            (
+                "ce-region",
+                event["attributes"]["region"]["ceString"].as_str().unwrap(),
+            ),
+        ] {
+            let mut entry = Vec::new();
+            field(&mut entry, 1, key.as_bytes());
+            field(&mut entry, 2, value.as_bytes());
+            field(&mut message, 2, &entry);
+        }
+        field(&mut request, 2, &message);
+    }
+    request.len()
+}
+
+#[tokio::test]
+async fn strict_aggregate_refusals_use_native_http_bytes_and_never_deliver() {
+    let channels = Arc::new(ChannelStore::new(
+        Box::new(SystemEntropy::default()),
+        Timing {
+            create: 0,
+            delete: 0,
+        },
+    ));
+    let server = start_with(Some(FunctionsHttpProfile::Strict), PROJECT, Some(channels)).await;
+    let made = "projects/demo-app/locations/us-central1/channels/aggregate";
+    let created = server
+        .send(
+            "POST",
+            "/v1/projects/demo-app/locations/us-central1/channels?channelId=aggregate",
+            true,
+            Some(&json!({"name": made}).to_string()),
+        )
+        .await;
+    let passing = server
+        .send(
+            "POST",
+            &format!("/v1/{CUSTOM}:publishEvents"),
+            true,
+            Some(&publish_body(&[event("eu")])),
+        )
+        .await;
+    let before = server.wait_for_frames(1).await;
+    let mut results = Vec::new();
+    for channel in [CUSTOM, made] {
+        let read = server
+            .send("GET", &format!("/v1/{channel}"), true, None)
+            .await;
+        let resource: Value = serde_json::from_str(&read.1).unwrap();
+        let topic = resource["pubsubTopic"].as_str().unwrap();
+        for padding in [100_000, 106_000] {
+            let events = aggregate_batch(padding, "eu");
+            let size = aggregate_wire_size(topic, &events);
+            let body = publish_body(&events);
+            for prefix in ["/v1", ""] {
+                let reply = server
+                    .exchange(
+                        "POST",
+                        &format!("{prefix}/{channel}:publishEvents"),
+                        Some("ya29.a-token"),
+                        Some(&body),
+                        "",
+                    )
+                    .await;
+                results.push((size, reply));
+            }
+        }
+    }
+    let after = server.frames_so_far().await;
+    server.stop().await;
+    assert_eq!(created.0, 200);
+    assert_eq!(passing, (200, "{}\n".to_owned()));
+    assert_eq!(before, 1);
+    assert_eq!(
+        after, before,
+        "neither matching nor unmatched refused batch reaches enqueue"
+    );
+    for (size, reply) in results {
+        assert_eq!(reply.status, 400);
+        assert!(reply
+            .head
+            .to_ascii_lowercase()
+            .contains("content-type: application/json"));
+        let message = if size > 10_485_760 {
+            "Request payload size exceeds the limit: 10485760 bytes.".to_owned()
+        } else {
+            assert!(size > 10_000_000);
+            format!("The value for request_size is too large. You passed {size} in the request, but the maximum value is 10000000.")
+        };
+        assert_eq!(reply.body, format!("{{\n  \"error\": {{\n    \"code\": 400,\n    \"message\": \"{message}\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }}\n}}\n"));
+    }
+}
+
+#[tokio::test]
+async fn emulator_aggregate_batches_keep_the_official_plain_ok_behavior() {
+    let server = start(Some(FunctionsHttpProfile::Emulator)).await;
+    let mut replies = Vec::new();
+    for padding in [100_000, 106_000] {
+        replies.push(
+            server
+                .send(
+                    "POST",
+                    &format!("/{CUSTOM}:publishEvents"),
+                    false,
+                    Some(&publish_body(&aggregate_batch(padding, "unmatched"))),
+                )
+                .await,
+        );
+    }
+    let frames = server.frames_so_far().await;
+    server.stop().await;
+    for reply in replies {
+        assert_eq!(reply, (200, "OK".to_owned()));
+    }
+    assert_eq!(frames, 0);
+}
+
 #[tokio::test]
 async fn custom_json_data_keeps_publisher_member_order_only_in_strict_deliveries() {
     use fireemu_adapter_functions::ordered_json::parse;

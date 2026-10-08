@@ -51,7 +51,20 @@ function frameProof(row, directory, runId) {
       bytes: String,
       defaults: false,
     });
-    return isDeepStrictEqual(sanitize(decoded), row.body);
+    if (isDeepStrictEqual(sanitize(decoded), row.body)) return true;
+    if (
+      row.direction !== "out" ||
+      !Array.isArray(row.body?.modifyDeadlineSeconds) ||
+      row.body.modifyDeadlineSeconds.length !== 0 ||
+      Object.hasOwn(decoded, "modifyDeadlineSeconds")
+    )
+      return false;
+    // The producer records its input, while defaults:false decoding omits this empty list.
+    const { modifyDeadlineSeconds: _empty, ...recorded } = row.body;
+    return (
+      isDeepStrictEqual(sanitize(decoded), recorded) &&
+      Buffer.from(Type.encode(Type.fromObject(row.body)).finish()).equals(raw)
+    );
   } catch {
     return false;
   }

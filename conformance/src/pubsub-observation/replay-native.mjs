@@ -82,6 +82,18 @@ function unorderedFlow(cell, sourceCell, opener) {
     throw new Error("native unordered owned multiset witness incomplete");
   return { pending, sourceIds: [...pending.keys()], ackSlots: new Map() };
 }
+function legalTimestamp(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).some((key) => !["seconds", "nanos"].includes(key))) return false;
+  const seconds = Object.hasOwn(value, "seconds") ? value.seconds : "0";
+  const nanos = Object.hasOwn(value, "nanos") ? value.nanos : 0;
+  if (!(typeof seconds === "string" && /^-?(0|[1-9]\d{0,11})$/.test(seconds)) &&
+      !(typeof seconds === "number" && Number.isSafeInteger(seconds))) return false;
+  const epoch = BigInt(seconds);
+  return epoch >= -62135596800n && epoch <= 253402300799n &&
+    Number.isInteger(nanos) && nanos >= 0 && nanos <= 999999999;
+}
+
 export function matchNativeReceive(source, actual, bindings) {
   if (
     !Array.isArray(source.receivedMessages) ||
@@ -89,6 +101,14 @@ export function matchNativeReceive(source, actual, bindings) {
     source.receivedMessages.length !== actual.receivedMessages.length
   )
     throw new Error("native receive cardinality mismatch");
+  for (const [index, item] of source.receivedMessages.entries()) {
+    const peer = actual.receivedMessages[index];
+    const present = Object.hasOwn(item.message ?? {}, "publishTime");
+    if (present !== Object.hasOwn(peer.message ?? {}, "publishTime") ||
+        (present && (!legalTimestamp(item.message.publishTime) ||
+          !legalTimestamp(peer.message.publishTime))))
+      throw new Error("native receive timestamp presence or structure mismatch");
+  }
   bindings.linkReceive(source, actual);
   const rewrite = (body) => ({
     ...body,
@@ -221,7 +241,7 @@ export function createNativeReplay({
           sourceOpenedAt: Date.parse(row.at),
         };
         active.stream = await wire.open({ cellId: cell.id, opener: row.body });
-        witnesses.set(cell.id, { sourceFrames: [], actions: [], completed: false });
+        witnesses.set(cell.id, { sourceFrames: [], actions: [], completed: false, semanticsVerified: false });
       } else {
         if (active.cellId !== cell.id) throw new Error("concurrent native cell refused");
         await quietProbe(row);
@@ -234,9 +254,13 @@ export function createNativeReplay({
             cell.invalidAck,
             active.unordered?.ackSlots,
           );
+          const expectedOutbound = structuredClone(outbound);
           active.lastOutboundMs = undefined;
           active.lastOutboundBody = undefined;
           active.stream.write(outbound);
+          if (active.lastOutboundBody !== undefined &&
+              !isDeepStrictEqual(active.lastOutboundBody, expectedOutbound))
+            throw new Error("native actual outbound semantic mismatch");
           if (active.unordered)
             for (const token of row.body.ackIds ?? []) active.unordered.ackSlots.delete(token);
           if (
@@ -388,6 +412,7 @@ export function createNativeReplay({
             throw new Error("native unordered owned multiset or live ACK slots incomplete");
         }
         proof.completed = !state.incomplete;
+        proof.semanticsVerified = proof.completed;
       } else throw new Error("unlisted native action");
       proof.actions.push({
         sourceN: row.n,

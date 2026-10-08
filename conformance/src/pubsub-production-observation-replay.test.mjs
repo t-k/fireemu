@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { protos } from "@google-cloud/pubsub";
 import { createBindings } from "./pubsub-production/stream-dlq-compare-core.mjs";
 import {
   rewriteNativeFrame,
@@ -824,6 +825,13 @@ test("loopback replay retains bounded actual terminal details without inventing 
   }
 });
 
+const nativeBytes = (body, direction = "in") => {
+  const type = direction === "in"
+    ? protos.google.pubsub.v1.StreamingPullResponse
+    : protos.google.pubsub.v1.StreamingPullRequest;
+  return Buffer.from(type.encode(type.fromObject(body)).finish());
+};
+
 // Synthetic source-bound controls retain S06's three publications and seven native frames.
 async function unorderedFlowFixture({
   order = [0, 1, 2],
@@ -838,6 +846,8 @@ async function unorderedFlowFixture({
   duplicateAck = false,
   origin = 0,
   pipeline = false,
+  reverseActualDirection = false,
+  outboundMutation,
 } = {}) {
   const { createNativeReplay } = await import("./pubsub-observation/replay-native.mjs");
   const { makePlan } = await import("./pubsub-observation/plan.mjs");
@@ -852,7 +862,11 @@ async function unorderedFlowFixture({
     receivedMessages: [
       {
         ackId: `${local ? "local" : "source"}-ack-${index}`,
-        message: { ...payload(index), messageId: `${local ? "local" : "source"}-${index}` },
+        message: {
+          ...payload(index),
+          messageId: `${local ? "local" : "source"}-${index}`,
+          publishTime: { seconds: local ? "200" : "100", nanos: 0 },
+        },
       },
     ],
   });
@@ -864,6 +878,7 @@ async function unorderedFlowFixture({
     event: "stream-frame",
     direction,
     body,
+    blob: { bytes: nativeBytes(body, direction).length },
     verified: true,
   });
   const frames = [
@@ -929,8 +944,11 @@ async function unorderedFlowFixture({
     received = 0,
     extraSent = false;
   const queue = [],
-    acks = [];
+    acks = [],
+    receivedAcks = new Map();
   function record(body, elapsedMs) {
+    for (const item of body.receivedMessages ?? [])
+      receivedAcks.set(item.message.messageId, item.ackId);
     received++;
     recordFrame({ direction: "in", body, elapsedMs });
     queue.push(body);
@@ -950,6 +968,7 @@ async function unorderedFlowFixture({
       return queue.shift() ?? null;
     },
     write(body) {
+      outboundMutation?.(body);
       acks.push(...body.ackIds);
       recordFrame({ direction: "out", body, elapsedMs: now - origin });
       if (nextIndex < 3) record(receive(order[nextIndex++], true), now - origin + 1);
@@ -959,7 +978,8 @@ async function unorderedFlowFixture({
     dispose() {},
   };
   let recordFrame = (frame) => replay.recordFrame(frame);
-  const open = async () => {
+  const open = async ({ opener }) => {
+    recordFrame({ direction: "out", body: opener, elapsedMs: now - origin });
     const body = receive(order[nextIndex++], true);
     if (batch)
       body.receivedMessages = order.map((index) => receive(index, true).receivedMessages[0]);
@@ -1043,10 +1063,11 @@ async function unorderedFlowFixture({
         advance: async () => {},
         wireFactory: ({ journal }) => {
           recordFrame = (frame) =>
-            journal.frame(Buffer.from(JSON.stringify(frame.body)), {
+            journal.frame(nativeBytes(frame.body, frame.direction), {
               event: "stream-frame",
               cellId: "S06",
               ...frame,
+              direction: reverseActualDirection && frame.direction === "in" ? "out" : frame.direction,
             });
           return {
             open,
@@ -1073,9 +1094,9 @@ async function unorderedFlowFixture({
     assert.equal(report.parentClosureReady, false);
     assert.deepEqual(
       acks,
-      order.map((index) => `local-ack-${index}`),
+      order.map((index) => receivedAcks.get(`local-${index}`)),
     );
-    return;
+    return report;
   }
   replay = createNativeReplay({
     cells: [cell],
@@ -1169,4 +1190,67 @@ test("S06 unordered matching still rejects the actual three-before-ACK shape and
 
 test("executed replay passes the admitted S06 source cell to unordered token matching", async () => {
   await assert.doesNotReject(unorderedFlowFixture({ pipeline: true }));
+});
+
+
+test("executed native semantics keep dynamic widths separate from literal physical gaps", async () => {
+  const report = await unorderedFlowFixture({ pipeline: true });
+  const cell = report.cells.find((c) => c.id === "S06");
+  assert.equal(cell.nativeSemantics.verdict, "MATCH");
+  assert.equal(cell.nativeLayout.verdict, "DIVERGES");
+  assert.equal(cell.verdict, "DIVERGES");
+  assert.equal(report.parentClosureReady, false);
+  assert.equal(cell.nativeLayout.frames.length, 7);
+});
+
+test("executed replay rejects equal-byte payload changes and compensated timestamp absence", async () => {
+  for (const firstMutation of [
+    (body) => {
+      const before = nativeBytes(body).length;
+      const data = Buffer.from(body.receivedMessages[0].message.data, "base64");
+      data[0] ^= 1;
+      body.receivedMessages[0].message.data = data.toString("base64");
+      assert.equal(nativeBytes(body).length, before);
+    },
+    (body) => {
+      const before = nativeBytes(body).length;
+      delete body.receivedMessages[0].message.publishTime;
+      const padding = before - nativeBytes(body).length;
+      body.receivedMessages[0].ackId += "p".repeat(padding);
+      assert.equal(nativeBytes(body).length, before);
+    },
+  ])
+    await assert.rejects(unorderedFlowFixture({ pipeline: true, firstMutation }), /binding|semantic|timestamp/);
+});
+
+test("executed receive requires corresponding presence and a legal decoded Timestamp", async () => {
+  for (const publishTime of [null, undefined, [], { seconds: "NaN" }, { seconds: "1.5" },
+    { seconds: "253402300800" }, { seconds: "-62135596801" }, { nanos: -1 },
+    { nanos: 1000000000 }, { nanos: 0.5 }, { seconds: true }, { unknown: 1 }])
+    await assert.rejects(unorderedFlowFixture({ pipeline: true, firstMutation: (body) => {
+      body.receivedMessages[0].message.publishTime = publishTime;
+    } }), /timestamp/);
+  for (const publishTime of [{}, { seconds: "-62135596800", nanos: 0 },
+    { seconds: "253402300799", nanos: 999999999 }, { seconds: 1, nanos: 1 }])
+    await assert.doesNotReject(unorderedFlowFixture({ pipeline: true, firstMutation: (body) => {
+      body.receivedMessages[0].message.publishTime = publishTime;
+    } }));
+});
+
+test("executed semantic witness keeps direction, subscription presence and credit controls", async () => {
+  await assert.rejects(unorderedFlowFixture({ pipeline: true, reverseActualDirection: true }), /timestamp|quiet/);
+  await assert.rejects(unorderedFlowFixture({ pipeline: true, firstMutation: (body) => {
+    delete body.subscriptionProperties;
+  } }), /semantic/);
+  await assert.rejects(unorderedFlowFixture({ pipeline: true, batch: true }), /cardinality/);
+  await assert.rejects(unorderedFlowFixture({ pipeline: true, extraAt: 8020 }), /quiet interval/);
+});
+
+
+test("executed replay refuses foreign and duplicate actual outbound ACK receipts", async () => {
+  for (const outboundMutation of [
+    (body) => (body.ackIds[0] = "foreign-actual-ack"),
+    (body) => body.ackIds.push(body.ackIds[0]),
+  ])
+    await assert.rejects(unorderedFlowFixture({ pipeline: true, outboundMutation }), /outbound semantic/);
 });

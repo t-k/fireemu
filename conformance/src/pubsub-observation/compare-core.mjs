@@ -486,13 +486,28 @@ export function compareExecutedObservation(source, local, nativeWitnesses) {
         (observation.invalidAckObservedMs >= 30000 && proof.silenceMs >= 30000));
     if (!exact) continue;
     cell.debts = cell.debts.filter((debt) => debt !== nativeDebt);
-    const layoutMatches =
+    const shapeMatches =
       original.frames.length === actual.frames.length &&
-      original.frames.every(
-        (f, i) =>
-          f.direction === actual.frames[i].direction &&
-          f.blob?.bytes === actual.frames[i].blob?.bytes,
-      );
+      original.frames.every((f, i) => f.direction === actual.frames[i].direction);
+    const layoutMatches = shapeMatches &&
+      original.frames.every((f, i) => f.blob?.bytes === actual.frames[i].blob?.bytes);
+    cell.nativeSemantics = {
+      verdict: proof.semanticsVerified !== true ? "NOT_COMPARABLE" : shapeMatches ? "MATCH" : "DIVERGES",
+      scope: "executed identity-bound receive, ACK, presence and timing guards; physical layout remains separate",
+    };
+    cell.nativeLayout = {
+      verdict: layoutMatches ? "MATCH" : "DIVERGES",
+      frames: original.frames.map((f, i) => ({
+        sourceN: f.n,
+        localN: actual.frames[i]?.n ?? null,
+        sourceDirection: f.direction,
+        localDirection: actual.frames[i]?.direction ?? null,
+        sourceBytes: f.blob?.bytes ?? null,
+        localBytes: actual.frames[i]?.blob?.bytes ?? null,
+        sourceSha256: f.blob?.sha256 ?? null,
+        localSha256: actual.frames[i]?.blob?.sha256 ?? null,
+      })),
+    };
     cell.rows.push({
       method: "StreamingPull",
       transport: "grpc",

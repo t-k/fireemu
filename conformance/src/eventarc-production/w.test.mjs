@@ -394,7 +394,7 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
   const m = manifest(stage, prerequisite),
     calls = [],
     notes = [];
-  const resourceMode = mode.replace(/^shape-/, "");
+  const resourceMode = mode.replace(/^(shape|upper)-/, "");
   let clock = 0,
     present = false,
     topicPresent = false;
@@ -416,6 +416,16 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
           let status = 200,
             body;
           if (host === "publishing") {
+            if (mode.startsWith("upper-")) {
+              if (spec.recipe.purpose.endsWith("control"))
+                return mode === `upper-${spec.recipe.purpose}-refused`
+                  ? native(400, nativeSizeRefusal)
+                  : native(200, {});
+              if (mode === "upper-unknown") return { unknown: true, status: 503, body: {} };
+              if (mode === "upper-unclassified")
+                return native(418, { error: { message: "unclassified" } });
+              return native(400, nativeSizeRefusal);
+            }
             if (mode.startsWith("shape")) {
               if (mode === "shape-unknown" && spec.recipe.purpose === "T0")
                 return { unknown: true, status: 503, body: {} };
@@ -834,50 +844,54 @@ test("W shape keeps control, lifecycle and cleanup obligations without retries",
   }
 });
 
-test("W shape default entry requires frozen admission before credentials, network or runtime writes", () => {
-  const root = resolve("target/codex-out/w-ready/test-work");
-  mkdirSync(root, { recursive: true });
-  const dir = mkdtempSync(join(root, "shape-entry-"));
-  try {
-    const m = manifest("w-shape");
-    const checkout = resolve(dirname(new URL("./w-run.mjs", import.meta.url).pathname), "../../..");
-    const config = {
-      ...m,
-      sourceCommit: execFileSync("git", ["-C", checkout, "rev-parse", "HEAD"], {
-        encoding: "utf8",
-      }).trim(),
-      reserveUsd: 0.05,
-      packetReserveUsd: 0.15,
-      parentBudgetUsd: 14,
-      out: join(dir, "out"),
-      sandboxLedger: join(dir, "ledger.jsonl"),
-      lockDir: join(dir, "locks"),
-      ownerLedger: join(dir, "owner.md"),
-      packetDir: dir,
-    };
-    const descriptor = {
-      status: "frozen",
-      sourceCommit: config.sourceCommit,
-      executions: [{ stage: m.stage, runId: m.runId }],
-      sourceHashes: {},
-      artifactHashes: {},
-      envelopeBodies: { [m.stage]: "unadmitted-shape" },
-    };
-    const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
-    for (const name of ["w.mjs", "w-run.mjs"]) {
-      const path = new URL(name, import.meta.url).pathname;
-      descriptor.sourceHashes[path] = hash(readFileSync(path));
-    }
-    for (const name of ["eventarc-packet-w.md", "w-checklist.md", "w-mutation-report.md"]) {
-      writeFileSync(join(dir, name), name);
-      descriptor.artifactHashes[name] = hash(name);
-    }
-    const descriptorBytes = JSON.stringify(descriptor);
-    writeFileSync(join(dir, "w-descriptor.json"), descriptorBytes);
-    writeFileSync(config.ownerLedger, `${W_A2_RULING}\n`);
-    const input = join(dir, "input.json");
-    writeFileSync(input, JSON.stringify(config));
-    const preload = `
+for (const stage of ["w-shape", "w-upper-counter"])
+  test(`W ${stage} default entry requires frozen admission before credentials, network or runtime writes`, () => {
+    const root = resolve("target/codex-out/w-ready/test-work");
+    mkdirSync(root, { recursive: true });
+    const dir = mkdtempSync(join(root, "shape-entry-"));
+    try {
+      const m = manifest(stage);
+      const checkout = resolve(
+        dirname(new URL("./w-run.mjs", import.meta.url).pathname),
+        "../../..",
+      );
+      const config = {
+        ...m,
+        sourceCommit: execFileSync("git", ["-C", checkout, "rev-parse", "HEAD"], {
+          encoding: "utf8",
+        }).trim(),
+        reserveUsd: 0.05,
+        packetReserveUsd: 0.15,
+        parentBudgetUsd: 14,
+        out: join(dir, "out"),
+        sandboxLedger: join(dir, "ledger.jsonl"),
+        lockDir: join(dir, "locks"),
+        ownerLedger: join(dir, "owner.md"),
+        packetDir: dir,
+      };
+      const descriptor = {
+        status: "frozen",
+        sourceCommit: config.sourceCommit,
+        executions: [{ stage: m.stage, runId: m.runId }],
+        sourceHashes: {},
+        artifactHashes: {},
+        envelopeBodies: { [m.stage]: "unadmitted-shape" },
+      };
+      const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+      for (const name of ["w.mjs", "w-run.mjs"]) {
+        const path = new URL(name, import.meta.url).pathname;
+        descriptor.sourceHashes[path] = hash(readFileSync(path));
+      }
+      for (const name of ["eventarc-packet-w.md", "w-checklist.md", "w-mutation-report.md"]) {
+        writeFileSync(join(dir, name), name);
+        descriptor.artifactHashes[name] = hash(name);
+      }
+      const descriptorBytes = JSON.stringify(descriptor);
+      writeFileSync(join(dir, "w-descriptor.json"), descriptorBytes);
+      writeFileSync(config.ownerLedger, `${W_A2_RULING}\n`);
+      const input = join(dir, "input.json");
+      writeFileSync(input, JSON.stringify(config));
+      const preload = `
       import fs from "node:fs";
       import child from "node:child_process";
       import { syncBuiltinESMExports } from "node:module";
@@ -907,55 +921,55 @@ test("W shape default entry requires frozen admission before credentials, networ
       syncBuiltinESMExports();
       process.on("exit", () => process.stdout.write(JSON.stringify(counts) + "\\n"));
     `;
-    const run = spawnSync(
-      process.execPath,
-      [
+      const run = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          `data:text/javascript,${encodeURIComponent(preload)}`,
+          new URL("./w-run.mjs", import.meta.url).pathname,
+          "--config",
+          input,
+        ],
+        {
+          env: { PATH: `${dirname(process.execPath)}:/etc/profiles/per-user/tk/bin:/usr/bin:/bin` },
+          cwd: checkout,
+          timeout: 10000,
+          encoding: "utf8",
+        },
+      );
+      assert.equal(run.status, 2, run.stderr);
+      assert.match(run.stderr, /exact E\/V admission absent/);
+      assert.deepEqual(JSON.parse(run.stdout), { wire: 0, credential: 0, runtimeWrite: 0 });
+      const vBody = `decision=APPROVE; envelopeId=EVENTARC-W-${config.runId}; packetSha256=${descriptor.artifactHashes["eventarc-packet-w.md"]}; checklistSha256=${descriptor.artifactHashes["w-checklist.md"]}; mutationSha256=${descriptor.artifactHashes["w-mutation-report.md"]}; descriptorSha256=${hash(descriptorBytes)}; sourceCommit=${config.sourceCommit}`;
+      writeFileSync(
+        config.ownerLedger,
+        `${W_A2_RULING}\n- 2026-10-08 | EVENTARC-PACKET-W envelope | ${descriptor.envelopeBodies[m.stage]} | offline test | test-only.md\n- 2026-10-08 | EVENTARC-PACKET-W | ${vBody} | offline test | test-only.md\n`,
+      );
+      const args = [
         "--import",
         `data:text/javascript,${encodeURIComponent(preload)}`,
         new URL("./w-run.mjs", import.meta.url).pathname,
         "--config",
         input,
-      ],
-      {
+      ];
+      const options = {
         env: { PATH: `${dirname(process.execPath)}:/etc/profiles/per-user/tk/bin:/usr/bin:/bin` },
         cwd: checkout,
         timeout: 10000,
         encoding: "utf8",
-      },
-    );
-    assert.equal(run.status, 2, run.stderr);
-    assert.match(run.stderr, /exact E\/V admission absent/);
-    assert.deepEqual(JSON.parse(run.stdout), { wire: 0, credential: 0, runtimeWrite: 0 });
-    const vBody = `decision=APPROVE; envelopeId=EVENTARC-W-${config.runId}; packetSha256=${descriptor.artifactHashes["eventarc-packet-w.md"]}; checklistSha256=${descriptor.artifactHashes["w-checklist.md"]}; mutationSha256=${descriptor.artifactHashes["w-mutation-report.md"]}; descriptorSha256=${hash(descriptorBytes)}; sourceCommit=${config.sourceCommit}`;
-    writeFileSync(
-      config.ownerLedger,
-      `${W_A2_RULING}\n- 2026-10-08 | EVENTARC-PACKET-W envelope | ${descriptor.envelopeBodies[m.stage]} | offline test | test-only.md\n- 2026-10-08 | EVENTARC-PACKET-W | ${vBody} | offline test | test-only.md\n`,
-    );
-    const args = [
-      "--import",
-      `data:text/javascript,${encodeURIComponent(preload)}`,
-      new URL("./w-run.mjs", import.meta.url).pathname,
-      "--config",
-      input,
-    ];
-    const options = {
-      env: { PATH: `${dirname(process.execPath)}:/etc/profiles/per-user/tk/bin:/usr/bin:/bin` },
-      cwd: checkout,
-      timeout: 10000,
-      encoding: "utf8",
-    };
-    const admitted = spawnSync(process.execPath, args, options);
-    assert.equal(admitted.status, 3, admitted.stderr);
-    assert.match(admitted.stderr, /runtime write denied/);
-    assert.deepEqual(JSON.parse(admitted.stdout), { wire: 0, credential: 0, runtimeWrite: 1 });
-    const a2 = spawnSync(process.execPath, [...args, "--a2"], options);
-    assert.equal(a2.status, 2, a2.stderr);
-    assert.match(a2.stderr, /shape A2 requires a separate ruling/);
-    assert.deepEqual(JSON.parse(a2.stdout), { wire: 0, credential: 0, runtimeWrite: 0 });
-  } finally {
-    rmSync(dir, { recursive: true });
-  }
-});
+      };
+      const admitted = spawnSync(process.execPath, args, options);
+      assert.equal(admitted.status, 3, admitted.stderr);
+      assert.match(admitted.stderr, /runtime write denied/);
+      assert.deepEqual(JSON.parse(admitted.stdout), { wire: 0, credential: 0, runtimeWrite: 1 });
+      const a2 = spawnSync(process.execPath, [...args, "--a2"], options);
+      assert.equal(a2.status, 2, a2.stderr);
+      assert.match(a2.stderr, /shape A2 requires a separate ruling/);
+      assert.deepEqual(JSON.parse(a2.stdout), { wire: 0, credential: 0, runtimeWrite: 0 });
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
 
 test("W native size refusal reaches staged bisection with bounded monotone publications", async () => {
   const zero = await replay("w0", "native-size");
@@ -1829,4 +1843,100 @@ test("W prerequisites and admission bind the checkpoint with a ledger-compatible
   });
   assert.equal(line.split(" | ").length, 5);
   assert.match(line, /checkpoint=b{64}; decision=APPROVE/);
+});
+
+test("W upper counters separate HTTP, CE and mapped request metrics", () => {
+  const m = manifest("w-upper-counter");
+  assert.equal(m.limits.publish, 4);
+  assert.throws(() => manifest("w-upper-counter", {}), /independent/);
+  for (const width of [9, 127, 128]) {
+    const topic = `projects/${m.project}/topics/${"t".repeat(width)}`;
+    const http = wModule.wUpperBody(m, 2, "Hplus1", topic);
+    const logical = wModule.wUpperBody(m, 3, "logical-counter", topic);
+    const base = wBody(m, 2, 10485760);
+    assert.equal(http.httpBytes, 10485761);
+    assert.equal(http.raw, base.raw + " ");
+    assert.deepEqual(http.body, base.body);
+    for (const built of [http, logical]) {
+      const wire = shapeWire(built.body.events, topic);
+      assert.equal(built.requestBytes, wire.ce.length);
+      assert.equal(built.predictedRequestSize, wire.pubsub.length);
+      assert.deepEqual(built.anyBytes, wire.anyBytes);
+      assert.ok(built.anyBytes.every((n) => n < 450000));
+      assert.equal(built.sha256, createHash("sha256").update(built.raw).digest("hex"));
+    }
+    assert.ok(http.requestBytes < 10485760);
+    assert.ok(http.predictedRequestSize < 10485760);
+    assert.equal(logical.requestBytes, 10485200);
+    assert.ok(logical.predictedRequestSize > 10485760);
+  }
+  assert.throws(() => wModule.wUpperBody(m, 3, "Hplus1", "projects/x/topics/t"), /recipe|topic/);
+});
+
+test("W upper recorder sends four fixed observations and keeps accepted counters native", async () => {
+  const { result, calls } = await replay("w-upper-counter", "all-accepted");
+  assert.equal(result.stopped, null);
+  assert.equal(result.cleanupReady, true);
+  assert.equal(result.evidenceComplete, true);
+  const publishes = calls.filter((c) => c.host === "publishing");
+  assert.deepEqual(
+    publishes.map((c) => c.recipe.purpose),
+    ["before-control", "Hplus1", "logical-counter", "after-control"],
+  );
+  assert.deepEqual(
+    publishes.map((c) => c.recipe.sequence),
+    [1, 2, 3, 4],
+  );
+  assert.ok(result.publishes.every((p) => p.answer.status === 200 && p.accepted === true));
+  assert.equal(result.boundary, null);
+  assert.equal(result.layer, null);
+});
+
+test("W upper recorder retains either known refusal without choosing an upper metric", async () => {
+  for (const mode of ["native-size", "request-size"]) {
+    const { result } = await replay("w-upper-counter", mode);
+    assert.equal(result.stopped, null, mode);
+    assert.equal(result.evidenceComplete, true, mode);
+    assert.equal(result.cleanupReady, true, mode);
+    assert.equal(result.publishes.length, 4, mode);
+    if (mode === "request-size")
+      assert.ok(
+        result.publishes.slice(1, 3).every((p) => Number.isSafeInteger(p.observedRequestSize)),
+      );
+    else assert.ok(result.publishes.every((p) => p.observedRequestSize === undefined));
+    assert.ok(
+      result.publishes.slice(1, 3).every((p) => p.accepted === false && p.answer.bodyBase64),
+    );
+    assert.equal(result.layer, null);
+    assert.equal(result.boundary, null);
+  }
+});
+
+test("W upper recorder stops unknown publication and preserves incomplete cleanup evidence", async () => {
+  const { result } = await replay("w-upper-counter", "unknown-publish");
+  assert.match(result.stopped, /needs-review/);
+  assert.equal(result.publishes.length, 1);
+  assert.equal(result.evidenceComplete, false);
+  assert.equal(result.cleanupReady, true);
+});
+
+test("W upper recorder keeps lifecycle, control and unknown-counter stops bounded", async () => {
+  for (const [mode, count, cleanup, complete] of [
+    ["upper-before-control-refused", 1, true, false],
+    ["upper-after-control-refused", 4, true, false],
+    ["upper-unknown", 2, true, false],
+    ["upper-unclassified", 2, true, false],
+    ["upper-api-disabled", 0, true, false],
+    ["upper-unknown-create", 0, false, false],
+    ["upper-dependent", 4, false, true],
+    ["upper-topic-left", 4, false, true],
+    ["upper-unknown-delete", 4, false, true],
+    ["upper-pending-delete", 4, false, true],
+  ]) {
+    const { result } = await replay("w-upper-counter", mode);
+    assert.equal(result.publishes.length, count, mode);
+    assert.equal(result.cleanupReady, cleanup, mode);
+    assert.equal(result.evidenceComplete, complete, mode);
+    assert.ok(result.counts.publish <= 4, mode);
+  }
 });

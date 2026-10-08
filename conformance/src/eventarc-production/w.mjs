@@ -12,11 +12,11 @@ export function wManifest({ project, runId, stage, prerequisite }) {
   if (
     project !== "fireemu-oracle-events" ||
     !/^[a-f0-9]{12}$/.test(runId ?? "") ||
-    !["w0", "w1", "w2", "w-shape"].includes(stage)
+    !["w0", "w1", "w2", "w-shape", "w-upper-counter"].includes(stage)
   )
     throw new Error("W requires the owned project, fresh fixed-width run and stage");
   const ceiling = 40 * 1024 * 1024;
-  if (stage === "w-shape" && prerequisite !== undefined)
+  if (["w-shape", "w-upper-counter"].includes(stage) && prerequisite !== undefined)
     throw new Error("W shape is an independent fixed observation");
   if (["w1", "w2"].includes(stage)) {
     if (
@@ -45,7 +45,12 @@ export function wManifest({ project, runId, stage, prerequisite }) {
     ceiling,
     ladder: [1, 2, 4, 8, 16, 32].map((n) => n * 1024 * 1024).concat(ceiling - 2),
     ...(["w1", "w2"].includes(stage) ? { prerequisite } : {}),
-    limits: { preflight: 16, setup: 12, publish: stage === "w-shape" ? 5 : 20, cleanup: 38 },
+    limits: {
+      preflight: 16,
+      setup: 12,
+      publish: stage === "w-upper-counter" ? 4 : stage === "w-shape" ? 5 : 20,
+      cleanup: 38,
+    },
     wallMs: 150 * 60_000,
     reserveUsd: 0.05,
   };
@@ -130,6 +135,56 @@ export function wShapeBody(m, sequence, shape, topic) {
     predictedRequestSize: field(length(topic)) + messages.reduce((sum, n) => sum + field(n), 0),
     sha256: createHash("sha256").update(raw).digest("hex"),
   };
+}
+
+/** Two fixed upper-size diagnostics; mapped request size remains a prediction. */
+export function wUpperBody(m, sequence, counter, topic) {
+  if (
+    m.stage !== "w-upper-counter" ||
+    sequence !== { Hplus1: 2, "logical-counter": 3 }[counter] ||
+    !["Hplus1", "logical-counter"].includes(counter) ||
+    !new RegExp(`^projects/${m.project}/topics/[A-Za-z][A-Za-z0-9._~-]*$`).test(topic ?? "")
+  )
+    throw new Error("W upper recipe or managed topic mismatch");
+  let built = wBody(m, sequence, 10485760, counter === "Hplus1" ? 1 : 0);
+  if (counter === "logical-counter") {
+    for (let step = 0; step < 3; step++)
+      built = wBody(m, sequence, built.httpBytes + 10485200 - built.requestBytes);
+    if (built.requestBytes !== 10485200) throw new Error("W upper fixed CE size violated");
+  }
+  const varint = (n) => {
+    let count = 1;
+    for (; n >= 128; n = Math.floor(n / 128)) count++;
+    return count;
+  };
+  const field = (n) => 1 + varint(n) + n;
+  const length = (text) => Buffer.byteLength(text, "utf8");
+  const messages = built.body.events.map((event) => {
+    const attributes = {
+      "ce-id": event.id,
+      "ce-source": event.source,
+      "ce-specversion": event.specVersion,
+      "ce-type": event.type,
+      "ce-datacontenttype": event.attributes.datacontenttype.ceString,
+      "ce-time": event.attributes.time.ceTimestamp,
+    };
+    return (
+      field(length(event.textData)) +
+      Object.entries(attributes).reduce(
+        (sum, [key, value]) => sum + field(field(length(key)) + field(length(value))),
+        0,
+      )
+    );
+  });
+  const predictedRequestSize =
+    field(length(topic)) + messages.reduce((sum, n) => sum + field(n), 0);
+  if (
+    (counter === "Hplus1" &&
+      (built.requestBytes >= 10485760 || predictedRequestSize >= 10485760)) ||
+    (counter === "logical-counter" && predictedRequestSize <= 10485760)
+  )
+    throw new Error("W upper metric separation violated");
+  return { ...built, counter, predictedRequestSize };
 }
 
 /** An exact uncompressed ASCII JSON family, with per-publication fresh fixed-width IDs. */
@@ -458,6 +513,9 @@ export async function recordW({
       if (m.stage === "w-shape")
         for (const [index, shape] of ["N99", "T0", "I0"].entries())
           wShapeBody(m, index + 2, shape, `projects/${m.project}/topics/w-validation`);
+      else if (m.stage === "w-upper-counter")
+        for (const [index, counter] of ["Hplus1", "logical-counter"].entries())
+          wUpperBody(m, index + 2, counter, `projects/${m.project}/topics/w-validation`);
       else wBody(m, 20, m.ceiling - 2, 2);
       const services = await list(
         "usage",
@@ -502,6 +560,13 @@ export async function recordW({
           answer = wAcceptance(reply, judged);
           entry.accepted = answer;
           if (answer === false) entry.observation = reply.body.error.message;
+          if (built.counter && answer === false) {
+            const measured =
+              /^The value for request_size is too large\. You passed ([1-9][0-9]{7}) in the request, but the maximum value is 10000000\.(?![\s\S])/.exec(
+                entry.observation,
+              );
+            if (measured) entry.observedRequestSize = Number(measured[1]);
+          }
           if (built.shape && answer !== null) {
             const measured =
               /^The value for request_size is too large\. You passed ([1-9][0-9]{7}) in the request, but the maximum value is 10000000\.(?![\s\S])/.exec(
@@ -527,7 +592,7 @@ export async function recordW({
           .slice(0, -1)
           .filter((p) => p.whitespace === 0 && p.accepted !== null);
         if (
-          m.stage !== "w-shape" &&
+          !["w-shape", "w-upper-counter"].includes(m.stage) &&
           !whitespace &&
           earlier.some(
             (p) =>
@@ -548,6 +613,13 @@ export async function recordW({
         for (const shape of ["N99", "T0", "I0"]) {
           const sequence = result.publishes.length + 1;
           await publishBody(wShapeBody(m, sequence, shape, result.topic), sequence, shape);
+        }
+        if ((await publish(65536, 0, "after-control")) !== true)
+          throw new Error("W after control refused");
+      } else if (m.stage === "w-upper-counter") {
+        for (const counter of ["Hplus1", "logical-counter"]) {
+          const sequence = result.publishes.length + 1;
+          await publishBody(wUpperBody(m, sequence, counter, result.topic), sequence, counter);
         }
         if ((await publish(65536, 0, "after-control")) !== true)
           throw new Error("W after control refused");

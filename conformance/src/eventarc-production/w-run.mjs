@@ -65,7 +65,8 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
       throw new Error("W requires real Node 24.14.0 first on PATH and the gcloud bin directory");
     config = JSON.parse(readFileSync(argv[1], "utf8"));
     m = wManifest(config);
-    if (a2 && m.stage === "w-shape") throw new Error("W shape A2 requires a separate ruling");
+    if (a2 && ["w-shape", "w-upper-counter"].includes(m.stage))
+      throw new Error("W shape A2 requires a separate ruling");
     if (
       !/^[a-f0-9]{40}$/.test(config.sourceCommit ?? "") ||
       config.reserveUsd !== 0.05 ||

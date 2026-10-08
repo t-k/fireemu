@@ -537,6 +537,34 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
     return receipt
 
 
+def s5b_confirmed_versions(snapshot, documents):
+    """Join confirmed owned writes/readbacks by document version, preserving the original seed receipt."""
+    versions = {role: copy.deepcopy(doc['updateTime']) for role, doc in documents.items()}
+    roles = {doc['name']: role for role, doc in documents.items()}
+    def owned(body, role):
+        fields = body.get('fields', {})
+        return isinstance(fields, dict) and body.get('name') == documents[role]['name'] and all(web_string_value(fields.get(key), value) for key, value in {'owner': snapshot['ownerId'], 'nonce': snapshot['nonce'], 'case': role.split('_', 1)[1]}.items())
+    def remember(role, version):
+        if web_version(version) > web_version(versions[role]): versions[role] = copy.deepcopy(version)
+    for sdk, rows in ((False, snapshot.get('parentJournal', [])), (True, snapshot.get('sdkJournal', []))):
+        for row in rows:
+            answer = row.get('evidence', {}) if sdk else row.get('answer', {})
+            if answer.get('complete') is not True or (answer.get('grpcCode') if sdk else answer.get('code')) != 0: continue
+            response = answer.get('response') or {}
+            if row.get('method') == 'Commit':
+                writes = row.get('request', {}).get('writes', []); results = response.get('writeResults', [])
+                if len(writes) != 1 or len(results) != 1: raise ValueError('S5b confirmed write lineage differs')
+                body = writes[0].get('update', {}); role = roles.get(body.get('name'))
+                if role is None or not owned(body, role): raise ValueError('S5b confirmed write ownership differs')
+                remember(role, results[0].get('updateTime'))
+            elif not sdk and row.get('method') == 'GetDocument':
+                role = roles.get(row.get('request', {}).get('name'))
+                if role is not None:
+                    if not isinstance(response, dict) or not owned(response, role): raise ValueError('S5b confirmed read ownership differs')
+                    remember(role, response.get('updateTime'))
+    return versions
+
+
 def s5b_recovery_documents(snapshot, action):
     """Recover only the three confirmed S5b003 responsibilities; never infer an unknown write."""
     from txn_program_cli import table_for
@@ -559,8 +587,10 @@ def s5b_recovery_documents(snapshot, action):
             raise ValueError('S5b unresolved parent write')
     for row in snapshot.get('sdkJournal', []):
         evidence = row.get('evidence', {})
-        if row.get('method') == 'Commit' and (evidence.get('complete') is not True or evidence.get('status') != 200 or type(evidence.get('grpcCode')) is not int or evidence['grpcCode'] in (1, 2, 4, 13, 14)):
+        if row.get('method') == 'Commit' and (evidence.get('complete') is not True or evidence.get('status') != 200 or type(evidence.get('grpcCode')) is not int or not 0 <= evidence['grpcCode'] <= 16 or evidence['grpcCode'] in (1, 2, 4, 13, 14)):
             raise ValueError('S5b unresolved SDK write')
+    versions = s5b_confirmed_versions(snapshot, documents)
+    for role, document in documents.items(): document['confirmedUpdateTime'] = versions[role]
     return documents
 
 
@@ -588,7 +618,7 @@ def s5b_document_action(snapshot, action, send):
         if not absent:
             body = answer.get('response'); fields = body.get('fields', {}) if isinstance(body, dict) else {}
             owned = isinstance(body, dict) and isinstance(fields, dict) and body.get('name') == name and all(web_string_value(fields.get(key), value) for key, value in {'owner': snapshot['ownerId'], 'nonce': snapshot['nonce'], 'case': role.split('_', 1)[1]}.items())
-            try: owned = owned and web_version(body.get('updateTime')) == web_version(document['updateTime'])
+            try: owned = owned and web_version(body.get('updateTime')) == web_version(document['confirmedUpdateTime'])
             except ValueError: owned = False
             if not owned: blocked = True; break
             if action == 'cleanup':

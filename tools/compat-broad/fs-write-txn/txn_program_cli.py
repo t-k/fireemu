@@ -317,6 +317,14 @@ def database_action(args, table, original, value, main_root, ledger, decisions, 
         os.close(guard)
 
 
+def verify_sdk_recovery_history(rows, pins, table):
+    """A consumed S5b recovery envelope cannot acquire another packet identity."""
+    if any(row.get('packetId') == pins['packetId'] for row in rows):
+        raise ValueError('SDK recovery packet already used')
+    if table['name'] == 's5b-web-sdk-retry' and any(row.get('envelopeId') == pins['envelopeId'] for row in rows):
+        raise ValueError('S5b recovery envelope already used')
+
+
 def main(argv=None):
     require_packet_runtime('3.12.13')
     parser = argparse.ArgumentParser()
@@ -387,7 +395,7 @@ def main(argv=None):
                 else: raise ValueError('SDK original process is still running')
                 rows = read_ledger(ledger)
                 if table['name'] == 's5b-web-sdk-retry': remaining_task_budget(rows, value['reserveUsd'])
-                if any(row.get('packetId') == pins['packetId'] for row in rows): raise ValueError('SDK recovery packet already used')
+                verify_sdk_recovery_history(rows, pins, table)
                 original = [row for row in rows if row.get('packetId') == recovery['originalPacketId'] and row.get('nonce') == snapshot['nonce'] and row.get('project') == pins['project']]
                 if not original or original[-1].get('outcome') not in ('reserved', 'stopped-needs-review'): raise ValueError('SDK original responsibility missing')
                 not_before = shared._instant(recovery['notBefore'])

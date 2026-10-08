@@ -1237,7 +1237,7 @@ def test_s5b_string_value_accepts_recorded_discriminator_only(value):
 
 def test_s5b_recovery_session_counts_twenty_and_preserves_metadata_scope(tmp_path, monkeypatch):
     from txn_program_cli import table_for
-    snapshot = s5b_recovery_fixture(); deleted = set(); calls = []; budgets = []
+    snapshot = s5b_lineage_fixture(); deleted = set(); calls = []; budgets = []
     import txn_program_cli as cli
     import txn_program_authority as authority
     from test_txn_program_authority import s5b_recovery_authority
@@ -1271,7 +1271,7 @@ def test_s5b_recovery_session_counts_twenty_and_preserves_metadata_scope(tmp_pat
         def send(self, transport, rpc, request, **kwargs):
             calls.append(rpc); name = request['name']
             if rpc == 'DeleteDocument': deleted.add(name); return {'complete': True, 'code': 0}
-            return {'complete': True, 'code': 5 if name in deleted else 0, 'response': None if name in deleted else s5b_owned_body(snapshot, name)}
+            return {'complete': True, 'code': 5 if name in deleted else 0, 'response': None if name in deleted else snapshot['parentJournal'][0]['answer']['response'] if name == snapshot['documents']['node_control']['name'] else s5b_owned_body(snapshot, name)}
     monkeypatch.setattr(runner, 'refresh', refresh); monkeypatch.setattr(runner, 'MetadataSession', Metadata); monkeypatch.setattr(runner, 'NodeWire', Wire)
     result = runner.record_sdk_action(table=table_for('s5b-web-sdk-retry'), snapshot=snapshot, action='cleanup', directory=tmp_path/'recovery', baseline={'projectNumber': 'fixture', 's5b': {'fixture': True}}, runtime=value['runtime'], check=admission, now=lambda: __import__('datetime').datetime.now(__import__('datetime').timezone.utc))
     assert result['complete'] and budgets[0].total == 20 and calls == ['GetDocument', 'DeleteDocument', 'GetDocument'] * 3
@@ -1298,10 +1298,11 @@ def test_s5b_recovery_absence_does_not_delete():
     assert result['complete'] and calls == ['GetDocument'] * 3
 
 
-@pytest.mark.parametrize('grpc_code', [1, 2, 4, 13, 14, None])
+@pytest.mark.parametrize('grpc_code', [-1, 1, 2, 4, 13, 14, 17, None, True, False, '0'])
 def test_s5b_recovery_unknown_sdk_write_cannot_be_inferred_from_http_200(grpc_code):
     snapshot = s5b_recovery_fixture()
-    snapshot['sdkJournal'] = [{'method': 'Commit', 'evidence': {'complete': True, 'status': 200, 'grpcCode': grpc_code}}]
+    doc = snapshot['documents']['node_control']; body = s5b_owned_body(snapshot, doc['name'])
+    snapshot['sdkJournal'] = [{'method': 'Commit', 'request': {'writes': [{'update': body}]}, 'evidence': {'complete': True, 'status': 200, 'grpcCode': grpc_code, 'response': {'writeResults': [{'updateTime': doc['updateTime']}]}}}]
     with pytest.raises(ValueError): runner.sdk_document_action(snapshot, 'cleanup', lambda *_: pytest.fail('must not send'), now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
 
 
@@ -1317,3 +1318,56 @@ def test_s5b_recovery_charge_journal_failure_prevents_wire(tmp_path, monkeypatch
     monkeypatch.setattr(runner, 'save_private', lambda *_: (_ for _ in ()).throw(OSError('offline journal')))
     monkeypatch.setattr(runner, 'NodeWire', lambda *_args, **_kwargs: pytest.fail('must not dispatch'))
     with pytest.raises(OSError): runner.record_sdk_action(table=table_for('s5b-web-sdk-retry'), snapshot=s5b_recovery_fixture(), action='cleanup', directory=tmp_path/'recovery', baseline={}, runtime={}, check=lambda: None, now=lambda: None)
+
+
+@pytest.mark.parametrize('grpc_code', [0, 9, 16])
+def test_s5b_recovery_known_sdk_status_preserves_recorded_success_and_refusal(grpc_code):
+    snapshot = s5b_recovery_fixture()
+    doc = snapshot['documents']['node_control']; body = s5b_owned_body(snapshot, doc['name'])
+    snapshot['sdkJournal'] = [{'method': 'Commit', 'request': {'writes': [{'update': body}]}, 'evidence': {'complete': True, 'status': 200, 'grpcCode': grpc_code, 'response': {'writeResults': [{'updateTime': doc['updateTime']}]}}}]
+    calls = []
+    result = runner.sdk_document_action(snapshot, 'a2', lambda rpc, request: calls.append(rpc) or {'complete': True, 'code': 5}, now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+    assert result['complete'] and calls == ['GetDocument'] * 3
+    assert result['sdkJournal'] == snapshot['sdkJournal']
+
+
+def s5b_lineage_fixture():
+    snapshot = s5b_recovery_fixture()
+    document = snapshot['documents']['node_control']; name = document['name']
+    document['updateTime'] = {'seconds': '1791447720', 'nanos': 454445000}
+    seed = copy.deepcopy(document['updateTime']); updated = {'seconds': '1791447734', 'nanos': 19995000}
+    body = s5b_owned_body(snapshot, name); body['updateTime'] = updated
+    write = {'update': {'name': name, 'fields': copy.deepcopy(body['fields'])}, 'currentDocument': {'updateTime': seed}}
+    snapshot['sdkJournal'] = [{'id': 's5b-2', 'method': 'Commit', 'request': {'writes': [write]}, 'evidence': {'complete': True, 'status': 200, 'grpcCode': 0, 'response': {'writeResults': [{'updateTime': updated}]}}}]
+    snapshot['parentJournal'] = [{'id': 'web-48', 'method': 'GetDocument', 'request': {'name': name}, 'pending': False, 'answer': {'complete': True, 'code': 0, 'response': body}}]
+    return snapshot
+
+
+@pytest.mark.parametrize('read_evidence', [True, False])
+def test_s5b_recovery_uses_latest_confirmed_sdk_write_lineage_without_altering_seed(read_evidence):
+    snapshot = s5b_lineage_fixture(); original = copy.deepcopy(snapshot)
+    current = copy.deepcopy(snapshot['parentJournal'][0]['answer']['response'])
+    if not read_evidence: snapshot['parentJournal'] = []
+    deleted = set(); calls = []
+    def send(rpc, request):
+        name = request['name']; calls.append((rpc, copy.deepcopy(request)))
+        if rpc == 'DeleteDocument':
+            expected = current['updateTime'] if name == current['name'] else s5b_owned_body(snapshot, name)['updateTime']
+            assert request['currentDocument']['updateTime'] == expected
+            deleted.add(name); return {'complete': True, 'code': 0}
+        return {'complete': True, 'code': 5 if name in deleted else 0, 'response': None if name in deleted else current if name == current['name'] else s5b_owned_body(snapshot, name)}
+    result = runner.sdk_document_action(snapshot, 'cleanup', send, now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+    assert result['complete'] and len(calls) == 9
+    assert result['documents']['node_control']['updateTime'] == original['documents']['node_control']['updateTime']
+    assert result['documents']['node_control']['confirmedUpdateTime'] == current['updateTime']
+    assert snapshot['documents'] == original['documents'] and result['unknownAnswers'] == original['unknownAnswers']
+
+
+@pytest.mark.parametrize('change', ['foreign-marker', 'foreign-name', 'missing-version', 'unknown-write'])
+def test_s5b_recovery_rejects_unowned_or_incomplete_successful_write_lineage(change):
+    snapshot = s5b_lineage_fixture(); row = snapshot['sdkJournal'][0]
+    if change == 'foreign-marker': row['request']['writes'][0]['update']['fields']['owner']['stringValue'] = 'foreign'
+    if change == 'foreign-name': row['request']['writes'][0]['update']['name'] += '_foreign'
+    if change == 'missing-version': row['evidence']['response']['writeResults'] = []
+    if change == 'unknown-write': row['evidence']['complete'] = False
+    with pytest.raises(ValueError): runner.sdk_document_action(snapshot, 'cleanup', lambda *_: pytest.fail('must not dispatch'), now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))

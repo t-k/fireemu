@@ -3650,3 +3650,207 @@ async fn recorded_snapshot_and_seek_refusals_preserve_profile_diagnostics() {
         );
     }
 }
+
+#[allow(clippy::too_many_lines)]
+async fn streaming_update_case(
+    policy: fireemu_adapter_pubsub::PagingPolicy,
+    deadline: Option<i32>,
+    expected_error: Option<&str>,
+) {
+    use std::time::Duration;
+    use tokio_stream::wrappers::ReceiverStream;
+    let address = start_policy(policy).await;
+    let mut publisher = PublisherClient::new(grpc_channel(address).await);
+    let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
+    let topic = "projects/demo-app/topics/stream-update";
+    let sub = "projects/demo-app/subscriptions/stream-update";
+    publisher
+        .create_topic(pb::Topic {
+            name: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    subscriber
+        .create_subscription(pb::Subscription {
+            name: sub.to_owned(),
+            topic: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let initial = publisher
+        .publish(pb::PublishRequest {
+            topic: topic.to_owned(),
+            messages: vec![pb::PubsubMessage {
+                data: b"owned".to_vec(),
+                ..Default::default()
+            }],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let (requests, inbound) = tokio::sync::mpsc::channel(8);
+    requests
+        .send(pb::StreamingPullRequest {
+            subscription: sub.to_owned(),
+            stream_ack_deadline_seconds: 10,
+            max_outstanding_messages: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut outbound = subscriber
+        .streaming_pull(ReceiverStream::new(inbound))
+        .await
+        .unwrap()
+        .into_inner();
+    let received = tokio::time::timeout(Duration::from_secs(2), outbound.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(received.received_messages.len(), 1);
+    assert_eq!(
+        received.received_messages[0]
+            .message
+            .as_ref()
+            .unwrap()
+            .message_id,
+        initial.message_ids[0]
+    );
+    let mut ack = received.received_messages[0].ack_id.clone();
+    requests
+        .send(pb::StreamingPullRequest {
+            modify_deadline_ack_ids: vec![ack.clone()],
+            modify_deadline_seconds: deadline.into_iter().collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    if let Some(details) = expected_error {
+        let error = tokio::time::timeout(Duration::from_millis(500), outbound.message())
+            .await
+            .expect("invalid update must terminate without client cancellation")
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(error.message(), details);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(500), outbound.message())
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        subscriber
+            .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                subscription: sub.to_owned(),
+                ack_ids: vec![ack],
+                ack_deadline_seconds: 0,
+            })
+            .await
+            .unwrap();
+        let retained = subscriber
+            .pull(pb::PullRequest {
+                subscription: sub.to_owned(),
+                max_messages: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(retained.received_messages.len(), 1);
+        assert_eq!(
+            retained.received_messages[0]
+                .message
+                .as_ref()
+                .unwrap()
+                .message_id,
+            initial.message_ids[0]
+        );
+    } else {
+        if deadline == Some(0) {
+            let redelivery = tokio::time::timeout(Duration::from_secs(2), outbound.message())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                redelivery.received_messages[0]
+                    .message
+                    .as_ref()
+                    .unwrap()
+                    .message_id,
+                initial.message_ids[0]
+            );
+            ack.clone_from(&redelivery.received_messages[0].ack_id);
+        } else {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), outbound.message())
+                    .await
+                    .is_err()
+            );
+        }
+        requests
+            .send(pb::StreamingPullRequest {
+                ack_ids: vec![ack],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let next = publisher
+            .publish(pb::PublishRequest {
+                topic: topic.to_owned(),
+                messages: vec![pb::PubsubMessage {
+                    data: b"next".to_vec(),
+                    ..Default::default()
+                }],
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let delivered = tokio::time::timeout(Duration::from_secs(2), outbound.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            delivered.received_messages[0]
+                .message
+                .as_ref()
+                .unwrap()
+                .message_id,
+            next.message_ids[0]
+        );
+    }
+}
+
+#[tokio::test]
+async fn recorded_streaming_update_refusals_preserve_emulator_inputs() {
+    use fireemu_adapter_pubsub::PagingPolicy;
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        streaming_update_case(policy, None, (policy == PagingPolicy::Strict).then_some(
+            "Invalid arguments provided: the number of ack ids to modify must be equal to the number of ack deadlines."
+        )).await;
+    }
+}
+
+#[tokio::test]
+async fn recorded_streaming_deadline_601_refusal_preserves_emulator_input() {
+    use fireemu_adapter_pubsub::PagingPolicy;
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        streaming_update_case(policy, Some(601), (policy == PagingPolicy::Strict).then_some(
+            "Invalid ack deadline given (ack_deadline=601). The ack deadline must be between 0 and 600 seconds."
+        )).await;
+    }
+}
+
+#[tokio::test]
+async fn valid_streaming_deadline_bounds_keep_owned_ack_delivery() {
+    use fireemu_adapter_pubsub::PagingPolicy;
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        for deadline in [0, 600] {
+            streaming_update_case(policy, Some(deadline), None).await;
+        }
+    }
+}

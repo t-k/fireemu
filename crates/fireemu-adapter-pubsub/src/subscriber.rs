@@ -99,7 +99,9 @@ fn stream_pull_max(
         return Ok(100);
     };
     let now = handle.now();
-    handle.state().retain_outstanding_ack_ids(subscription, outstanding_ack_ids, now)?;
+    handle
+        .state()
+        .retain_outstanding_ack_ids(subscription, outstanding_ack_ids, now)?;
     Ok(limit.saturating_sub(outstanding_ack_ids.len()).min(100))
 }
 
@@ -108,7 +110,17 @@ fn apply_stream_request(
     handle: &PubSubHandle,
     sub: &SubscriptionName,
     req: &pb::StreamingPullRequest,
-) {
+) -> Result<(), Status> {
+    if handle.paging_policy == crate::PagingPolicy::Strict {
+        if req.modify_deadline_ack_ids.len() != req.modify_deadline_seconds.len() {
+            return Err(Status::invalid_argument(
+                "Invalid arguments provided: the number of ack ids to modify must be equal to the number of ack deadlines.",
+            ));
+        }
+        for seconds in &req.modify_deadline_seconds {
+            crate::admission::ack_deadline(i64::from(*seconds)).map_err(|error| status(&error))?;
+        }
+    }
     if !req.ack_ids.is_empty() {
         let ids: Vec<_> = req
             .ack_ids
@@ -128,6 +140,7 @@ fn apply_stream_request(
         let id = crate::ack_token::internal(id, handle.paging_policy);
         let _ = state.modify_ack_deadline(sub, std::slice::from_ref(&id), s, now);
     }
+    Ok(())
 }
 
 #[tonic::async_trait]
@@ -469,7 +482,12 @@ impl Subscriber for SubscriberService {
                         }
                     } => {
                         match msg {
-                            Ok(Some(req)) => apply_stream_request(&handle, &name, &req),
+                            Ok(Some(req)) => {
+                                if let Err(error) = apply_stream_request(&handle, &name, &req) {
+                                    let _ = tx.send(Err(error)).await;
+                                    break;
+                                }
+                            },
                             Ok(None) | Err(_) => break,
                         }
                     }
@@ -724,7 +742,8 @@ mod ack_wire_tests {
                 modify_deadline_seconds: vec![0],
                 ..Default::default()
             },
-        );
+        )
+        .unwrap();
         let renewed = handle.pull(&sub, 1).unwrap();
         assert_eq!(renewed.len(), 1);
         assert_eq!(renewed[0].message.message_id, first[0].message.message_id);
@@ -736,7 +755,91 @@ mod ack_wire_tests {
                 ack_ids: vec![issued, current],
                 ..Default::default()
             },
-        );
+        )
+        .unwrap();
         assert!(handle.pull(&sub, 1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn streaming_invalid_updates_leave_ack_and_deadline_state_unchanged() {
+        for deadline in [None, Some(601)] {
+            let now = LogicalInstant::from_unix_seconds(1_700_000_000);
+            let clock = Arc::new(Mutex::new(VirtualClock::new(now)));
+            let handle = PubSubHandle::new(
+                Arc::new(Mutex::new(PubSubState::new(99))),
+                Arc::clone(&clock),
+                None,
+            )
+            .with_paging_policy(crate::PagingPolicy::Strict);
+            let topic = TopicName::new("demo-app", "stream-atomic").unwrap();
+            let config = crate::convert::subscription_from_proto(&pb::Subscription {
+                name: "projects/demo-app/subscriptions/stream-atomic".to_owned(),
+                topic: topic.to_full(),
+                ..Default::default()
+            })
+            .unwrap();
+            let sub = config.name.clone();
+            handle
+                .state()
+                .create_topic(topic.clone(), BTreeMap::new())
+                .unwrap();
+            handle.state().create_subscription(config).unwrap();
+            handle
+                .state()
+                .publish(
+                    &topic,
+                    vec![
+                        PubsubMessage {
+                            data: vec![1],
+                            ..Default::default()
+                        },
+                        PubsubMessage {
+                            data: vec![2],
+                            ..Default::default()
+                        },
+                    ],
+                    now,
+                )
+                .unwrap();
+            let owned = handle.pull(&sub, 2).unwrap();
+            assert_eq!(owned.len(), 2);
+            let _result = apply_stream_request(
+                &handle,
+                &sub,
+                &pb::StreamingPullRequest {
+                    ack_ids: vec![crate::ack_token::wire(
+                        &owned[0].ack_id,
+                        handle.paging_policy,
+                    )],
+                    modify_deadline_ack_ids: vec![crate::ack_token::wire(
+                        &owned[1].ack_id,
+                        handle.paging_policy,
+                    )],
+                    modify_deadline_seconds: deadline.into_iter().collect(),
+                    ..Default::default()
+                },
+            );
+            clock
+                .lock()
+                .unwrap()
+                .advance_to(LogicalInstant::from_unix_seconds(1_700_000_011))
+                .unwrap();
+            let retained = handle.pull(&sub, 2).unwrap();
+            assert_eq!(
+                retained.len(),
+                2,
+                "invalid frame must not ACK or extend either owned lease"
+            );
+            assert_eq!(
+                retained
+                    .iter()
+                    .map(|m| &m.message.message_id)
+                    .collect::<BTreeSet<_>>(),
+                owned
+                    .iter()
+                    .map(|m| &m.message.message_id)
+                    .collect::<BTreeSet<_>>()
+            );
+        }
     }
 }

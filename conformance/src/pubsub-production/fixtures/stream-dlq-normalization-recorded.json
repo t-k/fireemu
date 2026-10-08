@@ -1,0 +1,2019 @@
+{
+  "scope": "Redacted same-route two-run response and producer fixtures. ACK/message/cursor values masked at the original width. Layout fields are recorded wire lengths, not reserialized fixture lengths.",
+  "captures": [
+    [
+      {
+        "note": "run-start",
+        "suite": "stream-dlq-v2",
+        "runId": "012345abcdef",
+        "project": "demo-oracle-masks0"
+      },
+      {
+        "n": 4,
+        "case": "deleted-cursor/rest",
+        "step": "04",
+        "op": "listTopics",
+        "transport": "rest",
+        "request": {
+          "method": "GET",
+          "path": "/v1/projects/demo-oracle-masks0/topics?pageSize=1"
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "topics": [
+              {
+                "name": "projects/demo-oracle-masks0/topics/fe012345abcdef-dc-r-cursor-0"
+              }
+            ],
+            "nextPageToken": "AAAAAAAAAAAAAAAAAAAAAAAAAA"
+          },
+          "bodyBytes": 163
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 4,
+          "line": 10,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 6,
+        "case": "deleted-cursor/rest",
+        "step": "06",
+        "op": "listTopics",
+        "transport": "rest",
+        "request": {
+          "method": "GET",
+          "path": "/v1/projects/demo-oracle-masks0/topics?pageSize=1&pageToken=AAAAAAAAAAAAAAAAAAAAAAAAAA"
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "topics": [
+              {
+                "name": "projects/demo-oracle-masks0/topics/fe012345abcdef-dc-r-cursor-1"
+              }
+            ],
+            "nextPageToken": "AAAAAAAAAAAAAAAAAAAAAAAAAA"
+          },
+          "bodyBytes": 163
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 6,
+          "line": 15,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 15,
+        "case": "stream-invalid-deadline/grpc/rest",
+        "step": "01",
+        "op": "publish",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/topics/fe012345abcdef-sd-g-stream-topic:publish",
+          "body": {
+            "messages": [
+              {
+                "data": "c3RyZWFtLWRlYWRsaW5lLTAxMjM0NWFiY2RlZg=="
+              }
+            ]
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "messageIds": [
+              "11111111111111111"
+            ]
+          },
+          "bodyBytes": 50
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 15,
+          "line": 44,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "case": "stream-invalid-deadline/grpc",
+        "step": "stream",
+        "note": "stream-frame",
+        "direction": "out",
+        "body": {
+          "subscription": "projects/demo-oracle-masks0/subscriptions/fe012345abcdef-sd-g-stream-sub",
+          "streamAckDeadlineSeconds": 10,
+          "maxOutstandingMessages": "1",
+          "maxOutstandingBytes": "1024"
+        },
+        "bodyBytes": 81,
+        "frame": 1,
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": null,
+          "line": 46,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "case": "stream-invalid-deadline/grpc",
+        "step": "stream",
+        "note": "stream-frame",
+        "direction": "in",
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+              "message": {
+                "data": "c3RyZWFtLWRlYWRsaW5lLTAxMjM0NWFiY2RlZg==",
+                "messageId": "11111111111111111",
+                "publishTime": {
+                  "seconds": "1791285097",
+                  "nanos": 393000000
+                }
+              }
+            }
+          ],
+          "subscriptionProperties": {}
+        },
+        "bodyBytes": 263,
+        "frame": 1,
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": null,
+          "line": 47,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "case": "stream-invalid-deadline/grpc",
+        "step": "stream",
+        "note": "stream-frame",
+        "direction": "out",
+        "body": {
+          "modifyDeadlineAckIds": [
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ],
+          "modifyDeadlineSeconds": [
+            -1
+          ]
+        },
+        "bodyBytes": 205,
+        "frame": 2,
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": null,
+          "line": 48,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 25,
+        "case": "dlq-no-grant/rest",
+        "step": "06",
+        "op": "publish",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/topics/fe012345abcdef-db-r-source:publish",
+          "body": {
+            "messages": [
+              {
+                "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                "attributes": {
+                  "recorderRun": "012345abcdef"
+                }
+              }
+            ]
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "messageIds": [
+              "11111111111111111"
+            ]
+          },
+          "bodyBytes": 50
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 25,
+          "line": 74,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 26,
+        "case": "dlq-no-grant/rest",
+        "step": "07",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:12:17.869Z"
+                },
+                "deliveryAttempt": 1
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 26,
+          "line": 77,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 28,
+        "case": "dlq-no-grant/rest",
+        "step": "09",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:12:17.869Z"
+                },
+                "deliveryAttempt": 2
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 28,
+          "line": 82,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 30,
+        "case": "dlq-no-grant/rest",
+        "step": "11",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:12:17.869Z"
+                },
+                "deliveryAttempt": 3
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 30,
+          "line": 87,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 32,
+        "case": "dlq-no-grant/rest",
+        "step": "13",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:12:17.869Z"
+                },
+                "deliveryAttempt": 4
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 32,
+          "line": 92,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 34,
+        "case": "dlq-no-grant/rest",
+        "step": "15",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:12:17.869Z"
+                },
+                "deliveryAttempt": 5
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 34,
+          "line": 97,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 36,
+        "case": "dlq-no-grant/rest",
+        "step": "17",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:12:17.869Z"
+                },
+                "deliveryAttempt": 6
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 36,
+          "line": 102,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 38,
+        "case": "dlq-no-grant/rest",
+        "step": "19",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:12:17.869Z"
+                },
+                "deliveryAttempt": 7
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 38,
+          "line": 107,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 40,
+        "case": "dlq-no-grant/rest",
+        "step": "21",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:12:17.869Z"
+                },
+                "deliveryAttempt": 8
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 40,
+          "line": 112,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 42,
+        "case": "dlq-no-grant/rest",
+        "step": "23",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:12:17.869Z"
+                },
+                "deliveryAttempt": 9
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 42,
+          "line": 117,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 80,
+        "case": "dlq-no-grant/rest",
+        "step": "61",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:12:17.869Z"
+                },
+                "deliveryAttempt": 1
+              }
+            ]
+          },
+          "bodyBytes": 536
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 80,
+          "line": 230,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 83,
+        "case": "rest-layout-routes/rest",
+        "step": "03",
+        "op": "publish",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/topics/fe012345abcdef-rl-r-source:publish",
+          "body": {
+            "messages": [
+              {
+                "data": "bGF5b3V0LTAxMjM0NWFiY2RlZg=="
+              }
+            ]
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "messageIds": [
+              "11111111111111111"
+            ]
+          },
+          "bodyBytes": 50
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 83,
+          "line": 239,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 85,
+        "case": "rest-layout-routes/rest",
+        "step": "05",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-rl-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "bGF5b3V0LTAxMjM0NWFiY2RlZg==",
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:17:12.956Z"
+                }
+              }
+            ]
+          },
+          "bodyBytes": 425
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 85,
+          "line": 243,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 99,
+        "case": "dlq-grant-window/rest",
+        "step": "12",
+        "op": "publish",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/topics/fe012345abcdef-da-r-source:publish",
+          "body": {
+            "messages": [
+              {
+                "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                "attributes": {
+                  "recorderRun": "012345abcdef"
+                }
+              }
+            ]
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "messageIds": [
+              "11111111111111111"
+            ]
+          },
+          "bodyBytes": 50
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 99,
+          "line": 281,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 100,
+        "case": "dlq-grant-window/rest",
+        "step": "13",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-da-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:32:55.259Z"
+                },
+                "deliveryAttempt": 1
+              }
+            ]
+          },
+          "bodyBytes": 533
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 100,
+          "line": 284,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 102,
+        "case": "dlq-grant-window/rest",
+        "step": "15",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-da-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:32:55.259Z"
+                },
+                "deliveryAttempt": 2
+              }
+            ]
+          },
+          "bodyBytes": 535
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 102,
+          "line": 289,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 104,
+        "case": "dlq-grant-window/rest",
+        "step": "17",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-da-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:32:55.259Z"
+                },
+                "deliveryAttempt": 3
+              }
+            ]
+          },
+          "bodyBytes": 535
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 104,
+          "line": 294,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 106,
+        "case": "dlq-grant-window/rest",
+        "step": "19",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-da-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:32:55.259Z"
+                },
+                "deliveryAttempt": 4
+              }
+            ]
+          },
+          "bodyBytes": 535
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 106,
+          "line": 299,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 108,
+        "case": "dlq-grant-window/rest",
+        "step": "21",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-da-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:32:55.259Z"
+                },
+                "deliveryAttempt": 5
+              }
+            ]
+          },
+          "bodyBytes": 535
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 108,
+          "line": 304,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 114,
+        "case": "dlq-grant-window/rest",
+        "step": "27",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fe012345abcdef-da-r-sink:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": true
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLTAxMjM0NWFiY2RlZi1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "012345abcdef",
+                    "CloudPubSubDeadLetterSourceSubscription": "fe012345abcdef-da-r-source",
+                    "CloudPubSubDeadLetterSourceTopicPublishTime": "2026-10-06T11:32:55.259+00:00",
+                    "CloudPubSubDeadLetterSourceSubscriptionProject": "demo-oracle-masks0",
+                    "CloudPubSubDeadLetterSourceDeliveryCount": "5"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T11:33:07.886Z"
+                }
+              }
+            ]
+          },
+          "bodyBytes": 823
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 114,
+          "line": 321,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      },
+      {
+        "n": 16,
+        "case": "stream-invalid-deadline/grpc",
+        "step": "stream",
+        "op": "streamingPull",
+        "transport": "grpc",
+        "request": {
+          "rpc": "Subscriber/StreamingPull",
+          "frames": [
+            {
+              "subscription": "projects/demo-oracle-masks0/subscriptions/fe012345abcdef-sd-g-stream-sub",
+              "streamAckDeadlineSeconds": 10,
+              "maxOutstandingMessages": "1",
+              "maxOutstandingBytes": "1024"
+            }
+          ],
+          "afterReceive": {
+            "modifyDeadlineSeconds": -1
+          }
+        },
+        "response": {
+          "code": "INVALID_ARGUMENT",
+          "message": "Invalid ack deadline given (ack_deadline=-1). The ack deadline must be between 0 and 600 seconds.",
+          "unknown": false,
+          "inboundFrames": 1,
+          "outboundFrames": 2,
+          "followUpSent": true
+        },
+        "source": {
+          "runId": "1c4d32925e36",
+          "n": 16,
+          "line": 49,
+          "captureSha256": "78991db3aee1cc2d1a4e28d6c8e0bc734a15102290f7c4413cefe00ecaff27b9"
+        }
+      }
+    ],
+    [
+      {
+        "note": "run-start",
+        "suite": "stream-dlq-v2",
+        "runId": "fedcba543210",
+        "project": "demo-oracle-masks0"
+      },
+      {
+        "n": 4,
+        "case": "deleted-cursor/rest",
+        "step": "04",
+        "op": "listTopics",
+        "transport": "rest",
+        "request": {
+          "method": "GET",
+          "path": "/v1/projects/demo-oracle-masks0/topics?pageSize=1"
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "topics": [
+              {
+                "name": "projects/demo-oracle-masks0/topics/fefedcba543210-dc-r-cursor-1"
+              }
+            ],
+            "nextPageToken": "AAAAAAAAAAAAAAAAAAAAAAAAAA"
+          },
+          "bodyBytes": 163
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 4,
+          "line": 10,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 6,
+        "case": "deleted-cursor/rest",
+        "step": "06",
+        "op": "listTopics",
+        "transport": "rest",
+        "request": {
+          "method": "GET",
+          "path": "/v1/projects/demo-oracle-masks0/topics?pageSize=1&pageToken=AAAAAAAAAAAAAAAAAAAAAAAAAA"
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "topics": [
+              {
+                "name": "projects/demo-oracle-masks0/topics/fefedcba543210-dc-r-cursor-2"
+              }
+            ],
+            "nextPageToken": "AAAAAAAAAAAAAAAAAAAAAAAAAA"
+          },
+          "bodyBytes": 163
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 6,
+          "line": 15,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 15,
+        "case": "stream-invalid-deadline/grpc/rest",
+        "step": "01",
+        "op": "publish",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/topics/fefedcba543210-sd-g-stream-topic:publish",
+          "body": {
+            "messages": [
+              {
+                "data": "c3RyZWFtLWRlYWRsaW5lLWZlZGNiYTU0MzIxMA=="
+              }
+            ]
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "messageIds": [
+              "11111111111111111"
+            ]
+          },
+          "bodyBytes": 50
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 15,
+          "line": 44,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "case": "stream-invalid-deadline/grpc",
+        "step": "stream",
+        "note": "stream-frame",
+        "direction": "out",
+        "body": {
+          "subscription": "projects/demo-oracle-masks0/subscriptions/fefedcba543210-sd-g-stream-sub",
+          "streamAckDeadlineSeconds": 10,
+          "maxOutstandingMessages": "1",
+          "maxOutstandingBytes": "1024"
+        },
+        "bodyBytes": 81,
+        "frame": 1,
+        "source": {
+          "runId": "a9232e061896",
+          "n": null,
+          "line": 46,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "case": "stream-invalid-deadline/grpc",
+        "step": "stream",
+        "note": "stream-frame",
+        "direction": "in",
+        "body": {
+          "receivedMessages": [
+            {
+              "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+              "message": {
+                "data": "c3RyZWFtLWRlYWRsaW5lLWZlZGNiYTU0MzIxMA==",
+                "messageId": "11111111111111111",
+                "publishTime": {
+                  "seconds": "1791291199",
+                  "nanos": 833000000
+                }
+              }
+            }
+          ],
+          "subscriptionProperties": {}
+        },
+        "bodyBytes": 263,
+        "frame": 1,
+        "source": {
+          "runId": "a9232e061896",
+          "n": null,
+          "line": 47,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "case": "stream-invalid-deadline/grpc",
+        "step": "stream",
+        "note": "stream-frame",
+        "direction": "out",
+        "body": {
+          "modifyDeadlineAckIds": [
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ],
+          "modifyDeadlineSeconds": [
+            -1
+          ]
+        },
+        "bodyBytes": 205,
+        "frame": 2,
+        "source": {
+          "runId": "a9232e061896",
+          "n": null,
+          "line": 48,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 25,
+        "case": "dlq-no-grant/rest",
+        "step": "06",
+        "op": "publish",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/topics/fefedcba543210-db-r-source:publish",
+          "body": {
+            "messages": [
+              {
+                "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                "attributes": {
+                  "recorderRun": "fedcba543210"
+                }
+              }
+            ]
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "messageIds": [
+              "11111111111111111"
+            ]
+          },
+          "bodyBytes": 50
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 25,
+          "line": 74,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 26,
+        "case": "dlq-no-grant/rest",
+        "step": "07",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "fedcba543210"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T12:53:58.005Z"
+                },
+                "deliveryAttempt": 1
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 26,
+          "line": 77,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 28,
+        "case": "dlq-no-grant/rest",
+        "step": "09",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "fedcba543210"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T12:53:58.005Z"
+                },
+                "deliveryAttempt": 2
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 28,
+          "line": 82,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 30,
+        "case": "dlq-no-grant/rest",
+        "step": "11",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "fedcba543210"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T12:53:58.005Z"
+                },
+                "deliveryAttempt": 3
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 30,
+          "line": 87,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 32,
+        "case": "dlq-no-grant/rest",
+        "step": "13",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "fedcba543210"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T12:53:58.005Z"
+                },
+                "deliveryAttempt": 4
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 32,
+          "line": 92,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 34,
+        "case": "dlq-no-grant/rest",
+        "step": "15",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "fedcba543210"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T12:53:58.005Z"
+                },
+                "deliveryAttempt": 5
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 34,
+          "line": 97,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 36,
+        "case": "dlq-no-grant/rest",
+        "step": "17",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "fedcba543210"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T12:53:58.005Z"
+                },
+                "deliveryAttempt": 6
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 36,
+          "line": 102,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 38,
+        "case": "dlq-no-grant/rest",
+        "step": "19",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "fedcba543210"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T12:53:58.005Z"
+                },
+                "deliveryAttempt": 7
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 38,
+          "line": 107,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 40,
+        "case": "dlq-no-grant/rest",
+        "step": "21",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "fedcba543210"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T12:53:58.005Z"
+                },
+                "deliveryAttempt": 8
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 40,
+          "line": 112,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 42,
+        "case": "dlq-no-grant/rest",
+        "step": "23",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "fedcba543210"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T12:53:58.005Z"
+                },
+                "deliveryAttempt": 9
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 42,
+          "line": 117,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 80,
+        "case": "dlq-no-grant/rest",
+        "step": "61",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-db-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "fedcba543210"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T12:53:58.005Z"
+                },
+                "deliveryAttempt": 1
+              }
+            ]
+          },
+          "bodyBytes": 536
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 80,
+          "line": 230,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 83,
+        "case": "rest-layout-routes/rest",
+        "step": "03",
+        "op": "publish",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/topics/fefedcba543210-rl-r-source:publish",
+          "body": {
+            "messages": [
+              {
+                "data": "bGF5b3V0LWZlZGNiYTU0MzIxMA=="
+              }
+            ]
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "messageIds": [
+              "11111111111111111"
+            ]
+          },
+          "bodyBytes": 50
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 83,
+          "line": 239,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 85,
+        "case": "rest-layout-routes/rest",
+        "step": "05",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-rl-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "bGF5b3V0LWZlZGNiYTU0MzIxMA==",
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T12:58:55.144Z"
+                }
+              }
+            ]
+          },
+          "bodyBytes": 424
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 85,
+          "line": 243,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 99,
+        "case": "dlq-grant-window/rest",
+        "step": "12",
+        "op": "publish",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/topics/fefedcba543210-da-r-source:publish",
+          "body": {
+            "messages": [
+              {
+                "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                "attributes": {
+                  "recorderRun": "fedcba543210"
+                }
+              }
+            ]
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "messageIds": [
+              "11111111111111111"
+            ]
+          },
+          "bodyBytes": 50
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 99,
+          "line": 281,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 100,
+        "case": "dlq-grant-window/rest",
+        "step": "13",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-da-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "fedcba543210"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T13:14:39.599Z"
+                },
+                "deliveryAttempt": 1
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 100,
+          "line": 284,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 102,
+        "case": "dlq-grant-window/rest",
+        "step": "15",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-da-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "fedcba543210"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T13:14:39.599Z"
+                },
+                "deliveryAttempt": 2
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 102,
+          "line": 289,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 104,
+        "case": "dlq-grant-window/rest",
+        "step": "17",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-da-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "fedcba543210"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T13:14:39.599Z"
+                },
+                "deliveryAttempt": 3
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 104,
+          "line": 294,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 106,
+        "case": "dlq-grant-window/rest",
+        "step": "19",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-da-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "fedcba543210"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T13:14:39.599Z"
+                },
+                "deliveryAttempt": 4
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 106,
+          "line": 299,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 108,
+        "case": "dlq-grant-window/rest",
+        "step": "21",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-da-r-source:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": false
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "recorderRun": "fedcba543210"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T13:14:39.599Z"
+                },
+                "deliveryAttempt": 5
+              }
+            ]
+          },
+          "bodyBytes": 537
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 108,
+          "line": 304,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 114,
+        "case": "dlq-grant-window/rest",
+        "step": "27",
+        "op": "pull",
+        "transport": "rest",
+        "request": {
+          "method": "POST",
+          "path": "/v1/projects/demo-oracle-masks0/subscriptions/fefedcba543210-da-r-sink:pull",
+          "body": {
+            "maxMessages": 1,
+            "returnImmediately": true
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "receivedMessages": [
+              {
+                "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "message": {
+                  "data": "ZGxxLWZlZGNiYTU0MzIxMC1pZGVudGl0eQ==",
+                  "attributes": {
+                    "CloudPubSubDeadLetterSourceSubscription": "fefedcba543210-da-r-source",
+                    "CloudPubSubDeadLetterSourceTopicPublishTime": "2026-10-06T13:14:39.599+00:00",
+                    "recorderRun": "fedcba543210",
+                    "CloudPubSubDeadLetterSourceDeliveryCount": "5",
+                    "CloudPubSubDeadLetterSourceSubscriptionProject": "demo-oracle-masks0"
+                  },
+                  "messageId": "11111111111111111",
+                  "publishTime": "2026-10-06T13:14:52.587Z"
+                }
+              }
+            ]
+          },
+          "bodyBytes": 819
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 114,
+          "line": 321,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      },
+      {
+        "n": 16,
+        "case": "stream-invalid-deadline/grpc",
+        "step": "stream",
+        "op": "streamingPull",
+        "transport": "grpc",
+        "request": {
+          "rpc": "Subscriber/StreamingPull",
+          "frames": [
+            {
+              "subscription": "projects/demo-oracle-masks0/subscriptions/fefedcba543210-sd-g-stream-sub",
+              "streamAckDeadlineSeconds": 10,
+              "maxOutstandingMessages": "1",
+              "maxOutstandingBytes": "1024"
+            }
+          ],
+          "afterReceive": {
+            "modifyDeadlineSeconds": -1
+          }
+        },
+        "response": {
+          "code": "INVALID_ARGUMENT",
+          "message": "Invalid ack deadline given (ack_deadline=-1). The ack deadline must be between 0 and 600 seconds.",
+          "unknown": false,
+          "inboundFrames": 1,
+          "outboundFrames": 2,
+          "followUpSent": true
+        },
+        "source": {
+          "runId": "a9232e061896",
+          "n": 16,
+          "line": 49,
+          "captureSha256": "7cd50c0feaa27fec79ef63d3563e4ad3ec4b0001ab8b679591665eaf13fe9445"
+        }
+      }
+    ]
+  ]
+}

@@ -1,0 +1,307 @@
+[
+  {
+    "provenance": {
+      "run": "148026092d56",
+      "line": 3,
+      "n": 1
+    },
+    "op": "getTopic",
+    "request": {
+      "method": "GET",
+      "path": "/v1/projects/demo-v2/topics/fe0123456789ab-lc-r-t"
+    },
+    "response": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "Resource not found (resource=fe0123456789ab-lc-r-t).",
+          "status": "NOT_FOUND"
+        }
+      }
+    },
+    "ms": 425
+  },
+  {
+    "provenance": {
+      "run": "148026092d56",
+      "line": 4,
+      "n": 2
+    },
+    "op": "createTopic",
+    "request": {
+      "method": "PUT",
+      "path": "/v1/projects/demo-v2/topics/fe0123456789ab-lc-r-t",
+      "body": {}
+    },
+    "response": {
+      "status": 200,
+      "body": {
+        "name": "projects/demo-v2/topics/fe0123456789ab-lc-r-t"
+      }
+    },
+    "ms": 4405
+  },
+  {
+    "provenance": {
+      "run": "148026092d56",
+      "line": 8,
+      "n": 6
+    },
+    "op": "getSubscription",
+    "request": {
+      "method": "GET",
+      "path": "/v1/projects/demo-v2/subscriptions/fe0123456789ab-lc-r-s"
+    },
+    "response": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "Resource not found (resource=fe0123456789ab-lc-r-s).",
+          "status": "NOT_FOUND"
+        }
+      }
+    },
+    "ms": 1251
+  },
+  {
+    "provenance": {
+      "run": "148026092d56",
+      "line": 9,
+      "n": 7
+    },
+    "op": "createSubscription",
+    "request": {
+      "method": "PUT",
+      "path": "/v1/projects/demo-v2/subscriptions/fe0123456789ab-lc-r-s",
+      "body": {
+        "topic": "projects/demo-v2/topics/fe0123456789ab-lc-r-never-created"
+      }
+    },
+    "response": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": 404,
+          "message": "Resource not found (resource=fe0123456789ab-lc-r-never-created).",
+          "status": "NOT_FOUND"
+        }
+      }
+    },
+    "ms": 324
+  },
+  {
+    "provenance": {
+      "run": "148026092d56",
+      "line": 14,
+      "n": 12
+    },
+    "op": "deleteTopic",
+    "request": {
+      "method": "DELETE",
+      "path": "/v1/projects/demo-v2/topics/fe0123456789ab-lc-r-t"
+    },
+    "response": {
+      "status": 200,
+      "body": {}
+    },
+    "ms": 2459
+  },
+  {
+    "provenance": {
+      "run": "148026092d56",
+      "line": 102,
+      "n": 92
+    },
+    "op": "listSubscriptions",
+    "request": {
+      "method": "GET",
+      "path": "/v1/projects/demo-v2/subscriptions?pageSize=1&pageToken=en9jd2lYFgkBRFB4XQwbBVAOGA"
+    },
+    "response": {
+      "status": 200,
+      "body": {
+        "subscriptions": [
+          {
+            "name": "projects/demo-v2/subscriptions/fe0123456789ab-pg-r-b",
+            "topic": "projects/demo-v2/topics/fe0123456789ab-pg-r-p",
+            "pushConfig": {},
+            "ackDeadlineSeconds": 10,
+            "messageRetentionDuration": "604800s",
+            "expirationPolicy": {
+              "ttl": "2678400s"
+            },
+            "state": "ACTIVE"
+          }
+        ],
+        "nextPageToken": "AAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    },
+    "ms": 1180
+  },
+  {
+    "provenance": {
+      "run": "148026092d56",
+      "line": 103,
+      "n": 93
+    },
+    "op": "listTopics",
+    "request": {
+      "method": "GET",
+      "path": "/v1/projects/demo-v2/topics?pageSize=1"
+    },
+    "response": {
+      "status": 200,
+      "body": {
+        "topics": [
+          {
+            "name": "projects/demo-v2/topics/x14"
+          }
+        ],
+        "nextPageToken": "AAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    },
+    "ms": 235
+  },
+  {
+    "provenance": {
+      "run": "148026092d56",
+      "line": 107,
+      "n": 97
+    },
+    "op": "listSnapshots",
+    "request": {
+      "method": "GET",
+      "path": "/v1/projects/demo-v2/snapshots?pageSize=1"
+    },
+    "response": {
+      "status": 200,
+      "body": {}
+    },
+    "ms": 974
+  },
+  {
+    "provenance": {
+      "run": "148026092d56",
+      "line": 318,
+      "n": 292
+    },
+    "op": "pull",
+    "request": {
+      "method": "POST",
+      "path": "/v1/projects/demo-v2/subscriptions/fe0123456789ab-pw-r-s:pull",
+      "body": {
+        "maxMessages": 1,
+        "returnImmediately": false
+      }
+    },
+    "response": {
+      "status": 200,
+      "body": {
+        "receivedMessages": [
+          {
+            "ackId": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "message": {
+              "data": "dHdv",
+              "attributes": {
+                "n": "1",
+                "color": "red"
+              },
+              "messageId": "21321106758856281",
+              "publishTime": "2026-10-04T21:40:28.372Z"
+            }
+          }
+        ]
+      }
+    },
+    "ms": 2501
+  },
+  {
+    "provenance": {
+      "run": "148026092d56",
+      "line": 319,
+      "n": 293
+    },
+    "op": "acknowledge",
+    "request": {
+      "method": "POST",
+      "path": "/v1/projects/demo-v2/subscriptions/fe0123456789ab-pw-r-s:acknowledge",
+      "body": {
+        "ackIds": [
+          "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        ]
+      }
+    },
+    "response": {
+      "status": 200,
+      "body": {}
+    },
+    "ms": 89
+  },
+  {
+    "provenance": {
+      "run": "148026092d56",
+      "line": 496,
+      "n": 446
+    },
+    "op": "createSnapshot",
+    "request": {
+      "method": "PUT",
+      "path": "/v1/projects/demo-v2/snapshots/fe0123456789ab-ss-r-empty",
+      "body": {
+        "subscription": "projects/demo-v2/subscriptions/fe0123456789ab-ss-r-s"
+      }
+    },
+    "response": {
+      "status": 200,
+      "body": {
+        "name": "projects/demo-v2/snapshots/fe0123456789ab-ss-r-empty",
+        "topic": "projects/demo-v2/topics/fe0123456789ab-ss-r-t",
+        "expireTime": "2026-10-11T21:44:25.750Z"
+      }
+    },
+    "ms": 9935
+  },
+  {
+    "provenance": {
+      "run": "148026092d56",
+      "line": 505,
+      "n": 455
+    },
+    "op": "getSnapshot",
+    "request": {
+      "method": "GET",
+      "path": "/v1/projects/demo-v2/snapshots/fe0123456789ab-ss-r-snap"
+    },
+    "response": {
+      "status": 200,
+      "body": {
+        "name": "projects/demo-v2/snapshots/fe0123456789ab-ss-r-snap",
+        "topic": "projects/demo-v2/topics/fe0123456789ab-ss-r-t",
+        "expireTime": "2026-10-11T21:44:43.114Z"
+      }
+    },
+    "ms": 486
+  },
+  {
+    "provenance": {
+      "run": "148026092d56",
+      "line": 512,
+      "n": 462
+    },
+    "op": "seek",
+    "request": {
+      "method": "POST",
+      "path": "/v1/projects/demo-v2/subscriptions/fe0123456789ab-ss-r-s:seek",
+      "body": {
+        "snapshot": "projects/demo-v2/snapshots/fe0123456789ab-ss-r-snap"
+      }
+    },
+    "response": {
+      "status": 200,
+      "body": {}
+    },
+    "ms": 3976
+  }
+]

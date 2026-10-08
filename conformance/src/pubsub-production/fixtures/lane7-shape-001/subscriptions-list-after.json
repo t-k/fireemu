@@ -1,0 +1,9 @@
+{
+  "id": "subscriptions-list-after",
+  "method": "GET",
+  "url": "https://pubsub.googleapis.com/v1/projects/fireemu-oracle-idp/subscriptions?pageSize=1000",
+  "status": 200,
+  "body": "{}\n",
+  "contentType": "application/json; charset=UTF-8",
+  "bodyBytes": 3
+}

@@ -823,3 +823,350 @@ test("loopback replay retains bounded actual terminal details without inventing 
     grpc.Client.prototype.makeBidiStreamRequest = original;
   }
 });
+
+// Synthetic source-bound controls retain S06's three publications and seven native frames.
+async function unorderedFlowFixture({
+  order = [0, 1, 2],
+  ordering = false,
+  firstMutation,
+  ackMutation,
+  batch = false,
+  extraAt = null,
+  tailExtra = false,
+  omitLast = false,
+  leaveAck = false,
+  duplicateAck = false,
+  origin = 0,
+  pipeline = false,
+} = {}) {
+  const { createNativeReplay } = await import("./pubsub-observation/replay-native.mjs");
+  const { makePlan } = await import("./pubsub-observation/plan.mjs");
+  const cell = makePlan().cells.find((c) => c.id === "S06");
+  const subscription = "projects/fireemu-oracle-idp/subscriptions/fe012345abcdef-s06-sub";
+  const topic = "projects/fireemu-oracle-idp/topics/fe012345abcdef-s06-topic";
+  const payload = (index) => ({
+    data: Buffer.from(`012345abcdef:S06:marker${index}`).toString("base64"),
+  });
+  const receive = (index, local) => ({
+    subscriptionProperties: {},
+    receivedMessages: [
+      {
+        ackId: `${local ? "local" : "source"}-ack-${index}`,
+        message: { ...payload(index), messageId: `${local ? "local" : "source"}-${index}` },
+      },
+    ],
+  });
+  const nativeRow = (n, elapsedMs, direction, body) => ({
+    n,
+    cellId: "S06",
+    elapsedMs,
+    at: new Date(1000 + elapsedMs).toISOString(),
+    event: "stream-frame",
+    direction,
+    body,
+    verified: true,
+  });
+  const frames = [
+    nativeRow(179, 0, "out", {
+      subscription,
+      streamAckDeadlineSeconds: 10,
+      maxOutstandingMessages: "1",
+      maxOutstandingBytes: "1024",
+    }),
+    nativeRow(183, 2013, "in", receive(1, false)),
+    nativeRow(186, 8035, "out", { ackIds: ["source-ack-1"] }),
+    nativeRow(188, 8656, "in", receive(0, false)),
+    nativeRow(189, 8664, "out", { ackIds: ["source-ack-0"] }),
+    nativeRow(191, 8712, "in", receive(2, false)),
+    nativeRow(192, 8718, "out", { ackIds: ["source-ack-2"] }),
+  ];
+  const sourceCell = {
+    ...cell,
+    frames,
+    exchanges: [
+      {
+        method: "CreateSubscription",
+        request: {
+          body: {
+            name: subscription,
+            topic,
+            ...(ordering === true ? { enableMessageOrdering: true } : {}),
+          },
+        },
+        response: {
+          ok: true,
+          unknown: false,
+          body: { name: subscription, enableMessageOrdering: ordering === true },
+        },
+      },
+      {
+        method: "GetSubscription",
+        request: { body: { name: subscription } },
+        response: {
+          ok: true,
+          unknown: false,
+          body: { name: subscription, enableMessageOrdering: ordering === true },
+        },
+      },
+      ...[0, 1, 2].map((index) => ({
+        method: "Publish",
+        request: { body: { topic, messages: [payload(index)] } },
+        response: { ok: true, unknown: false, body: { messageIds: [`source-${index}`] } },
+      })),
+    ],
+  };
+  if (ordering === "unknown") sourceCell.exchanges.splice(1, 1);
+  const bindings = createBindings();
+  for (let index = 0; index < 3; index++)
+    bindings.linkPublish(
+      { messages: [payload(index)] },
+      { messageIds: [`source-${index}`] },
+      { messageIds: [`local-${index}`] },
+    );
+  let now = origin,
+    replay,
+    nextIndex = 0,
+    received = 0,
+    extraSent = false;
+  const queue = [],
+    acks = [];
+  function record(body, elapsedMs) {
+    received++;
+    recordFrame({ direction: "in", body, elapsedMs });
+    queue.push(body);
+  }
+  function advance(ms) {
+    const end = now + ms;
+    if (extraAt !== null && !extraSent && end - origin >= extraAt) {
+      extraSent = true;
+      record(receive(order[1], true), extraAt);
+    }
+    now = end;
+  }
+  const stream = {
+    async next(timeout) {
+      if (queue.length) return queue.shift();
+      advance(timeout);
+      return queue.shift() ?? null;
+    },
+    write(body) {
+      acks.push(...body.ackIds);
+      recordFrame({ direction: "out", body, elapsedMs: now - origin });
+      if (nextIndex < 3) record(receive(order[nextIndex++], true), now - origin + 1);
+      else if (tailExtra) record(receive(order[0], true), now - origin + 1);
+    },
+    state: () => ({ incomplete: false, terminal: null, received }),
+    dispose() {},
+  };
+  let recordFrame = (frame) => replay.recordFrame(frame);
+  const open = async () => {
+    const body = receive(order[nextIndex++], true);
+    if (batch)
+      body.receivedMessages = order.map((index) => receive(index, true).receivedMessages[0]);
+    firstMutation?.(body);
+    record(body, 2);
+    return stream;
+  };
+  if (pipeline) {
+    const { replayA } = await import("./pubsub-observation/replay.mjs");
+    const input = fixture();
+    input.rows = [input.rows[0]];
+    for (const exchange of sourceCell.exchanges) {
+      const requestId = input.rows.length;
+      input.rows.push({
+        event: "request-dispatch",
+        cellId: "S06",
+        requestId,
+        method: exchange.method,
+        transport: "grpc",
+        category: "target",
+        request: exchange.request.body,
+      });
+      input.rows.push({
+        event: "response",
+        durationMs: 0,
+        cellId: "S06",
+        requestId,
+        method: exchange.method,
+        transport: "grpc",
+        reply: { code: "OK", ...exchange.response },
+      });
+    }
+    for (const frame of frames)
+      input.rows.push({ ...frame, at: new Date(20000 + frame.elapsedMs).toISOString() });
+    input.rows.push({
+      event: "stream-case-observation",
+      cellId: "S06",
+      elapsedMs: 8740,
+      at: new Date(28740).toISOString(),
+      state: { incomplete: false, terminal: null },
+      invalidAckObservedMs: null,
+    });
+    input.rows.push({
+      event: "case-result",
+      cellId: "S06",
+      at: new Date(28741).toISOString(),
+      complete: true,
+      cleanupClosed: true,
+      budgetOverrun: false,
+    });
+    input.rows = input.rows.map((row, index) => ({
+      ...row,
+      n: index + 1,
+      at: row.at ?? new Date(1000 + index * 1000).toISOString(),
+    }));
+    input.verifiedFrames = new Set(
+      input.rows.filter((row) => row.event === "stream-frame").map((row) => row.n),
+    );
+    input.summary.results = [
+      { cellId: "S06", complete: true, cleanupClosed: true, budgetOverrun: false },
+    ];
+    let publication = 0;
+    const report = await replayA(
+      input,
+      {
+        PUBSUB_EMULATOR_HOST: "127.0.0.1:1234",
+        FIREEMU_CONTROL_URL: "http://127.0.0.1:4321/v1/",
+        FIREEMU_CONTROL_TOKEN: "synthetic-control",
+      },
+      {
+        profile: "release",
+        rustcWrapper: "",
+        path: "/fixture/release/fireemu",
+        head: "a".repeat(40),
+        sha256: "b".repeat(64),
+        command: ["cargo", "build", "--release"],
+      },
+      {
+        now: () => now,
+        wait: async (ms) => advance(ms),
+        advance: async () => {},
+        wireFactory: ({ journal }) => {
+          recordFrame = (frame) =>
+            journal.frame(Buffer.from(JSON.stringify(frame.body)), {
+              event: "stream-frame",
+              cellId: "S06",
+              ...frame,
+            });
+          return {
+            open,
+            close() {},
+            call: async ({ method, request }) => {
+              const exchange = sourceCell.exchanges.find((e) => e.method === method);
+              journal.write({ event: "request-dispatch", cellId: "S06", method, request });
+              const reply = {
+                ...exchange.response,
+                code: "OK",
+                body:
+                  method === "Publish"
+                    ? { messageIds: [`local-${publication++}`] }
+                    : exchange.response.body,
+              };
+              journal.write({ event: "response", cellId: "S06", method, reply });
+              return reply;
+            },
+          };
+        },
+      },
+    );
+    assert.equal(report.nativeWitnesses.S06.completed, true);
+    assert.equal(report.parentClosureReady, false);
+    assert.deepEqual(
+      acks,
+      order.map((index) => `local-ack-${index}`),
+    );
+    return;
+  }
+  replay = createNativeReplay({
+    cells: [cell],
+    sourceCells: [sourceCell],
+    bindings,
+    clock: createActionClock({
+      now: () => now,
+      wait: async (ms) => advance(ms),
+      advance: async () => {},
+    }),
+    wire: { open },
+  });
+  try {
+    await replay.frame(frames[0]);
+    for (const sourceRow of frames.slice(1)) {
+      if ((omitLast && sourceRow.n >= 191) || (leaveAck && sourceRow.n === 192)) continue;
+      const next = structuredClone(sourceRow);
+      if (next.n === 186) ackMutation?.(next.body);
+      await replay.frame(next);
+      if (duplicateAck && next.n === 186)
+        await replay.frame({ ...next, n: 187, elapsedMs: 8036, at: new Date(9036).toISOString() });
+    }
+    await replay.action({
+      n: 194,
+      cellId: "S06",
+      event: "stream-case-observation",
+      elapsedMs: 8740,
+      at: new Date(9740).toISOString(),
+      state: { incomplete: false, terminal: null },
+      invalidAckObservedMs: null,
+    });
+    assert.equal(replay.witnesses.get("S06").completed, true);
+    assert.deepEqual(
+      acks,
+      order.map((index) => `local-ack-${index}`),
+    );
+    for (let index = 0; index < 3; index++) {
+      assert.equal(bindings.get("message", `source-${index}`), `local-${index}`);
+      assert.equal(bindings.get("ack", `source-ack-${index}`), `local-ack-${index}`);
+    }
+    return acks;
+  } finally {
+    replay.close();
+  }
+}
+
+test("unordered S06 follows each actual owned token for all six legal single-message permutations", async () => {
+  for (const order of [
+    [1, 0, 2],
+    [0, 1, 2],
+    [0, 2, 1],
+    [1, 2, 0],
+    [2, 0, 1],
+    [2, 1, 0],
+  ])
+    await assert.doesNotReject(unorderedFlowFixture({ order }));
+});
+
+test("S06 unordered selection requires a recorded disabled ordering configuration", async () => {
+  await assert.doesNotReject(unorderedFlowFixture({ order: [1, 0, 2], ordering: true }));
+  await assert.rejects(unorderedFlowFixture({ ordering: true }), /binding|semantic/);
+  await assert.rejects(unorderedFlowFixture({ ordering: "unknown" }), /ordering/);
+});
+
+test("S06 unordered identity, payload, attribute and live ACK controls fail closed", async () => {
+  for (const firstMutation of [
+    (body) => (body.receivedMessages[0].message.messageId = "foreign"),
+    (body) => (body.receivedMessages[0].message.data = "Zm9yZWlnbg=="),
+    (body) => (body.receivedMessages[0].message.attributes = { foreign: "true" }),
+    (body) => (body.receivedMessages[0].message.orderingKey = "unexpected-key"),
+    (body) => (body.receivedMessages[0].deliveryAttempt = 2),
+    (body) => delete body.receivedMessages[0].message.data,
+  ])
+    await assert.rejects(unorderedFlowFixture({ firstMutation }), /binding|semantic|owned/);
+  await assert.rejects(
+    unorderedFlowFixture({ ackMutation: (body) => (body.ackIds = ["source-ack-0"]) }),
+    /ACK slot/,
+  );
+  await assert.rejects(unorderedFlowFixture({ duplicateAck: true }), /ACK slot/);
+  await assert.rejects(unorderedFlowFixture({ order: [0, 0, 2] }), /binding|owned|duplicate/);
+  await assert.rejects(unorderedFlowFixture({ omitLast: true }), /multiset|owned/);
+  await assert.rejects(unorderedFlowFixture({ leaveAck: true }), /multiset|ACK/);
+  await assert.rejects(unorderedFlowFixture({ tailExtra: true }), /multiset|owned/);
+});
+
+test("S06 unordered matching still rejects the actual three-before-ACK shape and queued early frames", async () => {
+  await assert.rejects(unorderedFlowFixture({ batch: true }), /cardinality/);
+  await assert.rejects(unorderedFlowFixture({ extraAt: 8020 }), /quiet interval/);
+  await assert.doesNotReject(unorderedFlowFixture({ origin: 2700000 }));
+});
+
+test("executed replay passes the admitted S06 source cell to unordered token matching", async () => {
+  await assert.doesNotReject(unorderedFlowFixture({ pipeline: true }));
+});

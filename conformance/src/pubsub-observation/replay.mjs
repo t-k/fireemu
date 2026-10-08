@@ -179,7 +179,14 @@ export async function replayA(
         });
       },
     });
-    native = createNativeReplay({ wire, bindings, clock, cells, journal });
+    native = createNativeReplay({
+      wire,
+      bindings,
+      clock,
+      cells,
+      sourceCells: source.cells,
+      journal,
+    });
     await clock.dispatch(input.rows[0]);
     for (const row of input.rows) {
       if (row.event === "request-dispatch" || row.event === "stream-frame") {

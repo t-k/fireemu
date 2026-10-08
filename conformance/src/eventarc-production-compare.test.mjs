@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compareAnswer, replay } from "./eventarc-production/compare.mjs";
+import { compareAnswer, replay, replayRow, tokenModes } from "./eventarc-production/compare.mjs";
 
 const parent = "projects/demo-reference/locations/us-central1";
 const collection = `/v1/${parent}/channels`;
@@ -306,5 +306,182 @@ test("page binding rejects empty and nested channel identifiers under a matching
     ]);
     assert.equal(got.urls[1], path);
     assert.equal(JSON.stringify(rows), before);
+  }
+});
+
+const authFixtures = {
+  default: "ya29.replay-token",
+  none: null,
+  invalid: "invalid-token-for-the-recording",
+  "ya29-garbage": "ya29.fireemu-recorder-not-a-token-0000000000000000",
+  "jwt-garbage":
+    "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJmaXJlZW11LXJlY29yZGVyIiwic3ViIjoieCJ9.fireemu-recorder-not-a-signature",
+  "jwt-expired-unsigned":
+    "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20iLCJhdWQiOiJmaXJlZW11LXJlY29yZGVyIiwiaWF0IjowLCJleHAiOjF9.fireemu-recorder-not-a-signature",
+  "wrong-scope": "ya29.a-token-of-another-scope",
+};
+
+async function authCapture(rows) {
+  const requests = [];
+  const results = await replay(rows, {
+    base: "http://127.0.0.1:9999",
+    fetchImpl: async (url, init) => {
+      requests.push({ url, ...init });
+      return { status: 200, text: async () => "{}" };
+    },
+  });
+  return { requests, results };
+}
+
+const authRow = (op = "listChannels", mode) => {
+  const value = { ...row(op, collection, {}), case: "auth-errors" };
+  if (op === "createChannel")
+    value.request = {
+      method: "POST",
+      path: `${collection}?channelId=one`,
+      body: { channel: { name: channel } },
+    };
+  else if (op === "publishEvents")
+    value.request = { method: "POST", path: `/v1/${channel}:publishEvents`, body: { events: [] } };
+  else if (op === "getOperation") value.request.path = `/v1/${issued}`;
+  else if (op === "getChannel") value.request.path = `/v1/${channel}`;
+  if (mode !== undefined) value.tokenMode = mode;
+  return value;
+};
+
+test("absent legacy A auth metadata preserves its nine-row credential sequence", async () => {
+  const ops = [
+    "createChannel",
+    "listChannels",
+    "publishEvents",
+    "listChannels",
+    "publishEvents",
+    "createChannel",
+    "publishEvents",
+    "publishEvents",
+    "getChannel",
+  ];
+  const rows = ops.map((op) => authRow(op));
+  rows.unshift({ ...row("listChannels", collection, {}), case: "other" });
+  const got = await authCapture(rows);
+  const modes = [
+    "default",
+    "default",
+    "none",
+    "none",
+    "invalid",
+    "invalid",
+    "none",
+    "default",
+    "default",
+    "default",
+  ];
+  assert.deepEqual(
+    got.requests.map((r) => r.headers.authorization),
+    modes.map((m) => (authFixtures[m] === null ? undefined : `Bearer ${authFixtures[m]}`)),
+  );
+});
+
+test("explicit B/C setup modes stay default through create and operation/channel reads", async () => {
+  const rows = ["createChannel", "getOperation", "getOperation", "getOperation", "getChannel"].map(
+    (op) => authRow(op, "default"),
+  );
+  rows.push(authRow("listChannels", "none"), authRow("publishEvents", "invalid"));
+  const got = await authCapture(rows);
+  assert.deepEqual(
+    got.requests.map((r) => r.method),
+    ["POST", "GET", "GET", "GET", "GET", "GET", "POST"],
+  );
+  assert.deepEqual(
+    got.requests.map((r) => r.headers.authorization),
+    [
+      ...Array(5).fill(`Bearer ${authFixtures.default}`),
+      undefined,
+      `Bearer ${authFixtures.invalid}`,
+    ],
+  );
+});
+
+test("all seven recorded modes send exact public fixture headers independently of expected answers", async () => {
+  const modes = Object.keys(authFixtures);
+  const rows = modes.map((mode) => ({
+    ...row("listChannels", collection, {}),
+    case: "outside-auth",
+    tokenMode: mode,
+  }));
+  const got = await authCapture(rows);
+  assert.deepEqual(
+    got.requests.map((r) => r.headers.authorization),
+    modes.map((m) => (authFixtures[m] === null ? undefined : `Bearer ${authFixtures[m]}`)),
+  );
+  assert.notEqual(authFixtures["jwt-garbage"], authFixtures["jwt-expired-unsigned"]);
+  assert.equal(
+    JSON.parse(Buffer.from(authFixtures["jwt-expired-unsigned"].split(".")[1], "base64url")).exp,
+    1,
+  );
+});
+
+test("explicit modes override legacy positions without consuming absent-only fallback slots", async () => {
+  const rows = [
+    authRow(),
+    authRow("listChannels", "default"),
+    authRow(),
+    authRow("listChannels", "invalid"),
+    authRow(),
+    authRow(),
+  ];
+  const got = await authCapture(rows);
+  assert.deepEqual(
+    got.requests.map((r) => r.headers.authorization),
+    ["default", "default", "none", "invalid", "none", "invalid"].map((m) =>
+      authFixtures[m] === null ? undefined : `Bearer ${authFixtures[m]}`,
+    ),
+  );
+  const inherited = Object.assign(
+    Object.create({ tokenMode: "none" }),
+    row("listChannels", collection, {}),
+  );
+  assert.deepEqual(
+    tokenModes([inherited]),
+    ["default"],
+    "inherited metadata is not recorded input",
+  );
+});
+
+test("malformed explicit metadata anywhere rejects the entire replay before its first fetch", async () => {
+  for (const mode of ["unknown", "", null, undefined, 7, {}, "toString", "__proto__"]) {
+    const rows = [authRow("listChannels", "default"), { ...authRow(), tokenMode: mode }];
+    assert.throws(() => tokenModes(rows), /unknown credential mode/);
+    let sent = 0;
+    await assert.rejects(
+      () =>
+        replay(rows, {
+          base: "http://127.0.0.1:9999",
+          fetchImpl: async () => {
+            sent += 1;
+            return { status: 200, text: async () => "{}" };
+          },
+        }),
+      /unknown credential mode/,
+    );
+    assert.equal(sent, 0);
+  }
+});
+
+test("direct replayRow rejects unsupported modes before fetch", async () => {
+  for (const mode of ["unknown", "", null, undefined, 7, {}, "toString", "__proto__"]) {
+    let sent = 0;
+    await assert.rejects(
+      () =>
+        replayRow(row("listChannels", collection, {}), mode, {
+          base: "http://127.0.0.1:9999",
+          fetchImpl: async () => {
+            sent += 1;
+            return { status: 200, text: async () => "{}" };
+          },
+        }),
+      /unknown credential mode/,
+    );
+    assert.equal(sent, 0);
   }
 });

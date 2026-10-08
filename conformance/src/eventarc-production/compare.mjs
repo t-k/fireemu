@@ -45,6 +45,24 @@ const AUTH_ERRORS_TOKENS = ["default", "none", "none", "invalid", "invalid", "no
 const INVALID_TOKEN = "invalid-token-for-the-recording";
 /** The shape of a Google access token: what a real client sends, and what the strict listener accepts. */
 const DEFAULT_TOKEN = "ya29.replay-token";
+const b64url = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+/** Synthetic public fixtures only; replay never resolves a remote credential or scope. */
+const REPLAY_TOKENS = Object.freeze({
+  default: DEFAULT_TOKEN,
+  none: null,
+  invalid: INVALID_TOKEN,
+  "ya29-garbage": "ya29.fireemu-recorder-not-a-token-0000000000000000",
+  "jwt-garbage": `${b64url({ alg: "RS256", typ: "JWT" })}.${b64url({ iss: "fireemu-recorder", sub: "x" })}.fireemu-recorder-not-a-signature`,
+  "jwt-expired-unsigned": `${b64url({ alg: "RS256", typ: "JWT" })}.${b64url({ iss: "https://accounts.google.com", aud: "fireemu-recorder", iat: 0, exp: 1 })}.fireemu-recorder-not-a-signature`,
+  "wrong-scope": "ya29.a-token-of-another-scope",
+});
+
+function requireTokenMode(mode) {
+  if (typeof mode !== "string" || !Object.hasOwn(REPLAY_TOKENS, mode))
+    throw new Error("unknown credential mode");
+  return mode;
+}
+
 const REQUEST_ID = /^[0-9a-f]{16}$/;
 const SIZE_IN_TEXT = /\((\d+) bytes\)/g;
 const ANY_TYPE_URL = "type.googleapis.com/io.cloudevents.v1.CloudEvent";
@@ -81,10 +99,11 @@ export function serviceStateOf(path) {
   return null;
 }
 
-/** The credential each row was sent with: see `AUTH_ERRORS_TOKENS` for the first rows of auth-errors, otherwise default. */
+/** Recorded credential modes take precedence; only absent metadata uses the legacy auth-errors sequence. */
 export function tokenModes(rows) {
   let seen = 0;
   return rows.map((row) => {
+    if (Object.hasOwn(row, "tokenMode")) return requireTokenMode(row.tokenMode);
     if (row.case === "auth-errors" && seen < AUTH_ERRORS_TOKENS.length) {
       seen += 1;
       return AUTH_ERRORS_TOKENS[seen - 1];
@@ -476,11 +495,11 @@ export function comparePair(rowsA, rowsB, runA, runB, states = [null, null]) {
 
 /** Sends one recorded row to `base` and returns the status and the parsed body ({raw} for a text). */
 export async function replayRow(row, token, { base, stripV1 = false, fetchImpl = fetch }) {
+  const bearer = REPLAY_TOKENS[requireTokenMode(token)];
   const headers = {};
   const body = requestBody(row);
   if (body !== undefined) headers["content-type"] = "application/json";
-  if (token === "invalid") headers.authorization = `Bearer ${INVALID_TOKEN}`;
-  else if (token === "default") headers.authorization = `Bearer ${DEFAULT_TOKEN}`;
+  if (bearer !== null) headers.authorization = `Bearer ${bearer}`;
   const reply = await fetchImpl(
     `${base}${stripV1 ? row.request.path.replace(/^\/v1\//, "/") : row.request.path}`,
     {

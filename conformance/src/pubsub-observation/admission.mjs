@@ -94,8 +94,8 @@ export function verifyScope(scope, descriptor, digest, options, now = Date.now()
     scope.descriptorSha256 !== digest ||
     !/^[a-f0-9]{64}$/.test(scope.packetSha256 ?? "") ||
     !Array.isArray(scope.runIds) ||
-    scope.runIds.length !== 2 ||
-    new Set(scope.runIds).size !== 2 ||
+    scope.runIds.length !== scope.plan.recordings ||
+    new Set(scope.runIds).size !== scope.plan.recordings ||
     scope.runIds.some((id) => !/^[a-f0-9]{12}$/.test(id)) ||
     !scope.runIds.includes(options.runId) ||
     !Number.isFinite(Date.parse(scope.expiresAt)) ||
@@ -111,7 +111,7 @@ export function verifyScope(scope, descriptor, digest, options, now = Date.now()
       throw new Error("absolute output scope required");
   const all = [...Object.values(scope.runOutputs), ...Object.values(scope.recoveryOutputs)];
   if (
-    new Set(all).size !== 4 ||
+    new Set(all).size !== scope.plan.recordings * 2 ||
     all.some((a, index) => all.some((b, j) => index !== j && b.startsWith(`${a}/`)))
   )
     throw new Error("distinct output scope required");

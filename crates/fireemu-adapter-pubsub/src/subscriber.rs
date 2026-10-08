@@ -406,15 +406,23 @@ impl Subscriber for SubscriberService {
             .await?
             .ok_or_else(|| Status::invalid_argument("streaming pull opened with no request"))?;
         let name = SubscriptionName::parse(&first.subscription).map_err(|e| status(&e))?;
-        // Fail fast if the subscription does not exist.
-        let report_attempt = self.handle.paging_policy == crate::PagingPolicy::Emulator
-            || self
-                .handle
-                .state()
-                .subscription_config(&name)
-                .map_err(|error| status(&error))?
-                .dead_letter_policy
-                .is_some();
+        // Strict responses report subscription properties even when both flags are false.
+        let (report_attempt, subscription_properties) =
+            if self.handle.paging_policy == crate::PagingPolicy::Emulator {
+                (true, None)
+            } else {
+                let state = self.handle.state();
+                let config = state
+                    .subscription_config(&name)
+                    .map_err(|error| status(&error))?;
+                (
+                    config.dead_letter_policy.is_some(),
+                    Some(pb::streaming_pull_response::SubscriptionProperties {
+                        exactly_once_delivery_enabled: false,
+                        message_ordering_enabled: config.enable_message_ordering,
+                    }),
+                )
+            };
 
         // Proto3 has no scalar presence: omitted and explicit initial zero decode alike.
         // ACK-only follow-up frames may omit the deadline, so validate only the opener.
@@ -453,6 +461,7 @@ impl Subscriber for SubscriberService {
                             Ok(msgs) if !msgs.is_empty() => {
                                 let resp = pb::StreamingPullResponse {
                                     received_messages: msgs.iter().map(|message|received_to_proto(message,report_attempt,handle.paging_policy)).collect(),
+                                    subscription_properties,
                                     ..pb::StreamingPullResponse::default()
                                 };
                                 if tx.send(Ok(resp)).await.is_err() {

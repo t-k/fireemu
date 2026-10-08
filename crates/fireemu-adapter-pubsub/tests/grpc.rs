@@ -1404,7 +1404,10 @@ async fn streaming_pull_initial_zero_is_strict_only_and_does_not_lease() {
                 }
             };
             assert_eq!(error.code(), tonic::Code::Internal);
-            assert_eq!(error.message(), "A service error has occurred. Please retry your request. If the error persists, please report it.");
+            assert_eq!(
+                error.message(),
+                "A service error has occurred. Please retry your request. If the error persists, please report it."
+            );
             let pulled = subc
                 .pull(pb::PullRequest {
                     subscription: subscription.to_owned(),
@@ -1427,6 +1430,14 @@ async fn streaming_pull_initial_zero_is_strict_only_and_does_not_lease() {
                     .unwrap()
                     .unwrap();
             assert_eq!(delivered.received_messages.len(), 1);
+            assert_eq!(
+                delivered.subscription_properties,
+                if policy == Strict {
+                    Some(pb::streaming_pull_response::SubscriptionProperties::default())
+                } else {
+                    None
+                }
+            );
             assert_eq!(
                 delivered.received_messages[0]
                     .message
@@ -1473,79 +1484,90 @@ async fn streaming_pull_zero_preserves_opening_validation_precedence() {
 
 #[tokio::test]
 async fn streaming_pull_delivers_and_acks() {
-    let h = start().await;
-    let mut pubc = h.publisher().await;
-    let mut subc = h.subscriber().await;
+    for ordered in [false, true] {
+        let h = start().await;
+        let mut pubc = h.publisher().await;
+        let mut subc = h.subscriber().await;
 
-    pubc.create_topic(pb::Topic {
-        name: "projects/demo-app/topics/stream".to_owned(),
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    subc.create_subscription(pb::Subscription {
-        name: "projects/demo-app/subscriptions/stream-sub".to_owned(),
-        topic: "projects/demo-app/topics/stream".to_owned(),
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    pubc.publish(pb::PublishRequest {
-        topic: "projects/demo-app/topics/stream".to_owned(),
-        messages: vec![msg(b"streamed")],
-    })
-    .await
-    .unwrap();
-
-    let (tx, rx) = tokio::sync::mpsc::channel::<pb::StreamingPullRequest>(4);
-    tx.send(pb::StreamingPullRequest {
-        subscription: "projects/demo-app/subscriptions/stream-sub".to_owned(),
-        stream_ack_deadline_seconds: 10,
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
-    let mut responses = subc.streaming_pull(outbound).await.unwrap().into_inner();
-
-    let msg = tokio::time::timeout(std::time::Duration::from_secs(5), responses.next())
-        .await
-        .expect("a streaming response arrives")
-        .expect("stream open")
-        .expect("ok response");
-    assert_eq!(msg.received_messages.len(), 1);
-    assert_eq!(
-        msg.received_messages[0].message.as_ref().unwrap().data,
-        b"streamed"
-    );
-    // Ack it on the same stream.
-    let ack = msg.received_messages[0].ack_id.clone();
-    tx.send(pb::StreamingPullRequest {
-        ack_ids: vec![ack],
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    drop(tx);
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
-            .await
-            .expect("the ACK-only follow-up closes naturally")
-            .unwrap()
-            .is_none()
-    );
-    advance(&h, LogicalDuration::from_seconds(11));
-    let after_ack = subc
-        .pull(pb::PullRequest {
-            subscription: "projects/demo-app/subscriptions/stream-sub".to_owned(),
-            max_messages: 1,
+        pubc.create_topic(pb::Topic {
+            name: "projects/demo-app/topics/stream".to_owned(),
             ..Default::default()
         })
         .await
-        .unwrap()
-        .into_inner();
-    assert!(after_ack.received_messages.is_empty());
-    h.shutdown().await;
+        .unwrap();
+        subc.create_subscription(pb::Subscription {
+            name: "projects/demo-app/subscriptions/stream-sub".to_owned(),
+            topic: "projects/demo-app/topics/stream".to_owned(),
+            enable_message_ordering: ordered,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        pubc.publish(pb::PublishRequest {
+            topic: "projects/demo-app/topics/stream".to_owned(),
+            messages: vec![msg(b"streamed")],
+        })
+        .await
+        .unwrap();
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<pb::StreamingPullRequest>(4);
+        tx.send(pb::StreamingPullRequest {
+            subscription: "projects/demo-app/subscriptions/stream-sub".to_owned(),
+            stream_ack_deadline_seconds: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
+        let mut responses = subc.streaming_pull(outbound).await.unwrap().into_inner();
+
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), responses.next())
+            .await
+            .expect("a streaming response arrives")
+            .expect("stream open")
+            .expect("ok response");
+        assert_eq!(msg.received_messages.len(), 1);
+        assert_eq!(
+            msg.subscription_properties,
+            Some(pb::streaming_pull_response::SubscriptionProperties {
+                exactly_once_delivery_enabled: false,
+                message_ordering_enabled: ordered,
+            }),
+            "delivery includes native subscription properties for ordering={ordered}"
+        );
+        assert_eq!(
+            msg.received_messages[0].message.as_ref().unwrap().data,
+            b"streamed"
+        );
+        // Ack it on the same stream.
+        let ack = msg.received_messages[0].ack_id.clone();
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec![ack],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+                .await
+                .expect("the ACK-only follow-up closes naturally")
+                .unwrap()
+                .is_none()
+        );
+        advance(&h, LogicalDuration::from_seconds(11));
+        let after_ack = subc
+            .pull(pb::PullRequest {
+                subscription: "projects/demo-app/subscriptions/stream-sub".to_owned(),
+                max_messages: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(after_ack.received_messages.is_empty());
+        h.shutdown().await;
+    }
 }
 
 #[tokio::test]

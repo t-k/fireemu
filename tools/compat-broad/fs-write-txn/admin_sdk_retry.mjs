@@ -373,6 +373,20 @@ function projectReceipt(receipt, sourceDigest, archivedRuntimeManifest) {
   return { kind: 'txn-admin-sdk-projection-v1', sourceDigest: receipt.sourceDigest, corpusDigest: receipt.corpusDigest, cases, timing: Object.fromEntries(['deadlineSeconds', 'dispatchMonotonic', 'responseMonotonic', 'dispatchUtc', 'responseUtc', 'elapsedSeconds', 'writerDispatchMargin', 'sdkBackoff'].map(key => [key, 'NOT_COMPARABLE'])) };
 }
 
+/** Validate archived production bytes before publishing a semantic expectation. */
+export function projectArchivedAdminReceipt(receipt, sources) {
+  const binding = archivedProductionBinding(receipt, sources);
+  return projectReceipt(receipt, binding.sourceDigest, binding.runtimeManifest);
+}
+
+/** Compare explicit semantic expectations with a freshly validated local projection. */
+export function compareAdminProjections(left, right) {
+  if (left?.kind !== 'txn-admin-sdk-projection-v1' || right?.kind !== left.kind || left.corpusDigest !== right.corpusDigest || left.cases.length !== CASES.length || right.cases.length !== CASES.length || CASES.some((spec, i) => left.cases[i].caseId !== spec.caseId || right.cases[i].caseId !== spec.caseId)) throw new Error('SDK projected case inventory differs');
+  const attempts = left.cases.flatMap((entry, i) => entry.attempts.map((attempt, j) => ({ caseId: entry.caseId, callbackCount: j + 1, production: { ...attempt, writer: entry.writer }, local: right.cases[i].attempts[j] ? { ...right.cases[i].attempts[j], writer: right.cases[i].writer } : null, match: JSON.stringify(attempt) === JSON.stringify(right.cases[i].attempts[j]) && JSON.stringify(entry.writer) === JSON.stringify(right.cases[i].writer) })));
+  for (const [i, entry] of right.cases.entries()) for (let j = left.cases[i].attempts.length; j < entry.attempts.length; j++) attempts.push({ caseId: entry.caseId, callbackCount: j + 1, production: null, local: { ...entry.attempts[j], writer: entry.writer }, match: false });
+  return { attempts, mismatches: attempts.filter(row => !row.match).length };
+}
+
 export function compareAdminReceipts(production, local, options = {}) {
   if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => key !== 'archivedProductionSources')) throw new Error('SDK comparison options differ');
   if (production.runtime?.target !== 'production' || !['local', 'production'].includes(local.runtime?.target)) throw new Error('SDK comparison requires production and local or production receipts');
@@ -381,8 +395,7 @@ export function compareAdminReceipts(production, local, options = {}) {
   const left = projectReceipt(production, binding.sourceDigest, binding.runtimeManifest), right = projectAdminReceipt(local);
   if (production.runtime.nodeSha256 !== local.runtime.nodeSha256 || production.runtime.lockSha256 !== local.runtime.lockSha256 || JSON.stringify(Object.entries(production.runtime.manifest.dependencies).map(([name, row]) => [name, row.version, row.treeSha256]).sort()) !== JSON.stringify(Object.entries(local.runtime.manifest.dependencies).map(([name, row]) => [name, row.version, row.treeSha256]).sort())) throw new Error('SDK comparison runtime differs');
   if ((!archived && left.sourceDigest !== right.sourceDigest) || left.corpusDigest !== right.corpusDigest) throw new Error('SDK comparison source differs');
-  const attempts = left.cases.flatMap((entry, i) => entry.attempts.map((attempt, j) => ({ caseId: entry.caseId, callbackCount: j + 1, production: { ...attempt, writer: entry.writer }, local: right.cases[i].attempts[j] ? { ...right.cases[i].attempts[j], writer: right.cases[i].writer } : null, match: JSON.stringify(attempt) === JSON.stringify(right.cases[i].attempts[j]) && JSON.stringify(entry.writer) === JSON.stringify(right.cases[i].writer) })));
-  for (const [i, entry] of right.cases.entries()) for (let j = left.cases[i].attempts.length; j < entry.attempts.length; j++) attempts.push({ caseId: entry.caseId, callbackCount: j + 1, production: null, local: { ...entry.attempts[j], writer: entry.writer }, match: false });
+  const { attempts } = compareAdminProjections(left, right);
   const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
   const provenance = {
     production: { binding: archived ? 'archived-production' : 'current', sourceDigest: left.sourceDigest, ...(archived ? { files: Object.fromEntries(ARCHIVED_PATHS.map((path, i) => [path, ARCHIVED_HASHES[i]])) } : {}), runtimeManifestSha256: digest(JSON.stringify(canonical(production.runtime.manifest))), receiptDigest: production.receiptDigest, canonicalReceiptSha256: digest(JSON.stringify(canonical(production))) },

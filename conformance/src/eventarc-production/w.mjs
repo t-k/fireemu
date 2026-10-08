@@ -558,6 +558,14 @@ export async function recordW({
         await request("publishing", spec, "publish", (reply, judged) => {
           entry.answer = reply;
           answer = wAcceptance(reply, judged);
+          if (
+            built.counter &&
+            answer === false &&
+            (reply.status !== 400 ||
+              JSON.stringify(Object.keys(reply.body)) !== '["error"]' ||
+              JSON.stringify(Object.keys(reply.body.error)) !== '["code","message","status"]')
+          )
+            answer = null;
           entry.accepted = answer;
           if (answer === false) entry.observation = reply.body.error.message;
           if (built.counter && answer === false) {

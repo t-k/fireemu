@@ -394,7 +394,9 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
   const m = manifest(stage, prerequisite),
     calls = [],
     notes = [];
-  const resourceMode = mode.replace(/^(shape|upper)-/, "");
+  const resourceMode = mode
+    .replace(/^(shape|upper)-/, "")
+    .replace(/^badrequest-(400|413)-(arbitrary|numeric|payload)-/, "");
   let clock = 0,
     present = false,
     topicPresent = false;
@@ -421,6 +423,25 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
                 return mode === `upper-${spec.recipe.purpose}-refused`
                   ? native(400, nativeSizeRefusal)
                   : native(200, {});
+              const generic = /^upper-badrequest-(400|413)-(arbitrary|numeric|payload)(?:-|$)/.exec(
+                mode,
+              );
+              if (generic) {
+                const refusal = template(
+                  (r) => r.status === 400 && r.body.error?.message === "No events provided.",
+                );
+                refusal.error.code = Number(generic[1]);
+                refusal.error.status =
+                  generic[1] === "400" ? "INVALID_ARGUMENT" : "RESOURCE_EXHAUSTED";
+                refusal.error.message =
+                  generic[2] === "numeric"
+                    ? requestSizeRefusal.error.message
+                    : generic[2] === "payload"
+                      ? nativeSizeRefusal.error.message
+                      : "Payload rejected by the service.";
+                refusal.error.details[0].fieldViolations[0].description = refusal.error.message;
+                return native(Number(generic[1]), refusal);
+              }
               if (mode === "upper-unknown") return { unknown: true, status: 503, body: {} };
               if (mode === "upper-unclassified")
                 return native(418, { error: { message: "unclassified" } });
@@ -1938,5 +1959,39 @@ test("W upper recorder keeps lifecycle, control and unknown-counter stops bounde
     assert.equal(result.cleanupReady, cleanup, mode);
     assert.equal(result.evidenceComplete, complete, mode);
     assert.ok(result.counts.publish <= 4, mode);
+  }
+});
+
+test("W upper counters stop recorded BadRequest layouts outside the two native refusal families", async () => {
+  for (const status of [400, 413]) {
+    for (const reason of ["arbitrary", "numeric", "payload"]) {
+      const { result } = await replay("w-upper-counter", `upper-badrequest-${status}-${reason}`);
+      assert.match(result.stopped, /needs-review/);
+      assert.equal(result.publishes.length, 2);
+      assert.equal(result.evidenceComplete, false);
+      assert.equal(result.cleanupReady, true);
+      const counter = result.publishes[1];
+      assert.equal(counter.accepted, null);
+      assert.equal(counter.observedRequestSize, undefined);
+      assert.equal(counter.answer.status, status);
+      assert.equal(
+        counter.answer.body.error.details[0]["@type"],
+        "type.googleapis.com/google.rpc.BadRequest",
+      );
+      assert.deepEqual(
+        JSON.parse(Buffer.from(counter.answer.bodyBase64, "base64")),
+        counter.answer.body,
+      );
+    }
+  }
+  for (const resource of ["dependent", "topic-left", "unknown-delete"]) {
+    const { result } = await replay(
+      "w-upper-counter",
+      `upper-badrequest-400-arbitrary-${resource}`,
+    );
+    assert.equal(result.publishes.length, 2, resource);
+    assert.equal(result.evidenceComplete, false, resource);
+    assert.equal(result.cleanupReady, false, resource);
+    assert.equal(result.publishes[1].accepted, null, resource);
   }
 });

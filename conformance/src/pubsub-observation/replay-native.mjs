@@ -131,7 +131,7 @@ export function matchNativeReceive(source, actual, bindings) {
     receivedMessages: body.receivedMessages.map((item) => ({
       ...item,
       ackId: undefined,
-      message: { ...item.message, messageId: undefined, publishTime: undefined },
+      message: { ...item.message, messageId: undefined },
     })),
   });
   if (!isDeepStrictEqual(rewrite(source), rewrite(actual)))

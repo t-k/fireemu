@@ -915,6 +915,8 @@ test("ACK projection preserves every remaining field, width, tag and terminal de
     (body) => (body.receivedMessages[0].message.data = "Zm9yZWln"),
     (body) => delete body.receivedMessages[0].message.publishTime,
     (body) => (body.receivedMessages[0].message.publishTime.seconds = "200"),
+    (body) => (body.receivedMessages[0].message.publishTime.seconds = "101"),
+    (body) => (body.receivedMessages[0].message.publishTime.nanos = 2),
     (body) => delete body.subscriptionProperties,
     (body) => body.receivedMessages.push(body.receivedMessages[0]),
   ]) {
@@ -1012,4 +1014,41 @@ test("ACK projection preserves every remaining field, width, tag and terminal de
     ).cells.find((c) => c.id === "S16").approvedComparison.verdict,
     "NOT_COMPARABLE",
   );
+});
+
+test("native receive preserves publishTime values with actual publication bindings", async () => {
+  const { matchNativeReceive } = await import("./pubsub-observation/replay-native.mjs");
+  const { createBindings } = await import("./pubsub-production/stream-dlq-compare-core.mjs");
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  for (const [field, value] of [
+    ["seconds", "101"],
+    ["nanos", 2],
+  ]) {
+    const f = approvedNativeFixture();
+    const source = f.source.cells.find((c) => c.id === "S16").frames[0].body;
+    const local = f.local.cells.find((c) => c.id === "S16").frames[0].body;
+    const bindings = createBindings();
+    bindings.linkPublish(
+      { messages: [{ data: "bWFya2Vy" }] },
+      { messageIds: ["source-1"] },
+      { messageIds: ["actual-1"] },
+    );
+    assert.doesNotThrow(() => matchNativeReceive(source, local, bindings));
+    local.receivedMessages[0].message.publishTime[field] = value;
+    const raw = Buffer.from(protos.google.pubsub.v1.StreamingPullResponse.encode(local).finish());
+    const frame = f.local.cells.find((c) => c.id === "S16").frames[0];
+    assert.equal(raw.length, frame.blob.bytes);
+    frame.blob = { bytes: raw.length, sha256: createHash("sha256").update(raw).digest("hex") };
+    f.disposition.rawFrames[0].localBytes = raw;
+    assert.equal(
+      compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+        (c) => c.id === "S16",
+      ).approvedComparison.verdict,
+      "DIVERGES",
+    );
+    assert.throws(
+      () => matchNativeReceive(source, local, bindings),
+      /native receive semantic mismatch/,
+    );
+  }
 });

@@ -388,7 +388,11 @@ fn create_topic(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    let topic_options = topic_from_json(topic, body)?;
+    let topic_options = topic_from_json(
+        topic,
+        body,
+        handle.paging_policy == crate::PagingPolicy::Strict,
+    )?;
     validate_topic_options(&topic_options).map_err(RestError::from_core)?;
     let labels = topic_options.labels.into_iter().collect();
     if handle.paging_policy == crate::PagingPolicy::Strict {
@@ -484,7 +488,7 @@ pub(crate) fn decode_query(value: &str) -> Result<String, RestError> {
 
 fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), RestError> {
     let topic_body = field(body, "topic").unwrap_or(body);
-    let topic_options = topic_from_json(topic, topic_body)?;
+    let topic_options = topic_from_json(topic, topic_body, false)?;
     let update_mask = field(body, "updateMask")
         .and_then(Value::as_str)
         .ok_or_else(|| RestError::invalid("updateMask must be a comma-separated string"))?;
@@ -706,6 +710,7 @@ fn publish(
 fn validate_subscription_body(
     subscription: &SubscriptionName,
     body: &Value,
+    route_name_precedence: bool,
 ) -> Result<(), RestError> {
     let object = body
         .as_object()
@@ -727,7 +732,7 @@ fn validate_subscription_body(
         let name = name
             .as_str()
             .ok_or_else(|| RestError::invalid("subscription.name must be a string"))?;
-        if name != subscription.to_full() {
+        if !route_name_precedence && name != subscription.to_full() {
             return Err(RestError::invalid(
                 "subscription.name must match the request path",
             ));
@@ -741,7 +746,11 @@ fn create_subscription(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    validate_subscription_body(subscription, body)?;
+    validate_subscription_body(
+        subscription,
+        body,
+        handle.paging_policy == crate::PagingPolicy::Strict,
+    )?;
     let topic = TopicName::parse(string_field(body, "topic")?).map_err(RestError::from_core)?;
     let ack_deadline_seconds = parse_ack_deadline(field(body, "ackDeadlineSeconds"))?;
     let filter_source = field(body, "filter")
@@ -1393,7 +1402,11 @@ fn topic_json(
     value
 }
 
-fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestError> {
+fn topic_from_json(
+    topic: &TopicName,
+    body: &Value,
+    route_name_precedence: bool,
+) -> Result<pb::Topic, RestError> {
     let object = body
         .as_object()
         .ok_or_else(|| RestError::invalid("topic must be an object"))?;
@@ -1409,7 +1422,7 @@ fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestErr
         let name = name
             .as_str()
             .ok_or_else(|| RestError::invalid("topic.name must be a string"))?;
-        if name != topic.to_full() {
+        if !route_name_precedence && name != topic.to_full() {
             return Err(RestError::invalid("topic.name must match the request path"));
         }
     }

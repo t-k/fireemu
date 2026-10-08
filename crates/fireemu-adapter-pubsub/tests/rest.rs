@@ -3854,3 +3854,212 @@ async fn valid_streaming_deadline_bounds_keep_owned_ack_delivery() {
         }
     }
 }
+#[tokio::test]
+async fn strict_create_topic_uses_route_name_and_keeps_body_name_absent() {
+    let address = start().await;
+    let route = "projects/demo-app/topics/route-topic";
+    let body_name = "projects/demo-app/topics/body-topic";
+    let (status, created) = rest_request(
+        address,
+        "PUT",
+        &format!("/v1/{route}"),
+        json!({"name": body_name}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(created, json!({"name": route}));
+    let (status, found) = rest_request(address, "GET", &format!("/v1/{route}"), json!({})).await;
+    assert_eq!(status, 200);
+    assert_eq!(found, created);
+    assert_eq!(
+        rest_request(address, "GET", &format!("/v1/{body_name}"), json!({}))
+            .await
+            .0,
+        404
+    );
+    assert_eq!(
+        rest_request(address, "DELETE", &format!("/v1/{route}"), json!({})).await,
+        (200, json!({}))
+    );
+    assert_eq!(
+        rest_request(address, "GET", &format!("/v1/{route}"), json!({}))
+            .await
+            .0,
+        404
+    );
+}
+
+#[tokio::test]
+async fn strict_create_subscription_uses_route_identity_and_existing_storage() {
+    let address = start().await;
+    let topic = "projects/demo-app/topics/route-sub-topic";
+    let route = "projects/demo-app/subscriptions/route-sub";
+    let body_name = "projects/demo-app/subscriptions/body-sub";
+    assert_eq!(
+        rest_request(address, "PUT", &format!("/v1/{topic}"), json!({}))
+            .await
+            .0,
+        200
+    );
+    let (status, created) = rest_request(
+        address,
+        "PUT",
+        &format!("/v1/{route}"),
+        json!({"name":body_name,"topic":topic}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        created,
+        json!({"name":route,"topic":topic,"pushConfig":{},"ackDeadlineSeconds":10,
+        "messageRetentionDuration":"604800s","expirationPolicy":{"ttl":"2678400s"},"state":"ACTIVE"})
+    );
+    assert_eq!(
+        rest_request(address, "GET", &format!("/v1/{body_name}"), json!({}))
+            .await
+            .0,
+        404
+    );
+    assert_eq!(
+        rest_request(address, "DELETE", &format!("/v1/{topic}"), json!({}))
+            .await
+            .0,
+        200
+    );
+    let (status, retained) = rest_request(address, "GET", &format!("/v1/{route}"), json!({})).await;
+    assert_eq!(status, 200);
+    assert_eq!(retained["name"], route);
+    assert_eq!(retained["topic"], "_deleted-topic_");
+    assert_eq!(
+        rest_request(address, "DELETE", &format!("/v1/{route}"), json!({})).await,
+        (200, json!({}))
+    );
+    assert_eq!(
+        rest_request(address, "GET", &format!("/v1/{route}"), json!({}))
+            .await
+            .0,
+        404
+    );
+}
+#[tokio::test]
+async fn create_route_precedence_keeps_type_and_field_validation() {
+    for policy in [
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    ] {
+        let address = start_policy(policy).await;
+        let topic = "projects/demo-app/topics/name-guards";
+        let subscription = "projects/demo-app/subscriptions/name-guards";
+        assert_eq!(
+            rest_request(address, "PUT", &format!("/v1/{topic}"), json!({}))
+                .await
+                .0,
+            200
+        );
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/{subscription}"),
+                json!({"topic":topic})
+            )
+            .await
+            .0,
+            200
+        );
+        for name in [Value::Null, json!(7), json!([]), json!({})] {
+            for (route, body) in [
+                (topic, json!({"name":name})),
+                (subscription, json!({"name":name,"topic":topic})),
+            ] {
+                assert_eq!(
+                    rest_request(address, "PUT", &format!("/v1/{route}"), body)
+                        .await
+                        .0,
+                    400
+                );
+            }
+        }
+        for (route, body) in [
+            (topic, json!({"unknownField":true})),
+            (subscription, json!({"topic":topic,"unknownField":true})),
+            (
+                topic,
+                json!({"messageRetentionDuration":"600s","message_retention_duration":"600s"}),
+            ),
+            (
+                subscription,
+                json!({"topic":topic,"ackDeadlineSeconds":10,"ack_deadline_seconds":10}),
+            ),
+        ] {
+            assert_eq!(
+                rest_request(address, "PUT", &format!("/v1/{route}"), body)
+                    .await
+                    .0,
+                400
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn route_name_precedence_does_not_widen_patch_or_emulator_create() {
+    for policy in [
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    ] {
+        let address = start_policy(policy).await;
+        let topic = "projects/demo-app/topics/scoped-name";
+        let subscription = "projects/demo-app/subscriptions/scoped-name";
+        assert_eq!(
+            rest_request(address, "PUT", &format!("/v1/{topic}"), json!({}))
+                .await
+                .0,
+            200
+        );
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/{subscription}"),
+                json!({"topic":topic})
+            )
+            .await
+            .0,
+            200
+        );
+        for (route, body) in [
+            (
+                topic,
+                json!({"topic":{"name":"projects/demo-app/topics/other"},"updateMask":"labels"}),
+            ),
+            (
+                subscription,
+                json!({"subscription":{"name":"projects/demo-app/subscriptions/other","ackDeadlineSeconds":20},"updateMask":"ackDeadlineSeconds"}),
+            ),
+        ] {
+            assert_eq!(
+                rest_request(address, "PATCH", &format!("/v1/{route}"), body)
+                    .await
+                    .0,
+                400
+            );
+        }
+        if policy == fireemu_adapter_pubsub::PagingPolicy::Emulator {
+            for (route, body) in [
+                (topic, json!({"name":"projects/demo-app/topics/other"})),
+                (
+                    subscription,
+                    json!({"name":"projects/demo-app/subscriptions/other","topic":topic}),
+                ),
+            ] {
+                assert_eq!(
+                    rest_request(address, "PUT", &format!("/v1/{route}"), body)
+                        .await
+                        .0,
+                    400
+                );
+            }
+        }
+    }
+}

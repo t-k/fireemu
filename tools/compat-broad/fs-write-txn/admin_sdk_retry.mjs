@@ -290,19 +290,31 @@ export async function recordAdminRetries({ host, project, admission }) {
 
 const PRODUCER_PATHS = ['tools/compat-broad/fs-write-txn/admin_sdk_retry.mjs', 'tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs'];
 const PRODUCTION_PRODUCER_HASHES = ['d1d61c26fe4f104decc94b0ab28f442b60a11e37c65dea6a737b3f561e6fbdc8', '1cd755958d1fe8293ecefc0c0d0d18ba455db803e6dbaad7eb4d2545af3c3e19'];
+const ARCHIVED_PATHS = [...PRODUCER_PATHS, 'tools/compat-broad/fs-write-txn/txn_program_transport.mjs'];
+const ARCHIVED_HASHES = [...PRODUCTION_PRODUCER_HASHES, 'dea5c1f59b8054888cff5244975c894fa622a7787db64bce343fe10ead783f50'];
+const ARCHIVED_RUNTIME_MANIFEST_SHA256 = '072bf56b670e8c6c8e2868f2b6e8de9646291ba84f41b7d51519cb5ee449be84';
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const currentProducerDigest = () => createHash('sha256').update(readFileSync(new URL('./admin_sdk_retry.mjs', import.meta.url))).update(readFileSync(new URL('../fs-listen-resume/listen_sdk_adapter.mjs', import.meta.url))).digest('hex');
 
 function archivedProductionBinding(receipt, files) {
-  if (receipt.runtime?.target !== 'production' || !files || typeof files !== 'object' || Array.isArray(files) || Object.keys(files).length !== PRODUCER_PATHS.length || PRODUCER_PATHS.some(path => !Object.hasOwn(files, path) || typeof files[path] !== 'string')) throw new Error('SDK archived production producer paths differ');
-  const bytes = PRODUCER_PATHS.map((path, index) => {
+  if (receipt.runtime?.target !== 'production' || !files || typeof files !== 'object' || Array.isArray(files) || Object.keys(files).length !== ARCHIVED_PATHS.length || ARCHIVED_PATHS.some(path => !Object.hasOwn(files, path) || typeof files[path] !== 'string')) throw new Error('SDK archived production producer paths differ');
+  const bytes = ARCHIVED_PATHS.map((path, index) => {
     const value = readFileSync(files[path]);
-    if (digest(value) !== PRODUCTION_PRODUCER_HASHES[index]) throw new Error('SDK archived production producer bytes differ');
-    if (receipt.sourceManifest?.[path] !== PRODUCTION_PRODUCER_HASHES[index]) throw new Error('SDK archived production source manifest differs');
+    if (digest(value) !== ARCHIVED_HASHES[index]) throw new Error('SDK archived production producer bytes differ');
+    if (receipt.sourceManifest?.[path] !== ARCHIVED_HASHES[index]) throw new Error('SDK archived production source manifest differs');
     return value;
   });
-  if (receipt.sourceManifest?.['tools/compat-broad/fs-write-txn/txn_program_transport.mjs'] !== digest(readFileSync(new URL('./txn_program_transport.mjs', import.meta.url)))) throw new Error('SDK archived production transport manifest differs');
-  return createHash('sha256').update(bytes[0]).update(bytes[1]).digest('hex');
+  const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  const manifest = receipt.runtime.manifest;
+  if (digest(JSON.stringify(canonical(manifest))) !== ARCHIVED_RUNTIME_MANIFEST_SHA256) throw new Error('SDK archived production runtime manifest differs');
+  const entries = Object.entries(manifest.dependencies);
+  const [firstKey, first] = entries[0];
+  const prefix = first.root.slice(0, -firstKey.length);
+  if (!prefix.startsWith('/') || !prefix.endsWith('/node_modules/') || entries.some(([key, row]) => row.root !== prefix + key)) throw new Error('SDK archived production runtime roots differ');
+  // Absolute checkout roots are provenance; every dependency content and graph field remains authoritative.
+  const content = value => ({ ...value, dependencies: Object.fromEntries(Object.entries(value.dependencies).map(([key, { root, ...row }]) => [key, row])) });
+  if (JSON.stringify(canonical(content(manifest))) !== JSON.stringify(canonical(content(runtimeInfo())))) throw new Error('SDK archived production runtime content differs');
+  return { sourceDigest: createHash('sha256').update(bytes[0]).update(bytes[1]).digest('hex'), runtimeManifest: manifest };
 }
 
 /** The public projector always requires the current producer. */
@@ -311,12 +323,12 @@ export function projectAdminReceipt(receipt) {
 }
 
 /** Derive SDK attempts from native rows; timing is deliberately excluded. */
-function projectReceipt(receipt, sourceDigest) {
+function projectReceipt(receipt, sourceDigest, archivedRuntimeManifest) {
   if (receipt.kind !== 'txn-program-recording-v1' || receipt.program !== 'FS-TRANSACTION-P17-ADMIN-SDK-RETRY' || !receipt.complete || !receipt.graphComplete || receipt.unrecovered || receipt.journalFailure || receipt.failureType || !receipt.cleanup?.absent || ['openTokens', 'unknownStarts', 'unknownCommits', 'unknownRollbacks'].some(key => !Array.isArray(receipt[key]) || receipt[key].length)) throw new Error('SDK projection requires complete acquisition');
   const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
   const bound = { ...receipt }; delete bound.receiptDigest;
   if (receipt.receiptDigest !== createHash('sha256').update(JSON.stringify(canonical(bound))).digest('hex')) throw new Error('SDK receipt digest differs');
-  if (receipt.runtime.node !== process.version || receipt.runtime.nodeSha256 !== createHash('sha256').update(readFileSync(process.execPath)).digest('hex') || receipt.runtime.lockSha256 !== createHash('sha256').update(readFileSync(new URL('../../../conformance/pnpm-lock.yaml', import.meta.url))).digest('hex') || JSON.stringify(canonical(receipt.runtime.manifest)) !== JSON.stringify(canonical(runtimeInfo()))) throw new Error('SDK runtime binding differs');
+  if (receipt.runtime.node !== process.version || receipt.runtime.nodeSha256 !== createHash('sha256').update(readFileSync(process.execPath)).digest('hex') || receipt.runtime.lockSha256 !== createHash('sha256').update(readFileSync(new URL('../../../conformance/pnpm-lock.yaml', import.meta.url))).digest('hex') || JSON.stringify(canonical(receipt.runtime.manifest)) !== JSON.stringify(canonical(archivedRuntimeManifest ?? runtimeInfo()))) throw new Error('SDK runtime binding differs');
   if (receipt.sourceDigest !== sourceDigest || receipt.corpusDigest !== createHash('sha256').update(JSON.stringify(CASES)).digest('hex')) throw new Error('SDK source binding differs');
   if (Object.entries({ campaignWallCapSeconds: 600, recordingWallCapSeconds: 300, observationSeconds: 180, recoverySeconds: 120, perRpcDeadlineSeconds: 30 }).some(([key, value]) => receipt.deadlineAccounting?.[key] !== value)) throw new Error('SDK deadline accounting differs');
   const rows = [...receipt.steps, ...receipt.cleanupSteps].sort((a, b) => a.sequence - b.sequence);
@@ -365,17 +377,17 @@ export function compareAdminReceipts(production, local, options = {}) {
   if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => key !== 'archivedProductionSources')) throw new Error('SDK comparison options differ');
   if (production.runtime?.target !== 'production' || !['local', 'production'].includes(local.runtime?.target)) throw new Error('SDK comparison requires production and local or production receipts');
   const archived = Object.hasOwn(options, 'archivedProductionSources');
-  const productionDigest = archived ? archivedProductionBinding(production, options.archivedProductionSources) : currentProducerDigest();
-  const left = projectReceipt(production, productionDigest), right = projectAdminReceipt(local);
+  const binding = archived ? archivedProductionBinding(production, options.archivedProductionSources) : { sourceDigest: currentProducerDigest() };
+  const left = projectReceipt(production, binding.sourceDigest, binding.runtimeManifest), right = projectAdminReceipt(local);
   if (production.runtime.nodeSha256 !== local.runtime.nodeSha256 || production.runtime.lockSha256 !== local.runtime.lockSha256 || JSON.stringify(Object.entries(production.runtime.manifest.dependencies).map(([name, row]) => [name, row.version, row.treeSha256]).sort()) !== JSON.stringify(Object.entries(local.runtime.manifest.dependencies).map(([name, row]) => [name, row.version, row.treeSha256]).sort())) throw new Error('SDK comparison runtime differs');
   if ((!archived && left.sourceDigest !== right.sourceDigest) || left.corpusDigest !== right.corpusDigest) throw new Error('SDK comparison source differs');
   const attempts = left.cases.flatMap((entry, i) => entry.attempts.map((attempt, j) => ({ caseId: entry.caseId, callbackCount: j + 1, production: { ...attempt, writer: entry.writer }, local: right.cases[i].attempts[j] ? { ...right.cases[i].attempts[j], writer: right.cases[i].writer } : null, match: JSON.stringify(attempt) === JSON.stringify(right.cases[i].attempts[j]) && JSON.stringify(entry.writer) === JSON.stringify(right.cases[i].writer) })));
   for (const [i, entry] of right.cases.entries()) for (let j = left.cases[i].attempts.length; j < entry.attempts.length; j++) attempts.push({ caseId: entry.caseId, callbackCount: j + 1, production: null, local: { ...entry.attempts[j], writer: entry.writer }, match: false });
   const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
   const provenance = {
-    production: { binding: archived ? 'archived-production' : 'current', sourceDigest: left.sourceDigest, ...(archived ? { files: Object.fromEntries(PRODUCER_PATHS.map((path, i) => [path, PRODUCTION_PRODUCER_HASHES[i]])) } : {}), receiptDigest: production.receiptDigest, canonicalReceiptSha256: digest(JSON.stringify(canonical(production))) },
+    production: { binding: archived ? 'archived-production' : 'current', sourceDigest: left.sourceDigest, ...(archived ? { files: Object.fromEntries(ARCHIVED_PATHS.map((path, i) => [path, ARCHIVED_HASHES[i]])) } : {}), runtimeManifestSha256: digest(JSON.stringify(canonical(production.runtime.manifest))), receiptDigest: production.receiptDigest, canonicalReceiptSha256: digest(JSON.stringify(canonical(production))) },
     local: { binding: 'current', sourceDigest: right.sourceDigest, receiptDigest: local.receiptDigest, canonicalReceiptSha256: digest(JSON.stringify(canonical(local))) },
-    currentValidator: { sourceDigest: currentProducerDigest(), fileSha256: digest(readFileSync(new URL('./admin_sdk_retry.mjs', import.meta.url))) },
+    currentValidator: { sourceDigest: currentProducerDigest(), fileSha256: digest(readFileSync(new URL('./admin_sdk_retry.mjs', import.meta.url))), transportSha256: digest(readFileSync(new URL('./txn_program_transport.mjs', import.meta.url))), runtimeManifestSha256: digest(JSON.stringify(canonical(runtimeInfo()))) },
     corpusDigest: left.corpusDigest, runtime: { nodeSha256: production.runtime.nodeSha256, lockSha256: production.runtime.lockSha256, dependenciesSha256: digest(JSON.stringify(canonical(production.runtime.manifest.dependencies))) },
   };
   return { kind: 'txn-admin-sdk-comparison-v1', complete: true, attempts, mismatches: attempts.filter(row => !row.match).length, timing: left.timing, provenance };

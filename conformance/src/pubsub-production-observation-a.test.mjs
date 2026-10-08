@@ -2031,3 +2031,118 @@ for (const transport of ["rest", "grpc"])
         }
       }
   });
+
+test("stream diagnostics retain bounded sanitized details without changing terminal or cancellation semantics", async () => {
+  const { default: grpc } = await import("@grpc/grpc-js");
+  const cases = [
+    { details: "deadline zero was refused", expected: "deadline zero was refused" },
+    {
+      details: "token=fixture-private-token; Bearer another-secret",
+      expected: "token=[REDACTED]; Bearer [REDACTED]",
+    },
+    {
+      details: "bearer mixed-secret fixture-private-token",
+      expected: "Bearer [REDACTED] [REDACTED]",
+    },
+    { details: "é".repeat(10240), expected: "é".repeat(10240) },
+    { details: "é".repeat(10241), expected: null },
+    { details: 13, expected: null },
+    { details: undefined, expected: undefined },
+  ];
+  for (const unit of ["a", "é", "€", "😀"])
+    for (const remaining of [0, 12, 60, 61440]) {
+      const limit = Math.floor(remaining / (3 * Buffer.byteLength(unit)));
+      for (const count of [Math.max(0, limit - 1), limit, limit + 1]) {
+        const details = unit.repeat(count);
+        cases.push({ remaining, details, expected: count <= limit ? details : null });
+      }
+    }
+  const original = "fixture-private-token".repeat(1000);
+  assert.ok(3 * Buffer.byteLength(original) > 61440);
+  assert.ok(
+    3 * Buffer.byteLength(original.replaceAll("fixture-private-token", "[REDACTED]")) < 61440,
+  );
+  cases.push({ details: original, expected: null });
+  for (const { details, expected, remaining = 61440 } of cases) {
+    const meter = createMeter({ now: () => 0 });
+    meter.enter(makePlan().cells[0]);
+    const rpc = new EventEmitter(),
+      rows = [];
+    let cancelled = 0;
+    rpc.write = () => true;
+    rpc.cancel = () => {
+      cancelled++;
+    };
+    rpc.end = () => {};
+    const stream = await openStream({
+      meter,
+      credential: async () => "fixture-private-token",
+      client: { makeBidiStreamRequest: () => rpc },
+      journal: { write: (row) => rows.push(row), frame() {} },
+      cellId: "S10",
+      opener: {},
+    });
+    try {
+      if (remaining < 61440) {
+        const metadata = new grpc.Metadata();
+        metadata.add("x", "a".repeat(61440 - remaining - 5));
+        rpc.emit("metadata", metadata);
+      }
+      rpc.emit("error", { code: 13, details });
+      const error = rows.find((row) => row.event === "stream-error");
+      assert.equal(error.details, expected);
+      assert.equal(Object.hasOwn(error, "details"), details !== undefined);
+      assert.equal(stream.state().metadataBytesIn, 65536 - remaining);
+      rpc.emit("status", { code: 13, details });
+      const status = rows.find((row) => row.event === "stream-status");
+      assert.equal(status.details, expected);
+      assert.equal(Object.hasOwn(status, "details"), details !== undefined);
+      assert.equal(
+        stream.state().metadataBytesIn,
+        65536 - remaining + (typeof details === "string" ? 3 * Buffer.byteLength(details) : 0),
+      );
+      assert.deepEqual(stream.state().terminal, { code: 13 });
+      assert.equal(stream.state().incomplete, true);
+      assert.equal(cancelled, expected === null && typeof details === "string" ? 1 : 0);
+      assert.ok(!JSON.stringify(rows).includes("fixture-private-token"));
+      assert.ok(!JSON.stringify(rows).includes("another-secret"));
+    } finally {
+      stream.dispose();
+    }
+  }
+});
+
+test("stream diagnostics honor metadata remaining before status accounting and preserve local cancellation", async () => {
+  const { default: grpc } = await import("@grpc/grpc-js");
+  for (const code of [1, 13]) {
+    const meter = createMeter({ now: () => 0 });
+    meter.enter(makePlan().cells[0]);
+    const rpc = new EventEmitter(),
+      rows = [];
+    rpc.write = () => true;
+    rpc.cancel = () => {};
+    rpc.end = () => {};
+    const stream = await openStream({
+      meter,
+      credential: async () => "fixture-private-token",
+      client: { makeBidiStreamRequest: () => rpc },
+      journal: { write: (row) => rows.push(row), frame() {} },
+      cellId: "S10",
+      opener: {},
+    });
+    try {
+      stream.cancel("unacked-owned-delivery");
+      const metadata = new grpc.Metadata();
+      metadata.add("x", "a".repeat(61426));
+      rpc.emit("metadata", metadata);
+      rpc.emit("error", { code, details: "four" });
+      rpc.emit("status", { code, details: "four" });
+      assert.equal(rows.find((row) => row.event === "stream-error").details, null);
+      assert.equal(rows.find((row) => row.event === "stream-status").details, null);
+      assert.equal(stream.state().incomplete, true);
+      assert.deepEqual(stream.state().terminal, { code });
+    } finally {
+      stream.dispose();
+    }
+  }
+});

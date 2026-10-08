@@ -21,6 +21,9 @@ WITHIN_ENVELOPE_ACTOR = "Claude（委任。枠の内の承認し直し）"
 DELEGATION_TOPIC_PREFIX = "調整役への委任"
 DELEGATION_SCOPE_SHA256 = "d57a2ebb9efdcb798ff64afca7ed2bc15e28556822336342505e41fb822cad46"
 ENVELOPE_DELEGATION_SCOPE_SHA256 = "9027f967c3479e7c43f2390ccc0bcddf3a7dccaa2b6164e2f5025a4f3c6516a5"
+CODEX_ACTOR = "Codex coordinator（委任）"
+CODEX_HANDOVER_TOPIC = "Codex coordinator handover"
+CODEX_HANDOVER_SCOPE_SHA256 = "c2bd23c43cfdcc00b7f82d0f33ce384a1d24e7ac74546b31a8e962f28e3405fa"
 _TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})\Z")
 
 
@@ -94,7 +97,28 @@ def _has_delegation(entries, decisions):
     return True
 
 
+def _has_codex_handover(entries, decisions):
+    """Bind the exact coordinator handover without changing the original delegation."""
+    if decisions is None:
+        decisions = entries.raw_decisions
+    topic = normalize_authority(CODEX_HANDOVER_TOPIC)
+    for line in decisions.splitlines():
+        columns = line.split("|")
+        if len(columns) >= 2 and normalize_authority(columns[1].strip()) == topic and _is_revocation(line):
+            return False
+    handovers = [columns for columns, _tokens in entries if normalize_authority(columns[1]) == topic]
+    if len(handovers) != 1:
+        return False
+    columns = handovers[0]
+    return (columns[0] == "2026-10-07"
+        and normalize_authority(columns[3]) == normalize_authority("オーナー直接指示")
+        and columns[4] == "Codex session 2026-10-07"
+        and hashlib.sha256(columns[2].encode()).hexdigest() == CODEX_HANDOVER_SCOPE_SHA256)
+
+
 def _delegated_actor(actor, entries, decisions, *, allow_within_envelope=False):
+    if normalize_authority(actor) == normalize_authority(CODEX_ACTOR):
+        return _has_delegation(entries, decisions) and _has_codex_handover(entries, decisions)
     recognized = normalize_authority(actor) == normalize_authority(DELEGATED_ACTOR)
     if allow_within_envelope:
         recognized = recognized or normalize_authority(actor) == normalize_authority(WITHIN_ENVELOPE_ACTOR)

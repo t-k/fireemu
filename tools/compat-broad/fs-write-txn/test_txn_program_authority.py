@@ -32,6 +32,9 @@ def approve_row(actor=ACTOR, **changes):
 
 ENVELOPE, APPROVE = envelope_row(), approve_row()
 DECISIONS = AUTHORITY + ENVELOPE + APPROVE
+CODEX_ACTOR = "Codex coordinator（委任）"
+CODEX_HANDOVER = "- 2026-10-07 | Codex coordinator handover | EVENTARC、FS-TRANSACTION、PUBSUBのclosureを目標にCodexが調整役を引き継ぎ、GPT-6.1-Solのサブエージェントへ作業を割り当てる。最優先はEVENTARC H2-Bの監視とjournal value.lineの原文admission、およびTxn-04再生成の完了処理。本番Firebaseとのgap解消を優先し、過剰設計を避ける。 | オーナー直接指示 | Codex session 2026-10-07\n"
+CODEX_DECISIONS = AUTHORITY + CODEX_HANDOVER + envelope_row(CODEX_ACTOR) + approve_row(CODEX_ACTOR)
 NOW = datetime(2026, 9, 28, 5, tzinfo=timezone.utc)
 LAST = {"ts": "2026-09-28T04:00:00Z", "project": "fireemu-oracle-sbx", "taskId": "FS-TRANSACTION-SANDBOX", "attemptId": "prior", "outcome": "recorded", "estimatedUsd": 0.05}
 
@@ -85,6 +88,72 @@ def test_an_envelope_that_states_the_shorter_deadline_does_not_authorize_a_table
 def test_delegation_with_exact_foundation_envelope_and_version_is_accepted():
     assert authority.authorize(DECISIONS, PINS) == (2 * REQUESTS, 0.04)
     assert authority.verify_initial_gates([LAST], NOW, DECISIONS, PINS) == LAST["ts"]
+
+
+@pytest.mark.parametrize("actor", [CODEX_ACTOR, "CODEX COORDINATOR(委任)"])
+def test_codex_actor_requires_genuine_owner_handover_and_both_foundations(actor):
+    decisions = CODEX_DECISIONS.replace(CODEX_ACTOR, actor)
+    assert authority.authorize(decisions, PINS) == (2 * REQUESTS, 0.04)
+    assert authority.verify_initial_gates([LAST], NOW, decisions, PINS) == LAST["ts"]
+    entries = authority.shared._decision_entries(decisions)
+    assert authority.shared._authorized_actor(actor, entries)
+
+
+@pytest.mark.parametrize("old,new", [
+    (CODEX_HANDOVER, ""),
+    ("- 2026-10-07 | Codex coordinator handover", "- 2026-10-08 | Codex coordinator handover"),
+    ("| Codex coordinator handover |", "| Codex coordinator delegation |"),
+    ("| オーナー直接指示 |", "| Codex coordinator（委任） |"),
+    ("| Codex session 2026-10-07", "| Codex conversation 2026-10-07"),
+    ("過剰設計を避ける。", "過剰設計も認める。"),
+    (CODEX_HANDOVER, CODEX_HANDOVER + CODEX_HANDOVER),
+    (CODEX_HANDOVER, CODEX_HANDOVER + CODEX_HANDOVER.replace("過剰設計を避ける。", "scope changed")),
+])
+def test_codex_actor_refuses_absent_altered_or_duplicate_handover(old, new):
+    with pytest.raises(ValueError):
+        authority.authorize(CODEX_DECISIONS.replace(old, new), PINS)
+
+
+@pytest.mark.parametrize("columns", [3, 4, 5, 6])
+@pytest.mark.parametrize("topic", ["Codex coordinator handover", "Ｃｏｄｅｘ coordinator handover"])
+def test_codex_actor_refuses_raw_handover_revocation(columns, topic):
+    parts = ["- 2026-10-08", topic, "ＲＥＶＯＫＥＤ", "オーナー直接指示", "unit", "extra"]
+    cancellation = " | ".join(parts[:columns]) + "\n"
+    with pytest.raises(ValueError):
+        authority.authorize(CODEX_DECISIONS + cancellation, PINS)
+
+
+@pytest.mark.parametrize("foundation", AUTHORITY.splitlines(keepends=True))
+@pytest.mark.parametrize("change", ["missing", "scope", "duplicate", "revoked"])
+def test_codex_actor_refuses_missing_changed_duplicate_or_revoked_old_foundations(foundation, change):
+    if change == "missing":
+        decisions = CODEX_DECISIONS.replace(foundation, "")
+    elif change == "scope":
+        decisions = CODEX_DECISIONS.replace(foundation, foundation.replace("費用US$10", "費用US$20"))
+    elif change == "duplicate":
+        decisions = CODEX_DECISIONS + foundation
+    else:
+        topic = foundation.split("|")[1].strip()
+        decisions = CODEX_DECISIONS + f"- 2026-10-08 | {topic} | REVOKED | オーナー直接指示 | unit\n"
+    with pytest.raises(ValueError):
+        authority.authorize(decisions, PINS)
+
+
+@pytest.mark.parametrize("actor", ["Codex coordinator", "Codex coordinator（委任。追加）", "Codex worker（委任）", "prefix Codex coordinator（委任）", "Codex coordinator（owner996/998・委任365/395）"])
+def test_codex_actor_does_not_accept_other_actor_names(actor):
+    with pytest.raises(ValueError):
+        authority.authorize(CODEX_DECISIONS.replace(CODEX_ACTOR, actor), PINS)
+
+
+def test_codex_actor_is_not_revoked_by_an_unrelated_packet_revocation():
+    cancellation = f"- 2026-10-08 | {NAME} | REVOKED packetSha256={'d' * 64} | {CODEX_ACTOR} | unit\n"
+    assert authority.authorize(CODEX_DECISIONS + cancellation, PINS) == (2 * REQUESTS, 0.04)
+
+
+def test_codex_handover_does_not_replace_exact_packet_and_envelope_approval():
+    for decisions in [AUTHORITY + CODEX_HANDOVER, CODEX_DECISIONS.replace(approve_row(CODEX_ACTOR), ""), CODEX_DECISIONS.replace(envelope_row(CODEX_ACTOR), "")]:
+        with pytest.raises(ValueError):
+            authority.authorize(decisions, PINS)
 
 
 @pytest.mark.parametrize("old,new", [("owned-2-documents", "owned-5-documents"), (f"maxRequests={2 * REQUESTS}", f"maxRequests={2 * REQUESTS - 1}"), ("reserveUsd=0.04", "reserveUsd=10.01"), ("reserveUsd=0.04", "reserveUsd=0.03"), (f"maxRequests={2 * REQUESTS}", f"maxRequests={2 * REQUESTS + 1}"), ("decision=APPROVE;", ""), ("recordings=2", "recordings=1"), ("根拠=2026-09-28 調整役への委任（本番の送信）", "根拠=unknown"), ("writerDeadlineSeconds=30", "writerDeadlineSeconds=60"), ("transports=grpc+rest", "transports=grpc"), ("observationSeconds=240", "observationSeconds=900"), ("recoverySeconds=180", "recoverySeconds=360"), ("maxTokens=2", "maxTokens=3"), ("maxUnresolvedTokens=1", "maxUnresolvedTokens=2"), ("releasePolicy=rollback-zero-before-next-chain", "releasePolicy=assume-invalidated"), ("timingSource=parent-wire-envelope", "timingSource=local-control-clock")])

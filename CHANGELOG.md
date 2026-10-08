@@ -8,6 +8,14 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-09
+
+Firestore transactions (FS-TRANSACTION) are now `COMPAT_VERIFIED` within the frozen production scope: saved transaction programs, Admin and Web SDK retry, and atomic commit visibility. The expiry campaign retains its `PARTIAL` qualification; this closure does not cover the full native Listen corpus.
+
+### Added
+
+- Release verification replays public transaction expectations through real local collectors, Node and browser SDKs, and native Listen, checking the supplied binary hash and the complete semantic row inventory.
+
 ### Fixed
 
 - Firestore transaction deadlocks abort the younger transaction with production's cross-transaction contention message. Begin order breaks equal-clock ties, a holder waiting on a third transaction is preserved, and an older requester commits immediately after releasing the last colliding lock. Retry attempts keep a fresh age, whose production behavior was not recorded.
@@ -574,7 +582,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/t-k/fireemu/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/t-k/fireemu/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/t-k/fireemu/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/t-k/fireemu/compare/v0.11.0...v0.12.0

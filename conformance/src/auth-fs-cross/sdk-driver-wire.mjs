@@ -2,6 +2,7 @@
 // `fetch` and `http2.connect` when its module loads, so this module is imported first.
 
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 
 import {
   createWireLedger,
@@ -41,5 +42,34 @@ const ledger = createWireLedger({
     );
   },
 });
-installWireGuard(ledger);
+let capture;
+if (local && config.transactionCapture === true) {
+  const require = createRequire(import.meta.url);
+  const firestoreRequire = createRequire(require.resolve("@google-cloud/firestore/package.json"));
+  const { protobuf } = firestoreRequire("google-gax");
+  const root = protobuf.Root.fromJSON(firestoreRequire("./build/protos/v1.json"));
+  capture = {
+    onTransaction: (evidence) => emit({ event: "transaction-wire", ...evidence }),
+    decodeGrpc(method, bytes, response) {
+      const type = root.lookupType(
+        `google.firestore.v1.${method}${response ? "Response" : "Request"}`,
+      );
+      const messages = [];
+      for (let offset = 0; offset < bytes.length;) {
+        if (offset + 5 > bytes.length || bytes[offset] !== 0) throw new Error("invalid gRPC frame");
+        const length = bytes.readUInt32BE(offset + 1);
+        if (offset + 5 + length > bytes.length) throw new Error("truncated gRPC frame");
+        messages.push(
+          type.toObject(type.decode(bytes.subarray(offset + 5, offset + 5 + length)), {
+            longs: String,
+          }),
+        );
+        offset += 5 + length;
+      }
+      if (!response && messages.length !== 1) throw new Error("request frame count");
+      return response && method === "BatchGetDocuments" ? messages : messages[0];
+    },
+  };
+}
+installWireGuard(ledger, capture);
 installSocketGuard(ledger);

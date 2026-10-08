@@ -263,6 +263,130 @@ test("W native size refusal admits only the recorded literal across generated ne
   }
 });
 
+// W0 3ba6db4cb8e0 capture n17 reports an opaque internal measurement, not recipe bytes.
+const requestSizeRefusal = {
+  error: {
+    code: 400,
+    message:
+      "The value for request_size is too large. You passed 10476337 in the request, but the maximum value is 10000000.",
+    status: "INVALID_ARGUMENT",
+  },
+};
+
+test("W request_size recognizes the actual n17 native refusal without equating its metric to recipe bytes", () => {
+  const m = wManifest({ project: "fireemu-oracle-events", runId: "3ba6db4cb8e0", stage: "w0" });
+  const spec = { host: "publishing", method: "POST", path: `/v1/${m.channel}:publishEvents` };
+  const answer = native(400, requestSizeRefusal);
+  answer.bodySha256 = createHash("sha256")
+    .update(Buffer.from(answer.bodyBase64, "base64"))
+    .digest("hex");
+  answer.headers = { "content-length": "201" };
+  assert.equal(answer.bodyBytes, 201);
+  assert.equal(
+    answer.bodySha256,
+    "35a2305226a86caf533f4cf9d22b06b89043ffa257985eec70615a6d464b0782",
+  );
+  const recipe = wBody(m, 8, 10485760);
+  assert.equal(recipe.httpBytes, 10485760);
+  assert.equal(recipe.requestBytes, 10475028);
+  assert.notEqual(10476337, recipe.httpBytes);
+  assert.notEqual(10476337, recipe.requestBytes);
+  assert.equal(wAcceptance(answer, spec), false);
+});
+
+test("W request_size bounds the observed grammar and rejects envelope, scope and raw near misses", () => {
+  const spec = {
+    host: "publishing",
+    method: "POST",
+    path: `/v1/${manifest().channel}:publishEvents`,
+  };
+  const withMessage = (message) => ({ error: { ...requestSizeRefusal.error, message } });
+  const message = (passed) =>
+    `The value for request_size is too large. You passed ${passed} in the request, but the maximum value is 10000000.`;
+  // These parser examples are synthetic; only 10476337 has production evidence.
+  for (const passed of [10000001, 10476337, 12345678, 99999999])
+    assert.equal(
+      wAcceptance(native(400, withMessage(message(passed))), spec),
+      false,
+      String(passed),
+    );
+  for (let i = 1; i <= 32; i++) {
+    const passed = 10000000 + i * 271829;
+    assert.equal(wAcceptance(native(400, withMessage(message(passed))), spec), false);
+    for (const malformed of [`0${passed}`, `${passed}.0`, `+${passed}`, `${passed}x`])
+      assert.equal(wAcceptance(native(400, withMessage(message(malformed))), spec), null);
+  }
+  for (const passed of [
+    "0",
+    "9999999",
+    "10000000",
+    "010476337",
+    "100000000",
+    "+10476337",
+    "-10476337",
+    "1.0476337e7",
+    "10476337.0",
+    "10476337 ",
+  ])
+    assert.equal(wAcceptance(native(400, withMessage(message(passed))), spec), null, passed);
+  for (const changed of [
+    message(10476337).replace("request_size", "events_size"),
+    message(10476337).replace("The value for request_size is too large.", "Payload rejected."),
+    message(10476337).replace("request_size", "event_size"),
+    message(10476337).replace("10000000.", "10000001."),
+    message(10476337).replace("10000000.", "9999999."),
+    message(10476337).slice(0, -1),
+    `${message(10476337)} Retry later.`,
+    `${message(10476337)}\n`,
+    "The value for request_size is too large.",
+    "Payload rejected by the service.",
+  ])
+    assert.equal(wAcceptance(native(400, withMessage(changed)), spec), null, changed);
+  const answer = native(400, requestSizeRefusal);
+  for (const status of [200, 404, 413, 429, 500, 503])
+    assert.equal(wAcceptance(native(status, requestSizeRefusal), spec), null, String(status));
+  for (const changed of [
+    { ...spec, host: "eventarc" },
+    { ...spec, method: "GET" },
+    { ...spec, path: "/v1/foreign:publishEvents" },
+  ])
+    assert.equal(wAcceptance(answer, changed), null);
+  for (const body of [
+    { error: { ...requestSizeRefusal.error, code: "400" } },
+    { error: { ...requestSizeRefusal.error, code: 413 } },
+    { error: { ...requestSizeRefusal.error, status: "RESOURCE_EXHAUSTED" } },
+    { error: { ...requestSizeRefusal.error, message: null } },
+    { error: { ...requestSizeRefusal.error, message: [requestSizeRefusal.error.message] } },
+    { ...requestSizeRefusal, extra: true },
+    { error: { ...requestSizeRefusal.error, extra: true } },
+    ...[null, [], [{}]].map((details) => ({ error: { ...requestSizeRefusal.error, details } })),
+    { error: { status: "INVALID_ARGUMENT", code: 400, message: requestSizeRefusal.error.message } },
+  ])
+    assert.equal(wAcceptance(native(400, body), spec), null, JSON.stringify(body));
+  const raw = Buffer.from(answer.bodyBase64, "base64").toString();
+  const rawAnswer = (text) => {
+    const bytes = Buffer.from(text);
+    return {
+      ...answer,
+      bodyBase64: bytes.toString("base64"),
+      bodyBytes: bytes.length,
+      bodySha256: createHash("sha256").update(bytes).digest("hex"),
+      headers: { "content-length": String(bytes.length) },
+    };
+  };
+  for (const changed of [
+    { ...answer, unknown: true },
+    { ...answer, bodyBytes: 200 },
+    { ...answer, headers: { "content-length": "200" } },
+    { ...answer, bodySha256: "0".repeat(64) },
+    rawAnswer(JSON.stringify(answer.body)),
+    rawAnswer(raw.replace(/  /g, "\t")),
+    rawAnswer(raw.slice(0, -1)),
+    rawAnswer(raw.replace("10476337", "10476338")),
+  ])
+    assert.equal(wAcceptance(changed, spec), null);
+});
+
 // Resource answers use recorded bodies and the real production judge; only instance values change.
 async function replay(stage = "w0", mode = "normal", prerequisite, defer = false, createReply) {
   const m = manifest(stage, prerequisite),
@@ -294,7 +418,7 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
             const accepted =
               mode === "all-accepted" ||
               (mode === "logical" ? spec.recipe.httpBytes - spec.recipe.whitespace : size) <=
-                (mode === "native-size" ? 10485760 : 1500000);
+                (mode === "native-size" || mode === "request-size" ? 10485760 : 1500000);
             if (accepted) body = {};
             else {
               status = 400;
@@ -304,6 +428,15 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
               body.error.message = "Payload rejected by the service.";
               body.error.details[0].fieldViolations[0].description = body.error.message;
               if (mode === "native-size") body = structuredClone(nativeSizeRefusal);
+              // A synthetic threshold and opaque variable measurement exercise mixed refusal families.
+              if (mode === "request-size") {
+                body = structuredClone(size > 12582912 ? nativeSizeRefusal : requestSizeRefusal);
+                if (size <= 12582912)
+                  body.error.message = body.error.message.replace(
+                    "10476337",
+                    String(10000000 + size - 10485760),
+                  );
+              }
             }
           } else if (host === "usage") {
             body = template(
@@ -437,6 +570,22 @@ test("W native size refusal reaches staged bisection with bounded monotone publi
   }
   assert.equal(one.result.layer, "http-body-dependent");
   assert.equal(two.result.layer, one.result.layer);
+});
+
+test("W request_size mixed refusal replay completes synthetic W0 bounded bisection", async () => {
+  const { result, calls } = await replay("w0", "request-size");
+  assert.equal(result.stopped, null);
+  assert.equal(result.evidenceComplete, true);
+  assert.equal(result.cleanupReady, true);
+  assert.ok(result.boundary.refused - result.boundary.accepted <= 4096);
+  assert.ok(result.counts.publish <= 20);
+  assert.ok(calls.length <= 16 + 12 + 20 + 38);
+  assert.equal(calls.filter((call) => call.method === "DELETE").length, 1);
+  assert.equal(result.publishes[0].accepted, true);
+  const refused = result.publishes.filter((p) => p.accepted === false);
+  assert.ok(refused.some((p) => p.observation === nativeSizeRefusal.error.message));
+  assert.ok(refused.some((p) => p.observation.startsWith("The value for request_size")));
+  assert.equal(result.layer, null);
 });
 
 test("W recorded C and D CREATE refusals settle failed with no open writes in main cleanup and A2", async () => {

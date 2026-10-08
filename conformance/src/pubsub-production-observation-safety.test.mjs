@@ -509,6 +509,7 @@ test("Task24 each recorder closes journals and listeners after reporting and wir
     ["--record", ...Object.entries(values).flatMap(([key, value]) => [`--${key}`, value])],
     {
       admit: () => ({
+        plan: makePlan(),
         check() {},
         descriptor: { head: "a".repeat(40) },
         descriptorSha256: "b".repeat(64),

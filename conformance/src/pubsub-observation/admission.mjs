@@ -9,7 +9,7 @@ import {
   sha256,
   verifyLiveLock,
 } from "../pubsub-production/admission.mjs";
-import { SUITE, TASK, PROJECT, makePlan, validatePlan } from "./plan.mjs";
+import { SUITE, TASK, PROJECT, validatePlan } from "./plan.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 export const SOURCE_FILES = Object.freeze([
   ...inheritedSources,
@@ -144,6 +144,23 @@ export function readJson(path) {
   if (bytes.length > 4194304) throw new Error("admission file byte cap");
   return { value: JSON.parse(bytes), sha256: sha256(bytes) };
 }
+export function verifyPacket(packet, scope, descriptor, descriptorSha256) {
+  if (
+    packet.sha256 !== scope.packetSha256 ||
+    packet.value.schema !== 1 ||
+    packet.value.taskId !== TASK ||
+    packet.value.version !== "v1" ||
+    packet.value.sourceHead !== descriptor.head ||
+    packet.value.descriptorSha256 !== descriptorSha256 ||
+    JSON.stringify(packet.value.runIds) !== JSON.stringify(scope.runIds) ||
+    JSON.stringify(packet.value.runOutputs) !== JSON.stringify(scope.runOutputs) ||
+    JSON.stringify(packet.value.recoveryOutputs) !== JSON.stringify(scope.recoveryOutputs) ||
+    JSON.stringify(packet.value.plan) !== JSON.stringify(scope.plan)
+  )
+    throw new Error("packet identity mismatch");
+  validatePlan(packet.value.plan);
+  return packet.value.plan;
+}
 export function admit(options, now = Date.now()) {
   const descriptorFile = readJson(options.descriptor),
     descriptor = descriptorFile.value;
@@ -151,19 +168,7 @@ export function admit(options, now = Date.now()) {
   const scope = readJson(options.authority).value;
   verifyScope(scope, descriptor, descriptorFile.sha256, options, now);
   const packet = readJson(options.packet);
-  if (
-    packet.sha256 !== scope.packetSha256 ||
-    packet.value.schema !== 1 ||
-    packet.value.taskId !== TASK ||
-    packet.value.version !== "v1" ||
-    packet.value.sourceHead !== descriptor.head ||
-    packet.value.descriptorSha256 !== descriptorFile.sha256 ||
-    JSON.stringify(packet.value.runIds) !== JSON.stringify(scope.runIds) ||
-    JSON.stringify(packet.value.runOutputs) !== JSON.stringify(scope.runOutputs) ||
-    JSON.stringify(packet.value.recoveryOutputs) !== JSON.stringify(scope.recoveryOutputs)
-  )
-    throw new Error("packet identity mismatch");
-  validatePlan(packet.value.plan);
+  verifyPacket(packet, scope, descriptor, descriptorFile.sha256);
   const main = dirname(git("rev-parse", "--path-format=absolute", "--git-common-dir"));
   const ledgerPath = resolve(main, "docs.local/instructions/owner-decisions.md");
   for (const kind of ["E", "V"]) {
@@ -217,7 +222,7 @@ export function admit(options, now = Date.now()) {
     descriptor,
     descriptorSha256: descriptorFile.sha256,
     check,
-    plan: makePlan(),
+    plan: scope.plan,
     preflightUnusedRun: () =>
       unusedRunPreflight({
         runId: options.runId,

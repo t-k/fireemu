@@ -517,10 +517,48 @@ export function compareAnswer(recorded, actual) {
   };
 }
 
+/** An issuing response must name this request's operation authority and channel. */
+function operationReference(body, target, verb) {
+  const parent = target.slice(0, target.lastIndexOf("/channels/"));
+  const id =
+    typeof body?.name === "string" && body.name.startsWith(`${parent}/operations/`)
+      ? body.name.slice(`${parent}/operations/`.length)
+      : "";
+  return /^operation-\d{13}-[a-f0-9]{13}-[a-f0-9]{8}-[a-f0-9]{8}$/.test(id) &&
+    body.metadata?.target === target &&
+    body.metadata?.verb === verb &&
+    typeof body.done === "boolean"
+    ? body.name
+    : null;
+}
+
+/** Scope opaque page cursors to their collection and selection, independent of page size. */
+function pageScope(path) {
+  const [bare, query = ""] = path.split(/\?(.*)/s, 2);
+  if (!/^\/v1\/projects\/[^/]+\/locations\/[^/]+\/channels$/.test(bare)) return null;
+  const params = new URLSearchParams(query);
+  return JSON.stringify([bare, params.getAll("filter"), params.getAll("orderBy")]);
+}
+
+function validPageToken(token) {
+  return (
+    typeof token === "string" &&
+    /^[A-Za-z0-9_-]+$/.test(token) &&
+    Buffer.from(token, "base64url").toString("base64url") === token
+  );
+}
+
+/** Conflicting issuing responses invalidate a binding instead of silently changing its identity. */
+function bindReference(bindings, original, local) {
+  bindings.set(original, bindings.has(original) && bindings.get(original) !== local ? null : local);
+}
+
 /** Replays a recording against a listener, row by row. */
 export async function replay(rows, options) {
   const modes = tokenModes(rows);
   const results = [];
+  const operations = new Map(),
+    pageTokens = new Map();
   for (const [index, row] of rows.entries()) {
     const skipped = skipReason(row);
     const common = {
@@ -540,7 +578,31 @@ export async function replay(rows, options) {
     }
     let actual;
     try {
-      actual = await replayRow(row, modes[index], options);
+      let path = row.request.path;
+      const [bare, query] = path.split(/\?(.*)/s, 2);
+      if (row.op === "getOperation" && row.request.method === "GET") {
+        const local = operations.get(bare.replace(/^\/v1\//, ""));
+        if (local) path = `/v1/${local}${query === undefined ? "" : `?${query}`}`;
+      }
+      if (
+        row.op === "listChannels" &&
+        row.request.method === "GET" &&
+        query !== undefined &&
+        new URLSearchParams(query).getAll("pageToken").length === 1
+      ) {
+        const scope = pageScope(path);
+        if (scope)
+          path = path.replace(/([?&]pageToken=)([^&]*)/g, (part, prefix, value) => {
+            const token = new URLSearchParams(`pageToken=${value}`).get("pageToken");
+            const local = pageTokens.get(`${scope}\0${token}`);
+            return local ? `${prefix}${encodeURIComponent(local)}` : part;
+          });
+      }
+      actual = await replayRow(
+        { ...row, request: { ...row.request, path } },
+        modes[index],
+        options,
+      );
     } catch (error) {
       results.push({
         ...common,
@@ -549,6 +611,58 @@ export async function replay(rows, options) {
         paths: [],
       });
       continue;
+    }
+    if (row.response.status === 200 && actual.status === 200) {
+      const [bare, query = ""] = row.request.path.split(/\?(.*)/s, 2);
+      const params = new URLSearchParams(query);
+      let target = null,
+        verb = null;
+      if (
+        row.op === "createChannel" &&
+        row.request.method === "POST" &&
+        /^\/v1\/projects\/[^/]+\/locations\/[^/]+\/channels$/.test(bare) &&
+        params.getAll("channelId").length === 1 &&
+        /^[^/]+$/.test(params.get("channelId"))
+      ) {
+        target = `${bare.slice(4)}/${params.get("channelId")}`;
+        verb = "create";
+      } else if (
+        row.op === "deleteChannel" &&
+        row.request.method === "DELETE" &&
+        /^\/v1\/projects\/[^/]+\/locations\/[^/]+\/channels\/[^/]+$/.test(bare)
+      ) {
+        target = bare.slice(4);
+        verb = "delete";
+      }
+      if (target) {
+        const original = operationReference(row.response.body, target, verb);
+        const local = operationReference(actual.body, target, verb);
+        if (original && local) bindReference(operations, original, local);
+      }
+      const scope =
+        row.op === "listChannels" && row.request.method === "GET"
+          ? pageScope(row.request.path)
+          : null;
+      const original = row.response.body,
+        local = actual.body;
+      if (
+        scope &&
+        validPageToken(original?.nextPageToken) &&
+        validPageToken(local?.nextPageToken) &&
+        Array.isArray(original.channels) &&
+        original.channels.length > 0 &&
+        Array.isArray(local.channels) &&
+        original.channels.length === local.channels.length &&
+        original.channels.every(
+          (item, i) =>
+            typeof item?.name === "string" &&
+            item.name.startsWith(`${bare.slice(4)}/`) &&
+            /^[^/?#]+$/.test(item.name.slice(bare.slice(4).length + 1)) &&
+            item.name === local.channels[i]?.name,
+        )
+      ) {
+        bindReference(pageTokens, `${scope}\0${original.nextPageToken}`, local.nextPageToken);
+      }
     }
     const compared = compareAnswer(row.response, actual);
     results.push({

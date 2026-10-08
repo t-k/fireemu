@@ -136,6 +136,15 @@ export function wAcceptance(reply, spec) {
     return null;
   const error = reply.body?.error;
   if (
+    reply.status === 400 &&
+    JSON.stringify(Object.keys(reply.body)) === '["error"]' &&
+    JSON.stringify(Object.keys(error ?? {})) === '["code","message","status"]' &&
+    error.code === 400 &&
+    error.status === "INVALID_ARGUMENT" &&
+    error.message === "Request payload size exceeds the limit: 10485760 bytes."
+  )
+    return false;
+  if (
     ![400, 413].includes(reply.status) ||
     error?.code !== reply.status ||
     typeof error.message !== "string" ||

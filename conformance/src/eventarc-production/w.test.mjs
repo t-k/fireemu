@@ -128,6 +128,141 @@ test("W accepts native recorded-layout 400 and 413 refusals without guessing mes
   assert.equal(wAcceptance({ ...native(200, {}), bodyBytes: 2 }, spec), null);
 });
 
+// Original W0 capture line 16: the public-safe native response has no details field.
+const nativeSizeRefusal = {
+  error: {
+    code: 400,
+    message: "Request payload size exceeds the limit: 10485760 bytes.",
+    status: "INVALID_ARGUMENT",
+  },
+};
+
+test("W recognizes the exact W0 native size refusal and base64-parts fallback", () => {
+  const spec = {
+    host: "publishing",
+    method: "POST",
+    path: `/v1/${manifest().channel}:publishEvents`,
+  };
+  const answer = native(400, nativeSizeRefusal);
+  const bytes = Buffer.from(answer.bodyBase64, "base64");
+  const bodySha256 = createHash("sha256").update(bytes).digest("hex");
+  assert.equal(answer.bodyBytes, 145);
+  assert.equal(bodySha256, "81e20f3b3dd1632f2778afb47bf7ebb6b03be6d6ef17fc938312dab8e8ca8d5d");
+  answer.bodySha256 = bodySha256;
+  answer.headers = { "content-length": "145" };
+  assert.equal(wAcceptance(answer, spec), false);
+  const { bodyBase64, ...parts } = answer;
+  assert.equal(
+    wAcceptance(
+      { ...parts, bodyBase64Parts: [bodyBase64.slice(0, 20), bodyBase64.slice(20)] },
+      spec,
+    ),
+    false,
+  );
+});
+
+test("W native size refusal rejects scope, status, envelope and native-byte near misses", () => {
+  const spec = {
+    host: "publishing",
+    method: "POST",
+    path: `/v1/${manifest().channel}:publishEvents`,
+  };
+  const answer = native(400, nativeSizeRefusal);
+  assert.equal(wAcceptance(native(413, nativeSizeRefusal), spec), null);
+  for (const changed of [
+    { ...spec, host: "eventarc" },
+    { ...spec, method: "GET" },
+    { ...spec, path: spec.path.replace("fireemu-oracle-events", "foreign") },
+    { ...spec, path: spec.path.replace("us-central1", "us-east1") },
+    { ...spec, path: spec.path.replace("-w:", "-foreign:") },
+  ])
+    assert.equal(wAcceptance(answer, changed), null, JSON.stringify(changed));
+  for (const status of [199, 200, 302, 400, 403, 413, 429, 503]) {
+    const body = structuredClone(nativeSizeRefusal);
+    if (status === 400) body.error.code = "400";
+    else body.error.code = status;
+    assert.equal(wAcceptance(native(status, body), spec), null, String(status));
+  }
+  const bodies = [
+    null,
+    {},
+    { error: null },
+    { error: { ...nativeSizeRefusal.error, code: 413 } },
+    { error: { ...nativeSizeRefusal.error, status: "RESOURCE_EXHAUSTED" } },
+    { error: { ...nativeSizeRefusal.error, status: null } },
+    { error: { ...nativeSizeRefusal.error, message: 10485760 } },
+    { ...nativeSizeRefusal, extra: true },
+    { error: { ...nativeSizeRefusal.error, extra: true } },
+    { error: { ...nativeSizeRefusal.error, details: null } },
+    { error: { ...nativeSizeRefusal.error, details: [] } },
+    { error: { status: "INVALID_ARGUMENT", code: 400, message: nativeSizeRefusal.error.message } },
+  ];
+  for (const message of [
+    "Payload rejected by the service.",
+    "Too many events.",
+    "Quota exceeded.",
+    "Permission denied.",
+    "Event payload size exceeds the limit: 10485760 bytes.",
+    "Request payload size exceeds the limit: 10485761 bytes.",
+    "Request payload size exceeds the limit: 10485760 bytes",
+    `${nativeSizeRefusal.error.message} Retry later.`,
+  ])
+    bodies.push({ error: { ...nativeSizeRefusal.error, message } });
+  for (const body of bodies)
+    assert.equal(wAcceptance(native(400, body), spec), null, JSON.stringify(body));
+  const raw = Buffer.from(answer.bodyBase64, "base64").toString();
+  const wrongRaw = (text) => {
+    const bytes = Buffer.from(text);
+    return {
+      ...answer,
+      bodyBase64: bytes.toString("base64"),
+      bodyBytes: bytes.length,
+      headers: { "content-length": String(bytes.length) },
+      bodySha256: createHash("sha256").update(bytes).digest("hex"),
+    };
+  };
+  for (const changed of [
+    { ...answer, unknown: true },
+    { ...answer, bodyBytes: 144 },
+    { ...answer, headers: { "content-length": "144" } },
+    { ...answer, bodySha256: "0".repeat(64) },
+    wrongRaw(JSON.stringify(answer.body)),
+    wrongRaw(raw.replace(/  /g, "\t")),
+    wrongRaw(raw.slice(0, -1)),
+    wrongRaw(raw.replace("10485760", "10485761")),
+  ])
+    assert.equal(wAcceptance(changed, spec), null);
+});
+
+test("W native size refusal admits only the recorded literal across generated near misses", () => {
+  const spec = {
+    host: "publishing",
+    method: "POST",
+    path: `/v1/${manifest().channel}:publishEvents`,
+  };
+  const message = nativeSizeRefusal.error.message;
+  for (let i = 0; i <= message.length; i++) {
+    for (const suffix of ["0", "x", " ", "\n"]) {
+      const changed = message.slice(0, i) + suffix + message.slice(i);
+      const body = { error: { ...nativeSizeRefusal.error, message: changed } };
+      assert.equal(wAcceptance(native(400, body), spec), null, JSON.stringify(changed));
+    }
+    if (i < message.length) {
+      const changed = message.slice(0, i) + message.slice(i + 1);
+      const body = { error: { ...nativeSizeRefusal.error, message: changed } };
+      assert.equal(wAcceptance(native(400, body), spec), null, JSON.stringify(changed));
+    }
+  }
+  for (let i = 0; i < 128; i++) {
+    const body = { error: { ...nativeSizeRefusal.error, [`extra${i}`]: i } };
+    assert.equal(wAcceptance(native(400, body), spec), null);
+    body.error = { ...nativeSizeRefusal.error, code: 399 - i };
+    assert.equal(wAcceptance(native(400, body), spec), null);
+    body.error = { ...nativeSizeRefusal.error, status: `INVALID_ARGUMENT${i}` };
+    assert.equal(wAcceptance(native(400, body), spec), null);
+  }
+});
+
 // Resource answers use recorded bodies and the real production judge; only instance values change.
 async function replay(stage = "w0", mode = "normal", prerequisite, defer = false, createReply) {
   const m = manifest(stage, prerequisite),
@@ -159,7 +294,7 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
             const accepted =
               mode === "all-accepted" ||
               (mode === "logical" ? spec.recipe.httpBytes - spec.recipe.whitespace : size) <=
-                1500000;
+                (mode === "native-size" ? 10485760 : 1500000);
             if (accepted) body = {};
             else {
               status = 400;
@@ -168,6 +303,7 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
               );
               body.error.message = "Payload rejected by the service.";
               body.error.details[0].fieldViolations[0].description = body.error.message;
+              if (mode === "native-size") body = structuredClone(nativeSizeRefusal);
             }
           } else if (host === "usage") {
             body = template(
@@ -270,6 +406,37 @@ test("W0 discovers an interval through real resource judges and cleans its exact
       call.timeoutMs,
       30_000 + Math.ceil(((call.recipe?.httpBytes ?? 0) * 8 * 1000) / 2_000_000),
     );
+});
+
+test("W native size refusal reaches staged bisection with bounded monotone publications", async () => {
+  const zero = await replay("w0", "native-size");
+  const one = await replay("w1", "native-size", zero.result.boundary);
+  const two = await replay("w2", "native-size", one.result.boundary);
+  assert.ok(zero.result.boundary.refused - zero.result.boundary.accepted <= 4096);
+  assert.deepEqual(one.result.boundary, { accepted: 10485760, refused: 10485761 });
+  assert.deepEqual(two.result.boundary, one.result.boundary);
+  for (const [stage, limit] of [
+    [zero, 20],
+    [one, 18],
+    [two, 6],
+  ]) {
+    const { result, calls } = stage;
+    assert.equal(result.stopped, null);
+    assert.equal(result.evidenceComplete, true);
+    assert.equal(result.cleanupReady, true);
+    assert.ok(result.counts.publish <= limit);
+    assert.ok(calls.length <= 16 + 12 + limit + 38);
+    assert.equal(calls.filter((c) => c.method === "DELETE").length, 1);
+    assert.equal(result.publishes[0].accepted, true);
+    if (stage !== zero) assert.equal(result.publishes.at(-1).accepted, true);
+    for (const publication of result.publishes) {
+      assert.equal(publication.accepted, publication.httpBytes <= 10485760);
+      if (publication.accepted === false)
+        assert.equal(publication.observation, nativeSizeRefusal.error.message);
+    }
+  }
+  assert.equal(one.result.layer, "http-body-dependent");
+  assert.equal(two.result.layer, one.result.layer);
 });
 
 test("W recorded C and D CREATE refusals settle failed with no open writes in main cleanup and A2", async () => {

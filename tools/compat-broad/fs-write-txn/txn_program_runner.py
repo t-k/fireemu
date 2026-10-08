@@ -537,6 +537,35 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
     return receipt
 
 
+S5B_NODE_RECOVERY_ROLES = frozenset(('node_control', 'node_control_other', 'node_conflict'))
+S5B_ALL_RECOVERY_ROLES = S5B_NODE_RECOVERY_ROLES | frozenset(('browser_control', 'browser_control_other', 'browser_conflict'))
+
+
+def s5b_sdk_commit_code(snapshot, row, documents):
+    """Validate the recorded native REST success separately from typed Node gRPC outcomes."""
+    evidence = row.get('evidence', {})
+    if row.get('client', '').startswith('browser'):
+        record = row.get('record', {}); request = row.get('request', {}); response = evidence.get('response', {})
+        if row.get('client') != 'browser-main' or row.get('method') != 'Commit' or record.get('host') != 'firestore.googleapis.com' or record.get('path') != '/v1/projects/fireemu-oracle-query/databases/(default)/documents:commit' or evidence.get('complete') is not True or type(evidence.get('status')) is not int or evidence['status'] != 200 or 'grpcCode' in evidence or not isinstance(response, dict) or 'error' in response or set(request) != {'writes'}:
+            raise ValueError('S5b native browser Commit differs')
+        writes = request['writes']; results = response.get('writeResults')
+        if not isinstance(writes, list) or len(writes) != 1 or not isinstance(results, list) or len(results) != 1 or not isinstance(writes[0], dict) or not isinstance(results[0], dict):
+            raise ValueError('S5b native browser write lineage differs')
+        write = writes[0]; body = write.get('update', {})
+        if not isinstance(body, dict): raise ValueError('S5b native browser write body differs')
+        fields = body.get('fields', {}); role = next((role for role, doc in documents.items() if doc['name'] == body.get('name')), None)
+        if set(write) != {'update', 'currentDocument'} or role not in S5B_ALL_RECOVERY_ROLES - S5B_NODE_RECOVERY_ROLES or not isinstance(fields, dict) or not all(web_string_value(fields.get(key), value) for key, value in {'owner': snapshot['ownerId'], 'nonce': snapshot['nonce'], 'case': role.split('_', 1)[1]}.items()) or not isinstance(write['currentDocument'], dict) or set(write['currentDocument']) != {'updateTime'}:
+            raise ValueError('S5b native browser write ownership differs')
+        previous = web_version(write['currentDocument']['updateTime'])
+        if previous != web_version(documents[role]['updateTime']) or web_version(results[0].get('updateTime')) <= previous:
+            raise ValueError('S5b native browser write version differs')
+        return 0
+    code = evidence.get('grpcCode')
+    if evidence.get('complete') is not True or type(evidence.get('status')) is not int or evidence['status'] != 200 or type(code) is not int or not 0 <= code <= 16 or code in (1, 2, 4, 13, 14):
+        raise ValueError('S5b unresolved SDK write')
+    return code
+
+
 def s5b_confirmed_versions(snapshot, documents):
     """Join confirmed owned writes/readbacks by document version, preserving the original seed receipt."""
     versions = {role: copy.deepcopy(doc['updateTime']) for role, doc in documents.items()}
@@ -549,7 +578,8 @@ def s5b_confirmed_versions(snapshot, documents):
     for sdk, rows in ((False, snapshot.get('parentJournal', [])), (True, snapshot.get('sdkJournal', []))):
         for row in rows:
             answer = row.get('evidence', {}) if sdk else row.get('answer', {})
-            if answer.get('complete') is not True or (answer.get('grpcCode') if sdk else answer.get('code')) != 0: continue
+            code = s5b_sdk_commit_code(snapshot, row, documents) if sdk and row.get('method') == 'Commit' else answer.get('code')
+            if answer.get('complete') is not True or code != 0: continue
             response = answer.get('response') or {}
             if row.get('method') == 'Commit':
                 writes = row.get('request', {}).get('writes', []); results = response.get('writeResults', [])
@@ -566,13 +596,13 @@ def s5b_confirmed_versions(snapshot, documents):
 
 
 def s5b_recovery_documents(snapshot, action):
-    """Recover only the three confirmed S5b003 responsibilities; never infer an unknown write."""
+    """Recover only the two fixed confirmed S5b responsibility sets; never infer an unknown write."""
     from txn_program_cli import table_for
     if snapshot.get('kind') not in ('txn-program-recording-v1', 'txn-s5b-sdk-recovery-v1') or action not in ('cleanup', 'a2'):
         raise ValueError('S5b recovery snapshot differs')
     plan = compile_plan(table_for('s5b-web-sdk-retry'), snapshot.get('nonce'), snapshot.get('ownerId'))
     documents = copy.deepcopy(snapshot.get('documents'))
-    if not isinstance(documents, dict) or set(documents) != {'node_control', 'node_control_other', 'node_conflict'} or snapshot.get('openTokens') != [] or snapshot.get('unknownStarts') != [] or snapshot.get('tokens'):
+    if not isinstance(documents, dict) or set(documents) not in (S5B_NODE_RECOVERY_ROLES, S5B_ALL_RECOVERY_ROLES) or snapshot.get('openTokens') != [] or snapshot.get('unknownStarts') != [] or snapshot.get('tokens'):
         raise ValueError('S5b confirmed responsibility scope differs')
     for role, doc in documents.items():
         if doc.get('name') != plan['documents'][role.replace('_', '-')] or doc.get('createConfirmed') is not True:
@@ -586,9 +616,8 @@ def s5b_recovery_documents(snapshot, action):
         if row.get('method') in ('Commit', 'DeleteDocument') and (row.get('pending') is not False or answer.get('complete') is not True or type(answer.get('code')) is not int or not 0 <= answer['code'] <= 16 or answer.get('code') in (1, 2, 4, 13, 14)):
             raise ValueError('S5b unresolved parent write')
     for row in snapshot.get('sdkJournal', []):
-        evidence = row.get('evidence', {})
-        if row.get('method') == 'Commit' and (evidence.get('complete') is not True or evidence.get('status') != 200 or type(evidence.get('grpcCode')) is not int or not 0 <= evidence['grpcCode'] <= 16 or evidence['grpcCode'] in (1, 2, 4, 13, 14)):
-            raise ValueError('S5b unresolved SDK write')
+        if row.get('method') == 'Commit' or row.get('request', {}).get('writes'):
+            s5b_sdk_commit_code(snapshot, row, documents)
     versions = s5b_confirmed_versions(snapshot, documents)
     for role, document in documents.items(): document['confirmedUpdateTime'] = versions[role]
     return documents
@@ -603,7 +632,7 @@ def s5b_document_action(snapshot, action, send):
     blocked = False
     def dispatch(rpc, request):
         nonlocal blocked
-        if blocked or len(calls) >= 9: raise ValueError('S5b recovery dispatch blocked')
+        if blocked or len(calls) >= 3 * len(documents): raise ValueError('S5b recovery dispatch blocked')
         try: answer = send(rpc, request)
         except (Exception, KeyboardInterrupt): answer = {'complete': False, 'code': 2}
         if not isinstance(answer, dict): answer = {'complete': False, 'code': 2}
@@ -705,9 +734,9 @@ def record_sdk_action(*, table, snapshot, action, directory, baseline, runtime, 
     budget = SessionBudget(plan, table, check, lambda value: save_private(directory / f"charged-{value['requests']:03d}.json", value))
     is_web = table['name'] == 's5b-web-sdk-retry'
     if is_web:
-        s5b_recovery_documents(snapshot, action)
-        budget._caps = {'observation': 0, 'tokenCleanup': 0, 'documentCleanup': 9, 'management': 10, 'credential': 1}
-        budget._max = 20
+        documents = s5b_recovery_documents(snapshot, action)
+        budget._caps = {'observation': 0, 'tokenCleanup': 0, 'documentCleanup': 3 * len(documents), 'management': 10, 'credential': 1}
+        budget._max = 11 + 3 * len(documents)
         budget.observation_deadline = budget.started + 120
         budget.recovery_deadline = budget.started + 120
     journal = directory / 'sdk-recovery-journal.jsonl'

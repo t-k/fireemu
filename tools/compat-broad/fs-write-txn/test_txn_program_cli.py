@@ -615,3 +615,52 @@ def test_sdk_recovery_history_keeps_p17_defaults_and_rejects_packet_replay():
     cli.verify_sdk_recovery_history(rows, pins, cli.table_for('p17-admin-sdk-retry'))
     cli.verify_sdk_recovery_history([], pins, cli.table_for('s5b-web-sdk-retry'))
     with pytest.raises(ValueError, match='packet already used'): cli.verify_sdk_recovery_history([{'packetId': pins['packetId']}], pins, cli.table_for('p17-admin-sdk-retry'))
+
+
+def test_s5b_six_recovery_packet_binds_roles_twenty_nine_and_fresh_envelope(monkeypatch):
+    from test_txn_program_runner import s5b_six_recovery_fixture
+    monkeypatch.setattr(cli, 'runner_sha256', lambda _: 'c' * 64)
+    recovery = {'action': 'cleanup', 'snapshotPath': 'docs.local/runs/s5b/recording-1.json', 'snapshotSha256': 'e' * 64, 'notBefore': '2026-10-08T00:10:00Z', 'originalPacketId': 'fs-transaction-s5b-web-sdk-retry-original', 'lockSha256': 'f' * 64, 'documentRoles': sorted(s5b_six_recovery_fixture()['documents'])}
+    def packet(binding):
+        return cli.packet_value(table=cli.table_for('s5b-web-sdk-retry'), source_commit='a' * 40, runtime={'webSdk': True}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-s5b-web-sdk-retry-recovery', envelope_relative='docs.local/reviews/s5b-recovery.md', sdk_recovery=binding)
+    value = packet(recovery)
+    assert value['envelopeId'] == 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-002'
+    assert value['requestsPerRecording'] == 29 and value['caps']['documentCleanup'] == 18
+    assert value['recordings'] == 1 and value['reserveUsd'] == 0.01
+    for roles in (recovery['documentRoles'][:3], recovery['documentRoles'][:-1], recovery['documentRoles'] + ['browser_probe'], list(reversed(recovery['documentRoles']))):
+        with pytest.raises(ValueError): packet({**recovery, 'documentRoles': roles})
+    with pytest.raises(ValueError): cli.verify_sdk_recovery_history([{'packetId': 'used', 'envelopeId': value['envelopeId']}], {'packetId': 'fresh', 'envelopeId': value['envelopeId']}, cli.table_for('s5b-web-sdk-retry'))
+
+
+@pytest.mark.parametrize('six_roles', [False, True])
+def test_s5b_recovery_snapshot_must_match_packet_shape_before_credentials(six_roles):
+    from test_txn_program_runner import s5b_recovery_fixture, s5b_six_recovery_fixture
+    snapshot = s5b_six_recovery_fixture() if six_roles else s5b_recovery_fixture()
+    recovery = {'action': 'cleanup'}
+    if six_roles: recovery['documentRoles'] = sorted(snapshot['documents'])
+    cli.verify_s5b_recovery_snapshot(snapshot, recovery)
+    mismatched = {} if six_roles else {'documentRoles': sorted(s5b_six_recovery_fixture()['documents'])}
+    with pytest.raises(ValueError, match='packet and snapshot'): cli.verify_s5b_recovery_snapshot(snapshot, {'action': 'cleanup', **mismatched})
+
+
+@pytest.mark.parametrize('field', ['requestsPerRecording', 'caps', 'envelopeId', 'documentRoles'])
+def test_s5b_six_packet_tamper_cannot_change_correlated_bounds(tmp_path, monkeypatch, field):
+    from test_txn_program_runner import s5b_six_recovery_fixture
+    monkeypatch.setattr(cli, 'verify_runtime', lambda _: None)
+    baseline = tmp_path/'baseline.json'; baseline.write_text('{}')
+    envelope = tmp_path/'envelope.md'; envelope.write_text('offline')
+    recovery = {'action': 'cleanup', 'snapshotPath': 'docs.local/runs/s5b/recording-1.json', 'snapshotSha256': 'e' * 64, 'notBefore': '2026-10-08T00:10:00Z', 'originalPacketId': 'fs-transaction-s5b-web-sdk-retry-original', 'lockSha256': 'f' * 64, 'documentRoles': sorted(s5b_six_recovery_fixture()['documents'])}
+    table = cli.table_for('s5b-web-sdk-retry')
+    value = cli.packet_value(table=table, source_commit='a' * 40, runtime={'webSdk': True}, baseline_sha256=cli.sha(baseline.read_bytes()), envelope_sha256=cli.sha(envelope.read_bytes()), packet_id='fs-transaction-s5b-web-sdk-retry-recovery', envelope_relative='docs.local/reviews/s5b-recovery.md', sdk_recovery=recovery)
+    if field == 'requestsPerRecording': value[field] = 20
+    if field == 'caps': value[field]['documentCleanup'] = 9
+    if field == 'envelopeId': value[field] = 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-001'
+    if field == 'documentRoles': value['sdkRecovery'][field] = value['sdkRecovery'][field][:-1]
+    packet = tmp_path/'packet.json'; packet.write_text(json.dumps(value))
+    with pytest.raises(ValueError): cli.load_packet(packet, cli.sha(packet.read_bytes()), baseline, envelope, table=table, source_commit='a' * 40, packet_relative='docs.local/reviews/s5b-recovery.json', envelope_relative=value['envelopePath'])
+
+
+def test_p17_empty_recovery_binding_keeps_closed_schema_refusal(monkeypatch):
+    monkeypatch.setattr(cli, 'runner_sha256', lambda _: 'c' * 64)
+    with pytest.raises(ValueError, match='closed SDK recovery packet scope'):
+        cli.packet_value(table=cli.table_for('p17-admin-sdk-retry'), source_commit='a' * 40, runtime={}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-p17-admin-sdk-retry-recovery', envelope_relative='docs.local/reviews/p17-recovery.md', sdk_recovery={})

@@ -1237,21 +1237,24 @@ def test_s5b_string_value_accepts_recorded_discriminator_only(value):
         assert not runner.web_string_value(invalid, 'owned')
 
 
-def test_s5b_recovery_session_counts_twenty_and_preserves_metadata_scope(tmp_path, monkeypatch):
+@pytest.mark.parametrize("six_roles", [False, True])
+def test_s5b_recovery_session_counts_twenty_and_preserves_metadata_scope(tmp_path, monkeypatch, six_roles):
     from txn_program_cli import table_for
-    snapshot = s5b_lineage_fixture(); deleted = set(); calls = []; budgets = []
+    snapshot = s5b_six_recovery_fixture() if six_roles else s5b_lineage_fixture(); deleted = set(); calls = []; budgets = []
+    total = 29 if six_roles else 20
     import txn_program_cli as cli
     import txn_program_authority as authority
     from test_txn_program_authority import s5b_recovery_authority
     baseline_path = tmp_path/'baseline.json'; baseline_path.write_text('{}')
     envelope_path = tmp_path/'envelope.md'; envelope_path.write_text('offline envelope')
     recovery = {'action': 'cleanup', 'snapshotPath': 'docs.local/runs/offline/recording-1.json', 'snapshotSha256': 'e'*64, 'notBefore': '2026-10-08T00:10:00Z', 'originalPacketId': 'fs-transaction-s5b-web-sdk-retry-original', 'lockSha256': 'f'*64}
+    if six_roles: recovery['documentRoles'] = sorted(snapshot['documents'])
     monkeypatch.setattr(cli, 'verify_runtime', lambda _: None)  # Synthetic runtime; no native child is allowed in this no-wire route.
     value = cli.packet_value(table=table_for('s5b-web-sdk-retry'), source_commit='a'*40, runtime={'webSdk': True}, baseline_sha256=cli.sha(baseline_path.read_bytes()), envelope_sha256=cli.sha(envelope_path.read_bytes()), packet_id='fs-transaction-s5b-web-sdk-retry-offline', envelope_relative='docs.local/reviews/offline.md', sdk_recovery=recovery)
     packet_path = tmp_path/'packet.json'; packet_path.write_text(json.dumps(value))
     pins = cli.load_packet(packet_path, cli.sha(packet_path.read_bytes()), baseline_path, envelope_path, table=table_for('s5b-web-sdk-retry'), source_commit='a'*40, packet_relative='docs.local/reviews/offline.json', envelope_relative=value['envelopePath'])
     decisions = s5b_recovery_authority(pins)
-    def admission(): assert authority.authorize(decisions, pins) == (20, 0.01)
+    def admission(): assert authority.authorize(decisions, pins) == (total, 0.01)
     admission()
     def refresh(baseline, budget, **kwargs):
         budgets.append(budget); budget.charge('credential'); return 'offline'
@@ -1273,11 +1276,11 @@ def test_s5b_recovery_session_counts_twenty_and_preserves_metadata_scope(tmp_pat
         def send(self, transport, rpc, request, **kwargs):
             calls.append(rpc); name = request['name']
             if rpc == 'DeleteDocument': deleted.add(name); return {'complete': True, 'code': 0}
-            return {'complete': True, 'code': 5 if name in deleted else 0, 'response': None if name in deleted else snapshot['parentJournal'][0]['answer']['response'] if name == snapshot['documents']['node_control']['name'] else s5b_owned_body(snapshot, name)}
+            return {'complete': True, 'code': 5 if name in deleted else 0, 'response': None if name in deleted else s5b_current_body(snapshot, name)}
     monkeypatch.setattr(runner, 'refresh', refresh); monkeypatch.setattr(runner, 'MetadataSession', Metadata); monkeypatch.setattr(runner, 'NodeWire', Wire)
     result = runner.record_sdk_action(table=table_for('s5b-web-sdk-retry'), snapshot=snapshot, action='cleanup', directory=tmp_path/'recovery', baseline={'projectNumber': 'fixture', 's5b': {'fixture': True}}, runtime=value['runtime'], check=admission, now=lambda: __import__('datetime').datetime.now(__import__('datetime').timezone.utc))
-    assert result['complete'] and budgets[0].total == 20 and calls == ['GetDocument', 'DeleteDocument', 'GetDocument'] * 3
-    assert budgets[0]._max == 20 and budgets[0].recovery_deadline == budgets[0].started + 120
+    assert result['complete'] and budgets[0].total == total and calls == ['GetDocument', 'DeleteDocument', 'GetDocument'] * len(snapshot['documents'])
+    assert budgets[0]._max == total and budgets[0].recovery_deadline == budgets[0].started + 120
     with pytest.raises(ValueError): budgets[0].charge('documentCleanup')
 
 
@@ -1415,3 +1418,74 @@ def test_s5b_deadline_preserves_recovery_reservation_and_global_cap(monkeypatch,
     with pytest.raises(TimeoutError, match='deadline'):
         budget.charge('documentCleanup')
     assert budget.used['documentCleanup'] == 1
+
+
+def s5b_six_recovery_fixture():
+    from txn_program_cli import table_for
+    snapshot = s5b_lineage_fixture()
+    plan = compile_plan(table_for('s5b-web-sdk-retry'), snapshot['nonce'], snapshot['ownerId'])
+    seed = {'seconds': '1791447720', 'nanos': 454445000}
+    for role in ('browser_control', 'browser_control_other', 'browser_conflict'):
+        snapshot['documents'][role] = {'name': plan['documents'][role.replace('_', '-')], 'createConfirmed': True, 'deleted': False, 'absent': False, 'updateTime': copy.deepcopy(seed)}
+    body = s5b_owned_body(snapshot, snapshot['documents']['browser_control']['name'])
+    body.pop('updateTime')
+    snapshot['sdkJournal'].append({'client': 'browser-main', 'method': 'Commit', 'record': {'host': 'firestore.googleapis.com', 'path': '/v1/projects/fireemu-oracle-query/databases/(default)/documents:commit', 'n': 2}, 'request': {'writes': [{'update': body, 'currentDocument': {'updateTime': '2026-10-08T08:22:00.454445000Z'}}]}, 'evidence': {'complete': True, 'status': 200, 'response': {'commitTime': '2026-10-08T08:22:14.019995Z', 'writeResults': [{'updateTime': '2026-10-08T08:22:14.019995Z'}]}}})
+    return snapshot
+
+
+def s5b_current_body(snapshot, name):
+    body = copy.deepcopy(s5b_owned_body(snapshot, name))
+    for row in snapshot['parentJournal']:
+        if row.get('method') == 'GetDocument' and row['request']['name'] == name:
+            return copy.deepcopy(row['answer']['response'])
+    for row in snapshot['sdkJournal']:
+        if row['request']['writes'][0]['update']['name'] == name:
+            body['updateTime'] = row['evidence']['response']['writeResults'][0]['updateTime']
+    return body
+
+
+def test_s5b_recovery_six_native_documents_use_latest_versions_before_delete():
+    snapshot = s5b_six_recovery_fixture(); original = copy.deepcopy(snapshot); deleted = set(); calls = []
+    def send(rpc, request):
+        calls.append(rpc); name = request['name']
+        if rpc == 'DeleteDocument':
+            assert runner.web_version(request['currentDocument']['updateTime']) == runner.web_version(s5b_current_body(snapshot, name)['updateTime'])
+            deleted.add(name); return {'complete': True, 'code': 0}
+        return {'complete': True, 'code': 5 if name in deleted else 0, 'response': None if name in deleted else s5b_current_body(snapshot, name)}
+    result = runner.s5b_document_action(snapshot, 'cleanup', send)
+    assert result['complete'] and result['requests'] == 18 and calls == ['GetDocument', 'DeleteDocument', 'GetDocument'] * 6
+    assert snapshot == original
+    assert runner.web_version(result['documents']['browser_control']['confirmedUpdateTime']) > runner.web_version(snapshot['documents']['browser_control']['updateTime'])
+
+
+@pytest.mark.parametrize('change', ['client', 'host', 'path', 'method', 'complete', 'status-string', 'status-bool', 'status-201', 'error', 'multi', 'missing-result', 'version', 'owner', 'name', 'precondition', 'precondition-version', 'result-not-newer', 'grpc-code', 'grpc-bool', 'body-type', 'result-type'])
+def test_s5b_recovery_native_browser_near_misses_refuse_before_send(change):
+    snapshot = s5b_six_recovery_fixture(); row = snapshot['sdkJournal'][-1]; evidence = row['evidence']
+    if change == 'client': row['client'] = 'browser-probe'
+    if change == 'host': row['record']['host'] = 'other.googleapis.com'
+    if change == 'path': row['record']['path'] += '/other'
+    if change == 'method': row['method'] = 'DeleteDocument'
+    if change == 'complete': evidence['complete'] = False
+    if change.startswith('status-'): evidence['status'] = {'status-string': '200', 'status-bool': True, 'status-201': 201}[change]
+    if change == 'error': evidence['response']['error'] = {'code': 9}
+    if change == 'multi': evidence['response']['writeResults'] *= 2
+    if change == 'missing-result': evidence['response'].pop('writeResults')
+    if change == 'version': evidence['response']['writeResults'][0]['updateTime'] = True
+    if change == 'owner': row['request']['writes'][0]['update']['fields']['owner']['stringValue'] = 'foreign'
+    if change == 'name': row['request']['writes'][0]['update']['name'] += '_foreign'
+    if change == 'precondition': row['request']['writes'][0]['currentDocument']['updateTime'] = 'not-a-version'
+    if change == 'precondition-version': row['request']['writes'][0]['currentDocument']['updateTime'] = '2026-10-08T08:21:59Z'
+    if change == 'result-not-newer': evidence['response']['writeResults'][0]['updateTime'] = row['request']['writes'][0]['currentDocument']['updateTime']
+    if change == 'grpc-code': evidence['grpcCode'] = '0'
+    if change == 'grpc-bool': evidence['grpcCode'] = True
+    if change == 'body-type': row['request']['writes'][0]['update'] = []
+    if change == 'result-type': evidence['response']['writeResults'][0] = []
+    with pytest.raises(ValueError): runner.s5b_document_action(snapshot, 'cleanup', lambda *_: pytest.fail('must not send'))
+
+
+@pytest.mark.parametrize('count', [2, 4, 5, 7])
+def test_s5b_recovery_rejects_any_intermediate_or_expanded_role_set(count):
+    snapshot = s5b_six_recovery_fixture()
+    if count < 6: snapshot['documents'] = dict(list(snapshot['documents'].items())[:count])
+    else: snapshot['documents']['browser_probe'] = copy.deepcopy(snapshot['documents']['browser_control'])
+    with pytest.raises(ValueError): runner.s5b_document_action(snapshot, 'cleanup', lambda *_: pytest.fail('must not send'))

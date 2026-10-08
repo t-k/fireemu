@@ -126,7 +126,7 @@ def packet_value(*, table, source_commit, runtime, baseline_sha256, envelope_sha
     value = {'schemaVersion': 1, 'program': table['program'], 'packetName': table['name'], 'packetId': packet_id, 'project': plan['project'], 'database': '(default)', 'recordings': 2, 'requestsPerRecording': requests_per_recording(table), 'estimatedUsdPerRecording': budget_for(plan['project'])[0], 'sourceCommit': source_commit, 'sourceBranch': 'work/codex-txn-s5b-production' if table['name'] == 's5b-web-sdk-retry' else 'work/fs-txn-s5a-admin' if table['name'] == 'p17-admin-sdk-retry' else 'work/fs-txn-s3-foreign-tokens' if table['name'] == 'p16-foreign-tokens' else 'work/codex-fs-transaction', 'runnerSha256': runner_sha256(table['name']), 'closureSha256': sha(CLOSURE.read_bytes()), 'corpusDigest': corpus_digest(table), 'planSourceDigest': source_digest(table), 'baselineSha256': baseline_sha256, 'envelopeId': table['envelopeId'], 'envelopePath': envelope_relative, 'envelopeSha256': envelope_sha256, 'runtime': runtime, 'iamConfig': 'none', 'retries': ('web-optimistic-callback-only-max-two' if table['name'] == 's5b-web-sdk-retry' else 'sdk-aborted-callback-only-max-two' if table['name'] == 'p17-admin-sdk-retry' else 'none'), 'onStop': 'needs-recovery-lock-held', 'observationSeconds': plan['observationSeconds'], 'recoverySeconds': plan['recoverySeconds'], 'maxTokens': plan['maxTokens'], 'timing': 'wall-clock', 'timingSource': ('sdk-parent-before-payload' if table['name'] == 's5b-web-sdk-retry' else 'grpc-js-client-interceptor' if table['name'] == 'p17-admin-sdk-retry' else 'parent-wire-envelope'), 'reserveUsd': budget_for(plan['project'])[1], 'maxUnresolvedTokens': plan['maxUnresolvedTokens'], 'releasePolicy': plan['releasePolicy'], 'caps': plan['caps'], 'cases': plan['cases'], 'scope': envelope_scope(table)}
 
     if sdk_recovery is not None:
-        if table['name'] not in ('p17-admin-sdk-retry', 's5b-web-sdk-retry') or not isinstance(sdk_recovery, dict) or set(sdk_recovery) != {'action', 'snapshotPath', 'snapshotSha256', 'notBefore', 'originalPacketId', 'lockSha256'}:
+        if table['name'] not in ('p17-admin-sdk-retry', 's5b-web-sdk-retry') or not isinstance(sdk_recovery, dict) or (set(sdk_recovery) != {'action', 'snapshotPath', 'snapshotSha256', 'notBefore', 'originalPacketId', 'lockSha256'} and (table['name'] != 's5b-web-sdk-retry' or set(sdk_recovery) != {'action', 'snapshotPath', 'snapshotSha256', 'notBefore', 'originalPacketId', 'lockSha256', 'documentRoles'})):
             raise ValueError('closed SDK recovery packet scope required')
         if sdk_recovery['action'] not in ('cleanup', 'a2') or not isinstance(sdk_recovery['snapshotPath'], str) or not sdk_recovery['snapshotPath'].startswith('docs.local/runs/') or '..' in Path(sdk_recovery['snapshotPath']).parts or not re.fullmatch(r'[a-f0-9]{64}', sdk_recovery['snapshotSha256']) or not re.fullmatch(r'[a-f0-9]{64}', sdk_recovery['lockSha256']) or not re.fullmatch(rf"fs-transaction-{re.escape(table['name'])}-[A-Za-z0-9_-]{{4,64}}", sdk_recovery['originalPacketId']) or packet_id == sdk_recovery['originalPacketId']:
             raise ValueError('SDK recovery binding differs')
@@ -138,9 +138,20 @@ def packet_value(*, table, source_commit, runtime, baseline_sha256, envelope_sha
         value['retries'] = 'none'
         value['releasePolicy'] = 'sdk-recovery-lock-held'
         if table['name'] == 's5b-web-sdk-retry':
-            value.update(envelopeId='FS-TRANSACTION-s5b-web-sdk-retry-recovery-001', recordings=1, requestsPerRecording=20, reserveUsd=0.01, estimatedUsdPerRecording=0.01, observationSeconds=120, recoverySeconds=120, caps={'observation': 0, 'tokenCleanup': 0, 'documentCleanup': 9, 'management': 10, 'credential': 1})
+            from txn_program_runner import S5B_ALL_RECOVERY_ROLES
+            six = 'documentRoles' in sdk_recovery
+            if six and sdk_recovery['documentRoles'] != sorted(S5B_ALL_RECOVERY_ROLES): raise ValueError('closed S5b recovery document roles required')
+            value.update(envelopeId='FS-TRANSACTION-s5b-web-sdk-retry-recovery-' + ('002' if six else '001'), recordings=1, requestsPerRecording=29 if six else 20, reserveUsd=0.01, estimatedUsdPerRecording=0.01, observationSeconds=120, recoverySeconds=120, caps={'observation': 0, 'tokenCleanup': 0, 'documentCleanup': 18 if six else 9, 'management': 10, 'credential': 1})
             value['scope'] = {**value['scope'], 'writes': 'owned-version-delete-only' if sdk_recovery['action'] == 'cleanup' else 'none', 'observationSeconds': '120', 'transports': 'grpc', 'timingSource': 'parent-wire-envelope', 'writerDeadlineSeconds': 'none'}
     return value
+
+
+
+def verify_s5b_recovery_snapshot(snapshot, recovery):
+    """Bind the already pinned packet shape to confirmed responsibilities before credentials."""
+    from txn_program_runner import S5B_NODE_RECOVERY_ROLES, s5b_recovery_documents
+    if set(s5b_recovery_documents(snapshot, recovery['action'])) != set(recovery.get('documentRoles', S5B_NODE_RECOVERY_ROLES)):
+        raise ValueError('S5b packet and snapshot responsibility differ')
 
 
 def _read_packet(path, digest, *, label='packet'):
@@ -382,6 +393,8 @@ def main(argv=None):
             recovery = value['sdkRecovery']
             snapshot_path = _private(main_root / recovery['snapshotPath'], main_root)
             snapshot = _read_packet(snapshot_path, recovery['snapshotSha256'], label='SDK snapshot')
+            if table['name'] == 's5b-web-sdk-retry':
+                verify_s5b_recovery_snapshot(snapshot, recovery)
             lock_path = ledger.parent / ('sandbox-locks/fireemu-oracle-query.lock' if table['name'] == 's5b-web-sdk-retry' else 'sandbox-locks/fireemu-oracle-txn.lock')
             with lock_path.open('rb') as guard:
                 fcntl.flock(guard.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)

@@ -400,8 +400,8 @@ def test_spacing_uses_last_project_row_of_any_task(event, outcome, seconds):
 
 def s5b_recovery_authority(pins):
     name = 'FS-TRANSACTION s5b-web-sdk-retry'
-    approved = {'decision': 'APPROVE', 'packetSha256': pins['packetSha256'], 'sourceCommit': pins['sourceCommit'], 'runnerSha256': pins['runnerSha256'], 'envelopeId': pins['envelopeId'], 'requestsPerRecording': '20', 'recordings': '1', 'estimatedUsdPerRecording': '0.01'}
-    envelope = {'envelopeId': pins['envelopeId'], **pins['scope'], 'maxRequests': '20', 'reserveUsd': '0.01'}
+    approved = {'decision': 'APPROVE', 'packetSha256': pins['packetSha256'], 'sourceCommit': pins['sourceCommit'], 'runnerSha256': pins['runnerSha256'], 'envelopeId': pins['envelopeId'], 'requestsPerRecording': str(pins['requestsPerRecording']), 'recordings': '1', 'estimatedUsdPerRecording': '0.01'}
+    envelope = {'envelopeId': pins['envelopeId'], **pins['scope'], 'maxRequests': str(pins['requestsPerRecording']), 'reserveUsd': '0.01'}
     return ''.join(f"- 2026-10-08 | {title} | " + '; '.join(f'{key}={value}' for key, value in values.items()) + f" | オーナー | {path}\n" for title, values, path in [(name, approved, pins['packetPath']), (name+' envelope', envelope, pins['envelopePath'])])
 
 
@@ -415,3 +415,15 @@ def test_s5b_single_recovery_authority_has_closed_twenty_request_bound():
         with pytest.raises(ValueError): authority.authorize(decisions, {**pins, key: changed})
     for original, changed in [('recordings=1', 'recordings=2'), ('maxRequests=20', 'maxRequests=40'), ('reserveUsd=0.01', 'reserveUsd=0.04')]:
         with pytest.raises(ValueError): authority.authorize(decisions.replace(original, changed), pins)
+
+
+def test_s5b_six_recovery_authority_correlates_fresh_envelope_with_twenty_nine():
+    from txn_program_cli import table_for
+    scope = {**authority.envelope_scope(table_for('s5b-web-sdk-retry')), 'writes': 'owned-version-delete-only', 'retries': 'none', 'releasePolicy': 'sdk-recovery-lock-held', 'observationSeconds': '120', 'transports': 'grpc', 'timingSource': 'parent-wire-envelope', 'writerDeadlineSeconds': 'none'}
+    pins = {**PINS, 'packetName': 's5b-web-sdk-retry', 'project': 'fireemu-oracle-query', 'envelopeId': 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-002', 'requestsPerRecording': 29, 'estimatedUsdPerRecording': 0.01, 'reserveUsd': 0.01, 'scope': scope}
+    decisions = s5b_recovery_authority(pins)
+    assert authority.authorize(decisions, pins) == (29, 0.01)
+    for envelope, count in [('001', 29), ('002', 20), ('002', 30), ('003', 29), ('002', True)]:
+        changed = {**pins, 'envelopeId': 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-' + envelope, 'requestsPerRecording': count}
+        with pytest.raises(ValueError): authority.authorize(s5b_recovery_authority(changed), changed)
+    with pytest.raises(ValueError): authority.authorize(decisions.replace('maxRequests=29', 'maxRequests=30'), pins)

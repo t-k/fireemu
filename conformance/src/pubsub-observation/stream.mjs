@@ -115,6 +115,19 @@ export async function openStream({
       cancel("frame-overflow-or-decode");
     }
   });
+  const diagnostic = (details) => {
+    if (details === undefined) return {};
+    if (
+      typeof details !== "string" ||
+      metadataBytes(undefined, details) > CAPS.metadataBytesEachDirection - state.metadataBytesIn
+    )
+      return { details: null };
+    return {
+      details: details
+        .replaceAll(token, "[REDACTED]")
+        .replace(/\bBearer\s+\S+/gi, "Bearer [REDACTED]"),
+    };
+  };
   const acceptMetadata = (value, details) => {
     state.metadataBytesIn += metadataBytes(value, details);
     event("stream-metadata", { metadataBytesIn: state.metadataBytesIn });
@@ -127,6 +140,7 @@ export async function openStream({
     if (!disposed) acceptMetadata(value);
   });
   rpc.on("status", (status) => {
+    const details = diagnostic(status.details);
     if (!disposed) acceptMetadata(status.metadata, status.details);
     state.terminal = { code: status.code };
     const localEnd =
@@ -134,7 +148,7 @@ export async function openStream({
       ((status.code === 1 && ["window-end", "unacked-owned-delivery"].includes(cancelReason)) ||
         (status.code === 4 && state.windowExpired));
     if ([1, 2, 4, 8, 13, 14, 15].includes(status.code) && !localEnd) state.incomplete = true;
-    event("stream-status", state.terminal);
+    event("stream-status", { ...state.terminal, ...details });
     wake();
   });
   rpc.on("error", (error) => {
@@ -147,7 +161,7 @@ export async function openStream({
       )
     )
       state.incomplete = true;
-    event("stream-error", { code: error.code ?? null });
+    event("stream-error", { code: error.code ?? null, ...diagnostic(error.details) });
     wake();
   });
   rpc.on("end", () => {

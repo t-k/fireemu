@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fireemu — Local Firebase emulator</title>
+<meta name="description" content="Fireemu is a fast local emulator for testing Firebase applications that aims to match production Firebase behavior.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2c2 6 9 9 9 17a9 9 0 0 1-18 0c0-5 3-7 4-11 1 3 3 4 3 4s-1-6 2-10z' fill='%23f97316'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top" aria-label="Fireemu home">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><path d="M16 2c2 6 9 9 9 17a9 9 0 0 1-18 0c0-5 3-7 4-11 1 3 3 4 3 4s-1-6 2-10z" fill="currentColor"/></svg>
+      Fireemu
+    </a>
+    <nav class="links" aria-label="Sections">
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a href="#usage">Usage</a>
+      <a href="#configuration">Configuration</a>
+      <a href="#compatibility">Compatibility</a>
+      <a class="gh" href="https://github.com/t-k/fireemu">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <div class="wrap">
+      <p class="eyebrow">Local emulator for Firebase</p>
+      <h1>Test Firebase apps locally,<br>closer to <span class="accent">production</span>.</h1>
+      <p class="lede">Fireemu runs Firestore, Authentication, Storage, Functions, Pub/Sub and Eventarc on your machine and in CI. It catches what the official emulator misses, supports features it lacks, and lets you control time.</p>
+      <div class="cta">
+        <a class="btn primary" href="#install">Get started</a>
+        <a class="btn" href="https://github.com/t-k/fireemu">View on GitHub</a>
+      </div>
+      <div class="term" role="region" aria-label="Quick start">
+        <div class="term-bar"><span></span><span></span><span></span></div>
+<pre><code><span class="c"># Node.js 20 or newer</span>
+<span class="p">$</span> npm install --save-dev fireemu
+<span class="p">$</span> npx fireemu init
+<span class="p">$</span> npx fireemu up            <span class="c"># UI: http://127.0.0.1:4000</span>
+<span class="p">$</span> npx fireemu exec -- npm test</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="stats">
+    <div class="wrap grid4">
+      <div class="stat"><b>21.6×</b><span>faster startup than the official Firestore emulator</span></div>
+      <div class="stat"><b>~1/34</b><span>idle memory (11 MiB vs 390 MiB)</span></div>
+      <div class="stat"><b>1.1–5.2×</b><span>higher Firestore throughput across 22 workloads</span></div>
+      <div class="stat"><b>6</b><span>Firebase / Google Cloud products emulated</span></div>
+    </div>
+  </section>
+
+  <section id="features" class="section">
+    <div class="wrap">
+      <h2>Features</h2>
+      <p class="sub">Passing tests against the official emulator does not always mean production will behave the same way. Fireemu is built to close those gaps.</p>
+      <div class="cards">
+        <article class="card">
+          <h3>Production-level validation</h3>
+          <p>Detects configuration problems that only surface in production, such as missing Firestore composite index definitions.</p>
+        </article>
+        <article class="card">
+          <h3>Features the official emulator lacks</h3>
+          <p>TOTP multi-factor authentication, password policies, tenants, quota simulation, App Check debug tokens and more.</p>
+        </article>
+        <article class="card">
+          <h3>Control over time</h3>
+          <p>Pin a virtual clock, advance it, and run scheduled functions immediately — no waiting for the real schedule.</p>
+        </article>
+        <article class="card">
+          <h3>Two compatibility profiles</h3>
+          <p><code>strict</code> follows production Firebase; <code>emulator</code> follows the pinned official emulator. Test against either or both.</p>
+        </article>
+        <article class="card">
+          <h3>Parallel test worlds</h3>
+          <p><code>fireemu/testing</code> creates isolated, resettable worlds — each with its own daemon, ports, clock, Rules and state.</p>
+        </article>
+        <article class="card">
+          <h3>Fast and light</h3>
+          <p>A native binary that starts in ~140 ms and idles at ~11 MiB, with a built-in UI for data, functions and logs.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="install" class="section alt">
+    <div class="wrap">
+      <h2>Installation</h2>
+      <p class="sub">Fireemu ships through npm with a prebuilt binary for each platform. Node.js 20 or newer is required.</p>
+      <div class="two">
+        <div>
+          <h3>1. Install</h3>
+<pre class="code"><code>npm install --save-dev fireemu</code></pre>
+          <h3>2. Initialize</h3>
+<pre class="code"><code>npx fireemu init        <span class="c"># interactive</span>
+npx fireemu init --yes  <span class="c"># CI / scripted</span></code></pre>
+          <p>Creates <code>fireemu.json</code>. You can choose a compatibility profile and reuse an existing <code>firebase.json</code> — rules, indexes, Functions codebases and ports are read from it at every start.</p>
+          <h3>3. Check the environment</h3>
+<pre class="code"><code>npx fireemu doctor</code></pre>
+        </div>
+        <div>
+          <h3>Supported platforms</h3>
+          <table>
+            <thead><tr><th>OS</th><th>Architecture</th></tr></thead>
+            <tbody>
+              <tr><td>macOS 13+</td><td>Apple silicon, Intel</td></tr>
+              <tr><td>Linux</td><td>x86-64, arm64</td></tr>
+              <tr><td>Windows 10+</td><td>x86-64</td></tr>
+            </tbody>
+          </table>
+          <p class="note">Running Functions requires <code>firebase-functions</code> v6 or v7 in the codebase.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="usage" class="section">
+    <div class="wrap">
+      <h2>Usage</h2>
+      <div class="two">
+        <div>
+          <h3>Start the emulator</h3>
+<pre class="code"><code>npx fireemu up
+npx fireemu up --only auth,firestore,storage
+npx fireemu up --only functions:&lt;codebase&gt;</code></pre>
+          <h3>Run a command against it</h3>
+<pre class="code"><code>npx fireemu exec -- npm test
+npx fireemu exec --only auth,firestore -- npm test
+npx fireemu exec --ui -- npm test</code></pre>
+          <p><code>exec</code> sets the Firebase SDK emulator host variables for the child, forwards SIGINT/SIGTERM and returns its exit status.</p>
+          <h3>Official CLI aliases</h3>
+<pre class="code"><code>npx fireemu emulators:start
+npx fireemu emulators:exec -- npm test
+npx fireemu emulators:export ./emulator-data</code></pre>
+        </div>
+        <div>
+          <h3>Web UI</h3>
+          <p>Browse and edit data, inspect registered functions, invocations and logs, run scheduled functions now, or advance the virtual clock. Default address <code>http://127.0.0.1:4000</code>; change it with <code>--ui-port</code>, disable with <code>--ui-port 0</code>.</p>
+          <h3>Parallel test worlds</h3>
+<pre class="code"><code><span class="k">import</span> { withTestWorld } <span class="k">from</span> <span class="s">'fireemu/testing'</span>;
+
+<span class="k">await</span> withTestWorld({
+  projectId: <span class="s">'demo-test'</span>,
+  clockStart: <span class="s">'2026-01-31T23:59:00Z'</span>,
+  services: [<span class="s">'auth'</span>, <span class="s">'firestore'</span>],
+}, <span class="k">async</span> world =&gt; {
+  <span class="k">await</span> world.clock.advance(59999);
+  <span class="k">await</span> world.run(process.execPath, [<span class="s">'./test.mjs'</span>]);
+});</code></pre>
+          <h3>Inspect capabilities</h3>
+<pre class="code"><code>npx fireemu capabilities</code></pre>
+        </div>
+      </div>
+      <p class="more">More: <a href="https://github.com/t-k/fireemu/blob/main/docs/test-worlds.md">Test clocks and independent worlds</a> · <a href="https://github.com/t-k/fireemu/blob/main/docs/functions-export-inventory.md">Functions support inventory</a></p>
+    </div>
+  </section>
+
+  <section id="configuration" class="section alt">
+    <div class="wrap">
+      <h2>Configuration</h2>
+      <div class="two">
+        <div>
+<pre class="code"><code>{
+  <span class="s">"$schema"</span>: <span class="s">"https://fireemu.dev/spec/config/fireemu.schema.json"</span>,
+  <span class="s">"schemaVersion"</span>: 1,
+  <span class="s">"profile"</span>: <span class="s">"strict"</span>,
+  <span class="s">"firestore"</span>: {
+    <span class="s">"edition"</span>: <span class="s">"standard"</span>,
+    <span class="s">"apiMode"</span>: <span class="s">"native"</span>
+  },
+  <span class="s">"daemon"</span>: { <span class="s">"clockStart"</span>: <span class="s">"2026-01-31T23:59:00Z"</span> }
+}</code></pre>
+          <p>Use <code>--config ./fireemu.json</code> to choose a file. See the <a href="https://github.com/t-k/fireemu/blob/main/spec/config/fireemu.schema.json">configuration schema</a> for every setting.</p>
+        </div>
+        <div>
+          <h3>Compatibility profiles</h3>
+          <table>
+            <thead><tr><th>Profile</th><th>Behavior</th></tr></thead>
+            <tbody>
+              <tr><td><code>strict</code></td><td>Matches production Firebase behavior and constraints as closely as possible. Default.</td></tr>
+              <tr><td><code>emulator</code></td><td>Targets a pinned version of the official emulator.</td></tr>
+            </tbody>
+          </table>
+          <h3>Notable settings</h3>
+          <ul class="list">
+            <li><code>auth.signIn</code>, <code>auth.passwordPolicy</code> — sign-in methods and password rules</li>
+            <li><code>auth.mfa</code>, <code>auth.totp</code> — TOTP multi-factor authentication</li>
+            <li><code>auth.tenants</code>, <code>auth.multiTenant</code> — tenants at start</li>
+            <li><code>auth.quotaSimulation</code> — sign-up quota exceeded</li>
+            <li><code>scheduler.*</code> — catch-up, overlap and time zone</li>
+            <li><code>firestore.history</code>, <code>storage.maxStoredBytes</code> — memory limits</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="compatibility" class="section">
+    <div class="wrap">
+      <h2>Compatibility</h2>
+      <p class="sub">Comparison baseline: <code>firebase-tools 15.28.2</code>. Fireemu is compatible with the listed Local Emulator Suite products under the <code>emulator</code> profile, as recorded in the <a href="https://github.com/t-k/fireemu/blob/main/spec/compatibility/contract.json">compatibility contract</a>.</p>
+      <div class="tablewrap">
+      <table class="compat">
+        <thead><tr><th>Product</th><th>Status</th><th>Key limitations</th></tr></thead>
+        <tbody>
+          <tr><td>Cloud Firestore</td><td><span class="badge ok">Supported</span></td><td>Enterprise Pipeline API supports a subset of reads; full-text search validates indexes but does not execute locally.</td></tr>
+          <tr><td>Authentication (Identity Platform)</td><td><span class="badge ok">Supported</span></td><td>No flows that talk to external identity providers, authorization-code exchange, or SAML XML signature verification.</td></tr>
+          <tr><td>Cloud Storage for Firebase</td><td><span class="badge ok">Supported</span></td><td>No object versioning, signed URLs, ACLs, <code>compose</code>, or notification configuration.</td></tr>
+          <tr><td>Cloud Functions for Firebase</td><td><span class="badge ok">Supported</span></td><td>Triggers for unsupported products (Realtime Database, Remote Config, Data Connect) cannot run.</td></tr>
+          <tr><td>Cloud Pub/Sub</td><td><span class="badge ok">Supported</span></td><td>No schemas, BigQuery / Cloud Storage subscriptions, or <code>UpdateTopic</code>.</td></tr>
+          <tr><td>Eventarc</td><td><span class="badge ok">Supported</span></td><td>—</td></tr>
+          <tr><td>App Check</td><td><span class="badge part">Local</span></td><td>Debug tokens only; no real attestation or limited-use replay protection.</td></tr>
+          <tr><td>Security Rules</td><td><span class="badge ok">Supported</span></td><td>Firestore and Storage.</td></tr>
+          <tr><td>Realtime Database, Data Connect</td><td><span class="badge no">Deferred</span></td><td>Not currently supported.</td></tr>
+          <tr><td>Hosting, App Hosting</td><td><span class="badge no">Unsupported</span></td><td>Not currently supported.</td></tr>
+          <tr><td>Extensions</td><td><span class="badge no">Not planned</span></td><td>—</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <div class="callout">
+        <b>Differences from production.</b> Fireemu does not reproduce real quota accounting, billing, IAM, organization policies, regional or network behavior, or production performance. Before relying on it in CI, run the same tests against a dedicated Firebase <em>test</em> project and compare the results.
+      </div>
+      <p class="more">Details: <a href="https://github.com/t-k/fireemu/blob/main/docs/compatibility-contract.md">Compatibility documentation</a> · <a href="https://github.com/t-k/fireemu/blob/main/crates/fireemu/src/capabilities.json">Capability manifest</a> · <a href="https://github.com/t-k/fireemu/blob/main/CHANGELOG.md">Changelog</a></p>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-inner">
+    <span>Fireemu is licensed under the <a href="https://github.com/t-k/fireemu/blob/main/LICENSE">Apache License 2.0</a>. Not affiliated with Google or Firebase.</span>
+    <span><a href="https://github.com/t-k/fireemu/issues">Report an issue</a> · <a href="https://github.com/t-k/fireemu/blob/main/docs/development.md">Development guide</a></span>
+  </div>
+</footer>
+</body>
+</html>

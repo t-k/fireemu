@@ -2303,3 +2303,253 @@ test("H controls require a matching type receipt for each handler before continu
   assert.equal(result.publishes.length, 1);
   assert.equal(result.closureReady, false);
 });
+
+test("H2 successor authority is exact to one fresh run and preserves legacy default loader guards", async (t) => {
+  const { spawnSync } = await import("node:child_process");
+  const { H_A2_RULING, H2_A2_RULING, H2_SUCCESSOR_RUN_ID, H2_SUCCESSOR_A2_RULING } =
+    await import("./eventarc-production/h-run.mjs");
+  const runId = "ea3c9a8129ff";
+  const expectedRuling = H2_A2_RULING.replace(
+    "- 2026-10-07 | EVENTARC-H2 A2 list settlement |",
+    "- 2026-10-08 | EVENTARC-H2-A-SUCCESSOR A2 list settlement |",
+  )
+    .replace(
+      "for EVENTARC packet H2 recordings (H2-A and H2-B) on fireemu-oracle-events,",
+      `for only the fresh EVENTARC H2-A successor recording run ${runId} on fireemu-oracle-events, with seven original A exports and the unchanged A2 maximum of 105 REST requests, three-hour invocation wall, and at least 600 seconds after its latest persisted request,`,
+    )
+    .replace(
+      "Claude（委任。オーナーの裁量の委任 2026-09-28）",
+      "Codex coordinator（委任。オーナー台帳365/395/996/998）",
+    )
+    .replace(
+      "docs.local/reviews/2026-10-07-eventarc-h2-presend-review.md",
+      "docs.local/runs/coordinator-codex-20261007/eventarc-h2-successor-packet/packet.md",
+    );
+  const dir = mkdtempSync(join(tmpdir(), "h2-successor-guard-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const preload = join(dir, "no-wire.mjs");
+  writeFileSync(
+    preload,
+    `import fs from 'node:fs'; import cp from 'node:child_process'; import http from 'node:http'; import https from 'node:https'; import net from 'node:net'; import { syncBuiltinESMExports } from 'node:module';
+const refuse = name => () => { fs.appendFileSync(process.env.H_NO_WIRE_LOG, name + '\\n'); throw new Error('OFFLINE_GUARD: ' + name); };
+for (const name of ['execFile','execFileSync','execSync','spawn','spawnSync','exec']) cp[name] = refuse(name);
+for (const mod of [http,https]) for (const name of ['request','get']) mod[name] = refuse(name);
+net.Socket.prototype.connect = refuse('connect'); globalThis.fetch = refuse('fetch'); syncBuiltinESMExports();`,
+  );
+  const cases = [
+    { name: "fresh", cap: 20.3, ruling: expectedRuling, accepted: true },
+    { name: "legacy-a", cap: 14, runId: "012345abcdef", ruling: H2_A2_RULING, accepted: true },
+    {
+      name: "legacy-b",
+      cap: 14,
+      runId: "012345abcdef",
+      recording: "h2-b",
+      reserve: 6,
+      ruling: H2_A2_RULING,
+      accepted: true,
+    },
+    { name: "legacy-h1", recording: "h1", ruling: H_A2_RULING, accepted: true },
+    { name: "fresh-old-cap", cap: 14, ruling: expectedRuling, gate: /parent budget/ },
+    { name: "fresh-low-cap", cap: 20.29, ruling: expectedRuling, gate: /parent budget/ },
+    { name: "fresh-high-cap", cap: 20.31, ruling: expectedRuling, gate: /parent budget/ },
+    {
+      name: "fresh-wrong-reserve",
+      cap: 20.3,
+      reserve: 6,
+      ruling: expectedRuling,
+      gate: /parent budget/,
+    },
+    {
+      name: "other-run-new-cap",
+      cap: 20.3,
+      runId: "012345abcdef",
+      ruling: expectedRuling,
+      gate: /parent budget/,
+    },
+    {
+      name: "other-recording-new-cap",
+      cap: 20.3,
+      recording: "h2-b",
+      reserve: 6,
+      ruling: expectedRuling,
+      gate: /parent budget/,
+    },
+    {
+      name: "legacy-a-new-cap",
+      cap: 20.3,
+      runId: "012345abcdef",
+      ruling: H2_A2_RULING,
+      gate: /parent budget/,
+    },
+    { name: "fresh-old-ruling", cap: 20.3, ruling: H2_A2_RULING, gate: /exact A2 RULING/ },
+    {
+      name: "fresh-pending-ruling",
+      cap: 20.3,
+      ruling: expectedRuling.replace("decision=APPROVE;", "decision=PENDING;"),
+      gate: /exact A2 RULING/,
+    },
+    {
+      name: "fresh-wrong-scope",
+      cap: 20.3,
+      ruling: expectedRuling.replace(runId, "012345abcdef"),
+      gate: /exact A2 RULING/,
+    },
+    {
+      name: "fresh-partial-ruling",
+      cap: 20.3,
+      ruling: expectedRuling.slice(0, -1),
+      gate: /exact A2 RULING/,
+    },
+    { name: "fresh-missing-ruling", cap: 20.3, ruling: "", gate: /exact A2 RULING/ },
+    {
+      name: "fresh-config-ruling",
+      cap: 20.3,
+      ruling: H2_A2_RULING,
+      configRuling: H2_A2_RULING,
+      gate: /exact A2 RULING/,
+    },
+    {
+      name: "fresh-invalid-source",
+      cap: 20.3,
+      ruling: expectedRuling,
+      sourceCommit: "not-a-commit",
+      gate: /source commit/,
+    },
+  ];
+  for (const item of cases) {
+    const child = join(dir, item.name);
+    mkdirSync(child);
+    const config = {
+      project: "fireemu-oracle-events",
+      runId: item.runId ?? runId,
+      recording: item.recording ?? "h2-a",
+      sourceCommit: item.sourceCommit ?? "c314c45e749a442a1d1fd07c2069f38ba3f0849a",
+      reserveUsd: item.reserve ?? 7,
+      parentBudgetUsd: item.cap,
+      out: join(child, "missing-issued-sentinel"),
+      ownerLedger: join(child, "owner.md"),
+      sandboxLedger: join(child, "ledger.jsonl"),
+      lockDir: join(child, "locks"),
+      frozenManifest: "unused",
+      adcFile: join(child, "no-credentials.json"),
+      depsDir: "unused",
+      firebaseJs: "unused",
+      ...(item.configRuling ? { a2Ruling: item.configRuling } : {}),
+    };
+    const input = join(child, "input.json"),
+      log = join(child, "wire.log");
+    writeFileSync(input, JSON.stringify(config));
+    writeFileSync(config.ownerLedger, item.ruling + "\n");
+    writeFileSync(log, "");
+    const answer = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        preload,
+        new URL("./eventarc-production/h-run.mjs", import.meta.url).pathname,
+        "--config",
+        input,
+        "--a2",
+      ],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          PATH: dirname(realpathSync(process.execPath)) + ":/usr/bin:/bin",
+          H_NO_WIRE_LOG: log,
+        },
+      },
+    );
+    assert.equal(answer.error, undefined, item.name);
+    assert.equal(answer.status, item.accepted ? 1 : 2, `${item.name}: ${answer.stderr}`);
+    assert.match(
+      answer.stderr,
+      item.accepted ? /ENOENT.*missing-issued-sentinel/s : item.gate,
+      item.name,
+    );
+    assert.equal(readFileSync(log, "utf8"), "", item.name);
+    for (const path of [config.out, config.lockDir, config.sandboxLedger, config.adcFile])
+      assert.equal(existsSync(path), false, item.name);
+  }
+  assert.equal(H2_SUCCESSOR_RUN_ID, runId);
+  assert.equal(H2_SUCCESSOR_A2_RULING, expectedRuling);
+});
+
+test("H2 successor A2 channel authority uses the same fresh ruling as admission", async (t) => {
+  const { main, H2_A2_RULING } = await import("./eventarc-production/h-run.mjs");
+  const runId = "ea3c9a8129ff";
+  const ruling = H2_A2_RULING.replace(
+    "- 2026-10-07 | EVENTARC-H2 A2 list settlement |",
+    "- 2026-10-08 | EVENTARC-H2-A-SUCCESSOR A2 list settlement |",
+  )
+    .replace(
+      "for EVENTARC packet H2 recordings (H2-A and H2-B) on fireemu-oracle-events,",
+      `for only the fresh EVENTARC H2-A successor recording run ${runId} on fireemu-oracle-events, with seven original A exports and the unchanged A2 maximum of 105 REST requests, three-hour invocation wall, and at least 600 seconds after its latest persisted request,`,
+    )
+    .replace(
+      "Claude（委任。オーナーの裁量の委任 2026-09-28）",
+      "Codex coordinator（委任。オーナー台帳365/395/996/998）",
+    )
+    .replace(
+      "docs.local/reviews/2026-10-07-eventarc-h2-presend-review.md",
+      "docs.local/runs/coordinator-codex-20261007/eventarc-h2-successor-packet/packet.md",
+    );
+  const dir = mkdtempSync(join(tmpdir(), "h2-successor-channel-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const manifest = hManifest({ project: "fireemu-oracle-events", runId, recording: "h2-a" });
+  const config = {
+    ...manifest,
+    reserveUsd: 7,
+    parentBudgetUsd: 20.3,
+    sourceCommit: "c314c45e749a442a1d1fd07c2069f38ba3f0849a",
+    out: join(dir, "out"),
+    ownerLedger: join(dir, "owner.md"),
+    sandboxLedger: join(dir, "sandbox.jsonl"),
+    lockDir: join(dir, "locks"),
+    frozenManifest: "unused",
+    adcFile: "unused",
+    depsDir: "unused",
+    firebaseJs: "unused",
+  };
+  mkdirSync(config.out);
+  writeFileSync(config.ownerLedger, ruling + "\n");
+  writeFileSync(
+    join(config.out, `issued-${runId}.jsonl`),
+    [
+      {
+        kind: "h-state",
+        value: {
+          manifest: { ...manifest, projectNumber: "123456789012" },
+          writes: [],
+          identities: [],
+          cleanup: { unconfirmed: [], unsettled: [] },
+        },
+      },
+      { kind: "request", at: 0 },
+    ]
+      .map(JSON.stringify)
+      .join("\n") + "\n",
+  );
+  const input = join(dir, "input.json");
+  writeFileSync(input, JSON.stringify(config));
+  let credentialSentinels = 0;
+  await main(
+    ["--config", input, "--a2"],
+    { PATH: dirname(realpathSync(process.execPath)) },
+    { stdout: { write: () => {} }, stderr: { write: () => {} } },
+    {
+      now: () => 600_000,
+      execToken: () => {
+        credentialSentinels++;
+        throw new Error("OFFLINE_A2_CHANNEL_AUTHORITY_SENTINEL");
+      },
+      fetchImpl: () => {
+        throw new Error("unexpected wire");
+      },
+    },
+  );
+  assert.ok(
+    credentialSentinels > 0,
+    "the fresh channel ruling must reach the offline credential sentinel",
+  );
+});

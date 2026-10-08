@@ -31,6 +31,10 @@ export const H_A2_RULING =
 export const H2_A2_RULING =
   "- 2026-10-07 | EVENTARC-H2 A2 list settlement | decision=APPROVE; for EVENTARC packet H2 recordings (H2-A and H2-B) on fireemu-oracle-events, a separate coordinator A2 may use a fresh complete 2xx list (every page, nextPageToken exhausted, page cap not reached, envelope judged against the recorded shape) that omits an exact name, read at least 600 seconds after the recording's latest request, as the absence read in place of a 404, only in five collections: Cloud Functions v2 functions in us-central1, Cloud Run v2 services in us-central1, Eventarc triggers in us-central1, Pub/Sub topics (global) and Pub/Sub subscriptions (global); it closes only a create the run confirmed by its own complete positive list or its own done operation, a create whose own single native CREATE was answered with a judged 4xx refusal and no operation, or that name's own unknown or not-done DELETE; an unknown or operation-pending CREATE is never closed by absence; a managed Run service, trigger, topic or subscription closes only after its function closed; A2 may read the own operation of a prior channel DELETE and may send one DELETE each for the exact run-owned confirmed retry marker, the baseline-absent confirmed firebase channel and the run-owned confirmed named channel, only after functions and cascades close, with a complete judged trigger list showing no channel dependents and exact-name read-backs; the Pub/Sub topic a channel GET reports as pubsubTopic is that channel's own topic, not a function cascade, and closes only on that channel's DELETE done by its own operation, a 404 read-back of the channel and its absence from a complete topics list; never resend a prior DELETE; both channels and the retry marker keep their exact-name recorded GET and 404 routes | Claude（委任。オーナーの裁量の委任 2026-09-28） | docs.local/reviews/2026-10-07-eventarc-h2-presend-review.md";
 
+export const H2_SUCCESSOR_RUN_ID = "ea3c9a8129ff";
+export const H2_SUCCESSOR_A2_RULING =
+  "- 2026-10-08 | EVENTARC-H2-A-SUCCESSOR A2 list settlement | decision=APPROVE; for only the fresh EVENTARC H2-A successor recording run ea3c9a8129ff on fireemu-oracle-events, with seven original A exports and the unchanged A2 maximum of 105 REST requests, three-hour invocation wall, and at least 600 seconds after its latest persisted request, a separate coordinator A2 may use a fresh complete 2xx list (every page, nextPageToken exhausted, page cap not reached, envelope judged against the recorded shape) that omits an exact name, read at least 600 seconds after the recording's latest request, as the absence read in place of a 404, only in five collections: Cloud Functions v2 functions in us-central1, Cloud Run v2 services in us-central1, Eventarc triggers in us-central1, Pub/Sub topics (global) and Pub/Sub subscriptions (global); it closes only a create the run confirmed by its own complete positive list or its own done operation, a create whose own single native CREATE was answered with a judged 4xx refusal and no operation, or that name's own unknown or not-done DELETE; an unknown or operation-pending CREATE is never closed by absence; a managed Run service, trigger, topic or subscription closes only after its function closed; A2 may read the own operation of a prior channel DELETE and may send one DELETE each for the exact run-owned confirmed retry marker, the baseline-absent confirmed firebase channel and the run-owned confirmed named channel, only after functions and cascades close, with a complete judged trigger list showing no channel dependents and exact-name read-backs; the Pub/Sub topic a channel GET reports as pubsubTopic is that channel's own topic, not a function cascade, and closes only on that channel's DELETE done by its own operation, a 404 read-back of the channel and its absence from a complete topics list; never resend a prior DELETE; both channels and the retry marker keep their exact-name recorded GET and 404 routes | Codex coordinator（委任。オーナー台帳365/395/996/998） | docs.local/runs/coordinator-codex-20261007/eventarc-h2-successor-packet/packet.md";
+
 /** Replay checkpoints and unanswered intents; never infer ownership from absence or CLI exit. */
 export function readHJournal(path) {
   let recording;
@@ -85,6 +89,7 @@ export function readHJournal(path) {
 export async function main(argv, env = process.env, io = process, deps = {}) {
   const now = deps.now ?? Date.now;
   let config;
+  let a2Ruling;
   const a2 = argv.length === 3 && argv[2] === "--a2";
   try {
     if (argv[0] !== "--config" || !argv[1] || !(argv.length === 2 || a2))
@@ -101,12 +106,19 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
     )
       throw new Error("H requires the reviewed events project and source commit");
     const manifest = hManifest(config);
+    const successor = manifest.recording === "h2-a" && manifest.runId === H2_SUCCESSOR_RUN_ID;
+    a2Ruling = manifest.functions
+      ? successor
+        ? H2_SUCCESSOR_A2_RULING
+        : H2_A2_RULING
+      : H_A2_RULING;
     if (
       manifest.functions &&
-      (config.reserveUsd !== manifest.reserveUsd || config.parentBudgetUsd !== 14)
+      (config.reserveUsd !== manifest.reserveUsd ||
+        config.parentBudgetUsd !== (successor ? 20.3 : 14))
     )
       throw new Error(
-        "H2 requires the reviewed thirteen dollar packet reserve within the fourteen dollar parent budget",
+        "H2 requires the manifest reserve and exact reviewed parent budget for this run",
       );
     for (const key of [
       "out",
@@ -119,11 +131,7 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
       "firebaseJs",
     ])
       if (typeof config[key] !== "string" || !config[key]) throw new Error(`H requires ${key}`);
-    if (
-      !readFileSync(config.ownerLedger, "utf8")
-        .split("\n")
-        .includes(manifest.functions ? H2_A2_RULING : H_A2_RULING)
-    )
+    if (!readFileSync(config.ownerLedger, "utf8").split("\n").includes(a2Ruling))
       throw new Error("H requires the exact A2 RULING line before H1 or A2");
   } catch (error) {
     io.stderr.write(`${error.message}\n`);
@@ -278,7 +286,7 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
               ? {
                   a2ChannelRuling: readFileSync(config.ownerLedger, "utf8")
                     .split("\n")
-                    .includes(H2_A2_RULING),
+                    .includes(a2Ruling),
                 }
               : {}),
           };

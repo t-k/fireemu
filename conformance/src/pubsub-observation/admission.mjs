@@ -373,6 +373,9 @@ export function verifySourceRecord(binding, plan, descriptor, read = readFileSyn
       )
         fail();
     } else if (
+      response.reply?.status !== 404 || response.reply.ok !== false ||
+      response.reply.code !== "NOT_FOUND" || response.reply.unknown !== false ||
+      response.reply.body?.error?.status !== "NOT_FOUND" ||
       !replay.settleAbsent(name, response.reply, {
         a2ElapsedMs: elapsedMs,
         a2EligibleRequestIds: originalIds,
@@ -499,7 +502,11 @@ export function verifySourceRecord(binding, plan, descriptor, read = readFileSyn
           fail();
         const requestId = ownedLedger.sent({ name, action: "delete", transport: "rest" });
         ownedLedger.answered({ name, action: "delete", transport: "rest", requestId, kind: "ok" });
-      } else if (!ownedLedger.settleAbsent(name, reply)) fail();
+      } else if (
+        reply?.status !== 404 || reply.ok !== false || reply.code !== "NOT_FOUND" ||
+        reply.unknown !== false || reply.body?.error?.status !== "NOT_FOUND" ||
+        !ownedLedger.settleAbsent(name, reply)
+      ) fail();
     }
     if (!closed() || JSON.stringify(withoutAt(delta)) !== JSON.stringify(withoutAt(cleanupIssued)))
       fail();

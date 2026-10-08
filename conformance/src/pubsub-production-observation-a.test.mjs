@@ -2707,95 +2707,120 @@ test("Task28 admits original complete source through exact resource-only A2 sett
 test("Task28 actual admit verifies original/successor provenance before run2 output claim", async () => {
   const a = await import("./pubsub-observation/admission.mjs");
   const { dirname, resolve } = await import("node:path");
-  const f = settlementFixture(),
-    descriptor = f.activeDescriptor;
-  const descriptorFile = { value: descriptor, sha256: "8".repeat(64) };
-  const runIds = [f.binding.runId, "123456abcdee"];
-  const scope = {
-    taskId: "PUBSUB-OBSERVATION-A",
-    suite: "pubsub-observation-a-v1",
-    project: "fireemu-oracle-idp",
-    envelopeId: "PUBSUB-OBSERVATION-A-SUCCESSOR",
-    sourceHead: descriptor.head,
-    descriptorSha256: descriptorFile.sha256,
-    packetSha256: "9".repeat(64),
-    runIds,
-    runOutputs: { [runIds[0]]: "/fixture/original", [runIds[1]]: "/fixture/successor" },
-    recoveryOutputs: { [runIds[0]]: "/fixture/original-a2", [runIds[1]]: "/fixture/successor-a2" },
-    expiresAt: "2099-01-01T00:00:00Z",
-    plan: f.plan,
-    previousAttempt: { ...f.binding.summary, record: f.binding },
-  };
-  const packet = {
-    sha256: scope.packetSha256,
-    value: {
-      schema: 1,
-      version: "v1",
-      taskId: scope.taskId,
-      sourceHead: scope.sourceHead,
-      descriptorSha256: scope.descriptorSha256,
+  for (const fixture of [settlementFixture, maintenanceFixture]) {
+    const f = fixture(),
+      descriptor = f.activeDescriptor;
+    const descriptorFile = { value: descriptor, sha256: "8".repeat(64) };
+    const runIds = [f.binding.runId, "123456abcdee"];
+    const scope = {
+      taskId: "PUBSUB-OBSERVATION-A",
+      suite: "pubsub-observation-a-v1",
+      project: "fireemu-oracle-idp",
+      envelopeId: "PUBSUB-OBSERVATION-A-SUCCESSOR",
+      sourceHead: descriptor.head,
+      descriptorSha256: descriptorFile.sha256,
+      packetSha256: "9".repeat(64),
       runIds,
-      runOutputs: scope.runOutputs,
-      recoveryOutputs: scope.recoveryOutputs,
-      plan: scope.plan,
-    },
-  };
-  const lines = [],
-    files = new Map([
-      ["descriptor", descriptorFile],
-      ["authority", { value: scope }],
-      ["packet", packet],
-    ]);
-  for (const kind of ["E", "V"]) {
-    const row = { ...scope, kind, state: "APPROVED", ledgerLine: lines.length + 1 };
-    const line = `| PUBSUB-OBSERVATION-A${kind === "E" ? " envelope" : ""} | decision=APPROVE; envelopeId=${scope.envelopeId}; scopeSha256=${a.scopeDigest(row)} |`;
-    lines.push(line);
-    row.ledgerLineSha256 = sha256(line);
-    files.set(kind, { value: row, sha256: kind === "E" ? "e".repeat(64) : "f".repeat(64) });
-    scope[kind] = { sha256: files.get(kind).sha256 };
+      runOutputs: { [runIds[0]]: "/fixture/original", [runIds[1]]: "/fixture/successor" },
+      recoveryOutputs: { [runIds[0]]: "/fixture/original-a2", [runIds[1]]: "/fixture/successor-a2" },
+      expiresAt: "2099-01-01T00:00:00Z",
+      plan: f.plan,
+      previousAttempt: { ...f.binding.summary, record: f.binding },
+    };
+    const packet = {
+      sha256: scope.packetSha256,
+      value: {
+        schema: 1,
+        version: "v1",
+        taskId: scope.taskId,
+        sourceHead: scope.sourceHead,
+        descriptorSha256: scope.descriptorSha256,
+        runIds,
+        runOutputs: scope.runOutputs,
+        recoveryOutputs: scope.recoveryOutputs,
+        plan: scope.plan,
+      },
+    };
+    const lines = [],
+      files = new Map([
+        ["descriptor", descriptorFile],
+        ["authority", { value: scope }],
+        ["packet", packet],
+      ]);
+    const bindProofs = () => {
+      lines.length = 0;
+      for (const kind of ["E", "V"]) {
+        const row = { ...scope, kind, state: "APPROVED", ledgerLine: lines.length + 1 };
+        const line = `| PUBSUB-OBSERVATION-A${kind === "E" ? " envelope" : ""} | decision=APPROVE; envelopeId=${scope.envelopeId}; scopeSha256=${a.scopeDigest(row)} |`;
+        lines.push(line);
+        row.ledgerLineSha256 = sha256(line);
+        files.set(kind, { value: row, sha256: kind === "E" ? "e".repeat(64) : "f".repeat(64) });
+        scope[kind] = { sha256: files.get(kind).sha256 };
+      }
+    };
+    bindProofs();
+    const boundaries = {
+      root: "/fixture/current",
+      readJson: (path) => {
+        if (files.has(path)) return files.get(path);
+        const bytes = f.files.get(path);
+        assert.ok(bytes, path);
+        return { value: JSON.parse(bytes), sha256: sha256(bytes) };
+      },
+      verifyDescriptor: () => descriptor,
+      verifyScope: a.verifyScope,
+      verifyPacket: a.verifyPacket,
+      dirname,
+      git: (...args) => (args.includes("--git-common-dir") ? "/fixture/.git" : descriptor.head),
+      resolve,
+      readFileSync: (path) =>
+        path.endsWith("owner-decisions.md") ? lines.join("\n") : f.files.get(path),
+      sha256,
+      verifyProof: a.verifyProof,
+      PROJECT: scope.project,
+      verifyLiveLock() {},
+      unusedRunPreflight() {
+        throw new Error("must remain before preflight");
+      },
+      verifySourceRecord: a.verifySourceRecord,
+    };
+    const actual = new Function(...Object.keys(boundaries), `return (${a.admit.toString()});`)(
+      ...Object.values(boundaries),
+    );
+    const options = {
+      descriptor: "descriptor",
+      authority: "authority",
+      packet: "packet",
+      E: "E",
+      V: "V",
+      lock: "fixture",
+      runId: runIds[1],
+      out: scope.runOutputs[runIds[1]],
+      a2: false,
+    };
+    assert.deepEqual(actual(options, 0).plan, scope.plan);
+    const maintenance = f.binding.settlement.maintenance;
+    const capture = maintenance ? f.cleanupCapture : f.a2Capture;
+    const originalReply = structuredClone(capture.at(-1).reply);
+    for (const edit of [
+      (reply) => { delete reply.status; },
+      (reply) => { delete reply.body; },
+      (reply) => { delete reply.body.error.status; },
+      (reply) => { delete reply.status; reply.body = {}; },
+    ]) {
+      capture.at(-1).reply = structuredClone(originalReply);
+      edit(capture.at(-1).reply);
+      const target = maintenance ?? f.binding.settlement;
+      target.capture = f.pin(maintenance ? "cleanup-capture.jsonl" : "a2-capture.jsonl", capture, true);
+      const summary = maintenance ? f.receipt : f.a2Summary;
+      summary.captureSha256 = target.capture.sha256;
+      target.summary = f.pin(maintenance ? "cleanup-summary.json" : "a2-summary.json", summary);
+      bindProofs();
+      assert.throws(() => actual(options, 0), /source record proof/);
+    }
+    f.files.set(f.binding.settlement.capture.path, Buffer.from("changed"));
+    assert.throws(() => actual(options, 0));
   }
-  const boundaries = {
-    root: "/fixture/current",
-    readJson: (path) => {
-      if (files.has(path)) return files.get(path);
-      const bytes = f.files.get(path);
-      assert.ok(bytes, path);
-      return { value: JSON.parse(bytes), sha256: sha256(bytes) };
-    },
-    verifyDescriptor: () => descriptor,
-    verifyScope: a.verifyScope,
-    verifyPacket: a.verifyPacket,
-    dirname,
-    git: (...args) => (args.includes("--git-common-dir") ? "/fixture/.git" : descriptor.head),
-    resolve,
-    readFileSync: (path) =>
-      path.endsWith("owner-decisions.md") ? lines.join("\n") : f.files.get(path),
-    sha256,
-    verifyProof: a.verifyProof,
-    PROJECT: scope.project,
-    verifyLiveLock() {},
-    unusedRunPreflight() {
-      throw new Error("must remain before preflight");
-    },
-    verifySourceRecord: a.verifySourceRecord,
-  };
-  const actual = new Function(...Object.keys(boundaries), `return (${a.admit.toString()});`)(
-    ...Object.values(boundaries),
-  );
-  const options = {
-    descriptor: "descriptor",
-    authority: "authority",
-    packet: "packet",
-    E: "E",
-    V: "V",
-    lock: "fixture",
-    runId: runIds[1],
-    out: scope.runOutputs[runIds[1]],
-    a2: false,
-  };
-  assert.deepEqual(actual(options, 0).plan, scope.plan);
-  f.files.set(f.binding.settlement.capture.path, Buffer.from("changed"));
-  assert.throws(() => actual(options, 0));
 });
 
 test("Task28 source identity and settlement pin near-misses never admit", async () => {
@@ -3238,4 +3263,27 @@ test("Task28 coherently repinned descriptor head must equal the original observa
     () => verifySourceRecord(f.binding, f.plan, f.activeDescriptor, (path) => f.files.get(path)),
     /source record proof/,
   );
+});
+
+
+test("Task28 REST settlement rejects missing HTTP status or typed error evidence", async () => {
+  const { verifySourceRecord } = await import("./pubsub-observation/admission.mjs");
+  for (const fixture of [settlementFixture, maintenanceFixture]) {
+    for (const edit of [
+      (reply) => { delete reply.status; },
+      (reply) => { delete reply.body; },
+      (reply) => { delete reply.body.error.status; },
+      (reply) => { delete reply.status; reply.body = {}; },
+    ]) {
+      const f = fixture(), maintenance = f.binding.settlement.maintenance;
+      const capture = maintenance ? f.cleanupCapture : f.a2Capture;
+      edit(capture.at(-1).reply);
+      const target = maintenance ?? f.binding.settlement;
+      target.capture = f.pin(maintenance ? "cleanup-capture.jsonl" : "a2-capture.jsonl", capture, true);
+      const summary = maintenance ? f.receipt : f.a2Summary;
+      summary.captureSha256 = target.capture.sha256;
+      target.summary = f.pin(maintenance ? "cleanup-summary.json" : "a2-summary.json", summary);
+      assert.throws(() => verifySourceRecord(f.binding, f.plan, f.activeDescriptor, (path) => f.files.get(path)), /source record proof/);
+    }
+  }
 });

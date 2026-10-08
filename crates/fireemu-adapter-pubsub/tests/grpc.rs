@@ -1482,6 +1482,371 @@ async fn streaming_pull_zero_preserves_opening_validation_precedence() {
     h.shutdown().await;
 }
 
+async fn setup_stream_credit(
+    h: &Harness,
+    suffix: &str,
+    count: usize,
+) -> (String, HashMap<String, Vec<u8>>) {
+    let topic = format!("projects/demo-app/topics/credit-{suffix}");
+    let subscription = format!("projects/demo-app/subscriptions/credit-{suffix}");
+    let mut pubc = h.publisher().await;
+    pubc
+        .create_topic(pb::Topic {
+            name: topic.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    h.subscriber()
+        .await
+        .create_subscription(pb::Subscription {
+            name: subscription.clone(),
+            topic: topic.clone(),
+            ack_deadline_seconds: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let payloads: Vec<_> = (0..count)
+        .map(|index| format!("credit-{index}").into_bytes())
+        .collect();
+    let published = pubc
+        .publish(pb::PublishRequest {
+            topic,
+            messages: payloads.iter().map(|data| msg(data)).collect(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    (
+        subscription,
+        published.message_ids.into_iter().zip(payloads).collect(),
+    )
+}
+
+async fn open_credit_stream(
+    h: &Harness,
+    subscription: &str,
+) -> (
+    tokio::sync::mpsc::Sender<pb::StreamingPullRequest>,
+    tonic::Streaming<pb::StreamingPullResponse>,
+) {
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    tx.send(pb::StreamingPullRequest {
+        subscription: subscription.to_owned(),
+        stream_ack_deadline_seconds: 10,
+        max_outstanding_messages: 1,
+        max_outstanding_bytes: 1024,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let responses = h
+        .subscriber()
+        .await
+        .streaming_pull(tokio_stream::wrappers::ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    (tx, responses)
+}
+
+async fn next_credit_delivery(
+    responses: &mut tonic::Streaming<pb::StreamingPullResponse>,
+    published: &HashMap<String, Vec<u8>>,
+) -> pb::ReceivedMessage {
+    let mut response = tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+        .await
+        .expect("one owned delivery arrives")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        response.received_messages.len(),
+        1,
+        "one outstanding credit admits one delivery"
+    );
+    let received = response.received_messages.remove(0);
+    let message = received.message.as_ref().unwrap();
+    assert_eq!(
+        published.get(&message.message_id),
+        Some(&message.data),
+        "delivery preserves an owned publication"
+    );
+    received
+}
+
+async fn assert_credit_held(responses: &mut tonic::Streaming<pb::StreamingPullResponse>) {
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), responses.message())
+            .await
+            .is_err(),
+        "no additional frame may arrive while the current credit is held"
+    );
+}
+
+#[tokio::test]
+async fn streaming_pull_strict_message_credit_waits_for_real_ack() {
+    use fireemu_adapter_pubsub::PagingPolicy::{Emulator, Strict};
+    for policy in [Strict, Emulator] {
+        let h = start_with_bridge_and_policy(None, policy).await;
+        let (subscription, published) = setup_stream_credit(&h, "ack", 3).await;
+        let (tx, mut responses) = open_credit_stream(&h, &subscription).await;
+        if policy == Emulator {
+            let response =
+                tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(response.received_messages.len(), 3);
+            assert!(response.subscription_properties.is_none());
+            drop(tx);
+            drop(responses);
+            h.shutdown().await;
+            continue;
+        }
+        let first = next_credit_delivery(&mut responses, &published).await;
+        let mut seen = std::collections::BTreeSet::new();
+        assert!(seen.insert(first.message.as_ref().unwrap().message_id.clone()));
+        assert_credit_held(&mut responses).await;
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec!["unknown".to_owned()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert_credit_held(&mut responses).await;
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec![first.ack_id.clone()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let second = next_credit_delivery(&mut responses, &published).await;
+        assert!(seen.insert(second.message.as_ref().unwrap().message_id.clone()));
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec![first.ack_id],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert_credit_held(&mut responses).await;
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec![second.ack_id],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let third = next_credit_delivery(&mut responses, &published).await;
+        assert!(seen.insert(third.message.as_ref().unwrap().message_id.clone()));
+        assert_eq!(seen.len(), published.len());
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec![third.ack_id],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        h.shutdown().await;
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn streaming_pull_credit_follows_broker_retirement() {
+    enum Release {
+        UnaryAck,
+        StreamNack,
+        UnaryNack,
+        Expire,
+        ExtendUnary,
+    }
+    for (release, suffix) in [
+        (Release::UnaryAck, "unary-ack"),
+        (Release::StreamNack, "stream-nack"),
+        (Release::UnaryNack, "unary-nack"),
+        (Release::Expire, "expire"),
+        (Release::ExtendUnary, "extend-unary"),
+    ] {
+        let h = start().await;
+        let (subscription, published) = setup_stream_credit(&h, suffix, 2).await;
+        let (tx, mut responses) = open_credit_stream(&h, &subscription).await;
+        let first = next_credit_delivery(&mut responses, &published).await;
+        assert_credit_held(&mut responses).await;
+        let mut subscriber = h.subscriber().await;
+        match release {
+            Release::UnaryAck => {
+                subscriber
+                    .acknowledge(pb::AcknowledgeRequest {
+                        subscription: subscription.clone(),
+                        ack_ids: vec![first.ack_id.clone()],
+                    })
+                    .await
+                    .unwrap();
+            }
+            Release::StreamNack => {
+                tx.send(pb::StreamingPullRequest {
+                    modify_deadline_ack_ids: vec![first.ack_id.clone()],
+                    modify_deadline_seconds: vec![0],
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            }
+            Release::UnaryNack => {
+                subscriber
+                    .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                        subscription: subscription.clone(),
+                        ack_ids: vec![first.ack_id.clone()],
+                        ack_deadline_seconds: 0,
+                    })
+                    .await
+                    .unwrap();
+            }
+            Release::Expire => advance(&h, LogicalDuration::from_seconds(10)),
+            Release::ExtendUnary => {
+                subscriber
+                    .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                        subscription: subscription.clone(),
+                        ack_ids: vec![first.ack_id.clone()],
+                        ack_deadline_seconds: 20,
+                    })
+                    .await
+                    .unwrap();
+                advance(&h, LogicalDuration::from_seconds(11));
+                assert_credit_held(&mut responses).await;
+                advance(&h, LogicalDuration::from_seconds(9));
+            }
+        }
+        let replacement = next_credit_delivery(&mut responses, &published).await;
+        assert_ne!(replacement.ack_id, first.ack_id);
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec![first.ack_id],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert_credit_held(&mut responses).await;
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec![replacement.ack_id],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        drop(responses);
+        h.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn streaming_pull_credit_is_per_stream() {
+    let h = start().await;
+    let (subscription, published) = setup_stream_credit(&h, "per-stream", 4).await;
+    let (tx_a, mut responses_a) = open_credit_stream(&h, &subscription).await;
+    let first_a = next_credit_delivery(&mut responses_a, &published).await;
+    let (tx_b, mut responses_b) = open_credit_stream(&h, &subscription).await;
+    let first_b = next_credit_delivery(&mut responses_b, &published).await;
+    assert_ne!(
+        first_a.message.as_ref().unwrap().message_id,
+        first_b.message.as_ref().unwrap().message_id
+    );
+    assert_credit_held(&mut responses_a).await;
+    assert_credit_held(&mut responses_b).await;
+    tx_b.send(pb::StreamingPullRequest {
+        ack_ids: vec![first_a.ack_id.clone()],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let second_a = next_credit_delivery(&mut responses_a, &published).await;
+    assert_credit_held(&mut responses_b).await;
+    tx_b.send(pb::StreamingPullRequest {
+        ack_ids: vec![first_a.ack_id.clone()],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_credit_held(&mut responses_b).await;
+    drop(responses_a);
+    drop(tx_a);
+    let (tx_c, mut responses_c) = open_credit_stream(&h, &subscription).await;
+    let first_c = next_credit_delivery(&mut responses_c, &published).await;
+    let mut distinct = std::collections::BTreeSet::new();
+    for received in [&first_a, &first_b, &second_a, &first_c] {
+        assert!(distinct.insert(received.message.as_ref().unwrap().message_id.clone()));
+    }
+    tx_b.send(pb::StreamingPullRequest {
+        ack_ids: vec![first_b.ack_id],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    tx_c.send(pb::StreamingPullRequest {
+        ack_ids: vec![first_c.ack_id],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    drop(tx_b);
+    drop(tx_c);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), responses_b.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), responses_c.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_none()
+    );
+    let mut subscriber = h.subscriber().await;
+    let before = subscriber
+        .pull(pb::PullRequest {
+            subscription: subscription.clone(),
+            max_messages: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(
+        before.received_messages.is_empty(),
+        "cancellation must not nack the held delivery"
+    );
+    advance(&h, LogicalDuration::from_seconds(10));
+    let after = subscriber
+        .pull(pb::PullRequest {
+            subscription,
+            max_messages: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(after.received_messages.len(), 1);
+    assert_eq!(
+        after.received_messages[0]
+            .message
+            .as_ref()
+            .unwrap()
+            .message_id,
+        second_a.message.as_ref().unwrap().message_id
+    );
+    h.shutdown().await;
+}
+
 #[tokio::test]
 async fn streaming_pull_delivers_and_acks() {
     for ordered in [false, true] {

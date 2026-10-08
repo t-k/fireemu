@@ -568,6 +568,16 @@ impl SubscriptionState {
         self.outstanding.len()
     }
 
+    /// Retains only candidate ACK IDs whose broker lease is still outstanding.
+    pub fn retain_outstanding_ack_ids(
+        &mut self,
+        ack_ids: &mut BTreeSet<String>,
+        now: LogicalInstant,
+    ) {
+        self.expire_deadlines(now);
+        ack_ids.retain(|id| self.outstanding.contains_key(id));
+    }
+
     /// Moves every outstanding message whose ack deadline has passed back to available, so the
     /// next pull redelivers it. Call this on every clock advance.
     pub fn expire_deadlines(&mut self, now: LogicalInstant) {
@@ -1457,8 +1467,53 @@ mod tests {
                     for index in selected {reference[index]=2;}
                 }
                 prop_assert_eq!(sub.outstanding_count(),reference.iter().fold(0, |count, state| count + usize::from(*state == 1)));
+                let mut candidates: BTreeSet<_> = acknowledgements.iter().enumerate().filter_map(|(index,id)|(!id.is_empty() && index%2==limit%2).then_some(id.clone())).collect();
+                candidates.insert("unknown".to_owned());
+                let expected: BTreeSet<_> = reference.iter().enumerate().filter_map(|(index,state)|(*state==1 && index%2==limit%2).then_some(acknowledgements[index].clone())).collect();
+                sub.retain_outstanding_ack_ids(&mut candidates,now);
+                prop_assert_eq!(candidates,expected);
             }
         }
+    }
+
+    #[test]
+    fn retained_ack_ids_follow_broker_retirement() {
+        let mut sub = SubscriptionState::new(cfg());
+        let now = LogicalInstant::from_unix_seconds(100);
+        let mut ids = counter();
+        sub.enqueue(stored("first", b"payload", 100), now).unwrap();
+        let first = sub.pull(1, now, &mut ids).received.remove(0);
+        let mut candidates = BTreeSet::from([first.ack_id.clone(), "unknown".to_owned()]);
+        sub.retain_outstanding_ack_ids(&mut candidates, now);
+        assert_eq!(candidates, BTreeSet::from([first.ack_id.clone()]));
+        sub.modify_ack_deadline(&first.ack_id, 20, now);
+        let old_deadline = now.checked_add(LogicalDuration::from_seconds(10)).unwrap();
+        sub.retain_outstanding_ack_ids(&mut candidates, old_deadline);
+        assert_eq!(candidates.len(), 1);
+        let extended_deadline = now.checked_add(LogicalDuration::from_seconds(20)).unwrap();
+        sub.retain_outstanding_ack_ids(&mut candidates, extended_deadline);
+        assert!(candidates.is_empty());
+        assert_eq!(sub.outstanding_count(), 0);
+        sub.modify_ack_deadline(&first.ack_id, 30, extended_deadline);
+        assert_eq!(
+            sub.outstanding_count(),
+            0,
+            "an expired token cannot be revived"
+        );
+        let second = sub.pull(1, extended_deadline, &mut ids).received.remove(0);
+        assert_ne!(second.ack_id, first.ack_id);
+        candidates.insert(second.ack_id.clone());
+        sub.modify_ack_deadline(&second.ack_id, 0, extended_deadline);
+        sub.retain_outstanding_ack_ids(&mut candidates, extended_deadline);
+        assert!(candidates.is_empty());
+        let third = sub.pull(1, extended_deadline, &mut ids).received.remove(0);
+        assert_eq!(sub.acknowledge(&[first.ack_id, second.ack_id]), 0);
+        candidates.insert(third.ack_id.clone());
+        sub.retain_outstanding_ack_ids(&mut candidates, extended_deadline);
+        assert_eq!(candidates, BTreeSet::from([third.ack_id.clone()]));
+        assert_eq!(sub.acknowledge(&[third.ack_id]), 1);
+        sub.retain_outstanding_ack_ids(&mut candidates, extended_deadline);
+        assert!(candidates.is_empty());
     }
 
     #[test]

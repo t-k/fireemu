@@ -1,7 +1,7 @@
 //! The `google.pubsub.v1.Subscriber` service implementation.
 #![allow(clippy::result_large_err)] // tonic::Status is large by design
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -87,6 +87,20 @@ fn update_push_config(
             push_config_from_proto(sub.push_config.as_ref(), policy).map_err(|error| status(&error))
         })
         .transpose()
+}
+
+fn stream_pull_max(
+    handle: &PubSubHandle,
+    subscription: &SubscriptionName,
+    message_limit: Option<usize>,
+    outstanding_ack_ids: &mut BTreeSet<String>,
+) -> Result<usize, fireemu_core_pubsub::PubSubError> {
+    let Some(limit) = message_limit else {
+        return Ok(100);
+    };
+    let now = handle.now();
+    handle.state().retain_outstanding_ack_ids(subscription, outstanding_ack_ids, now)?;
+    Ok(limit.saturating_sub(outstanding_ack_ids.len()).min(100))
 }
 
 /// Applies the acks and modify-ack-deadlines carried by one streaming-pull request.
@@ -434,9 +448,13 @@ impl Subscriber for SubscriberService {
             ));
         }
 
+        let message_limit = (self.handle.paging_policy == crate::PagingPolicy::Strict
+            && first.max_outstanding_messages > 0)
+            .then(|| usize::try_from(first.max_outstanding_messages).unwrap_or(usize::MAX));
         let handle = self.handle.clone();
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<pb::StreamingPullResponse, Status>>(16);
         tokio::spawn(async move {
+            let mut outstanding_ack_ids = BTreeSet::new();
             let mut first = Some(first);
             // A short poll delivers messages published after the stream opened. This is a
             // delivery cadence only; ack-deadline and redelivery timing run on the virtual clock.
@@ -455,10 +473,24 @@ impl Subscriber for SubscriberService {
                             Ok(None) | Err(_) => break,
                         }
                     }
+                    () = tx.closed() => break,
                     _ = interval.tick() => {
-                        let pulled = handle.pull(&name, 100);
+                        let max = match stream_pull_max(&handle, &name, message_limit, &mut outstanding_ack_ids) {
+                            Ok(max) => max,
+                            Err(error) => {
+                                let _ = tx.send(Err(status(&error))).await;
+                                break;
+                            }
+                        };
+                        if max == 0 {
+                            continue;
+                        }
+                        let pulled = handle.pull(&name, max);
                         match pulled {
                             Ok(msgs) if !msgs.is_empty() => {
+                                if message_limit.is_some() {
+                                    outstanding_ack_ids.extend(msgs.iter().map(|message| message.ack_id.clone()));
+                                }
                                 let resp = pb::StreamingPullResponse {
                                     received_messages: msgs.iter().map(|message|received_to_proto(message,report_attempt,handle.paging_policy)).collect(),
                                     subscription_properties,

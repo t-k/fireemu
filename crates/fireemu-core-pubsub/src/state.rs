@@ -1498,6 +1498,17 @@ impl PubSubState {
         Ok(self.sub_mut(name)?.acknowledge(ack_ids))
     }
 
+    /// Reconciles candidate ACK IDs with current broker leases for one subscription.
+    pub fn retain_outstanding_ack_ids(
+        &mut self,
+        name: &SubscriptionName,
+        ack_ids: &mut BTreeSet<String>,
+        now: LogicalInstant,
+    ) -> Result<()> {
+        self.sub_mut(name)?.retain_outstanding_ack_ids(ack_ids, now);
+        Ok(())
+    }
+
     /// Modifies the ack deadline of the named messages. Zero seconds nacks (immediate
     /// redelivery). Unknown ack ids are ignored.
     pub fn modify_ack_deadline(

@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdirSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { createHash } from "node:crypto";
+import * as wModule from "./w.mjs";
+import { spawnSync, execFileSync } from "node:child_process";
 import {
   wManifest,
   wBody,
@@ -392,6 +394,7 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
   const m = manifest(stage, prerequisite),
     calls = [],
     notes = [];
+  const resourceMode = mode.replace(/^shape-/, "");
   let clock = 0,
     present = false,
     topicPresent = false;
@@ -413,6 +416,23 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
           let status = 200,
             body;
           if (host === "publishing") {
+            if (mode.startsWith("shape")) {
+              if (mode === "shape-unknown" && spec.recipe.purpose === "T0")
+                return { unknown: true, status: 503, body: {} };
+              if (spec.recipe.purpose.endsWith("control"))
+                return mode === `shape-${spec.recipe.purpose}-refused`
+                  ? native(400, nativeSizeRefusal)
+                  : native(200, {});
+              if (mode === "shape-counter-success") return native(200, {});
+              if (mode === "shape-unmeasured") return native(400, nativeSizeRefusal);
+              return native(400, {
+                error: {
+                  code: 400,
+                  message: `The value for request_size is too large. You passed ${shapeWire(spec.body.events, topic).pubsub.length + (mode === "shape-mismatch" ? 1 : 0)} in the request, but the maximum value is 10000000.`,
+                  status: "INVALID_ARGUMENT",
+                },
+              });
+            }
             if (mode === "unknown-publish") return { unknown: true, status: 503, body: {} };
             const size = Buffer.byteLength(spec.rawBody);
             const accepted =
@@ -444,7 +464,7 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
                 Array.isArray(r.body.services) &&
                 r.body.services.some((s) => s.config?.name === "eventarcpublishing.googleapis.com"),
             );
-            if (mode === "api-disabled")
+            if (resourceMode === "api-disabled")
               body.services = body.services.filter(
                 (s) => s.config.name !== "eventarcpublishing.googleapis.com",
               );
@@ -452,12 +472,12 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
             body = topicPresent ? { topics: [{ name: topic }] } : {};
           else if (spec.path.endsWith("/triggers"))
             body =
-              mode === "dependent" && present
+              resourceMode === "dependent" && present
                 ? { triggers: [{ name: `${m.parent}/triggers/foreign`, channel: m.channel }] }
                 : {};
           else if (spec.path.includes("/operations/")) {
             const own = operations.get(spec.path.slice(4));
-            if (mode === "pending-delete" && own.action === "delete") {
+            if (resourceMode === "pending-delete" && own.action === "delete") {
               body = template((r) => r.case === "channel-operation-not-done");
               body.name = own.body.name;
               body.metadata.target = m.channel;
@@ -468,20 +488,20 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
               body.metadata.verb = own.action;
               if (own.action === "delete") {
                 present = false;
-                topicPresent = mode === "topic-left";
+                topicPresent = resourceMode === "topic-left";
               }
-              if (mode === "wrong-target") body.metadata.target += "-foreign";
+              if (resourceMode === "wrong-target") body.metadata.target += "-foreign";
             }
           } else if (spec.method === "POST") {
             if (createReply) return structuredClone(createReply);
             present = true;
             topicPresent = true;
-            if (mode === "unknown-create") return { unknown: true, status: 503, body: {} };
+            if (resourceMode === "unknown-create") return { unknown: true, status: 503, body: {} };
             body = operation("create");
           } else if (spec.method === "DELETE") {
-            if (mode === "unknown-delete") return { unknown: true, status: 503, body: {} };
+            if (resourceMode === "unknown-delete") return { unknown: true, status: 503, body: {} };
             body = operation("delete");
-          } else if (present && mode !== "unknown-create") {
+          } else if (present && resourceMode !== "unknown-create") {
             body = template(
               (r) =>
                 r.status === 200 &&
@@ -539,6 +559,347 @@ test("W0 discovers an interval through real resource judges and cleans its exact
       call.timeoutMs,
       30_000 + Math.ceil(((call.recipe?.httpBytes ?? 0) * 8 * 1000) / 2_000_000),
     );
+});
+
+// Independent byte encoders follow the public CloudEvent and Pub/Sub field numbers.
+function shapeWire(events, topic, channel = manifest().channel) {
+  const varint = (value) => {
+    const bytes = [];
+    do {
+      bytes.push((value % 128) | (value >= 128 ? 128 : 0));
+      value = Math.floor(value / 128);
+    } while (value);
+    return Buffer.from(bytes);
+  };
+  const field = (tag, bytes) => {
+    bytes = Buffer.from(bytes);
+    return Buffer.concat([varint(tag * 8 + 2), varint(bytes.length), bytes]);
+  };
+  const ce = [field(1, channel)],
+    pubsub = [field(1, topic)],
+    anyBytes = [];
+  for (const event of events) {
+    const encoded = [
+      field(1, event.id),
+      field(2, event.source),
+      field(3, event.specVersion),
+      field(4, event.type),
+    ];
+    const attributes = {
+      "ce-id": event.id,
+      "ce-source": event.source,
+      "ce-specversion": event.specVersion,
+      "ce-type": event.type,
+    };
+    for (const [key, value] of Object.entries(event.attributes)) {
+      let inner, text;
+      if (value.ceString !== undefined) {
+        inner = field(3, value.ceString);
+        text = value.ceString;
+      } else if (value.ceInteger !== undefined) {
+        inner = Buffer.concat([varint(2 * 8), varint(value.ceInteger)]);
+        text = String(value.ceInteger);
+      } else {
+        const seconds = Date.parse(value.ceTimestamp) / 1000;
+        inner = field(7, seconds ? Buffer.concat([varint(8), varint(seconds)]) : Buffer.alloc(0));
+        text = value.ceTimestamp;
+      }
+      encoded.push(field(5, Buffer.concat([field(1, key), field(2, inner)])));
+      attributes[`ce-${key}`] = text;
+    }
+    encoded.push(field(7, event.textData));
+    const any = Buffer.concat([field(1, event["@type"]), field(2, Buffer.concat(encoded))]);
+    anyBytes.push(any.length);
+    ce.push(field(2, any));
+    const message = [field(1, event.textData)];
+    for (const [key, value] of Object.entries(attributes))
+      message.push(field(2, Buffer.concat([field(1, key), field(2, value)])));
+    pubsub.push(field(2, Buffer.concat(message)));
+  }
+  return { ce: Buffer.concat(ce), pubsub: Buffer.concat(pubsub), anyBytes };
+}
+
+test("W shape fixes three public-safe recipes and reconstructs their exact byte metrics", () => {
+  const m = manifest("w-shape");
+  assert.deepEqual(m.limits, { preflight: 16, setup: 12, publish: 5, cleanup: 38 });
+  const topic = `projects/${m.project}/topics/${"t".repeat(49)}`;
+  assert.equal(Buffer.byteLength(topic), 87);
+  for (const [index, shape] of ["N99", "T0", "I0"].entries()) {
+    const built = wModule.wShapeBody(m, index + 2, shape, topic);
+    const wire = shapeWire(built.body.events, topic);
+    assert.equal(wire.ce.length, 10081812);
+    assert.equal(built.requestBytes, wire.ce.length);
+    assert.equal(built.predictedRequestSize, wire.pubsub.length);
+    assert.equal(built.predictedRequestSize, [10083108, 10083721, 10083321][index]);
+    assert.deepEqual(built.anyBytes, wire.anyBytes);
+    assert.ok(built.anyBytes.every((n) => n < 450000));
+    assert.ok(built.httpBytes <= m.ceiling);
+    assert.equal(built.httpBytes, Buffer.byteLength(built.raw));
+    assert.deepEqual(JSON.parse(built.raw), built.body);
+    assert.equal(built.sha256, createHash("sha256").update(built.raw).digest("hex"));
+    assert.deepEqual(wModule.wShapeBody(m, index + 2, shape, topic), built);
+    const events = built.body.events;
+    assert.equal(events.length, shape === "N99" ? 99 : 100);
+    assert.equal(new Set(events.map((e) => e.id)).size, events.length);
+    assert.ok(events.every((e) => typeof JSON.parse(e.textData) === "string"));
+    assert.ok(
+      events.every(
+        (e) =>
+          e.attributes.time.ceTimestamp ===
+          (shape === "T0" ? "1970-01-01T00:00:00Z" : "2026-10-07T00:00:00Z"),
+      ),
+    );
+    assert.ok(
+      events.every(
+        (e) =>
+          JSON.stringify(Object.keys(e.attributes)) ===
+          (shape === "I0" ? '["datacontenttype","time","probe"]' : '["datacontenttype","time"]'),
+      ),
+    );
+    if (shape === "I0") assert.ok(events.every((e) => e.attributes.probe.ceInteger === 0));
+  }
+  for (const args of [
+    [m, 1, "N99", topic],
+    [m, 2, "T0", topic],
+    [m, 2, "foreign", topic],
+    [manifest(), 2, "N99", topic],
+    [m, 2, "N99", "projects/foreign/topics/t"],
+    [{ ...m, ceiling: 65536 }, 2, "N99", topic],
+  ])
+    assert.throws(() => wModule.wShapeBody(...args), /shape|ceiling/);
+  assert.throws(() => manifest("w-shape", { accepted: 1, refused: 2 }), /shape/);
+});
+
+test("W shape obtains the actual topic then sends only controls and the three counters", async () => {
+  const { result, calls } = await replay("w-shape", "shape");
+  assert.equal(result.stopped, null);
+  assert.equal(result.evidenceComplete, true);
+  assert.equal(result.cleanupReady, true);
+  assert.equal(result.boundary, null);
+  assert.equal(result.layer, null);
+  assert.equal(result.counts.publish, 5);
+  assert.deepEqual(
+    result.publishes.map((p) => p.purpose),
+    ["before-control", "N99", "T0", "I0", "after-control"],
+  );
+  assert.deepEqual(
+    result.publishes.map((p) => p.accepted),
+    [true, false, false, false, true],
+  );
+  for (const call of calls.filter((c) => c.host === "publishing")) {
+    const { raw, body, ...recipe } = call.recipe.shape
+      ? wModule.wShapeBody(result.manifest, call.recipe.sequence, call.recipe.shape, result.topic)
+      : wBody(result.manifest, call.recipe.sequence, 65536);
+    assert.equal(raw, call.rawBody);
+    assert.deepEqual(body, call.body);
+    for (const [key, value] of Object.entries(recipe)) assert.deepEqual(call.recipe[key], value);
+  }
+  for (const p of result.publishes.slice(1, 4)) {
+    assert.equal(p.observedRequestSize, p.predictedRequestSize);
+    assert.equal(p.predictionMatches, true);
+  }
+  assert.equal(calls.filter((c) => c.method === "DELETE").length, 1);
+});
+
+test("W shape generated fixed-width identities and topic varint boundaries match independent encodings", () => {
+  for (const [index, topicWidth] of [87, 127, 128, 129].entries()) {
+    const m = wManifest({
+      project: manifest().project,
+      runId: (index + 1).toString(16).padStart(12, "0"),
+      stage: "w-shape",
+    });
+    const prefix = `projects/${m.project}/topics/`;
+    const topic = prefix + "t".repeat(topicWidth - Buffer.byteLength(prefix));
+    for (const [ordinal, shape] of ["N99", "T0", "I0"].entries()) {
+      const built = wModule.wShapeBody(m, ordinal + 2, shape, topic);
+      const wire = shapeWire(built.body.events, topic, m.channel);
+      assert.equal(built.requestBytes, wire.ce.length);
+      assert.equal(built.predictedRequestSize, wire.pubsub.length);
+      assert.equal(wire.ce.length, 10081812);
+      assert.deepEqual(built.anyBytes, wire.anyBytes);
+      assert.ok(
+        built.body.events.every(
+          (event) =>
+            event.id.startsWith(m.runId) && event.source === m.source && event.type === m.type,
+        ),
+      );
+    }
+  }
+});
+
+test("W shape preserves mismatched measurements and stops on unknown or unmeasured answers with cleanup", async () => {
+  const mismatch = await replay("w-shape", "shape-mismatch");
+  assert.equal(mismatch.result.evidenceComplete, true);
+  assert.ok(
+    mismatch.result.publishes
+      .slice(1, 4)
+      .every(
+        (p) =>
+          p.observedRequestSize === p.predictedRequestSize + 1 && p.predictionMatches === false,
+      ),
+  );
+  for (const [mode, count] of [
+    ["shape-unknown", 3],
+    ["shape-unmeasured", 2],
+    ["shape-counter-success", 2],
+  ]) {
+    const { result, calls } = await replay("w-shape", mode);
+    assert.equal(result.evidenceComplete, false);
+    assert.equal(result.counts.publish, count);
+    assert.equal(result.cleanupReady, true);
+    assert.match(result.stopped, /needs-review/);
+    assert.equal(calls.filter((c) => c.method === "DELETE").length, 1);
+  }
+});
+
+test("W shape keeps control, lifecycle and cleanup obligations without retries", async () => {
+  for (const [mode, count, closed] of [
+    ["shape-before-control-refused", 1, true],
+    ["shape-after-control-refused", 5, true],
+    ["shape-api-disabled", 0, true],
+    ["shape-unknown-create", 0, false],
+    ["shape-dependent", 5, false],
+    ["shape-topic-left", 5, false],
+    ["shape-unknown-delete", 5, false],
+    ["shape-pending-delete", 5, false],
+  ]) {
+    const { result, calls } = await replay("w-shape", mode);
+    assert.equal(result.counts.publish, count, mode);
+    assert.equal(result.cleanupReady, closed, mode);
+    assert.ok(calls.filter((c) => c.method === "DELETE").length <= 1, mode);
+    assert.equal(
+      result.evidenceComplete,
+      count === 5 && mode !== "shape-after-control-refused",
+      mode,
+    );
+    if (mode === "shape-api-disabled") assert.notEqual(result.closureReady, true, mode);
+    else assert.equal(result.closureReady, false, mode);
+    if (mode === "shape-api-disabled")
+      assert.equal(calls.filter((c) => c.method === "POST").length, 0);
+  }
+});
+
+test("W shape default entry requires frozen admission before credentials, network or runtime writes", () => {
+  const root = resolve("target/codex-out/w-ready/test-work");
+  mkdirSync(root, { recursive: true });
+  const dir = mkdtempSync(join(root, "shape-entry-"));
+  try {
+    const m = manifest("w-shape");
+    const checkout = resolve(dirname(new URL("./w-run.mjs", import.meta.url).pathname), "../../..");
+    const config = {
+      ...m,
+      sourceCommit: execFileSync("git", ["-C", checkout, "rev-parse", "HEAD"], {
+        encoding: "utf8",
+      }).trim(),
+      reserveUsd: 0.05,
+      packetReserveUsd: 0.15,
+      parentBudgetUsd: 14,
+      out: join(dir, "out"),
+      sandboxLedger: join(dir, "ledger.jsonl"),
+      lockDir: join(dir, "locks"),
+      ownerLedger: join(dir, "owner.md"),
+      packetDir: dir,
+    };
+    const descriptor = {
+      status: "frozen",
+      sourceCommit: config.sourceCommit,
+      executions: [{ stage: m.stage, runId: m.runId }],
+      sourceHashes: {},
+      artifactHashes: {},
+      envelopeBodies: { [m.stage]: "unadmitted-shape" },
+    };
+    const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+    for (const name of ["w.mjs", "w-run.mjs"]) {
+      const path = new URL(name, import.meta.url).pathname;
+      descriptor.sourceHashes[path] = hash(readFileSync(path));
+    }
+    for (const name of ["eventarc-packet-w.md", "w-checklist.md", "w-mutation-report.md"]) {
+      writeFileSync(join(dir, name), name);
+      descriptor.artifactHashes[name] = hash(name);
+    }
+    const descriptorBytes = JSON.stringify(descriptor);
+    writeFileSync(join(dir, "w-descriptor.json"), descriptorBytes);
+    writeFileSync(config.ownerLedger, `${W_A2_RULING}\n`);
+    const input = join(dir, "input.json");
+    writeFileSync(input, JSON.stringify(config));
+    const preload = `
+      import fs from "node:fs";
+      import child from "node:child_process";
+      import { syncBuiltinESMExports } from "node:module";
+      const counts = { wire: 0, credential: 0, runtimeWrite: 0 };
+      const read = fs.readFileSync;
+      fs.readFileSync = function(path, ...args) {
+        if (/application_default_credentials|\\/.config\\/gcloud\\//.test(String(path))) {
+          counts.credential++; throw new Error("credential denied");
+        }
+        return read.call(this, path, ...args);
+      };
+      const open = fs.openSync;
+      fs.openSync = function(path, flags, ...args) {
+        if (flags === "r" || flags === 0) return open.call(this, path, flags, ...args);
+        counts.runtimeWrite++; throw new Error("runtime open denied");
+      };
+      for (const name of ["mkdirSync", "writeFileSync", "appendFileSync", "unlinkSync"])
+        fs[name] = () => { counts.runtimeWrite++; throw new Error("runtime write denied"); };
+      child.execFile = () => { counts.credential++; throw new Error("credential execution denied"); };
+      const exec = child.execFileSync;
+      child.execFileSync = (file, args, options) => {
+        if (file === "git" && JSON.stringify(args) === '["rev-parse","HEAD"]')
+          return exec(file, args, options);
+        counts.credential++; throw new Error("child execution denied");
+      };
+      globalThis.fetch = () => { counts.wire++; throw new Error("wire denied"); };
+      syncBuiltinESMExports();
+      process.on("exit", () => process.stdout.write(JSON.stringify(counts) + "\\n"));
+    `;
+    const run = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        `data:text/javascript,${encodeURIComponent(preload)}`,
+        new URL("./w-run.mjs", import.meta.url).pathname,
+        "--config",
+        input,
+      ],
+      {
+        env: { PATH: `${dirname(process.execPath)}:/etc/profiles/per-user/tk/bin:/usr/bin:/bin` },
+        cwd: checkout,
+        timeout: 10000,
+        encoding: "utf8",
+      },
+    );
+    assert.equal(run.status, 2, run.stderr);
+    assert.match(run.stderr, /exact E\/V admission absent/);
+    assert.deepEqual(JSON.parse(run.stdout), { wire: 0, credential: 0, runtimeWrite: 0 });
+    const vBody = `decision=APPROVE; envelopeId=EVENTARC-W-${config.runId}; packetSha256=${descriptor.artifactHashes["eventarc-packet-w.md"]}; checklistSha256=${descriptor.artifactHashes["w-checklist.md"]}; mutationSha256=${descriptor.artifactHashes["w-mutation-report.md"]}; descriptorSha256=${hash(descriptorBytes)}; sourceCommit=${config.sourceCommit}`;
+    writeFileSync(
+      config.ownerLedger,
+      `${W_A2_RULING}\n- 2026-10-08 | EVENTARC-PACKET-W envelope | ${descriptor.envelopeBodies[m.stage]} | offline test | test-only.md\n- 2026-10-08 | EVENTARC-PACKET-W | ${vBody} | offline test | test-only.md\n`,
+    );
+    const args = [
+      "--import",
+      `data:text/javascript,${encodeURIComponent(preload)}`,
+      new URL("./w-run.mjs", import.meta.url).pathname,
+      "--config",
+      input,
+    ];
+    const options = {
+      env: { PATH: `${dirname(process.execPath)}:/etc/profiles/per-user/tk/bin:/usr/bin:/bin` },
+      cwd: checkout,
+      timeout: 10000,
+      encoding: "utf8",
+    };
+    const admitted = spawnSync(process.execPath, args, options);
+    assert.equal(admitted.status, 3, admitted.stderr);
+    assert.match(admitted.stderr, /runtime write denied/);
+    assert.deepEqual(JSON.parse(admitted.stdout), { wire: 0, credential: 0, runtimeWrite: 1 });
+    const a2 = spawnSync(process.execPath, [...args, "--a2"], options);
+    assert.equal(a2.status, 2, a2.stderr);
+    assert.match(a2.stderr, /shape A2 requires a separate ruling/);
+    assert.deepEqual(JSON.parse(a2.stdout), { wire: 0, credential: 0, runtimeWrite: 0 });
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
 });
 
 test("W native size refusal reaches staged bisection with bounded monotone publications", async () => {

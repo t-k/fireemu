@@ -65,6 +65,7 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
       throw new Error("W requires real Node 24.14.0 first on PATH and the gcloud bin directory");
     config = JSON.parse(readFileSync(argv[1], "utf8"));
     m = wManifest(config);
+    if (a2 && m.stage === "w-shape") throw new Error("W shape A2 requires a separate ruling");
     if (
       !/^[a-f0-9]{40}$/.test(config.sourceCommit ?? "") ||
       config.reserveUsd !== 0.05 ||
@@ -126,7 +127,7 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
       )
     )
       throw new Error("W approval revoked");
-    if (m.stage !== "w0") {
+    if (["w1", "w2"].includes(m.stage)) {
       const bytes = readFileSync(config.checkpoint);
       const prior = JSON.parse(bytes);
       if (

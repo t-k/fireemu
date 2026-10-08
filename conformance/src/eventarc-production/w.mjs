@@ -12,11 +12,13 @@ export function wManifest({ project, runId, stage, prerequisite }) {
   if (
     project !== "fireemu-oracle-events" ||
     !/^[a-f0-9]{12}$/.test(runId ?? "") ||
-    !["w0", "w1", "w2"].includes(stage)
+    !["w0", "w1", "w2", "w-shape"].includes(stage)
   )
     throw new Error("W requires the owned project, fresh fixed-width run and stage");
   const ceiling = 40 * 1024 * 1024;
-  if (stage !== "w0") {
+  if (stage === "w-shape" && prerequisite !== undefined)
+    throw new Error("W shape is an independent fixed observation");
+  if (["w1", "w2"].includes(stage)) {
     if (
       !prerequisite ||
       !Number.isSafeInteger(prerequisite.accepted) ||
@@ -42,10 +44,91 @@ export function wManifest({ project, runId, stage, prerequisite }) {
     source: `//fireemu/w/${runId}`,
     ceiling,
     ladder: [1, 2, 4, 8, 16, 32].map((n) => n * 1024 * 1024).concat(ceiling - 2),
-    ...(stage === "w0" ? {} : { prerequisite }),
-    limits: { preflight: 16, setup: 12, publish: 20, cleanup: 38 },
+    ...(["w1", "w2"].includes(stage) ? { prerequisite } : {}),
+    limits: { preflight: 16, setup: 12, publish: stage === "w-shape" ? 5 : 20, cleanup: 38 },
     wallMs: 150 * 60_000,
     reserveUsd: 0.05,
+  };
+}
+
+/** Three fixed counterexamples to the inferred Pub/Sub request-size transformation. */
+export function wShapeBody(m, sequence, shape, topic) {
+  if (
+    m.stage !== "w-shape" ||
+    sequence !== { N99: 2, T0: 3, I0: 4 }[shape] ||
+    !["N99", "T0", "I0"].includes(shape) ||
+    !new RegExp(`^projects/${m.project}/topics/[A-Za-z][A-Za-z0-9._~-]*$`).test(topic ?? "")
+  )
+    throw new Error("W shape recipe or managed topic mismatch");
+  const { body } = wBody(m, sequence, 65536);
+  if (shape === "N99") body.events.pop();
+  for (const event of body.events) {
+    event.textData = '""';
+    if (shape === "T0") event.attributes.time.ceTimestamp = "1970-01-01T00:00:00Z";
+    if (shape === "I0") event.attributes.probe = { ceInteger: 0 };
+  }
+  const varint = (n) => {
+    let count = 1;
+    for (; n >= 128; n = Math.floor(n / 128)) count++;
+    return count;
+  };
+  const field = (n) => 1 + varint(n) + n;
+  const length = (text) => Buffer.byteLength(text, "utf8");
+  const sizes = () =>
+    body.events.map((event) => {
+      // compare.mjs covers string/timestamp attributes; only this fixed integer-zero entry is added.
+      const { probe, ...attributes } = event.attributes;
+      const inner =
+        cloudEventSize({ ...event, attributes }) +
+        (probe === undefined ? 0 : field(field(length("probe")) + field(2)));
+      return field(length(event["@type"])) + field(inner);
+    });
+  const requestSize = () =>
+    field(length(m.channel)) + sizes().reduce((sum, n) => sum + field(n), 0);
+  let padding = 0;
+  // A bounded local fixed point accounts for protobuf length-prefix width changes, with no dispatch.
+  for (let step = 0; step < 3; step++) {
+    padding += 10081812 - requestSize();
+    for (let i = 0; i < body.events.length; i++)
+      body.events[i].textData = JSON.stringify(
+        "x".repeat(
+          Math.floor(padding / body.events.length) + (i < padding % body.events.length ? 1 : 0),
+        ),
+      );
+  }
+  const raw = JSON.stringify(body),
+    httpBytes = length(raw),
+    anyBytes = sizes();
+  if (requestSize() !== 10081812 || httpBytes > m.ceiling || anyBytes.some((n) => n >= 450000))
+    throw new Error("W shape fixed wire size, ceiling or individual Any violated");
+  const messages = body.events.map((event) => {
+    const attributes = {
+      "ce-id": event.id,
+      "ce-source": event.source,
+      "ce-specversion": event.specVersion,
+      "ce-type": event.type,
+      "ce-datacontenttype": event.attributes.datacontenttype.ceString,
+      "ce-time": event.attributes.time.ceTimestamp,
+      ...(shape === "I0" ? { "ce-probe": "0" } : {}),
+    };
+    return (
+      field(length(event.textData)) +
+      Object.entries(attributes).reduce(
+        (sum, [key, value]) => sum + field(field(length(key)) + field(length(value))),
+        0,
+      )
+    );
+  });
+  return {
+    body,
+    raw,
+    httpBytes,
+    requestBytes: requestSize(),
+    anyBytes,
+    whitespace: 0,
+    shape,
+    predictedRequestSize: field(length(topic)) + messages.reduce((sum, n) => sum + field(n), 0),
+    sha256: createHash("sha256").update(raw).digest("hex"),
   };
 }
 
@@ -372,7 +455,10 @@ export async function recordW({
   if (!a2) {
     try {
       // Validate the maximum candidate before any request; balanced padding makes all smaller candidates safe.
-      wBody(m, 20, m.ceiling - 2, 2);
+      if (m.stage === "w-shape")
+        for (const [index, shape] of ["N99", "T0", "I0"].entries())
+          wShapeBody(m, index + 2, shape, `projects/${m.project}/topics/w-validation`);
+      else wBody(m, 20, m.ceiling - 2, 2);
       const services = await list(
         "usage",
         `/v1/projects/${m.project}/services?filter=state:ENABLED&pageSize=200`,
@@ -397,9 +483,8 @@ export async function recordW({
       captureChannel(await get("eventarc", `/v1/${m.channel}`, "setup"));
       checkpoint();
       let acceptedSequence;
-      const publish = async (size, whitespace = 0, purpose = "search") => {
-        const sequence = whitespace ? acceptedSequence : result.publishes.length + 1;
-        const built = wBody(m, sequence, size, whitespace);
+      const publishBody = async (built, sequence, purpose) => {
+        const { httpBytes: size, whitespace } = built;
         const { raw, body, ...recipe } = built;
         const spec = {
           method: "POST",
@@ -417,12 +502,22 @@ export async function recordW({
           answer = wAcceptance(reply, judged);
           entry.accepted = answer;
           if (answer === false) entry.observation = reply.body.error.message;
+          if (built.shape && answer !== null) {
+            const measured =
+              /^The value for request_size is too large\. You passed ([1-9][0-9]{7}) in the request, but the maximum value is 10000000\.(?![\s\S])/.exec(
+                entry.observation ?? "",
+              );
+            if (answer !== false || measured === null) return false;
+            entry.observedRequestSize = Number(measured[1]);
+            entry.predictionMatches = entry.observedRequestSize === built.predictedRequestSize;
+          }
           return answer !== null;
         });
         const earlier = result.publishes
           .slice(0, -1)
           .filter((p) => p.whitespace === 0 && p.accepted !== null);
         if (
+          m.stage !== "w-shape" &&
           !whitespace &&
           earlier.some(
             (p) =>
@@ -433,9 +528,20 @@ export async function recordW({
           throw new Error("W nonmonotonic answer");
         return answer;
       };
+      const publish = (size, whitespace = 0, purpose = "search") => {
+        const sequence = whitespace ? acceptedSequence : result.publishes.length + 1;
+        return publishBody(wBody(m, sequence, size, whitespace), sequence, purpose);
+      };
       if ((await publish(65536, 0, "before-control")) !== true)
         throw new Error("W before control refused");
-      if (m.stage === "w0") {
+      if (m.stage === "w-shape") {
+        for (const shape of ["N99", "T0", "I0"]) {
+          const sequence = result.publishes.length + 1;
+          await publishBody(wShapeBody(m, sequence, shape, result.topic), sequence, shape);
+        }
+        if ((await publish(65536, 0, "after-control")) !== true)
+          throw new Error("W after control refused");
+      } else if (m.stage === "w0") {
         const found = await bracket({ start: 65536, values: m.ladder, accepts: publish });
         if (found.high === null)
           result.observation =

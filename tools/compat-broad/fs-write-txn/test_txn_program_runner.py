@@ -1096,3 +1096,66 @@ def test_sdk_failure_message_redaction_unit(tmp_path, monkeypatch, kind):
     assert receipt['failureMessage'] == 'safe prefix [credential-redacted] safe suffix'
     assert receipt['childExitCode'] is None
     assert receipt['childStderrTail'] == ''
+
+
+def test_s5b_parent_charge_and_journal_precede_payload_and_ack():
+    import unittest
+    from txn_program_cli import table_for
+    from broad_contract import digest
+    table = table_for('s5b-web-sdk-retry')
+    plan = compile_plan(table, 'a' * 32, 'b' * 32)
+    web = {'apiKey': 'fixture-key', 'authDomain': 'fixture.invalid', 'projectId': plan['project']}
+    baseline = {'webConfigSha256': digest(web), 'origin': 'http://127.0.0.1:4567'}
+    order, state = [], {}
+    class Budget:
+        def charge(self, phase): order.append('charge')
+        def begin_recovery(self): order.append('recovery')
+    class Wire:
+        def send(self, *args, **kwargs): order.append('payload'); return {'complete': True, 'code': 5, 'response': None}
+    kwargs = {'state': state, 'plan': plan, 'budget': Budget(), 'wire': Wire(), 'bearer': 'fixture-bearer', 'journal': lambda row: order.append('journal'), 'check': lambda: None, 'web_config': web, 'web_baseline': baseline, 'bindings': {}}
+    runner.web_event({'event': 'ready', 'id': 'web-1'}, **kwargs)
+    reply = runner.web_event({'event': 'parent-call', 'id': 'web-2', 'method': 'GetDocument', 'phase': 'observation', 'request': {'name': plan['documents']['node-probe']}}, **kwargs)
+    assert order[:3] == ['charge', 'journal', 'payload']
+    assert reply['authorized'] is True and reply['id'] == 'web-2'
+    assert reply['answer']['code'] == 5
+    order.clear()
+    with unittest.TestCase().assertRaisesRegex(ValueError, 'exact parent'):
+        runner.web_event({'event': 'parent-call', 'id': 'web-3', 'method': 'GetDocument', 'phase': 'observation', 'request': {'name': plan['documents']['node-probe'] + '_foreign'}}, **kwargs)
+    assert order == []
+    def refused(_row): raise OSError('fixture journal failure')
+    kwargs['journal'] = refused
+    with unittest.TestCase().assertRaises(OSError): runner.web_event({'event': 'parent-call', 'id': 'web-4', 'method': 'GetDocument', 'phase': 'observation', 'request': {'name': plan['documents']['browser-probe']}}, **kwargs)
+    assert 'payload' not in order
+    assert state['parent'][-1]['pending'] is True
+
+
+def test_s5b_unknown_sdk_status_blocks_observation_and_ownerless_delete():
+    import unittest
+    from txn_program_cli import table_for
+    from broad_contract import digest
+    plan = compile_plan(table_for('s5b-web-sdk-retry'), 'a' * 32, 'b' * 32)
+    web = {'apiKey': 'fixture-key', 'authDomain': 'fixture.invalid', 'projectId': plan['project']}
+    state = {}
+    class Budget:
+        failed = False
+        def charge(self, _phase): pass
+        def begin_recovery(self): pass
+    kwargs = {'state': state, 'plan': plan, 'budget': Budget(), 'wire': None, 'bearer': 'fixture', 'journal': lambda _: None, 'check': lambda: None, 'web_config': web, 'web_baseline': {'webConfigSha256': digest(web), 'origin': 'http://127.0.0.1:4567'}, 'bindings': {}}
+    runner.web_event({'event': 'ready', 'id': 'web-1'}, **kwargs)
+    name = plan['documents']['node-control']
+    row = {'client': 'node-main', 'method': 'BatchGetDocuments', 'request': {'documents': [name]}, 'record': {'host': 'firestore.googleapis.com', 'path': '/google.firestore.v1.Firestore/BatchGetDocuments', 'bearer': None, 'n': 1}}
+    runner.web_event({'event': 'dispatch', 'id': 'web-2', 'row': row}, **kwargs)
+    reply = runner.web_event({'event': 'status', 'id': 'web-3', 'row': {'client': 'node-main', 'evidence': {'n': 1, 'method': 'BatchGetDocuments', 'complete': False, 'status': 503, 'request': {'documents': [name]}, 'response': {}}}}, **kwargs)
+    assert reply['authorized'] is False and len(state['unknown']) == 1
+    reply = runner.web_event({'event': 'dispatch', 'id': 'web-4', 'row': row}, **kwargs)
+    assert reply['authorized'] is False
+    payloads = []
+    class Wire:
+        def send(self, *args, **kwargs):
+            payloads.append(args)
+            return {'complete': True, 'code': 5, 'response': None}
+    kwargs['wire'] = Wire()
+    reply = runner.web_event({'event': 'parent-call', 'id': 'web-5', 'method': 'GetDocument', 'phase': 'observation', 'request': {'name': name}}, **kwargs)
+    assert reply['authorized'] is False and payloads == []
+    with unittest.TestCase().assertRaisesRegex(ValueError, 'owned version'):
+        runner.web_event({'event': 'parent-call', 'id': 'web-6', 'method': 'DeleteDocument', 'phase': 'documentCleanup', 'request': {'name': name, 'currentDocument': {'updateTime': {'seconds': '1', 'nanos': 0}}}}, **kwargs)

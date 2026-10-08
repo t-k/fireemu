@@ -41,6 +41,8 @@ def sha(raw):
 
 
 def table_for(name):
+    if name == 's5b-web-sdk-retry':
+        return {'name': name, 'program': 'FS-TRANSACTION-S5B-WEB-SDK-RETRY', 'slug': 'txn-s5b', 'documents': [f'{transport}-{role}' for transport in ('node', 'browser') for role in ('control', 'control-other', 'conflict', 'probe')], 'states': ['seed', 'witness', 'final'], 'steps': [], 'cases': ['control', 'conflict'], 'caps': {'observation': 34, 'tokenCleanup': 0, 'documentCleanup': 18, 'management': 10, 'credential': 1}, 'observationSeconds': 180, 'recoverySeconds': 120, 'maxTokens': 0, 'envelopeId': 'FS-TRANSACTION-s5b-web-sdk-retry-001', 'project': 'fireemu-oracle-query', 'sourceFile': str(HERE / 'web_sdk_retry.mjs')}
     if name == 'p17-admin-sdk-retry':
         return {'name': name, 'program': 'FS-TRANSACTION-P17-ADMIN-SDK-RETRY', 'slug': 'txn-p17', 'documents': [f'{case}-{role}' for case in ('conflict', 'control', 'retry', 'retry-older') for role in ('a', 'b', 'c')], 'states': ['baseline', 'writer', 'transaction-baseline', 'transaction-writer'], 'steps': [], 'cases': ['conflict', 'control', 'retry', 'retry-older'], 'caps': {'observation': 88, 'tokenCleanup': 0, 'documentCleanup': 36, 'management': 6, 'credential': 1}, 'observationSeconds': 180, 'recoverySeconds': 120, 'maxTokens': 9, 'envelopeId': 'FS-TRANSACTION-p17-admin-sdk-retry-003', 'project': 'fireemu-oracle-txn', 'sourceFile': str(HERE / 'admin_sdk_retry.mjs')}
     if not isinstance(name, str) or name not in TABLES:
@@ -58,6 +60,7 @@ def _source_paths(name):
     search = [HERE, HERE.parent, ROOT / 'tools/compat-broad/fs-request-bytes-boundary']
     pending = list(HERE.glob('*txn_program*.py')) + list(HERE.glob('*txn_program*.mjs')) + [table_file]
     pending.append(ROOT / 'tools/compat-broad/fs-request-bytes-boundary/request_bytes_preflight.py')
+    if name == 's5b-web-sdk-retry': pending.extend([ROOT / 'conformance/package.json', ROOT / 'conformance/pnpm-lock.yaml', *[ROOT / 'conformance/src/auth-fs-cross' / driver for driver in ('sdk-driver.mjs', 'browser-driver.mjs', 'browser-page.mjs')]])
     if name == 'p17-admin-sdk-retry': pending.extend([HERE / 'admin_sdk_retry.mjs', ROOT / 'conformance/package.json'])
     result = set()
     while pending:
@@ -118,8 +121,9 @@ def refuse_virtualenv(runtime):
 
 def packet_value(*, table, source_commit, runtime, baseline_sha256, envelope_sha256, packet_id, envelope_relative, sdk_recovery=None):
     refuse_virtualenv(runtime)
+    if table['name'] == 's5b-web-sdk-retry' and runtime.get('webSdk') is not True: raise ValueError('S5b exact Web runtime variant required')
     plan = compile_plan(table, 'a' * 32, 'b' * 32)
-    value = {'schemaVersion': 1, 'program': table['program'], 'packetName': table['name'], 'packetId': packet_id, 'project': plan['project'], 'database': '(default)', 'recordings': 2, 'requestsPerRecording': requests_per_recording(table), 'estimatedUsdPerRecording': budget_for(plan['project'])[0], 'sourceCommit': source_commit, 'sourceBranch': 'work/fs-txn-s5a-admin' if table['name'] == 'p17-admin-sdk-retry' else 'work/fs-txn-s3-foreign-tokens' if table['name'] == 'p16-foreign-tokens' else 'work/codex-fs-transaction', 'runnerSha256': runner_sha256(table['name']), 'closureSha256': sha(CLOSURE.read_bytes()), 'corpusDigest': corpus_digest(table), 'planSourceDigest': source_digest(table), 'baselineSha256': baseline_sha256, 'envelopeId': table['envelopeId'], 'envelopePath': envelope_relative, 'envelopeSha256': envelope_sha256, 'runtime': runtime, 'iamConfig': 'none', 'retries': ('sdk-aborted-callback-only-max-two' if table['name'] == 'p17-admin-sdk-retry' else 'none'), 'onStop': 'needs-recovery-lock-held', 'observationSeconds': plan['observationSeconds'], 'recoverySeconds': plan['recoverySeconds'], 'maxTokens': plan['maxTokens'], 'timing': 'wall-clock', 'timingSource': ('grpc-js-client-interceptor' if table['name'] == 'p17-admin-sdk-retry' else 'parent-wire-envelope'), 'reserveUsd': budget_for(plan['project'])[1], 'maxUnresolvedTokens': plan['maxUnresolvedTokens'], 'releasePolicy': plan['releasePolicy'], 'caps': plan['caps'], 'cases': plan['cases'], 'scope': envelope_scope(table)}
+    value = {'schemaVersion': 1, 'program': table['program'], 'packetName': table['name'], 'packetId': packet_id, 'project': plan['project'], 'database': '(default)', 'recordings': 2, 'requestsPerRecording': requests_per_recording(table), 'estimatedUsdPerRecording': budget_for(plan['project'])[0], 'sourceCommit': source_commit, 'sourceBranch': 'work/codex-txn-s5b-production' if table['name'] == 's5b-web-sdk-retry' else 'work/fs-txn-s5a-admin' if table['name'] == 'p17-admin-sdk-retry' else 'work/fs-txn-s3-foreign-tokens' if table['name'] == 'p16-foreign-tokens' else 'work/codex-fs-transaction', 'runnerSha256': runner_sha256(table['name']), 'closureSha256': sha(CLOSURE.read_bytes()), 'corpusDigest': corpus_digest(table), 'planSourceDigest': source_digest(table), 'baselineSha256': baseline_sha256, 'envelopeId': table['envelopeId'], 'envelopePath': envelope_relative, 'envelopeSha256': envelope_sha256, 'runtime': runtime, 'iamConfig': 'none', 'retries': ('web-optimistic-callback-only-max-two' if table['name'] == 's5b-web-sdk-retry' else 'sdk-aborted-callback-only-max-two' if table['name'] == 'p17-admin-sdk-retry' else 'none'), 'onStop': 'needs-recovery-lock-held', 'observationSeconds': plan['observationSeconds'], 'recoverySeconds': plan['recoverySeconds'], 'maxTokens': plan['maxTokens'], 'timing': 'wall-clock', 'timingSource': ('sdk-parent-before-payload' if table['name'] == 's5b-web-sdk-retry' else 'grpc-js-client-interceptor' if table['name'] == 'p17-admin-sdk-retry' else 'parent-wire-envelope'), 'reserveUsd': budget_for(plan['project'])[1], 'maxUnresolvedTokens': plan['maxUnresolvedTokens'], 'releasePolicy': plan['releasePolicy'], 'caps': plan['caps'], 'cases': plan['cases'], 'scope': envelope_scope(table)}
 
     if sdk_recovery is not None:
         if table['name'] != 'p17-admin-sdk-retry' or not isinstance(sdk_recovery, dict) or set(sdk_recovery) != {'action', 'snapshotPath', 'snapshotSha256', 'notBefore', 'originalPacketId', 'lockSha256'}:
@@ -138,8 +142,13 @@ def packet_value(*, table, source_commit, runtime, baseline_sha256, envelope_sha
 
 def _read_packet(path, digest, *, label='packet'):
     raw = Path(path).read_bytes()
+    if label == 'Web configuration':
+        if len(raw) > 8192: raise ValueError('S5b private configuration capacity exceeded')
+        body = json.loads(raw)
+        if sha(json.dumps(body, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()) != digest: raise ValueError('S5b private configuration digest differs')
+        return body
     if len(raw) > (4194304 if label == 'SDK snapshot' else 262144) or sha(raw) != digest: raise ValueError(f'program {label} bytes differ from review')
-    if len(raw) > 65536 and label != 'SDK snapshot' and (label != 'packet' or json.loads(raw).get('packetName') not in {*TABLES, 'p17-admin-sdk-retry'}): raise ValueError(f'program {label} bytes differ from review')
+    if len(raw) > 65536 and label != 'SDK snapshot' and (label != 'packet' or json.loads(raw).get('packetName') not in {*TABLES, 'p17-admin-sdk-retry', 's5b-web-sdk-retry'}): raise ValueError(f'program {label} bytes differ from review')
     return json.loads(raw)
 
 
@@ -310,6 +319,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('command', choices=['inspect-local', 'record-production', 'readback-a2', 'recover-database', 'sdk-cleanup', 'sdk-a2'])
     parser.add_argument('--table')
+    parser.add_argument('--web-config')
     for name in ['packet', 'packet-sha256', 'review', 'review-sha256', 'baseline', 'go-packet-sha256']: parser.add_argument('--' + name)
     for name in ['action-packet', 'action-packet-sha256']: parser.add_argument('--' + name)
     args = parser.parse_args(argv)
@@ -328,10 +338,16 @@ def main(argv=None):
     if not isinstance(envelope_relative, str): raise ValueError('program envelope path missing')
     envelope = _private(main_root / envelope_relative, main_root)
     baseline_value = _read_packet(baseline, value['baselineSha256'], label='baseline')
+    web_config = None
+    if table['name'] == 's5b-web-sdk-retry':
+        if not args.web_config: raise ValueError('S5b reviewed private Web configuration required')
+        web_config_path = _private(args.web_config, main_root)
+        web_config = _read_packet(web_config_path, baseline_value.get('s5b', {}).get('webConfigSha256'), label='Web configuration')
     decisions_path = main_root / 'docs.local/instructions/owner-decisions.md'
     ledger = main_root / 'docs.local/runs/sandbox-ledger.jsonl'
     def admit():
         assert_clean_environment()
+        if table['name'] == 's5b-web-sdk-retry' and _read_packet(web_config_path, baseline_value['s5b']['webConfigSha256'], label='Web configuration') != web_config: raise ValueError('S5b private configuration changed')
         pins = load_packet(packet, args.packet_sha256, baseline, envelope, table=table, source_commit=signed_source_commit(value.get('sourceBranch')), packet_relative=packet.relative_to(main_root).as_posix(), envelope_relative=envelope_relative)
         if args.command in ('record-production', 'sdk-cleanup', 'sdk-a2'):
             verify_review(review, args.review_sha256, pins); verify_go(args.go_packet_sha256, pins)
@@ -340,7 +356,7 @@ def main(argv=None):
     if args.command in ('readback-a2', 'recover-database') and table['name'] == 'p17-admin-sdk-retry': raise ValueError('p16 database action cannot accept an SDK packet')
     if bool(value.get('sdkRecovery')) != (args.command in ('sdk-cleanup', 'sdk-a2')): raise ValueError('SDK action requires its own packet')
     if value.get('sdkRecovery') and args.command != 'sdk-' + value['sdkRecovery']['action']: raise ValueError('SDK action differs from packet')
-    if table['name'] == 'p17-admin-sdk-retry':
+    if table['name'] in ('p17-admin-sdk-retry', 's5b-web-sdk-retry'):
         import txn_sandbox_admission as shared
         # Retain the O_EXCL launch guard for coordinator PID/inode-checked closure.
         shared.acquire_shared_lock(ledger.parent / (pins['packetId'] + '.launch-guard'), pins['packetId'])
@@ -395,7 +411,7 @@ def main(argv=None):
             result = database_action(args, table, pins, value, main_root, ledger, lambda: decisions_path.read_text(), baseline_value, admit)
             print(json.dumps(result, sort_keys=True))
             return 0 if result['complete'] else 1
-        result = record_twice(table=table, ledger_path=ledger, private_dir=ledger.parent, pins=pins, decisions=lambda: decisions_path.read_text(), now=lambda: dt.datetime.now(dt.timezone.utc), admission_check=admit, record_once=lambda index, nonce, owner, directory: run_once(index, table, nonce, owner, directory, baseline=baseline_value, runtime=value['runtime'], check=check))
+        result = record_twice(table=table, ledger_path=ledger, private_dir=ledger.parent, pins=pins, decisions=lambda: decisions_path.read_text(), now=lambda: dt.datetime.now(dt.timezone.utc), admission_check=admit, record_once=lambda index, nonce, owner, directory: run_once(index, table, nonce, owner, directory, baseline=baseline_value, runtime=value['runtime'], check=check, **({'web_config': web_config} if table['name'] == 's5b-web-sdk-retry' else {})))
         print(json.dumps({key: str(path) for key, path in result.items()}, sort_keys=True))
     finally: signal.signal(signal.SIGTERM, previous)
     return 0

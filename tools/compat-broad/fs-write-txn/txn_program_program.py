@@ -130,9 +130,9 @@ def _step(row):
 
 
 def _validate_table(table):
-    if table.get("name") == "p17-admin-sdk-retry":
+    if table.get("name") in ("p17-admin-sdk-retry", "s5b-web-sdk-retry"):
         from txn_program_cli import table_for
-        if table != table_for("p17-admin-sdk-retry"): _bad("SDK contract differs")
+        if table != table_for(table["name"]): _bad("SDK contract differs")
         return []
     if not isinstance(table, dict) or not all(key in table for key in ("name", "program", "slug", "documents", "states", "steps", "caps", "observationSeconds", "recoverySeconds", "maxTokens", "sourceFile")):
         _bad("a table field is missing")
@@ -349,6 +349,8 @@ def _identity(value, label):
 
 
 def corpus_digest(table):
+    if table['name'] == 's5b-web-sdk-retry':
+        return hashlib.sha256(_canonical({'transports': ['node', 'browser'], 'scenarios': ['control', 'conflict'], 'maxAttempts': 2, 'probes': 'read-only-never-resumed', 'sdkRequests': 14, 'parentRequests': 20, 'writableDocuments': 6}).encode()).hexdigest()
     if table['name'] == 'p17-admin-sdk-retry':
         return hashlib.sha256(json.dumps([{'caseId': 'conflict', 'maxAttempts': 1}, {'caseId': 'control', 'maxAttempts': 1}, {'caseId': 'retry', 'maxAttempts': 2}, {'caseId': 'retry-older', 'maxAttempts': 2}], separators=(',', ':')).encode()).hexdigest()
     steps = _validate_table(table)
@@ -391,7 +393,7 @@ def compile_plan(table, nonce, owner_id):
         "documents": {role: f"{databases[table['placements'][role]] if role in table.get('placements', {}) else database}/documents/oracle/{nonce}/{table['slug']}/{role}" for role in table["documents"]},
         "states": list(table["states"]),
         "steps": steps,
-        "cases": table["cases"] if table["name"] == "p17-admin-sdk-retry" else [step["caseId"] for step in steps if step["caseId"]],
+        "cases": table["cases"] if table["name"] in ("p17-admin-sdk-retry", "s5b-web-sdk-retry") else [step["caseId"] for step in steps if step["caseId"]],
         "maxTokens": table["maxTokens"],
         "maxUnresolvedTokens": 1,
         "releasePolicy": "rollback-zero-before-next-chain",
@@ -406,6 +408,10 @@ def compile_plan(table, nonce, owner_id):
         "sourceDigest": source_digest(table),
         "corpusDigest": corpus_digest(table),
     }
+    if table["name"] == "s5b-web-sdk-retry":
+        plan["documents"] = {role: f"{database}/documents/conf_txn/s5b_{nonce}_{role.replace(chr(45), chr(95))}" for role in table["documents"]}
+        plan["releasePolicy"] = "owned-version-delete-definite-before-release"
+        plan["maxUnresolvedTokens"] = 0
     if table["name"] == "p17-admin-sdk-retry":
         plan["documents"] = {role: f"{database}/documents/oracle/{nonce}/txn-p17-{role.rsplit('-', 1)[0]}/{role.rsplit('-', 1)[1]}" for role in table["documents"]}
         plan["releasePolicy"] = "sdk-rollback-definite-before-next-case"

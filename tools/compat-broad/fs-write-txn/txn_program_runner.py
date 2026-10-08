@@ -13,6 +13,7 @@ import selectors
 import subprocess
 import re
 import secrets
+import signal
 import time
 from pathlib import Path
 
@@ -35,7 +36,7 @@ class SessionBudget(RequestBudget):
         super().__init__(plan, table)
         self.check = check
         self.save_count = save_count
-        self.sdk = table['name'] == 'p17-admin-sdk-retry'
+        self.sdk = table['name'] in ('p17-admin-sdk-retry', 's5b-web-sdk-retry')
         self.started = time.monotonic()
         if not math.isfinite(self.started):
             raise ValueError("program monotonic clock is invalid")
@@ -78,7 +79,177 @@ class SessionBudget(RequestBudget):
             raise TimeoutError("program dispatch no longer fits after charged-count journal")
 
 
-def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, check):
+def web_process_identity(pid):
+    if type(pid) is not int or pid < 1: raise ValueError('S5b process PID differs')
+    result = subprocess.run(['ps', '-p', str(pid), '-o', 'lstart=', '-o', 'comm=', '-o', 'args='], capture_output=True, text=True, timeout=2, check=False)
+    if result.returncode not in (0, 1): raise ValueError('S5b process observation unavailable')
+    return result.stdout.strip() or None
+
+
+def web_version(value):
+    """Normalize only typed timestamp representations without losing nanoseconds."""
+    if isinstance(value, dict) and set(value) <= {'seconds', 'nanos'} and 'seconds' in value and re.fullmatch(r'-?[0-9]+', str(value['seconds'])) and type(value.get('nanos', 0)) is int and 0 <= value.get('nanos', 0) < 1_000_000_000:
+        return int(value['seconds']), value.get('nanos', 0)
+    if isinstance(value, str):
+        match = re.fullmatch(r'(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z', value)
+        if match:
+            try: return int(dt.datetime.fromisoformat(match[1] + '+00:00').timestamp()), int((match[2] or '').ljust(9, '0'))
+            except ValueError: pass
+    raise ValueError('S5b typed updateTime required')
+
+
+def web_event(event, *, state, plan, budget, wire, bearer, journal, check, web_config, web_baseline, bindings):
+    """One fixed Web event in the existing parent's durable before-send loop."""
+    expected_id = 'web-' + str(state.setdefault('next', 0) + 1)
+    if event.get('id') != expected_id: raise ValueError('S5b parent correlation differs')
+    state['next'] += 1
+    reply = {'authorized': True, 'id': event['id']}
+    names = set(plan['documents'].values())
+    writable = names - {name for role, name in plan['documents'].items() if role.endswith('-probe')}
+    check()
+    if event['event'] == 'ready':
+        if state.get('ready') or web_config is None: raise ValueError('S5b private configuration missing or duplicate ready')
+        from broad_contract import digest
+        if not isinstance(web_config, dict) or set(web_config) != {'apiKey', 'authDomain', 'projectId'} or web_config['projectId'] != 'fireemu-oracle-query' or not isinstance(web_config['apiKey'], str) or not web_config['apiKey'] or digest(web_config) != web_baseline['webConfigSha256']: raise ValueError('S5b reviewed private configuration differs')
+        state['ready'] = True
+        return {**reply, 'nonce': plan['nonce'], 'ownerId': plan['ownerId'], 'web': web_config, 'origin': web_baseline['origin'], 'bindings': bindings}
+    if not state.get('ready'): raise ValueError('S5b event before ready')
+    if event['event'] == 'check': return reply
+    if event['event'] == 'driver-lifecycle':
+        client, pid = event.get('client'), event.get('pid')
+        if client not in ('node-probe', 'browser-probe', 'node-main', 'browser-main'): raise ValueError('S5b driver identity differs')
+        identities = state.setdefault('processes', {})
+        drivers = state.setdefault('drivers', {})
+        if event.get('phase') == 'launch':
+            if client in drivers or type(pid) is not int or pid < 1: raise ValueError('S5b duplicate or absent driver PID')
+            driver = Path(__file__).resolve().parents[3] / 'conformance/src/auth-fs-cross' / ('browser-driver.mjs' if client.startswith('browser') else 'sdk-driver.mjs')
+            proof = web_process_identity(pid)
+            if proof is None or str(driver) not in proof or 'node' not in proof: raise ValueError('S5b driver PID ownership differs')
+            drivers[client] = pid; identities[pid] = proof
+        elif event.get('phase') == 'exit':
+            if drivers.get(client) != pid or event.get('closed') is not True or any(web_process_identity(owned) is not None for owned in state.get('clientProcesses', {}).get(client, [pid])): raise ValueError('S5b owned driver/browser processes remain')
+        else: raise ValueError('S5b lifecycle phase differs')
+    elif event['event'] == 'browser-processes':
+        client, entries = event.get('client'), event.get('processes')
+        if client not in ('browser-probe', 'browser-main') or event.get('driverPid') != state.get('drivers', {}).get(client) or event.get('origin') != web_baseline['origin'] or not isinstance(entries, list) or not 1 <= len(entries) <= 20: raise ValueError('S5b browser process inventory differs')
+        owned = [event['driverPid']]
+        for entry in entries:
+            pid = entry.get('pid'); proof = web_process_identity(pid)
+            if proof is None or not re.search(r'chromium|chrome|Chromium|Chrome|headless_shell', proof): raise ValueError('S5b browser process ownership differs')
+            state.setdefault('processes', {})[pid] = proof; owned.append(pid)
+        state.setdefault('clientProcesses', {})[client] = owned
+    elif event['event'] == 'responsibility':
+        if event.get('nonce') != plan['nonce'] or event.get('ownerId') != plan['ownerId'] or not isinstance(event.get('documents'), dict) or any(role.replace('_', '-') not in plan['documents'] or doc.get('name') != plan['documents'][role.replace('_', '-')] or doc.get('name') not in writable for role, doc in event['documents'].items()): raise ValueError('S5b responsibility scope differs')
+        state['documents'] = copy.deepcopy(event['documents'])
+    elif event['event'] == 'parent-call':
+        phase, method, request = event.get('phase'), event.get('method'), event.get('request')
+        if phase not in ('observation', 'documentCleanup') or method not in ('GetDocument', 'Commit', 'DeleteDocument') or not isinstance(request, dict): raise ValueError('S5b parent call differs')
+        if state.get('unknown') and phase == 'observation': return {**reply, 'authorized': False}
+        if phase == 'documentCleanup': budget.begin_recovery()
+        if method in ('GetDocument', 'DeleteDocument') and request.get('name') not in names: raise ValueError('S5b exact parent read/delete name differs')
+        if method == 'DeleteDocument':
+            doc = state.get('ownedReads', {}).get(request['name'])
+            if phase != 'documentCleanup' or request['name'] not in writable or not doc or web_version(request.get('currentDocument', {}).get('updateTime')) != web_version(doc.get('updateTime')): raise ValueError('S5b delete lacks an owned version witness')
+        if method == 'Commit':
+            if phase != 'observation' or request.get('database') != plan['database'] or len(request.get('writes', [])) != 1: raise ValueError('S5b parent write scope differs')
+            write = request['writes'][0]
+            name = write.get('update', {}).get('name')
+            marker = next((role for role, resource in plan['documents'].items() if resource == name), None)
+            field = write.get('update', {}).get('fields', {})
+            if name not in writable or set(field) != {'owner', 'nonce', 'case', 'value'} or field['owner'] != {'stringValue': plan['ownerId']} or field['nonce'] != {'stringValue': plan['nonce']} or field['case'] != {'stringValue': marker.split('-', 1)[1].replace('-', '_')} or str(field['value'].get('integerValue')) not in ('1', '2'): raise ValueError('S5b parent ownership differs')
+            if 'updateTime' in write.get('currentDocument', {}):
+                prior = state.get('seedVersions', {}).get(name)
+                if not prior or web_version(prior) != web_version(write['currentDocument']['updateTime']): raise ValueError('S5b witness lacks its acknowledged seed version')
+        budget.charge(phase)
+        row = {'event': 'parent-dispatch', 'id': event['id'], 'method': method, 'request': copy.deepcopy(request), 'phase': phase, 'pending': True}
+        state.setdefault('parent', []).append(row)
+        # Both journals precede the payload; any failure blocks the NodeWire call.
+        journal(row); check()
+        answer = wire.send('grpc', method, request, nonce=plan['nonce'], owner_id=plan['ownerId'], bearer=bearer, deadline_ms=10000)
+        row.update(pending=False, answer=copy.deepcopy(answer))
+        journal({**row, 'event': 'parent-status'}); check()
+        known = answer.get('complete') is True and type(answer.get('code')) is int and 0 <= answer['code'] <= 16 and answer['code'] not in (1, 2, 4, 13, 14)
+        if not known: state.setdefault('unknown', []).append(copy.deepcopy(row))
+        if known and answer['code'] == 0 and method == 'Commit':
+            version = (answer.get('response', {}).get('writeResults') or [{}])[0].get('updateTime')
+            web_version(version)
+            state.setdefault('seedVersions', {})[name] = version
+        if known and answer['code'] == 0 and method == 'GetDocument':
+            doc = answer.get('response')
+            role = next((role for role, resource in plan['documents'].items() if resource == request['name']), None)
+            if doc and doc.get('name') in writable and doc.get('fields', {}).get('owner') == {'stringValue': plan['ownerId']} and doc['fields'].get('nonce') == {'stringValue': plan['nonce']} and doc['fields'].get('case') == {'stringValue': role.split('-', 1)[1].replace('-', '_')}:
+                web_version(doc.get('updateTime')); state.setdefault('ownedReads', {})[doc['name']] = copy.deepcopy(doc)
+        reply['answer'] = answer
+    elif event['event'] == 'dispatch':
+        row = event.get('row', {}); client = row.get('client'); record = row.get('record', {}); request = row.get('request', {}); method = row.get('method')
+        if state.get('unknown'): return {**reply, 'authorized': False}
+        if client not in ('node-probe', 'browser-probe', 'node-main', 'browser-main') or record.get('host') != 'firestore.googleapis.com' or record.get('bearer') is not None or method not in ('BatchGetDocuments', 'Commit'): raise ValueError('S5b SDK transport/auth scope differs')
+        transport, mode = client.split('-'); n = record.get('n')
+        count = state.setdefault('clients', {}).get(client, 0)
+        if type(n) is not int or n != count + 1 or n > (1 if mode == 'probe' else 6): raise ValueError('S5b SDK request cap/order differs')
+        path = record.get('path')
+        allowed_paths = (f'/google.firestore.v1.Firestore/{method}', f"/v1/{plan['database']}/documents:{'batchGet' if method == 'BatchGetDocuments' else 'commit'}")
+        if path not in allowed_paths or request.get('transaction') or request.get('newTransaction') or request.get('readTime') or request.get('database', plan['database']) != plan['database']: raise ValueError('S5b SDK exact path/database differs')
+        allowed = {plan['documents'][f'{transport}-probe']} if mode == 'probe' else {plan['documents'][f'{transport}-{case}'] for case in ('control', 'conflict')}
+        if method == 'BatchGetDocuments':
+            if set(request) - {'database', 'documents'} or not isinstance(request.get('documents'), list) or len(request['documents']) != 1 or request['documents'][0] not in allowed: raise ValueError('S5b SDK exact read differs')
+        else:
+            if mode == 'probe' or set(request) - {'database', 'writes'} or len(request.get('writes', [])) != 1: raise ValueError('S5b probe/write scope differs')
+            write = request['writes'][0]; update = write.get('update', {}); field = update.get('fields', {}); name = update.get('name')
+            case = next((case for case in ('control', 'conflict') if name == plan['documents'][f'{transport}-{case}']), None)
+            if name not in allowed or set(write) != {'update', 'currentDocument'} or set(update) != {'name', 'fields'} or set(field) != {'owner', 'nonce', 'case', 'value'} or field['owner'] != {'stringValue': plan['ownerId']} or field['nonce'] != {'stringValue': plan['nonce']} or field['case'] != {'stringValue': case} or str(field['value'].get('integerValue')) != '3' or set(write.get('currentDocument', {})) != {'updateTime'}: raise ValueError('S5b SDK ownership/precondition differs')
+            read = state.get('sdkReads', {}).get((client, name))
+            if not read or web_version(write['currentDocument']['updateTime']) != web_version(read): raise ValueError('S5b SDK Commit lacks its read-version lineage')
+        key = f'{client}:{n}'
+        if n > 1 and not state.get('sdk', {}).get(f'{client}:{n-1}', {}).get('evidence'): raise ValueError('S5b next SDK request before prior known status')
+        budget.charge('observation')
+        state['clients'][client] = n
+        state.setdefault('sdk', {})[key] = copy.deepcopy(row)
+    elif event['event'] == 'status':
+        row = event.get('row', {}); evidence = row.get('evidence', {}); key = f"{row.get('client')}:{evidence.get('n')}"
+        before = state.get('sdk', {}).get(key)
+        if before is None or before.get('evidence') or evidence.get('method') != before['method']: raise ValueError('S5b SDK status correlation differs')
+        shaped = evidence.get('request', {})
+        if before['method'] == 'BatchGetDocuments' and shaped.get('documents') != before['request']['documents']: raise ValueError('S5b SDK read status differs')
+        if before['method'] == 'Commit':
+            writes = shaped.get('writes')
+            if not isinstance(writes, list) or len(writes) != 1 or writes[0].get('update', {}).get('name') != before['request']['writes'][0]['update']['name'] or web_version(writes[0].get('currentDocument', {}).get('updateTime')) != web_version(before['request']['writes'][0]['currentDocument']['updateTime']): raise ValueError('S5b SDK write status differs')
+        before['evidence'] = copy.deepcopy(evidence)
+        status = evidence.get('status')
+        code = evidence.get('grpcCode')
+        error = evidence.get('response', {}).get('error')
+        known = evidence.get('complete') is True and type(status) is int and (200 <= status < 300 or 400 <= status < 500 and error) and (code is None or type(code) is int and 0 <= code <= 16 and code not in (1, 2, 4, 13, 14))
+        if not known: state.setdefault('unknown', []).append(copy.deepcopy(before)); reply['authorized'] = False
+        elif before['method'] == 'BatchGetDocuments':
+            documents = evidence.get('response', {}).get('documents', [])
+            if len(documents) != 1: raise ValueError('S5b SDK response count differs')
+            doc = documents[0]
+            if doc.get('name') == before['request']['documents'][0]:
+                web_version(doc.get('updateTime')); state.setdefault('sdkReads', {})[(row['client'], doc['name'])] = doc['updateTime']
+            elif doc.get('missing') != before['request']['documents'][0]: raise ValueError('S5b SDK response exact name differs')
+    else: raise ValueError('S5b parent event outside fixed set')
+    try: journal(event)
+    except (Exception, KeyboardInterrupt): budget.failed = True; raise
+    check()
+    return reply
+
+
+def web_projection(receipt):
+    """The producer's existing comparator verifies lineage; retain semantic answers for pair comparison."""
+    if receipt.get('complete') is not True or len(receipt.get('transports', [])) != 2 or receipt.get('unknownWrites'): raise ValueError('S5b complete known receipt required')
+    result = []
+    for report, transport in zip(receipt['transports'], ('node', 'browser'), strict=True):
+        if report.get('transport') != transport or not report.get('closed') or not report.get('probe', {}).get('complete') or not report['probe'].get('closed'): raise ValueError('S5b transport/probe receipt differs')
+        scenarios = []
+        if len(report.get('scenarios', [])) != 2: raise ValueError('S5b scenario count differs')
+        for row, case in zip(report['scenarios'], ('control', 'conflict'), strict=True):
+            if row.get('scenario') != case or row.get('complete') is not True or row.get('answer', {}).get('attempts') != (1 if case == 'control' else 2): raise ValueError('S5b callback comparison differs')
+            scenarios.append({'scenario': case, 'attempts': row['answer']['attempts'], 'finalValue': row.get('final', {}).get('value'), 'wire': [{key: event.get(key) for key in ('method', 'status', 'grpcCode', 'complete')} | {'refusal': event.get('response', {}).get('error')} for event in row['events'] if event.get('event') == 'transaction-wire']})
+        result.append({'transport': transport, 'scenarios': scenarios})
+    return result
+
+
+def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, check, web_config=None):
     directory = Path(directory) / f'journal-{index + 1}'
     directory.mkdir(mode=0o700)
     sequence = 0
@@ -94,19 +265,32 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
     metadata = None
     collector = None
     child = None
+    producer_started = None
     bearer = None
+    is_web = table['name'] == 's5b-web-sdk-retry'
+    web_state = {}
     stderr_tail = bytearray()
     stderr_truncated = False
     try:
         check()
         project = table.get('project', PROJECT)
+        if is_web:
+            from broad_contract import digest
+            if runtime.get('webSdk') is not True: raise ValueError('S5b Firebase/Playwright runtime closure required before refresh')
+            if not isinstance(baseline.get('s5b'), dict) or not isinstance(web_config, dict) or web_config.get('projectId') != project or digest(web_config) != baseline['s5b'].get('webConfigSha256'): raise ValueError('S5b reviewed private configuration/baseline required before refresh')
         bearer = refresh(baseline, budget, before_send=check)
         # the shared project keeps the call exactly as it was; another project's name rides along
         extra = {} if project == PROJECT else {'project': project}
-        metadata = MetadataSession(bearer, baseline, budget, request_fn=request_once if project == PROJECT else functools.partial(request_once, project=project), **extra)
+        metadata = MetadataSession(bearer, {key: value for key, value in baseline.items() if key != 's5b'} if is_web else baseline, budget, **({'s5b': baseline.get('s5b')} if is_web else {}), request_fn=request_once if project == PROJECT else functools.partial(request_once, project=project, **({'project_number': baseline['projectNumber']} if is_web else {})), **extra)
         preflight = metadata.preflight()
-        if table['name'] == 'p17-admin-sdk-retry':
+        if table['name'] in ('p17-admin-sdk-retry', 's5b-web-sdk-retry'):
+            if is_web:
+                if not baseline.get('s5b'): raise ValueError('S5b reviewed baseline required')
+                web_wire = NodeWire(runtime, wire_scope(table), project=project)
+                from txn_program_cli import source_manifest
+                web_bindings = {'sources': source_manifest(table['name']), 'runtime': copy.deepcopy(runtime), 'corpusDigest': plan['corpusDigest'], 'configSha256': baseline['s5b']['webConfigSha256'], 'keyRestrictionsSha256': baseline['s5b']['keyRestrictionsSha256'], 'origin': baseline['s5b']['origin']}
             worker = Path(table['sourceFile'])
+            producer_started = time.monotonic()
             child = subprocess.Popen([runtime['nodeExecutable'], str(worker), 'production'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={'LANG': 'C', 'LC_ALL': 'C', 'TZ': 'UTC'}, close_fds=True)
             end = budget.started + 300
             buffered = bytearray()
@@ -138,6 +322,15 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
                                     receipt = event['receipt']
                                     continue
                                 check()
+                                if is_web:
+                                    def web_journal(value):
+                                        try:
+                                            shared.append_ledger(directory / 'sdk-journal.jsonl', value)
+                                            journal(value)
+                                        except (Exception, KeyboardInterrupt): budget.failed = True; raise
+                                    reply = web_event(event, state=web_state, plan=plan, budget=budget, wire=web_wire, bearer=bearer, journal=web_journal, check=check, web_config=web_config, web_baseline=baseline['s5b'], bindings=web_bindings)
+                                    child.stdin.write((json.dumps(reply) + '\n').encode()); child.stdin.flush()
+                                    continue
                                 if event.get('event') == 'ready':
                                     reply = {'authorized': True, 'bearer': bearer, 'nonce': nonce, 'ownerId': owner_id, 'observationRemaining': budget.observation_deadline - time.monotonic()}
                                 else:
@@ -202,21 +395,28 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
                                 child.stdin.write((json.dumps(reply) + '\n').encode()); child.stdin.flush()
                 child.wait(timeout=max(0.01, end - time.monotonic()))
                 if child.returncode != 0 or receipt is None or buffered: raise ValueError('SDK worker receipt incomplete')
-                if receipt.get('receiptDigest') != hashlib.sha256(json.dumps({key: value for key, value in receipt.items() if key != 'receiptDigest'}, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode()).hexdigest(): raise ValueError('SDK native receipt digest differs')
-                if receipt['nonce'] != nonce or receipt['ownerId'] != owner_id or receipt['sandboxRequests'] != len(dispatched) or len(dispatched) != budget.used['observation'] + budget.used['documentCleanup']: raise ValueError('SDK receipt disagrees with dispatch journal')
-                if receipt.get('runtime', {}).get('manifest', {}).get('dependencies') != runtime['dependencies'] or receipt['runtime'].get('nodeSha256') != runtime['nodeSha256'] or receipt['runtime'].get('lockSha256') != runtime['lockSha256'] or receipt['runtime'].get('target') != 'production': raise ValueError('SDK child runtime differs from reviewed manifest')
-                native_rows = receipt.get('steps', []) + receipt.get('cleanupSteps', [])
-                if len(native_rows) != len(dispatched): raise ValueError('SDK receipt lost native rows')
-                for row in native_rows:
-                    original = copy.deepcopy(dispatched.get(row['sequence']))
-                    if original is None: raise ValueError('SDK receipt contains an undispatched row')
-                    if original.get('result'): original['result'].update(childReaped=True, workerExitCode=0)
-                    if row != original: raise ValueError('SDK receipt changed native evidence')
-                receipt['metadata'] = preflight
-                if receipt.get('complete') is not True: raise ValueError('SDK unknown responsibility requires A2')
-                budget.begin_recovery()
-                receipt['postflight'] = metadata.postflight()
-                check()
+                if is_web:
+                    if receipt.get('nonce') != nonce or receipt.get('ownerId') != owner_id or receipt.get('bindings') != web_bindings or web_state.get('unknown') or sum(web_state.get('clients', {}).values()) != 14 or len(web_state.get('parent', [])) != 38: raise ValueError('S5b receipt/count/binding differs')
+                    web_projection(receipt)
+                    budget.begin_recovery()
+                    receipt.update(metadata=preflight, postflight=metadata.postflight())
+                    check()
+                elif receipt.get('receiptDigest') != hashlib.sha256(json.dumps({key: value for key, value in receipt.items() if key != 'receiptDigest'}, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode()).hexdigest(): raise ValueError('SDK native receipt digest differs')
+                if not is_web:
+                    if receipt['nonce'] != nonce or receipt['ownerId'] != owner_id or receipt['sandboxRequests'] != len(dispatched) or len(dispatched) != budget.used['observation'] + budget.used['documentCleanup']: raise ValueError('SDK receipt disagrees with dispatch journal')
+                    if receipt.get('runtime', {}).get('manifest', {}).get('dependencies') != runtime['dependencies'] or receipt['runtime'].get('nodeSha256') != runtime['nodeSha256'] or receipt['runtime'].get('lockSha256') != runtime['lockSha256'] or receipt['runtime'].get('target') != 'production': raise ValueError('SDK child runtime differs from reviewed manifest')
+                    native_rows = receipt.get('steps', []) + receipt.get('cleanupSteps', [])
+                    if len(native_rows) != len(dispatched): raise ValueError('SDK receipt lost native rows')
+                    for row in native_rows:
+                        original = copy.deepcopy(dispatched.get(row['sequence']))
+                        if original is None: raise ValueError('SDK receipt contains an undispatched row')
+                        if original.get('result'): original['result'].update(childReaped=True, workerExitCode=0)
+                        if row != original: raise ValueError('SDK receipt changed native evidence')
+                    receipt['metadata'] = preflight
+                    if receipt.get('complete') is not True: raise ValueError('SDK unknown responsibility requires A2')
+                    budget.begin_recovery()
+                    receipt['postflight'] = metadata.postflight()
+                    check()
             finally:
                 if child.poll() is None:
                     proof = subprocess.run(['ps', '-p', str(child.pid), '-o', 'comm=', '-o', 'args='], capture_output=True, text=True, timeout=2).stdout
@@ -236,6 +436,21 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
                         stderr_truncated = True
                         del stderr_tail[:-8192]
                 for pipe in (child.stdin, child.stdout, child.stderr): pipe.close()
+                if is_web:
+                    process_cleanup = []
+                    for pid, expected in web_state.get('processes', {}).items():
+                        proof = web_process_identity(pid)
+                        if proof is None:
+                            process_cleanup.append({'pid': pid, 'absent': True}); continue
+                        if proof != expected:
+                            process_cleanup.append({'pid': pid, 'absent': False, 'identityChanged': True}); continue
+                        os.kill(pid, signal.SIGTERM)
+                        until = time.monotonic() + 1
+                        while time.monotonic() < until and web_process_identity(pid) == expected: time.sleep(0.05)
+                        if web_process_identity(pid) == expected: os.kill(pid, signal.SIGKILL)
+                        process_cleanup.append({'pid': pid, 'absent': web_process_identity(pid) is None})
+                    web_state['processCleanup'] = process_cleanup
+                    if receipt is not None and any(row.get('absent') is not True for row in process_cleanup): receipt['complete'] = False
         else:
             if table['name'] == 'p16-foreign-tokens':
                 metadata.create_named_database(plan['databases']['named'], journal)
@@ -305,6 +520,15 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
             raise
         save_private(directory / 'sdk-final-receipt.json', receipt)
     else: receipt['runtime'] = copy.deepcopy(runtime)
+    if is_web:
+        receipt['producerStartedMonotonic'] = producer_started
+        if web_state.get('documents'): receipt['documents'] = copy.deepcopy(web_state['documents'])
+        pending = [row for row in web_state.get('parent', []) if row.get('pending')] + [row for row in web_state.get('sdk', {}).values() if not row.get('evidence')]
+        if pending: web_state.setdefault('unknown', []).extend(copy.deepcopy(pending))
+        receipt['processCleanup'] = copy.deepcopy(web_state.get('processCleanup', []))
+        receipt.update(program=plan['program'], packetName=plan['packetName'], sourceDigest=plan['sourceDigest'], corpusDigest=plan['corpusDigest'], parentJournal=copy.deepcopy(web_state.get('parent', [])), sdkJournal=list(copy.deepcopy(web_state.get('sdk', {})).values()), unknownAnswers=copy.deepcopy(web_state.get('unknown', [])), journalFailure=budget.failed)
+        receipt['complete'] = receipt.get('complete') is True and not receipt['unknownAnswers'] and not budget.failed
+        save_private(directory / 'web-final-receipt.json', receipt)
     return receipt
 
 
@@ -416,7 +640,7 @@ def _row(pins, attempt, directory, nonce, outcome, requests, now):
 
 def record_twice(*, table, ledger_path, private_dir, pins, decisions, now, record_once, admission_check):
     ledger_path, private_dir = Path(ledger_path), Path(private_dir)
-    campaign_deadline = time.monotonic() + 600
+    campaign_deadline = None if table['name'] == 's5b-web-sdk-retry' else time.monotonic() + 600
     verify_initial_gates(shared.read_ledger(ledger_path), now(), decisions(), pins)
     held = shared.acquire_project_locks(private_dir, sorted({resource.split('/')[0] for resource in pins['scope']['project'].split('+')}), task_id=TASK_ID, packet_id=pins['packetId'], source_commit=pins['sourceCommit'])
     release = False
@@ -430,7 +654,7 @@ def record_twice(*, table, ledger_path, private_dir, pins, decisions, now, recor
         receipts = []
         sdk_projections = []
         for index in range(2):
-            if table['name'] == 'p17-admin-sdk-retry' and campaign_deadline - time.monotonic() < 300: raise TimeoutError('SDK campaign wall cap exceeded')
+            if table['name'] in ('p17-admin-sdk-retry', 's5b-web-sdk-retry') and campaign_deadline is not None and campaign_deadline - time.monotonic() < 300: raise TimeoutError('SDK campaign wall cap exceeded')
             admission_check(); authorize(decisions(), pins)
             remaining_task_budget(shared.read_ledger(ledger_path), pins.get('estimatedUsdPerRecording', 0.01))
             attempt, nonce, owner_id = secrets.token_hex(16), secrets.token_hex(16), secrets.token_hex(16)
@@ -438,23 +662,27 @@ def record_twice(*, table, ledger_path, private_dir, pins, decisions, now, recor
             reserved = True
             receipt = record_once(index, nonce, owner_id, directory)
             if not isinstance(receipt, dict): raise ValueError('program recording receipt missing')
+            if table['name'] == 's5b-web-sdk-retry' and index == 0:
+                started = receipt.get('producerStartedMonotonic')
+                if type(started) not in (int, float) or not 0 < started <= time.monotonic(): raise ValueError('S5b parent producer launch timestamp missing')
+                campaign_deadline = started + 600
             requests = receipt.get('sandboxRequests')
             save_private(directory / f'recording-{index + 1}.json', receipt)
-            if receipt.get('complete') is not True or receipt.get('timingMode') != 'wall-clock' or receipt.get('timingSource') != ('grpc-js-client-interceptor' if table['name'] == 'p17-admin-sdk-retry' else 'parent-wire-envelope'):
+            if receipt.get('complete') is not True or receipt.get('timingMode') != 'wall-clock' or receipt.get('timingSource') != ('sdk-parent-before-payload' if table['name'] == 's5b-web-sdk-retry' else 'grpc-js-client-interceptor' if table['name'] == 'p17-admin-sdk-retry' else 'parent-wire-envelope'):
                 raise ValueError('program acquisition stopped; second recording is forbidden')
-            if table['name'] == 'p17-admin-sdk-retry':
+            if table['name'] in ('p17-admin-sdk-retry', 's5b-web-sdk-retry'):
                 if campaign_deadline - time.monotonic() < 30: raise TimeoutError('SDK campaign projection cannot fit wall cap')
-                sdk_projections.append(projection(receipt, table))
+                sdk_projections.append(web_projection(receipt) if table["name"] == "s5b-web-sdk-retry" else projection(receipt, table))
             else: projection(receipt, table)
             shared.append_ledger(ledger_path, _row(pins, attempt, directory, nonce, 'recorded', requests, now()))
             receipts.append(receipt)
         admission_check(); authorize(decisions(), pins)
-        first, second = sdk_projections if table['name'] == 'p17-admin-sdk-retry' else (projection(receipt, table) for receipt in receipts)
+        first, second = sdk_projections if table['name'] in ('p17-admin-sdk-retry', 's5b-web-sdk-retry') else (projection(receipt, table) for receipt in receipts)
         if pins.get('project', PROJECT) == PROJECT:
             metadata = [{key: receipt.get('metadata', {}).get(key) for key in ['rulesetName', 'rulesSourceSha256']} for receipt in receipts]
             rules_ok = all(metadata[0].values())
         elif pins.get('project') == 'fireemu-oracle-query':
-            metadata = [{key: receipt.get('metadata', {}).get(key) for key in ['project', 'database', 'databaseSettings']} for receipt in receipts]
+            metadata = [{key: receipt.get('metadata', {}).get(key) for key in (['project', 'database', 'databaseSettings', 'rulesetName', 'rulesSourceSha256', 'keyRestrictionsSha256'] if table['name'] == 's5b-web-sdk-retry' else ['project', 'database', 'databaseSettings'])} for receipt in receipts]
             rules_ok = all(row['project'] and row['database'] and isinstance(row['databaseSettings'], dict) for row in metadata) and all(receipt.get('metadata', {}).get('oauth-tokeninfo', {}).get('verified') is True for receipt in receipts)
         else:
             # A project with no Rules release: the session proved the absence before each recording (the rules-absent slot).
@@ -463,7 +691,7 @@ def record_twice(*, table, ledger_path, private_dir, pins, decisions, now, recor
         if first != second or metadata[0] != metadata[1] or not rules_ok:
             save_private(directory / 'freeze-differences.json', {'first': first, 'second': second, 'metadata': metadata})
             raise ValueError('program independent recordings differ; shared lock retained')
-        if table['name'] == 'p17-admin-sdk-retry':
+        if table['name'] in ('p17-admin-sdk-retry', 's5b-web-sdk-retry'):
             if time.monotonic() >= campaign_deadline: raise TimeoutError('SDK campaign wall cap exceeded')
             save_private(directory / 'comparison.json', {'kind': 'txn-admin-sdk-independent-recordings-v1', 'projection': first, 'recordingSha256': [hashlib.sha256((directory / f'recording-{i + 1}.json').read_bytes()).hexdigest() for i in range(2)], 'authorizesProduction': False})
             release = True

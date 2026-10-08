@@ -18,6 +18,8 @@ _TAKEN_NAMES = ('p09-grpc-retry', 'p10-grpc-boundary', 'p10-grpc-idle', 'expiry-
 def envelope_scope(table):
     """The resource scope an envelope must state, derived from the table alone."""
     plan = compile_plan(table, 'a' * 32, 'b' * 32)
+    if table['name'] == 's5b-web-sdk-retry':
+        return {'project': 'fireemu-oracle-query/(default)', 'writes': 'owned-6-documents+2-no-write-probes', 'iamConfig': 'none', 'retries': 'web-optimistic-callback-only-max-two', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': '180', 'recoverySeconds': '120', 'maxTokens': '0', 'maxUnresolvedTokens': '0', 'releasePolicy': 'owned-version-delete-definite-before-release', 'timing': 'wall-clock', 'timingSource': 'sdk-parent-before-payload', 'transports': 'node+browser', 'writerDeadlineSeconds': '10'}
     if table['name'] == 'p17-admin-sdk-retry':
         return {'project': 'fireemu-oracle-txn/(default)', 'writes': 'owned-12-documents', 'iamConfig': 'none', 'retries': 'sdk-aborted-callback-only-max-two', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': '180', 'recoverySeconds': '120', 'maxTokens': '9', 'maxUnresolvedTokens': '9', 'releasePolicy': 'sdk-rollback-definite-before-next-case', 'timing': 'wall-clock', 'timingSource': 'grpc-js-client-interceptor', 'transports': 'grpc', 'writerDeadlineSeconds': '30'}
     resources = [plan['database'], *table.get('databases', {}).values()]
@@ -77,7 +79,7 @@ def authorize(decisions, pins):
             exact.append(columns)
     if len(exact) != 1:
         raise ValueError('one explicit exact-version program APPROVE row required')
-    if packet_name != 'p17-admin-sdk-retry' and shared.normalize_authority(exact[0][3]).startswith(shared.normalize_authority('オーナー')):
+    if packet_name not in ('p17-admin-sdk-retry', 's5b-web-sdk-retry') and shared.normalize_authority(exact[0][3]).startswith(shared.normalize_authority('オーナー')):
         return 2 * requests, 0.02
     envelopes = []
     for columns, _tokens in entries:

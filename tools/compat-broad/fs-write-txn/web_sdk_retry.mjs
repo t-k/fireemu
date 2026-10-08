@@ -1,4 +1,4 @@
-// Local rehearsal of the Web SDK optimistic retry condition; never a production recorder.
+// Local rehearsal and the explicitly admitted fixed S5b production producer.
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -313,7 +313,218 @@ export async function runLocalRetry(target, { artifact, artifactSource, receiptP
   return receipt;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+/** The fixed production corpus is callable only by the admitted transaction parent. */
+export async function recordWebRetries({ admission, parentCall, authorizeSdk, statusSdk, journal, check, spawn = spawnSdk }) {
+  const { authorized, nonce, ownerId, web, origin, bindings } = admission ?? {};
+  if (authorized !== true || !/^[a-f0-9]{32}$/.test(nonce ?? "") ||
+      !/^[a-f0-9]{32}$/.test(ownerId ?? "") || web?.projectId !== "fireemu-oracle-query" ||
+      typeof web.apiKey !== "string" || !web.apiKey ||
+      !/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(origin ?? "") ||
+      Number(new URL(origin).port) > 65535 || !bindings ||
+      ![parentCall, authorizeSdk, statusSdk, journal, check].every((value) => typeof value === "function"))
+    throw new Error("S5b fixed parent admission required");
+  const database = "projects/fireemu-oracle-query/databases/(default)";
+  const roles = ["node", "browser"].flatMap((transport) =>
+    ["control", "control_other", "conflict", "probe"].map((role) => `${transport}_${role}`));
+  const names = Object.fromEntries(roles.map((role) => [role, `${database}/documents/conf_txn/s5b_${nonce}_${role}`]));
+  const receipt = { kind: "txn-s5b-web-recording-v1", nonce, ownerId, complete: false,
+    bindings, timingMode: "wall-clock", timingSource: "sdk-parent-before-payload", transports: [],
+    documents: {}, unknownWrites: [], cleanup: [] };
+  let observationStopped = false;
+  const calls = [];
+  const owned = (doc, role) => doc?.name === names[role] && doc.fields?.owner?.stringValue === ownerId &&
+    doc.fields?.nonce?.stringValue === nonce && doc.fields?.case?.stringValue === role.split("_").slice(1).join("_") && versionKey(doc.updateTime);
+  const dispatch = async (method, request, phase = "observation") => {
+    if (phase === "observation" && observationStopped) throw new Error("S5b observations stopped");
+    await check();
+    const answer = await parentCall({ method, request, phase });
+    calls.push({ method, phase, complete: answer?.complete, code: answer?.code });
+    if (!answer?.complete || !Number.isInteger(answer.code) || [1, 2, 4, 13, 14].includes(answer.code)) {
+      observationStopped = true;
+      if (["Commit", "DeleteDocument"].includes(method)) receipt.unknownWrites.push({ method, request, phase });
+      throw new Error("S5b parent answer unknown");
+    }
+    return answer;
+  };
+  const get = (role, phase) => dispatch("GetDocument", { name: names[role] }, phase);
+  const put = async (role, value, version) => {
+    const fields = { owner: { stringValue: ownerId }, nonce: { stringValue: nonce },
+      case: { stringValue: role.split("_").slice(1).join("_") }, value: { integerValue: String(value) } };
+    receipt.documents[role] ??= { name: names[role], createConfirmed: false, deleted: false, absent: false };
+    await journal({ event: "responsibility", documents: receipt.documents, nonce, ownerId });
+    const answer = await dispatch("Commit", { database, writes: [{ update: { name: names[role], fields },
+      currentDocument: version ? { updateTime: version } : { exists: false } }] });
+    const updateTime = answer.response?.writeResults?.[0]?.updateTime;
+    if (answer.code !== 0 || !versionKey(updateTime)) throw new Error("S5b parent write refused or incomplete");
+    receipt.documents[role].createConfirmed = true;
+    receipt.documents[role].updateTime = updateTime;
+    await journal({ event: "responsibility", documents: receipt.documents, nonce, ownerId });
+    return { status: 200, path: names[role].split("/documents/")[1], value, updateTime };
+  };
+  const close = async (sdk) => {
+    await sdk.send("shutdown", {}, { timeout: 3000 }).catch(() => {});
+    await sdk.waitFor((event) => event.event === "exit", { timeout: 5000 }).catch(() => {});
+    return (await sdk.close()).code === 0;
+  };
+  const open = async (transport, probe, report) => {
+    const client = `${transport}-${probe ? "probe" : "main"}`;
+    let sdk;
+    const statuses = new Set();
+    const reportStatus = async (n) => {
+      if (statuses.has(n)) return;
+      const event = await sdk.waitFor((value) => value.event === "transaction-wire" && value.n === n);
+      await statusSdk({ client, evidence: event });
+      statuses.add(n);
+      if (event.complete !== true || event.grpcCode !== undefined && [1, 2, 4, 13, 14].includes(event.grpcCode) ||
+          event.status < 200 || event.status >= 500 || event.status >= 300 && event.status < 400)
+        throw new Error("S5b SDK capture or status unknown");
+    };
+    await check();
+    sdk = spawn({ mode: "production", web, origin, transactionCapture: true, wireCap: probe ? 1 : 6,
+      connectionCap: 20, chromiumExecutable: bindings.runtime?.chromiumExecutable, s5bAdmission: { authorized: true, nonce, ownerId, transport, probe } }, {
+      driver: DRIVERS[transport === "node" ? "node-sdk" : "browser"], timeoutMs: 15000,
+      onTransactionAdmission: async (event) => {
+        if (event.record.n > 1) await reportStatus(event.record.n - 1);
+        await check();
+        return authorizeSdk({ client, ...event });
+      },
+    });
+    report.client = client;
+    await journal({ event: "driver-lifecycle", client, phase: "launch", pid: sdk.pid });
+    return { sdk, reportStatus };
+  };
+  try {
+    for (const role of roles) {
+      const answer = await get(role);
+      if (answer.code !== 5) throw new Error("S5b exact name is not typed absent");
+    }
+    // Both transport probes succeed before any seed write; neither transaction is resumed.
+    for (const transport of ["node", "browser"]) {
+      const report = { transport, probe: {}, scenarios: [], closed: false };
+      receipt.transports.push(report);
+      const { sdk, reportStatus } = await open(transport, true, report.probe);
+      try {
+        await sdk.ready();
+        if (transport === "browser") await journal({ event: "browser-processes", client: report.probe.client, ...(await sdk.waitFor((event) => event.event === "browser-processes")) });
+        const role = `${transport}_probe`, path = names[role].split("/documents/")[1];
+        const result = sdk.send("transaction", { name: role, reads: [path], maxAttempts: 2, write: { path, data: {} } });
+        result.catch(() => {});
+        const read = await sdk.waitFor((event) => event.event === "transaction-read" && event.name === role && event.attempt === 1);
+        await reportStatus(1);
+        report.probe.events = sdk.events.filter((event) => ["wire", "transaction-wire", "transaction-read"].includes(event.event));
+        const evidence = report.probe.events.find((event) => event.event === "transaction-wire");
+        report.probe.complete = read.docs?.length === 1 && read.docs[0].exists === false &&
+          evidence?.complete === true && evidence.response?.documents?.length === 1 && evidence.response.documents[0].missing === names[role] &&
+          report.probe.events.filter((event) => event.event === "wire").length === 1;
+        if (!report.probe.complete) throw new Error("S5b no-write probe refused");
+      } finally { report.probe.closed = await close(sdk); await journal({ event: "driver-lifecycle", client: report.probe.client, phase: "exit", pid: sdk.pid, closed: report.probe.closed }); }
+      if (!report.probe.closed) throw new Error("S5b probe driver did not close");
+    }
+    for (const report of receipt.transports) {
+      const transport = report.transport;
+      const { sdk, reportStatus } = await open(transport, false, report);
+      try {
+        await sdk.ready();
+        if (transport === "browser") await journal({ event: "browser-processes", client: report.client, ...(await sdk.waitFor((event) => event.event === "browser-processes")) });
+        for (const scenario of ["control", "conflict"]) {
+          const role = `${transport}_${scenario}`, otherRole = `${transport}_control_other`;
+          const path = names[role].split("/documents/")[1], other = names[otherRole].split("/documents/")[1];
+          const outcome = { name: role, scenario, path, other, document: names[role], events: [], cleanup: [] };
+          report.scenarios.push(outcome);
+          const start = sdk.events.length;
+          outcome.seed = await put(role, 1);
+          const result = sdk.send("transaction", { name: role, reads: [path], maxAttempts: 2,
+            write: { path, data: { owner: ownerId, nonce, case: scenario, value: 3 } } });
+          result.catch(() => {});
+          await sdk.waitFor((event) => event.event === "transaction-read" && event.name === role && event.attempt === 1);
+          const latestWire = sdk.events.filter((event) => event.event === "wire").at(-1);
+          await reportStatus(latestWire.n);
+          outcome.witness = await put(scenario === "control" ? otherRole : role, 2, scenario === "conflict" ? outcome.seed.updateTime : undefined);
+          await sdk.send("continueTransaction", { name: role });
+          outcome.answer = await result;
+          const lastWire = sdk.events.filter((event) => event.event === "wire").at(-1);
+          await reportStatus(lastWire.n);
+          const final = await get(role);
+          if (final.code !== 0 || !owned(final.response, role)) throw new Error("S5b final owner/version differs");
+          outcome.final = { status: 200, value: Number(final.response.fields.value?.integerValue), updateTime: final.response.updateTime };
+          outcome.events = sdk.events.slice(start).filter((event) => ["wire", "transaction-wire", "transaction-read", "wire-refused", "driver-error", "page-error", "unparsable-output"].includes(event.event));
+        }
+      } finally {
+        report.closed = await close(sdk);
+        await journal({ event: "driver-lifecycle", client: report.client, phase: "exit", pid: sdk.pid, closed: report.closed });
+        report.bundles = sdk.events.filter((event) => event.event === "bundle");
+      }
+      if (!report.closed) throw new Error("S5b main driver did not close");
+    }
+  } catch { observationStopped = true; receipt.failure = "observation-incomplete"; }
+  // Known names remain independently cleanable after another name fails. Unknown writes stay sticky.
+  for (const [role, responsibility] of Object.entries(receipt.documents)) {
+    if (!responsibility.createConfirmed) continue;
+    const item = { path: names[role].split("/documents/")[1], deleted: false, absent: false };
+    receipt.cleanup.push(item);
+    try {
+      const read = await get(role, "documentCleanup");
+      item.readStatus = read.code === 0 ? 200 : read.code === 5 ? 404 : null;
+      if (read.code !== 0 || !owned(read.response, role)) continue;
+      item.updateTime = read.response.updateTime;
+      const deleted = await dispatch("DeleteDocument", { name: names[role], currentDocument: { updateTime: item.updateTime } }, "documentCleanup");
+      item.deleteStatus = deleted.code === 0 ? 200 : null;
+      item.deleted = deleted.code === 0;
+      if (!item.deleted) continue;
+      const absent = await get(role, "documentCleanup");
+      item.absenceStatus = absent.code === 5 ? 404 : null;
+      item.absent = absent.code === 5;
+      responsibility.deleted = item.deleted; responsibility.absent = item.absent;
+      await journal({ event: "responsibility", documents: receipt.documents, nonce, ownerId });
+    } catch { item.failure = "cleanup-incomplete"; }
+  }
+  for (const report of receipt.transports) for (const outcome of report.scenarios) {
+    outcome.cleanup = [outcome.path, ...(outcome.scenario === "control" ? [outcome.other] : [])].map((path) => receipt.cleanup.find((item) => item.path === path)).filter(Boolean);
+    outcome.complete = scenarioComplete(outcome);
+  }
+  receipt.complete = !observationStopped && receipt.unknownWrites.length === 0 && receipt.cleanup.length === 6 &&
+    receipt.cleanup.every((item) => item.deleted && item.absent) && receipt.transports.length === 2 &&
+    receipt.transports.every((report) => report.closed && report.probe.complete && report.probe.closed && report.scenarios.length === 2 && report.scenarios.every((outcome) => outcome.complete));
+  receipt.parentRequests = calls;
+  return receipt;
+}
+
+async function productionEntry() {
+  const { createInterface } = await import("node:readline");
+  const pending = new Map();
+  let next = 0;
+  const lines = createInterface({ input: process.stdin });
+  lines.on("line", (line) => {
+    try {
+      const reply = JSON.parse(line), waiting = pending.get(reply.id);
+      if (!waiting) throw new Error("unknown parent reply");
+      pending.delete(reply.id); clearTimeout(waiting.timer);
+      if (reply.authorized !== true) waiting.reject(new Error("parent refused"));
+      else waiting.resolve(reply);
+    } catch { for (const waiting of pending.values()) { clearTimeout(waiting.timer); waiting.reject(new Error("parent IPC failed")); } pending.clear(); }
+  });
+  const exchange = (event) => new Promise((resolve, reject) => {
+    const id = `web-${++next}`;
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error("parent acknowledgment missing")); }, 13_000);
+    pending.set(id, { resolve, reject, timer });
+    process.stdout.write(`${JSON.stringify({ ...event, id })}\n`);
+  });
+  try {
+    const admission = await exchange({ event: "ready" });
+    const receipt = await recordWebRetries({ admission,
+      parentCall: async (call) => (await exchange({ event: "parent-call", ...call })).answer,
+      authorizeSdk: async (event) => (await exchange({ event: "dispatch", row: event })).authorized,
+      statusSdk: (event) => exchange({ event: "status", row: event }),
+      journal: (event) => exchange(event), check: () => exchange({ event: "check" }) });
+    process.stdout.write(`${JSON.stringify({ event: "receipt", receipt })}\n`);
+    process.exitCode = receipt.complete ? 0 : 1;
+  } finally { lines.close(); }
+}
+
+
+if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv[2] === "production") {
+  productionEntry().catch(() => { process.stderr.write("S5b production recording incomplete\n"); process.exitCode = 1; });
+} else if (process.argv[1] === fileURLToPath(import.meta.url)) {
   runLocalRetry(
     {
       projectId: process.env.GOOGLE_CLOUD_PROJECT,

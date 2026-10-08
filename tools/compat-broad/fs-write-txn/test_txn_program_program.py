@@ -371,3 +371,18 @@ def test_database_extensions_refuse_invalid_declarations_and_placements(program,
         program.corpus_digest(changed)
     with pytest.raises(ValueError, match="table"):
         plan(program, changed)
+
+
+def test_s5b_has_six_writable_names_two_absent_probes_and_exact_63_cap():
+    from txn_program_cli import table_for
+    from txn_program_program import compile_plan
+    table = table_for('s5b-web-sdk-retry')
+    plan = compile_plan(table, 'a' * 32, 'b' * 32)
+    assert plan['project'] == 'fireemu-oracle-query'
+    assert plan['caps'] == {'observation': 34, 'tokenCleanup': 0, 'documentCleanup': 18, 'management': 10, 'credential': 1}
+    assert plan['maxRequests'] == 63
+    assert len(plan['documents']) == 8
+    assert sum(name.endswith('_probe') for name in plan['documents'].values()) == 2
+    assert all(name.startswith('projects/fireemu-oracle-query/databases/(default)/documents/conf_txn/s5b_' + 'a' * 32 + '_') for name in plan['documents'].values())
+    assert plan['cases'] == ['control', 'conflict']
+    assert plan['maxTokens'] == 0

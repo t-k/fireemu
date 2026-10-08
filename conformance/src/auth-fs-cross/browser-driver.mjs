@@ -21,6 +21,7 @@ import { chromium } from "playwright";
 
 import {
   createWireLedger,
+  createS5bAdmission,
   PRODUCTION_HOSTS,
   transactionMethod,
   transactionWireEvidence,
@@ -63,6 +64,7 @@ export function webChannelBearer(url, body = null) {
 
 /** The hosts (with ports) the page may reach beyond its own server. */
 export function allowedHosts(config) {
+  if (config.s5bAdmission !== undefined) return ["firestore.googleapis.com"];
   if (config.mode !== "local") return PRODUCTION_HOSTS;
   const { host, port } = config.firestoreEmulator;
   return [new URL(config.authEmulator).host, `${host}:${port}`];
@@ -78,7 +80,9 @@ const FILES = {
 async function main() {
   const config = JSON.parse(process.env.AFC_SDK_CONFIG);
   const tokenOwner = new Map();
-  const capture = config.mode === "local" && config.transactionCapture === true;
+  const admission = config.s5bAdmission === undefined ? null : createS5bAdmission(config, emit);
+  const capture = (config.mode === "local" || admission) && config.transactionCapture === true;
+  if (admission && !capture) throw new Error("S5b production capture is required");
   const capturedRequests = new Map();
   const pendingCapture = new Set();
   // Replaced once the browser is up; before that there is nothing to close but the process.
@@ -113,10 +117,12 @@ async function main() {
     response.writeHead(200, { "content-type": entry.type, "cache-control": "no-store" });
     response.end(entry.body ?? readFileSync(entry.file));
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const fixedPort = admission ? Number(new URL(config.origin).port) : 0;
+  if (admission && (!/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(config.origin ?? "") || fixedPort > 65535)) throw new Error("S5b fixed browser origin differs");
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(fixedPort, "127.0.0.1", resolve); });
   const origin = `http://127.0.0.1:${server.address().port}`;
 
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, ...(admission ? { executablePath: config.chromiumExecutable } : {}) });
   const context = await browser.newContext();
   const page = await context.newPage();
   let closing = false;
@@ -178,6 +184,11 @@ async function main() {
         parsed.pathname,
         headers.authorization ?? webChannelBearer(url, body) ?? undefined,
       );
+      if (admission) {
+        if (typeof body !== "string" || Buffer.byteLength(body) > TRANSACTION_BODY_LIMIT)
+          throw new Error("S5b browser request missing or capped");
+        await admission.beforeTransaction({ method: transactionMethod(parsed.pathname), request: JSON.parse(body), record });
+      }
       if (capture && transactionMethod(parsed.pathname))
         capturedRequests.set(request, {
           n: record.n,
@@ -255,6 +266,13 @@ async function main() {
   }, config);
   page.on("pageerror", (error) => emit({ event: "page-error", message: String(error.message) }));
   await page.goto(`${origin}/`);
+  if (admission) {
+    const browserSession = await browser.newBrowserCDPSession();
+    const processes = await browserSession.send("SystemInfo.getProcessInfo");
+    if (!Array.isArray(processes.processInfo) || processes.processInfo.length > 20 || processes.processInfo.some((value) => !Number.isInteger(value.id) || value.id < 1)) throw new Error("S5b bounded browser process identities missing");
+    emit({ event: "browser-processes", origin, driverPid: process.pid, processes: processes.processInfo.map(({ id, type }) => ({ pid: id, type })) });
+    await browserSession.detach();
+  }
 
   createInterface({ input: process.stdin }).on("line", (line) => {
     let command;
@@ -263,6 +281,7 @@ async function main() {
     } catch {
       return emit({ event: "result", id: null, ok: false, error: "unparsable command" });
     }
+    if (admission?.accept(command)) return;
     // Dispatched, not awaited: a paused transaction must not block the command resuming it.
     return page
       .evaluate((c) => window.afcRun(c), command)

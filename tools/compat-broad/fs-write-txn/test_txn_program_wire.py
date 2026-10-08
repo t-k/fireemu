@@ -22,6 +22,67 @@ def runtime():
     return discover_runtime(Path(NODE))
 
 
+def test_s5b_runtime_variant_selects_only_the_fixed_worker_mode():
+    import json
+    import unittest
+    from unittest.mock import patch
+    import txn_program_wire as module
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, json.dumps({'nodeVersion': 'fixture'}).encode())
+    with patch.object(module.subprocess, 'run', run), patch.object(module, '_sha', return_value='0' * 64), patch.object(module, 'verify_runtime'), patch.object(module, 'require_packet_runtime'):
+        ordinary = discover_runtime(Path(NODE))
+        web = discover_runtime(Path(NODE), web_sdk=True)
+    assert calls[0][-1] == '--runtime-info'
+    assert calls[1][-1] == '--runtime-info-s5b'
+    assert ordinary == web
+    assert module._SEEDS == {'@grpc/grpc-js', '@google-cloud/firestore', 'firebase-admin'}
+    assert module._WEB_SEEDS - module._SEEDS == {'firebase', 'playwright'}
+    with unittest.TestCase().assertRaisesRegex(ValueError, 'reviewed interpreter'):
+        module._verify_runtime_full({'webSdk': False})
+
+
+def test_s5b_chromium_framework_and_helper_changes_invalidate_runtime_cache():
+    import hashlib
+    import json
+    import sys
+    import tempfile
+    import unittest
+    from unittest.mock import patch
+    import txn_program_wire as module
+    with tempfile.TemporaryDirectory() as directory:
+        bundle = Path(directory) / 'Selected.app'
+        launcher = bundle / 'Contents/MacOS/Selected'
+        framework = bundle / 'Contents/Frameworks/Selected.framework/Versions/1/Selected'
+        helper = bundle / 'Contents/Frameworks/Selected Helper.app/Contents/MacOS/Selected Helper'
+        for path in (launcher, framework, helper):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'fixture-executable')
+        count, digest = module._tree(bundle)
+        value = {'pythonExecutable': sys.executable, 'pythonVersion': module.PYTHON_VERSION,
+                 'nodeExecutable': sys.executable, 'dependencies': {}, 'webSdk': True,
+                 'chromiumExecutable': str(launcher),
+                 'chromiumBundle': {'root': str(bundle), 'fileCount': count, 'treeSha256': digest}}
+        key = hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+        for changed in (framework, helper):
+            paths = module._watch_paths(value)
+            stamps = tuple(module._stamp(path) for path in paths)
+            with patch.dict(module._RUNTIME_STAMPS, {key: (paths, stamps)}, clear=True):
+                module.verify_runtime(value)
+                before = changed.read_bytes()
+                if changed == framework:
+                    changed.write_bytes(before[:-1] + b'X')
+                else:
+                    replacement = changed.with_suffix('.replacement')
+                    replacement.write_bytes(before)
+                    replacement.replace(changed)
+                assert module._tree(bundle) != (count, digest) or changed == helper
+                with unittest.TestCase().assertRaisesRegex(ValueError, 'runtime or dependency resolution path changed'):
+                    module.verify_runtime(value)
+                changed.write_bytes(before)
+
+
 def receipt(transport='grpc', **changes):
     value = {'kind': 'txn-program-receipt-v1', 'transport': transport, 'complete': True, 'code': 0, 'details': '', 'response': {}, 'http': None if transport == 'grpc' else 200, 'dispatchedRequests': 1}
     return {**value, **changes}

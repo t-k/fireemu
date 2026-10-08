@@ -2498,3 +2498,744 @@ test("stream diagnostics honor metadata remaining before status accounting and p
     }
   }
 });
+
+// Task28 keeps semantic source records and resource-only settlement independently pinned.
+function settlementFixture() {
+  const runId = "123456abcdef",
+    files = new Map();
+  const pin = (name, value, jsonl = false) => {
+    const bytes = Buffer.from(
+      jsonl ? value.map((row) => JSON.stringify(row)).join("\n") + "\n" : JSON.stringify(value),
+    );
+    const path = `/fixture/original/${name}`;
+    files.set(path, bytes);
+    return { path, sha256: sha256(bytes) };
+  };
+  const plan = makePlan("invalid-path-gap");
+  const descriptor = {
+    head: "a".repeat(40),
+    sources: [
+      ...["record", "scenarios", "wire", "ledger", "plan"].map((name) => ({
+        path: `conformance/src/pubsub-observation/${name}.mjs`,
+        sha256: sha256(Buffer.from("core-" + name)),
+      })),
+      { path: "conformance/src/pubsub-observation/admission.mjs", sha256: "2".repeat(64) },
+    ],
+  };
+  const source = {
+    runId,
+    sourceHead: descriptor.head,
+    envelopeId: "PUBSUB-OBSERVATION-A-ORIGINAL",
+    packetSha256: "3".repeat(64),
+  };
+  const packet = {
+    schema: 1,
+    taskId: "PUBSUB-OBSERVATION-A",
+    version: "v1",
+    sourceHead: source.sourceHead,
+    descriptorSha256: "",
+    plan,
+    runIds: [runId, "123456abcdee"],
+  };
+  const descriptorPin = pin("descriptor.json", descriptor);
+  packet.descriptorSha256 = descriptorPin.sha256;
+  const packetPin = pin("packet.json", packet);
+  source.packetSha256 = packetPin.sha256;
+  const context = { suite: "pubsub-observation-a-v1", project: "fireemu-oracle-idp", ...source };
+  const name = `projects/fireemu-oracle-idp/subscriptions/fe${runId}-r2-sub`;
+  const issued = [
+    { phase: "sent", name, action: "create", transport: "rest", requestId: "own-create" },
+    {
+      phase: "answered",
+      name,
+      action: "create",
+      transport: "rest",
+      requestId: "own-create",
+      kind: "ok",
+    },
+  ];
+  const results = plan.cells
+    .filter((cell) => !cell.reserve)
+    .map((cell) => ({ cellId: cell.id, complete: true }));
+  const capture = [
+    {
+      event: "run-start",
+      at: "2026-10-08T10:00:00.000Z",
+      ...context,
+      descriptorSha256: descriptorPin.sha256,
+    },
+    ...results.map((result) => ({
+      event: "case-result",
+      at: "2026-10-08T10:00:00.000Z",
+      ...result,
+    })),
+  ];
+  const capturePin = pin(`capture-${runId}.jsonl`, capture, true),
+    issuedPin = pin(`issued-${runId}.jsonl`, issued, true);
+  const summary = {
+    ...context,
+    a2: false,
+    recordingComplete: true,
+    resourcesClosed: false,
+    error: null,
+    signalled: false,
+    results,
+    captureSha256: capturePin.sha256,
+    issuedSha256: issuedPin.sha256,
+    recordingDomain: { selection: plan.selection, cellIds: results.map((r) => r.cellId) },
+  };
+  const summaryPin = pin(`summary-${runId}.json`, summary);
+  const elapsedMs = 600000;
+  const a2Issued = [
+    {
+      phase: "resolved",
+      name,
+      requestId: "own-create",
+      resolution: "gone-a2",
+      proof: { kind: "aged-a2-404", elapsedMs },
+    },
+  ];
+  const a2Capture = [
+    {
+      event: "run-start",
+      at: "2026-10-08T10:10:00.000Z",
+      ...context,
+      descriptorSha256: descriptorPin.sha256,
+    },
+    {
+      event: "request-dispatch",
+      at: "2026-10-08T10:10:00.000Z",
+      cellId: "A2",
+      requestId: 1,
+      transport: "rest",
+      category: "resourceRead",
+      method: "GetSubscription",
+      request: { name },
+    },
+    {
+      event: "response",
+      at: "2026-10-08T10:10:00.000Z",
+      cellId: "A2",
+      requestId: 1,
+      transport: "rest",
+      method: "GetSubscription",
+      reply: {
+        ok: false,
+        status: 404,
+        code: "NOT_FOUND",
+        unknown: false,
+        body: { error: { code: 404, status: "NOT_FOUND" } },
+      },
+    },
+  ];
+  const a2CapturePin = pin("a2-capture.jsonl", a2Capture, true),
+    a2IssuedPin = pin("a2-issued.jsonl", a2Issued, true);
+  const a2Summary = {
+    ...context,
+    a2: true,
+    recordingComplete: false,
+    resourcesClosed: true,
+    error: null,
+    signalled: false,
+    closureReady: false,
+    parentClosureReady: false,
+    captureSha256: a2CapturePin.sha256,
+    issuedSha256: a2IssuedPin.sha256,
+    results: [
+      {
+        closed: true,
+        reads: 1,
+        resourceReads: 1,
+        unknownDeleteReads: 0,
+        iamReads: 0,
+        outstanding: [],
+      },
+    ],
+  };
+  const binding = {
+    ...source,
+    descriptor: descriptorPin,
+    packet: packetPin,
+    capture: capturePin,
+    issued: issuedPin,
+    summary: summaryPin,
+    settlement: {
+      capture: a2CapturePin,
+      issued: a2IssuedPin,
+      summary: pin("a2-summary.json", a2Summary),
+    },
+  };
+  const activeDescriptor = structuredClone(descriptor);
+  activeDescriptor.head = "b".repeat(40);
+  activeDescriptor.sources.at(-1).sha256 = sha256(Buffer.from("successor-admission"));
+  for (const entry of activeDescriptor.sources)
+    files.set(
+      `/fixture/current/${entry.path}`,
+      Buffer.from(
+        entry.path.endsWith("admission.mjs")
+          ? "successor-admission"
+          : "core-" + entry.path.split("/").at(-1).replace(".mjs", ""),
+      ),
+    );
+  return {
+    binding,
+    plan,
+    activeDescriptor,
+    files,
+    pin,
+    summary,
+    a2Summary,
+    a2Capture,
+    a2Issued,
+    issued,
+  };
+}
+
+const { sha256 } = await import("./pubsub-production/admission.mjs");
+test("Task28 admits original complete source through exact resource-only A2 settlement", async () => {
+  const { verifySourceRecord } = await import("./pubsub-observation/admission.mjs");
+  const f = settlementFixture();
+  const original = Buffer.from(f.files.get(f.binding.summary.path));
+  const value = verifySourceRecord(f.binding, f.plan, f.activeDescriptor, (path) =>
+    f.files.get(path),
+  );
+  assert.equal(value.summary.recordingComplete, true);
+  assert.equal(value.summary.resourcesClosed, false);
+  assert.deepEqual(f.files.get(f.binding.summary.path), original);
+});
+
+test("Task28 actual admit verifies original/successor provenance before run2 output claim", async () => {
+  const a = await import("./pubsub-observation/admission.mjs");
+  const { dirname, resolve } = await import("node:path");
+  const f = settlementFixture(),
+    descriptor = f.activeDescriptor;
+  const descriptorFile = { value: descriptor, sha256: "8".repeat(64) };
+  const runIds = [f.binding.runId, "123456abcdee"];
+  const scope = {
+    taskId: "PUBSUB-OBSERVATION-A",
+    suite: "pubsub-observation-a-v1",
+    project: "fireemu-oracle-idp",
+    envelopeId: "PUBSUB-OBSERVATION-A-SUCCESSOR",
+    sourceHead: descriptor.head,
+    descriptorSha256: descriptorFile.sha256,
+    packetSha256: "9".repeat(64),
+    runIds,
+    runOutputs: { [runIds[0]]: "/fixture/original", [runIds[1]]: "/fixture/successor" },
+    recoveryOutputs: { [runIds[0]]: "/fixture/original-a2", [runIds[1]]: "/fixture/successor-a2" },
+    expiresAt: "2099-01-01T00:00:00Z",
+    plan: f.plan,
+    previousAttempt: { ...f.binding.summary, record: f.binding },
+  };
+  const packet = {
+    sha256: scope.packetSha256,
+    value: {
+      schema: 1,
+      version: "v1",
+      taskId: scope.taskId,
+      sourceHead: scope.sourceHead,
+      descriptorSha256: scope.descriptorSha256,
+      runIds,
+      runOutputs: scope.runOutputs,
+      recoveryOutputs: scope.recoveryOutputs,
+      plan: scope.plan,
+    },
+  };
+  const lines = [],
+    files = new Map([
+      ["descriptor", descriptorFile],
+      ["authority", { value: scope }],
+      ["packet", packet],
+    ]);
+  for (const kind of ["E", "V"]) {
+    const row = { ...scope, kind, state: "APPROVED", ledgerLine: lines.length + 1 };
+    const line = `| PUBSUB-OBSERVATION-A${kind === "E" ? " envelope" : ""} | decision=APPROVE; envelopeId=${scope.envelopeId}; scopeSha256=${a.scopeDigest(row)} |`;
+    lines.push(line);
+    row.ledgerLineSha256 = sha256(line);
+    files.set(kind, { value: row, sha256: kind === "E" ? "e".repeat(64) : "f".repeat(64) });
+    scope[kind] = { sha256: files.get(kind).sha256 };
+  }
+  const boundaries = {
+    root: "/fixture/current",
+    readJson: (path) => {
+      if (files.has(path)) return files.get(path);
+      const bytes = f.files.get(path);
+      assert.ok(bytes, path);
+      return { value: JSON.parse(bytes), sha256: sha256(bytes) };
+    },
+    verifyDescriptor: () => descriptor,
+    verifyScope: a.verifyScope,
+    verifyPacket: a.verifyPacket,
+    dirname,
+    git: (...args) => (args.includes("--git-common-dir") ? "/fixture/.git" : descriptor.head),
+    resolve,
+    readFileSync: (path) =>
+      path.endsWith("owner-decisions.md") ? lines.join("\n") : f.files.get(path),
+    sha256,
+    verifyProof: a.verifyProof,
+    PROJECT: scope.project,
+    verifyLiveLock() {},
+    unusedRunPreflight() {
+      throw new Error("must remain before preflight");
+    },
+    verifySourceRecord: a.verifySourceRecord,
+  };
+  const actual = new Function(...Object.keys(boundaries), `return (${a.admit.toString()});`)(
+    ...Object.values(boundaries),
+  );
+  const options = {
+    descriptor: "descriptor",
+    authority: "authority",
+    packet: "packet",
+    E: "E",
+    V: "V",
+    lock: "fixture",
+    runId: runIds[1],
+    out: scope.runOutputs[runIds[1]],
+    a2: false,
+  };
+  assert.deepEqual(actual(options, 0).plan, scope.plan);
+  f.files.set(f.binding.settlement.capture.path, Buffer.from("changed"));
+  assert.throws(() => actual(options, 0));
+});
+
+test("Task28 source identity and settlement pin near-misses never admit", async () => {
+  const { verifySourceRecord } = await import("./pubsub-observation/admission.mjs");
+  for (const edit of [
+    (f) => {
+      f.binding.sourceHead = "c".repeat(40);
+    },
+    (f) => {
+      f.binding.envelopeId = "PUBSUB-OBSERVATION-A-FOREIGN";
+    },
+    (f) => {
+      f.binding.runId = "123456abcdee";
+    },
+    (f) => {
+      f.binding.packetSha256 = "5".repeat(64);
+    },
+    (f) => {
+      f.activeDescriptor.sources[0].sha256 = "6".repeat(64);
+    },
+    (f) => {
+      f.plan.cells[0].variant = "different-input";
+    },
+    (f) => {
+      delete f.binding.settlement;
+    },
+    (f) => {
+      f.summary.recordingComplete = false;
+      f.binding.summary = f.pin(`summary-${f.binding.runId}.json`, f.summary);
+    },
+    (f) => {
+      f.summary.a2 = true;
+      f.binding.summary = f.pin(`summary-${f.binding.runId}.json`, f.summary);
+    },
+    (f) => {
+      f.summary.results.pop();
+      f.binding.summary = f.pin(`summary-${f.binding.runId}.json`, f.summary);
+    },
+    (f) => {
+      f.summary.recordingDomain.selection = "full";
+      f.binding.summary = f.pin(`summary-${f.binding.runId}.json`, f.summary);
+    },
+    (f) => {
+      f.a2Summary.resourcesClosed = false;
+      f.binding.settlement.summary = f.pin("a2-summary.json", f.a2Summary);
+    },
+    (f) => {
+      f.a2Summary.results[0].closed = false;
+      f.binding.settlement.summary = f.pin("a2-summary.json", f.a2Summary);
+    },
+    (f) => {
+      f.a2Summary.recordingComplete = true;
+      f.binding.settlement.summary = f.pin("a2-summary.json", f.a2Summary);
+    },
+    (f) => {
+      f.a2Summary.captureSha256 = "0".repeat(64);
+      f.binding.settlement.summary = f.pin("a2-summary.json", f.a2Summary);
+    },
+    (f) => {
+      f.binding.settlement.issued.sha256 = "0".repeat(64);
+    },
+    (f) => {
+      f.binding.descriptor.sha256 = "0".repeat(64);
+    },
+    (f) => {
+      f.binding.summary.path = "relative-summary.json";
+    },
+  ]) {
+    const f = settlementFixture();
+    edit(f);
+    assert.throws(() =>
+      verifySourceRecord(f.binding, f.plan, f.activeDescriptor, (path) => f.files.get(path)),
+    );
+  }
+});
+
+test("Task28 bounded generated A2 outcomes follow exact typed absence and age rules", async () => {
+  const { verifySourceRecord } = await import("./pubsub-observation/admission.mjs");
+  for (const status of [200, 302, 400, 404, 418, 500])
+    for (const unknown of [false, true])
+      for (const elapsedMs of [599999, 600000, 600001]) {
+        const f = settlementFixture();
+        f.a2Capture[2].reply = {
+          ok: false,
+          status,
+          code: "NOT_FOUND",
+          unknown,
+          body: { error: { code: status, status: "NOT_FOUND" } },
+        };
+        f.a2Issued[0].proof.elapsedMs = elapsedMs;
+        f.a2Capture[1].at = new Date(
+          Date.parse("2026-10-08T10:00:00.000Z") + elapsedMs,
+        ).toISOString();
+        f.binding.settlement.capture = f.pin("a2-capture.jsonl", f.a2Capture, true);
+        f.binding.settlement.issued = f.pin("a2-issued.jsonl", f.a2Issued, true);
+        f.a2Summary.captureSha256 = f.binding.settlement.capture.sha256;
+        f.a2Summary.issuedSha256 = f.binding.settlement.issued.sha256;
+        f.binding.settlement.summary = f.pin("a2-summary.json", f.a2Summary);
+        const verify = () =>
+          verifySourceRecord(f.binding, f.plan, f.activeDescriptor, (path) => f.files.get(path));
+        if (status === 404 && !unknown && elapsedMs >= 600000) assert.doesNotThrow(verify);
+        else assert.throws(verify, undefined, `${status}/${unknown}/${elapsedMs}`);
+      }
+});
+
+test("Task28 rejects synthetic A2 request substitution and forged issued resolutions", async () => {
+  const { verifySourceRecord } = await import("./pubsub-observation/admission.mjs");
+  for (const edit of [
+    (f) => {
+      f.a2Capture[1].method = "DeleteSubscription";
+    },
+    (f) => {
+      f.a2Capture[1].request.name += "-foreign";
+    },
+    (f) => {
+      f.a2Capture[1].category = "unknownDeleteRead";
+    },
+    (f) => {
+      f.a2Capture[1].at = "2026-10-08T10:09:59.999Z";
+    },
+    (f) => {
+      f.a2Capture.push({ ...f.a2Capture[1] });
+    },
+    (f) => {
+      f.a2Capture[2].requestId = 2;
+    },
+    (f) => {
+      f.a2Capture[2].reply.body.error.status = "INVALID_ARGUMENT";
+    },
+    (f) => {
+      f.a2Issued[0].requestId = "unissued";
+    },
+    (f) => {
+      f.a2Issued[0].proof.elapsedMs = 599999;
+    },
+    (f) => {
+      f.issued[1].kind = "unknown";
+    },
+  ]) {
+    const f = settlementFixture();
+    edit(f);
+    f.binding.issued = f.pin(`issued-${f.binding.runId}.jsonl`, f.issued, true);
+    f.summary.issuedSha256 = f.binding.issued.sha256;
+    f.binding.summary = f.pin(`summary-${f.binding.runId}.json`, f.summary);
+    f.binding.settlement.capture = f.pin("a2-capture.jsonl", f.a2Capture, true);
+    f.binding.settlement.issued = f.pin("a2-issued.jsonl", f.a2Issued, true);
+    f.a2Summary.captureSha256 = f.binding.settlement.capture.sha256;
+    f.a2Summary.issuedSha256 = f.binding.settlement.issued.sha256;
+    f.binding.settlement.summary = f.pin("a2-summary.json", f.a2Summary);
+    assert.throws(() =>
+      verifySourceRecord(f.binding, f.plan, f.activeDescriptor, (path) => f.files.get(path)),
+    );
+  }
+});
+
+test("Task28 actual-shaped positive A2 read cannot turn empty outstanding requests into closed proof", async () => {
+  const { verifySourceRecord } = await import("./pubsub-observation/admission.mjs");
+  for (const resourcesClosed of [false, true]) {
+    const f = settlementFixture();
+    f.a2Capture[2].reply = {
+      ok: true,
+      status: 200,
+      code: "OK",
+      unknown: false,
+      body: { name: f.a2Capture[1].request.name, state: "ACTIVE", topic: "_deleted-topic_" },
+    };
+    f.binding.settlement.capture = f.pin("a2-capture.jsonl", f.a2Capture, true);
+    f.binding.settlement.issued = f.pin("a2-issued.jsonl", [], true);
+    f.a2Summary.resourcesClosed = resourcesClosed;
+    f.a2Summary.results[0].closed = resourcesClosed;
+    f.a2Summary.captureSha256 = f.binding.settlement.capture.sha256;
+    f.a2Summary.issuedSha256 = f.binding.settlement.issued.sha256;
+    f.binding.settlement.summary = f.pin("a2-summary.json", f.a2Summary);
+    assert.throws(() =>
+      verifySourceRecord(f.binding, f.plan, f.activeDescriptor, (path) => f.files.get(path)),
+    );
+  }
+});
+
+function maintenanceFixture() {
+  const f = settlementFixture(),
+    name = f.a2Capture[1].request.name;
+  const positive = {
+    ok: true,
+    status: 200,
+    code: "OK",
+    unknown: false,
+    body: { name, state: "ACTIVE", topic: "_deleted-topic_" },
+  };
+  f.a2Capture[2].reply = positive;
+  f.binding.settlement.capture = f.pin("a2-capture.jsonl", f.a2Capture, true);
+  f.binding.settlement.issued = f.pin("a2-issued.jsonl", [], true);
+  f.a2Summary.resourcesClosed = false;
+  f.a2Summary.results[0].closed = false;
+  f.a2Summary.captureSha256 = f.binding.settlement.capture.sha256;
+  f.a2Summary.issuedSha256 = f.binding.settlement.issued.sha256;
+  f.binding.settlement.summary = f.pin("a2-summary.json", f.a2Summary);
+  const source = {
+    path: "/fixture/private/cleanup.mjs",
+    sha256: sha256(Buffer.from("synthetic-cleanup-source")),
+  };
+  f.files.set(source.path, Buffer.from("synthetic-cleanup-source"));
+  const cleanupEnvelopeId = "PUBSUB-OWNED-CLEANUP-FIXTURE",
+    cleanupPacketSha256 = "7".repeat(64);
+  const context = {
+    runId: f.binding.runId,
+    sourceHead: f.binding.sourceHead,
+    envelopeId: f.binding.envelopeId,
+    packetSha256: f.binding.packetSha256,
+    suite: "pubsub-observation-a-v1",
+    project: "fireemu-oracle-idp",
+  };
+  const at = "2026-10-08T10:11:00.000Z";
+  const cleanupCapture = [
+    {
+      event: "run-start",
+      at,
+      ...context,
+      descriptorSha256: f.binding.descriptor.sha256,
+      cleanupSourceSha256: source.sha256,
+      cleanupEnvelopeId,
+      cleanupPacketSha256,
+    },
+  ];
+  for (const [index, method] of [
+    "GetSubscription",
+    "DeleteSubscription",
+    "GetSubscription",
+  ].entries()) {
+    cleanupCapture.push({
+      event: "request-dispatch",
+      at,
+      cellId: "R2",
+      requestId: index + 1,
+      transport: "rest",
+      category: method.startsWith("Delete") ? "cleanupDelete" : "cleanupGet",
+      method,
+      request: { name },
+    });
+    cleanupCapture.push({
+      event: "response",
+      at,
+      cellId: "R2",
+      requestId: index + 1,
+      transport: "rest",
+      method,
+      reply:
+        index === 0
+          ? positive
+          : index === 1
+            ? { ok: true, status: 200, code: "OK", unknown: false, body: {} }
+            : {
+                ok: false,
+                status: 404,
+                code: "NOT_FOUND",
+                unknown: false,
+                body: { error: { code: 404, status: "NOT_FOUND" } },
+              },
+    });
+  }
+  const cleanupIssued = [
+    { phase: "sent", name, action: "delete", transport: "rest", requestId: `${name}#2` },
+    {
+      phase: "answered",
+      name,
+      action: "delete",
+      transport: "rest",
+      requestId: `${name}#2`,
+      kind: "ok",
+    },
+    ...["own-create", `${name}#2`].map((requestId) => ({
+      phase: "resolved",
+      name,
+      requestId,
+      resolution: "gone",
+      proof: { kind: "own-delete-404" },
+    })),
+  ];
+  const capture = f.pin("cleanup-capture.jsonl", cleanupCapture, true),
+    issued = f.pin("cleanup-issued.jsonl", cleanupIssued, true);
+  const original = Object.fromEntries(
+    ["capture", "issued", "summary"].map((field) => [field + "Sha256", f.binding[field].sha256]),
+  );
+  const priorA2 = Object.fromEntries(
+    ["capture", "issued", "summary"].map((field) => [
+      field + "Sha256",
+      f.binding.settlement[field].sha256,
+    ]),
+  );
+  const receipt = {
+    ...context,
+    maintenance: true,
+    cleanupSourceSha256: source.sha256,
+    cleanupEnvelopeId,
+    cleanupPacketSha256,
+    original,
+    priorA2,
+    captureSha256: capture.sha256,
+    issuedSha256: issued.sha256,
+    resourcesClosed: true,
+    recordingComplete: false,
+    closureReady: false,
+    parentClosureReady: false,
+    signalled: false,
+    error: null,
+    results: [{ closed: true, reads: 2, deletes: 1, outstanding: [] }],
+  };
+  f.binding.settlement.maintenance = {
+    source,
+    envelopeId: cleanupEnvelopeId,
+    packetSha256: cleanupPacketSha256,
+    capture,
+    issued,
+    summary: f.pin("cleanup-summary.json", receipt),
+  };
+  return { ...f, cleanupCapture, cleanupIssued, receipt };
+}
+
+test("Task28 separate confirmed-owned DELETE proof settles without rewriting unclosed A2", async () => {
+  const { verifySourceRecord } = await import("./pubsub-observation/admission.mjs");
+  const f = maintenanceFixture(),
+    original = Buffer.from(f.files.get(f.binding.summary.path)),
+    a2 = Buffer.from(f.files.get(f.binding.settlement.summary.path));
+  assert.doesNotThrow(() =>
+    verifySourceRecord(f.binding, f.plan, f.activeDescriptor, (path) => f.files.get(path)),
+  );
+  assert.deepEqual(f.files.get(f.binding.summary.path), original);
+  assert.deepEqual(f.files.get(f.binding.settlement.summary.path), a2);
+  assert.equal(JSON.parse(a2).resourcesClosed, false);
+});
+
+test("Task28 maintenance requires exact new authority, own successful DELETE and unchanged evidence", async () => {
+  const { verifySourceRecord } = await import("./pubsub-observation/admission.mjs");
+  for (const edit of [
+    (f) => {
+      f.binding.settlement.maintenance.envelopeId += "-FOREIGN";
+    },
+    (f) => {
+      f.binding.settlement.maintenance.packetSha256 = "0".repeat(64);
+    },
+    (f) => {
+      f.receipt.original.summarySha256 = "0".repeat(64);
+    },
+    (f) => {
+      f.receipt.priorA2.summarySha256 = "0".repeat(64);
+    },
+    (f) => {
+      f.receipt.cleanupSourceSha256 = "0".repeat(64);
+    },
+    (f) => {
+      f.receipt.recordingComplete = true;
+    },
+    (f) => {
+      f.receipt.resourcesClosed = false;
+    },
+    (f) => {
+      f.cleanupCapture[1].request.name += "-foreign";
+    },
+    (f) => {
+      f.cleanupCapture[2].reply.body.state = "INACTIVE";
+    },
+    (f) => {
+      f.cleanupCapture[2].reply.body.topic = "projects/foreign/topics/other";
+    },
+    (f) => {
+      f.cleanupCapture[4].reply = {
+        ok: false,
+        status: 404,
+        code: "NOT_FOUND",
+        unknown: false,
+        body: { error: { code: 404, status: "NOT_FOUND" } },
+      };
+    },
+    (f) => {
+      f.cleanupCapture[4].reply.unknown = true;
+    },
+    (f) => {
+      f.cleanupCapture[4].reply.status = 500;
+    },
+    (f) => {
+      f.cleanupCapture[6].reply.unknown = true;
+    },
+    (f) => {
+      f.cleanupCapture[6].reply.status = 400;
+    },
+    (f) => {
+      f.cleanupCapture.push({ ...f.cleanupCapture[3] });
+    },
+    (f) => {
+      f.cleanupCapture[4].requestId = 1;
+    },
+    (f) => {
+      f.cleanupCapture.splice(3, 2);
+    },
+    (f) => {
+      f.cleanupIssued[2].proof = { kind: "aged-a2-404", elapsedMs: 600000 };
+    },
+    (f) => {
+      f.cleanupIssued[0].requestId = "unissued";
+    },
+  ]) {
+    const f = maintenanceFixture();
+    edit(f);
+    const maintenance = f.binding.settlement.maintenance;
+    maintenance.capture = f.pin("cleanup-capture.jsonl", f.cleanupCapture, true);
+    maintenance.issued = f.pin("cleanup-issued.jsonl", f.cleanupIssued, true);
+    f.receipt.captureSha256 = maintenance.capture.sha256;
+    f.receipt.issuedSha256 = maintenance.issued.sha256;
+    maintenance.summary = f.pin("cleanup-summary.json", f.receipt);
+    assert.throws(() =>
+      verifySourceRecord(f.binding, f.plan, f.activeDescriptor, (path) => f.files.get(path)),
+    );
+  }
+});
+
+test("Task28 coherently repinned descriptor head must equal the original observation identity", async () => {
+  const { verifySourceRecord } = await import("./pubsub-observation/admission.mjs");
+  const f = settlementFixture();
+  const descriptor = JSON.parse(f.files.get(f.binding.descriptor.path));
+  descriptor.head = "c".repeat(40);
+  f.binding.descriptor = f.pin("descriptor.json", descriptor);
+  const packet = JSON.parse(f.files.get(f.binding.packet.path));
+  packet.descriptorSha256 = f.binding.descriptor.sha256;
+  f.binding.packet = f.pin("packet.json", packet);
+  f.binding.packetSha256 = f.binding.packet.sha256;
+  const capture = f.files.get(f.binding.capture.path).toString().trim().split("\n").map(JSON.parse);
+  capture[0].descriptorSha256 = f.binding.descriptor.sha256;
+  capture[0].packetSha256 = f.binding.packetSha256;
+  f.binding.capture = f.pin(`capture-${f.binding.runId}.jsonl`, capture, true);
+  f.summary.captureSha256 = f.binding.capture.sha256;
+  f.summary.packetSha256 = f.binding.packetSha256;
+  f.binding.summary = f.pin(`summary-${f.binding.runId}.json`, f.summary);
+  f.a2Capture[0].descriptorSha256 = f.binding.descriptor.sha256;
+  f.a2Capture[0].packetSha256 = f.binding.packetSha256;
+  f.binding.settlement.capture = f.pin("a2-capture.jsonl", f.a2Capture, true);
+  f.a2Summary.captureSha256 = f.binding.settlement.capture.sha256;
+  f.a2Summary.packetSha256 = f.binding.packetSha256;
+  f.binding.settlement.summary = f.pin("a2-summary.json", f.a2Summary);
+  assert.throws(
+    () => verifySourceRecord(f.binding, f.plan, f.activeDescriptor, (path) => f.files.get(path)),
+    /source record proof/,
+  );
+});

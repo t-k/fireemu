@@ -12,11 +12,14 @@ export function wManifest({ project, runId, stage, prerequisite }) {
   if (
     project !== "fireemu-oracle-events" ||
     !/^[a-f0-9]{12}$/.test(runId ?? "") ||
-    !["w0", "w1", "w2", "w-shape", "w-upper-counter"].includes(stage)
+    !["w0", "w1", "w2", "w-shape", "w-upper-counter", "w-upper-escape"].includes(stage)
   )
     throw new Error("W requires the owned project, fresh fixed-width run and stage");
   const ceiling = 40 * 1024 * 1024;
-  if (["w-shape", "w-upper-counter"].includes(stage) && prerequisite !== undefined)
+  if (
+    ["w-shape", "w-upper-counter", "w-upper-escape"].includes(stage) &&
+    prerequisite !== undefined
+  )
     throw new Error("W shape is an independent fixed observation");
   if (["w1", "w2"].includes(stage)) {
     if (
@@ -48,7 +51,14 @@ export function wManifest({ project, runId, stage, prerequisite }) {
     limits: {
       preflight: 16,
       setup: 12,
-      publish: stage === "w-upper-counter" ? 4 : stage === "w-shape" ? 5 : 20,
+      publish:
+        stage === "w-upper-escape"
+          ? 3
+          : stage === "w-upper-counter"
+            ? 4
+            : stage === "w-shape"
+              ? 5
+              : 20,
       cleanup: 38,
     },
     wallMs: 150 * 60_000,
@@ -185,6 +195,70 @@ export function wUpperBody(m, sequence, counter, topic) {
   )
     throw new Error("W upper metric separation violated");
   return { ...built, counter, predictedRequestSize };
+}
+
+/** One LF-prefix diagnostic separating compact JSON from the mapped-size prediction. */
+export function wEscapeBody(m, sequence, topic) {
+  if (
+    m.stage !== "w-upper-escape" ||
+    sequence !== 2 ||
+    !new RegExp(`^projects/${m.project}/topics/[A-Za-z][A-Za-z0-9._~-]*$`).test(topic ?? "")
+  )
+    throw new Error("W LF recipe or managed topic mismatch");
+  const { body } = wBody(m, sequence, 10485759);
+  body.events[0].textData = "\n" + body.events[0].textData;
+  const raw = JSON.stringify(body);
+  const varint = (n) => {
+    let count = 1;
+    for (; n >= 128; n = Math.floor(n / 128)) count++;
+    return count;
+  };
+  const field = (n) => 1 + varint(n) + n;
+  const length = (text) => Buffer.byteLength(text, "utf8");
+  const anyBytes = body.events.map(
+    (event) => field(length(event["@type"])) + field(cloudEventSize(event)),
+  );
+  const messages = body.events.map((event) => {
+    const attributes = {
+      "ce-id": event.id,
+      "ce-source": event.source,
+      "ce-specversion": event.specVersion,
+      "ce-type": event.type,
+      "ce-datacontenttype": event.attributes.datacontenttype.ceString,
+      "ce-time": event.attributes.time.ceTimestamp,
+    };
+    return (
+      field(length(event.textData)) +
+      Object.entries(attributes).reduce(
+        (sum, [key, value]) => sum + field(field(length(key)) + field(length(value))),
+        0,
+      )
+    );
+  });
+  const httpBytes = length(raw),
+    requestBytes = publishRequestSize(m.channel, body.events),
+    predictedRequestSize = field(length(topic)) + messages.reduce((sum, n) => sum + field(n), 0);
+  if (
+    httpBytes !== 10485761 ||
+    httpBytes > m.ceiling ||
+    requestBytes >= 10485760 ||
+    predictedRequestSize <= 10000000 ||
+    predictedRequestSize >= 10485760 ||
+    anyBytes.some((n) => n >= 450000)
+  )
+    throw new Error("W LF metric separation, ceiling or individual Any violated");
+  return {
+    body,
+    raw,
+    httpBytes,
+    compactBytes: length(JSON.stringify(body)),
+    requestBytes,
+    predictedRequestSize,
+    anyBytes,
+    whitespace: 0,
+    counter: "LF-prefix",
+    sha256: createHash("sha256").update(raw).digest("hex"),
+  };
 }
 
 /** An exact uncompressed ASCII JSON family, with per-publication fresh fixed-width IDs. */
@@ -516,6 +590,8 @@ export async function recordW({
       else if (m.stage === "w-upper-counter")
         for (const [index, counter] of ["Hplus1", "logical-counter"].entries())
           wUpperBody(m, index + 2, counter, `projects/${m.project}/topics/w-validation`);
+      else if (m.stage === "w-upper-escape")
+        wEscapeBody(m, 2, `projects/${m.project}/topics/w-validation`);
       else wBody(m, 20, m.ceiling - 2, 2);
       const services = await list(
         "usage",
@@ -575,6 +651,16 @@ export async function recordW({
               );
             if (measured) entry.observedRequestSize = Number(measured[1]);
           }
+          if (
+            built.counter === "LF-prefix" &&
+            (answer === true ||
+              (answer === false &&
+                entry.observedRequestSize !== undefined &&
+                entry.observedRequestSize !== built.predictedRequestSize))
+          ) {
+            answer = null;
+            entry.accepted = null;
+          }
           if (built.shape && answer !== null) {
             const measured =
               /^The value for request_size is too large\. You passed ([1-9][0-9]{7}) in the request, but the maximum value is 10000000\.(?![\s\S])/.exec(
@@ -600,7 +686,7 @@ export async function recordW({
           .slice(0, -1)
           .filter((p) => p.whitespace === 0 && p.accepted !== null);
         if (
-          !["w-shape", "w-upper-counter"].includes(m.stage) &&
+          !["w-shape", "w-upper-counter", "w-upper-escape"].includes(m.stage) &&
           !whitespace &&
           earlier.some(
             (p) =>
@@ -629,6 +715,10 @@ export async function recordW({
           const sequence = result.publishes.length + 1;
           await publishBody(wUpperBody(m, sequence, counter, result.topic), sequence, counter);
         }
+        if ((await publish(65536, 0, "after-control")) !== true)
+          throw new Error("W after control refused");
+      } else if (m.stage === "w-upper-escape") {
+        await publishBody(wEscapeBody(m, 2, result.topic), 2, "LF-prefix");
         if ((await publish(65536, 0, "after-control")) !== true)
           throw new Error("W after control refused");
       } else if (m.stage === "w0") {

@@ -395,7 +395,7 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
     calls = [],
     notes = [];
   const resourceMode = mode
-    .replace(/^(shape|upper)-/, "")
+    .replace(/^(shape|upper|escape)-/, "")
     .replace(/^badrequest-(400|413)-(arbitrary|numeric|payload)-/, "");
   let clock = 0,
     present = false,
@@ -418,6 +418,24 @@ async function replay(stage = "w0", mode = "normal", prerequisite, defer = false
           let status = 200,
             body;
           if (host === "publishing") {
+            if (mode.startsWith("escape-")) {
+              if (spec.recipe.purpose.endsWith("control"))
+                return mode === `escape-${spec.recipe.purpose}-refused`
+                  ? native(400, nativeSizeRefusal)
+                  : native(200, {});
+              if (mode === "escape-unknown") return { unknown: true, status: 503, body: {} };
+              if (mode === "escape-accepted") return native(200, {});
+              if (mode === "escape-payload") return native(400, nativeSizeRefusal);
+              const refusal = structuredClone(requestSizeRefusal);
+              refusal.error.message = refusal.error.message.replace(
+                "10476337",
+                String(
+                  shapeWire(spec.body.events, topic).pubsub.length +
+                    (mode === "escape-mismatch" ? 1 : 0),
+                ),
+              );
+              return native(400, refusal);
+            }
             if (mode.startsWith("upper-")) {
               if (spec.recipe.purpose.endsWith("control"))
                 return mode === `upper-${spec.recipe.purpose}-refused`
@@ -865,7 +883,7 @@ test("W shape keeps control, lifecycle and cleanup obligations without retries",
   }
 });
 
-for (const stage of ["w-shape", "w-upper-counter"])
+for (const stage of ["w-shape", "w-upper-counter", "w-upper-escape"])
   test(`W ${stage} default entry requires frozen admission before credentials, network or runtime writes`, () => {
     const root = resolve("target/codex-out/w-ready/test-work");
     mkdirSync(root, { recursive: true });
@@ -1993,5 +2011,116 @@ test("W upper counters stop recorded BadRequest layouts outside the two native r
     assert.equal(result.evidenceComplete, false, resource);
     assert.equal(result.cleanupReady, false, resource);
     assert.equal(result.publishes[1].accepted, null, resource);
+  }
+});
+
+test("W LF counter recomputes actual modified bytes and matches its parsed space twin", () => {
+  for (const runId of ["adbcfeadbcfe", "000000000000", "ffffffffffff"]) {
+    const m = wManifest({ project: "fireemu-oracle-events", runId, stage: "w-upper-escape" });
+    assert.equal(m.limits.publish, 3);
+    assert.throws(() => manifest("w-upper-escape", {}), /independent/);
+    for (const width of [87, 127, 128]) {
+      const prefix = `projects/${m.project}/topics/`;
+      const topic = prefix + "t".repeat(width - prefix.length);
+      const built = wModule.wEscapeBody(m, 2, topic);
+      const base = wBody(m, 2, 10485759);
+      assert.equal(built.body.events[0].textData, "\n" + base.body.events[0].textData);
+      assert.equal(built.httpBytes, 10485761);
+      assert.equal(built.compactBytes, 10485761);
+      assert.equal(built.raw, JSON.stringify(built.body));
+      assert.equal(built.whitespace, 0);
+      assert.equal(built.requestBytes, 10475028);
+      const wire = shapeWire(built.body.events, topic, m.channel);
+      assert.equal(built.requestBytes, wire.ce.length);
+      assert.deepEqual(built.anyBytes, wire.anyBytes);
+      assert.equal(built.predictedRequestSize, wire.pubsub.length);
+      assert.ok(built.predictedRequestSize > 10000000 && built.predictedRequestSize < 10485760);
+      if (width === 87) assert.equal(built.predictedRequestSize, 10476337);
+      assert.ok(built.anyBytes.every((n) => n < 450000));
+      assert.equal(built.sha256, createHash("sha256").update(built.raw).digest("hex"));
+      assert.notEqual(built.sha256, base.sha256);
+      const twin = structuredClone(built.body);
+      twin.events[0].textData = " " + twin.events[0].textData.slice(1);
+      assert.equal(Buffer.byteLength(JSON.stringify(twin)), 10485760);
+      assert.deepEqual(shapeWire(twin.events, topic, m.channel).anyBytes, built.anyBytes);
+      assert.equal(
+        shapeWire(twin.events, topic, m.channel).pubsub.length,
+        built.predictedRequestSize,
+      );
+      assert.deepEqual(
+        twin.events.map((e) => JSON.parse(e.textData)),
+        built.body.events.map((e) => JSON.parse(e.textData)),
+      );
+      assert.deepEqual(built.body.events.slice(1), base.body.events.slice(1));
+      assert.throws(() => wModule.wEscapeBody(m, 3, topic), /recipe/);
+      assert.throws(() => wModule.wEscapeBody(m, 2, "projects/foreign/topics/t"), /topic/);
+    }
+  }
+});
+
+test("W LF recorder brackets only its informative counter and retains both native families", async () => {
+  for (const mode of ["escape-numeric", "escape-payload"]) {
+    const { result, calls } = await replay("w-upper-escape", mode);
+    assert.equal(result.stopped, null, mode);
+    assert.equal(result.evidenceComplete, true, mode);
+    assert.equal(result.cleanupReady, true, mode);
+    const pubs = calls.filter((c) => c.host === "publishing");
+    assert.deepEqual(
+      pubs.map((p) => p.recipe.purpose),
+      ["before-control", "LF-prefix", "after-control"],
+    );
+    assert.deepEqual(
+      pubs.map((p) => p.recipe.sequence),
+      [1, 2, 3],
+    );
+    assert.deepEqual(
+      result.publishes.map((p) => p.accepted),
+      [true, false, true],
+    );
+    const counter = result.publishes[1];
+    assert.ok(counter.answer.bodyBase64);
+    assert.equal(
+      counter.observedRequestSize,
+      mode === "escape-numeric" ? counter.predictedRequestSize : undefined,
+    );
+    assert.equal(result.boundary, null);
+    assert.equal(result.layer, null);
+  }
+});
+
+test("W LF third native outcomes retain raw and halt incomplete with bounded cleanup", async () => {
+  for (const mode of [
+    "escape-mismatch",
+    "escape-accepted",
+    "escape-unknown",
+    "upper-badrequest-400-arbitrary",
+    "upper-badrequest-413-numeric",
+  ]) {
+    const { result } = await replay("w-upper-escape", mode);
+    assert.match(result.stopped, /needs-review/, mode);
+    assert.equal(result.publishes.length, 2, mode);
+    assert.equal(result.evidenceComplete, false, mode);
+    assert.equal(result.cleanupReady, true, mode);
+    const counter = result.publishes[1];
+    assert.equal(counter.accepted, null, mode);
+    if (mode !== "escape-unknown") assert.ok(counter.answer.bodyBase64, mode);
+    if (mode === "escape-mismatch")
+      assert.equal(counter.observedRequestSize, counter.predictedRequestSize + 1);
+    assert.equal(result.layer, null, mode);
+  }
+  for (const [mode, count, closed, complete] of [
+    ["escape-before-control-refused", 1, true, false],
+    ["escape-after-control-refused", 3, true, false],
+    ["escape-dependent", 3, false, true],
+    ["escape-topic-left", 3, false, true],
+    ["escape-unknown-delete", 3, false, true],
+    ["escape-unknown-create", 0, false, false],
+    ["escape-api-disabled", 0, true, false],
+  ]) {
+    const { result } = await replay("w-upper-escape", mode);
+    assert.equal(result.publishes.length, count, mode);
+    assert.equal(result.cleanupReady, closed, mode);
+    assert.equal(result.evidenceComplete, complete, mode);
+    assert.ok(result.counts.publish <= 3, mode);
   }
 });

@@ -583,5 +583,35 @@ def test_presend_generator_describes_the_finalized_query_baseline():
 
 
 def test_the_s5b_successor_uses_a_fresh_fixed_envelope_without_changing_p17():
-    assert cli.table_for("s5b-web-sdk-retry")["envelopeId"] == "FS-TRANSACTION-s5b-web-sdk-retry-003"
+    assert cli.table_for("s5b-web-sdk-retry")["envelopeId"] == "FS-TRANSACTION-s5b-web-sdk-retry-004"
     assert cli.table_for("p17-admin-sdk-retry")["envelopeId"] == "FS-TRANSACTION-p17-admin-sdk-retry-003"
+
+
+def test_s5b_recovery_packet_has_fixed_single_action_reserve_and_scope(monkeypatch):
+    table = cli.table_for('s5b-web-sdk-retry')
+    monkeypatch.setattr(cli, 'runner_sha256', lambda _: 'c' * 64)
+    monkeypatch.setattr(cli, 'refuse_virtualenv', lambda _: None)
+    recovery = {'action': 'cleanup', 'snapshotPath': 'docs.local/runs/s5b/recording-1.json', 'snapshotSha256': 'e' * 64, 'notBefore': '2026-10-08T00:10:00Z', 'originalPacketId': 'fs-transaction-s5b-web-sdk-retry-original', 'lockSha256': 'f' * 64}
+    value = cli.packet_value(table=table, source_commit='a' * 40, runtime={'webSdk': True}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-s5b-web-sdk-retry-recovery', envelope_relative='docs.local/reviews/s5b-recovery.md', sdk_recovery=recovery)
+    assert value['envelopeId'] == 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-001'
+    assert value['recordings'] == 1 and value['requestsPerRecording'] == 20 and value['reserveUsd'] == 0.01
+    assert value['observationSeconds'] == value['recoverySeconds'] == 120
+    assert value['caps'] == {'credential': 1, 'management': 10, 'documentCleanup': 9, 'observation': 0, 'tokenCleanup': 0}
+    assert value['scope']['writes'] == 'owned-version-delete-only'
+
+
+@pytest.mark.parametrize('outcome', ['reserved', 'stopped-needs-review', 'sdk-recovery-observed'])
+def test_s5b_recovery_envelope_cannot_be_reused_under_a_fresh_packet(outcome):
+    pins = {'packetId': 'fs-transaction-s5b-web-sdk-retry-fresh', 'envelopeId': 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-001'}
+    rows = [{'packetId': 'fs-transaction-s5b-web-sdk-retry-consumed', 'envelopeId': pins['envelopeId'], 'outcome': outcome}]
+    with pytest.raises(ValueError, match='envelope already used'):
+        cli.verify_sdk_recovery_history(rows, pins, cli.table_for('s5b-web-sdk-retry'))
+    assert rows[0]['outcome'] == outcome
+
+
+def test_sdk_recovery_history_keeps_p17_defaults_and_rejects_packet_replay():
+    pins = {'packetId': 'fs-transaction-p17-admin-sdk-retry-fresh', 'envelopeId': 'FS-TRANSACTION-p17-admin-sdk-retry-cleanup-001'}
+    rows = [{'packetId': 'old', 'envelopeId': pins['envelopeId'], 'outcome': 'stopped-needs-review'}]
+    cli.verify_sdk_recovery_history(rows, pins, cli.table_for('p17-admin-sdk-retry'))
+    cli.verify_sdk_recovery_history([], pins, cli.table_for('s5b-web-sdk-retry'))
+    with pytest.raises(ValueError, match='packet already used'): cli.verify_sdk_recovery_history([{'packetId': pins['packetId']}], pins, cli.table_for('p17-admin-sdk-retry'))

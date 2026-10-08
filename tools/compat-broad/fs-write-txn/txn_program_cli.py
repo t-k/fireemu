@@ -42,7 +42,7 @@ def sha(raw):
 
 def table_for(name):
     if name == 's5b-web-sdk-retry':
-        return {'name': name, 'program': 'FS-TRANSACTION-S5B-WEB-SDK-RETRY', 'slug': 'txn-s5b', 'documents': [f'{transport}-{role}' for transport in ('node', 'browser') for role in ('control', 'control-other', 'conflict', 'probe')], 'states': ['seed', 'witness', 'final'], 'steps': [], 'cases': ['control', 'conflict'], 'caps': {'observation': 34, 'tokenCleanup': 0, 'documentCleanup': 18, 'management': 10, 'credential': 1}, 'observationSeconds': 180, 'recoverySeconds': 120, 'maxTokens': 0, 'envelopeId': 'FS-TRANSACTION-s5b-web-sdk-retry-003', 'project': 'fireemu-oracle-query', 'sourceFile': str(HERE / 'web_sdk_retry.mjs')}
+        return {'name': name, 'program': 'FS-TRANSACTION-S5B-WEB-SDK-RETRY', 'slug': 'txn-s5b', 'documents': [f'{transport}-{role}' for transport in ('node', 'browser') for role in ('control', 'control-other', 'conflict', 'probe')], 'states': ['seed', 'witness', 'final'], 'steps': [], 'cases': ['control', 'conflict'], 'caps': {'observation': 34, 'tokenCleanup': 0, 'documentCleanup': 18, 'management': 10, 'credential': 1}, 'observationSeconds': 180, 'recoverySeconds': 120, 'maxTokens': 0, 'envelopeId': 'FS-TRANSACTION-s5b-web-sdk-retry-004', 'project': 'fireemu-oracle-query', 'sourceFile': str(HERE / 'web_sdk_retry.mjs')}
     if name == 'p17-admin-sdk-retry':
         return {'name': name, 'program': 'FS-TRANSACTION-P17-ADMIN-SDK-RETRY', 'slug': 'txn-p17', 'documents': [f'{case}-{role}' for case in ('conflict', 'control', 'retry', 'retry-older') for role in ('a', 'b', 'c')], 'states': ['baseline', 'writer', 'transaction-baseline', 'transaction-writer'], 'steps': [], 'cases': ['conflict', 'control', 'retry', 'retry-older'], 'caps': {'observation': 88, 'tokenCleanup': 0, 'documentCleanup': 36, 'management': 6, 'credential': 1}, 'observationSeconds': 180, 'recoverySeconds': 120, 'maxTokens': 9, 'envelopeId': 'FS-TRANSACTION-p17-admin-sdk-retry-003', 'project': 'fireemu-oracle-txn', 'sourceFile': str(HERE / 'admin_sdk_retry.mjs')}
     if not isinstance(name, str) or name not in TABLES:
@@ -126,9 +126,9 @@ def packet_value(*, table, source_commit, runtime, baseline_sha256, envelope_sha
     value = {'schemaVersion': 1, 'program': table['program'], 'packetName': table['name'], 'packetId': packet_id, 'project': plan['project'], 'database': '(default)', 'recordings': 2, 'requestsPerRecording': requests_per_recording(table), 'estimatedUsdPerRecording': budget_for(plan['project'])[0], 'sourceCommit': source_commit, 'sourceBranch': 'work/codex-txn-s5b-production' if table['name'] == 's5b-web-sdk-retry' else 'work/fs-txn-s5a-admin' if table['name'] == 'p17-admin-sdk-retry' else 'work/fs-txn-s3-foreign-tokens' if table['name'] == 'p16-foreign-tokens' else 'work/codex-fs-transaction', 'runnerSha256': runner_sha256(table['name']), 'closureSha256': sha(CLOSURE.read_bytes()), 'corpusDigest': corpus_digest(table), 'planSourceDigest': source_digest(table), 'baselineSha256': baseline_sha256, 'envelopeId': table['envelopeId'], 'envelopePath': envelope_relative, 'envelopeSha256': envelope_sha256, 'runtime': runtime, 'iamConfig': 'none', 'retries': ('web-optimistic-callback-only-max-two' if table['name'] == 's5b-web-sdk-retry' else 'sdk-aborted-callback-only-max-two' if table['name'] == 'p17-admin-sdk-retry' else 'none'), 'onStop': 'needs-recovery-lock-held', 'observationSeconds': plan['observationSeconds'], 'recoverySeconds': plan['recoverySeconds'], 'maxTokens': plan['maxTokens'], 'timing': 'wall-clock', 'timingSource': ('sdk-parent-before-payload' if table['name'] == 's5b-web-sdk-retry' else 'grpc-js-client-interceptor' if table['name'] == 'p17-admin-sdk-retry' else 'parent-wire-envelope'), 'reserveUsd': budget_for(plan['project'])[1], 'maxUnresolvedTokens': plan['maxUnresolvedTokens'], 'releasePolicy': plan['releasePolicy'], 'caps': plan['caps'], 'cases': plan['cases'], 'scope': envelope_scope(table)}
 
     if sdk_recovery is not None:
-        if table['name'] != 'p17-admin-sdk-retry' or not isinstance(sdk_recovery, dict) or set(sdk_recovery) != {'action', 'snapshotPath', 'snapshotSha256', 'notBefore', 'originalPacketId', 'lockSha256'}:
+        if table['name'] not in ('p17-admin-sdk-retry', 's5b-web-sdk-retry') or not isinstance(sdk_recovery, dict) or set(sdk_recovery) != {'action', 'snapshotPath', 'snapshotSha256', 'notBefore', 'originalPacketId', 'lockSha256'}:
             raise ValueError('closed SDK recovery packet scope required')
-        if sdk_recovery['action'] not in ('cleanup', 'a2') or not isinstance(sdk_recovery['snapshotPath'], str) or not sdk_recovery['snapshotPath'].startswith('docs.local/runs/') or '..' in Path(sdk_recovery['snapshotPath']).parts or not re.fullmatch(r'[a-f0-9]{64}', sdk_recovery['snapshotSha256']) or not re.fullmatch(r'[a-f0-9]{64}', sdk_recovery['lockSha256']) or not re.fullmatch(r'fs-transaction-p17-admin-sdk-retry-[A-Za-z0-9_-]{4,64}', sdk_recovery['originalPacketId']) or packet_id == sdk_recovery['originalPacketId']:
+        if sdk_recovery['action'] not in ('cleanup', 'a2') or not isinstance(sdk_recovery['snapshotPath'], str) or not sdk_recovery['snapshotPath'].startswith('docs.local/runs/') or '..' in Path(sdk_recovery['snapshotPath']).parts or not re.fullmatch(r'[a-f0-9]{64}', sdk_recovery['snapshotSha256']) or not re.fullmatch(r'[a-f0-9]{64}', sdk_recovery['lockSha256']) or not re.fullmatch(rf"fs-transaction-{re.escape(table['name'])}-[A-Za-z0-9_-]{{4,64}}", sdk_recovery['originalPacketId']) or packet_id == sdk_recovery['originalPacketId']:
             raise ValueError('SDK recovery binding differs')
         from txn_sandbox_admission import _instant
         _instant(sdk_recovery['notBefore'])
@@ -137,6 +137,9 @@ def packet_value(*, table, source_commit, runtime, baseline_sha256, envelope_sha
         value['scope'] = {**value['scope'], 'retries': 'none', 'releasePolicy': 'sdk-recovery-lock-held', **({'writes': 'none'} if sdk_recovery['action'] == 'a2' else {})}
         value['retries'] = 'none'
         value['releasePolicy'] = 'sdk-recovery-lock-held'
+        if table['name'] == 's5b-web-sdk-retry':
+            value.update(envelopeId='FS-TRANSACTION-s5b-web-sdk-retry-recovery-001', recordings=1, requestsPerRecording=20, reserveUsd=0.01, estimatedUsdPerRecording=0.01, observationSeconds=120, recoverySeconds=120, caps={'observation': 0, 'tokenCleanup': 0, 'documentCleanup': 9, 'management': 10, 'credential': 1})
+            value['scope'] = {**value['scope'], 'writes': 'owned-version-delete-only' if sdk_recovery['action'] == 'cleanup' else 'none', 'observationSeconds': '120', 'transports': 'grpc', 'timingSource': 'parent-wire-envelope', 'writerDeadlineSeconds': 'none'}
     return value
 
 
@@ -154,7 +157,7 @@ def _read_packet(path, digest, *, label='packet'):
 
 def load_packet(path, digest, baseline_path, envelope_path, *, table, source_commit, packet_relative, envelope_relative):
     value = _read_packet(path, digest)
-    if not isinstance(value, dict) or set(value) != (FIELDS | {'sourceBranch'} | ({'sdkRecovery'} if 'sdkRecovery' in value else set()) if table['name'] == 'p17-admin-sdk-retry' else FIELDS) or type(value['schemaVersion']) is not int or type(value['recordings']) is not int or type(value['requestsPerRecording']) is not int:
+    if not isinstance(value, dict) or set(value) != (FIELDS | {'sourceBranch'} | ({'sdkRecovery'} if 'sdkRecovery' in value else set()) if table['name'] in ('p17-admin-sdk-retry', 's5b-web-sdk-retry') else FIELDS) or type(value['schemaVersion']) is not int or type(value['recordings']) is not int or type(value['requestsPerRecording']) is not int:
         raise ValueError('closed program packet schema differs')
     if not isinstance(value['packetId'], str) or not re.fullmatch(rf"fs-transaction-{re.escape(table['name'])}-[A-Za-z0-9_-]{{4,64}}", value['packetId']): raise ValueError('program packet identity differs')
     if not isinstance(envelope_relative, str) or not envelope_relative.startswith('docs.local/reviews/') or '..' in Path(envelope_relative).parts or not packet_relative.startswith('docs.local/reviews/') or '..' in Path(packet_relative).parts:
@@ -314,6 +317,14 @@ def database_action(args, table, original, value, main_root, ledger, decisions, 
         os.close(guard)
 
 
+def verify_sdk_recovery_history(rows, pins, table):
+    """A consumed S5b recovery envelope cannot acquire another packet identity."""
+    if any(row.get('packetId') == pins['packetId'] for row in rows):
+        raise ValueError('SDK recovery packet already used')
+    if table['name'] == 's5b-web-sdk-retry' and any(row.get('envelopeId') == pins['envelopeId'] for row in rows):
+        raise ValueError('S5b recovery envelope already used')
+
+
 def main(argv=None):
     require_packet_runtime('3.12.13')
     parser = argparse.ArgumentParser()
@@ -371,7 +382,7 @@ def main(argv=None):
             recovery = value['sdkRecovery']
             snapshot_path = _private(main_root / recovery['snapshotPath'], main_root)
             snapshot = _read_packet(snapshot_path, recovery['snapshotSha256'], label='SDK snapshot')
-            lock_path = ledger.parent / 'sandbox-locks/fireemu-oracle-txn.lock'
+            lock_path = ledger.parent / ('sandbox-locks/fireemu-oracle-query.lock' if table['name'] == 's5b-web-sdk-retry' else 'sandbox-locks/fireemu-oracle-txn.lock')
             with lock_path.open('rb') as guard:
                 fcntl.flock(guard.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 lock_raw = guard.read()
@@ -383,7 +394,8 @@ def main(argv=None):
                 except ProcessLookupError: pass
                 else: raise ValueError('SDK original process is still running')
                 rows = read_ledger(ledger)
-                if any(row.get('packetId') == pins['packetId'] for row in rows): raise ValueError('SDK recovery packet already used')
+                if table['name'] == 's5b-web-sdk-retry': remaining_task_budget(rows, value['reserveUsd'])
+                verify_sdk_recovery_history(rows, pins, table)
                 original = [row for row in rows if row.get('packetId') == recovery['originalPacketId'] and row.get('nonce') == snapshot['nonce'] and row.get('project') == pins['project']]
                 if not original or original[-1].get('outcome') not in ('reserved', 'stopped-needs-review'): raise ValueError('SDK original responsibility missing')
                 not_before = shared._instant(recovery['notBefore'])
@@ -395,7 +407,7 @@ def main(argv=None):
                     if lock_path.stat().st_ino != lock_stat.st_ino or lock_path.read_bytes() != lock_raw or sha(snapshot_path.read_bytes()) != recovery['snapshotSha256']: raise ValueError('SDK recovery responsibility changed')
                 recovery_check()
                 directory = ledger.parent / (pins['packetId'] + '-recovery')
-                row = {'ts': dt.datetime.now(dt.timezone.utc).isoformat(), 'taskId': 'FS-TRANSACTION-SANDBOX', 'project': pins['project'], 'packetId': pins['packetId'], 'envelopeId': pins['envelopeId'], 'attemptId': pins['packetId'], 'originalPacketId': recovery['originalPacketId'], 'runDir': str(directory), 'nonce': snapshot['nonce'], 'estimatedUsd': 0.0}
+                row = {'ts': dt.datetime.now(dt.timezone.utc).isoformat(), 'taskId': 'FS-TRANSACTION-SANDBOX', 'project': pins['project'], 'packetId': pins['packetId'], 'envelopeId': pins['envelopeId'], 'attemptId': pins['packetId'], 'originalPacketId': recovery['originalPacketId'], 'runDir': str(directory), 'nonce': snapshot['nonce'], 'estimatedUsd': value['reserveUsd'] if table['name'] == 's5b-web-sdk-retry' else 0.0}
                 shared.append_ledger(ledger, {**row, 'outcome': 'reserved'})
                 try:
                     result = record_sdk_action(table=table, snapshot=snapshot, action=recovery['action'], directory=directory, baseline=baseline_value, runtime=value['runtime'], check=recovery_check, now=lambda: dt.datetime.now(dt.timezone.utc))

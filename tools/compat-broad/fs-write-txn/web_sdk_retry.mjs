@@ -336,12 +336,14 @@ export async function runLocalRetry(target, { artifact, artifactSource, receiptP
 
 /** The fixed production corpus is callable only by the admitted transaction parent. */
 export async function recordWebRetries({ admission, parentCall, authorizeSdk, statusSdk, journal, check, spawn = spawnSdk }) {
-  const { authorized, nonce, ownerId, web, origin, bindings } = admission ?? {};
+  const { authorized, nonce, ownerId, web, origin, bindings, observationDeadlineMs } = admission ?? {};
   if (authorized !== true || !/^[a-f0-9]{32}$/.test(nonce ?? "") ||
       !/^[a-f0-9]{32}$/.test(ownerId ?? "") || web?.projectId !== "fireemu-oracle-query" ||
       typeof web.apiKey !== "string" || !web.apiKey ||
       !/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(origin ?? "") ||
       Number(new URL(origin).port) > 65535 || !bindings ||
+      !Number.isFinite(observationDeadlineMs) || observationDeadlineMs <= performance.now() ||
+      observationDeadlineMs > performance.now() + 180_000 ||
       ![parentCall, authorizeSdk, statusSdk, journal, check].every((value) => typeof value === "function"))
     throw new Error("S5b fixed parent admission required");
   const database = "projects/fireemu-oracle-query/databases/(default)";
@@ -456,34 +458,71 @@ export async function recordWebRetries({ admission, parentCall, authorizeSdk, st
     for (const report of receipt.transports) {
       const transport = report.transport;
       const { sdk, reportStatus } = await open(transport, false, report);
+      let stage = "ready", outcome;
       try {
         await sdk.ready();
+        stage = "browser-processes";
         if (transport === "browser") await journal({ event: "browser-processes", client: report.client, ...(await sdk.waitFor((event) => event.event === "browser-processes")) });
         for (const scenario of ["control", "conflict"]) {
           const role = `${transport}_${scenario}`, otherRole = `${transport}_control_other`;
           const path = names[role].split("/documents/")[1], other = names[otherRole].split("/documents/")[1];
-          const outcome = { name: role, scenario, path, other, document: names[role], events: [], cleanup: [] };
+          outcome = { name: role, scenario, path, other, document: names[role], events: [], cleanup: [] };
           report.scenarios.push(outcome);
           const start = sdk.events.length;
+          stage = "seed";
           outcome.seed = await put(role, 1);
-          const result = sdk.send("transaction", { name: role, reads: [path], maxAttempts: 2,
-            write: { path, data: { owner: ownerId, nonce, case: scenario, value: 3 } } });
+          stage = "transaction-send";
+          const startedMs = performance.now();
+          const timeoutMs = Math.floor(observationDeadlineMs - startedMs);
+          if (timeoutMs <= 0) throw new Error("S5b observation deadline reached");
+          const id = `${role}-transaction`, command = { id, startedMs, deadlineMs: observationDeadlineMs, timeoutMs };
+          outcome.command = command;
+          const result = sdk.send("transaction", { id, name: role, reads: [path], maxAttempts: 2,
+            write: { path, data: { owner: ownerId, nonce, case: scenario, value: 3 } } }, { timeout: timeoutMs }).then((answer) => {
+            const resultMs = performance.now(), late = resultMs >= observationDeadlineMs;
+            command.result = { state: late ? "rejected" : "resolved", resultMs,
+              ...(late ? { reason: "observation-deadline" } : { ok: answer.ok === true }) };
+            if (late) throw new Error("S5b observation deadline reached");
+            return answer;
+          }, (error) => {
+            const resultMs = performance.now();
+            command.result = { state: "rejected", resultMs,
+              reason: resultMs >= observationDeadlineMs ? "observation-deadline" : "sdk-result-rejected",
+              name: diagnosticName(error?.name) };
+            const code = diagnosticCode(error?.code);
+            if (code !== undefined) command.result.code = code;
+            throw error;
+          });
           result.catch(() => {});
+          stage = "transaction-read";
           await sdk.waitFor((event) => event.event === "transaction-read" && event.name === role && event.attempt === 1);
           const latestWire = sdk.events.filter((event) => event.event === "wire").at(-1);
+          stage = "first-wire-status";
           await reportStatus(latestWire.n);
+          stage = "witness";
           outcome.witness = await put(scenario === "control" ? otherRole : role, 2, scenario === "conflict" ? outcome.seed.updateTime : undefined);
+          stage = "continue-transaction";
           await sdk.send("continueTransaction", { name: role });
+          stage = "transaction-result";
           outcome.answer = await result;
           const lastWire = sdk.events.filter((event) => event.event === "wire").at(-1);
+          stage = "final-wire-status";
           await reportStatus(lastWire.n);
+          stage = "final-read";
           const final = await get(role);
           if (final.code !== 0 || !owned(final.response, role)) throw new Error("S5b final owner/version differs");
           outcome.final = { status: 200, value: Number(final.response.fields.value?.integerValue), updateTime: final.response.updateTime };
           outcome.events = sdk.events.slice(start).filter((event) => ["wire", "transaction-wire", "transaction-read", "wire-refused", "driver-error", "page-error", "unparsable-output"].includes(event.event));
         }
+      } catch (error) {
+        report.failure = { stage, name: diagnosticName(error?.name) };
+        const code = diagnosticCode(error?.code);
+        if (code !== undefined) report.failure.code = code;
+        if (outcome) outcome.failure = { ...report.failure };
+        throw error;
       } finally {
         report.closed = await close(sdk);
+        if (report.failure) report.diagnostics = diagnosticEvents(sdk.events);
         await journal({ event: "driver-lifecycle", client: report.client, phase: "exit", pid: sdk.pid, closed: report.closed });
         report.bundles = sdk.events.filter((event) => event.event === "bundle");
       }
@@ -543,7 +582,12 @@ async function productionEntry() {
     process.stdout.write(`${JSON.stringify({ ...event, id })}\n`);
   });
   try {
+    const readyStartedMs = performance.now();
     const admission = await exchange({ event: "ready" });
+    if (!Number.isFinite(admission.observationRemaining) || admission.observationRemaining <= 0 || admission.observationRemaining > 180)
+      throw new Error("S5b remaining observation admission required");
+    // Anchor before the exchange so IPC time cannot extend the parent's original window.
+    admission.observationDeadlineMs = readyStartedMs + Math.floor(admission.observationRemaining * 1000);
     const receipt = await recordWebRetries({ admission,
       parentCall: async (call) => (await exchange({ event: "parent-call", ...call })).answer,
       authorizeSdk: async (event) => (await exchange({ event: "dispatch", row: event })).authorized,

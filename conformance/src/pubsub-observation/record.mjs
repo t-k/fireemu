@@ -132,7 +132,7 @@ export async function main(args = process.argv.slice(2), deps = {}) {
     const ledger = input
       ? readLedger(input.ledgerPath).withJournal(issuedJournal)
       : createLedger({ journal: issuedJournal });
-    const meter = createMeter({ a2: options.a2 });
+    const meter = createMeter({ a2: options.a2, plan });
     const token = (deps.createCredentials ?? createCredentials)();
     const guardedToken = (value) => {
       admission.check();

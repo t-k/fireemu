@@ -76,7 +76,11 @@ const g1Case = (variant) =>
             ? [7, 2]
             : [4, 6];
 export function makePlan(selection = "full") {
-  if (!["full", "s10-diagnostic", "residual"].includes(selection))
+  if (
+    !["full", "s10-diagnostic", "residual", "valid-stream-gap", "invalid-path-gap"].includes(
+      selection,
+    )
+  )
     throw new Error("fixed observation selection required");
   const cells = [...streamCases, ...supplements].map((variant, index) => ({
     id: `S${String(index + 1).padStart(2, "0")}`,
@@ -140,6 +144,32 @@ export function makePlan(selection = "full") {
     },
   };
   if (selection === "full") return plan;
+  if (selection === "valid-stream-gap" || selection === "invalid-path-gap") {
+    const valid = selection === "valid-stream-gap",
+      streams = valid ? 9 : 4,
+      restCells = valid ? 0 : 2;
+    plan.recordings = valid ? 1 : 2;
+    plan.caps.G4 = {
+      ...plan.caps.G4,
+      requests: streams * 18,
+      rest: streams * 17,
+      grpc: 0,
+      streams,
+    };
+    plan.caps.G1 = {
+      ...plan.caps.G1,
+      requests: restCells * 12,
+      rest: restCells * 12,
+      grpc: 0,
+      streams: 0,
+    };
+    plan.caps.sourceRequests = streams * 18 + restCells * 12;
+    plan.caps.totalRequests = plan.caps.sourceRequests + plan.caps.G7.requests;
+    plan.caps.framesOut = plan.caps.framesIn = streams * 6;
+    plan.caps.smallPublishes = streams * 3;
+    plan.caps.largePublishes = 0;
+    plan.caps.sourceWallMs = streams * plan.caps.G4.cellMs + restCells * plan.caps.G1.cellMs;
+  }
   return {
     ...plan,
     selection,
@@ -148,7 +178,11 @@ export function makePlan(selection = "full") {
         !cell.reserve &&
         (selection === "s10-diagnostic"
           ? cell.id === "S10"
-          : !/^S0[1-9]$/.test(cell.id) && cell.id !== "S10"),
+          : selection === "valid-stream-gap"
+            ? /^S0[1-9]$/.test(cell.id)
+            : selection === "invalid-path-gap"
+              ? ["S12", "S13", "S14", "S15", "R1", "R2"].includes(cell.id)
+              : !/^S0[1-9]$/.test(cell.id) && cell.id !== "S10"),
     ),
   };
 }

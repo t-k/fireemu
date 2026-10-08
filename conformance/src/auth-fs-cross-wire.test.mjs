@@ -277,3 +277,191 @@ test("S5b request/response size boundaries and malformed shapes remain incomplet
     false,
   );
 });
+
+test("transaction fetch waits for admission and refuses missing acknowledgment before payload", async () => {
+  const calls = [];
+  let acknowledge;
+  const ledger = createWireLedger({ hosts: ["firestore.googleapis.com"], cap: 1 });
+  const restore = installWireGuard(ledger, {
+    beforeTransaction: async ({ method, request, record }) => {
+      assert.equal(method, "BatchGetDocuments");
+      assert.equal(record.bearer, null);
+      assert.deepEqual(request.documents, ["fixture-document"]);
+      await new Promise((resolve) => { acknowledge = resolve; });
+      calls.push("ack");
+    },
+    fetchImpl: async (request) => {
+      assert.equal(await request.clone().text(), JSON.stringify({ documents: ["fixture-document"] }));
+      assert.equal(request.headers.get("authorization"), null);
+      calls.push("payload"); return new Response("{}");
+    },
+  });
+  try {
+    const init = { method: "POST", headers: {}, body: JSON.stringify({ documents: ["fixture-document"] }) };
+    const pending = fetch("https://firestore.googleapis.com/v1/projects/fireemu-oracle-query/databases/(default)/documents:batchGet", init);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, []);
+    assert.equal(typeof acknowledge, "function");
+    init.body = JSON.stringify({ documents: ["foreign-document"] });
+    init.headers.authorization = "Bearer forbidden-after-ack";
+    acknowledge();
+    await pending;
+    assert.deepEqual(calls, ["ack", "payload"]);
+  } finally { restore(); }
+  const refused = installWireGuard(createWireLedger({ hosts: ["firestore.googleapis.com"], cap: 1 }), {
+    beforeTransaction: async () => { throw new Error("journal refused"); },
+    fetchImpl: async () => { assert.fail("refused payload sent"); },
+  });
+  try {
+    await assert.rejects(fetch("https://firestore.googleapis.com/v1/projects/fireemu-oracle-query/databases/(default)/documents:commit", { method: "POST", body: "{}" }), /journal refused/);
+  } finally { refused(); }
+});
+
+test("HTTP2 transaction payload is buffered until decoded admission resolves", async () => {
+  const { EventEmitter } = await import("node:events");
+  const payload = [];
+  const original = http2.connect;
+  let acknowledge;
+  const stream = new EventEmitter();
+  stream.write = (chunk) => { payload.push(String(chunk)); return true; };
+  stream.end = (chunk) => { if (chunk != null) payload.push(String(chunk)); payload.push("end"); return stream; };
+  stream.destroy = (error) => stream.emit("error", error);
+  stream.on("error", () => {});
+  http2.connect = () => ({ request: () => stream });
+  const restore = installWireGuard(createWireLedger({ hosts: ["firestore.googleapis.com"], cap: 1 }), {
+    onTransaction: () => {},
+    decodeGrpc: (_method, bytes) => ({ documents: [bytes.toString()] }),
+    beforeTransaction: async ({ request }) => {
+      assert.deepEqual(request, { documents: ["firstsecond"] });
+      await new Promise((resolve) => { acknowledge = resolve; });
+      payload.push("ack");
+    },
+  });
+  try {
+    const actual = http2.connect("https://firestore.googleapis.com").request({ ":path": "/google.firestore.v1.Firestore/BatchGetDocuments" });
+    const first = Buffer.from("first"), second = Buffer.from("second");
+    actual.write(first);
+    actual.end(second);
+    first.fill(0); second.fill(0);
+    await Promise.resolve();
+    assert.deepEqual(payload, []);
+    acknowledge();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(payload, ["ack", "first", "second", "end"]);
+  } finally { restore(); http2.connect = original; }
+});
+
+test("transaction operation opts into two attempts and preserves the default SDK call", async () => {
+  const { createOperations } = await import("./auth-fs-cross/sdk-operations.mjs");
+  const calls = [];
+  const events = [];
+  const run = createOperations({
+    fb: {
+      onIdTokenChanged: () => {},
+      doc: (_db, path) => path,
+      runTransaction: async (...args) => { calls.push(args); return args[1]({ set: () => {} }); },
+    },
+    auth: {}, db: {}, emit: (event) => events.push(event), onToken: () => {}, exit: () => {},
+  });
+  const command = { op: "transaction", name: "fixture", reads: [], write: { path: "fixture", data: {} }, pauseAttempts: 0 };
+  await run({ ...command, maxAttempts: 2 });
+  assert.deepEqual(calls[0][2], { maxAttempts: 2 });
+  await run(command);
+  assert.equal(calls[1].length, 2);
+  for (const maxAttempts of [0, 1.5, 3, "2", null]) {
+    await run({ ...command, maxAttempts });
+    assert.equal(events.at(-1).ok, false);
+  }
+  assert.equal(calls.length, 2);
+});
+
+test("S5b admission binds exact transport names and awaits a correlated acknowledgment", async () => {
+  const { createS5bAdmission } = await import("./auth-fs-cross/sdk-wire.mjs");
+  const events = [];
+  const nonce = "a".repeat(32), ownerId = "b".repeat(32);
+  const admission = createS5bAdmission({ mode: "production", web: { projectId: "fireemu-oracle-query" }, wireCap: 1, connectionCap: 20, s5bAdmission: { authorized: true, nonce, ownerId, transport: "node", probe: true } }, (event) => events.push(event));
+  const name = `projects/fireemu-oracle-query/databases/(default)/documents/conf_txn/s5b_${nonce}_node_probe`;
+  let done = false;
+  const pending = admission.beforeTransaction({ method: "BatchGetDocuments", request: { documents: [name], database: "projects/fireemu-oracle-query/databases/(default)" }, record: { n: 1, host: "firestore.googleapis.com", path: "/google.firestore.v1.Firestore/BatchGetDocuments", bearer: null } }).then(() => { done = true; });
+  await Promise.resolve();
+  assert.equal(done, false);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].event, "transaction-dispatch");
+  assert.equal(admission.accept({ op: "transactionAdmission", id: events[0].id, authorized: true }), true);
+  await pending;
+  assert.equal(done, true);
+  assert.throws(() => admission.accept({ op: "transactionAdmission", id: events[0].id, authorized: true }), /unknown/);
+  const cases = [
+    { method: "Commit", request: { writes: [] } },
+    { method: "BatchGetDocuments", request: { documents: [name.replace("node_probe", "browser_probe")] } },
+    { method: "BatchGetDocuments", request: { documents: [name], transaction: "foreign" } },
+    { method: "BatchGetDocuments", request: { documents: [name] }, record: { n: 2, host: "evil.example", bearer: null } },
+  ];
+  for (const change of cases) {
+    await assert.rejects(admission.beforeTransaction({ method: "BatchGetDocuments", request: { documents: [name] }, record: { n: 2, host: "firestore.googleapis.com", bearer: null }, ...change }));
+  }
+  assert.equal(events.length, 1);
+});
+
+test("SDK client acknowledges dispatch only after the parent's durable callback", async () => {
+  const { spawnSdk } = await import("./auth-fs-cross/sdk-client.mjs");
+  const { PassThrough } = await import("node:stream");
+  const { EventEmitter } = await import("node:events");
+  const child = new EventEmitter();
+  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  const replies = [];
+  child.stdin.on("data", (bytes) => replies.push(JSON.parse(bytes.toString())));
+  let release;
+  const client = spawnSdk({}, { spawnImpl: () => child, onTransactionAdmission: async (event) => {
+    assert.equal(event.id, "s5b-1");
+    await new Promise((resolve) => { release = resolve; });
+    return true;
+  } });
+  child.stdout.write(JSON.stringify({ event: "transaction-dispatch", id: "s5b-1" }) + "\n");
+  await Promise.resolve();
+  assert.deepEqual(replies, []);
+  release();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(replies, [{ op: "transactionAdmission", id: "s5b-1", authorized: true }]);
+  child.emit("close", 0, null);
+  await client.close();
+  child.stdin.end(); child.stdout.end(); child.stderr.end();
+});
+
+test("S5b write admission refuses foreign ownership, missing version, and probe Commit", async () => {
+  const { createS5bAdmission } = await import("./auth-fs-cross/sdk-wire.mjs");
+  const nonce = "a".repeat(32), ownerId = "b".repeat(32);
+  const config = { mode: "production", web: { projectId: "fireemu-oracle-query" }, wireCap: 6, connectionCap: 20, s5bAdmission: { authorized: true, nonce, ownerId, transport: "node", probe: false } };
+  const name = `projects/fireemu-oracle-query/databases/(default)/documents/conf_txn/s5b_${nonce}_node_control`;
+  const request = { writes: [{ update: { name, fields: { owner: { stringValue: ownerId }, nonce: { stringValue: nonce }, case: { stringValue: "control" }, value: { integerValue: "3" } } }, currentDocument: { updateTime: "2030-01-01T00:00:00Z" } }] };
+  const row = { method: "Commit", request, record: { n: 1, host: "firestore.googleapis.com", path: "/google.firestore.v1.Firestore/Commit", bearer: null } };
+  const changes = [
+    (r) => { r.request.writes[0].update.name += "_other"; },
+    (r) => { r.request.writes[0].update.fields.owner.stringValue = "c".repeat(32); },
+    (r) => { r.request.writes[0].currentDocument = { exists: true }; },
+    (r) => { r.request.writes[0].currentDocument.updateTime = null; },
+    (r) => { r.request.writes[0].currentDocument.updateTime = ""; },
+    (r) => { r.request.writes[0].update.fields.nonce.extra = "secret"; },
+    (r) => { r.record.bearer = "forbidden"; },
+    (r) => { r.request.transaction = "foreign"; },
+  ];
+  for (const change of changes) {
+    const changed = structuredClone(row); change(changed);
+    const observed = [];
+    const admission = createS5bAdmission(config, (event) => {
+      observed.push(event);
+      queueMicrotask(() => admission.accept({ op: "transactionAdmission", id: event.id, authorized: false }));
+    });
+    await assert.rejects(admission.beforeTransaction(changed), /scope|ownership or version/);
+    assert.deepEqual(observed, []);
+    await assert.rejects(admission.beforeTransaction(row), /scope/);
+  }
+  const events = [];
+  const admission = createS5bAdmission(config, (event) => events.push(event));
+  const pending = admission.beforeTransaction(row);
+  admission.accept({ op: "transactionAdmission", id: events[0].id, authorized: false });
+  await assert.rejects(pending, /refused/);
+  await assert.rejects(admission.beforeTransaction(row), /scope/);
+  const probe = createS5bAdmission({ ...config, wireCap: 1, s5bAdmission: { ...config.s5bAdmission, probe: true } }, () => assert.fail("probe Commit journaled"));
+  await assert.rejects(probe.beforeTransaction(row), /probe/);
+});

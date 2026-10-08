@@ -336,6 +336,68 @@ def test_a_wrong_branch_or_a_dirty_tree_is_refused_with_the_branch_it_needs(monk
         cli.signed_source_commit()
 
 
+def test_sdk_packet_scope_pins_its_own_branch_runtime_and_attempt_budget(monkeypatch):
+    table = cli.table_for('p17-admin-sdk-retry')
+    monkeypatch.setattr(cli, 'runner_sha256', lambda _name: 'c' * 64)
+    monkeypatch.setattr(cli, 'refuse_virtualenv', lambda _runtime: None)
+    value = cli.packet_value(table=table, source_commit='a' * 40, runtime={}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-p17-admin-sdk-retry-test', envelope_relative='docs.local/reviews/sdk-envelope.md')
+    assert value['sourceBranch'] == 'work/fs-txn-s5a-admin'
+    assert value['project'] == 'fireemu-oracle-txn'
+    assert value['caps'] == {'observation': 88, 'tokenCleanup': 0, 'documentCleanup': 36, 'management': 6, 'credential': 1}
+    assert value['requestsPerRecording'] == 131
+    assert value['scope']['writes'] == 'owned-12-documents'
+    assert value['scope']['retries'] == 'sdk-aborted-callback-only-max-two'
+    assert value['scope']['timingSource'] == 'grpc-js-client-interceptor'
+    assert value['retries'] == value['scope']['retries']
+    assert value['timingSource'] == value['scope']['timingSource']
+    assert value['observationSeconds'] == 180
+    assert value['recoverySeconds'] == 120
+
+
+def test_sdk_source_manifest_binds_the_reused_adapter_transitively():
+    manifest = cli.source_manifest('p17-admin-sdk-retry')
+    assert 'tools/compat-broad/fs-write-txn/admin_sdk_retry.mjs' in manifest
+    assert 'tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs' in manifest
+    assert 'tools/compat-broad/fs-listen-resume/listen_journal.mjs' in manifest
+    assert 'tools/compat-broad/fs-listen-resume/listen_collector.mjs' in manifest
+    assert 'conformance/package.json' in manifest
+
+
+def test_sdk_recovery_packet_binds_action_snapshot_wait_and_distinct_envelope(monkeypatch):
+    table = cli.table_for('p17-admin-sdk-retry')
+    monkeypatch.setattr(cli, 'runner_sha256', lambda _name: 'c' * 64)
+    monkeypatch.setattr(cli, 'refuse_virtualenv', lambda _runtime: None)
+    recovery = {'action': 'a2', 'snapshotPath': 'docs.local/runs/sdk-stopped/sdk-final-receipt.json', 'snapshotSha256': 'e' * 64, 'notBefore': '2026-10-07T00:10:00Z', 'originalPacketId': 'fs-transaction-p17-admin-sdk-retry-original', 'lockSha256': 'f' * 64}
+    value = cli.packet_value(table=table, source_commit='a' * 40, runtime={}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-p17-admin-sdk-retry-recovery', envelope_relative='docs.local/reviews/sdk-recovery-envelope.md', sdk_recovery=recovery)
+    assert value['sdkRecovery'] == recovery
+    assert value['envelopeId'] == 'FS-TRANSACTION-p17-admin-sdk-retry-a2-001'
+    assert value['scope']['retries'] == 'none'
+    assert value['scope']['writes'] == 'none'
+    assert value['recordings'] == 2
+    for key, changed in [('action', 'unexpected'), ('snapshotPath', 'tools/file.json'), ('snapshotSha256', 'bad'), ('notBefore', 'bad')]:
+        with pytest.raises(ValueError): cli.packet_value(table=table, source_commit='a' * 40, runtime={}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-p17-admin-sdk-retry-recovery', envelope_relative='docs.local/reviews/sdk-recovery-envelope.md', sdk_recovery={**recovery, key: changed})
+
+
+def test_sdk_recovery_snapshot_size_is_bounded_and_digest_checked(tmp_path):
+    path = tmp_path / 'receipt.json'
+    raw = json.dumps({'packetName': 'p17-admin-sdk-retry', 'padding': 'x' * 70000}).encode()
+    path.write_bytes(raw)
+    assert cli._read_packet(path, cli.sha(raw), label='SDK snapshot')['packetName'] == 'p17-admin-sdk-retry'
+    with pytest.raises(ValueError): cli._read_packet(path, 'a' * 64, label='SDK snapshot')
+    path.write_bytes(b' ' * 4194305)
+    with pytest.raises(ValueError): cli._read_packet(path, cli.sha(path.read_bytes()), label='SDK snapshot')
+
+
+def test_sdk_packet_size_widening_remains_closed_and_bounded(tmp_path):
+    path = tmp_path / 'packet.json'
+    raw = json.dumps({'packetName': 'p17-admin-sdk-retry', 'padding': 'x' * 70000}).encode()
+    path.write_bytes(raw)
+    assert cli._read_packet(path, cli.sha(raw))['packetName'] == 'p17-admin-sdk-retry'
+    with pytest.raises(ValueError): cli._read_packet(path, cli.sha(raw), label='envelope')
+    path.write_bytes(b' ' * 262145)
+    with pytest.raises(ValueError): cli._read_packet(path, cli.sha(path.read_bytes()))
+
+
 def test_p16_admission_accepts_only_the_packet_source_branch(monkeypatch):
     branch = "work/fs-txn-s3-foreign-tokens"
     responses = {("status", "--porcelain"): "", ("branch", "--show-current"): branch, ("rev-parse", "HEAD"): "a" * 40, ("log", "-1", "--format=%G?"): "G"}
@@ -486,6 +548,26 @@ def test_main_refuses_a_database_action_without_its_own_packet(packet, tmp_path,
     monkeypatch.setattr(cli, "database_action", lambda *args: pytest.fail("action without packet reached its runner"))
     argv = _argv(reviewed, digest, baseline, tmp_path); argv[0] = "readback-a2"
     with pytest.raises(ValueError, match="own packet"): cli.main(argv)
+
+
+@pytest.mark.parametrize("command", ["readback-a2", "recover-database"])
+def test_main_rejects_sdk_packets_for_database_actions_before_any_guard(tmp_path, monkeypatch, command):
+    import txn_sandbox_admission as shared
+    table = cli.table_for("p17-admin-sdk-retry")
+    private = tmp_path / "docs.local/reviews"; private.mkdir(parents=True)
+    baseline = private / "baseline.json"; baseline.write_text("{}\n")
+    envelope = private / "sdk-envelope.md"; envelope.write_text("SDK scope\n")
+    monkeypatch.setattr(cli, "verify_runtime", lambda _runtime: None)
+    value = cli.packet_value(table=table, source_commit="b" * 40, runtime={}, baseline_sha256=cli.sha(baseline.read_bytes()), envelope_sha256=cli.sha(envelope.read_bytes()), packet_id="fs-transaction-p17-admin-sdk-retry-unit", envelope_relative="docs.local/reviews/sdk-envelope.md")
+    packet = private / "packet.json"; packet.write_text(json.dumps(value))
+    digest = cli.sha(packet.read_bytes())
+    _isolate_admission(monkeypatch, tmp_path, value)
+    monkeypatch.setattr(shared, "acquire_shared_lock", lambda *args: pytest.fail("SDK database action acquired a launch guard"))
+    monkeypatch.setattr(cli, "database_action", lambda *args: pytest.fail("SDK packet reached the p16 action gate"))
+    monkeypatch.setattr(cli, "record_twice", lambda **kwargs: pytest.fail("SDK database action resumed acquisition"))
+    argv = _argv(packet, digest, baseline, tmp_path); argv[0] = command
+    with pytest.raises(ValueError, match="p16 database action"):
+        cli.main(argv + ["--action-packet", str(private / "action.json"), "--action-packet-sha256", "d" * 64])
 
 
 

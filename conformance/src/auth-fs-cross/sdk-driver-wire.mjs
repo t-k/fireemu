@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 
 import {
   createWireLedger,
+  createS5bAdmission,
   installSocketGuard,
   installWireGuard,
   PRODUCTION_HOSTS,
@@ -17,11 +18,12 @@ export const emit = (event) =>
 export const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 export const config = JSON.parse(process.env.AFC_SDK_CONFIG ?? "{}");
 export const local = config.mode === "local";
+export const transactionAdmission = config.s5bAdmission === undefined ? null : createS5bAdmission(config, emit);
 /** Which uid each ID token (by hash) belonged to, as the SDK obtained them. */
 export const tokenOwner = new Map();
 
 const ledger = createWireLedger({
-  hosts: local ? ["127.0.0.1", "localhost"] : PRODUCTION_HOSTS,
+  hosts: local ? ["127.0.0.1", "localhost"] : transactionAdmission ? ["firestore.googleapis.com"] : PRODUCTION_HOSTS,
   cap: config.wireCap ?? 400,
   // Every socket the process opens counts, whether or not a request follows on it.
   connectionCap: config.connectionCap ?? 20,
@@ -43,12 +45,13 @@ const ledger = createWireLedger({
   },
 });
 let capture;
-if (local && config.transactionCapture === true) {
+if ((local || transactionAdmission) && config.transactionCapture === true) {
   const require = createRequire(import.meta.url);
   const firestoreRequire = createRequire(require.resolve("@google-cloud/firestore/package.json"));
   const { protobuf } = firestoreRequire("google-gax");
   const root = protobuf.Root.fromJSON(firestoreRequire("./build/protos/v1.json"));
   capture = {
+    ...(transactionAdmission ? { beforeTransaction: transactionAdmission.beforeTransaction } : {}),
     onTransaction: (evidence) => emit({ event: "transaction-wire", ...evidence }),
     decodeGrpc(method, bytes, response) {
       const type = root.lookupType(
@@ -71,5 +74,6 @@ if (local && config.transactionCapture === true) {
     },
   };
 }
+if (transactionAdmission && !capture) throw new Error("S5b production capture is required");
 installWireGuard(ledger, capture);
 installSocketGuard(ledger);

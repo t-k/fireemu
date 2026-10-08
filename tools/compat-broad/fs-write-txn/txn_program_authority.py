@@ -18,6 +18,10 @@ _TAKEN_NAMES = ('p09-grpc-retry', 'p10-grpc-boundary', 'p10-grpc-idle', 'expiry-
 def envelope_scope(table):
     """The resource scope an envelope must state, derived from the table alone."""
     plan = compile_plan(table, 'a' * 32, 'b' * 32)
+    if table['name'] == 's5b-web-sdk-retry':
+        return {'project': 'fireemu-oracle-query/(default)', 'writes': 'owned-6-documents+2-no-write-probes', 'iamConfig': 'none', 'retries': 'web-optimistic-callback-only-max-two', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': '180', 'recoverySeconds': '120', 'maxTokens': '0', 'maxUnresolvedTokens': '0', 'releasePolicy': 'owned-version-delete-definite-before-release', 'timing': 'wall-clock', 'timingSource': 'sdk-parent-before-payload', 'transports': 'node+browser', 'writerDeadlineSeconds': '10'}
+    if table['name'] == 'p17-admin-sdk-retry':
+        return {'project': 'fireemu-oracle-txn/(default)', 'writes': 'owned-12-documents', 'iamConfig': 'none', 'retries': 'sdk-aborted-callback-only-max-two', 'onStop': 'needs-recovery-lock-held', 'observationSeconds': '180', 'recoverySeconds': '120', 'maxTokens': '9', 'maxUnresolvedTokens': '9', 'releasePolicy': 'sdk-rollback-definite-before-next-case', 'timing': 'wall-clock', 'timingSource': 'grpc-js-client-interceptor', 'transports': 'grpc', 'writerDeadlineSeconds': '30'}
     resources = [plan['database'], *table.get('databases', {}).values()]
     project_scope = '+'.join(sorted(resource.removeprefix('projects/').replace('/databases/', '/') for resource in resources))
     writer = any(step['role'] == 'outside-writer' for step in plan['steps'])
@@ -75,7 +79,7 @@ def authorize(decisions, pins):
             exact.append(columns)
     if len(exact) != 1:
         raise ValueError('one explicit exact-version program APPROVE row required')
-    if shared.normalize_authority(exact[0][3]).startswith(shared.normalize_authority('オーナー')):
+    if packet_name not in ('p17-admin-sdk-retry', 's5b-web-sdk-retry') and shared.normalize_authority(exact[0][3]).startswith(shared.normalize_authority('オーナー')):
         return 2 * requests, 0.02
     envelopes = []
     for columns, _tokens in entries:
@@ -133,14 +137,15 @@ def verify_initial_gates(rows, now, decisions, pins):
     latest_primary = None
     for project in sorted({resource.split('/')[0] for resource in pins['scope']['project'].split('+')}):
         sandbox = [row for row in rows if row.get('project') == project or project in row.get('projects', [])]
+        task = []
         for index, row in enumerate(sandbox):
             shared._instant(row.get('ts'))
-            own = row.get('taskId') in (TASK_ID, 'FS-TRANSACTION') or row.get('packetId') == pins['packetId'] or row.get('envelopeId') == pins['envelopeId']
+            own = row.get('taskId') in (TASK_ID, 'FS-TRANSACTION') or row.get('packetId') == pins['packetId'] or row.get('envelopeId') == pins['envelopeId'] or isinstance(row.get('packetId'), str) and re.fullmatch(r'fs-transaction-p17-admin-sdk-retry-[A-Za-z0-9_-]{4,64}', row['packetId'])
+            if own: task.append(row)
             if own and (row.get('outcome') == 'reserved' or row.get('event') == 'started'):
                 key = next((name for name in ('attemptId', 'runId', 'runDir') if row.get(name)), None)
                 if key is None or not shared._closed_attempt(row, key, sandbox[index + 1:]):
                     raise ValueError(f'{project} has an open attempt')
-        task = [row for row in sandbox if row.get('taskId') == TASK_ID]
         if task and not shared._terminal(max(reversed(task), key=lambda row: shared._instant(row['ts']))):
             raise ValueError('FS-TRANSACTION requires recovery')
         latest = max(sandbox, key=lambda row: shared._instant(row['ts'])) if sandbox else None

@@ -10,7 +10,7 @@
 //   operations are those of sdk-operations.mjs, shared with the browser page.
 
 // Must stay the first import: it installs the wire guard before Firebase loads.
-import { config, emit, local, sha256, tokenOwner } from "./sdk-driver-wire.mjs";
+import { config, emit, local, sha256, tokenOwner, transactionAdmission } from "./sdk-driver-wire.mjs";
 
 import { createInterface } from "node:readline";
 
@@ -50,6 +50,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   } catch {
     return emit({ event: "result", id: null, ok: false, error: "unparsable command" });
   }
+  if (transactionAdmission?.accept(command)) return;
   return run(command);
 });
 // A parent that is gone (killed, or its terminal closed) ends this client and its streams.

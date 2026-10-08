@@ -326,7 +326,7 @@ for (const failedPhase of ["read", "delete", "absence"]) {
     const source = await readFile(new URL("./web_sdk_retry.mjs", import.meta.url), "utf8");
     const body = source.slice(
       source.indexOf("export async function runLocalRetry"),
-      source.indexOf("if (process.argv[1]"),
+      source.indexOf("export async function recordWebRetries"),
     );
     const calls = [],
       saved = [];
@@ -429,3 +429,152 @@ for (const failedPhase of ["read", "delete", "absence"]) {
     assert.deepEqual(saved[0], receipt, "cleanup failures are durable in the written receipt");
   });
 }
+
+test("production Web entry refuses missing admission before driver or parent call", async () => {
+  const { recordWebRetries } = await import("./web_sdk_retry.mjs");
+  let sends = 0;
+  await assert.rejects(recordWebRetries({ admission: {}, parentCall: () => { sends += 1; }, spawn: () => { sends += 1; } }), /admission/);
+  assert.equal(sends, 0);
+});
+
+function productionFixture({ refuseProbe = false } = {}) {
+  const nonce = "a".repeat(32), ownerId = "b".repeat(32);
+  const database = "projects/fireemu-oracle-query/databases/(default)";
+  const docs = new Map(), parent = [], sdkCalls = [], drivers = [], journals = [];
+  let clock = 0;
+  const version = () => `2030-01-01T00:00:${String(++clock).padStart(2, "0")}.000000001Z`;
+  const fields = (data) => Object.fromEntries(Object.entries(data).map(([key, value]) => [key, typeof value === "number" ? { integerValue: String(value) } : { stringValue: value }]));
+  const data = (field) => Object.fromEntries(Object.entries(field).map(([key, value]) => [key, value.stringValue ?? Number(value.integerValue)]));
+  const spawn = (config, options) => {
+    const pid = 4041 + drivers.length;
+    const events = [{ event: "ready" }, ...(config.s5bAdmission.transport === "browser" ? [{ event: "browser-processes", origin: config.origin, driverPid: pid, processes: [{ pid: pid + 100, type: "browser" }] }] : [])], waiters = [], paused = new Map();
+    let n = 0, exit;
+    const emit = (event) => { events.push(event); for (const waiter of [...waiters]) if (waiter.match(event)) { waiters.splice(waiters.indexOf(waiter), 1); waiter.resolve(event); } };
+    const waitFor = (match) => {
+      const event = events.find(match);
+      if (event) return Promise.resolve(event);
+      return new Promise((resolve) => waiters.push({ match, resolve }));
+    };
+    const wire = async (method, request, response, code = 0) => {
+      const number = ++n;
+      const path = config.s5bAdmission.transport === "node" ? `/google.firestore.v1.Firestore/${method}` : `/v1/${database}/documents:${method === "Commit" ? "commit" : "batchGet"}`;
+      const event = { event: "transaction-dispatch", id: `s5b-${number}`, method, request, record: { n: number, host: "firestore.googleapis.com", path, bearer: null } };
+      assert.equal(await options.onTransactionAdmission(event), true);
+      sdkCalls.push({ client: config.s5bAdmission, method, request });
+      emit({ event: "wire", n: number, host: event.record.host, path, principal: null });
+      const shapedRequest = method === "Commit" ? { transactionPresent: false, writes: request.writes.map((write) => ({ update: { name: write.update.name, updateTime: null }, currentDocument: write.currentDocument })) } : { transactionPresent: false, documents: request.documents };
+      emit({ event: "transaction-wire", n: number, method, complete: true, status: config.s5bAdmission.transport === "node" || code === 0 ? 200 : 400, ...(config.s5bAdmission.transport === "node" ? { grpcCode: code } : {}), request: shapedRequest, response });
+    };
+    const sdk = {
+      pid, events, waitFor, ready: async () => {}, close: async () => exit,
+      send: async (op, command = {}) => {
+        if (op === "shutdown") { exit = { code: 0 }; emit({ event: "exit", code: 0 }); return { ok: true }; }
+        if (op === "continueTransaction") { assert.equal(config.s5bAdmission.probe, false); paused.get(command.name)(); paused.delete(command.name); return { ok: true }; }
+        assert.equal(op, "transaction"); assert.equal(command.maxAttempts, 2);
+        if (refuseProbe && config.s5bAdmission.probe) throw new Error("fixture probe refused");
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+          const name = `${database}/documents/${command.reads[0]}`;
+          const found = docs.get(name), readVersion = found?.updateTime;
+          await wire("BatchGetDocuments", { documents: [name], database }, { documents: found ? [{ name, updateTime: readVersion }] : [{ missing: name }] });
+          const continueRead = attempt === 1 ? new Promise((resolve) => paused.set(command.name, resolve)) : Promise.resolve();
+          emit({ event: "transaction-read", name: command.name, attempt, docs: [{ path: command.reads[0], exists: Boolean(found), data: found ? data(found.fields) : null }] });
+          await continueRead;
+          const write = { update: { name, fields: fields(command.write.data) }, currentDocument: { updateTime: readVersion } };
+          const conflict = docs.get(name)?.updateTime !== readVersion;
+          const updated = conflict ? null : version();
+          await wire("Commit", { database, writes: [write] }, conflict ? { error: { code: 9, status: "FAILED_PRECONDITION" } } : { writeResults: [{ updateTime: updated }], commitTime: updated }, conflict ? 9 : 0);
+          if (!conflict) { docs.set(name, { name, fields: write.update.fields, updateTime: updated }); return { ok: true, attempts: attempt }; }
+        }
+        return { ok: false, attempts: 2 };
+      },
+    };
+    drivers.push({ sdk, config });
+    return sdk;
+  };
+  const parentCall = async (call) => {
+    parent.push(call);
+    if (call.method === "GetDocument") { const doc = docs.get(call.request.name); return { complete: true, code: doc ? 0 : 5, response: doc ? structuredClone(doc) : null }; }
+    if (call.method === "Commit") {
+      const write = call.request.writes[0], old = docs.get(write.update.name);
+      assert.equal(write.currentDocument.exists === false ? Boolean(old) : old.updateTime !== write.currentDocument.updateTime, false);
+      const updateTime = version(); docs.set(write.update.name, { ...structuredClone(write.update), updateTime });
+      return { complete: true, code: 0, response: { writeResults: [{ updateTime }], commitTime: updateTime } };
+    }
+    assert.equal(call.method, "DeleteDocument"); assert.equal(docs.get(call.request.name).updateTime, call.request.currentDocument.updateTime);
+    docs.delete(call.request.name); return { complete: true, code: 0, response: {} };
+  };
+  return { admission: { authorized: true, nonce, ownerId, web: { apiKey: "fixture-key", projectId: "fireemu-oracle-query", authDomain: "fixture.invalid" }, origin: "http://127.0.0.1:4567", bindings: { corpus: "fixture" } }, parentCall, spawn,
+    authorizeSdk: async () => true, statusSdk: async () => {}, journal: async (event) => journals.push(structuredClone(event)), check: async () => {}, parent, sdkCalls, drivers, docs, journals };
+}
+
+test("production fixed corpus accounts for 52 data calls plus 11 management/credential slots", async () => {
+  const { recordWebRetries } = await import("./web_sdk_retry.mjs");
+  const fixture = productionFixture();
+  const receipt = await recordWebRetries(fixture);
+  assert.equal(receipt.complete, true);
+  assert.equal(fixture.parent.length, 38);
+  assert.equal(fixture.parent.filter((call) => call.phase === "observation").length, 20);
+  assert.equal(fixture.parent.filter((call) => call.phase === "documentCleanup").length, 18);
+  assert.equal(fixture.sdkCalls.length, 14);
+  assert.equal(fixture.parent.length + fixture.sdkCalls.length + 11, 63);
+  assert.equal(fixture.drivers.length, 4);
+  assert.equal(fixture.docs.size, 0);
+  assert.equal(Object.keys(receipt.documents).length, 6);
+  assert.equal(fixture.sdkCalls.filter((call) => call.client.probe && call.method === "Commit").length, 0);
+  assert.equal(fixture.sdkCalls.slice(0, 2).every((call) => call.client.probe), true);
+  assert.equal(JSON.stringify(receipt).includes("fixture-key"), false);
+});
+
+test("production cleanup continues across an ownership mismatch without deleting that name", async () => {
+  const { recordWebRetries } = await import("./web_sdk_retry.mjs");
+  const fixture = productionFixture();
+  const call = fixture.parentCall;
+  let foreign;
+  fixture.parentCall = async (request) => {
+    const answer = await call(request);
+    if (request.phase === "documentCleanup" && request.method === "GetDocument" && !foreign) {
+      foreign = request.request.name;
+      answer.response.fields.owner.stringValue = "foreign-owner";
+    }
+    return answer;
+  };
+  const receipt = await recordWebRetries(fixture);
+  assert.equal(receipt.complete, false);
+  assert.equal(fixture.parent.filter((request) => request.method === "DeleteDocument").length, 5);
+  assert.equal(fixture.parent.some((request) => request.method === "DeleteDocument" && request.request.name === foreign), false);
+  assert.equal(fixture.docs.size, 1);
+  assert.equal(receipt.cleanup.length, 6);
+});
+
+test("production probe refusal stops before seed writes and never resumes either probe", async () => {
+  const { recordWebRetries } = await import("./web_sdk_retry.mjs");
+  const fixture = productionFixture();
+  fixture.statusSdk = async ({ client }) => { if (client.endsWith("probe")) throw new Error("fixture capture refused"); };
+  const receipt = await recordWebRetries(fixture);
+  assert.equal(receipt.complete, false);
+  assert.equal(fixture.parent.some((call) => call.method !== "GetDocument"), false);
+  assert.equal(fixture.sdkCalls.length, 1);
+  assert.equal(fixture.sdkCalls[0].method, "BatchGetDocuments");
+  assert.equal(fixture.drivers.length, 1);
+  assert.equal(fixture.docs.size, 0);
+});
+
+test("fixed parent transport validates only six marked writes and version-bound deletes", async () => {
+  const { validateCall } = await import("./txn_program_transport.mjs");
+  const nonce = "a".repeat(32), ownerId = "b".repeat(32);
+  const database = "projects/fireemu-oracle-query/databases/(default)";
+  const spec = { kind: "txn-program-call-v1", transport: "grpc", target: { kind: "production" }, projectId: "fireemu-oracle-query", nonce, ownerId, slug: "txn-s5b", documents: ["node", "browser"].flatMap((transport) => ["control", "control-other", "conflict", "probe"].map((role) => `${transport}-${role}`)), states: ["seed", "witness", "final"], method: "Commit", deadlineMs: 10000, bearer: "fixture-bearer", request: { database, writes: [{ update: { name: `${database}/documents/conf_txn/s5b_${nonce}_node_conflict`, fields: { owner: { stringValue: ownerId }, nonce: { stringValue: nonce }, case: { stringValue: "conflict" }, value: { integerValue: "1" } } }, currentDocument: { exists: false } }] } };
+  validateCall(spec);
+  const update = structuredClone(spec);
+  update.request.writes[0].update.fields.value.integerValue = "2";
+  update.request.writes[0].currentDocument = { updateTime: { seconds: "1", nanos: 1 } };
+  validateCall(update);
+  const deletion = { ...spec, method: "DeleteDocument", request: { name: spec.request.writes[0].update.name, currentDocument: { updateTime: { seconds: "1", nanos: 1 } } } };
+  validateCall(deletion);
+  for (const changed of [
+    { ...spec, projectId: "fireemu-oracle-sbx" },
+    { ...spec, method: "BeginTransaction", request: { database, options: { readWrite: {} } } },
+    { ...deletion, request: { ...deletion.request, name: deletion.request.name.replace("node_conflict", "node_probe") } },
+    { ...deletion, request: { ...deletion.request, currentDocument: { exists: true } } },
+  ]) assert.throws(() => validateCall(changed));
+});

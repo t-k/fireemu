@@ -20,7 +20,8 @@ ROOT = HERE.parents[2]
 WORKER = HERE / 'txn_program_transport.mjs'
 LOCK = ROOT / 'conformance/pnpm-lock.yaml'
 _ENV = {'LANG': 'C', 'LC_ALL': 'C', 'TZ': 'UTC'}
-_SEEDS = {'@grpc/grpc-js', '@google-cloud/firestore'}
+_SEEDS = {'@grpc/grpc-js', '@google-cloud/firestore', 'firebase-admin'}
+_WEB_SEEDS = _SEEDS | {'firebase', 'playwright'}
 _RUNTIME_STAMPS = {}
 
 
@@ -28,16 +29,22 @@ def _sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def _tree(root):
+def _tree(root, *, chromium=False):
     root = Path(root)
     rows = []
     for directory, dirs, files in os.walk(root, followlinks=False):
         dirs[:] = sorted(name for name in dirs if name != 'node_modules')
         for name in dirs + files:
-            if (Path(directory) / name).is_symlink():
+            entry = Path(directory) / name
+            if entry.is_symlink() and chromium:
+                if not entry.resolve(strict=True).is_relative_to(root.resolve()):
+                    raise ValueError('S5b Chromium link escaped the selected bundle')
+                rows.append((entry.relative_to(root).as_posix(), hashlib.sha256(b'symlink\0' + os.readlink(entry).encode()).hexdigest()))
+            elif entry.is_symlink():
                 raise ValueError('program dependency tree has a non-regular entry')
         for name in files:
             path = Path(directory) / name
+            if path.is_symlink() and chromium: continue
             if not path.is_file():
                 raise ValueError('program dependency entry is not a file')
             rows.append((path.relative_to(root).as_posix(), _sha(path)))
@@ -45,13 +52,13 @@ def _tree(root):
     return len(rows), hashlib.sha256(''.join(f'{name}\0{digest}\n' for name, digest in rows).encode()).hexdigest()
 
 
-def discover_runtime(executable):
+def discover_runtime(executable, *, web_sdk=False):
     require_packet_runtime(PYTHON_VERSION)
     node = Path(executable)
     if not node.is_absolute() or not node.is_file():
         raise ValueError('program absolute Node executable required')
-    result = subprocess.run([str(node), str(WORKER), '--runtime-info'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=_ENV, timeout=12, check=True)
-    if len(result.stdout) > 65536:
+    result = subprocess.run([str(node), str(WORKER), '--runtime-info-s5b' if web_sdk else '--runtime-info'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=_ENV, timeout=12, check=True)
+    if len(result.stdout) > 262144:
         raise ValueError('program runtime receipt capacity exceeded')
     info = json.loads(result.stdout)
     runtime = {**info, 'nodeExecutable': str(node), 'nodeSha256': _sha(node), 'workerSha256': _sha(WORKER), 'lockSha256': _sha(LOCK), 'pythonVersion': PYTHON_VERSION, 'pythonExecutable': sys.executable, 'pythonSha256': _sha(sys.executable)}
@@ -76,6 +83,12 @@ def _stamp(path):
 
 def _watch_paths(value):
     paths = {WORKER, LOCK, Path(sys.executable), Path(value['nodeExecutable'])}
+    if value.get('webSdk') is True:
+        paths.add(Path(value['chromiumExecutable']))
+        bundle = Path(value['chromiumBundle']['root'])
+        for directory, dirs, files in os.walk(bundle, followlinks=False):
+            paths.add(Path(directory))
+            paths.update(Path(directory) / name for name in dirs + files)
     modules = ROOT / 'conformance/node_modules'
     paths.add(modules)
     for row in value['dependencies'].values():
@@ -124,6 +137,8 @@ def verify_runtime(value):
 def _verify_runtime_full(value):
     require_packet_runtime(PYTHON_VERSION)
     expected_keys = {'nodeVersion', 'dependencies', 'nodeExecutable', 'nodeSha256', 'workerSha256', 'lockSha256', 'pythonVersion', 'pythonExecutable', 'pythonSha256'}
+    web = isinstance(value, dict) and value.get('webSdk') is True
+    if web: expected_keys |= {'webSdk', 'chromiumExecutable', 'chromiumSha256', 'chromiumBundle', 'browserBundles'}
     if not isinstance(value, dict) or set(value) != expected_keys or value['pythonVersion'] != PYTHON_VERSION or value['pythonExecutable'] != sys.executable or value['nodeVersion'] != 'v24.14.0':
         raise ValueError('program runtime differs from reviewed interpreter')
     node = Path(value['nodeExecutable'])
@@ -136,7 +151,8 @@ def _verify_runtime_full(value):
         if value[key] != _sha(path):
             raise ValueError('program runtime bytes differ')
     dependencies = value['dependencies']
-    if not isinstance(dependencies, dict) or not _SEEDS <= set(dependencies):
+    seeds = _WEB_SEEDS if web else _SEEDS
+    if not isinstance(dependencies, dict) or not seeds <= set(dependencies):
         raise ValueError('program closed dependency roots differ')
     modules = ROOT / 'conformance/node_modules'
     for key, row in dependencies.items():
@@ -163,14 +179,23 @@ def _verify_runtime_full(value):
             if resolved != row['requires'][name] or resolved is not None and resolved not in dependencies or resolved is None and name not in package.get('optionalDependencies', {}):
                 raise ValueError('program dependency resolution changed or was omitted')
     reachable = set()
-    pending = list(_SEEDS)
+    pending = list(seeds)
     while pending:
         key = pending.pop()
         if key in reachable: continue
         reachable.add(key)
         pending.extend(child for child in dependencies[key]['requires'].values() if child is not None)
     if reachable != set(dependencies): raise ValueError('program dependency graph is not closed')
-    if dependencies['@grpc/grpc-js']['version'] != '1.14.4' or dependencies['@google-cloud/firestore']['version'] != '8.7.1':
+    if web:
+        chromium = Path(value['chromiumExecutable'])
+        bundle = value['chromiumBundle']
+        root = chromium.parents[2] if chromium.parents[2].suffix == '.app' else chromium.parent
+        if not isinstance(bundle, dict) or set(bundle) != {'root', 'fileCount', 'treeSha256'} or bundle['root'] != str(root) or (_tree(root, chromium=True) != (bundle['fileCount'], bundle['treeSha256'])):
+            raise ValueError('S5b actual Chromium bundle bytes differ')
+        firebase = Path(dependencies['firebase']['root'])
+        if dependencies['firebase']['version'] != '12.18.0' or not chromium.is_absolute() or not chromium.is_file() or value['chromiumSha256'] != _sha(chromium) or not isinstance(value['browserBundles'], dict) or value['browserBundles'] != {name: _sha(firebase / name) for name in ('firebase-app.js', 'firebase-auth.js', 'firebase-firestore.js')}:
+            raise ValueError('S5b actual Web SDK/Chromium/bundle bytes differ')
+    if dependencies['@grpc/grpc-js']['version'] != '1.14.4' or dependencies['@google-cloud/firestore']['version'] != '8.7.1' or dependencies['firebase-admin']['version'] != '14.3.0':
         raise ValueError('program dependency versions differ')
 
 

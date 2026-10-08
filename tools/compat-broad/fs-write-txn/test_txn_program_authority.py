@@ -1,7 +1,7 @@
 """Program-scoped authority: exact scope, revocation, shared history and send-time authorization."""
 
 import importlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -32,6 +32,9 @@ def approve_row(actor=ACTOR, **changes):
 
 ENVELOPE, APPROVE = envelope_row(), approve_row()
 DECISIONS = AUTHORITY + ENVELOPE + APPROVE
+CODEX_ACTOR = "Codex coordinator（委任）"
+CODEX_HANDOVER = "- 2026-10-07 | Codex coordinator handover | EVENTARC、FS-TRANSACTION、PUBSUBのclosureを目標にCodexが調整役を引き継ぎ、GPT-6.1-Solのサブエージェントへ作業を割り当てる。最優先はEVENTARC H2-Bの監視とjournal value.lineの原文admission、およびTxn-04再生成の完了処理。本番Firebaseとのgap解消を優先し、過剰設計を避ける。 | オーナー直接指示 | Codex session 2026-10-07\n"
+CODEX_DECISIONS = AUTHORITY + CODEX_HANDOVER + envelope_row(CODEX_ACTOR) + approve_row(CODEX_ACTOR)
 NOW = datetime(2026, 9, 28, 5, tzinfo=timezone.utc)
 LAST = {"ts": "2026-09-28T04:00:00Z", "project": "fireemu-oracle-sbx", "taskId": "FS-TRANSACTION-SANDBOX", "attemptId": "prior", "outcome": "recorded", "estimatedUsd": 0.05}
 
@@ -85,6 +88,72 @@ def test_an_envelope_that_states_the_shorter_deadline_does_not_authorize_a_table
 def test_delegation_with_exact_foundation_envelope_and_version_is_accepted():
     assert authority.authorize(DECISIONS, PINS) == (2 * REQUESTS, 0.04)
     assert authority.verify_initial_gates([LAST], NOW, DECISIONS, PINS) == LAST["ts"]
+
+
+@pytest.mark.parametrize("actor", [CODEX_ACTOR, "CODEX COORDINATOR(委任)"])
+def test_codex_actor_requires_genuine_owner_handover_and_both_foundations(actor):
+    decisions = CODEX_DECISIONS.replace(CODEX_ACTOR, actor)
+    assert authority.authorize(decisions, PINS) == (2 * REQUESTS, 0.04)
+    assert authority.verify_initial_gates([LAST], NOW, decisions, PINS) == LAST["ts"]
+    entries = authority.shared._decision_entries(decisions)
+    assert authority.shared._authorized_actor(actor, entries)
+
+
+@pytest.mark.parametrize("old,new", [
+    (CODEX_HANDOVER, ""),
+    ("- 2026-10-07 | Codex coordinator handover", "- 2026-10-08 | Codex coordinator handover"),
+    ("| Codex coordinator handover |", "| Codex coordinator delegation |"),
+    ("| オーナー直接指示 |", "| Codex coordinator（委任） |"),
+    ("| Codex session 2026-10-07", "| Codex conversation 2026-10-07"),
+    ("過剰設計を避ける。", "過剰設計も認める。"),
+    (CODEX_HANDOVER, CODEX_HANDOVER + CODEX_HANDOVER),
+    (CODEX_HANDOVER, CODEX_HANDOVER + CODEX_HANDOVER.replace("過剰設計を避ける。", "scope changed")),
+])
+def test_codex_actor_refuses_absent_altered_or_duplicate_handover(old, new):
+    with pytest.raises(ValueError):
+        authority.authorize(CODEX_DECISIONS.replace(old, new), PINS)
+
+
+@pytest.mark.parametrize("columns", [3, 4, 5, 6])
+@pytest.mark.parametrize("topic", ["Codex coordinator handover", "Ｃｏｄｅｘ coordinator handover"])
+def test_codex_actor_refuses_raw_handover_revocation(columns, topic):
+    parts = ["- 2026-10-08", topic, "ＲＥＶＯＫＥＤ", "オーナー直接指示", "unit", "extra"]
+    cancellation = " | ".join(parts[:columns]) + "\n"
+    with pytest.raises(ValueError):
+        authority.authorize(CODEX_DECISIONS + cancellation, PINS)
+
+
+@pytest.mark.parametrize("foundation", AUTHORITY.splitlines(keepends=True))
+@pytest.mark.parametrize("change", ["missing", "scope", "duplicate", "revoked"])
+def test_codex_actor_refuses_missing_changed_duplicate_or_revoked_old_foundations(foundation, change):
+    if change == "missing":
+        decisions = CODEX_DECISIONS.replace(foundation, "")
+    elif change == "scope":
+        decisions = CODEX_DECISIONS.replace(foundation, foundation.replace("費用US$10", "費用US$20"))
+    elif change == "duplicate":
+        decisions = CODEX_DECISIONS + foundation
+    else:
+        topic = foundation.split("|")[1].strip()
+        decisions = CODEX_DECISIONS + f"- 2026-10-08 | {topic} | REVOKED | オーナー直接指示 | unit\n"
+    with pytest.raises(ValueError):
+        authority.authorize(decisions, PINS)
+
+
+@pytest.mark.parametrize("actor", ["Codex coordinator", "Codex coordinator（委任。追加）", "Codex worker（委任）", "prefix Codex coordinator（委任）", "Codex coordinator（owner996/998・委任365/395）"])
+def test_codex_actor_does_not_accept_other_actor_names(actor):
+    with pytest.raises(ValueError):
+        authority.authorize(CODEX_DECISIONS.replace(CODEX_ACTOR, actor), PINS)
+
+
+def test_codex_actor_is_not_revoked_by_an_unrelated_packet_revocation():
+    cancellation = f"- 2026-10-08 | {NAME} | REVOKED packetSha256={'d' * 64} | {CODEX_ACTOR} | unit\n"
+    assert authority.authorize(CODEX_DECISIONS + cancellation, PINS) == (2 * REQUESTS, 0.04)
+
+
+def test_codex_handover_does_not_replace_exact_packet_and_envelope_approval():
+    for decisions in [AUTHORITY + CODEX_HANDOVER, CODEX_DECISIONS.replace(approve_row(CODEX_ACTOR), ""), CODEX_DECISIONS.replace(envelope_row(CODEX_ACTOR), "")]:
+        with pytest.raises(ValueError):
+            authority.authorize(decisions, PINS)
 
 
 @pytest.mark.parametrize("old,new", [("owned-2-documents", "owned-5-documents"), (f"maxRequests={2 * REQUESTS}", f"maxRequests={2 * REQUESTS - 1}"), ("reserveUsd=0.04", "reserveUsd=10.01"), ("reserveUsd=0.04", "reserveUsd=0.03"), (f"maxRequests={2 * REQUESTS}", f"maxRequests={2 * REQUESTS + 1}"), ("decision=APPROVE;", ""), ("recordings=2", "recordings=1"), ("根拠=2026-09-28 調整役への委任（本番の送信）", "根拠=unknown"), ("writerDeadlineSeconds=30", "writerDeadlineSeconds=60"), ("transports=grpc+rest", "transports=grpc"), ("observationSeconds=240", "observationSeconds=900"), ("recoverySeconds=180", "recoverySeconds=360"), ("maxTokens=2", "maxTokens=3"), ("maxUnresolvedTokens=1", "maxUnresolvedTokens=2"), ("releasePolicy=rollback-zero-before-next-chain", "releasePolicy=assume-invalidated"), ("timingSource=parent-wire-envelope", "timingSource=local-control-clock")])
@@ -183,6 +252,25 @@ def test_the_transports_in_the_scope_come_from_the_table():
     assert authority.envelope_scope(support.TABLE)["transports"] == "grpc+rest"
 
 
+@pytest.mark.parametrize('missing', ['none', 'envelope', 'version', 'wrong-scope', 'duplicate'])
+def test_sdk_admission_requires_exact_e_and_v_even_for_direct_owner(missing):
+    from txn_program_cli import table_for
+    table = table_for('p17-admin-sdk-retry')
+    scope = authority.envelope_scope(table)
+    pins = {**PINS, 'packetName': table['name'], 'project': table['project'], 'envelopeId': table['envelopeId'], 'requestsPerRecording': 131, 'estimatedUsdPerRecording': 0, 'scope': scope}
+    topic = 'FS-TRANSACTION ' + table['name']
+    envelope = f"- 2026-10-07 | {topic} envelope | " + '; '.join(f'{key}={value}' for key, value in {'envelopeId': table['envelopeId'], **scope, 'maxRequests': 262, 'reserveUsd': 0}.items()) + f" | オーナー | {pins['envelopePath']}\n"
+    version = f"- 2026-10-07 | {topic} | " + '; '.join(f'{key}={value}' for key, value in {'decision': 'APPROVE', 'envelopeId': pins['envelopeId'], 'packetSha256': pins['packetSha256'], 'sourceCommit': pins['sourceCommit'], 'runnerSha256': pins['runnerSha256'], 'requestsPerRecording': 131, 'estimatedUsdPerRecording': 0, 'recordings': 2}.items()) + f" | オーナー | {pins['packetPath']}\n"
+    text = envelope + version
+    if missing == 'envelope': text = version
+    if missing == 'version': text = envelope
+    if missing == 'wrong-scope': text = text.replace('owned-12-documents', 'owned-8-documents')
+    if missing == 'duplicate': text += version
+    if missing == 'none': assert authority.authorize(text, pins) == (262, 0)
+    else:
+        with pytest.raises(ValueError): authority.authorize(text, pins)
+
+
 def test_query_is_billed_and_authority_scope_binds_each_declared_database():
     from txn_program_program import PROJECTS, budget_for
     assert "fireemu-oracle-query" in PROJECTS
@@ -258,7 +346,8 @@ def test_initial_gates_accept_real_project_history_read_only(source):
     scope = {**SCOPE, "project": "fireemu-oracle-query/(default)+fireemu-oracle-query/txn-{nonce}+fireemu-oracle-txn/(default)"}
     pins = {**PINS, "project": "fireemu-oracle-query", "scope": scope}
     decisions = AUTHORITY + envelope_row(scope=scope) + approve_row()
-    now = datetime(2026, 10, 7, tzinfo=timezone.utc)
+    projects = {resource.split('/')[0] for resource in scope['project'].split('+')}
+    now = max(datetime.fromisoformat(row['ts'].replace('Z', '+00:00')) for row in rows if row.get('project') in projects or projects.intersection(row.get('projects', []))) + timedelta(minutes=31)
     assert authority.verify_initial_gates(rows, now, decisions, pins)
     assert path.read_bytes() == original
 
@@ -277,6 +366,21 @@ def test_history_excludes_other_tasks_but_never_an_open_current_attempt(project,
         row[identity] = authority.TASK_ID if identity == "taskId" else pins[identity]
     with pytest.raises(ValueError):
         authority.verify_initial_gates([row], NOW, decisions, pins)
+
+
+@pytest.mark.parametrize("identity", ["taskId", "task-alias", "sdk-packet"])
+@pytest.mark.parametrize("outcome", ["reserved", "stopped-needs-review"])
+def test_p16_admission_keeps_prior_sdk_responsibility_open(identity, outcome):
+    scope = {**SCOPE, "project": "fireemu-oracle-query/(default)+fireemu-oracle-txn/(default)"}
+    pins = {**PINS, "project": "fireemu-oracle-query", "scope": scope}
+    decisions = AUTHORITY + envelope_row(scope=scope) + approve_row()
+    row = {"ts": LAST["ts"], "project": "fireemu-oracle-txn", "taskId": "OTHER", "packetId": "fs-transaction-p17-admin-sdk-retry-prior", "attemptId": "sdk-prior", "outcome": outcome, "estimatedUsd": 0}
+    if identity == "taskId": row["taskId"] = authority.TASK_ID
+    elif identity == "task-alias": row["taskId"] = "FS-TRANSACTION"
+    with pytest.raises(ValueError):
+        authority.verify_initial_gates([row], NOW, decisions, pins)
+    row["outcome"] = "recorded"
+    assert authority.verify_initial_gates([row], NOW, decisions, pins) is None
 
 
 @pytest.mark.parametrize("event,outcome", [("started", None), (None, "reserved"), (None, "recorded")])

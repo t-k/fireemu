@@ -1,14 +1,86 @@
 import grpc from "@grpc/grpc-js";
 import { isDeepStrictEqual } from "node:util";
 
-export function rewriteNativeFrame(frame, bindings, invalidAck) {
+export function rewriteNativeFrame(frame, bindings, invalidAck, ackSlots = null) {
   const result = structuredClone(frame);
   for (const field of ["ackIds", "modifyDeadlineAckIds"])
     if (result[field])
       result[field] = result[field].map((value) =>
-        field === "ackIds" && value === invalidAck ? value : bindings.get("ack", value),
+        field === "ackIds" && value === invalidAck
+          ? value
+          : field === "ackIds" && ackSlots
+            ? liveAckSlot(ackSlots, value)
+            : bindings.get("ack", value),
       );
   return result;
+}
+function liveAckSlot(slots, sourceToken) {
+  if (!slots.has(sourceToken)) throw new Error("native ACK slot requires an actual live receive");
+  return slots.get(sourceToken);
+}
+function unorderedFlow(cell, sourceCell, opener) {
+  if (cell.id !== "S06" || cell.variant !== "flow-control") return null;
+  const exchanges = sourceCell?.exchanges ?? [];
+  const setup = (method) =>
+    exchanges.filter(
+      (e) =>
+        e.method === method &&
+        e.request.body.name === opener.subscription &&
+        e.response.ok === true &&
+        e.response.unknown !== true &&
+        e.response.body.name === opener.subscription,
+    );
+  const creates = setup("CreateSubscription"),
+    gets = setup("GetSubscription");
+  if (creates.length !== 1 || gets.length !== 1)
+    throw new Error("native unordered ordering witness missing");
+  const flag = (value) => {
+    if (value === undefined || value === false) return false;
+    if (value === true) return true;
+    throw new Error("native unordered ordering witness invalid");
+  };
+  const ordering = flag(creates[0].request.body.enableMessageOrdering);
+  if (
+    flag(creates[0].response.body.enableMessageOrdering) !== ordering ||
+    flag(gets[0].response.body.enableMessageOrdering) !== ordering
+  )
+    throw new Error("native unordered ordering witness contradictory");
+  if (ordering) return null;
+  const publications = new Map();
+  for (const exchange of exchanges.filter((e) => e.method === "Publish")) {
+    const messages = exchange.request.body.messages,
+      ids = exchange.response.body?.messageIds;
+    if (
+      exchange.request.body.topic !== creates[0].request.body.topic ||
+      exchange.response.ok !== true ||
+      exchange.response.unknown === true ||
+      messages?.length !== 1 ||
+      ids?.length !== 1 ||
+      publications.has(ids[0])
+    )
+      throw new Error("native unordered owned publication witness invalid");
+    if (messages[0].orderingKey) return null;
+    publications.set(ids[0], messages[0]);
+  }
+  const pending = new Map();
+  for (const frame of sourceCell.frames.filter((f) => f.direction === "in")) {
+    if (!frame.verified || frame.body.receivedMessages?.length !== 1)
+      throw new Error("native unordered source cardinality witness invalid");
+    const item = frame.body.receivedMessages[0],
+      publication = publications.get(item.message?.messageId);
+    if (
+      !publication ||
+      pending.has(item.message.messageId) ||
+      !["data", "attributes", "orderingKey"].every((field) =>
+        isDeepStrictEqual(publication[field], item.message[field]),
+      )
+    )
+      throw new Error("native unordered owned receive witness invalid");
+    pending.set(item.message.messageId, item);
+  }
+  if (pending.size !== 3 || publications.size !== 3)
+    throw new Error("native unordered owned multiset witness incomplete");
+  return { pending, sourceIds: [...pending.keys()], ackSlots: new Map() };
 }
 export function matchNativeReceive(source, actual, bindings) {
   if (
@@ -65,7 +137,14 @@ export function createActionClock({
 }
 
 // A finite action connector; all token substitutions come from an actual owned receive.
-export function createNativeReplay({ wire, bindings, clock, cells, journal = null }) {
+export function createNativeReplay({
+  wire,
+  bindings,
+  clock,
+  cells,
+  sourceCells = [],
+  journal = null,
+}) {
   let active = null;
   const witnesses = new Map();
   const receivedAt = new WeakMap();
@@ -129,9 +208,15 @@ export function createNativeReplay({ wire, bindings, clock, cells, journal = nul
       if (!cell || cell.group !== "G4") throw new Error("native cell scope");
       if (!active) {
         if (row.direction !== "out" || row.elapsedMs < 0) throw new Error("native opener order");
+        const unordered = unorderedFlow(
+          cell,
+          sourceCells.find((c) => c.id === cell.id),
+          row.body,
+        );
         await clock.dispatch(row);
         clock.open(cell.id);
         active = {
+          unordered,
           cellId: cell.id,
           sourceOpenedAt: Date.parse(row.at),
         };
@@ -143,10 +228,17 @@ export function createNativeReplay({ wire, bindings, clock, cells, journal = nul
         await clock.native(row);
         checkActualReceives();
         if (row.direction === "out") {
-          const outbound = rewriteNativeFrame(row.body, bindings, cell.invalidAck);
+          const outbound = rewriteNativeFrame(
+            row.body,
+            bindings,
+            cell.invalidAck,
+            active.unordered?.ackSlots,
+          );
           active.lastOutboundMs = undefined;
           active.lastOutboundBody = undefined;
           active.stream.write(outbound);
+          if (active.unordered)
+            for (const token of row.body.ackIds ?? []) active.unordered.ackSlots.delete(token);
           if (
             cell.variant === "in-stream-deadline-update" &&
             row.body.modifyDeadlineSeconds?.[0] === 20
@@ -174,7 +266,23 @@ export function createNativeReplay({ wire, bindings, clock, cells, journal = nul
             if (active.creditHeld || instant < active.deadlineUntilMs)
               throw new Error("native actual receive violated quiet interval");
           }
-          matchNativeReceive(row.body, actual, bindings);
+          if (active.unordered) {
+            if (row.body.receivedMessages?.length !== 1 || actual.receivedMessages?.length !== 1)
+              throw new Error("native receive cardinality mismatch");
+            const received = actual.receivedMessages[0];
+            const matches = [...active.unordered.pending].filter(
+              ([id]) => bindings.get("message", id) === received.message?.messageId,
+            );
+            if (matches.length !== 1)
+              throw new Error("native unordered owned receive missing or duplicate");
+            const [id, candidate] = matches[0];
+            matchNativeReceive({ ...row.body, receivedMessages: [candidate] }, actual, bindings);
+            const slot = row.body.receivedMessages[0].ackId;
+            if (active.unordered.ackSlots.has(slot))
+              throw new Error("native ACK slot already live");
+            active.unordered.ackSlots.set(slot, received.ackId);
+            active.unordered.pending.delete(id);
+          } else matchNativeReceive(row.body, actual, bindings);
           if (cell.variant === "flow-control" && actual.receivedMessages?.length) {
             const instant = receivedAt.get(actual);
             if (!Number.isFinite(instant))
@@ -262,6 +370,22 @@ export function createNativeReplay({ wire, bindings, clock, cells, journal = nul
             observedElapsedMs,
             observationN: observation?.n ?? null,
           };
+        }
+        if (active.unordered) {
+          const expectedIds = active.unordered.sourceIds
+            .map((id) => bindings.get("message", id))
+            .toSorted();
+          const actualIds = (active.receipts ?? [])
+            .flatMap((receipt) =>
+              (receipt.body.receivedMessages ?? []).map((item) => item.message?.messageId),
+            )
+            .toSorted();
+          if (
+            active.unordered.pending.size ||
+            active.unordered.ackSlots.size ||
+            !isDeepStrictEqual(expectedIds, actualIds)
+          )
+            throw new Error("native unordered owned multiset or live ACK slots incomplete");
         }
         proof.completed = !state.incomplete;
       } else throw new Error("unlisted native action");

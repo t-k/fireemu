@@ -1293,7 +1293,21 @@ export async function hA2({
           facts.some(
             (f) =>
               f.name === n &&
-              (f.closed || (channels.includes(name) && n === channelTopic && f.confirmed)),
+              (f.closed ||
+                (channels.includes(name) && n === channelTopic && f.confirmed) ||
+                (m.functions &&
+                  f.confirmed &&
+                  Object.entries(recording.channelTopics).some(
+                    ([channel, topic]) =>
+                      topic === n &&
+                      channels.includes(channel) &&
+                      (channel === m.channel ? recording.baseline : recording.namedBaseline)
+                        ?.status === 404 &&
+                      recording.writes.some(
+                        (w) =>
+                          w.name === channel && w.action === "create" && w.state === "confirmed",
+                      ),
+                  ))),
           ),
       ) &&
       ((host === "firestore" && name === recording.marker && creation?.state === "confirmed") ||

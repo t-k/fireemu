@@ -2647,3 +2647,365 @@ test("H2 successor emitted checkpoint and settlement lines use the truthful coor
     }
   }
 });
+
+test("H2 A2 closes both owned channel topics only after their own channel DELETE", async () => {
+  const { hA2 } = await import("./eventarc-production/h-record.mjs");
+  for (const scenario of [
+    "actual",
+    "reverse",
+    "foreign-topic",
+    "foreign-owner",
+    "unknown-owner",
+    "pending-owner",
+    "preexisting-owner",
+    "prior-delete",
+  ]) {
+    const manifest = hManifest({
+      project: "fireemu-oracle-events",
+      runId: "ea3c9a8129ff",
+      recording: "h2-a",
+    });
+    const channels = [manifest.namedChannel, manifest.channel];
+    const topics = channels.map(
+      (name, i) => `projects/${manifest.project}/topics/owned-channel-${i}`,
+    );
+    const fn = `projects/${manifest.project}/locations/us-central1/functions/feea3c9a8129ffHExtension`;
+    const marker = `projects/${manifest.project}/databases/(default)/documents/fe_h_${manifest.runId}/owned`;
+    const recording = {
+      manifest,
+      lastRequestAt: 0,
+      marker,
+      publishes: [{ retry: true, body: { events: [{ id: "retry-id" }] } }],
+      writes: [
+        ...channels.map((name) => ({
+          name,
+          host: "eventarc",
+          action: "create",
+          state: "confirmed",
+        })),
+        { name: fn, host: "functions", action: "create", state: "confirmed" },
+        {
+          name: fn,
+          host: "functions",
+          action: "delete",
+          state: "pending",
+          operation: "original-function-delete",
+        },
+        { name: marker, host: "firestore", action: "create", state: "unknown" },
+      ],
+      identities: topics.map((topic) => ({ function: fn, topic })),
+      channelTopics: Object.fromEntries(channels.map((name, i) => [name, topics[i]])),
+      baseline: { status: 404 },
+      namedBaseline: { status: 404 },
+      baselineLists: {},
+      cleanup: {
+        unconfirmed: [],
+        unsettled: [fn, topics[0], topics[1], topics[1], topics[1], ...channels],
+      },
+    };
+    if (scenario === "reverse") recording.writes.reverse();
+    if (scenario === "foreign-topic")
+      recording.cleanup.unsettled.push("projects/fireemu-oracle-events/topics/foreign");
+    if (scenario === "foreign-owner") {
+      delete recording.channelTopics[channels[1]];
+      recording.channelTopics[
+        "projects/fireemu-oracle-events/locations/us-central1/channels/foreign"
+      ] = topics[1];
+      recording.writes.push({
+        name: "projects/fireemu-oracle-events/locations/us-central1/channels/foreign",
+        host: "eventarc",
+        action: "create",
+        state: "confirmed",
+      });
+    }
+    if (["unknown-owner", "pending-owner"].includes(scenario))
+      recording.writes[1].state = scenario === "unknown-owner" ? "unknown" : "pending";
+    if (scenario === "preexisting-owner") recording.baseline.status = 200;
+    if (scenario === "prior-delete")
+      recording.writes.push({
+        name: channels[0],
+        host: "eventarc",
+        action: "delete",
+        state: "unknown",
+      });
+    const deleted = new Set();
+    const calls = [];
+    const channelDone = new Set();
+    let markerDeleted = false;
+    const result = await hA2({
+      recording,
+      now: () => 600000,
+      note: () => {},
+      sleep: async () => {},
+      evidence: {
+        a2ListRuling: true,
+        a2ChannelRuling: true,
+        readiness: () => true,
+        notFound: (r) => r.status === 404,
+        operation: () => true,
+        retention: async () => ({ complete: true, atBaseline: true }),
+      },
+      transports: Object.fromEntries(
+        ["functions", "run", "eventarc", "pubsub", "firestore"].map((host) => [
+          host,
+          {
+            request: async (spec) => {
+              calls.push({ host, ...spec });
+              if (spec.method === "DELETE") {
+                if (host === "firestore") {
+                  if (["actual", "reverse"].includes(scenario))
+                    assert.equal(channelDone.size, 2, scenario);
+                  markerDeleted = true;
+                  return { status: 200, body: {} };
+                }
+                const name = spec.path.slice(4);
+                assert.equal(host, "eventarc");
+                assert.ok(channels.includes(name));
+                assert.equal(deleted.has(name), false);
+                deleted.add(name);
+                return {
+                  status: 200,
+                  body: {
+                    name: `projects/${manifest.project}/locations/us-central1/operations/delete-${channels.indexOf(name)}`,
+                    metadata: { target: name },
+                    done: true,
+                  },
+                };
+              }
+              if (host === "firestore")
+                return markerDeleted
+                  ? { status: 404, body: {} }
+                  : {
+                      status: 200,
+                      body: {
+                        name: marker,
+                        fields: {
+                          run: { stringValue: manifest.runId },
+                          source: { stringValue: manifest.source },
+                          eventId: { stringValue: "retry-id" },
+                        },
+                      },
+                    };
+              const channel = channels.find((name) => spec.path === `/v1/${name}`);
+              if (channel) {
+                if (
+                  ["unknown-owner", "pending-owner"].includes(scenario) &&
+                  channel === channels[1]
+                )
+                  return { status: 404, body: {} };
+                if (deleted.has(channel)) {
+                  channelDone.add(channel);
+                  return { status: 404, body: {} };
+                }
+                return {
+                  status: 200,
+                  body: { name: channel, pubsubTopic: topics[channels.indexOf(channel)] },
+                };
+              }
+              const key = spec.path.split("?")[0].split("/").at(-1);
+              if (key === "topics")
+                return {
+                  status: 200,
+                  body: {
+                    topics: topics
+                      .filter((topic, i) => !channelDone.has(channels[i]))
+                      .map((name) => ({ name })),
+                  },
+                };
+              return { status: 200, body: { [key]: [] } };
+            },
+          },
+        ]),
+      ),
+    });
+    const success = ["actual", "reverse"].includes(scenario);
+    assert.equal(result.cleanupReady, success, scenario);
+    assert.equal(result.closureReady, false, scenario);
+    assert.equal(
+      recording.writes.find((w) => w.name === fn && w.action === "delete").state,
+      "pending",
+      scenario,
+    );
+    for (const [i, topic] of topics.entries())
+      assert.equal(
+        result.facts.find((f) => f.name === topic)?.closed ?? false,
+        success || (scenario === "prior-delete" && i === 1),
+        scenario,
+      );
+    assert.equal(
+      calls.some((c) => c.host === "pubsub" && c.method === "DELETE"),
+      false,
+      scenario,
+    );
+    if (success) {
+      assert.equal(deleted.size, 2);
+      assert.equal(markerDeleted, true);
+    }
+    if (
+      [
+        "foreign-topic",
+        "foreign-owner",
+        "unknown-owner",
+        "pending-owner",
+        "preexisting-owner",
+      ].includes(scenario)
+    )
+      assert.equal(deleted.size, 0, scenario);
+    if (scenario === "prior-delete") {
+      assert.equal(
+        calls.some((c) => c.method === "DELETE" && c.path === `/v1/${channels[0]}`),
+        false,
+      );
+      assert.deepEqual([...deleted], [channels[1]]);
+      assert.equal(markerDeleted, true);
+      assert.equal(result.facts.find((f) => f.name === channels[0]).closed, false);
+    }
+  }
+});
+
+test("H2 successor A2 binds recovery source adoption before credentials and preserves the recording", async (t) => {
+  const { main, H2_SUCCESSOR_A2_RULING } = await import("./eventarc-production/h-run.mjs");
+  const origin = "2f13f34e54049dc7393946a618544cb5fdcda2f1";
+  const recovery = "1234567890abcdef1234567890abcdef12345678";
+  const adoption = `- 2026-10-08 | EVENTARC-H-ea3c9a8129ff A2 recovery source adoption | decision=APPROVE; project=fireemu-oracle-events; recordingSourceCommit=${origin}; recoverySourceCommit=${recovery}; A2 only; unchanged owner1041 scope, 105 REST requests, three-hour wall, latest request age at least 600 seconds and no DELETE resend; no normal recording | Codex coordinator（委任。オーナー台帳365/395/996/998） | docs.local/runs/coordinator-codex-20261007/eventarc-h2-a2-fix-source/clean-index.json`;
+  for (const scenario of [
+    "original-lock",
+    "recovery-lock",
+    "missing-adoption",
+    "wrong-adoption",
+    "wrong-origin",
+    "old-source",
+    "normal",
+    "foreign-run",
+    "foreign-lock",
+    "live",
+    "body",
+    "inode",
+  ]) {
+    const dir = mkdtempSync(join(tmpdir(), "h2-source-adoption-"));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const manifest = hManifest({
+      project: "fireemu-oracle-events",
+      runId: scenario === "foreign-run" ? "abcdef012345" : "ea3c9a8129ff",
+      recording: "h2-a",
+    });
+    const config = {
+      ...manifest,
+      parentBudgetUsd: 25,
+      sourceCommit: scenario === "old-source" ? origin : recovery,
+      recordingSourceCommit: scenario === "wrong-origin" ? "0".repeat(40) : origin,
+      out: join(dir, "out"),
+      sandboxLedger: join(dir, "sandbox.jsonl"),
+      lockDir: join(dir, "locks"),
+      ownerLedger: join(dir, "owner.md"),
+      frozenManifest: "unused",
+      adcFile: "unused",
+      depsDir: "unused",
+      firebaseJs: "unused",
+    };
+    mkdirSync(config.out);
+    mkdirSync(config.lockDir, { mode: 0o700 });
+    writeFileSync(
+      config.ownerLedger,
+      `${H2_SUCCESSOR_A2_RULING}\n${scenario === "missing-adoption" ? "" : scenario === "wrong-adoption" ? adoption.replace(recovery, "a".repeat(40)) : adoption}\n`,
+    );
+    const original = `${JSON.stringify({ kind: "h-state", value: { manifest: { ...manifest, projectNumber: "123456789012" }, writes: [], identities: [], cleanup: { unconfirmed: [], unsettled: [] } } })}\n${JSON.stringify({ kind: "request", at: 0 })}\n`;
+    const originalPath = join(config.out, `issued-${manifest.runId}.jsonl`);
+    writeFileSync(originalPath, original);
+    const input = join(dir, "input.json");
+    writeFileSync(input, JSON.stringify(config));
+    const path = join(config.lockDir, `${manifest.project}.lock`);
+    const lock = {
+      taskId: "PUBSUB-EVENTARC",
+      packetId: `EVENTARC-H-${manifest.runId}`,
+      sourceCommit:
+        scenario === "recovery-lock"
+          ? recovery
+          : scenario === "foreign-lock"
+            ? "f".repeat(40)
+            : origin,
+      pid: process.pid,
+    };
+    const raw = JSON.stringify(lock);
+    writeFileSync(path, raw);
+    let credentials = 0,
+      requests = 0,
+      message = "";
+    const observed = [];
+    const code = await main(
+      ["--config", input, ...(scenario === "normal" ? [] : ["--a2"])],
+      { HOME: dir, PATH: dirname(realpathSync(process.execPath)) },
+      {
+        stdout: { write: () => {} },
+        stderr: {
+          write: (s) => {
+            message += s;
+          },
+        },
+      },
+      {
+        now: () => 600000,
+        checkPid: () => {
+          if (scenario === "live") return;
+          if (scenario === "body") writeFileSync(path, JSON.stringify({ ...lock, changed: true }));
+          if (scenario === "inode") {
+            renameSync(path, path + ".old");
+            writeFileSync(path, raw);
+          }
+          throw Object.assign(new Error("dead fixture PID"), { code: "ESRCH" });
+        },
+        fetchImpl: () => {
+          requests++;
+          throw new Error("network forbidden");
+        },
+        execToken: () => {
+          credentials++;
+          const lockSource = JSON.parse(readFileSync(path)).sourceCommit;
+          const rows = readFileSync(
+            join(config.out, `issued-${manifest.runId}-a2-19700101T001000Z.jsonl`),
+            "utf8",
+          )
+            .trim()
+            .split("\n")
+            .map(JSON.parse);
+          const started = rows.find((row) => row.kind === "a2-recovery-start");
+          observed.push({ lockSource, started: started?.value });
+          throw new Error("source adoption credential sentinel");
+        },
+      },
+    );
+    assert.equal(requests, 0, scenario);
+    assert.equal(readFileSync(originalPath, "utf8"), original, scenario);
+    if (["original-lock", "recovery-lock"].includes(scenario)) {
+      assert.equal(code, 1, scenario);
+      assert.ok(credentials > 0, `${scenario}: ${message}`);
+      assert.ok(observed.length > 0, scenario);
+      for (const value of observed)
+        assert.deepEqual(
+          value,
+          {
+            lockSource: recovery,
+            started: { recordingSourceCommit: origin, recoverySourceCommit: recovery },
+          },
+          scenario,
+        );
+      assert.match(message, /project locks retained/, scenario);
+      assert.equal(JSON.parse(readFileSync(path)).sourceCommit, recovery, scenario);
+    } else {
+      assert.equal(credentials, 0, scenario);
+      assert.equal(existsSync(config.sandboxLedger), false, scenario);
+      assert.match(
+        message,
+        scenario === "live"
+          ? /recorder process is still alive/
+          : ["body", "inode"].includes(scenario)
+            ? /recovery lock changed/
+            : scenario === "foreign-lock"
+              ? /foreign recovery lock/
+              : /recovery source adoption/,
+        scenario,
+      );
+      assert.equal(existsSync(path), true, scenario);
+    }
+  }
+});

@@ -90,6 +90,7 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
   const now = deps.now ?? Date.now;
   let config;
   let a2Ruling;
+  let recoverySourceAdoption;
   const a2 = argv.length === 3 && argv[2] === "--a2";
   try {
     if (argv[0] !== "--config" || !argv[1] || !(argv.length === 2 || a2))
@@ -107,6 +108,16 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
       throw new Error("H requires the reviewed events project and source commit");
     const manifest = hManifest(config);
     const successor = manifest.recording === "h2-a" && manifest.runId === H2_SUCCESSOR_RUN_ID;
+    if (config.recordingSourceCommit !== undefined) {
+      if (
+        !a2 ||
+        !successor ||
+        config.recordingSourceCommit !== "2f13f34e54049dc7393946a618544cb5fdcda2f1" ||
+        config.sourceCommit === config.recordingSourceCommit
+      )
+        throw new Error("H refuses recovery source adoption outside the exact successor A2");
+      recoverySourceAdoption = `- 2026-10-08 | EVENTARC-H-ea3c9a8129ff A2 recovery source adoption | decision=APPROVE; project=fireemu-oracle-events; recordingSourceCommit=${config.recordingSourceCommit}; recoverySourceCommit=${config.sourceCommit}; A2 only; unchanged owner1041 scope, 105 REST requests, three-hour wall, latest request age at least 600 seconds and no DELETE resend; no normal recording | Codex coordinator（委任。オーナー台帳365/395/996/998） | docs.local/runs/coordinator-codex-20261007/eventarc-h2-a2-fix-source/clean-index.json`;
+    }
     a2Ruling = manifest.functions
       ? successor
         ? H2_SUCCESSOR_A2_RULING
@@ -133,6 +144,11 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
       if (typeof config[key] !== "string" || !config[key]) throw new Error(`H requires ${key}`);
     if (!readFileSync(config.ownerLedger, "utf8").split("\n").includes(a2Ruling))
       throw new Error("H requires the exact A2 RULING line before H1 or A2");
+    if (
+      recoverySourceAdoption &&
+      !readFileSync(config.ownerLedger, "utf8").split("\n").includes(recoverySourceAdoption)
+    )
+      throw new Error("H requires the exact recovery source adoption line");
   } catch (error) {
     io.stderr.write(`${error.message}\n`);
     return 2;
@@ -165,7 +181,8 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
           !stat.isFile() ||
           lock.taskId !== "PUBSUB-EVENTARC" ||
           lock.packetId !== `EVENTARC-H-${m.runId}` ||
-          lock.sourceCommit !== config.sourceCommit ||
+          (lock.sourceCommit !== config.sourceCommit &&
+            !(recoverySourceAdoption && lock.sourceCommit === config.recordingSourceCommit)) ||
           !Number.isSafeInteger(lock.pid) ||
           lock.pid <= 0
         )
@@ -278,6 +295,11 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
         );
         let result;
         try {
+          if (recoverySourceAdoption)
+            note("a2-recovery-start", {
+              recordingSourceCommit: config.recordingSourceCommit,
+              recoverySourceCommit: config.sourceCommit,
+            });
           row("started", { reserveUsd: a2 ? 0 : (m.reserveUsd ?? 2) });
           const evidence = {
             ...(deps.evidence ?? hProductionEvidence),

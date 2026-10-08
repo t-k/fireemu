@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { protos } from "@google-cloud/pubsub";
+import { createHash } from "node:crypto";
+import { compareExecutedObservation } from "./pubsub-observation/compare-core.mjs";
 import { createBindings } from "./pubsub-production/stream-dlq-compare-core.mjs";
 import {
   rewriteNativeFrame,
@@ -848,6 +850,9 @@ async function unorderedFlowFixture({
   pipeline = false,
   reverseActualDirection = false,
   outboundMutation,
+  approvedComparison = false,
+  localSeconds = "200",
+  localIdentityPrefix = "local",
 } = {}) {
   const { createNativeReplay } = await import("./pubsub-observation/replay-native.mjs");
   const { makePlan } = await import("./pubsub-observation/plan.mjs");
@@ -864,8 +869,8 @@ async function unorderedFlowFixture({
         ackId: `${local ? "local" : "source"}-ack-${index}`,
         message: {
           ...payload(index),
-          messageId: `${local ? "local" : "source"}-${index}`,
-          publishTime: { seconds: local ? "200" : "100", nanos: 0 },
+          messageId: `${local ? localIdentityPrefix : "source"}-${index}`,
+          publishTime: { seconds: local ? localSeconds : "100", nanos: 0 },
         },
       },
     ],
@@ -936,7 +941,7 @@ async function unorderedFlowFixture({
     bindings.linkPublish(
       { messages: [payload(index)] },
       { messageIds: [`source-${index}`] },
-      { messageIds: [`local-${index}`] },
+      { messageIds: [`${localIdentityPrefix}-${index}`] },
     );
   let now = origin,
     replay,
@@ -1038,6 +1043,8 @@ async function unorderedFlowFixture({
     input.verifiedFrames = new Set(
       input.rows.filter((row) => row.event === "stream-frame").map((row) => row.n),
     );
+    for (const row of input.rows.filter((r) => r.event === "stream-frame"))
+      row.blob.sha256 = createHash("sha256").update(nativeBytes(row.body, row.direction)).digest("hex");
     input.summary.results = [
       { cellId: "S06", complete: true, cleanupClosed: true, budgetOverrun: false },
     ];
@@ -1080,7 +1087,7 @@ async function unorderedFlowFixture({
                 code: "OK",
                 body:
                   method === "Publish"
-                    ? { messageIds: [`local-${publication++}`] }
+                    ? { messageIds: [`${localIdentityPrefix}-${publication++}`] }
                     : exchange.response.body,
               };
               journal.write({ event: "response", cellId: "S06", method, reply });
@@ -1094,8 +1101,29 @@ async function unorderedFlowFixture({
     assert.equal(report.parentClosureReady, false);
     assert.deepEqual(
       acks,
-      order.map((index) => receivedAcks.get(`local-${index}`)),
+      order.map((index) => receivedAcks.get(`${localIdentityPrefix}-${index}`)),
     );
+    if (approvedComparison) {
+      const source = validateReplaySource(input);
+      const local = { ...source, cells: source.cells.map((cell) => ({
+        ...cell,
+        frames: report.localRows.filter((r) => r.cellId === cell.id && r.event === "stream-frame")
+          .map((r) => ({ ...r, verified: true })),
+        events: report.localRows.filter((r) => r.cellId === cell.id && r.event.startsWith("stream-")),
+      })) };
+      const authorityBytes = Buffer.from(JSON.stringify({ proposalSha256: "d".repeat(64), line: "Explicit offline ACK disposition" }));
+      const disposition = {
+        authority: { bytes: authorityBytes, sha256: createHash("sha256").update(authorityBytes).digest("hex") },
+        source: { runId: source.runId, packetSha256: source.packetSha256, descriptorSha256: source.descriptorSha256 },
+        rawFrames: source.cells.flatMap((cell) => cell.frames.map((frame, i) => {
+          const peer = local.cells.find((c) => c.id === cell.id).frames[i];
+          return { sourceN: frame.n, localN: peer.n,
+            sourceBytes: nativeBytes(frame.body, frame.direction), localBytes: nativeBytes(peer.body, peer.direction) };
+        })),
+        remainingDebts: {},
+      };
+      return compareExecutedObservation(source, local, report.nativeWitnesses, disposition);
+    }
     return report;
   }
   replay = createNativeReplay({
@@ -1134,7 +1162,7 @@ async function unorderedFlowFixture({
       order.map((index) => `local-ack-${index}`),
     );
     for (let index = 0; index < 3; index++) {
-      assert.equal(bindings.get("message", `source-${index}`), `local-${index}`);
+      assert.equal(bindings.get("message", `source-${index}`), `${localIdentityPrefix}-${index}`);
       assert.equal(bindings.get("ack", `source-ack-${index}`), `local-ack-${index}`);
     }
     return acks;
@@ -1201,6 +1229,27 @@ test("executed native semantics keep dynamic widths separate from literal physic
   assert.equal(cell.verdict, "DIVERGES");
   assert.equal(report.parentClosureReady, false);
   assert.equal(cell.nativeLayout.frames.length, 7);
+});
+
+test("approved comparison consumes executed receive and ACK guards without erasing non-ACK widths", async () => {
+  const matched = await unorderedFlowFixture({ pipeline: true, approvedComparison: true,
+    order: [1, 0, 2], localSeconds: "101", localIdentityPrefix: "actual" });
+  const cell = matched.cells.find((c) => c.id === "S06");
+  assert.equal(cell.nativeSemantics.verdict, "MATCH");
+  assert.equal(cell.nativeLayout.verdict, "DIVERGES");
+  assert.equal(cell.approvedComparison.verdict, "MATCH");
+  assert.equal(matched.parentClosureReady, false);
+  const residual = await unorderedFlowFixture({ pipeline: true, approvedComparison: true, order: [1, 0, 2] });
+  assert.equal(residual.cells.find((c) => c.id === "S06").approvedComparison.verdict, "DIVERGES");
+  for (const options of [
+    { batch: true }, { extraAt: 8020 },
+    { outboundMutation: (body) => (body.ackIds[0] = "foreign-actual-ack") },
+    { outboundMutation: (body) => body.ackIds.push(body.ackIds[0]) },
+    { firstMutation: (body) => delete body.receivedMessages[0].message.publishTime },
+    { firstMutation: (body) => (body.receivedMessages[0].message.data = "Zm9yZWlnbg==") },
+  ])
+    await assert.rejects(unorderedFlowFixture({ pipeline: true, approvedComparison: true, ...options }),
+      /outbound semantic|timestamp|binding|semantic|quiet|cardinality/);
 });
 
 test("executed replay rejects equal-byte payload changes and compensated timestamp absence", async () => {

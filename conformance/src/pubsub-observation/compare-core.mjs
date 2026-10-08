@@ -1,4 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
+import { createHash } from "node:crypto";
+import { protos } from "@google-cloud/pubsub";
+import { sanitize } from "../pubsub-production/capture.mjs";
 import { makePlan, PROJECT, SUITE } from "./plan.mjs";
 import { normalizeOutcome } from "../pubsub-production/outcome.mjs";
 import {
@@ -447,8 +450,146 @@ function compareZeroOutcome(source, local, original, actual, proof) {
   };
 }
 
-export function compareExecutedObservation(source, local, nativeWitnesses) {
+// Preserve field order and all non-ACK widths, including opaque timestamp widths.
+function ackWireProjection(raw, kind) {
+  let offset = 0, containsAck = false;
+  const fields = [], seen = new Set(), acks = new Set();
+  const varint = () => {
+    const start = offset;
+    let value = 0n;
+    for (let i = 0; i < 10 && offset < raw.length; i++) {
+      const byte = raw[offset++];
+      value |= BigInt(byte & 127) << BigInt(i * 7);
+      if (byte < 128) {
+        if ((i > 0 && byte === 0) || (i === 9 && byte > 1))
+          throw new Error("noncanonical native varint");
+        return { value, bytes: raw.subarray(start, offset) };
+      }
+    }
+    throw new Error("truncated native varint");
+  };
+  while (offset < raw.length) {
+    const tag = varint(), number = Number(tag.value >> 3n), wire = Number(tag.value & 7n);
+    if (number < 1 || number > 536870911) throw new Error("invalid native tag");
+    const ack = (kind === "received" && number === 1) ||
+      (kind === "request" && [2, 4].includes(number));
+    const childKind = kind === "response" && number === 1 ? "received" :
+      kind === "received" && number === 2 ? "message" :
+      kind === "message" && number === 4 ? "timestamp" : null;
+    const singular = kind === "received" && [1, 2, 3].includes(number) ||
+      kind === "message" && [1, 3, 4, 5].includes(number) ||
+      kind === "timestamp" && [1, 2].includes(number) ||
+      kind === "response" && number === 4 ||
+      kind === "request" && [1, 5, 6, 7, 8, 10].includes(number);
+    if (singular && seen.has(number)) throw new Error("duplicate native field");
+    seen.add(number);
+    if ((ack || childKind) && wire !== 2) throw new Error("native field wire type");
+    let payload, prefix;
+    if (wire === 2) {
+      prefix = varint();
+      if (prefix.value > BigInt(raw.length - offset)) throw new Error("truncated native field");
+      const length = Number(prefix.value);
+      payload = raw.subarray(offset, offset + length); offset += length;
+    } else if (wire === 0) payload = varint().bytes;
+    else if ([1, 5].includes(wire)) {
+      const length = wire === 1 ? 8 : 4;
+      if (offset + length > raw.length) throw new Error("truncated native field");
+      payload = raw.subarray(offset, offset + length); offset += length;
+    } else throw new Error("unsupported native wire type");
+    const field = { number, wire, tag: tag.bytes.toString("hex") };
+    if (ack) {
+      const text = payload.toString("utf8");
+      if (!text || !Buffer.from(text).equals(payload) || acks.has(text))
+        throw new Error("empty, invalid or duplicate native ACK");
+      acks.add(text); field.ack = true; containsAck = true;
+    } else if (childKind) {
+      const child = ackWireProjection(payload, childKind);
+      field.fields = child.fields;
+      if (!child.containsAck) field.prefix = prefix.bytes.toString("hex");
+      containsAck ||= child.containsAck;
+    } else {
+      field.bytes = payload.length;
+      if (prefix) field.prefix = prefix.bytes.toString("hex");
+      const opaque = kind === "message" && number === 3 ||
+        kind === "timestamp" && [1, 2].includes(number) && wire === 0;
+      if (!opaque) field.value = payload.toString("hex");
+    }
+    fields.push(field);
+  }
+  if (kind === "received" && !seen.has(1)) throw new Error("native ACK absent");
+  return { fields, containsAck };
+}
+
+function approvedBinding(source, local, disposition) {
+  try {
+    const authority = disposition.authority;
+    if (!Buffer.isBuffer(authority.bytes) || authority.bytes.length > 65536 ||
+      !/^[a-f0-9]{64}$/.test(authority.sha256) ||
+      createHash("sha256").update(authority.bytes).digest("hex") !== authority.sha256 ||
+      !/^[a-f0-9]{64}$/.test(JSON.parse(authority.bytes).proposalSha256) ||
+      !isDeepStrictEqual(disposition.source, {
+        runId: source.runId, packetSha256: source.packetSha256,
+        descriptorSha256: source.descriptorSha256,
+      }) || !Array.isArray(disposition.rawFrames)) return false;
+    const expected = source.cells.flatMap((cell) => cell.frames.map((f, i) =>
+      [f.n, local.cells.find((c) => c.id === cell.id)?.frames[i]?.n]));
+    return local.cells.reduce((n, cell) => n + cell.frames.length, 0) === expected.length &&
+      isDeepStrictEqual(disposition.rawFrames.map((f) => [f.sourceN, f.localN]), expected) &&
+      new Set(expected.map(([n]) => n)).size === expected.length &&
+      new Set(expected.map(([, n]) => n)).size === expected.length;
+  } catch { return false; }
+}
+
+function approvedNativeComparison(original, actual, proof, disposition, binding) {
+  const terminal = (cell) => cell.events.filter((e) =>
+    ["stream-error", "stream-status"].includes(e.event));
+  const sourceTerminal = terminal(original), localTerminal = terminal(actual);
+  const invalidTerminal = (events) => events.some((e) =>
+    typeof e.details !== "string" || canonicalStatus(e.code) === "UNKNOWN") ||
+    new Set(events.map((e) => e.event)).size !== events.length;
+  const terminalVerdict = sourceTerminal.length !== localTerminal.length ? "NOT_COMPARABLE" :
+    invalidTerminal(sourceTerminal) || invalidTerminal(localTerminal) ?
+      "NOT_COMPARABLE" : isDeepStrictEqual(
+        sourceTerminal.map((e) => [e.event, e.code, e.details]),
+        localTerminal.map((e) => [e.event, e.code, e.details]),
+      ) ? "MATCH" : "DIVERGES";
+  const frames = [];
+  const complete = [original, actual].every((cell) => cell.result?.complete === true &&
+    cell.result.cleanupClosed === true && cell.result.budgetOverrun === false);
+  let verdict = !binding || !complete || proof.semanticsVerified !== true ? "NOT_COMPARABLE" : "MATCH";
+  if (verdict === "MATCH") {
+    try {
+      for (const [i, sourceFrame] of original.frames.entries()) {
+        const localFrame = actual.frames[i];
+        const raw = disposition.rawFrames.find((f) => f.sourceN === sourceFrame.n);
+        const projections = [[sourceFrame, raw.sourceBytes], [localFrame, raw.localBytes]].map(([frame, bytes]) => {
+          if (!Buffer.isBuffer(bytes) || bytes.length > 65536 || bytes.length !== frame.blob.bytes ||
+            createHash("sha256").update(bytes).digest("hex") !== frame.blob.sha256)
+            throw new Error("native raw pin mismatch");
+          const Type = protos.google.pubsub.v1[frame.direction === "out" ? "StreamingPullRequest" : "StreamingPullResponse"];
+          const decoded = Type.toObject(Type.decode(bytes), { longs: String, enums: String, bytes: String, defaults: false });
+          if (!isDeepStrictEqual(sanitize(decoded), frame.body)) throw new Error("native decoded body mismatch");
+          return ackWireProjection(bytes, frame.direction === "out" ? "request" : "response").fields;
+        });
+        const matches = sourceFrame.direction === localFrame.direction &&
+          isDeepStrictEqual(projections[0], projections[1]);
+        frames.push({ sourceN: sourceFrame.n, localN: localFrame.n,
+          sourceSha256: sourceFrame.blob.sha256, localSha256: localFrame.blob.sha256,
+          verdict: matches ? "MATCH" : "DIVERGES" });
+        if (!matches) verdict = "DIVERGES";
+      }
+    } catch { verdict = "NOT_COMPARABLE"; }
+  }
+  if (terminalVerdict === "DIVERGES") verdict = "DIVERGES";
+  else if (terminalVerdict !== "MATCH" && verdict === "MATCH") verdict = "NOT_COMPARABLE";
+  return { verdict, authoritySha256: disposition?.authority?.sha256 ?? null,
+    terminalVerdict, frames, scope: "explicit offline ACK-only wire disposition; literal physical result retained" };
+}
+
+export function compareExecutedObservation(source, local, nativeWitnesses, approvedDisposition) {
   const report = compareObservation(source, local);
+  const approved = approvedDisposition !== undefined;
+  const approvedBound = approved && approvedBinding(source, local, approvedDisposition);
   const nativeDebt =
     "native stream timing and causal witness requires dedicated replay; frame equality alone is insufficient";
   for (const cell of report.cells.filter((c) => c.group === "G4")) {
@@ -508,11 +649,17 @@ export function compareExecutedObservation(source, local, nativeWitnesses) {
         localSha256: actual.frames[i]?.blob?.sha256 ?? null,
       })),
     };
+    if (approved) {
+      cell.approvedComparison = approvedNativeComparison(original, actual, proof, approvedDisposition, approvedBound);
+      cell.approvedComparison.physicalVerdict = cell.nativeLayout.verdict;
+      cell.debts.push(...(approvedDisposition?.remainingDebts?.[cell.id] ?? []));
+    }
     cell.rows.push({
       method: "StreamingPull",
       transport: "grpc",
-      verdict: layoutMatches ? "MATCH" : "DIVERGES",
-      reason: layoutMatches
+      verdict: approved ? cell.approvedComparison.verdict : layoutMatches ? "MATCH" : "DIVERGES",
+      ...(approved ? { physicalVerdict: cell.nativeLayout.verdict } : {}),
+      reason: approved ? "explicit pinned ACK projection and recorded terminal details" : layoutMatches
         ? "actual causal actions, measured window and physical frame lengths match"
         : "native frame direction/cardinality/physical length gap",
     });

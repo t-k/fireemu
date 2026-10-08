@@ -689,3 +689,140 @@ test("exact S10 natural outcome preserves incomplete debt and message availabili
     }
   }
 });
+
+
+export function approvedNativeFixture() {
+  const source = prepared(), local = prepared();
+  const bytes = (body) => Buffer.from(protos.google.pubsub.v1.StreamingPullResponse.encode(body).finish());
+  const decode = (raw) => protos.google.pubsub.v1.StreamingPullResponse.toObject(
+    protos.google.pubsub.v1.StreamingPullResponse.decode(raw),
+    { longs: String, enums: String, bytes: String, defaults: false },
+  );
+  const received = (ack, id) => ({ receivedMessages: [{ ackId: ack, message: {
+    data: "bWFya2Vy", messageId: id, publishTime: { seconds: "100", nanos: 1 },
+  } }], subscriptionProperties: {} });
+  const sourceBytes = bytes(received("source-ack", "source-1"));
+  const localBytes = bytes(received("longer-local-ack", "actual-1"));
+  for (const [observation, raw, n] of [[source, sourceBytes, 7], [local, localBytes, 17]]) {
+    const cell = observation.cells.find((c) => c.id === "S16");
+    cell.exchanges = [];
+    cell.debts = ["native stream timing and causal witness requires dedicated replay; frame equality alone is insufficient"];
+    cell.result = { complete: true, cleanupClosed: true, budgetOverrun: false };
+    cell.frames = [{ n, direction: "in", verified: true, body: decode(raw),
+      blob: { bytes: raw.length, sha256: createHash("sha256").update(raw).digest("hex") } }];
+    cell.events = [
+      { n: n + 1, event: "stream-status", code: 0, details: "", elapsedMs: 1 },
+      { n: n + 2, event: "stream-case-observation", elapsedMs: 2,
+        state: { incomplete: false }, invalidAckObservedMs: 30001 },
+    ];
+  }
+  const authorityBytes = Buffer.from(JSON.stringify({ proposalSha256: "d".repeat(64), line: "Explicit offline ACK disposition" }));
+  return { source, local, witness: { S16: { completed: true, semanticsVerified: true,
+    sourceFrames: [7], actions: [{ sourceN: 9, event: "stream-case-observation", elapsedMs: 30001 }], silenceMs: 30001 } },
+    disposition: { authority: { bytes: authorityBytes,
+      sha256: createHash("sha256").update(authorityBytes).digest("hex") },
+      source: { runId: source.runId, packetSha256: source.packetSha256, descriptorSha256: source.descriptorSha256 },
+      rawFrames: [{ sourceN: 7, localN: 17, sourceBytes, localBytes }], remainingDebts: {} } };
+}
+
+test("explicit pinned ACK disposition retains the literal physical gap", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const { source, local, witness, disposition } = approvedNativeFixture();
+  const ordinary = compareExecutedObservation(source, local, witness).cells.find((c) => c.id === "S16");
+  assert.equal(ordinary.verdict, "DIVERGES");
+  const report = compareExecutedObservation(source, local, witness, disposition);
+  const cell = report.cells.find((c) => c.id === "S16");
+  assert.equal(cell.approvedComparison.verdict, "MATCH");
+  assert.equal(cell.nativeLayout.verdict, "DIVERGES");
+  assert.equal(cell.verdict, "MATCH");
+  assert.equal(report.parentClosureReady, false);
+});
+
+test("approved wire comparison refuses absent authority, raw coverage and semantic guards", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  for (const alter of [
+    (f) => delete f.disposition.authority,
+    (f) => (f.disposition.authority.sha256 = "0".repeat(64)),
+    (f) => (f.disposition.source.runId = "foreign"),
+    (f) => (f.disposition.rawFrames = []),
+    (f) => f.disposition.rawFrames.push(f.disposition.rawFrames[0]),
+    (f) => (f.disposition.rawFrames[0].localN++),
+    (f) => (f.disposition.rawFrames[0].localBytes[3] ^= 1),
+    (f) => {
+      const raw = f.disposition.rawFrames[0].localBytes;
+      raw[4] ^= 1;
+      f.local.cells.find((c) => c.id === "S16").frames[0].body.receivedMessages[0].ackId =
+        protos.google.pubsub.v1.StreamingPullResponse.decode(raw).receivedMessages[0].ackId;
+    },
+    (f) => (f.witness.S16.semanticsVerified = false),
+    (f) => (f.witness.S16.completed = false),
+    (f) => (f.witness.S16.sourceFrames = []),
+    (f) => (f.witness.S16.actions = []),
+    (f) => (f.witness.S16.silenceMs = 29999),
+    (f) => (f.local.cells.find((c) => c.id === "S16").frames[0].direction = "out"),
+    (f) => f.local.cells.find((c) => c.id === "S16").frames.push({ ...f.local.cells.find((c) => c.id === "S16").frames[0], n: 18 }),
+    (f) => (f.source.cells.find((c) => c.id === "S16").result.complete = false),
+    (f) => (f.disposition.remainingDebts.S16 = ["Required terminal status remains unrecorded"]),
+  ]) {
+    const f = approvedNativeFixture(); alter(f);
+    assert.notEqual(compareExecutedObservation(f.source, f.local, f.witness, f.disposition)
+      .cells.find((c) => c.id === "S16").verdict, "MATCH");
+  }
+});
+
+test("ACK projection preserves every remaining field, width, tag and terminal detail", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const Type = protos.google.pubsub.v1.StreamingPullResponse;
+  for (const alter of [
+    (body) => delete body.receivedMessages[0].ackId,
+    (body) => (body.receivedMessages[0].ackId = ""),
+    (body) => (body.receivedMessages[0].message.data = "Zm9yZWln"),
+    (body) => delete body.receivedMessages[0].message.publishTime,
+    (body) => (body.receivedMessages[0].message.publishTime.seconds = "200"),
+    (body) => delete body.subscriptionProperties,
+    (body) => body.receivedMessages.push(body.receivedMessages[0]),
+  ]) {
+    const f = approvedNativeFixture(), cell = f.local.cells.find((c) => c.id === "S16");
+    alter(cell.frames[0].body);
+    const raw = Buffer.from(Type.encode(cell.frames[0].body).finish());
+    cell.frames[0].body = Type.toObject(Type.decode(raw), { longs: String, enums: String, bytes: String, defaults: false });
+    cell.frames[0].blob = { bytes: raw.length, sha256: createHash("sha256").update(raw).digest("hex") };
+    f.disposition.rawFrames[0].localBytes = raw;
+    assert.notEqual(compareExecutedObservation(f.source, f.local, f.witness, f.disposition)
+      .cells.find((c) => c.id === "S16").approvedComparison.verdict, "MATCH");
+  }
+  for (const alterRaw of [
+    (raw) => Buffer.concat([raw, Buffer.from([0xa8, 0x06, 0x01])]),
+    (raw) => { const b = Buffer.from(raw); b[2] = 0x08; return b; },
+    (raw) => { const b = Buffer.from(raw); b[2] = 0x1a; return b; },
+    (raw) => Buffer.concat([Buffer.from([0x0a, raw[1] + 3]), raw.subarray(2, 2 + raw[1]), Buffer.from([0x0a, 1, 0x78]), raw.subarray(2 + raw[1])]),
+    (raw) => raw.subarray(0, raw.length - 1),
+  ]) {
+    const f = approvedNativeFixture(), frame = f.local.cells.find((c) => c.id === "S16").frames[0];
+    const raw = alterRaw(f.disposition.rawFrames[0].localBytes);
+    try { frame.body = Type.toObject(Type.decode(raw), { longs: String, enums: String, bytes: String, defaults: false }); }
+    catch { frame.body = {}; }
+    frame.blob = { bytes: raw.length, sha256: createHash("sha256").update(raw).digest("hex") };
+    f.disposition.rawFrames[0].localBytes = raw;
+    assert.notEqual(compareExecutedObservation(f.source, f.local, f.witness, f.disposition)
+      .cells.find((c) => c.id === "S16").approvedComparison.verdict, "MATCH");
+  }
+  for (const alter of [
+    (cell) => delete cell.events[0].details,
+    (cell) => (cell.events[0].details = "different"),
+    (cell) => (cell.events[0].code = 5),
+    (cell) => (cell.events[0].code = "UNKNOWN"),
+    (cell) => cell.events.splice(0, 1),
+    (cell) => cell.events.push(cell.events[0]),
+  ]) {
+    const f = approvedNativeFixture(); alter(f.local.cells.find((c) => c.id === "S16"));
+    assert.notEqual(compareExecutedObservation(f.source, f.local, f.witness, f.disposition)
+      .cells.find((c) => c.id === "S16").approvedComparison.verdict, "MATCH");
+  }
+  const missingBoth = approvedNativeFixture();
+  for (const observation of [missingBoth.source, missingBoth.local])
+    delete observation.cells.find((c) => c.id === "S16").events[0].details;
+  assert.equal(compareExecutedObservation(missingBoth.source, missingBoth.local,
+    missingBoth.witness, missingBoth.disposition).cells.find((c) => c.id === "S16")
+    .approvedComparison.verdict, "NOT_COMPARABLE");
+});

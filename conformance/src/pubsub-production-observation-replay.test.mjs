@@ -96,6 +96,148 @@ test("action clock uses explicit dispatch instants and independently measured el
     /open/,
   );
 });
+async function postWindowFixture(t, alter = () => {}) {
+  const { createNativeReplay } = await import("./pubsub-observation/replay-native.mjs");
+  let now = 0;
+  const waits = [],
+    actions = [],
+    advances = [];
+  const windowEnd = {
+    n: 42,
+    cellId: "S13",
+    event: "stream-observation-window-end",
+    elapsedMs: 89999.93512499999,
+    at: new Date(90999).toISOString(),
+  };
+  const cancel = {
+    n: 43,
+    cellId: "S13",
+    event: "stream-cancel",
+    reason: "window-end",
+    elapsedMs: 90004.78279200001,
+    at: new Date(91004).toISOString(),
+  };
+  const source = { id: "S13", events: [windowEnd, structuredClone(cancel)] };
+  alter({ source, windowEnd, cancel });
+  const replay = createNativeReplay({
+    cells: [{ id: "S13", group: "G4", variant: "opening-deadline-601" }],
+    sourceCells: [source],
+    bindings: createBindings(),
+    clock: createActionClock({
+      now: () => now,
+      wait: async (ms) => {
+        waits.push(ms);
+        now += ms;
+      },
+      advance: async (row) => advances.push(row),
+    }),
+    wire: {
+      open: async () => ({
+        cancel: (reason) => actions.push(reason),
+        end: () => actions.push("write-end"),
+        state: () => ({ incomplete: true, terminal: null, inboundEnded: false }),
+        dispose() {},
+      }),
+    },
+  });
+  t.after(() => replay.close());
+  await replay.frame({
+    n: 39,
+    cellId: "S13",
+    event: "stream-frame",
+    direction: "out",
+    elapsedMs: 0,
+    at: new Date(1000).toISOString(),
+    body: { subscription: "owned", streamAckDeadlineSeconds: 601 },
+  });
+  return { replay, cancel, source, waits, actions, advances };
+}
+
+test("source-bound window cancellation preserves the recorded post-window elapsed time", async (t) => {
+  const f = await postWindowFixture(t);
+  const original = structuredClone(f.cancel);
+  await f.replay.action(f.cancel);
+  assert.deepEqual(f.waits, [90004.78279200001]);
+  assert.deepEqual(f.actions, ["window-end"]);
+  assert.deepEqual(f.cancel, original);
+  const proof = f.replay.witnesses.get("S13");
+  assert.equal(proof.actions[0].elapsedMs, original.elapsedMs);
+  assert.equal(f.advances.at(-1).instant, original.at);
+  assert.equal(proof.completed, false);
+  assert.equal(proof.semanticsVerified, false);
+  await assert.rejects(
+    f.replay.action({
+      n: 49,
+      cellId: "S13",
+      event: "stream-case-observation",
+      at: new Date(91024).toISOString(),
+      state: { terminal: { code: 1 }, inboundEnded: true },
+    }),
+    /terminal witness/,
+  );
+  assert.equal(proof.completed, false);
+});
+
+test("post-window timing requires the exact source cancel and its preceding window witness", async (t) => {
+  for (const alter of [
+    ({ source }) => source.events.shift(),
+    ({ source }) => source.events.pop(),
+    ({ source }) => source.events.push(structuredClone(source.events[0])),
+    ({ windowEnd }) => (windowEnd.cellId = "foreign"),
+    ({ windowEnd }) => (windowEnd.n = 44),
+    ({ windowEnd }) => (windowEnd.elapsedMs = NaN),
+    ({ cancel, source }) => {
+      cancel.reason = "dispose";
+      source.events[1] = structuredClone(cancel);
+    },
+    ({ cancel, source }) => {
+      cancel.event = "stream-write-end";
+      source.events[1] = structuredClone(cancel);
+    },
+  ]) {
+    const f = await postWindowFixture(t, alter);
+    await assert.rejects(f.replay.action(f.cancel), /native elapsed bound/);
+    assert.deepEqual(f.waits, []);
+    assert.deepEqual(f.actions, []);
+  }
+});
+
+test("normal native frames and actions retain finite window and cleanup ceilings", async (t) => {
+  for (const elapsedMs of [-1, NaN, Infinity, 130000.001]) {
+    const f = await postWindowFixture(t, ({ source, cancel }) => {
+      cancel.elapsedMs = elapsedMs;
+      source.events[1] = structuredClone(cancel);
+    });
+    await assert.rejects(f.replay.action(f.cancel), /native elapsed bound/);
+    assert.deepEqual(f.waits, []);
+  }
+  for (const elapsedMs of [90000.001, NaN, Infinity, -1]) {
+    const f = await postWindowFixture(t);
+    await assert.rejects(
+      f.replay.frame({
+        n: 41,
+        cellId: "S13",
+        direction: "out",
+        at: new Date(92000).toISOString(),
+        elapsedMs,
+        body: {},
+      }),
+      /native elapsed bound/,
+    );
+  }
+  for (const event of ["stream-write-end", "stream-case-observation"]) {
+    const f = await postWindowFixture(t);
+    await assert.rejects(f.replay.action({ ...f.cancel, event }), /native elapsed bound/);
+  }
+  const boundary = await postWindowFixture(t, ({ source, cancel }) => {
+    cancel.elapsedMs = 130000;
+    cancel.at = new Date(131000).toISOString();
+    source.events[1] = structuredClone(cancel);
+  });
+  await boundary.replay.action(boundary.cancel);
+  assert.deepEqual(boundary.waits, [130000]);
+});
+
 test("source binding and raw frame proof fail before any local action", () => {
   const f = fixture();
   assert.doesNotThrow(() => validateReplaySource(f));
@@ -828,9 +970,10 @@ test("loopback replay retains bounded actual terminal details without inventing 
 });
 
 const nativeBytes = (body, direction = "in") => {
-  const type = direction === "in"
-    ? protos.google.pubsub.v1.StreamingPullResponse
-    : protos.google.pubsub.v1.StreamingPullRequest;
+  const type =
+    direction === "in"
+      ? protos.google.pubsub.v1.StreamingPullResponse
+      : protos.google.pubsub.v1.StreamingPullRequest;
   return Buffer.from(type.encode(type.fromObject(body)).finish());
 };
 
@@ -1044,7 +1187,9 @@ async function unorderedFlowFixture({
       input.rows.filter((row) => row.event === "stream-frame").map((row) => row.n),
     );
     for (const row of input.rows.filter((r) => r.event === "stream-frame"))
-      row.blob.sha256 = createHash("sha256").update(nativeBytes(row.body, row.direction)).digest("hex");
+      row.blob.sha256 = createHash("sha256")
+        .update(nativeBytes(row.body, row.direction))
+        .digest("hex");
     input.summary.results = [
       { cellId: "S06", complete: true, cleanupClosed: true, budgetOverrun: false },
     ];
@@ -1074,7 +1219,8 @@ async function unorderedFlowFixture({
               event: "stream-frame",
               cellId: "S06",
               ...frame,
-              direction: reverseActualDirection && frame.direction === "in" ? "out" : frame.direction,
+              direction:
+                reverseActualDirection && frame.direction === "in" ? "out" : frame.direction,
             });
           return {
             open,
@@ -1105,21 +1251,45 @@ async function unorderedFlowFixture({
     );
     if (approvedComparison) {
       const source = validateReplaySource(input);
-      const local = { ...source, cells: source.cells.map((cell) => ({
-        ...cell,
-        frames: report.localRows.filter((r) => r.cellId === cell.id && r.event === "stream-frame")
-          .map((r) => ({ ...r, verified: true })),
-        events: report.localRows.filter((r) => r.cellId === cell.id && r.event.startsWith("stream-")),
-      })) };
-      const authorityBytes = Buffer.from(JSON.stringify({ proposalSha256: "d".repeat(64), line: "Explicit offline ACK disposition" }));
-      const disposition = {
-        authority: { bytes: authorityBytes, sha256: createHash("sha256").update(authorityBytes).digest("hex") },
-        source: { runId: source.runId, packetSha256: source.packetSha256, descriptorSha256: source.descriptorSha256 },
-        rawFrames: source.cells.flatMap((cell) => cell.frames.map((frame, i) => {
-          const peer = local.cells.find((c) => c.id === cell.id).frames[i];
-          return { sourceN: frame.n, localN: peer.n,
-            sourceBytes: nativeBytes(frame.body, frame.direction), localBytes: nativeBytes(peer.body, peer.direction) };
+      const local = {
+        ...source,
+        cells: source.cells.map((cell) => ({
+          ...cell,
+          frames: report.localRows
+            .filter((r) => r.cellId === cell.id && r.event === "stream-frame")
+            .map((r) => ({ ...r, verified: true })),
+          events: report.localRows.filter(
+            (r) => r.cellId === cell.id && r.event.startsWith("stream-"),
+          ),
         })),
+      };
+      const authorityBytes = Buffer.from(
+        JSON.stringify({
+          proposalSha256: "d".repeat(64),
+          line: "Explicit offline ACK disposition",
+        }),
+      );
+      const disposition = {
+        authority: {
+          bytes: authorityBytes,
+          sha256: createHash("sha256").update(authorityBytes).digest("hex"),
+        },
+        source: {
+          runId: source.runId,
+          packetSha256: source.packetSha256,
+          descriptorSha256: source.descriptorSha256,
+        },
+        rawFrames: source.cells.flatMap((cell) =>
+          cell.frames.map((frame, i) => {
+            const peer = local.cells.find((c) => c.id === cell.id).frames[i];
+            return {
+              sourceN: frame.n,
+              localN: peer.n,
+              sourceBytes: nativeBytes(frame.body, frame.direction),
+              localBytes: nativeBytes(peer.body, peer.direction),
+            };
+          }),
+        ),
         remainingDebts: {},
       };
       return compareExecutedObservation(source, local, report.nativeWitnesses, disposition);
@@ -1220,7 +1390,6 @@ test("executed replay passes the admitted S06 source cell to unordered token mat
   await assert.doesNotReject(unorderedFlowFixture({ pipeline: true }));
 });
 
-
 test("executed native semantics keep dynamic widths separate from literal physical gaps", async () => {
   const report = await unorderedFlowFixture({ pipeline: true });
   const cell = report.cells.find((c) => c.id === "S06");
@@ -1232,24 +1401,36 @@ test("executed native semantics keep dynamic widths separate from literal physic
 });
 
 test("approved comparison consumes executed receive and ACK guards without erasing non-ACK widths", async () => {
-  const matched = await unorderedFlowFixture({ pipeline: true, approvedComparison: true,
-    order: [1, 0, 2], localSeconds: "101", localIdentityPrefix: "actual" });
+  const matched = await unorderedFlowFixture({
+    pipeline: true,
+    approvedComparison: true,
+    order: [1, 0, 2],
+    localSeconds: "101",
+    localIdentityPrefix: "actual",
+  });
   const cell = matched.cells.find((c) => c.id === "S06");
   assert.equal(cell.nativeSemantics.verdict, "MATCH");
   assert.equal(cell.nativeLayout.verdict, "DIVERGES");
   assert.equal(cell.approvedComparison.verdict, "MATCH");
   assert.equal(matched.parentClosureReady, false);
-  const residual = await unorderedFlowFixture({ pipeline: true, approvedComparison: true, order: [1, 0, 2] });
+  const residual = await unorderedFlowFixture({
+    pipeline: true,
+    approvedComparison: true,
+    order: [1, 0, 2],
+  });
   assert.equal(residual.cells.find((c) => c.id === "S06").approvedComparison.verdict, "DIVERGES");
   for (const options of [
-    { batch: true }, { extraAt: 8020 },
+    { batch: true },
+    { extraAt: 8020 },
     { outboundMutation: (body) => (body.ackIds[0] = "foreign-actual-ack") },
     { outboundMutation: (body) => body.ackIds.push(body.ackIds[0]) },
     { firstMutation: (body) => delete body.receivedMessages[0].message.publishTime },
     { firstMutation: (body) => (body.receivedMessages[0].message.data = "Zm9yZWlnbg==") },
   ])
-    await assert.rejects(unorderedFlowFixture({ pipeline: true, approvedComparison: true, ...options }),
-      /outbound semantic|timestamp|binding|semantic|quiet|cardinality/);
+    await assert.rejects(
+      unorderedFlowFixture({ pipeline: true, approvedComparison: true, ...options }),
+      /outbound semantic|timestamp|binding|semantic|quiet|cardinality/,
+    );
 });
 
 test("executed replay rejects equal-byte payload changes and compensated timestamp absence", async () => {
@@ -1269,37 +1450,77 @@ test("executed replay rejects equal-byte payload changes and compensated timesta
       assert.equal(nativeBytes(body).length, before);
     },
   ])
-    await assert.rejects(unorderedFlowFixture({ pipeline: true, firstMutation }), /binding|semantic|timestamp/);
+    await assert.rejects(
+      unorderedFlowFixture({ pipeline: true, firstMutation }),
+      /binding|semantic|timestamp/,
+    );
 });
 
 test("executed receive requires corresponding presence and a legal decoded Timestamp", async () => {
-  for (const publishTime of [null, undefined, [], { seconds: "NaN" }, { seconds: "1.5" },
-    { seconds: "253402300800" }, { seconds: "-62135596801" }, { nanos: -1 },
-    { nanos: 1000000000 }, { nanos: 0.5 }, { seconds: true }, { unknown: 1 }])
-    await assert.rejects(unorderedFlowFixture({ pipeline: true, firstMutation: (body) => {
-      body.receivedMessages[0].message.publishTime = publishTime;
-    } }), /timestamp/);
-  for (const publishTime of [{}, { seconds: "-62135596800", nanos: 0 },
-    { seconds: "253402300799", nanos: 999999999 }, { seconds: 1, nanos: 1 }])
-    await assert.doesNotReject(unorderedFlowFixture({ pipeline: true, firstMutation: (body) => {
-      body.receivedMessages[0].message.publishTime = publishTime;
-    } }));
+  for (const publishTime of [
+    null,
+    undefined,
+    [],
+    { seconds: "NaN" },
+    { seconds: "1.5" },
+    { seconds: "253402300800" },
+    { seconds: "-62135596801" },
+    { nanos: -1 },
+    { nanos: 1000000000 },
+    { nanos: 0.5 },
+    { seconds: true },
+    { unknown: 1 },
+  ])
+    await assert.rejects(
+      unorderedFlowFixture({
+        pipeline: true,
+        firstMutation: (body) => {
+          body.receivedMessages[0].message.publishTime = publishTime;
+        },
+      }),
+      /timestamp/,
+    );
+  for (const publishTime of [
+    {},
+    { seconds: "-62135596800", nanos: 0 },
+    { seconds: "253402300799", nanos: 999999999 },
+    { seconds: 1, nanos: 1 },
+  ])
+    await assert.doesNotReject(
+      unorderedFlowFixture({
+        pipeline: true,
+        firstMutation: (body) => {
+          body.receivedMessages[0].message.publishTime = publishTime;
+        },
+      }),
+    );
 });
 
 test("executed semantic witness keeps direction, subscription presence and credit controls", async () => {
-  await assert.rejects(unorderedFlowFixture({ pipeline: true, reverseActualDirection: true }), /timestamp|quiet/);
-  await assert.rejects(unorderedFlowFixture({ pipeline: true, firstMutation: (body) => {
-    delete body.subscriptionProperties;
-  } }), /semantic/);
+  await assert.rejects(
+    unorderedFlowFixture({ pipeline: true, reverseActualDirection: true }),
+    /timestamp|quiet/,
+  );
+  await assert.rejects(
+    unorderedFlowFixture({
+      pipeline: true,
+      firstMutation: (body) => {
+        delete body.subscriptionProperties;
+      },
+    }),
+    /semantic/,
+  );
   await assert.rejects(unorderedFlowFixture({ pipeline: true, batch: true }), /cardinality/);
   await assert.rejects(unorderedFlowFixture({ pipeline: true, extraAt: 8020 }), /quiet interval/);
 });
-
 
 test("executed replay refuses foreign and duplicate actual outbound ACK receipts", async () => {
   for (const outboundMutation of [
     (body) => (body.ackIds[0] = "foreign-actual-ack"),
     (body) => body.ackIds.push(body.ackIds[0]),
   ])
-    await assert.rejects(unorderedFlowFixture({ pipeline: true, outboundMutation }), /outbound semantic/);
+    await assert.rejects(
+      unorderedFlowFixture({ pipeline: true, outboundMutation }),
+      /outbound semantic/,
+    );
 });

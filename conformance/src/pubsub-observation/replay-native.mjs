@@ -1,5 +1,6 @@
 import grpc from "@grpc/grpc-js";
 import { isDeepStrictEqual } from "node:util";
+import { CAPS } from "./plan.mjs";
 
 export function rewriteNativeFrame(frame, bindings, invalidAck, ackSlots = null) {
   const result = structuredClone(frame);
@@ -83,15 +84,28 @@ function unorderedFlow(cell, sourceCell, opener) {
   return { pending, sourceIds: [...pending.keys()], ackSlots: new Map() };
 }
 function legalTimestamp(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value) ||
-      Object.keys(value).some((key) => !["seconds", "nanos"].includes(key))) return false;
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).some((key) => !["seconds", "nanos"].includes(key))
+  )
+    return false;
   const seconds = Object.hasOwn(value, "seconds") ? value.seconds : "0";
   const nanos = Object.hasOwn(value, "nanos") ? value.nanos : 0;
-  if (!(typeof seconds === "string" && /^-?(0|[1-9]\d{0,11})$/.test(seconds)) &&
-      !(typeof seconds === "number" && Number.isSafeInteger(seconds))) return false;
+  if (
+    !(typeof seconds === "string" && /^-?(0|[1-9]\d{0,11})$/.test(seconds)) &&
+    !(typeof seconds === "number" && Number.isSafeInteger(seconds))
+  )
+    return false;
   const epoch = BigInt(seconds);
-  return epoch >= -62135596800n && epoch <= 253402300799n &&
-    Number.isInteger(nanos) && nanos >= 0 && nanos <= 999999999;
+  return (
+    epoch >= -62135596800n &&
+    epoch <= 253402300799n &&
+    Number.isInteger(nanos) &&
+    nanos >= 0 &&
+    nanos <= 999999999
+  );
 }
 
 export function matchNativeReceive(source, actual, bindings) {
@@ -104,9 +118,11 @@ export function matchNativeReceive(source, actual, bindings) {
   for (const [index, item] of source.receivedMessages.entries()) {
     const peer = actual.receivedMessages[index];
     const present = Object.hasOwn(item.message ?? {}, "publishTime");
-    if (present !== Object.hasOwn(peer.message ?? {}, "publishTime") ||
-        (present && (!legalTimestamp(item.message.publishTime) ||
-          !legalTimestamp(peer.message.publishTime))))
+    if (
+      present !== Object.hasOwn(peer.message ?? {}, "publishTime") ||
+      (present &&
+        (!legalTimestamp(item.message.publishTime) || !legalTimestamp(peer.message.publishTime)))
+    )
       throw new Error("native receive timestamp presence or structure mismatch");
   }
   bindings.linkReceive(source, actual);
@@ -143,9 +159,27 @@ export function createActionClock({
       if (opened.has(cellId)) throw new Error("stream already open");
       opened.set(cellId, now());
     },
-    async native(row) {
+    async native(row, sourceEvents = []) {
       if (!opened.has(row.cellId)) throw new Error("native clock requires open stream");
-      if (!Number.isFinite(row.elapsedMs) || row.elapsedMs < 0 || row.elapsedMs > 90000)
+      const ends = sourceEvents.filter(
+        (event) => event.cellId === row.cellId && event.event === "stream-observation-window-end",
+      );
+      const end = ends[0];
+      const postWindowCancel =
+        row.event === "stream-cancel" &&
+        row.reason === "window-end" &&
+        sourceEvents.some((event) => isDeepStrictEqual(event, row)) &&
+        ends.length === 1 &&
+        Number.isSafeInteger(end.n) &&
+        Number.isSafeInteger(row.n) &&
+        end.n < row.n &&
+        Number.isFinite(end.elapsedMs) &&
+        end.elapsedMs >= 0 &&
+        end.elapsedMs <= 90000 &&
+        end.elapsedMs <= row.elapsedMs &&
+        Date.parse(end.at) <= Date.parse(row.at);
+      const ceiling = postWindowCancel ? 90000 + CAPS.cleanupReserveMs : 90000;
+      if (!Number.isFinite(row.elapsedMs) || row.elapsedMs < 0 || row.elapsedMs > ceiling)
         throw new Error("native elapsed bound");
       const remaining = row.elapsedMs - (now() - opened.get(row.cellId));
       if (remaining > 0) await wait(remaining);
@@ -241,7 +275,12 @@ export function createNativeReplay({
           sourceOpenedAt: Date.parse(row.at),
         };
         active.stream = await wire.open({ cellId: cell.id, opener: row.body });
-        witnesses.set(cell.id, { sourceFrames: [], actions: [], completed: false, semanticsVerified: false });
+        witnesses.set(cell.id, {
+          sourceFrames: [],
+          actions: [],
+          completed: false,
+          semanticsVerified: false,
+        });
       } else {
         if (active.cellId !== cell.id) throw new Error("concurrent native cell refused");
         await quietProbe(row);
@@ -258,8 +297,10 @@ export function createNativeReplay({
           active.lastOutboundMs = undefined;
           active.lastOutboundBody = undefined;
           active.stream.write(outbound);
-          if (active.lastOutboundBody !== undefined &&
-              !isDeepStrictEqual(active.lastOutboundBody, expectedOutbound))
+          if (
+            active.lastOutboundBody !== undefined &&
+            !isDeepStrictEqual(active.lastOutboundBody, expectedOutbound)
+          )
             throw new Error("native actual outbound semantic mismatch");
           if (active.unordered)
             for (const token of row.body.ackIds ?? []) active.unordered.ackSlots.delete(token);
@@ -349,7 +390,7 @@ export function createNativeReplay({
         elapsedMs: row.elapsedMs ?? Math.min(90000, Date.parse(row.at) - active.sourceOpenedAt),
       };
       await quietProbe(timed);
-      await clock.native(timed);
+      await clock.native(timed, sourceCells.find((cell) => cell.id === row.cellId)?.events);
       checkActualReceives();
       if (row.event === "stream-write-end") active.stream.end();
       else if (row.event === "stream-cancel") active.stream.cancel(row.reason);

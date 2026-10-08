@@ -2337,7 +2337,7 @@ for (const mod of [http,https]) for (const name of ['request','get']) mod[name] 
 net.Socket.prototype.connect = refuse('connect'); globalThis.fetch = refuse('fetch'); syncBuiltinESMExports();`,
   );
   const cases = [
-    { name: "fresh", cap: 20.3, ruling: expectedRuling, accepted: true },
+    { name: "fresh", cap: 25, ruling: expectedRuling, accepted: true },
     { name: "legacy-a", cap: 14, runId: "012345abcdef", ruling: H2_A2_RULING, accepted: true },
     {
       name: "legacy-b",
@@ -2350,25 +2350,31 @@ net.Socket.prototype.connect = refuse('connect'); globalThis.fetch = refuse('fet
     },
     { name: "legacy-h1", recording: "h1", ruling: H_A2_RULING, accepted: true },
     { name: "fresh-old-cap", cap: 14, ruling: expectedRuling, gate: /parent budget/ },
-    { name: "fresh-low-cap", cap: 20.29, ruling: expectedRuling, gate: /parent budget/ },
-    { name: "fresh-high-cap", cap: 20.31, ruling: expectedRuling, gate: /parent budget/ },
+    {
+      name: "fresh-previous-proposal-cap",
+      cap: 20.3,
+      ruling: expectedRuling,
+      gate: /parent budget/,
+    },
+    { name: "fresh-low-cap", cap: 24.99, ruling: expectedRuling, gate: /parent budget/ },
+    { name: "fresh-high-cap", cap: 25.01, ruling: expectedRuling, gate: /parent budget/ },
     {
       name: "fresh-wrong-reserve",
-      cap: 20.3,
+      cap: 25,
       reserve: 6,
       ruling: expectedRuling,
       gate: /parent budget/,
     },
     {
       name: "other-run-new-cap",
-      cap: 20.3,
+      cap: 25,
       runId: "012345abcdef",
       ruling: expectedRuling,
       gate: /parent budget/,
     },
     {
       name: "other-recording-new-cap",
-      cap: 20.3,
+      cap: 25,
       recording: "h2-b",
       reserve: 6,
       ruling: expectedRuling,
@@ -2376,41 +2382,41 @@ net.Socket.prototype.connect = refuse('connect'); globalThis.fetch = refuse('fet
     },
     {
       name: "legacy-a-new-cap",
-      cap: 20.3,
+      cap: 25,
       runId: "012345abcdef",
       ruling: H2_A2_RULING,
       gate: /parent budget/,
     },
-    { name: "fresh-old-ruling", cap: 20.3, ruling: H2_A2_RULING, gate: /exact A2 RULING/ },
+    { name: "fresh-old-ruling", cap: 25, ruling: H2_A2_RULING, gate: /exact A2 RULING/ },
     {
       name: "fresh-pending-ruling",
-      cap: 20.3,
+      cap: 25,
       ruling: expectedRuling.replace("decision=APPROVE;", "decision=PENDING;"),
       gate: /exact A2 RULING/,
     },
     {
       name: "fresh-wrong-scope",
-      cap: 20.3,
+      cap: 25,
       ruling: expectedRuling.replace(runId, "012345abcdef"),
       gate: /exact A2 RULING/,
     },
     {
       name: "fresh-partial-ruling",
-      cap: 20.3,
+      cap: 25,
       ruling: expectedRuling.slice(0, -1),
       gate: /exact A2 RULING/,
     },
-    { name: "fresh-missing-ruling", cap: 20.3, ruling: "", gate: /exact A2 RULING/ },
+    { name: "fresh-missing-ruling", cap: 25, ruling: "", gate: /exact A2 RULING/ },
     {
       name: "fresh-config-ruling",
-      cap: 20.3,
+      cap: 25,
       ruling: H2_A2_RULING,
       configRuling: H2_A2_RULING,
       gate: /exact A2 RULING/,
     },
     {
       name: "fresh-invalid-source",
-      cap: 20.3,
+      cap: 25,
       ruling: expectedRuling,
       sourceCommit: "not-a-commit",
       gate: /source commit/,
@@ -2500,7 +2506,7 @@ test("H2 successor A2 channel authority uses the same fresh ruling as admission"
   const config = {
     ...manifest,
     reserveUsd: 7,
-    parentBudgetUsd: 20.3,
+    parentBudgetUsd: 25,
     sourceCommit: "c314c45e749a442a1d1fd07c2069f38ba3f0849a",
     out: join(dir, "out"),
     ownerLedger: join(dir, "owner.md"),
@@ -2552,4 +2558,92 @@ test("H2 successor A2 channel authority uses the same fresh ruling as admission"
     credentialSentinels > 0,
     "the fresh channel ruling must reach the offline credential sentinel",
   );
+});
+
+test("H2 successor emitted checkpoint and settlement lines use the truthful coordinator", async (t) => {
+  const { openSync, fsyncSync, closeSync } = await import("node:fs");
+  const { createHash } = await import("node:crypto");
+  const { createFileJournal } = await import("./pubsub-production/capture.mjs");
+  const { H2_SUCCESSOR_RUN_ID } = await import("./eventarc-production/h-run.mjs");
+  const text = readFileSync(new URL("./eventarc-production/h-run.mjs", import.meta.url), "utf8");
+  const start = text.indexOf("async ({ segment, result, settlement }) => {");
+  const end = text.indexOf("\n          const sleep = deps.sleep", start);
+  assert.ok(start > 0 && end > start);
+  const expression = text.slice(start, end).trim().replace(/;$/, "");
+  const dir = mkdtempSync(join(tmpdir(), "h2-actual-admission-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  for (const [runId, recording, actor] of [
+    ["ea3c9a8129ff", "h2-a", "Codex coordinator（委任。オーナー台帳365/395/996/998）"],
+    ["012345abcdef", "h2-a", "Claude（委任。オーナーの裁量の委任 2026-09-28）"],
+    ["ea3c9a8129ff", "h2-b", "Claude（委任。オーナーの裁量の委任 2026-09-28）"],
+  ]) {
+    for (const settlement of [undefined, "extension"]) {
+      const out = join(dir, `${runId}-${recording}-${settlement ?? "admission"}`);
+      mkdirSync(out);
+      const config = {
+        out,
+        ownerLedger: join(out, "owner.md"),
+        sourceCommit: "187addf46659d5f3b493dcfe5861fd7a0f6d7b70",
+      };
+      writeFileSync(config.ownerLedger, "");
+      const journalPath = join(out, "issued.jsonl");
+      const journal = createFileJournal(journalPath);
+      let emitted;
+      const callback = new Function(
+        "m",
+        "config",
+        "now",
+        "controller",
+        "sleep",
+        "note",
+        "join",
+        "openSync",
+        "writeFileSync",
+        "fsyncSync",
+        "closeSync",
+        "readFileSync",
+        "H2_SUCCESSOR_RUN_ID",
+        `return (${expression});`,
+      )(
+        hManifest({ project: "fireemu-oracle-events", runId, recording }),
+        config,
+        () => Date.UTC(2026, 9, 8),
+        { signal: { aborted: false } },
+        async () => {
+          writeFileSync(config.ownerLedger, emitted.line + "\n");
+        },
+        (kind, value) => {
+          emitted = value;
+          journal.write({ kind, value });
+        },
+        join,
+        openSync,
+        writeFileSync,
+        fsyncSync,
+        closeSync,
+        readFileSync,
+        H2_SUCCESSOR_RUN_ID,
+      );
+      const result = { startedAt: Date.UTC(2026, 9, 8), observed: "checkpoint" };
+      try {
+        assert.equal(await callback({ segment: "multi", settlement, result }), true);
+      } finally {
+        journal.close();
+      }
+      const row = JSON.parse(readFileSync(journalPath, "utf8").trim());
+      assert.equal(row.kind, "h-segment-admission-required");
+      const columns = row.value.line.split(" | ");
+      assert.equal(columns[3], actor);
+      assert.equal(
+        columns[1],
+        `EVENTARC-H2 segment ${settlement ? "settlement (extension) and " : ""}admission`,
+      );
+      const checkpoint = readFileSync(row.value.checkpoint);
+      assert.equal(checkpoint.toString(), JSON.stringify(result));
+      assert.ok(
+        columns[2].includes(`checkpoint=${createHash("sha256").update(checkpoint).digest("hex")}`),
+      );
+      assert.equal(readFileSync(config.ownerLedger, "utf8"), row.value.line + "\n");
+    }
+  }
 });

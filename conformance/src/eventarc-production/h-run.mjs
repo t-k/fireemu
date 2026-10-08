@@ -115,7 +115,7 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
     if (
       manifest.functions &&
       (config.reserveUsd !== manifest.reserveUsd ||
-        config.parentBudgetUsd !== (successor ? 20.3 : 14))
+        config.parentBudgetUsd !== (successor ? 25 : 14))
     )
       throw new Error(
         "H2 requires the manifest reserve and exact reviewed parent budget for this run",
@@ -308,7 +308,11 @@ export async function main(argv, env = process.env, io = process, deps = {}) {
                 .digest("hex");
               const topic = `EVENTARC-H2 segment ${settlement ? `settlement (${settlement}) and ` : ""}admission`;
               const body = `run=${m.runId}; source=${config.sourceCommit}; segment=${segment}; checkpoint=${digest}; decision=APPROVE`;
-              const line = `- ${new Date(now()).toISOString().slice(0, 10)} | ${topic} | ${body} | Claude（委任。オーナーの裁量の委任 2026-09-28） | docs.local/runs/${config.out.split(/[\\/]/).at(-1)}`;
+              const actor =
+                m.recording === "h2-a" && m.runId === H2_SUCCESSOR_RUN_ID
+                  ? "Codex coordinator（委任。オーナー台帳365/395/996/998）"
+                  : "Claude（委任。オーナーの裁量の委任 2026-09-28）";
+              const line = `- ${new Date(now()).toISOString().slice(0, 10)} | ${topic} | ${body} | ${actor} | docs.local/runs/${config.out.split(/[\\/]/).at(-1)}`;
               note("h-segment-admission-required", { segment, checkpoint, line });
               while (
                 !controller.signal.aborted &&

@@ -416,6 +416,16 @@ impl Subscriber for SubscriberService {
                 .dead_letter_policy
                 .is_some();
 
+        // Proto3 has no scalar presence: omitted and explicit initial zero decode alike.
+        // ACK-only follow-up frames may omit the deadline, so validate only the opener.
+        if self.handle.paging_policy == crate::PagingPolicy::Strict
+            && first.stream_ack_deadline_seconds == 0
+        {
+            return Err(Status::internal(
+                "A service error has occurred. Please retry your request. If the error persists, please report it.",
+            ));
+        }
+
         let handle = self.handle.clone();
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<pb::StreamingPullResponse, Status>>(16);
         tokio::spawn(async move {

@@ -175,7 +175,6 @@ export function createActionClock({
         end.n < row.n &&
         Number.isFinite(end.elapsedMs) &&
         end.elapsedMs >= 0 &&
-        end.elapsedMs <= 90000 &&
         end.elapsedMs <= row.elapsedMs &&
         Date.parse(end.at) <= Date.parse(row.at);
       const ceiling = postWindowCancel ? 90000 + CAPS.cleanupReserveMs : 90000;

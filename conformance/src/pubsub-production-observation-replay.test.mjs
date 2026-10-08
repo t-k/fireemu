@@ -154,28 +154,41 @@ async function postWindowFixture(t, alter = () => {}) {
 }
 
 test("source-bound window cancellation preserves the recorded post-window elapsed time", async (t) => {
-  const f = await postWindowFixture(t);
-  const original = structuredClone(f.cancel);
-  await f.replay.action(f.cancel);
-  assert.deepEqual(f.waits, [90004.78279200001]);
-  assert.deepEqual(f.actions, ["window-end"]);
-  assert.deepEqual(f.cancel, original);
-  const proof = f.replay.witnesses.get("S13");
-  assert.equal(proof.actions[0].elapsedMs, original.elapsedMs);
-  assert.equal(f.advances.at(-1).instant, original.at);
-  assert.equal(proof.completed, false);
-  assert.equal(proof.semanticsVerified, false);
-  await assert.rejects(
-    f.replay.action({
-      n: 49,
-      cellId: "S13",
-      event: "stream-case-observation",
-      at: new Date(91024).toISOString(),
-      state: { terminal: { code: 1 }, inboundEnded: true },
-    }),
-    /terminal witness/,
-  );
-  assert.equal(proof.completed, false);
+  for (const [endMs, cancelMs] of [
+    [89999.93512499999, 90004.78279200001],
+    [90001.09804099999, 90010.44237500001],
+  ]) {
+    const f = await postWindowFixture(t, ({ source, windowEnd, cancel }) => {
+      windowEnd.elapsedMs = endMs;
+      windowEnd.at = new Date(1000 + endMs).toISOString();
+      cancel.elapsedMs = cancelMs;
+      cancel.at = new Date(1000 + cancelMs).toISOString();
+      source.events[1] = structuredClone(cancel);
+    });
+    const original = structuredClone(f.cancel);
+    const originalEvents = structuredClone(f.source.events);
+    await f.replay.action(f.cancel);
+    assert.deepEqual(f.waits, [cancelMs]);
+    assert.deepEqual(f.actions, ["window-end"]);
+    assert.deepEqual(f.cancel, original);
+    assert.deepEqual(f.source.events, originalEvents);
+    const proof = f.replay.witnesses.get("S13");
+    assert.equal(proof.actions[0].elapsedMs, original.elapsedMs);
+    assert.equal(f.advances.at(-1).instant, original.at);
+    assert.equal(proof.completed, false);
+    assert.equal(proof.semanticsVerified, false);
+    await assert.rejects(
+      f.replay.action({
+        n: 49,
+        cellId: "S13",
+        event: "stream-case-observation",
+        at: new Date(91024).toISOString(),
+        state: { terminal: { code: 1 }, inboundEnded: true },
+      }),
+      /terminal witness/,
+    );
+    assert.equal(proof.completed, false);
+  }
 });
 
 test("post-window timing requires the exact source cancel and its preceding window witness", async (t) => {
@@ -186,6 +199,10 @@ test("post-window timing requires the exact source cancel and its preceding wind
     ({ windowEnd }) => (windowEnd.cellId = "foreign"),
     ({ windowEnd }) => (windowEnd.n = 44),
     ({ windowEnd }) => (windowEnd.elapsedMs = NaN),
+    ({ windowEnd }) => (windowEnd.elapsedMs = Infinity),
+    ({ windowEnd }) => (windowEnd.elapsedMs = -1),
+    ({ windowEnd, cancel }) => (windowEnd.elapsedMs = cancel.elapsedMs + 1),
+    ({ windowEnd, cancel }) => (windowEnd.at = new Date(Date.parse(cancel.at) + 1).toISOString()),
     ({ cancel, source }) => {
       cancel.reason = "dispose";
       source.events[1] = structuredClone(cancel);
@@ -212,18 +229,20 @@ test("normal native frames and actions retain finite window and cleanup ceilings
     assert.deepEqual(f.waits, []);
   }
   for (const elapsedMs of [90000.001, NaN, Infinity, -1]) {
-    const f = await postWindowFixture(t);
-    await assert.rejects(
-      f.replay.frame({
-        n: 41,
-        cellId: "S13",
-        direction: "out",
-        at: new Date(92000).toISOString(),
-        elapsedMs,
-        body: {},
-      }),
-      /native elapsed bound/,
-    );
+    for (const direction of ["out", "in"]) {
+      const f = await postWindowFixture(t);
+      await assert.rejects(
+        f.replay.frame({
+          n: 41,
+          cellId: "S13",
+          direction,
+          at: new Date(92000).toISOString(),
+          elapsedMs,
+          body: {},
+        }),
+        /native elapsed bound/,
+      );
+    }
   }
   for (const event of ["stream-write-end", "stream-case-observation"]) {
     const f = await postWindowFixture(t);

@@ -1186,3 +1186,115 @@ test("B complete redirect, server error and sub-200 responses remain unknown", a
     }
   }
 });
+
+function task28PriorPair(selection = "invalid-path-gap", omitLastCell = false) {
+  const cells = ["S12", "S13", "S14", "S15", "R1", "R2"];
+  if (omitLastCell) cells.pop();
+  const files = new Map(), plan = {selection, cells: cells.map((id) => ({id, reserve: false}))};
+  const pin = (path, value, jsonl = false) => {
+    const bytes = Buffer.from(jsonl ? value.map((row) => JSON.stringify(row)).join("\n")+"\n" : JSON.stringify(value));
+    files.set(path, bytes); return {path, sha256: sha256(bytes)};
+  };
+  const value = {reviewed: true, suite: "pubsub-observation-a-v1", sourceHead: "a".repeat(40), envelopeId: "PUBSUB-OBSERVATION-A-FIRST", packetSha256: "", runIds: ["123456abcdef", "abcdef123456"], selection, plan, summaries: []};
+  for(const [index,runId] of value.runIds.entries()) {
+    const base = `/fixture/pair/${runId}`, sourceHead = (index ? "b" : "a").repeat(40), envelopeId = `PUBSUB-OBSERVATION-A-${index ? "SECOND" : "FIRST"}`;
+    const descriptor = pin(base+"/descriptor.json", {head: sourceHead, sources: [{path: "conformance/src/pubsub-observation/scenarios.mjs", sha256: "1".repeat(64)}]});
+    const packet = pin(base+"/packet.json", {sourceHead, descriptorSha256: descriptor.sha256, taskId: "PUBSUB-OBSERVATION-A", runIds: [runId], plan});
+    const context = {suite: value.suite, project: "fireemu-oracle-idp", runId, sourceHead, envelopeId, packetSha256: packet.sha256};
+    const results = plan.cells.map((cell) => ({cellId: cell.id, complete: true}));
+    const capture = pin(base+`/capture-${runId}.jsonl`, [{event: "run-start", at: "2026-10-08T10:00:00.000Z", ...context, descriptorSha256: descriptor.sha256}], true);
+    const name = `projects/fireemu-oracle-idp/subscriptions/fe${runId}-r2-sub`;
+    const issued = pin(base+`/issued-${runId}.jsonl`, [{phase: "sent", name, action: "create", transport: "rest", requestId: "create"}, {phase: "answered", name, action: "create", transport: "rest", requestId: "create", kind: "error"}], true);
+    const summary = pin(base+`/summary-${runId}.json`, {...context, a2: false, resourcesClosed: true, recordingComplete: true, signalled: false, error: null, captureSha256: capture.sha256, issuedSha256: issued.sha256, results, recordingDomain: {selection: plan.selection, cellIds: plan.cells.map((cell) => cell.id)}});
+    const record = {runId, sourceHead, envelopeId, packetSha256: packet.sha256, descriptor, packet, capture, issued, summary};
+    value.summaries.push({runId, ...summary, record});
+    if(index===0)value.packetSha256 = packet.sha256;
+  }
+  return {value, files, pin};
+}
+
+test("Task28 B binds two actual invalid-gap source records with independent provenance", () => {
+  const f = task28PriorPair();
+  assert.doesNotThrow(() => verifyPriorPacket(f.value, (path) => f.files.get(path)));
+  assert.notEqual(f.value.summaries[0].record.sourceHead, f.value.summaries[1].record.sourceHead);
+  for (const changed of [task28PriorPair("full"), task28PriorPair("valid-stream-gap"), task28PriorPair("invalid-path-gap", true)])
+    assert.throws(() => verifyPriorPacket(changed.value, (path) => changed.files.get(path)));
+  for (const edit of [
+    (v) => {v.selection = "full";},
+    (v) => {v.sourceHead = "0".repeat(40);},
+    (v) => {v.envelopeId = "PUBSUB-OBSERVATION-A-OTHER";},
+    (v) => {v.packetSha256 = "0".repeat(64);},
+    (v) => {v.plan.cells.pop();},
+    (v) => {v.summaries[1].record.summary.path = v.summaries[0].path;},
+    (v) => {v.plan.selection = "valid-stream-gap";},
+    (v) => {delete v.summaries[0].record;},
+    (v) => {v.summaries[1].record.runId = v.runIds[0];},
+    (v) => {v.summaries[1].sha256 = "0".repeat(64);},
+    (v) => {v.summaries[1].path = `/fixture/other/summary-${v.runIds[1]}.json`;},
+    (v) => {v.summaries[1].record = structuredClone(v.summaries[0].record);},
+    (v) => {v.summaries[1].record.summary.sha256 = "0".repeat(64);},
+    (v) => {v.summaries[1].record.descriptor.sha256 = "0".repeat(64);},
+  ]) {
+    const changed = structuredClone(f.value); edit(changed);
+    assert.throws(() => verifyPriorPacket(changed, (path) => f.files.get(path)));
+  }
+});
+
+test("Task28 B refuses A2 or incomplete semantic records even when all pins are coherent", () => {
+  for(const field of ["a2", "recordingComplete", "resourcesClosed"]) {
+    const f = task28PriorPair(), original = f.value.summaries[0], summary = JSON.parse(f.files.get(original.path));
+    summary[field] = !summary[field];
+    const changed = f.pin(original.path, summary); original.sha256 = changed.sha256; original.record.summary = changed;
+    assert.throws(() => verifyPriorPacket(f.value, (path) => f.files.get(path)));
+  }
+});
+
+
+test("Task28 actual B admission consumes the exact reviewed pair before recording", async () => {
+  const { admit } = await import("./pubsub-observation-b/admission.mjs");
+  const { dirname, resolve } = await import("node:path");
+  const attempt = (pair) => {
+    const files = new Map(pair.files);
+    const descriptor = { head: "c".repeat(40), sources: [] };
+    const add = (path, value) => {
+      const bytes = Buffer.from(JSON.stringify(value));
+      files.set(path, bytes);
+      return sha256(bytes);
+    };
+    const options = { descriptor: "/fixture/b/descriptor.json", authority: "/fixture/b/authority.json", packet: "/fixture/b/packet.json", E: "/fixture/b/E.json", V: "/fixture/b/V.json", lock: "/fixture/b/lock", runId: "111111111111", out: "/fixture/b/run1", a2: false };
+    const scope = { taskId: "PUBSUB-OBSERVATION-B", suite: "pubsub-observation-b-v1", project: "fireemu-oracle-idp", envelopeId: "PUBSUB-OBSERVATION-B-FIXED", sourceHead: descriptor.head, descriptorSha256: add(options.descriptor, descriptor), runIds: [options.runId, "222222222222"], runOutputs: {111111111111: options.out, 222222222222: "/fixture/b/run2"}, recoveryOutputs: {111111111111: "/fixture/b/a2-one", 222222222222: "/fixture/b/a2-two"}, expiresAt: "2099-01-01T00:00:00.000Z", plan: makePlan(), priorPacket: pair.value };
+    scope.packetSha256 = add(options.packet, { schema: 1, taskId: scope.taskId, version: "v1", sourceHead: descriptor.head, descriptorSha256: scope.descriptorSha256, runIds: scope.runIds, runOutputs: scope.runOutputs, recoveryOutputs: scope.recoveryOutputs, plan: scope.plan });
+    const lines = [];
+    for (const kind of ["E", "V"]) {
+      const row = { ...scope, kind, state: "APPROVED", ledgerLine: lines.length + 1 };
+      const line = `| PUBSUB-OBSERVATION-B${kind === "E" ? " envelope" : ""} | decision=APPROVE; envelopeId=${scope.envelopeId}; scopeSha256=${scopeDigest(row)} |`;
+      lines.push(line); row.ledgerLineSha256 = sha256(line);
+      scope[kind] = { sha256: add(options[kind], row) };
+    }
+    add(options.authority, scope);
+    const read = (path, encoding) => path.endsWith("owner-decisions.md") ? lines.join("\n") : encoding ? files.get(path)?.toString() : files.get(path);
+    const readJson = (path) => ({ value: JSON.parse(read(path)), sha256: sha256(read(path)) });
+    let locks = 0;
+    const entry = new Function("readJson", "verifyDescriptor", "verifyScope", "validatePlan", "git", "dirname", "resolve", "readFileSync", "sha256", "verifyProof", "PROJECT", "TASK", "verifyLiveLock", "verifyPriorPacket", "makePlan", "unusedRunPreflight", "root", `return (${admit.toString()});`)(readJson, () => {}, verifyScope, validatePlan, (...args) => args.includes("--git-common-dir") ? "/fixture/.git" : descriptor.head, dirname, resolve, read, sha256, verifyProof, scope.project, scope.taskId, () => { locks++; }, (value) => verifyPriorPacket(value, read), makePlan, () => { throw new Error("unused-run execution forbidden"); }, "/fixture");
+    const result = entry(options, 0);
+    assert.equal(locks, 1);
+    assert.deepEqual(result.scope.priorPacket, pair.value);
+    return scope;
+  };
+  const original = task28PriorPair();
+  const scope = attempt(original);
+  for (const selection of ["full", "valid-stream-gap", "invalid-path-gap"]) {
+    for (const semantic of [true, false]) {
+      const pair = task28PriorPair();
+      pair.value.selection = selection;
+      const pin = pair.value.summaries[1], summary = JSON.parse(pair.files.get(pin.path));
+      summary.recordingComplete = semantic;
+      const changed = pair.pin(pin.path, summary); pin.sha256 = changed.sha256; pin.record.summary = changed;
+      if (selection === "invalid-path-gap" && semantic) assert.doesNotThrow(() => attempt(pair));
+      else assert.throws(() => attempt(pair));
+    }
+  }
+  const changed = structuredClone(scope);
+  changed.priorPacket.selection = "full";
+  assert.notEqual(scopeDigest({ ...scope, kind: "V" }), scopeDigest({ ...changed, kind: "V" }));
+});

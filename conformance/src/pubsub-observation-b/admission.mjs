@@ -9,7 +9,10 @@ import {
   sha256,
   verifyLiveLock,
 } from "../pubsub-production/admission.mjs";
-import { SOURCE_FILES as inheritedSources } from "../pubsub-observation/admission.mjs";
+import {
+  SOURCE_FILES as inheritedSources,
+  verifySourceRecord,
+} from "../pubsub-observation/admission.mjs";
 import { SUITE, TASK, PROJECT, makePlan, validatePlan } from "./plan.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 export const SOURCE_FILES = Object.freeze([
@@ -165,6 +168,30 @@ function validatePriorShape(value) {
 }
 export function verifyPriorPacket(value, read = readFileSync) {
   validatePriorShape(value);
+  if (value.summaries.some((pin) => pin.record !== undefined)) {
+    if (
+      value.selection !== "invalid-path-gap" ||
+      value.plan?.selection !== value.selection ||
+      JSON.stringify(value.plan?.cells?.filter((cell) => !cell.reserve).map((cell) => cell.id)) !==
+        JSON.stringify(["S12", "S13", "S14", "S15", "R1", "R2"]) ||
+      value.summaries.some((pin) =>
+        !pin.record || pin.record.runId !== pin.runId ||
+        pin.record.summary?.path !== pin.path || pin.record.summary?.sha256 !== pin.sha256,
+      )
+    )
+      throw new Error("exact invalid-gap source pair required");
+    const first = value.summaries[0].record;
+    if (first.sourceHead !== value.sourceHead || first.envelopeId !== value.envelopeId ||
+        first.packetSha256 !== value.packetSha256)
+      throw new Error("prior packet first source identity mismatch");
+    const bytes = read(first.descriptor.path);
+    if (!Buffer.isBuffer(bytes) || bytes.length > 4194304 || sha256(bytes) !== first.descriptor.sha256)
+      throw new Error("prior packet descriptor pin mismatch");
+    const descriptor = JSON.parse(bytes);
+    for (const pin of value.summaries)
+      verifySourceRecord(pin.record, value.plan, descriptor, read);
+    return value;
+  }
   for (const pin of value.summaries) {
     const bytes = read(pin.path);
     if (!Buffer.isBuffer(bytes) || bytes.length > 4194304 || sha256(bytes) !== pin.sha256)

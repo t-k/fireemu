@@ -329,13 +329,29 @@ export const RUNS = [
     commands: [
       {
         mode: "check",
-        argv: ["python3", "tools/compat-broad/fs-write-txn/fs_txn_release.py", "check", "--binary", "{bin}", "--out", "{runDir}/fs-transaction/check"],
+        argv: [
+          "python3",
+          "tools/compat-broad/fs-write-txn/fs_txn_release.py",
+          "check",
+          "--binary",
+          "{bin}",
+          "--out",
+          "{runDir}/fs-transaction/check",
+        ],
         env: {},
         expectedExitCodes: [0],
       },
       {
         mode: "export-comparison",
-        argv: ["python3", "tools/compat-broad/fs-write-txn/fs_txn_release.py", "export", "--binary", "{bin}", "--out", "{export}"],
+        argv: [
+          "python3",
+          "tools/compat-broad/fs-write-txn/fs_txn_release.py",
+          "export",
+          "--binary",
+          "{bin}",
+          "--out",
+          "{export}",
+        ],
         env: {},
         expectedExitCodes: [0],
       },

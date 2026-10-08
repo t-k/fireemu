@@ -181,10 +181,10 @@ export function hPublishes(m) {
   add("multi", mixed);
   const noTime = event("no-time");
   delete noTime.attributes.time;
-  bracket("no-time", [noTime], { negativeHandlers: [m.observe, m.filtered] });
+  bracket("no-time", [noTime], m.functions ? {} : { negativeHandlers: [m.observe, m.filtered] });
   const bytes = event("ce-bytes");
   bytes.attributes.convbytes = { ceBytes: "AAE=" };
-  bracket("ce-bytes", [bytes], { negativeHandlers: [m.observe, m.filtered] });
+  bracket("ce-bytes", [bytes], m.functions ? {} : { negativeHandlers: [m.observe, m.filtered] });
   for (const [caseId, channel, generated] of [
     ["sdk-default", undefined, false],
     ["sdk-full", m.channel, false],

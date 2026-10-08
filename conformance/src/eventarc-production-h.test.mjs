@@ -82,6 +82,11 @@ test("H freezes two run-owned functions and 48 unique publish attempts", () => {
     assert.equal(plan[index + 1].control, true);
     assert.equal(plan[index].windowMs, 120_000);
   }
+  for (const caseId of ["no-time", "ce-bytes"])
+    assert.deepEqual(plan.find((p) => p.case === caseId).negativeHandlers, [
+      manifest.observe,
+      manifest.filtered,
+    ]);
   assert.equal(plan.find((p) => p.case === "retry").windowMs, 600_000);
   assert.throws(() => hManifest({ project: "demo-eventarc-h", runId: "bad" }));
 });
@@ -634,4 +639,150 @@ test("H refuses cross-type handler receipts even when matching receipts also exi
   assert.equal(judgeH({ manifest, observations: [filteredObservation], capture }).complete, true);
   capture.frames.push({ frame: { ...frame, event: filteredEvent } });
   assert.equal(judgeH({ manifest, observations: [filteredObservation], capture }).complete, false);
+});
+
+for (const recording of ["h2-a", "h2-b"]) {
+  for (const caseId of ["no-time", "ce-bytes"]) {
+    test(`H2 ${recording}/${caseId} completes admitted deliveries and rejects missing or foreign receipts`, () => {
+      const m = hManifest({ project: "demo-eventarc-h", runId: "012345abcdef", recording });
+      const plan = hPublishes(m);
+      const index = plan.findIndex((p) => p.case === caseId);
+      const start = Date.parse("2026-10-06T00:00:00Z");
+      const observations = plan.slice(index - 1, index + 2).map((p, i) => ({
+        ...p,
+        known: true,
+        status: 200,
+        before: true,
+        after: true,
+        sentAt: start + i * 120_000,
+        endedAt: start + (i + 1) * 120_000,
+      }));
+      const subject = observations[1];
+      const e = subject.body.events[0];
+      assert.deepEqual(
+        subject.expectedRecipients,
+        [m.observe, m.fanout].map((handler) => ({ handler, id: e.id, source: e.source })),
+      );
+      assert.equal(subject.negativeHandlers, undefined);
+      const ownedOrigins = m.functions
+        .filter((f) => f.segment === "core")
+        .map((f) => ({ handler: f.name, service: `owned-${f.name}`, location: m.location }));
+      const entries = observations.flatMap((o) => {
+        const recipients =
+          o === subject
+            ? [m.observe, m.fanout].map((handler) => ({ handler, id: e.id }))
+            : o.expectedRecipients;
+        return recipients.map((r, i) => {
+          const proto = o.body.events.find((p) => p.id === r.id);
+          const visible = {
+            id: proto.id,
+            source: proto.source,
+            type: proto.type,
+            specversion: proto.specVersion,
+            ...Object.fromEntries(
+              Object.entries(proto.attributes)
+                .filter(([key]) => !["datacontenttype", "convbytes"].includes(key))
+                .map(([key, value]) => [key, value.ceString ?? value.ceTimestamp]),
+            ),
+            data: JSON.parse(proto.textData),
+            traceparent: `00-${"1".repeat(32)}-${"2".repeat(16)}-01`,
+          };
+          const receipt = {
+            ...frame,
+            handler: r.handler,
+            recording,
+            case: o.case,
+            invocationId: `${o.case}-${i}`,
+            correlation: { id: proto.id, source: proto.source },
+            event: visible,
+            eventKeys: Object.keys(visible),
+          };
+          return {
+            ...entry,
+            insertId: `${o.case}-${i}`,
+            timestamp: new Date(o.sentAt + 1).toISOString(),
+            resource: {
+              type: "cloud_run_revision",
+              labels: {
+                project_id: m.project,
+                service_name: `owned-${r.handler}`,
+                location: m.location,
+              },
+            },
+            textPayload: `FE_EVENTS_FRAME ${JSON.stringify(receipt)}`,
+          };
+        });
+      });
+      const judge = (raw) => {
+        const parsed = parseHEntries(
+          { entries: raw },
+          {
+            manifest: m,
+            origins: ownedOrigins,
+            readAt: new Date(observations.at(-1).endedAt).toISOString(),
+          },
+        );
+        return judgeH({
+          manifest: m,
+          observations,
+          capture: {
+            ...parsed,
+            origins: ownedOrigins,
+            complete: !parsed.incomplete,
+            finalRead: true,
+          },
+        });
+      };
+      assert.equal(judge(entries).complete, true);
+      for (const handler of [m.observe, m.fanout]) {
+        assert.equal(
+          judge(
+            entries.filter((r) => {
+              const f = JSON.parse(r.textPayload.slice("FE_EVENTS_FRAME ".length));
+              return f.case !== caseId || f.handler !== handler;
+            }),
+          ).complete,
+          false,
+          `missing ${handler}`,
+        );
+      }
+      assert.equal(
+        judge(entries.filter((r) => !r.insertId.startsWith(`${caseId}-`))).complete,
+        false,
+        "missing both recipients",
+      );
+      const wrongHandler = structuredClone(entries);
+      const target = wrongHandler.find((r) => r.insertId === `${caseId}-0`);
+      const foreign = JSON.parse(target.textPayload.slice("FE_EVENTS_FRAME ".length));
+      foreign.handler = m.filtered;
+      target.resource.labels.service_name = `owned-${m.filtered}`;
+      target.textPayload = `FE_EVENTS_FRAME ${JSON.stringify(foreign)}`;
+      assert.equal(judge(wrongHandler).complete, false, "wrong handler");
+      const wrongOrigin = structuredClone(entries);
+      wrongOrigin.find((r) => r.insertId === `${caseId}-0`).resource.labels.service_name =
+        "foreign-service";
+      assert.equal(judge(wrongOrigin).complete, false, "wrong origin");
+    });
+  }
+}
+
+test("H2 subject recipients follow admitted names, channels, types and filters", () => {
+  for (const recording of ["h2-a", "h2-b"]) {
+    for (const variant of ["rename", "channel", "type", "filter"]) {
+      const m = hManifest({ project: "demo-eventarc-h", runId: "012345abcdef", recording });
+      const observe = m.functions.find((f) => f.name === m.observe);
+      if (variant === "rename") observe.name += "Renamed";
+      if (variant === "channel") observe.channel = m.namedChannel;
+      if (variant === "type") observe.type = m.filteredType;
+      if (variant === "filter") observe.filters.tenant = `${m.tenant}-miss`;
+      for (const caseId of ["no-time", "ce-bytes"]) {
+        const p = hPublishes(m).find((p) => p.case === caseId);
+        assert.deepEqual(
+          p.expectedRecipients.map((r) => r.handler),
+          variant === "rename" ? [observe.name, m.fanout] : [m.fanout],
+          `${recording}/${variant}/${caseId}`,
+        );
+      }
+    }
+  }
 });

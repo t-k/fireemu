@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
-import { captureFrames } from "./browser-driver.mjs";
+import { captureFrames } from "./frames.mjs";
 
 const DOCUMENT_ROWS = new Set(["documentChange", "documentDelete", "documentRemove"]);
 

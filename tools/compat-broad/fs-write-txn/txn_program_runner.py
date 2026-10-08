@@ -98,6 +98,11 @@ def web_version(value):
     raise ValueError('S5b typed updateTime required')
 
 
+def web_string_value(value, expected):
+    """Accept only the two observed protobuf string representations."""
+    return isinstance(value, dict) and set(value) in ({'stringValue'}, {'stringValue', 'valueType'}) and value.get('stringValue') == expected and value.get('valueType', 'stringValue') == 'stringValue'
+
+
 def web_event(event, *, state, plan, budget, wire, bearer, journal, check, web_config, web_baseline, bindings):
     """One fixed Web event in the existing parent's durable before-send loop."""
     expected_id = 'web-' + str(state.setdefault('next', 0) + 1)
@@ -177,7 +182,7 @@ def web_event(event, *, state, plan, budget, wire, bearer, journal, check, web_c
         if known and answer['code'] == 0 and method == 'GetDocument':
             doc = answer.get('response')
             role = next((role for role, resource in plan['documents'].items() if resource == request['name']), None)
-            if doc and doc.get('name') in writable and doc.get('fields', {}).get('owner') == {'stringValue': plan['ownerId']} and doc['fields'].get('nonce') == {'stringValue': plan['nonce']} and doc['fields'].get('case') == {'stringValue': role.split('-', 1)[1].replace('-', '_')}:
+            if doc and doc.get('name') in writable and web_string_value(doc.get('fields', {}).get('owner'), plan['ownerId']) and web_string_value(doc['fields'].get('nonce'), plan['nonce']) and web_string_value(doc['fields'].get('case'), role.split('-', 1)[1].replace('-', '_')):
                 web_version(doc.get('updateTime')); state.setdefault('ownedReads', {})[doc['name']] = copy.deepcopy(doc)
         reply['answer'] = answer
     elif event['event'] == 'dispatch':
@@ -532,9 +537,78 @@ def run_once(index, table, nonce, owner_id, directory, *, baseline, runtime, che
     return receipt
 
 
+def s5b_recovery_documents(snapshot, action):
+    """Recover only the three confirmed S5b003 responsibilities; never infer an unknown write."""
+    from txn_program_cli import table_for
+    if snapshot.get('kind') not in ('txn-program-recording-v1', 'txn-s5b-sdk-recovery-v1') or action not in ('cleanup', 'a2'):
+        raise ValueError('S5b recovery snapshot differs')
+    plan = compile_plan(table_for('s5b-web-sdk-retry'), snapshot.get('nonce'), snapshot.get('ownerId'))
+    documents = copy.deepcopy(snapshot.get('documents'))
+    if not isinstance(documents, dict) or set(documents) != {'node_control', 'node_control_other', 'node_conflict'} or snapshot.get('openTokens') != [] or snapshot.get('unknownStarts') != [] or snapshot.get('tokens'):
+        raise ValueError('S5b confirmed responsibility scope differs')
+    for role, doc in documents.items():
+        if doc.get('name') != plan['documents'][role.replace('_', '-')] or doc.get('createConfirmed') is not True:
+            raise ValueError('S5b exact confirmed document differs')
+        web_version(doc.get('updateTime'))
+    unknown = snapshot.get('unknownAnswers', [])
+    if not isinstance(unknown, list) or any(row.get('method') != 'BatchGetDocuments' for row in unknown) or snapshot.get('unknownWrites'):
+        raise ValueError('S5b unresolved mutation differs')
+    for row in snapshot.get('parentJournal', []):
+        answer = row.get('answer', {})
+        if row.get('method') in ('Commit', 'DeleteDocument') and (row.get('pending') is not False or answer.get('complete') is not True or type(answer.get('code')) is not int or not 0 <= answer['code'] <= 16 or answer.get('code') in (1, 2, 4, 13, 14)):
+            raise ValueError('S5b unresolved parent write')
+    for row in snapshot.get('sdkJournal', []):
+        evidence = row.get('evidence', {})
+        if row.get('method') == 'Commit' and (evidence.get('complete') is not True or evidence.get('status') != 200 or type(evidence.get('grpcCode')) is not int or evidence['grpcCode'] in (1, 2, 4, 13, 14)):
+            raise ValueError('S5b unresolved SDK write')
+    return documents
+
+
+def s5b_document_action(snapshot, action, send):
+    documents = s5b_recovery_documents(snapshot, action)
+    previous_calls = copy.deepcopy(snapshot.get('recoverySteps', []))
+    calls = []
+    if any(row.get('rpc') == 'DeleteDocument' for row in previous_calls) and action == 'cleanup':
+        raise ValueError('S5b deletion cannot be resent')
+    blocked = False
+    def dispatch(rpc, request):
+        nonlocal blocked
+        if blocked or len(calls) >= 9: raise ValueError('S5b recovery dispatch blocked')
+        try: answer = send(rpc, request)
+        except (Exception, KeyboardInterrupt): answer = {'complete': False, 'code': 2}
+        if not isinstance(answer, dict): answer = {'complete': False, 'code': 2}
+        calls.append({'rpc': rpc, 'request': copy.deepcopy(request), 'result': copy.deepcopy(answer)})
+        if answer.get('complete') is not True or type(answer.get('code')) is not int or answer['code'] != 0 and not (rpc == 'GetDocument' and answer['code'] == 5): blocked = True
+        return answer
+    for role, document in documents.items():
+        if blocked: break
+        name = document['name']; answer = dispatch('GetDocument', {'name': name})
+        if blocked: break
+        absent = answer['code'] == 5
+        if not absent:
+            body = answer.get('response'); fields = body.get('fields', {}) if isinstance(body, dict) else {}
+            owned = isinstance(body, dict) and isinstance(fields, dict) and body.get('name') == name and all(web_string_value(fields.get(key), value) for key, value in {'owner': snapshot['ownerId'], 'nonce': snapshot['nonce'], 'case': role.split('_', 1)[1]}.items())
+            try: owned = owned and web_version(body.get('updateTime')) == web_version(document['updateTime'])
+            except ValueError: owned = False
+            if not owned: blocked = True; break
+            if action == 'cleanup':
+                deleted = dispatch('DeleteDocument', {'name': name, 'currentDocument': {'updateTime': copy.deepcopy(body['updateTime'])}})
+                if blocked: break
+                document['deleted'] = True
+                verified = dispatch('GetDocument', {'name': name})
+                if blocked: break
+                absent = verified['code'] == 5
+                if not absent: blocked = True; break
+        document['absent'] = absent
+    return {**copy.deepcopy(snapshot), 'kind': 'txn-s5b-sdk-recovery-v1', 'action': action, 'complete': not blocked and all(doc.get('absent') is True for doc in documents.values()), 'documents': documents, 'recoverySteps': previous_calls + calls, 'recoveryBlocked': blocked, 'requests': len(calls)}
+
+
 def sdk_document_action(snapshot, action, send, *, now):
     """Recover exact SDK-owned names; A2 reads never settle an unknown create by absence."""
     from txn_program_cli import table_for
+    if snapshot.get('packetName') == 's5b-web-sdk-retry':
+        if now.tzinfo is None: raise ValueError('SDK timezone required')
+        return s5b_document_action(snapshot, action, send)
     if action not in ('cleanup', 'a2') or snapshot.get('kind') not in ('txn-program-recording-v1', 'txn-admin-sdk-recovery-v1') or snapshot.get('packetName') != 'p17-admin-sdk-retry' or now.tzinfo is None:
         raise ValueError('SDK cleanup or A2 snapshot required')
     plan = compile_plan(table_for('p17-admin-sdk-retry'), snapshot['nonce'], snapshot['ownerId'])
@@ -599,12 +673,19 @@ def record_sdk_action(*, table, snapshot, action, directory, baseline, runtime, 
     directory.mkdir(mode=0o700)
     plan = compile_plan(table, snapshot['nonce'], snapshot['ownerId'])
     budget = SessionBudget(plan, table, check, lambda value: save_private(directory / f"charged-{value['requests']:03d}.json", value))
+    is_web = table['name'] == 's5b-web-sdk-retry'
+    if is_web:
+        s5b_recovery_documents(snapshot, action)
+        budget._caps = {'observation': 0, 'tokenCleanup': 0, 'documentCleanup': 9, 'management': 10, 'credential': 1}
+        budget._max = 20
+        budget.observation_deadline = budget.started + 120
+        budget.recovery_deadline = budget.started + 120
     journal = directory / 'sdk-recovery-journal.jsonl'
     result = None
     try:
         check()
         bearer = refresh(baseline, budget, before_send=check)
-        metadata = MetadataSession(bearer, baseline, budget, request_fn=functools.partial(request_once, project=plan['project']), project=plan['project'])
+        metadata = MetadataSession(bearer, {key: value for key, value in baseline.items() if key != 's5b'} if is_web else baseline, budget, request_fn=functools.partial(request_once, project=plan['project'], **({'project_number': baseline['projectNumber']} if is_web else {})), project=plan['project'], **({'s5b': baseline['s5b']} if is_web else {}))
         before = metadata.preflight()
         def send(rpc, request):
             check()
@@ -613,14 +694,14 @@ def record_sdk_action(*, table, snapshot, action, directory, baseline, runtime, 
             budget.charge(phase)
             name = request.get('name') or request.get('writes', [{}])[0].get('delete')
             case = name.split('/')[-2].removeprefix('txn-p17-') if name else 'conflict'
-            wire = NodeWire(runtime, {'slug': 'txn-p17-' + case, 'documents': ['a', 'b', 'c'], 'states': table['states']}, project=plan['project'])
+            wire = NodeWire(runtime, wire_scope(table) if is_web else {'slug': 'txn-p17-' + case, 'documents': ['a', 'b', 'c'], 'states': table['states']}, project=plan['project'])
             shared.append_ledger(journal, {'event': 'dispatch', 'rpc': rpc, 'request': request, 'ts': now().isoformat()})
             answer = wire.send('grpc', rpc, request, nonce=snapshot['nonce'], owner_id=snapshot['ownerId'], bearer=bearer)
             shared.append_ledger(journal, {'event': 'status', 'rpc': rpc, 'result': answer})
             return answer
         result = sdk_document_action(snapshot, action, send, now=now())
         budget.begin_recovery()
-        if not result['unknownAnswers']:
+        if not (result.get('recoveryBlocked') if is_web else result['unknownAnswers']):
             after = metadata.postflight()
             if before.get('project') != after.get('project') or before.get('database') != after.get('database'): result['complete'] = False
             result.update(metadata=before, postflight=after)

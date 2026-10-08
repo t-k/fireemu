@@ -48,12 +48,21 @@ def _same_amount(text, amount):
         return False
 
 
+def _s5b_recovery(pins):
+    return pins.get('packetName') == 's5b-web-sdk-retry' and pins.get('envelopeId') == 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-001'
+
+
 def _check_scope(pins):
     name = pins.get('packetName')
     requests = pins.get('requestsPerRecording')
     envelope = pins.get('envelopeId')
-    if not isinstance(name, str) or not _PACKET_NAME.fullmatch(name) or name in _TAKEN_NAMES or type(requests) is not int or requests <= 0 or pins.get('estimatedUsdPerRecording') != budget_for(pins.get('project', PROJECT))[0] or not isinstance(pins.get('scope'), dict) or set(pins['scope']) != set(SCOPE_KEYS) or any(not isinstance(value, str) or not value for value in pins['scope'].values()) or not isinstance(envelope, str) or not envelope.startswith(f'FS-TRANSACTION-{name}-'):
+    if not isinstance(name, str) or not _PACKET_NAME.fullmatch(name) or name in _TAKEN_NAMES or type(requests) is not int or requests <= 0 or pins.get('estimatedUsdPerRecording') != (0.01 if _s5b_recovery(pins) else budget_for(pins.get('project', PROJECT))[0]) or not isinstance(pins.get('scope'), dict) or set(pins['scope']) != set(SCOPE_KEYS) or any(not isinstance(value, str) or not value for value in pins['scope'].values()) or not isinstance(envelope, str) or not envelope.startswith(f'FS-TRANSACTION-{name}-'):
         raise ValueError('fresh program authority scope required')
+    if _s5b_recovery(pins):
+        from txn_program_cli import table_for
+        expected = {**envelope_scope(table_for(name)), 'retries': 'none', 'releasePolicy': 'sdk-recovery-lock-held', 'observationSeconds': '120', 'transports': 'grpc', 'timingSource': 'parent-wire-envelope', 'writerDeadlineSeconds': 'none', 'writes': pins['scope']['writes']}
+        if requests != 20 or pins.get('reserveUsd') != 0.01 or pins.get('project') != 'fireemu-oracle-query' or pins['scope']['writes'] not in ('owned-version-delete-only', 'none') or pins['scope'] != expected:
+            raise ValueError('closed S5b recovery authority required')
     return name, requests
 
 
@@ -67,7 +76,7 @@ def authorize(decisions, pins):
     for columns, _tokens in entries:
         if shared.normalize_authority(columns[1]) in scope and shared._revoked_packet(columns[2], pins['packetSha256'], pins['envelopeId']):
             raise ValueError('program packet or envelope is REVOKED')
-    expected = {'decision': 'APPROVE', 'envelopeId': pins['envelopeId'], 'packetSha256': pins['packetSha256'], 'sourceCommit': pins['sourceCommit'], 'runnerSha256': pins['runnerSha256'], 'requestsPerRecording': str(requests), 'recordings': '2'}
+    expected = {'decision': 'APPROVE', 'envelopeId': pins['envelopeId'], 'packetSha256': pins['packetSha256'], 'sourceCommit': pins['sourceCommit'], 'runnerSha256': pins['runnerSha256'], 'requestsPerRecording': str(requests), 'recordings': '1' if _s5b_recovery(pins) else '2'}
     exact = []
     for columns, _tokens in entries:
         if shared.normalize_authority(columns[1]) not in {shared.normalize_authority(value) for value in ('FS-TRANSACTION', name)} or columns[4] != pins['packetPath']:
@@ -100,7 +109,7 @@ def authorize(decisions, pins):
         reserve = Decimal(values[shared.normalize_authority('reserveUsd')])
     except (KeyError, ValueError, InvalidOperation):
         raise ValueError('program envelope bound is invalid') from None
-    if str(count) != values[shared.normalize_authority('maxRequests')] or count != 2 * requests or not reserve.is_finite() or reserve != Decimal(str(budget_for(pins.get('project', PROJECT))[1])):
+    if str(count) != values[shared.normalize_authority('maxRequests')] or count != (20 if _s5b_recovery(pins) else 2 * requests) or not reserve.is_finite() or reserve != Decimal(str(0.01 if _s5b_recovery(pins) else budget_for(pins.get('project', PROJECT))[1])):
         raise ValueError('program envelope does not cover the graph within task limits')
     return count, float(reserve)
 

@@ -225,36 +225,77 @@ function snapshotTime(source, actual, receipt, state, messages, topics, bound) {
     result.verdict = "DIVERGES";
     return result;
   }
+  result.scope = "bounded-source-correlation-and-local-lifetime";
+  result.sourceInternalLifetimeVerdict = "NOT_COMPARABLE";
+  result.sourceCreationBoundsVerdict = "NOT_COMPARABLE";
+  result.automaticExpiryVerdict = "NOT_COMPARABLE";
   if (
-    !bound ||
     !subscription ||
     subscription.tainted ||
     !topics.has(subscription.topic) ||
     subscription.topic !== source.reply.body.topic
-  )
+  ) {
+    result.gap = "fresh unchanged subscription/topic backlog unavailable";
     return result;
-  const backlog = [...messages.values()].filter(
-    (p) => p.topic === subscription.topic && p.source.n > subscription.createdN,
+  }
+  const publications = [...messages.values()].filter(
+    (p) =>
+      p.topic === subscription.topic && p.source.n > subscription.createdN && p.source.n < source.n,
   );
-  // A fresh unfiltered subscription with no ACK/Seek/configuration changes proves this backlog in each run.
-  if (!backlog.length || backlog.some((p) => p.timestampVerdict !== "MATCH")) return result;
+  const backlog = publications.filter(
+    (p) => !subscription.localAcknowledged.has(p.sourceMessageId),
+  );
+  if (subscription.localAckGap) {
+    result.gap = subscription.localAckGap;
+    return result;
+  }
+  if (!publications.length || publications.some((p) => p.timestampVerdict !== "MATCH")) {
+    result.gap = "saved publication witness unavailable";
+    return result;
+  }
   const clock = publicationClock(source, receipt);
-  if (!clock) return result;
-  const oldest = (key) =>
-    backlog.reduce((min, p) => {
+  if (!clock) {
+    result.gap = "actual local Snapshot creation clock unavailable";
+    return result;
+  }
+  const oldest = (items, key) =>
+    items.reduce((min, p) => {
       const value = timestamp(p[key]).instant;
       return min === null || value < min ? value : min;
     }, null);
-  const validLifetime = (expiry, created, oldestPublication) =>
-    expiry === oldestPublication + week && expiry <= created + week && expiry >= created + hour;
-  // The journal dispatch clock cannot prove production server creation bounds.
-  result.verdict =
-    original.instant === oldest("sourceTime") + week &&
-    validLifetime(local.instant, clock.instant, oldest("localTime"))
-      ? "NOT_COMPARABLE"
+  const expectedLocalExpiry = backlog.length
+    ? oldest(backlog, "localTime") + week
+    : clock.instant + week;
+  result.localLifetimeVerdict =
+    local.instant === expectedLocalExpiry &&
+    local.instant <= clock.instant + week &&
+    local.instant >= clock.instant + hour
+      ? "MATCH"
       : "DIVERGES";
   result.subscription = source.request.subscription;
   result.publicationSourceNs = backlog.map((p) => p.source.n);
+  if (result.localLifetimeVerdict === "DIVERGES") {
+    result.verdict = "DIVERGES";
+    return result;
+  }
+  const sourceBacklog = publications.filter(
+    (p) => !subscription.sourceAcknowledged.has(p.sourceMessageId),
+  );
+  // Public saved timestamps do not expose Google's internal backlog-age clock.
+  result.sourcePublicExpiryRelationVerdict =
+    sourceBacklog.length && original.instant === oldest(sourceBacklog, "sourceTime") + week
+      ? "MATCH"
+      : "NOT_COMPARABLE";
+  if (!bound || source.reply.unknown || subscription.sourceAckGap) {
+    result.gap =
+      subscription.sourceAckGap ??
+      (source.reply.unknown
+        ? "successful source Snapshot creation unavailable"
+        : "approved source/runtime disposition unavailable");
+    return result;
+  }
+  result.sourceCorrelationVerdict = "MATCH";
+  result.verdict = "MATCH";
   return result;
 }
 export async function replayRecording(
@@ -404,15 +445,15 @@ export async function replayRecording(
             topic: source.request.topic,
             createdN: source.n,
             tainted: Boolean(source.request.filter || source.reply.body.filter),
+            ackDeadlineSeconds: source.reply.body.ackDeadlineSeconds,
+            currentDeliveries: new Map(),
+            localAcknowledged: new Set(),
+            sourceAcknowledged: new Set(),
           });
         if (
-          [
-            "Acknowledge",
-            "Seek",
-            "ModifyAckDeadline",
-            "UpdateSubscription",
-            "DeleteSubscription",
-          ].includes(source.method)
+          ["Seek", "ModifyAckDeadline", "UpdateSubscription", "DeleteSubscription"].includes(
+            source.method,
+          )
         ) {
           const state = subscriptions.get(source.request.subscription ?? source.request.name);
           if (state) state.tainted = true;
@@ -464,6 +505,20 @@ export async function replayRecording(
             if (prior && (prior.ackId !== binding.ackId || prior.messageId !== binding.messageId))
               throw new Error("same-delivery identity drift");
             tokens.set(`${source.request.subscription}\0${item.ackId}`, binding);
+            const subscription = subscriptions.get(source.request.subscription);
+            if (subscription) {
+              const deliveredClock = publicationClock(source, clockReceipt);
+              subscription.currentDeliveries.set(publication.sourceMessageId, {
+                sourceAckId: item.ackId,
+                binding,
+                deadline:
+                  deliveredClock &&
+                  Number.isSafeInteger(subscription.ackDeadlineSeconds) &&
+                  subscription.ackDeadlineSeconds > 0
+                    ? deliveredClock.instant + BigInt(subscription.ackDeadlineSeconds) * 1000000000n
+                    : null,
+              });
+            }
             if (timestampDisposition) {
               const proof = publicationTime(
                 publication,
@@ -529,6 +584,8 @@ export async function replayRecording(
               same(source.reply.body, pending.sourceBody) && same(actual.body, pending.localBody)
                 ? pending.proof.verdict
                 : "DIVERGES";
+          if (source.reply.unknown && proof.verdict !== "DIVERGES")
+            proof.verdict = "NOT_COMPARABLE";
           timestampProofs.push(proof);
           if (expected && actual.body) expected.expireTime = actual.body.expireTime;
           pairedSnapshot = pending;
@@ -565,8 +622,47 @@ export async function replayRecording(
           observe(pairedSnapshot.entry);
           pairedSnapshot.entry = null;
         }
-        if (source.method === "Acknowledge" && actual.ok)
-          call.request.ackIds.forEach((id) => acked.add(id));
+        if (source.method === "Acknowledge") {
+          const subscription = subscriptions.get(source.request.subscription);
+          const ackClock = publicationClock(source, clockReceipt);
+          for (const [index, sourceAckId] of source.request.ackIds.entries()) {
+            const binding = tokens.get(`${source.request.subscription}\0${sourceAckId}`);
+            const current = subscription?.currentDeliveries.get(binding?.sourceMessageId);
+            if (subscription) {
+              if (
+                !current ||
+                !ackClock ||
+                current.deadline === null ||
+                !actual.ok ||
+                actual.unknown ||
+                actual.code !== "OK" ||
+                !same(actual.body, {}) ||
+                (actual.status !== 200 &&
+                  !(source.transport === "grpc" && actual.status === undefined))
+              ) {
+                subscription.localAckGap = "ACK current local lease/effect unavailable";
+                subscription.sourceAckGap = "ACK source effect unavailable";
+              } else if (ackClock.instant >= current.deadline) {
+                // An expired local lease cannot remove this message; source effect stays unproved.
+                subscription.sourceAckGap = "ACK source effect unavailable for expired local lease";
+              } else if (current.binding.ackId !== call.request.ackIds[index]) {
+                subscription.localAckGap = "ACK local token is not the current delivery";
+                subscription.sourceAckGap = "ACK source token is not the current delivery";
+              } else {
+                subscription.localAcknowledged.add(binding.sourceMessageId);
+                if (
+                  current.sourceAckId === sourceAckId &&
+                  source.reply.ok &&
+                  !source.reply.unknown &&
+                  semantic === "MATCH"
+                )
+                  subscription.sourceAcknowledged.add(binding.sourceMessageId);
+                else subscription.sourceAckGap = "ACK source current token/effect unavailable";
+              }
+            }
+            if (actual.ok) acked.add(call.request.ackIds[index]);
+          }
+        }
         const physical =
           source.reply.bodyBytes == null || actual.bodyBytes == null
             ? "NOT_COMPARABLE"

@@ -65,6 +65,8 @@ function requireTokenMode(mode) {
 }
 
 const REQUEST_ID = /^[0-9a-f]{16}$/;
+const INTERNAL_ERROR_ID =
+  /^An internal error has occurred \([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\)$/;
 const SIZE_IN_TEXT = /\((\d+) bytes\)/g;
 const ANY_TYPE_URL = "type.googleapis.com/io.cloudevents.v1.CloudEvent";
 
@@ -216,7 +218,7 @@ export function publishedChannel(path) {
 
 // --- masks ---------------------------------------------------------------------------------------------
 
-/** Masks the `requestId` of a `RequestInfo` detail: a fresh 16-hex value in every answer. */
+/** Masks generated request IDs and the exact internal-error wrapper accepted by the Rust replay comparator. */
 export function maskRequestIds(value) {
   if (Array.isArray(value)) return value.map(maskRequestIds);
   if (value !== null && typeof value === "object") {
@@ -225,7 +227,9 @@ export function maskRequestIds(value) {
         key,
         key === "requestId" && typeof item === "string" && REQUEST_ID.test(item)
           ? "<requestId>"
-          : maskRequestIds(item),
+          : key === "message" && typeof item === "string" && INTERNAL_ERROR_ID.test(item)
+            ? "An internal error has occurred (<errorId>)"
+            : maskRequestIds(item),
       ]),
     );
   }

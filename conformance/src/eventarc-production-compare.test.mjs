@@ -910,3 +910,79 @@ test("current-walk ambiguity dominates persistent fallback after inventory inval
     );
   }
 });
+
+test("original C124 and D57 internal-error wrappers normalize only their generated hex UUID", async () => {
+  const { readFileSync } = await import("node:fs");
+  for (const [label, ordinal] of [
+    ["C", 124],
+    ["D", 57],
+  ]) {
+    const native = readFileSync(
+      new URL(`./eventarc-production/fixtures/ad/${label}.jsonl`, import.meta.url),
+      "utf8",
+    )
+      .trim()
+      .split("\n")
+      .map(JSON.parse)
+      .find((captured) => captured.n === ordinal).response;
+    const actual = structuredClone(native);
+    actual.body.error.message =
+      "An internal error has occurred (00000000-0000-0000-0000-000000000001)";
+    assert.equal(compareAnswer(native, actual).verdict, "match", `${label}${ordinal}`);
+    assert.notEqual(
+      native.body.error.message,
+      actual.body.error.message,
+      "raw generated IDs remain different",
+    );
+  }
+});
+test("internal-error ID normalization retains wrapper, status, code, details and unrelated-message differences", () => {
+  const message = "An internal error has occurred (12345678-1234-4ABC-8abc-123456789aBC)";
+  const native = { status: 500, body: { error: { code: 500, status: "INTERNAL", message } } };
+  const own = "An internal error has occurred (00000000-0000-0000-0000-000000000001)";
+  for (const changed of [
+    own.replace("000000000001", "00000000001"),
+    own.replace("000000000001", "0000000000001"),
+    own.replace("000000000001", "00000000000g"),
+    own.replace("0000-0000", "000-0000"),
+    own.replace("An internal", "an internal"),
+    own.replace("has occurred", "occurred"),
+    own + "suffix",
+    own + "\n",
+    own.replace(")", ""),
+    own.replace(" (", ": "),
+    "another message (00000000-0000-0000-0000-000000000001)",
+    null,
+    500,
+  ]) {
+    assert.equal(
+      compareAnswer(native, {
+        status: 500,
+        body: { error: { ...native.body.error, message: changed } },
+      }).verdict,
+      "diverge",
+    );
+  }
+  for (const changed of [
+    { status: 400, body: { error: { ...native.body.error, message: own } } },
+    { status: 500, body: { error: { ...native.body.error, code: 400, message: own } } },
+    { status: 500, body: { error: { ...native.body.error, status: "UNKNOWN", message: own } } },
+    {
+      status: 500,
+      body: { error: { ...native.body.error, details: [{ reason: "unexpected" }], message: own } },
+    },
+  ])
+    assert.equal(compareAnswer(native, changed).verdict, "diverge");
+  assert.equal(
+    compareAnswer(native, { status: 500, body: { error: { ...native.body.error, message: own } } })
+      .verdict,
+    "match",
+  );
+  assert.equal(
+    compareAnswer(
+      { status: 500, body: { description: message } },
+      { status: 500, body: { description: own } },
+    ).verdict,
+    "diverge",
+  );
+});

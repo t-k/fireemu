@@ -469,6 +469,7 @@ impl Subscriber for SubscriberService {
         tokio::spawn(async move {
             let mut outstanding_ack_ids = BTreeSet::new();
             let mut first = Some(first);
+            let mut inbound_open = true;
             // A short poll delivers messages published after the stream opened. This is a
             // delivery cadence only; ack-deadline and redelivery timing run on the virtual clock.
             let mut interval = tokio::time::interval(Duration::from_millis(25));
@@ -480,7 +481,7 @@ impl Subscriber for SubscriberService {
                             Some(f) => Ok(Some(f)),
                             None => inbound.message().await,
                         }
-                    } => {
+                    }, if inbound_open => {
                         match msg {
                             Ok(Some(req)) => {
                                 if let Err(error) = apply_stream_request(&handle, &name, &req) {
@@ -488,6 +489,10 @@ impl Subscriber for SubscriberService {
                                     break;
                                 }
                             },
+                            Ok(None) if handle.paging_policy == crate::PagingPolicy::Strict => {
+                                // A clean request half-close leaves the Strict response live.
+                                inbound_open = false;
+                            }
                             Ok(None) | Err(_) => break,
                         }
                     }

@@ -1490,13 +1490,12 @@ async fn setup_stream_credit(
     let topic = format!("projects/demo-app/topics/credit-{suffix}");
     let subscription = format!("projects/demo-app/subscriptions/credit-{suffix}");
     let mut pubc = h.publisher().await;
-    pubc
-        .create_topic(pb::Topic {
-            name: topic.clone(),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+    pubc.create_topic(pb::Topic {
+        name: topic.clone(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
     h.subscriber()
         .await
         .create_subscription(pb::Subscription {
@@ -1647,13 +1646,22 @@ async fn streaming_pull_strict_message_credit_waits_for_real_ack() {
         .await
         .unwrap();
         drop(tx);
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
-                .await
-                .unwrap()
-                .unwrap()
-                .is_none()
-        );
+        assert_credit_held(&mut responses).await;
+        advance(&h, LogicalDuration::from_seconds(11));
+        assert_credit_held(&mut responses).await;
+        let after_ack = h
+            .subscriber()
+            .await
+            .pull(pb::PullRequest {
+                subscription,
+                max_messages: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(after_ack.received_messages.is_empty());
+        drop(responses);
         h.shutdown().await;
     }
 }
@@ -1798,18 +1806,14 @@ async fn streaming_pull_credit_is_per_stream() {
     drop(tx_b);
     drop(tx_c);
     assert!(
-        tokio::time::timeout(std::time::Duration::from_secs(2), responses_b.message())
+        tokio::time::timeout(std::time::Duration::from_millis(200), responses_b.message())
             .await
-            .unwrap()
-            .unwrap()
-            .is_none()
+            .is_err()
     );
     assert!(
-        tokio::time::timeout(std::time::Duration::from_secs(2), responses_c.message())
+        tokio::time::timeout(std::time::Duration::from_millis(200), responses_c.message())
             .await
-            .unwrap()
-            .unwrap()
-            .is_none()
+            .is_err()
     );
     let mut subscriber = h.subscriber().await;
     let before = subscriber
@@ -1844,6 +1848,160 @@ async fn streaming_pull_credit_is_per_stream() {
             .message_id,
         second_a.message.as_ref().unwrap().message_id
     );
+    drop(responses_b);
+    drop(responses_c);
+    h.shutdown().await;
+}
+
+#[test]
+fn streaming_pull_half_close_preserves_strict_delivery_and_emulator_eof() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(8), async {
+                use fireemu_adapter_pubsub::PagingPolicy::{Emulator, Strict};
+                for policy in [Strict, Emulator] {
+                    let h = start_with_bridge_and_policy(None, policy).await;
+                    let topic = "projects/demo-app/topics/half-close";
+                    let subscription = "projects/demo-app/subscriptions/half-close";
+                    let mut publisher = h.publisher().await;
+                    publisher
+                        .create_topic(pb::Topic {
+                            name: topic.to_owned(),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap();
+                    h.subscriber()
+                        .await
+                        .create_subscription(pb::Subscription {
+                            name: subscription.to_owned(),
+                            topic: topic.to_owned(),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap();
+                    let (tx, mut responses) = open_credit_stream(&h, subscription).await;
+                    tx.send(pb::StreamingPullRequest {
+                        ack_ids: vec!["invalid-ack-for-stream-observation".to_owned()],
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+                    drop(tx);
+                    if policy == Emulator {
+                        assert!(tokio::time::timeout(
+                            std::time::Duration::from_secs(2),
+                            responses.message()
+                        )
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .is_none());
+                    } else {
+                        // The original native observation waits after ending both outbound frames.
+                        assert!(
+                            tokio::time::timeout(
+                                std::time::Duration::from_millis(200),
+                                responses.message()
+                            )
+                            .await
+                            .is_err(),
+                            "clean request EOF must not finish the Strict response"
+                        );
+                        let publication = publisher
+                            .publish(pb::PublishRequest {
+                                topic: topic.to_owned(),
+                                messages: vec![msg(b"after-half-close")],
+                            })
+                            .await
+                            .unwrap()
+                            .into_inner();
+                        let response = tokio::time::timeout(
+                            std::time::Duration::from_secs(2),
+                            responses.message(),
+                        )
+                        .await
+                        .expect("polling continues after request EOF")
+                        .unwrap()
+                        .unwrap();
+                        let message = response.received_messages[0].message.as_ref().unwrap();
+                        assert_eq!(message.message_id, publication.message_ids[0]);
+                        assert_eq!(message.data, b"after-half-close");
+                    }
+                    drop(responses);
+                    drop(publisher);
+                    let state = h.state.clone();
+                    tokio::time::timeout(std::time::Duration::from_secs(2), h.shutdown())
+                        .await
+                        .expect("server shutdown is bounded");
+                    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                        while Arc::strong_count(&state) != 1 {
+                            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        }
+                    })
+                    .await
+                    .expect("dropping the receiver releases the stream task's broker handle");
+                }
+            })
+            .await
+            .expect("half-close delivery and shutdown finish within the owned bound");
+        });
+    }));
+    runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[tokio::test]
+async fn streaming_pull_inbound_decode_error_terminates_the_response() {
+    let h = start().await;
+    let (subscription, _) = setup_stream_credit(&h, "decode-error", 1).await;
+    let mut subscriber = h
+        .subscriber()
+        .await
+        .max_encoding_message_size(16 * 1024 * 1024);
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    tx.send(pb::StreamingPullRequest {
+        subscription,
+        stream_ack_deadline_seconds: 10,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let mut responses = subscriber
+        .streaming_pull(tokio_stream::wrappers::ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.received_messages.len(), 1);
+    // The genuine tonic decoder rejects this oversized follow-up before applying it.
+    tx.send(pb::StreamingPullRequest {
+        subscription: "x".repeat(11 * 1024 * 1024),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let terminal = tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+        .await
+        .expect("an inbound transport error still terminates the response");
+    assert!(
+        matches!(terminal, Ok(None) | Err(_)),
+        "no delivery may replace transport termination"
+    );
+    drop(tx);
+    drop(responses);
+    drop(subscriber);
     h.shutdown().await;
 }
 
@@ -1914,11 +2072,9 @@ async fn streaming_pull_delivers_and_acks() {
         .unwrap();
         drop(tx);
         assert!(
-            tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+            tokio::time::timeout(std::time::Duration::from_millis(200), responses.message())
                 .await
-                .expect("the ACK-only follow-up closes naturally")
-                .unwrap()
-                .is_none()
+                .is_err()
         );
         advance(&h, LogicalDuration::from_seconds(11));
         let after_ack = subc
@@ -1931,6 +2087,7 @@ async fn streaming_pull_delivers_and_acks() {
             .unwrap()
             .into_inner();
         assert!(after_ack.received_messages.is_empty());
+        drop(responses);
         h.shutdown().await;
     }
 }

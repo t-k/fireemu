@@ -4063,3 +4063,71 @@ async fn route_name_precedence_does_not_widen_patch_or_emulator_create() {
         }
     }
 }
+
+/// A cursor issued before its boundary resource is deleted still selects current names after it.
+#[tokio::test]
+async fn issued_deleted_topic_cursor_continues_over_current_names() {
+    let address = start().await;
+    for id in ["cursor-a", "cursor-c", "cursor-e"] {
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/projects/demo-app/topics/{id}"),
+                json!({})
+            )
+            .await
+            .0,
+            200
+        );
+    }
+    let (code, first) = rest_request(
+        address,
+        "GET",
+        "/v1/projects/demo-app/topics?pageSize=1",
+        json!({}),
+    )
+    .await;
+    assert_eq!(code, 200);
+    let token = first["nextPageToken"].as_str().unwrap();
+    let boundary = first["topics"][0]["name"].as_str().unwrap();
+    assert_eq!(
+        rest_request(address, "DELETE", &format!("/v1/{boundary}"), json!({}))
+            .await
+            .0,
+        200
+    );
+    assert_eq!(
+        rest_request(address, "GET", &format!("/v1/{boundary}"), json!({}))
+            .await
+            .0,
+        404
+    );
+    assert_eq!(
+        rest_request(
+            address,
+            "PUT",
+            "/v1/projects/demo-app/topics/cursor-b",
+            json!({})
+        )
+        .await
+        .0,
+        200
+    );
+    let (code, continued) = rest_request(
+        address,
+        "GET",
+        &format!("/v1/projects/demo-app/topics?pageSize=0&pageToken={token}"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(code, 200, "{continued}");
+    assert_eq!(
+        continued["topics"],
+        json!([
+            {"name":"projects/demo-app/topics/cursor-b"},
+            {"name":"projects/demo-app/topics/cursor-c"},
+            {"name":"projects/demo-app/topics/cursor-e"}
+        ])
+    );
+}

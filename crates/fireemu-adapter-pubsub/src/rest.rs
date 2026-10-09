@@ -10,7 +10,6 @@ use axum::http::{Method, Request, StatusCode};
 use axum::response::Response;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use fireemu_core_pubsub::pagination::paginate;
 use fireemu_core_pubsub::subscription::{
     DeadLetterPolicy, ExpirationPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
     DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS, MAX_RETRY_BACKOFF_SECONDS,
@@ -274,6 +273,7 @@ fn dispatch(
     Err(RestError::not_found("unknown Pub/Sub REST resource"))
 }
 
+#[allow(clippy::too_many_lines)]
 fn dispatch_topic(
     method: &Method,
     parts: &[&str],
@@ -286,7 +286,7 @@ fn dispatch_topic(
         if *method != Method::GET {
             return Err(RestError::method_not_allowed());
         }
-        let state = handle.state();
+        let mut state = handle.state();
         let topics = state
             .list_topics(project)
             .into_iter()
@@ -301,7 +301,14 @@ fn dispatch_topic(
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
-            paged_collection_json("topics", topics, query, handle)?,
+            paged_collection_json(
+                "topics",
+                topics,
+                query,
+                handle,
+                &mut state,
+                &format!("projects/{project}/topics"),
+            )?,
             Schema::Topics,
         ));
     }
@@ -332,7 +339,14 @@ fn dispatch_topic(
         let resources = names.into_iter().map(Value::String).collect();
         return Ok((
             StatusCode::OK,
-            paged_collection_json(parts[1], resources, query, handle)?,
+            paged_collection_json(
+                parts[1],
+                resources,
+                query,
+                handle,
+                &mut state,
+                &format!("{}/{}", topic.to_full(), parts[1]),
+            )?,
             if parts[1] == "subscriptions" {
                 Schema::Subscriptions
             } else {
@@ -435,6 +449,8 @@ fn paged_collection_json(
     resources: Vec<Value>,
     query: &str,
     handle: &PubSubHandle,
+    state: &mut PubSubState,
+    context: &str,
 ) -> Result<Value, RestError> {
     let mut size = 0;
     let mut token = String::new();
@@ -457,14 +473,22 @@ fn paged_collection_json(
             _ => {}
         }
     }
-    let page = paginate(resources, size, &token, handle.paging_policy, |resource| {
-        resource
-            .as_str()
-            .or_else(|| resource.get("name").and_then(Value::as_str))
-            .unwrap_or_default()
-            .to_owned()
-    })
-    .map_err(RestError::from_core)?;
+    let page = state
+        .paginate(
+            context,
+            resources,
+            size,
+            &token,
+            handle.paging_policy,
+            |resource| {
+                resource
+                    .as_str()
+                    .or_else(|| resource.get("name").and_then(Value::as_str))
+                    .unwrap_or_default()
+                    .to_owned()
+            },
+        )
+        .map_err(RestError::from_core)?;
     let mut response = collection_json(field, page.resources);
     if !page.next_page_token.is_empty() {
         response.as_object_mut().expect("collection object").insert(
@@ -518,7 +542,7 @@ fn dispatch_subscription(
         if *method != Method::GET {
             return Err(RestError::method_not_allowed());
         }
-        let state = handle.state();
+        let mut state = handle.state();
         let subscriptions = state
             .list_subscriptions(project)
             .into_iter()
@@ -526,7 +550,14 @@ fn dispatch_subscription(
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
-            paged_collection_json("subscriptions", subscriptions, query, handle)?,
+            paged_collection_json(
+                "subscriptions",
+                subscriptions,
+                query,
+                handle,
+                &mut state,
+                &format!("projects/{project}/subscriptions"),
+            )?,
             Schema::Subscriptions,
         ));
     }
@@ -596,15 +627,22 @@ fn dispatch_snapshot(
         if *method != Method::GET {
             return Err(RestError::method_not_allowed());
         }
-        let snapshots = handle
-            .state()
+        let mut state = handle.state();
+        let snapshots = state
             .list_snapshots(project, handle.now())
             .into_iter()
             .map(|snapshot| snapshot_json(&snapshot))
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
-            paged_collection_json("snapshots", snapshots, query, handle)?,
+            paged_collection_json(
+                "snapshots",
+                snapshots,
+                query,
+                handle,
+                &mut state,
+                &format!("projects/{project}/snapshots"),
+            )?,
             Schema::Snapshots,
         ));
     }
@@ -1832,9 +1870,9 @@ mod production_shape_tests {
             ).with_paging_policy(crate::PagingPolicy::Emulator);
             let resources: Vec<_> = (0..count).map(|i| json!({"name":format!("projects/p/topics/query-{i:03}")})).collect();
             let valid = format!("pageSize={size}&pageToken=projects%2Fp%2Ftopics%2Fquery-001");
-            let expected = paged_collection_json("topics", resources.clone(), &valid, &handle).unwrap();
+            let expected = paged_collection_json("topics", resources.clone(), &valid, &handle, &mut handle.state(), "projects/p/topics").unwrap();
             for query in [format!("{valid}&{invalid}"), format!("{invalid}&{valid}")] {
-                let result = paged_collection_json("topics", resources.clone(), &query, &handle);
+                let result = paged_collection_json("topics", resources.clone(), &query, &handle, &mut handle.state(), "projects/p/topics");
                 prop_assert!(result.is_ok(), "{}", query);
                 prop_assert_eq!(result.unwrap(), expected.clone());
             }

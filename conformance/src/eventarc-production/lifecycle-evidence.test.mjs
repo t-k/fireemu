@@ -10,6 +10,8 @@ import {
   collectOwnCursorWalk,
   issueOperation,
   collectOperationTerminal,
+  observeUnfinishedCreate,
+  collectPairedOperationTerminals,
 } from "./lifecycle-evidence.mjs";
 const collection = "projects/test-project/locations/us-central1/channels";
 const time = "2026-10-09T00:00:00.000000000Z";
@@ -463,4 +465,162 @@ test("impossible calendar timestamps in operation metadata are rejected", async 
   invalid.metadata.createTime = "2026-02-31T00:00:00.000000000Z";
   const { collector } = scripted([invalid]);
   await assert.rejects(issueOperation({ collector, input: f.get(3) }));
+});
+
+test("paired own create-delete retains overlap, both terminals and final404", async (t) => {
+  const f = fixtures(t);
+  const creating = { ...inventory[0], pubsubTopic: "" };
+  delete creating.state;
+  const { collector, calls } = scripted([
+    operation(),
+    creating,
+    operation(),
+    { ...operation("delete"), name: op.replace("abcdef01", "abcdef02") },
+    operation("create", true),
+    { ...operation("delete", true), name: op.replace("abcdef01", "abcdef02") },
+    response({ error: { code: 404, status: "NOT_FOUND", message: "absent" } }, 404),
+  ]);
+  const create = await issueOperation({ collector, input: f.get(3) });
+  await observeUnfinishedCreate({ collector, issued: create });
+  const deleted = await issueOperation({ collector, input: f.get(4) });
+  const proof = await collectPairedOperationTerminals({
+    collector,
+    create,
+    deleted,
+    pollIntervalMs: 1,
+    timeoutMs: 100,
+  });
+  assert.equal(proof.complete, true);
+  assert.equal(proof.kind, "paired-own-operation-terminals");
+  assert.equal(calls.length, 7);
+  assert.equal(calls[3][1].method, "DELETE");
+});
+test("paired operation proof rejects missing unfinished-start observation", async (t) => {
+  const f = fixtures(t),
+    { collector } = scripted([operation(), operation("delete")]);
+  const create = await issueOperation({ collector, input: f.get(3) }),
+    deleted = await issueOperation({ collector, input: f.get(4) });
+  await assert.rejects(
+    collectPairedOperationTerminals({
+      collector,
+      create,
+      deleted,
+      pollIntervalMs: 1,
+      timeoutMs: 100,
+    }),
+  );
+});
+test("paired start cannot use an already completed create or invented CREATING state", async (t) => {
+  for (const createRead of [operation("create", true), null]) {
+    const f = fixtures(t);
+    const creatingChannel = { ...inventory[0], pubsubTopic: "" };
+    if (createRead) delete creatingChannel.state;
+    else creatingChannel.state = "CREATING";
+    const { collector } = scripted([operation(), creatingChannel, createRead ?? operation()]);
+    const create = await issueOperation({ collector, input: f.get(3) });
+    await assert.rejects(observeUnfinishedCreate({ collector, issued: create }));
+  }
+});
+for (const [name, change] of [
+  ["uid", (r) => (r.response.uid = "00000000-0000-4000-8000-000000000009")],
+  ["createTime", (r) => (r.response.createTime = "2026-10-09T00:00:01.000000000Z")],
+  ["state", (r) => (r.response.state = "INACTIVE")],
+  ["operation", (r) => (r.name = op.replace("abcdef01", "abcdef09"))],
+])
+  test(`paired terminal rejects changed ${name}`, async (t) => {
+    const f = fixtures(t),
+      creating = { ...inventory[0], pubsubTopic: "" };
+    delete creating.state;
+    const active = operation("create", true);
+    change(active);
+    const { collector } = scripted([
+      operation(),
+      creating,
+      operation(),
+      { ...operation("delete"), name: op.replace("abcdef01", "abcdef02") },
+      active,
+      { ...operation("delete", true), name: op.replace("abcdef01", "abcdef02") },
+      response({ error: { code: 404, status: "NOT_FOUND", message: "absent" } }, 404),
+    ]);
+    const create = await issueOperation({ collector, input: f.get(3) });
+    await observeUnfinishedCreate({ collector, issued: create });
+    const deleted = await issueOperation({ collector, input: f.get(4) });
+    await assert.rejects(
+      collectPairedOperationTerminals({
+        collector,
+        create,
+        deleted,
+        pollIntervalMs: 1,
+        timeoutMs: 100,
+      }),
+    );
+  });
+test("paired proof rejects DELETE issued before unfinished observation", async (t) => {
+  const f = fixtures(t),
+    creating = { ...inventory[0], pubsubTopic: "" };
+  delete creating.state;
+  const { collector } = scripted([
+    operation(),
+    { ...operation("delete"), name: op.replace("abcdef01", "abcdef02") },
+    creating,
+    operation(),
+    operation("create", true),
+    { ...operation("delete", true), name: op.replace("abcdef01", "abcdef02") },
+    response({ error: { code: 404, status: "NOT_FOUND", message: "absent" } }, 404),
+  ]);
+  const create = await issueOperation({ collector, input: f.get(3) }),
+    deleted = await issueOperation({ collector, input: f.get(4) });
+  await observeUnfinishedCreate({ collector, issued: create });
+  await assert.rejects(
+    collectPairedOperationTerminals({
+      collector,
+      create,
+      deleted,
+      pollIntervalMs: 1,
+      timeoutMs: 100,
+    }),
+  );
+});
+test("paired stage-specific updateTime may advance without changing resource identity", async (t) => {
+  const f = fixtures(t),
+    creating = { ...inventory[0], pubsubTopic: "" };
+  delete creating.state;
+  const active = operation("create", true);
+  active.response.updateTime = "2026-10-09T00:00:01.000000000Z";
+  const { collector } = scripted([
+    operation(),
+    creating,
+    operation(),
+    { ...operation("delete"), name: op.replace("abcdef01", "abcdef02") },
+    active,
+    { ...operation("delete", true), name: op.replace("abcdef01", "abcdef02") },
+    response({ error: { code: 404, status: "NOT_FOUND", message: "absent" } }, 404),
+  ]);
+  const create = await issueOperation({ collector, input: f.get(3) });
+  await observeUnfinishedCreate({ collector, issued: create });
+  const deleted = await issueOperation({ collector, input: f.get(4) });
+  assert.equal(
+    (
+      await collectPairedOperationTerminals({
+        collector,
+        create,
+        deleted,
+        pollIntervalMs: 1,
+        timeoutMs: 100,
+      })
+    ).complete,
+    true,
+  );
+});
+test("own delete absence refuses an incomplete404 error even with canonical status and message", async (t) => {
+  const f = fixtures(t),
+    { collector } = scripted([
+      operation("delete"),
+      operation("delete", true),
+      response({ error: { status: "NOT_FOUND", message: "absent" } }, 404),
+    ]);
+  const issued = await issueOperation({ collector, input: f.get(4) });
+  await assert.rejects(
+    collectOperationTerminal({ collector, issued, pollIntervalMs: 1, timeoutMs: 100 }),
+  );
 });

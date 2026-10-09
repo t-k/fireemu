@@ -301,6 +301,7 @@ function generatedEvidence() {
     snapshots = new Map(),
     pendingSnapshots = new Map(),
     deletedSnapshots = new Set(),
+    supplementalDeletedSnapshots = new Map(),
     sourceIds = new Map(),
     localIds = new Map();
   const ttl = 604800000000000n;
@@ -315,7 +316,20 @@ function generatedEvidence() {
         (dispatch.transport !== "rest" || (expected.status === 200 && actual.status === 200))
       )
         deletedSnapshots.add(dispatch.request.name);
-      else deletedSnapshots.delete(dispatch.request.name);
+      else if (
+        !(
+          supplementalDeletedSnapshots.get(dispatch.request.name) === dispatch.cellId &&
+          snapshots.get(dispatch.request.name)?.witness.cellId === dispatch.cellId &&
+          expected?.code === "OK" &&
+          expected.unknown !== true &&
+          actual?.code === "NOT_FOUND" &&
+          actual.unknown !== true &&
+          (dispatch.transport !== "rest" || (expected.status === 200 && actual.status === 404))
+        )
+      ) {
+        deletedSnapshots.delete(dispatch.request.name);
+        supplementalDeletedSnapshots.delete(dispatch.request.name);
+      }
       return;
     }
     if (!["Publish", "CreateSnapshot", "GetSnapshot"].includes(dispatch.method)) return;
@@ -506,10 +520,31 @@ function generatedEvidence() {
       }
     }
   }
-  return { witnesses, snapshots, observe };
+  return {
+    witnesses,
+    snapshots,
+    observe,
+    confirmOwnedAbsence(cell, name, deleted, absent) {
+      const saved = snapshots.get(name);
+      if (
+        cell.kind !== "snapshots" ||
+        saved?.witness.verdict !== "MATCH" ||
+        saved.witness.cellId !== cell.id ||
+        saved.body.name !== name ||
+        deleted?.code !== "OK" ||
+        deleted.unknown === true ||
+        absent?.code !== "NOT_FOUND" ||
+        absent.unknown === true ||
+        (cell.transport === "rest" && (deleted.status !== 200 || absent.status !== 404))
+      )
+        return;
+      deletedSnapshots.add(name);
+      supplementalDeletedSnapshots.set(name, cell.id);
+    },
+  };
 }
 // owner1146 witnesses are independent of the original recorded request judgments.
-function ownListWitness({ cell, manifest, exchanges }, call, snapshots) {
+function ownListWitness({ cell, manifest, exchanges }, call, snapshots, confirmOwnedAbsence) {
   const witness = {
     cellId: cell.id,
     sourceSelectedMember: exchanges.find((e) => e.page?.stage === "first")?.page.names[0] ?? null,
@@ -744,6 +779,7 @@ function ownListWitness({ cell, manifest, exchanges }, call, snapshots) {
           reply.code === "NOT_FOUND" && (cell.transport !== "rest" || reply.status === 404),
           "independent selected-member absence not confirmed",
         );
+        confirmOwnedAbsence(cell, selected, witness.deleted, reply);
         const requestAfter = { ...first.request, pageToken: first.token };
         const replyAfter = await send({ ...dispatch, method: first.dispatch.method }, requestAfter);
         witness.after = await walk(
@@ -828,6 +864,7 @@ export async function replayRecording(input, call) {
       { cell, manifest, exchanges },
       countedCall,
       generated.snapshots,
+      generated.confirmOwnedAbsence,
     );
     semanticWitnesses.push(independent.witness);
     let firstSource = null,

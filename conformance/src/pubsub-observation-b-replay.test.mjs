@@ -1642,3 +1642,161 @@ test("B verified generated Snapshot success survives only confirmed owned cleanu
     } else assert.notEqual(report.generatedWitnesses[1].verdict, "MATCH", mode);
   }
 });
+
+test("B supplemental owned Snapshot deletion preserves a stable pair through redundant recorded cleanup", async () => {
+  for (const mode of [
+    "confirmed",
+    "delete-unknown",
+    "delete-refused",
+    "absence-unknown",
+    "absence-wrong-status",
+    "predelete-get-failure",
+    "drift",
+    "wrong-name",
+    "wrong-cell",
+    "redundant-unknown",
+    "redundant-refused",
+  ]) {
+    const { input, at, name, topic } = generatedInput();
+    if (mode === "wrong-cell") input.cells[0].cell.id = "R8";
+    const other = name.replace(/-a$/, "-b"),
+      sourceExpiry = "2026-10-16T00:00:00.234Z",
+      localExpiry = "2026-10-16T00:00:00.123Z";
+    const source = (n) => ({ name: n, topic, expireTime: sourceExpiry });
+    const absent = {
+      code: "NOT_FOUND",
+      status: 404,
+      body: { error: { status: "NOT_FOUND", message: "missing" } },
+    };
+    const append = (id, method, category, request, reply, page) =>
+      input.cells[0].exchanges.push({
+        dispatch: {
+          requestId: id,
+          n: id,
+          at,
+          cellId: "R7",
+          transport: "rest",
+          method,
+          category,
+          request,
+        },
+        response: { reply },
+        ...(page ? { page } : {}),
+      });
+    input.cells[0].manifest.manifest.members = [name, other];
+    input.cells[0].manifest.manifest.resources = [name, other].map((name) => ({
+      name,
+      method: "CreateSnapshot",
+    }));
+    append(
+      4,
+      "CreateSnapshot",
+      "create",
+      { name: other, subscription: `projects/${PROJECT}/subscriptions/fe${runId}-r7-prereq` },
+      { code: "OK", status: 200, body: source(other) },
+    );
+    append(
+      5,
+      "GetSnapshot",
+      "get",
+      { name: other },
+      { code: "OK", status: 200, body: source(other) },
+    );
+    append(
+      6,
+      "ListSnapshots",
+      "list",
+      { project: `projects/${PROJECT}`, pageSize: 100 },
+      { code: "OK", status: 200, ok: true, body: { snapshots: [source(name), source(other)] } },
+      { stage: "baseline", names: [name, other], nextPageToken: null },
+    );
+    append(
+      7,
+      "ListSnapshots",
+      "list",
+      { project: `projects/${PROJECT}`, pageSize: 1 },
+      {
+        code: "OK",
+        status: 200,
+        ok: true,
+        body: { snapshots: [source(other)], nextPageToken: "source-issued" },
+      },
+      { stage: "first", names: [other], nextPageToken: "source-issued" },
+    );
+    append(
+      8,
+      "DeleteSnapshot",
+      "cursorDelete",
+      { name: other },
+      { code: "OK", status: 200, body: {} },
+    );
+    append(9, "GetSnapshot", "cursorGet", { name: other }, structuredClone(absent));
+    append(10, "DeleteSnapshot", "cleanupDelete", { name }, { code: "OK", status: 200, body: {} });
+    append(11, "GetSnapshot", "cleanupGet", { name }, structuredClone(absent));
+    const local = independentListModel(
+      input,
+      (reply, q) => {
+        if (q.method === "ListSnapshots" && reply.body?.topics) {
+          reply.body.snapshots = reply.body.topics.map((r) => ({
+            ...r,
+            topic,
+            expireTime: localExpiry,
+          }));
+          delete reply.body.topics;
+          if (mode === "wrong-name" && q.requestId === 7)
+            reply.body.snapshots[0].name += "-unowned";
+        }
+        if (["CreateSnapshot", "GetSnapshot"].includes(q.method) && reply.code === "OK")
+          reply.body = {
+            ...reply.body,
+            topic,
+            expireTime: mode === "drift" && q.requestId === 3 ? sourceExpiry : localExpiry,
+          };
+        if (mode === "predelete-get-failure" && q.requestId === 3)
+          return { code: "UNAVAILABLE", unknown: true };
+        if (q.semanticRef && q.method === "DeleteSnapshot") {
+          if (mode === "delete-unknown") return { ...reply, unknown: true };
+          if (mode === "delete-refused")
+            return { code: "PERMISSION_DENIED", status: 403, body: {} };
+        }
+        if (q.semanticRef && q.method === "GetSnapshot") {
+          if (mode === "absence-unknown") return { ...reply, unknown: true };
+          if (mode === "absence-wrong-status") return { ...reply, status: 200 };
+        }
+        if (q.requestId === 10 && mode === "redundant-unknown") return { ...reply, unknown: true };
+        if (q.requestId === 10 && mode === "redundant-refused")
+          return { code: "PERMISSION_DENIED", status: 403, body: {} };
+        return reply;
+      },
+      [name, other],
+    );
+    const report = await replayRecording(input, async (q) =>
+      q.method === "Publish"
+        ? {
+            code: "OK",
+            status: 200,
+            body: { messageIds: ["22222222222222222"] },
+            clockReadback: { clock: at, sourceRequestId: q.requestId },
+          }
+        : { ...(await local.call(q)), clockReadback: { clock: at, sourceRequestId: q.requestId } },
+    );
+    if (mode === "confirmed") {
+      assert.equal(
+        report.semanticWitnesses[0].verdict,
+        "MATCH",
+        report.semanticWitnesses[0].reason,
+      );
+      assert.equal(
+        report.rows.find((r) => r.requestId === 10).semantic,
+        "DIVERGES",
+        "redundant DELETE physical error remains",
+      );
+      assert.equal(report.rows.find((r) => r.requestId === 11).semantic, "MATCH");
+      assert.ok(report.generatedWitnesses.every((w) => w.verdict === "MATCH"));
+      assert.ok(
+        report.generatedWitnesses.every((w) => w.expiryEffects === "NOT_COMPARABLE_NOT_OBSERVED"),
+      );
+    } else if (mode === "wrong-name") assert.notEqual(report.semanticWitnesses[0].verdict, "MATCH");
+    else assert.notEqual(report.generatedWitnesses[1].verdict, "MATCH", mode);
+  }
+});

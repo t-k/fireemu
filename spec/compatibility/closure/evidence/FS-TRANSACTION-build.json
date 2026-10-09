@@ -20,7 +20,7 @@
   "environment": {
     "CARGO_INCREMENTAL": "0",
     "SOURCE_DATE_EPOCH": "0",
-    "RUSTFLAGS": "--remap-path-prefix=/home/runner/work/fireemu/fireemu=/src --remap-path-prefix=/home/runner/.cargo=/cargo -D warnings"
+    "RUSTFLAGS": "--remap-path-prefix=<checkout>=/src --remap-path-prefix=<cargo-home>=/cargo -D warnings"
   },
   "buildInputs": {
     "scheme": "crates-without-test-trees-v1",
@@ -123,5 +123,6 @@
     "cleanBuildIndexSha256": "f2e03ad496c711beea6d590f57c495cafb2de333543b07533502e44decd48797",
     "producerSourceCommit": "73b2c2b99b8f8d35a245ab795d2b09e7d9dd9399",
     "rustSourceEquivalence": "The binary-v1 Rust build inputs are unchanged between the recorded build source and the producer source; canonical evidence assembly changes no Rust build input."
-  }
+  },
+  "environmentProvenance": "RUSTFLAGS source-path notation is normalized as <checkout> and <cargo-home>. Raw actual CI values remain in the buildLogSha256-pinned log, linked to the source and job by the unchanged buildReceiptSha256-pinned receipt."
 }

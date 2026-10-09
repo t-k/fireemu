@@ -2348,7 +2348,7 @@
     "binaryProfile": "release",
     "buildSourceCommit": "dee94974292f4a49a10be6d586491e1ce663ad78",
     "buildReceiptPath": "spec/compatibility/closure/evidence/FS-TRANSACTION-build.json",
-    "buildReceiptSha256": "6ca28d079bd43d7937822f95b0ba5b3a31be8317eb304a0ed91973c316c5dbf9",
+    "buildReceiptSha256": "19a5dc93456788e1f229ed076a152dd99bcba9e2e643a3d0806cacca7efd5fe2",
     "fixturePath": "spec/compatibility/broad-runs/fs-transaction-release-replay-inputs-v1.json",
     "comparisons": [
       {

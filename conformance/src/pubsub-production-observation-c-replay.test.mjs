@@ -903,3 +903,118 @@ test("repeated delivery may reuse an actual token while the original stale-token
     "same-actual-token",
   ]);
 });
+
+import * as cReplay from "./pubsub-observation-c/replay.mjs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
+const configDigest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+test("C lifecycle persists bounded strict config before runtime-start and survives temporary removal", () => {
+  const dir = mkdtempSync(join(tmpdir(), "c-lifecycle-test-"));
+  try {
+    const temporary = join(dir, "temporary.json"),
+      out = join(dir, "out");
+    const bytes = Buffer.from(JSON.stringify({ daemon: { clockStart: time } }));
+    // The producer's output directory already exists before the worker starts.
+    mkdirSync(out);
+    writeFileSync(temporary, bytes);
+    cReplay.persistRuntimeStart(
+      out,
+      {
+        config: temporary,
+        configSha256: configDigest(bytes),
+        serverPid: 101,
+      },
+      time,
+    );
+    rmSync(temporary);
+    const receipt = JSON.parse(readFileSync(join(out, "runtime-start.json")));
+    assert.equal(receipt.serverPid, 101);
+    assert.equal(receipt.workerPid, process.pid);
+    assert.equal(receipt.strictConfigPath, join(out, "strict-config.json"));
+    assert.equal(receipt.strictConfigBytes, bytes.length);
+    assert.equal(receipt.strictConfigSha256, configDigest(bytes));
+    assert.deepEqual(readFileSync(receipt.strictConfigPath), bytes);
+    assert.throws(
+      () =>
+        cReplay.persistRuntimeStart(
+          out,
+          {
+            config: receipt.strictConfigPath,
+            configSha256: configDigest(bytes),
+            serverPid: 101,
+          },
+          time,
+        ),
+      /EEXIST/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+test("C lifecycle refuses bad hash clock symlink or oversized config before runtime-start", () => {
+  const dir = mkdtempSync(join(tmpdir(), "c-lifecycle-rejection-"));
+  try {
+    assert.equal(typeof cReplay.persistRuntimeStart, "function");
+    for (const mode of ["hash", "clock", "symlink", "oversize"]) {
+      const temporary = join(dir, `${mode}.json`),
+        out = join(dir, mode);
+      const bytes = Buffer.from(
+        mode === "oversize"
+          ? JSON.stringify({ daemon: { clockStart: time } }) + " ".repeat(1_000_001)
+          : JSON.stringify({ daemon: { clockStart: mode === "clock" ? "wrong" : time } }),
+      );
+      mkdirSync(out);
+      writeFileSync(temporary, bytes);
+      let path = temporary;
+      if (mode === "symlink") {
+        path += ".link";
+        symlinkSync(temporary, path);
+      }
+      assert.throws(() =>
+        cReplay.persistRuntimeStart(
+          out,
+          {
+            config: path,
+            configSha256: mode === "hash" ? "0".repeat(64) : configDigest(bytes),
+            serverPid: 101,
+          },
+          time,
+        ),
+      );
+      assert.throws(() => readFileSync(join(out, "runtime-start.json")), /ENOENT/);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("C lifecycle cannot publish runtime-start when persistent config creation fails", () => {
+  const dir = mkdtempSync(join(tmpdir(), "c-lifecycle-order-"));
+  try {
+    const temporary = join(dir, "temporary.json"),
+      out = join(dir, "out");
+    mkdirSync(out);
+    const bytes = Buffer.from(JSON.stringify({ daemon: { clockStart: time } }));
+    writeFileSync(temporary, bytes);
+    writeFileSync(join(out, "strict-config.json"), "existing");
+    assert.throws(
+      () =>
+        cReplay.persistRuntimeStart(
+          out,
+          {
+            config: temporary,
+            configSha256: configDigest(bytes),
+            serverPid: 101,
+          },
+          time,
+        ),
+      /EEXIST/,
+    );
+    assert.throws(() => readFileSync(join(out, "runtime-start.json")), /ENOENT/);
+    assert.equal(readFileSync(join(out, "strict-config.json"), "utf8"), "existing");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

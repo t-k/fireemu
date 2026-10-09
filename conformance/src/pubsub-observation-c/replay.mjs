@@ -206,6 +206,24 @@ function options(argv) {
     throw new Error("C replay input/build pins and output required");
   return opts;
 }
+export function persistRuntimeStart(out, launch, clockStart) {
+  const bytes = pinned(launch.config, launch.configSha256, 1_000_000);
+  const config = JSON.parse(bytes);
+  if (config.daemon.clockStart !== clockStart) throw new Error("C strict clock start refused");
+  const strictConfigPath = resolve(out, "strict-config.json");
+  writeFileSync(strictConfigPath, bytes, { flag: "wx", mode: 0o600, flush: true });
+  writeFileSync(
+    join(out, "runtime-start.json"),
+    JSON.stringify({
+      serverPid: launch.serverPid,
+      workerPid: process.pid,
+      strictConfigPath,
+      strictConfigBytes: bytes.length,
+      strictConfigSha256: launch.configSha256,
+    }) + "\n",
+    { flag: "wx", mode: 0o600, flush: true },
+  );
+}
 export async function main(argv = process.argv.slice(2), environment = process.env, launch = null) {
   const opts = options(argv),
     binding = JSON.parse(pinned(opts.input, opts["input-sha256"])),
@@ -230,18 +248,7 @@ export async function main(argv = process.argv.slice(2), environment = process.e
     });
   }
   verifyStrictWorker({ pin, project: input.metadata.project, launch });
-  const config = JSON.parse(pinned(launch.config, launch.configSha256));
-  if (config.daemon.clockStart !== input.metadata.at)
-    throw new Error("C strict clock start refused");
-  writeFileSync(
-    join(opts.out, "runtime-start.json"),
-    JSON.stringify({
-      serverPid: launch.serverPid,
-      workerPid: process.pid,
-      strictConfigSha256: launch.configSha256,
-    }) + "\n",
-    { flag: "wx" },
-  );
+  persistRuntimeStart(opts.out, launch, input.metadata.at);
   let bodySequence = 0;
   const persist = (kind, value) => {
     if (kind === "body")

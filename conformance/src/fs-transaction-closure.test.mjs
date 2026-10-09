@@ -117,13 +117,118 @@ test("FS-TRANSACTION approved regression is rerun through the public recipe rout
   assert.equal(regression.productionRequests, 0);
 });
 
+const shippedSource = "dee94974292f4a49a10be6d586491e1ce663ad78";
+const shippedArtifact = "429bb8a023e5adc52acbe7c8ce318c23710e9e0de9059850496c1224776c0cf6";
+const shippedReview = "c63746d538b4600d1f095e3f1aa52eea9a21d5ec39da642ccb275a5b2d4b7ad8";
+
 function assertCurrentDomainEvidence(comparison, build) {
+  assert.equal(build.profile, "release");
+  assert.equal(build.binarySha256, shippedArtifact);
+  assert.equal(build.sourceCommit, shippedSource);
+  assert.equal(build.producerSourceCommit, shippedSource);
+  assert.equal(comparison.producerSourceCommit, shippedSource);
+  assert.equal(build.buildInputs.scheme, "crates-without-test-trees-v1");
+  assert.equal(build.buildInputs.dirty, false);
+  assert.equal(
+    build.buildInputs.inputsSha256,
+    "14fa8adc424c133022eb864d36894fd253a02f606a9ff8c30c81c48d47e99187",
+  );
+  assert.deepEqual(build.command, [
+    "cargo",
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "fireemu",
+    "--target",
+    "x86_64-unknown-linux-musl",
+  ]);
+  assert.equal(build.sourceBoundBuildProof.headSha, shippedSource);
+  assert.equal(build.sourceBoundBuildProof.buildConclusion, "success");
+  assert.equal(build.sourceBoundBuildProof.installedIdentityStep.conclusion, "success");
+  assertDomainEvidence(comparison, build, {
+    processReceiptSha256: comparison.webSdk.lifecycle.processReceiptSha256,
+    processReaped: true,
+    exitCode: 0,
+    driverReportsClosed: [true, true],
+  });
+  assert.equal(comparison.atomicVisibility.local.provenance.sourceCommit, shippedSource);
+  assert.deepEqual(comparison.atomicVisibility.local.provenance.buildInputs, build.buildInputs);
+}
+
+function debugSnapshot(closure) {
+  return {
+    ...closure,
+    parentStatus: closure.debugParentStatus,
+    closureReview: closure.debugClosureReview,
+    integratedRegression: closure.debugIntegratedRegression,
+    conditions: closure.conditions.map((condition) => ({
+      ...condition,
+      status: condition.debugStatus,
+      evidence: condition.debugEvidence,
+      note: condition.debugNote,
+    })),
+  };
+}
+
+function assertApprovedReview(closure, build, comparison) {
+  assert.equal(closure.parentStatus, "COMPAT_VERIFIED");
+  const review = closure.closureReview;
+  assert.equal(review.decision, "APPROVED");
+  assert.equal(review.reviewScope, "FULL_PARENT");
+  assert.equal(review.reviewedCommit, shippedSource);
+  assert.equal(review.finalArtifactSha256, shippedArtifact);
+  assert.equal(review.reviewSha256, shippedReview);
+  assert.equal(closure.conditions.length, 18);
+  assert.deepEqual(
+    new Set(
+      closure.conditions.map(({ conditionId }) => conditionId.replace("FS-TRANSACTION/", "")),
+    ),
+    required,
+  );
+  assert.ok(closure.conditions.every(({ status }) => status === "VERIFIED"));
+  assertCurrentDomainEvidence(comparison, build);
+  assert.equal(closure.integratedRegression.releaseBinarySha256, build.binarySha256);
+  assert.equal(closure.integratedRegression.buildSourceCommit, build.sourceCommit);
+  assert.equal(closure.integratedRegression.integrationCommit, shippedSource);
+  for (const regression of [closure.integratedRegression, comparison.releaseRegression]) {
+    assert.equal(regression.binaryProfile, "release");
+    assert.equal(regression.checkExitCode, 0);
+    assert.equal(regression.exportExitCode, 0);
+    assert.equal(regression.checkExportIdentical, true);
+    assert.equal(regression.reviewScope, review.reviewScope);
+    assert.equal(regression.reviewSha256, review.reviewSha256);
+  }
+  assert.equal(closure.integratedRegression.reviewStatus, review.decision);
+  assert.equal(comparison.releaseRegression.independentReview, review.decision);
+  assert.equal(
+    comparison.releaseRegression.comparisonSha256,
+    closure.integratedRegression.actualComparisonSha256,
+  );
+  assert.equal(
+    closure.integratedRegression.actualComparisonSha256,
+    "859029091064115fb6883336676ffcf4d0d05b0c25e59ddbbe7c96478d6ebdf4",
+  );
+  assert.equal(comparison.releaseRegression.artifactSha256, shippedArtifact);
+  assert.equal(comparison.releaseRegression.producerSourceCommit, shippedSource);
+  for (const id of ["final-artifact-regression", "closure-review"]) {
+    const evidence = closure.conditions.find(
+      ({ conditionId }) => conditionId === `FS-TRANSACTION/${id}`,
+    ).evidence;
+    assert.equal(evidence.sourceCommit, review.reviewedCommit);
+    assert.equal(evidence.finalArtifactSha256, review.finalArtifactSha256);
+    assert.equal(evidence.reviewStatus, review.decision);
+    assert.equal(evidence.reviewScope, review.reviewScope);
+    assert.equal(evidence.reviewSha256, review.reviewSha256);
+  }
+}
+
+function assertDomainEvidence(comparison, build, lifecycle) {
   assert.equal(comparison.artifactSha256, build.binarySha256);
   assert.equal(comparison.sourceCommit, build.sourceCommit);
-  assert.equal(comparison.binaryProfile, "debug");
+  assert.equal(comparison.binaryProfile, build.profile);
   assert.equal(comparison.sourceBound, true);
-  assert.equal(build.buildInputs.scheme, "binary-v1");
-  assert.equal(build.buildInputs.inputCount, 337);
+  assert.deepEqual(comparison.buildInputs, build.buildInputs);
   assert.equal(comparison.programReplay.recordings, 32);
   assert.equal(comparison.programReplay.publisherRows, 1302);
   assert.equal(comparison.programReplay.tokenAgeRows, 142);
@@ -159,7 +264,7 @@ function assertCurrentDomainEvidence(comparison, build) {
   assert.equal(comparison.webSdk.localComplete, true);
   assert.equal(comparison.webSdk.localReceipt.complete, true);
   assert.equal(comparison.webSdk.localReceipt.reportedArtifactSourceCommit, null);
-  assert.equal(comparison.webSdk.lifecycle.processGroupAbsent, true);
+  assert.deepEqual(comparison.webSdk.lifecycle, lifecycle);
   assert.deepEqual(comparison.webSdk.lifecycle.driverReportsClosed, [true, true]);
   assert.match(comparison.webSdk.lifecycle.processReceiptSha256, /^[0-9a-f]{64}$/);
   for (const record of comparison.webSdk.comparisons) {
@@ -376,6 +481,18 @@ test("FS-TRANSACTION final domain evidence retains genuine replay coverage on on
     ),
   );
   assertCurrentDomainEvidence(comparison, build);
+  assert.equal(build.debugBuild.profile, "debug");
+  assert.equal(build.debugBuild.buildInputs.scheme, "binary-v1");
+  assert.equal(build.debugBuild.buildInputs.inputCount, 337);
+  assertDomainEvidence(
+    { ...comparison.debugComparison, historicalComparison: comparison.historicalComparison },
+    build.debugBuild,
+    {
+      processReceiptSha256: comparison.debugComparison.webSdk.lifecycle.processReceiptSha256,
+      processGroupAbsent: true,
+      driverReportsClosed: [true, true],
+    },
+  );
   assertHistoricalDomainEvidence(comparison.historicalComparison);
   for (const mutate of [
     (value) => {
@@ -435,7 +552,7 @@ test("FS-TRANSACTION final domain evidence retains genuine replay coverage on on
 });
 
 test("FS-TRANSACTION bounded debug approval cannot promote formal closure", () => {
-  const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
+  const closure = debugSnapshot(JSON.parse(readFileSync(closureUrl, "utf8")));
   assertDebugReview(closure);
   for (const mutate of [
     (value) => {
@@ -468,10 +585,7 @@ test("FS-TRANSACTION bounded debug approval cannot promote formal closure", () =
 test("FS-TRANSACTION published program records retain thirteen condition mappings", () => {
   const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
   const root = new URL("../../", import.meta.url);
-  assert.equal(
-    closure.conditions.filter(({ status }) => status === "VERIFIED").length,
-    closure.closureReview.decision === "APPROVED" ? 18 : 17,
-  );
+  assert.equal(closure.conditions.filter(({ status }) => status === "VERIFIED").length, 18);
   for (const condition of closure.conditions) {
     const expected = recordedConditions.get(condition.conditionId);
     if (!expected) {
@@ -565,7 +679,7 @@ test("FS-TRANSACTION published program records retain thirteen condition mapping
       ),
     );
     assertCurrentProgramBindings(condition, current, fixture, inputs);
-    assertDebugReview(closure);
+    assertDebugReview(debugSnapshot(closure));
     assert.doesNotMatch(condition.note, /not a published redacted record yet/i);
   }
   // one strict artifact per publication: every record names the same commit and binary
@@ -706,7 +820,7 @@ test("FS-TRANSACTION supplementary REST evidence stays partial beside independen
     closure.parentStatus,
     closure.closureReview.decision === "APPROVED" ? "COMPAT_VERIFIED" : "IMPLEMENTING",
   );
-  assertDebugReview(closure);
+  assertDebugReview(debugSnapshot(closure));
   assert.equal(closure.profileComparison.emulatorCompatibilityCheck, "SEPARATE_TRACK");
   assert.equal(closure.productionPlan.preparedCampaign.authorizesProduction, false);
   assert.deepEqual(closure.productionPlan.preparedCampaign.actualRequestsPerRecording, [75, 75]);
@@ -892,4 +1006,78 @@ test("FS-TRANSACTION historical E04 rows of the verified conditions retain their
   assert.ok(
     idles.length >= 3 && idles.every((idle) => (idle >= 110.7 && idle < 122.96) || idle === 20),
   );
+});
+
+test("FS-TRANSACTION full-parent approval binds the actual shipped artifact and all eighteen conditions", () => {
+  const root = new URL("../../", import.meta.url);
+  const closure = JSON.parse(readFileSync(closureUrl, "utf8"));
+  const build = JSON.parse(
+    readFileSync(
+      new URL("spec/compatibility/closure/evidence/FS-TRANSACTION-build.json", root),
+      "utf8",
+    ),
+  );
+  const comparison = JSON.parse(
+    readFileSync(
+      new URL("spec/compatibility/closure/evidence/FS-TRANSACTION-comparison.json", root),
+      "utf8",
+    ),
+  );
+  assertApprovedReview(closure, build, comparison);
+  for (const mutate of [
+    (value) => {
+      value.closureReview.reviewSha256 = "0".repeat(64);
+    },
+    (value) => {
+      value.closureReview.reviewedCommit = value.debugClosureReview.reviewedCommit;
+    },
+    (value) => {
+      value.closureReview.finalArtifactSha256 = value.debugClosureReview.finalArtifactSha256;
+    },
+    (value) => {
+      value.closureReview.reviewScope = "FINAL_DEBUG_ARTIFACT_EVIDENCE";
+    },
+    (value) => {
+      value.conditions.shift();
+    },
+    (value) => {
+      value.conditions[0].status = "PENDING_REVIEW";
+    },
+    (value) => {
+      value.integratedRegression.checkExportIdentical = false;
+    },
+  ]) {
+    const changed = structuredClone(closure);
+    mutate(changed);
+    assert.throws(() => assertApprovedReview(changed, build, comparison));
+  }
+  for (const [key, value] of [
+    ["reviewSha256", "0".repeat(64)],
+    ["reviewScope", "FINAL_DEBUG_ARTIFACT_EVIDENCE"],
+  ]) {
+    const changed = structuredClone(closure);
+    const changedComparison = structuredClone(comparison);
+    changed.closureReview[key] = value;
+    changed.integratedRegression[key] = value;
+    changedComparison.releaseRegression[key] = value;
+    for (const id of ["final-artifact-regression", "closure-review"]) {
+      changed.conditions.find(({ conditionId }) => conditionId === `FS-TRANSACTION/${id}`).evidence[
+        key
+      ] = value;
+    }
+    assert.throws(() => assertApprovedReview(changed, build, changedComparison));
+  }
+  const changedClosure = structuredClone(closure);
+  const changedComparison = structuredClone(comparison);
+  changedClosure.integratedRegression.actualComparisonSha256 = "0".repeat(64);
+  changedComparison.releaseRegression.comparisonSha256 = "0".repeat(64);
+  assert.throws(() => assertApprovedReview(changedClosure, build, changedComparison));
+  const changedBuild = structuredClone(build);
+  changedBuild.buildInputs.inputsSha256 = "0".repeat(64);
+  const changedInputsComparison = structuredClone(comparison);
+  changedInputsComparison.buildInputs = changedBuild.buildInputs;
+  changedInputsComparison.atomicVisibility.local.provenance.buildInputs = changedBuild.buildInputs;
+  assert.throws(() => assertApprovedReview(closure, changedBuild, changedInputsComparison));
+  const debugBuild = { ...build.debugBuild, historicalBuild: build.historicalBuild };
+  assert.throws(() => assertApprovedReview(closure, debugBuild, comparison));
 });

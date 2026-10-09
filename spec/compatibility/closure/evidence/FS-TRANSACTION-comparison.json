@@ -598,7 +598,7 @@
       "mismatches": 0
     },
     "coverage": "PARTIAL",
-    "legacyComparisonPath": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
+    "legacyComparisonPath": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-v0150-recorded-comparison-v1.json",
     "legacyComparisonSha256": "d9ac150baef986bf9ce2b36b9018f428f67b0a7554a6f76cfabfd471a7a4a81f"
   },
   "summary": {
@@ -4661,7 +4661,7 @@
         "mismatches": 0
       },
       "coverage": "PARTIAL",
-      "legacyComparisonPath": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-recorded-comparison-v1.json",
+      "legacyComparisonPath": "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-v0150-recorded-comparison-v1.json",
       "legacyComparisonSha256": "d9ac150baef986bf9ce2b36b9018f428f67b0a7554a6f76cfabfd471a7a4a81f"
     },
     "summary": {

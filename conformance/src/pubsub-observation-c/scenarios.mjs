@@ -478,10 +478,8 @@ export async function runCell({
             maxMessages: 1,
             required: true,
           });
-          await publish([
-            { orderingKey: "key-A", attributes: { seq: "1" } },
-            { orderingKey: "key-B", attributes: { seq: "0" } },
-          ]);
+          await publish([{ orderingKey: "key-A", attributes: { seq: "1" } }]);
+          await publish([{ orderingKey: "key-B", attributes: { seq: "0" } }]);
           await nack(s, first);
           const before = await pull(s, "before-predecessor-ACK", { attempts: 3, required: true });
           if (!before.some((i) => i.message.messageId === firstId))

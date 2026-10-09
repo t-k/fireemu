@@ -263,6 +263,8 @@ function referenceWorld({
     }
     if (method === "Publish") {
       if (!resources.has(request.topic)) return bad("NOT_FOUND", 404);
+      if (new Set(request.messages.map((value) => value.orderingKey ?? "")).size > 1)
+        return bad("FAILED_PRECONDITION", 400);
       const ids = request.messages.map((value) => {
         const messageId = `own-${++messageSequence}`;
         messages.set(messageId, {
@@ -340,7 +342,13 @@ function referenceWorld({
 }
 
 function referenceWire(meter, world, journal = { write() {} }) {
-  const codes = { INVALID_ARGUMENT: 3, NOT_FOUND: 5, ALREADY_EXISTS: 6, UNKNOWN: 14 };
+  const codes = {
+    INVALID_ARGUMENT: 3,
+    NOT_FOUND: 5,
+    ALREADY_EXISTS: 6,
+    FAILED_PRECONDITION: 9,
+    UNKNOWN: 14,
+  };
   return createWire({
     meter,
     journal,
@@ -2005,3 +2013,179 @@ for (const transport of ["rest", "grpc"]) {
     }
   });
 }
+
+test("C R8 N8 ordering publications are three separately bound budgeted calls before NACK", async (t) => {
+  for (const transport of ["rest", "grpc"]) {
+    await t.test(transport, async () => {
+      const cell = makePlan().cells.find(
+        (c) => c.transport === transport && c.variant === "nack-blocked-key",
+      );
+      const meter = createMeter({ now: () => 0 }),
+        world = referenceWorld(),
+        rows = [],
+        ledger = createLedger();
+      meter.enter(cell);
+      const wire = referenceWire(meter, world, { write: (row) => rows.push(row) });
+      try {
+        const result = await scenarios.runCell({
+          cell,
+          meter,
+          wire,
+          ledger,
+          runId: "123456abcdef",
+          journal: { write: (row) => rows.push(row) },
+          sleep: async () => {},
+        });
+        assert.equal(result.complete, true, `${cell.id}: ${result.reason}`);
+        assert.equal(result.cleanupClosed, true);
+        assert.equal(result.budgetOverrun, false);
+        assert.equal(ledger.outstanding().length, 0);
+        assert.equal(world.resources.size, 0);
+        const publications = world.calls.filter((call) => call.method === "Publish");
+        assert.equal(publications.length, 3);
+        assert.deepEqual(
+          publications.map((call) => call.request.messages.map((m) => m.orderingKey)),
+          [["key-A"], ["key-A"], ["key-B"]],
+        );
+        assert.deepEqual(
+          publications.map((call) => call.request.messages[0].attributes.seq),
+          ["0", "1", "0"],
+        );
+        const bindings = rows.filter(
+          (row) => row.event === "delivery-observation" && row.stage === "publication-binding",
+        );
+        assert.equal(bindings.length, 3);
+        for (let index = 0; index < 3; index++) {
+          assert.equal(bindings[index].topic, publications[index].request.topic);
+          assert.deepEqual(bindings[index].messages, publications[index].request.messages);
+          assert.deepEqual(bindings[index].messageIds, [`own-${index + 1}`]);
+          assert.equal(
+            Buffer.from(bindings[index].messages[0].data, "base64").toString(),
+            `123456abcdef:${cell.id}:${index}`,
+          );
+        }
+        const predecessor = result.observations.find(
+          (row) => row.stage === "outstanding-predecessor",
+        ).items[0];
+        const nackIndex = world.calls.findIndex((call) => call.method === "ModifyAckDeadline");
+        assert.ok(publications.every((call) => world.calls.indexOf(call) < nackIndex));
+        assert.deepEqual(world.calls[nackIndex].request.ackIds, [predecessor.ackId]);
+        assert.equal(world.calls[nackIndex].request.ackDeadlineSeconds, 0);
+        const before = result.observations.find((row) => row.stage === "before-predecessor-ACK");
+        assert.ok(
+          before.items.some((item) => item.message.messageId === bindings[0].messageIds[0]),
+        );
+        assert.ok(
+          before.items.some((item) => item.message.messageId === bindings[2].messageIds[0]),
+        );
+        assert.equal(
+          before.items.some((item) => item.message.messageId === bindings[1].messageIds[0]),
+          false,
+        );
+        const after = result.observations.find((row) => row.stage === "after-predecessor-ACK");
+        assert.deepEqual(
+          after.items.map((item) => item.message.messageId),
+          bindings[1].messageIds,
+        );
+        const acks = world.calls.filter((call) => call.method === "Acknowledge");
+        assert.deepEqual(
+          acks.map((call) => call.request.ackIds),
+          [before.items.map((item) => item.ackId), after.items.map((item) => item.ackId)],
+        );
+        assert.equal(categoryCaps(cell.group).publish, 3);
+        assert.ok(world.calls.length <= 37);
+      } finally {
+        wire.close();
+      }
+    });
+  }
+});
+
+test("C publish ordering-key model matches homogeneous-key reference for every small key vector", () => {
+  const topic = "projects/demo-app/topics/key-property";
+  const keys = [undefined, "", "key-A", "key-B"];
+  for (let length = 1; length <= 3; length++) {
+    for (let value = 0; value < keys.length ** length; value++) {
+      const world = referenceWorld();
+      world.answer("CreateTopic", { name: topic });
+      const messages = Array.from({ length }, (_, index) => ({
+        data: "eA==",
+        orderingKey: keys[Math.floor(value / keys.length ** index) % keys.length],
+      }));
+      const reply = world.answer("Publish", { topic, messages });
+      const homogeneous = messages.every(
+        (message) => (message.orderingKey ?? "") === (messages[0].orderingKey ?? ""),
+      );
+      assert.equal(reply.ok, homogeneous);
+      assert.equal(world.messages.size, homogeneous ? length : 0);
+      if (homogeneous) assert.equal(reply.body.messageIds.length, length);
+      else {
+        assert.equal(reply.status, 400);
+        assert.equal(reply.code, "FAILED_PRECONDITION");
+        assert.equal(reply.body.messageIds, undefined);
+      }
+    }
+  }
+});
+
+test("C R8 N8 unbound follower or control stops before NACK without adopting its IDs", async () => {
+  for (const transport of ["rest", "grpc"]) {
+    for (const ordinal of [2, 3]) {
+      for (const fault of ["refused", "missing-IDs"]) {
+        const cell = makePlan().cells.find(
+            (c) => c.transport === transport && c.variant === "nack-blocked-key",
+          ),
+          meter = createMeter({ now: () => 0 }),
+          world = referenceWorld(),
+          rows = [];
+        const answer = world.answer;
+        let publishCount = 0;
+        world.answer = (method, request) => {
+          if (method === "Publish" && ++publishCount === ordinal) {
+            world.calls.push({ method, request: structuredClone(request) });
+            return fault === "refused"
+              ? {
+                  ok: false,
+                  code: "FAILED_PRECONDITION",
+                  status: 400,
+                  body: {
+                    error: { status: "FAILED_PRECONDITION", message: "same ordering key required" },
+                  },
+                }
+              : { ok: true, code: "OK", status: 200, body: { messageIds: [] } };
+          }
+          return answer(method, request);
+        };
+        meter.enter(cell);
+        const wire = referenceWire(meter, world);
+        try {
+          const result = await scenarios.runCell({
+            cell,
+            meter,
+            wire,
+            ledger: createLedger(),
+            runId: "123456abcdef",
+            journal: { write: (row) => rows.push(row) },
+            sleep: async () => {},
+          });
+          assert.equal(result.complete, false, `${transport}/${ordinal}/${fault}`);
+          assert.equal(result.reason, "publication is not bound");
+          assert.equal(result.cleanupClosed, true);
+          assert.equal(world.resources.size, 0);
+          assert.equal(
+            world.calls.filter((call) => ["ModifyAckDeadline", "Acknowledge"].includes(call.method))
+              .length,
+            0,
+          );
+          assert.equal(
+            rows.filter((row) => row.stage === "publication-binding").length,
+            ordinal - 1,
+          );
+          assert.equal(world.calls.filter((call) => call.method === "Publish").length, ordinal);
+        } finally {
+          wire.close();
+        }
+      }
+    }
+  }
+});

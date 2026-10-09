@@ -99,7 +99,9 @@ export function makePlan({ selection = "full" } = {}) {
     });
   const gap = selection === "remaining-gap";
   const selected = gap
-    ? cells.filter((cell) => !cell.reserve && [1, 2, 3, 4, 5, 6, 8, 10, 11].includes(Number(cell.id.slice(1))))
+    ? cells.filter(
+        (cell) => !cell.reserve && [1, 2, 3, 4, 5, 6, 8, 10, 11].includes(Number(cell.id.slice(1))),
+      )
     : cells;
   return {
     schema: 1,
@@ -109,7 +111,14 @@ export function makePlan({ selection = "full" } = {}) {
     groups: ["G2", "G7"],
     recordings: 2,
     caps: gap
-      ? { ...structuredClone(CAPS), G2: { ...CAPS.G2, requests: 666, rest: 333, grpc: 333 }, sourceRequests: 666, totalRequests: 680, smallPublishes: 54, sourceWallMs: 3240000 }
+      ? {
+          ...structuredClone(CAPS),
+          G2: { ...CAPS.G2, requests: 666, rest: 333, grpc: 333 },
+          sourceRequests: 666,
+          totalRequests: 680,
+          smallPublishes: 54,
+          sourceWallMs: 3240000,
+        }
       : structuredClone(CAPS),
     cells: selected,
     ackSelector: "NOT_COMPARABLE-until-observed",

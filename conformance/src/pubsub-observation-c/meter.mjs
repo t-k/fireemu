@@ -3,7 +3,8 @@ import { makePlan, validatePlan, categoryCaps } from "./plan.mjs";
 export class Limit extends Error {}
 const zero = () => ({ requests: 0, rest: 0, grpc: 0, streams: 0 });
 export function createMeter({ now = () => performance.now(), a2 = false, plan = makePlan() } = {}) {
-  const admittedPlan = structuredClone(validatePlan(plan)), caps = admittedPlan.caps;
+  const admittedPlan = structuredClone(validatePlan(plan)),
+    caps = admittedPlan.caps;
   const begun = now();
   const groups = { G2: zero(), G7: zero() };
   const visited = new Set();

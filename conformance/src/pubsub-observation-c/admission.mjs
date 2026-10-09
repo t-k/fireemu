@@ -28,8 +28,7 @@ const git = (...args) =>
 export function describeSource() {
   return {
     schema: 1,
-    requestBudgetAuthority:
-      "hash-bound packet.plan.caps; unused reservations cannot be reassigned",
+    requestBudgetAuthority: "hash-bound packet.plan.caps; unused reservations cannot be reassigned",
     suite: SUITE,
     head: git("rev-parse", "HEAD"),
     runtime: runtimeIdentity(),

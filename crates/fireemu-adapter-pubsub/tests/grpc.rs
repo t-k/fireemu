@@ -4228,3 +4228,200 @@ async fn a_publish_during_an_in_flight_failing_push_sends_nothing_before_the_bac
     stop.store(true, Ordering::Release);
     worker.join().unwrap();
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn issued_deleted_cursors_continue_on_all_native_list_routes() {
+    let h = start_with_bridge(None).await;
+    let mut publisher = h.publisher().await;
+    let mut subscriber = h.subscriber().await;
+    let topic = "projects/demo-app/topics/cursor-parent";
+    publisher
+        .create_topic(pb::Topic {
+            name: topic.into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    for id in ["a", "b", "c"] {
+        let name = format!("projects/demo-app/subscriptions/cursor-{id}");
+        subscriber
+            .create_subscription(pb::Subscription {
+                name: name.clone(),
+                topic: topic.into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        subscriber
+            .create_snapshot(pb::CreateSnapshotRequest {
+                name: format!("projects/demo-app/snapshots/cursor-{id}"),
+                subscription: name,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+    let subscriptions = subscriber
+        .list_subscriptions(pb::ListSubscriptionsRequest {
+            project: "projects/demo-app".into(),
+            page_size: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let attached = publisher
+        .list_topic_subscriptions(pb::ListTopicSubscriptionsRequest {
+            topic: topic.into(),
+            page_size: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let snapshots = subscriber
+        .list_snapshots(pb::ListSnapshotsRequest {
+            project: "projects/demo-app".into(),
+            page_size: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let attached_snapshots = publisher
+        .list_topic_snapshots(pb::ListTopicSnapshotsRequest {
+            topic: topic.into(),
+            page_size: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    subscriber
+        .delete_subscription(pb::DeleteSubscriptionRequest {
+            subscription: subscriptions.subscriptions[0].name.clone(),
+        })
+        .await
+        .unwrap();
+    subscriber
+        .delete_snapshot(pb::DeleteSnapshotRequest {
+            snapshot: snapshots.snapshots[0].name.clone(),
+        })
+        .await
+        .unwrap();
+    let continued = subscriber
+        .list_subscriptions(pb::ListSubscriptionsRequest {
+            project: "projects/demo-app".into(),
+            page_token: subscriptions.next_page_token,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        continued
+            .subscriptions
+            .iter()
+            .map(|s| s.name.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            "projects/demo-app/subscriptions/cursor-b",
+            "projects/demo-app/subscriptions/cursor-c"
+        ]
+    );
+    let continued = publisher
+        .list_topic_subscriptions(pb::ListTopicSubscriptionsRequest {
+            topic: topic.into(),
+            page_token: attached.next_page_token,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        continued.subscriptions,
+        vec![
+            "projects/demo-app/subscriptions/cursor-b",
+            "projects/demo-app/subscriptions/cursor-c"
+        ]
+    );
+    let continued = subscriber
+        .list_snapshots(pb::ListSnapshotsRequest {
+            project: "projects/demo-app".into(),
+            page_token: snapshots.next_page_token,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        continued
+            .snapshots
+            .iter()
+            .map(|s| s.name.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            "projects/demo-app/snapshots/cursor-b",
+            "projects/demo-app/snapshots/cursor-c"
+        ]
+    );
+    let continued = publisher
+        .list_topic_snapshots(pb::ListTopicSnapshotsRequest {
+            topic: topic.into(),
+            page_token: attached_snapshots.next_page_token,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        continued.snapshots,
+        vec![
+            "projects/demo-app/snapshots/cursor-b",
+            "projects/demo-app/snapshots/cursor-c"
+        ]
+    );
+    for id in ["a", "b"] {
+        publisher
+            .create_topic(pb::Topic {
+                name: format!("projects/demo-app/topics/cursor-{id}"),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+    let topics = publisher
+        .list_topics(pb::ListTopicsRequest {
+            project: "projects/demo-app".into(),
+            page_size: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    publisher
+        .delete_topic(pb::DeleteTopicRequest {
+            topic: topics.topics[0].name.clone(),
+        })
+        .await
+        .unwrap();
+    let continued = publisher
+        .list_topics(pb::ListTopicsRequest {
+            project: "projects/demo-app".into(),
+            page_token: topics.next_page_token,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        continued
+            .topics
+            .iter()
+            .map(|t| t.name.clone())
+            .collect::<Vec<_>>(),
+        vec!["projects/demo-app/topics/cursor-b", topic]
+    );
+    h.shutdown().await;
+}

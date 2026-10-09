@@ -300,15 +300,30 @@ function generatedEvidence() {
     publications = new Map(),
     snapshots = new Map(),
     pendingSnapshots = new Map(),
+    deletedSnapshots = new Set(),
     sourceIds = new Map(),
     localIds = new Map();
   const ttl = 604800000000000n;
   function observe(dispatch, expected, actual) {
+    if (dispatch.method === "DeleteSnapshot") {
+      if (
+        snapshots.has(dispatch.request.name) &&
+        expected?.code === "OK" &&
+        actual?.code === "OK" &&
+        expected.unknown !== true &&
+        actual.unknown !== true &&
+        (dispatch.transport !== "rest" || (expected.status === 200 && actual.status === 200))
+      )
+        deletedSnapshots.add(dispatch.request.name);
+      else deletedSnapshots.delete(dispatch.request.name);
+      return;
+    }
     if (!["Publish", "CreateSnapshot", "GetSnapshot"].includes(dispatch.method)) return;
-    // A confirmed recorded absence has its own cursor witness; it does not revalidate a past pair.
+    // A confirmed owned cleanup absence does not revalidate an earlier successful pair.
     if (
       dispatch.method === "GetSnapshot" &&
-      dispatch.category === "cursorGet" &&
+      (dispatch.category === "cursorGet" ||
+        (dispatch.category === "cleanupGet" && deletedSnapshots.has(dispatch.request.name))) &&
       snapshots.has(dispatch.request.name) &&
       expected?.code === "NOT_FOUND" &&
       expected.unknown !== true &&

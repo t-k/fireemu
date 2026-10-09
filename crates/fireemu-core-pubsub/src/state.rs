@@ -121,6 +121,7 @@ struct TopicEntry {
 #[derive(Debug)]
 pub struct PubSubState {
     seed: u64,
+    issued_page_boundaries: BTreeMap<String, BTreeMap<String, Option<String>>>,
     topics: BTreeMap<String, TopicEntry>,
     subscriptions: BTreeMap<String, SubscriptionState>,
     topic_subs: BTreeMap<String, BTreeSet<String>>,
@@ -142,6 +143,7 @@ impl PubSubState {
     pub fn new(seed: u64) -> Self {
         Self {
             seed,
+            issued_page_boundaries: BTreeMap::new(),
             topics: BTreeMap::new(),
             subscriptions: BTreeMap::new(),
             topic_subs: BTreeMap::new(),
@@ -159,6 +161,40 @@ impl PubSubState {
                 DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
             ),
         }
+    }
+
+    /// Selects current resources, retaining only emitted strict cursor boundaries in this list context until reset. History can grow with distinct issued boundaries; cursors do not authenticate requests.
+    pub fn paginate<T>(
+        &mut self,
+        context: &str,
+        resources: Vec<T>,
+        page_size: i32,
+        page_token: &str,
+        policy: crate::pagination::PagingPolicy,
+        name: impl Fn(&T) -> String,
+    ) -> Result<crate::pagination::Page<T>> {
+        let boundary = self
+            .issued_page_boundaries
+            .get(context)
+            .and_then(|tokens| tokens.get(page_token))
+            .and_then(Option::as_deref);
+        let page = crate::pagination::paginate_after(
+            resources, page_size, page_token, policy, &name, boundary,
+        )?;
+        if policy == crate::pagination::PagingPolicy::Strict && !page.next_page_token.is_empty() {
+            let boundary = name(page.resources.last().expect("nonempty continuation page"));
+            self.issued_page_boundaries
+                .entry(context.to_owned())
+                .or_default()
+                .entry(page.next_page_token.clone())
+                .and_modify(|previous| {
+                    if previous.as_ref() != Some(&boundary) {
+                        *previous = None;
+                    }
+                })
+                .or_insert(Some(boundary));
+        }
+        Ok(page)
     }
 
     /// Sets the minimum interval kept between two push deliveries of the same message on a
@@ -290,6 +326,7 @@ impl PubSubState {
 
     /// Drops every topic and subscription (session reset). Identifier generators reset for deterministic fresh runs; topic incarnations remain monotonic to reject stale preparations.
     pub fn clear(&mut self) {
+        self.issued_page_boundaries.clear();
         self.topics.clear();
         self.subscriptions.clear();
         self.topic_subs.clear();
@@ -306,6 +343,9 @@ impl PubSubState {
 
     /// Drops one project's topics and subscriptions without disturbing other sessions.
     pub fn clear_project(&mut self, project: &str) {
+        let prefix = format!("projects/{project}/");
+        self.issued_page_boundaries
+            .retain(|context, _| !context.starts_with(&prefix));
         let subscriptions = self
             .subscriptions
             .values()
@@ -338,6 +378,12 @@ impl PubSubState {
     /// Drops every resource owned by a project accepted by `matches`.
     pub fn clear_projects_where(&mut self, matches: impl Fn(&str) -> bool) {
         let mut projects = BTreeSet::new();
+        projects.extend(
+            self.issued_page_boundaries
+                .keys()
+                .filter_map(|context| context.split('/').nth(1))
+                .map(str::to_owned),
+        );
         projects.extend(
             self.topics
                 .values()
@@ -445,6 +491,9 @@ impl PubSubState {
         if self.topics.remove(&key).is_none() {
             return Err(PubSubError::not_found(format!("topic {key} not found")));
         }
+        let prefix = format!("{key}/");
+        self.issued_page_boundaries
+            .retain(|context, _| !context.starts_with(&prefix));
         for subscription in self.topic_subs.remove(&key).unwrap_or_default() {
             if let Some(state) = self.subscriptions.get_mut(&subscription) {
                 state.mark_topic_deleted();

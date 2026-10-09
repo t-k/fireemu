@@ -8,7 +8,6 @@ use std::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-use fireemu_core_pubsub::pagination::paginate;
 use fireemu_core_pubsub::subscription::DEFAULT_ACK_DEADLINE_SECONDS;
 use fireemu_core_pubsub::{PushConfig, SubscriptionName};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
@@ -298,7 +297,7 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<pb::ListSubscriptionsResponse>, Status> {
         let req = request.into_inner();
         let project = project_of(&req.project)?;
-        let state = self.handle.state();
+        let mut state = self.handle.state();
         let subscriptions: Vec<_> = state
             .list_subscriptions(project)
             .iter()
@@ -309,14 +308,16 @@ impl Subscriber for SubscriberService {
                 subscription_to_proto(c, &reported, self.handle.paging_policy)
             })
             .collect();
-        let page = paginate(
-            subscriptions,
-            req.page_size,
-            &req.page_token,
-            self.handle.paging_policy,
-            |subscription| subscription.name.clone(),
-        )
-        .map_err(|e| status(&e))?;
+        let page = state
+            .paginate(
+                &format!("projects/{project}/subscriptions"),
+                subscriptions,
+                req.page_size,
+                &req.page_token,
+                self.handle.paging_policy,
+                |subscription| subscription.name.clone(),
+            )
+            .map_err(|e| status(&e))?;
         Ok(Response::new(pb::ListSubscriptionsResponse {
             subscriptions: page.resources,
             next_page_token: page.next_page_token,
@@ -578,21 +579,22 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<pb::ListSnapshotsResponse>, Status> {
         let req = request.into_inner();
         let project = project_of(&req.project)?;
-        let snapshots: Vec<_> = self
-            .handle
-            .state()
+        let mut state = self.handle.state();
+        let snapshots: Vec<_> = state
             .list_snapshots(project, self.handle.now())
             .iter()
             .map(snapshot_to_proto)
             .collect();
-        let page = paginate(
-            snapshots,
-            req.page_size,
-            &req.page_token,
-            self.handle.paging_policy,
-            |snapshot| snapshot.name.clone(),
-        )
-        .map_err(|e| status(&e))?;
+        let page = state
+            .paginate(
+                &format!("projects/{project}/snapshots"),
+                snapshots,
+                req.page_size,
+                &req.page_token,
+                self.handle.paging_policy,
+                |snapshot| snapshot.name.clone(),
+            )
+            .map_err(|e| status(&e))?;
         Ok(Response::new(pb::ListSnapshotsResponse {
             snapshots: page.resources,
             next_page_token: page.next_page_token,

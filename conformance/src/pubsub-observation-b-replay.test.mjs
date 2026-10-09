@@ -1558,3 +1558,87 @@ test("B verified Snapshot pair survives its recorded selected DELETE and confirm
     } else assert.notEqual(report.generatedWitnesses[1].verdict, "MATCH", mode);
   }
 });
+
+test("B verified generated Snapshot success survives only confirmed owned cleanup absence", async () => {
+  for (const mode of [
+    "confirmed",
+    "unknown",
+    "wrong-status",
+    "wrong-code",
+    "unverified-pair",
+    "missing-delete",
+    "unknown-delete",
+    "source-unknown",
+    "source-wrong-status",
+    "refused-delete",
+  ]) {
+    const { input, at, name, topic } = generatedInput();
+    const absent = {
+      code: "NOT_FOUND",
+      status: 404,
+      body: { error: { status: "NOT_FOUND", message: "missing" } },
+    };
+    const append = (id, method, reply) =>
+      input.cells[0].exchanges.push({
+        dispatch: {
+          requestId: id,
+          n: id,
+          at,
+          cellId: "R7",
+          transport: "rest",
+          method,
+          category: method === "GetSnapshot" ? "cleanupGet" : "cleanupDelete",
+          request: { name },
+        },
+        response: { reply },
+      });
+    if (mode !== "missing-delete")
+      append(4, "DeleteSnapshot", { code: "OK", status: 200, body: {} });
+    append(
+      5,
+      "GetSnapshot",
+      mode === "source-unknown"
+        ? { ...absent, unknown: true }
+        : mode === "source-wrong-status"
+          ? { ...absent, status: 200 }
+          : structuredClone(absent),
+    );
+    const report = await replayRecording(input, async (q) => {
+      if (q.method === "Publish")
+        return {
+          code: "OK",
+          status: 200,
+          body: { messageIds: ["22222222222222222"] },
+          clockReadback: { clock: at, sourceRequestId: q.requestId },
+        };
+      if (q.method === "DeleteSnapshot")
+        return mode === "unknown-delete"
+          ? { code: "OK", status: 200, body: {}, unknown: true }
+          : mode === "refused-delete"
+            ? { code: "PERMISSION_DENIED", status: 403, body: {} }
+            : { code: "OK", status: 200, body: {} };
+      if (q.requestId === 5)
+        return mode === "unknown"
+          ? { ...absent, unknown: true }
+          : mode === "wrong-status"
+            ? { ...absent, status: 200 }
+            : mode === "wrong-code"
+              ? { code: "PERMISSION_DENIED", status: 403, body: {} }
+              : structuredClone(absent);
+      if (q.method === "GetSnapshot" && mode === "unverified-pair")
+        return { code: "UNAVAILABLE", unknown: true };
+      return {
+        code: "OK",
+        status: 200,
+        body: { name, topic, expireTime: "2026-10-16T00:00:00.123Z" },
+        clockReadback: { clock: at, sourceRequestId: q.requestId },
+      };
+    });
+    if (mode === "confirmed") {
+      assert.equal(report.rows.find((r) => r.requestId === 5).semantic, "MATCH");
+      assert.equal(report.generatedWitnesses.length, 3);
+      assert.ok(report.generatedWitnesses.every((w) => w.verdict === "MATCH"));
+      assert.equal(report.generatedWitnesses[1].expiryEffects, "NOT_COMPARABLE_NOT_OBSERVED");
+    } else assert.notEqual(report.generatedWitnesses[1].verdict, "MATCH", mode);
+  }
+});

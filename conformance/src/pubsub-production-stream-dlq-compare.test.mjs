@@ -10,6 +10,7 @@ import * as cli from "./pubsub-production/stream-dlq-compare.mjs";
 import { protos } from "@google-cloud/pubsub";
 import { spawnSync, spawn, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createServer } from "node:http";
 const exchange = (body, extra = {}) => ({
   n: 1,
   transport: "rest",
@@ -454,6 +455,52 @@ function layoutInput() {
   capture.push({ note: "case-end", case: id, outcome: "completed", at }, { note: "run-end", at });
   return { capture, issued, iam: [] };
 }
+test("local replay omits Pub/Sub credentials while retaining control authorization", async (t) => {
+  const pubsubHeaders = [],
+    controlHeaders = [];
+  const server = createServer((request, response) => {
+    request.resume();
+    if (request.url.endsWith("/clock:advanceTo")) {
+      controlHeaders.push(request.headers.authorization);
+      response.end("{}");
+    } else {
+      pubsubHeaders.push(request.headers.authorization);
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ name: request.url.slice(4) }));
+    }
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(Number(process.env.PORT ?? 0), "127.0.0.1", resolve);
+  });
+  const input = layoutInput();
+  const first = input.capture.find((row) => row.request && row.response);
+  input.capture = input.capture.filter((row) => !row.op || row.op === first.op);
+  input.issued = input.issued.slice(0, 2);
+  input.metadata = input.capture[0];
+  input.verifiedFrames = new Set();
+  const target = `127.0.0.1:${server.address().port}`;
+  await cli.replayLocal(
+    input,
+    {
+      PUBSUB_EMULATOR_HOST: target,
+      FIREEMU_CONTROL_URL: `http://${target}/v1/`,
+      FIREEMU_CONTROL_TOKEN: "control-only",
+    },
+    {
+      profile: "release",
+      rustcWrapper: "",
+      sha256: "a".repeat(64),
+      head: "b".repeat(40),
+      command: ["cargo", "build", "--release"],
+      path: "/fixture/target/release/fireemu",
+    },
+  );
+  assert.deepEqual(pubsubHeaders, [undefined]);
+  assert.deepEqual(controlHeaders, ["Bearer control-only", "Bearer control-only"]);
+});
+
 const echoReplay = async (original, request) => {
   void request;
   return structuredClone(original);

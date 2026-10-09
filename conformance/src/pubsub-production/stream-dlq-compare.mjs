@@ -282,7 +282,7 @@ export async function replayLocal(input, environment, pin) {
     project: input.metadata.project,
     runId: input.metadata.runId,
   });
-  const localCredential = async () => "local-comparison-fixture";
+  const localCredential = null;
   const rest = createRest({ base: `http://${target}`, budget, capture, getToken: localCredential });
   const grpc = createGrpc({ target, secure: false, budget, capture, getToken: localCredential });
   let logicalTime = -Infinity;

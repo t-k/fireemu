@@ -656,6 +656,7 @@ export async function replay(rows, options) {
   const results = [];
   const operations = new Map(),
     pageTokens = new Map(),
+    persistentPageTokens = new Map(),
     pageInventories = new Map();
   for (const [index, row] of rows.entries()) {
     const skipped = skipReason(row);
@@ -685,7 +686,6 @@ export async function replay(rows, options) {
       if (
         row.op === "listChannels" &&
         row.request.method === "GET" &&
-        row.response.status === 200 &&
         query !== undefined &&
         new URLSearchParams(query).getAll("pageToken").length === 1
       ) {
@@ -693,7 +693,12 @@ export async function replay(rows, options) {
         if (scope)
           path = path.replace(/([?&]pageToken=)([^&]*)/g, (part, prefix, value) => {
             const token = new URLSearchParams(`pageToken=${value}`).get("pageToken");
-            const local = pageTokens.get(`${scope}\0${token}`);
+            if (!validPageToken(token)) return part;
+            const key = `${scope}\0${token}`;
+            if (pageTokens.has(key) && pageTokens.get(key) === null) return part;
+            const current =
+              pageTokens.has(key) && (row.response.status === 200 || pageInventories.has(scope));
+            const local = current ? pageTokens.get(key) : persistentPageTokens.get(token);
             return local ? `${prefix}${encodeURIComponent(local)}` : part;
           });
       }
@@ -781,6 +786,8 @@ export async function replay(rows, options) {
           }
         }
         bindReference(pageTokens, `${scope}\0${original.nextPageToken}`, local.nextPageToken);
+        if (pageInventories.has(scope))
+          bindReference(persistentPageTokens, original.nextPageToken, local.nextPageToken);
       }
     }
     const compared = compareAnswer(row.response, actual);

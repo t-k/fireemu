@@ -601,9 +601,8 @@ test("B28 positive binding rejects malformed, incomplete, foreign or changed inv
     assert.equal(got.results.at(-1).actual.status, 400, name);
   }
 });
-test("B28 negative, unissued and wrong-selection consumers remain original requests", async () => {
+test("B28 unissued malformed and unsupported-collection consumers remain original requests", async () => {
   for (const [name, modifyRows] of [
-    ["negative consumer", (rows) => (rows[2].response.status = 400)],
     [
       "unissued cursor",
       (rows) =>
@@ -622,8 +621,6 @@ test("B28 negative, unissued and wrong-selection consumers remain original reque
         );
       },
     ],
-    ["different filter", (rows) => (rows[2].request.path += "&filter=state%3DINACTIVE")],
-    ["different orderBy", (rows) => (rows[2].request.path += "&orderBy=name")],
     [
       "different collection",
       (rows) => (rows[2].request.path = rows[2].request.path.replace("/channels?", "/foreign?")),
@@ -742,4 +739,174 @@ test("negative and foreign-scope roots cannot reset an existing scoped walk", as
   }
   const unproven = await captureIndependentWalks({ withoutInventory: true });
   assert.equal(unproven.urls.at(-1), unproven.consumer.request.path);
+});
+
+async function capturePersistentIssuer({
+  consumerToken = sourceContinuationToken,
+  consumerQuery = "",
+  conflicting = false,
+  malformedIssuer = false,
+} = {}) {
+  const inventory = structuredClone(b28Rows[0]),
+    issuer = structuredClone(b28Rows[1]),
+    intervening = structuredClone(b28Rows[1]),
+    consumer = structuredClone(b28Rows[2]);
+  const interveningNative = conflicting
+    ? sourceContinuationToken
+    : token("different native walk boundary");
+  intervening.response.body.nextPageToken = interveningNative;
+  consumer.request.path =
+    consumer.request.path
+      .replace("/locations/us-central1/", "/locations/other-region/")
+      .replace(/pageToken=[^&]+/, `pageToken=${consumerToken}`) + consumerQuery;
+  consumer.response.status = 500;
+  const other = inventory.response.body.channels.find(
+    (member) => member.name !== issuer.response.body.channels[0].name,
+  );
+  const issuerAnswer = { channels: [other], nextPageToken: ownContinuationToken };
+  if (malformedIssuer) issuerAnswer.channels[0] = { ...other, unexpected: true };
+  const got = await capture(
+    [inventory, issuer, intervening, consumer],
+    [
+      { body: inventory.response.body },
+      { body: issuerAnswer },
+      {
+        body: {
+          channels: intervening.response.body.channels,
+          nextPageToken: token("intervening own walk cursor"),
+        },
+      },
+      { status: 500, body: consumer.response.body },
+    ],
+  );
+  return { ...got, consumer };
+}
+test("a uniquely validated persistent issuer survives intervening walks for negative foreign-scope requests", async () => {
+  for (const consumerQuery of [
+    "",
+    "&filter=state%3DACTIVE&alt=json",
+    "&filter=state%3DINACTIVE",
+    "&orderBy=name&pageSize=9",
+    "&aggregate=true",
+  ]) {
+    const got = await capturePersistentIssuer({ consumerQuery });
+    assert.equal(
+      got.urls.at(-1),
+      got.consumer.request.path.replace(sourceContinuationToken, ownContinuationToken),
+    );
+  }
+  const negative = await captureB28({ modifyRows: (rows) => (rows[2].response.status = 400) });
+  assert.equal(new URL(negative.urls[2]).searchParams.get("pageToken"), ownContinuationToken);
+});
+test("persistent rebinding rejects unknown mutated malformed ambiguous and duplicate-token inputs", async () => {
+  for (const options of [
+    { consumerToken: token("unknown native token") },
+    { consumerToken: sourceContinuationToken.slice(0, -1) + "A" },
+    { consumerToken: "not%2Bbase64%21" },
+    { conflicting: true },
+    { malformedIssuer: true },
+    { consumerQuery: "&pageToken=" },
+    { consumerQuery: `&pageToken=${sourceContinuationToken}` },
+    { consumerQuery: `&%70ageToken=${sourceContinuationToken}` },
+  ]) {
+    const got = await capturePersistentIssuer(options);
+    assert.equal(got.urls.at(-1), got.consumer.request.path);
+  }
+});
+
+test("original C and D cross-region aggregate and changed-size consumers retain their unique issuer cursor", async () => {
+  const { readFileSync } = await import("node:fs");
+  for (const [label, issuerN, consumerNs] of [
+    ["C", 102, [124, 126, 127]],
+    ["D", 41, [57, 59, 60]],
+  ]) {
+    const nativeRows = readFileSync(
+      new URL(`./eventarc-production/fixtures/ad/${label}.jsonl`, import.meta.url),
+      "utf8",
+    )
+      .trim()
+      .split("\n")
+      .map(JSON.parse);
+    const issuerIndex = nativeRows.findIndex((captured) => captured.n === issuerN);
+    const sourceIssuer = nativeRows[issuerIndex];
+    const inventoryRow = nativeRows
+      .slice(0, issuerIndex)
+      .findLast(
+        (captured) =>
+          captured.op === "listChannels" &&
+          captured.response.status === 200 &&
+          Array.isArray(captured.response.body?.channels) &&
+          !Object.hasOwn(captured.response.body, "nextPageToken") &&
+          !new URL(captured.request.path, "http://local").searchParams.has("pageToken") &&
+          captured.request.path.split("?")[0] === sourceIssuer.request.path.split("?")[0],
+      );
+    assert.ok(inventoryRow, `${label}: source complete inventory`);
+    for (const consumerN of consumerNs) {
+      const inventory = structuredClone(inventoryRow),
+        issuer = structuredClone(sourceIssuer),
+        intervening = structuredClone(sourceIssuer),
+        consumer = structuredClone(nativeRows.find((captured) => captured.n === consumerN));
+      issuer.response.body.nextPageToken = sourceContinuationToken;
+      intervening.response.body.nextPageToken = token("intervening source cursor");
+      consumer.request.path = consumer.request.path.replace(
+        /pageToken=[^&]+/,
+        `pageToken=${sourceContinuationToken}`,
+      );
+      const got = await capture(
+        [inventory, issuer, intervening, consumer],
+        [
+          { body: inventory.response.body },
+          { body: { ...issuer.response.body, nextPageToken: ownContinuationToken } },
+          {
+            body: {
+              ...intervening.response.body,
+              nextPageToken: token("intervening local cursor"),
+            },
+          },
+          { status: consumer.response.status, body: consumer.response.body },
+        ],
+      );
+      assert.equal(
+        got.urls.at(-1),
+        consumer.request.path.replace(sourceContinuationToken, ownContinuationToken),
+        `${label}${consumerN}`,
+      );
+      assert.equal(
+        got.results.at(-1).verdict,
+        "match",
+        `${label}${consumerN}: original status/body retained`,
+      );
+    }
+  }
+});
+
+test("current-walk ambiguity dominates persistent fallback after inventory invalidation for every expected status", async () => {
+  for (const status of [200, 400]) {
+    const inventory = structuredClone(b28Rows[0]),
+      issuer = structuredClone(b28Rows[1]),
+      consumer = structuredClone(b28Rows[2]);
+    consumer.response.status = status;
+    if (status === 400)
+      consumer.response.body = { error: { code: 400, status: "INVALID_ARGUMENT" } };
+    const got = await capture(
+      [inventory, issuer, structuredClone(inventory), structuredClone(issuer), consumer],
+      [
+        { body: inventory.response.body },
+        { body: { ...issuer.response.body, nextPageToken: ownContinuationToken } },
+        { body: { channels: [inventory.response.body.channels[0]] } },
+        {
+          body: {
+            ...issuer.response.body,
+            nextPageToken: token("conflicting own cursor after invalidation"),
+          },
+        },
+        { status, body: consumer.response.body },
+      ],
+    );
+    assert.equal(
+      got.urls.at(-1),
+      consumer.request.path,
+      `expected${status}: conflict stays unbound`,
+    );
+  }
 });

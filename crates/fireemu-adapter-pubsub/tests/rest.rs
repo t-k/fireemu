@@ -4369,3 +4369,243 @@ async fn wrong_topic_seek_preserves_shared_core_message_on_both_transports() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn strict_pending_rest_pull_disconnect_does_not_lease_or_ack_outstanding_message() {
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_700_000_000),
+    )));
+    let handle = PubSubHandle::new(
+        Arc::new(Mutex::new(PubSubState::new(99))),
+        clock.clone(),
+        None,
+    )
+    .with_paging_policy(fireemu_adapter_pubsub::PagingPolicy::Strict);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        serve_pubsub(listener, handle).await.unwrap();
+    });
+    let topic = "/v1/projects/demo-app/topics/pending-cancel";
+    let sub = "/v1/projects/demo-app/subscriptions/pending-cancel";
+    assert_eq!(rest_request(address, "PUT", topic, json!({})).await.0, 200);
+    assert_eq!(
+        rest_request(
+            address,
+            "PUT",
+            sub,
+            json!({"topic":"projects/demo-app/topics/pending-cancel", "ackDeadlineSeconds":10})
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("{topic}:publish"),
+            json!({"messages":[{"data":"b3V0c3RhbmRpbmc="},{"data":"Y29udHJvbA=="}]})
+        )
+        .await
+        .0,
+        200
+    );
+    let (_, initial) = rest_request(
+        address,
+        "POST",
+        &format!("{sub}:pull"),
+        json!({"maxMessages":2,"returnImmediately":true}),
+    )
+    .await;
+    let messages = initial["receivedMessages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+    let outstanding = messages
+        .iter()
+        .find(|m| m["message"]["data"] == "b3V0c3RhbmRpbmc=")
+        .unwrap();
+    let control = messages
+        .iter()
+        .find(|m| m["message"]["data"] == "Y29udHJvbA==")
+        .unwrap();
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("{sub}:acknowledge"),
+            json!({"ackIds":[control["ackId"]]})
+        )
+        .await
+        .0,
+        200
+    );
+    let mut pending = tokio::net::TcpStream::connect(address).await.unwrap();
+    let body = br#"{"maxMessages":2,"returnImmediately":false}"#;
+    let headers = format!("POST {sub}:pull HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", body.len());
+    pending.write_all(headers.as_bytes()).await.unwrap();
+    pending.write_all(body).await.unwrap();
+    let mut byte = [0];
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(1), pending.read(&mut byte))
+            .await
+            .is_err(),
+        "strict REST Pull must still be pending at disconnect"
+    );
+    drop(pending);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(11))
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let (_, fresh) = rest_request(
+        address,
+        "POST",
+        &format!("{sub}:pull"),
+        json!({"maxMessages":2,"returnImmediately":true}),
+    )
+    .await;
+    let fresh = fresh["receivedMessages"].as_array().unwrap();
+    assert_eq!(
+        fresh.len(),
+        1,
+        "disconnected server future must not steal redelivery"
+    );
+    assert_eq!(fresh[0]["message"], outstanding["message"]);
+    assert_ne!(fresh[0]["ackId"], outstanding["ackId"]);
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("{sub}:acknowledge"),
+            json!({"ackIds":[fresh[0]["ackId"]]})
+        )
+        .await
+        .0,
+        200
+    );
+    let path = format!("{sub}:pull");
+    let mut wake = tokio::spawn(async move {
+        rest_request(
+            address,
+            "POST",
+            &path,
+            json!({"maxMessages":2,"returnImmediately":false}),
+        )
+        .await
+    });
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut wake)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("{topic}:publish"),
+            json!({"messages":[{"data":"d2FrZQ=="}]})
+        )
+        .await
+        .0,
+        200
+    );
+    let (status, response) = tokio::time::timeout(std::time::Duration::from_secs(1), wake)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(response["receivedMessages"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        response["receivedMessages"][0]["message"]["data"],
+        "d2FrZQ=="
+    );
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+async fn unary_rest_pull_immediate_invalid_and_emulator_controls_are_prompt() {
+    for policy in [
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    ] {
+        let address = start_policy(policy).await;
+        let sub = "/v1/projects/demo-app/subscriptions/pull-controls";
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                "/v1/projects/demo-app/topics/pull-controls",
+                json!({})
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                sub,
+                json!({"topic":"projects/demo-app/topics/pull-controls"})
+            )
+            .await
+            .0,
+            200
+        );
+        let immediate = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            rest_request(
+                address,
+                "POST",
+                &format!("{sub}:pull"),
+                json!({"maxMessages":1,"returnImmediately":true}),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(immediate, (200, json!({})));
+        let missing = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            rest_request(
+                address,
+                "POST",
+                "/v1/projects/demo-app/subscriptions/absent:pull",
+                json!({"maxMessages":1}),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(missing.0, 404);
+        if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
+            let invalid = tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                rest_request(
+                    address,
+                    "POST",
+                    &format!("{sub}:pull"),
+                    json!({"maxMessages":0}),
+                ),
+            )
+            .await
+            .unwrap();
+            assert_eq!(invalid.0, 400);
+        } else {
+            let ordinary = tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                rest_request(
+                    address,
+                    "POST",
+                    &format!("{sub}:pull"),
+                    json!({"maxMessages":1,"returnImmediately":false}),
+                ),
+            )
+            .await
+            .unwrap();
+            assert_eq!(ordinary, (200, json!({})));
+        }
+    }
+}

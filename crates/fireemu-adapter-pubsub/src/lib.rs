@@ -628,6 +628,34 @@ impl PubSubHandle {
         Ok(outcome.received)
     }
 
+    /// Waits within this request for strict unary delivery, without retaining a broker lock.
+    /// The twenty-second empty-response ceiling is a local bound, not a production timing claim.
+    pub(crate) async fn pull_unary(
+        &self,
+        subscription: &SubscriptionName,
+        max: usize,
+        return_immediately: bool,
+    ) -> Result<Vec<ReceivedMessage>, PubSubError> {
+        if return_immediately || self.paging_policy == PagingPolicy::Emulator {
+            return self.pull(subscription, max);
+        }
+        let started = tokio::time::Instant::now();
+        let deadline = started + std::time::Duration::from_secs(20);
+        let cadence = std::time::Duration::from_millis(25);
+        let mut ticks = tokio::time::interval_at(started + cadence, cadence);
+        loop {
+            let received = self.pull(subscription, max)?;
+            if !received.is_empty() {
+                return Ok(received);
+            }
+            tokio::select! {
+                biased;
+                () = tokio::time::sleep_until(deadline) => return Ok(Vec::new()),
+                _ = ticks.tick() => {}
+            }
+        }
+    }
+
     fn commit_dead_letter(&self, forward: &DeadLetterForward) {
         let _publication = self.lock_publication();
         let published = self.publish_locked(
@@ -2191,6 +2219,108 @@ mod dispatch_tests {
             assert!(lifecycle.task.is_none());
         }
         handle.shutdown_push_dispatcher().await;
+    }
+    fn unary_pull_fixture(policy: PagingPolicy) -> (PubSubHandle, SubscriptionName, TopicName) {
+        let handle = PubSubHandle::new(
+            Arc::new(Mutex::new(PubSubState::new(7))),
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+            None,
+        )
+        .with_paging_policy(policy);
+        let topic = TopicName::new("demo-app", "unary-bound").unwrap();
+        let subscription = SubscriptionName::new("demo-app", "unary-bound").unwrap();
+        let config = crate::convert::subscription_from_proto_with_policy(
+            &fireemu_proto_pubsub::google::pubsub::v1::Subscription {
+                name: subscription.to_full(),
+                topic: topic.to_full(),
+                ..Default::default()
+            },
+            policy,
+        )
+        .unwrap();
+        handle
+            .state()
+            .create_topic(topic.clone(), BTreeMap::new())
+            .unwrap();
+        handle.state().create_subscription(config).unwrap();
+        (handle, subscription, topic)
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(32))]
+        #[test]
+        fn unary_pull_waits_only_for_strict_non_immediate_requests(strict in proptest::bool::ANY, immediate in proptest::bool::ANY) {
+            let policy = if strict { PagingPolicy::Strict } else { PagingPolicy::Emulator };
+            let (handle, subscription, _) = unary_pull_fixture(policy);
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+            let ready = runtime.block_on(async {
+                tokio::time::timeout(std::time::Duration::from_millis(2), handle.pull_unary(&subscription, 1, immediate)).await.is_ok()
+            });
+            proptest::prop_assert_eq!(ready, immediate || !strict);
+        }
+    }
+
+    #[tokio::test]
+    async fn strict_unary_pull_has_finite_local_empty_ceiling() {
+        let (handle, subscription, _) = unary_pull_fixture(PagingPolicy::Strict);
+        let started = tokio::time::Instant::now();
+        let received = tokio::time::timeout(
+            std::time::Duration::from_secs(25),
+            handle.pull_unary(&subscription, 1, false),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(received.is_empty());
+        assert!(started.elapsed() >= std::time::Duration::from_secs(20));
+    }
+
+    #[tokio::test]
+    async fn unary_pull_immediate_error_emulator_and_dropped_future_controls() {
+        for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+            let (handle, subscription, topic) = unary_pull_fixture(policy);
+            assert!(tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                handle.pull_unary(&subscription, 1, true)
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .is_empty());
+            let missing = SubscriptionName::new("demo-app", "missing").unwrap();
+            assert!(tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                handle.pull_unary(&missing, 1, false)
+            )
+            .await
+            .unwrap()
+            .is_err());
+            let mut future = Box::pin(handle.pull_unary(&subscription, 1, false));
+            let result =
+                tokio::time::timeout(std::time::Duration::from_millis(100), &mut future).await;
+            if policy == PagingPolicy::Emulator {
+                assert!(result.unwrap().unwrap().is_empty());
+            } else {
+                assert!(result.is_err());
+            }
+            // Drop the request-owned future before making delivery eligible.
+            drop(future);
+            handle
+                .state()
+                .publish(
+                    &topic,
+                    vec![PubsubMessage {
+                        data: b"available".to_vec(),
+                        ..Default::default()
+                    }],
+                    handle.now(),
+                )
+                .unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let received = handle.pull_unary(&subscription, 1, true).await.unwrap();
+            assert_eq!(received.len(), 1);
+            assert_eq!(received[0].message.message.data, b"available");
+        }
     }
 }
 

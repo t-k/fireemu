@@ -378,6 +378,7 @@ impl Subscriber for SubscriberService {
         Ok(Response::new(()))
     }
 
+    #[allow(deprecated)] // Pub/Sub still defines the legacy immediate-Pull request behavior.
     async fn pull(
         &self,
         request: Request<pb::PullRequest>,
@@ -410,7 +411,11 @@ impl Subscriber for SubscriberService {
                 .map_err(|error| status(&error))?
                 .dead_letter_policy
                 .is_some();
-        let received = self.handle.pull(&name, max).map_err(|e| status(&e))?;
+        let received = self
+            .handle
+            .pull_unary(&name, max, req.return_immediately)
+            .await
+            .map_err(|e| status(&e))?;
         Ok(Response::new(pb::PullResponse {
             received_messages: received
                 .iter()

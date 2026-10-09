@@ -183,7 +183,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
         }
     };
 
-    match dispatch(&method, &path, &query, &value, &body, &handle) {
+    match dispatch(&method, &path, &query, &value, &body, &handle).await {
         Ok((status, response, schema)) => {
             json_response(status, response, handle.paging_policy, schema)
         }
@@ -245,7 +245,7 @@ fn route_not_found_response(path: &str) -> Response {
     response
 }
 
-fn dispatch(
+async fn dispatch(
     method: &Method,
     path: &str,
     query: &str,
@@ -266,7 +266,8 @@ fn dispatch(
         return dispatch_topic(method, &parts[3..], project, query, body, handle);
     }
     if parts[2] == "subscriptions" {
-        return dispatch_subscription(method, &parts[3..], project, query, body, raw_body, handle);
+        return dispatch_subscription(method, &parts[3..], project, query, body, raw_body, handle)
+            .await;
     }
     if parts[2] == "snapshots" {
         return dispatch_snapshot(method, &parts[3..], project, query, body, handle);
@@ -531,7 +532,7 @@ fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), 
     ))
 }
 
-fn dispatch_subscription(
+async fn dispatch_subscription(
     method: &Method,
     parts: &[&str],
     project: &str,
@@ -588,7 +589,7 @@ fn dispatch_subscription(
             handle.retry_pending_dead_letters();
             Ok((StatusCode::OK, json!({})))
         }
-        (&Method::POST, Some("pull")) => pull(subscription, body, handle),
+        (&Method::POST, Some("pull")) => pull(subscription, body, handle).await,
         (&Method::POST, Some("acknowledge")) => acknowledge(subscription, body, handle),
         (&Method::POST, Some("modifyAckDeadline")) => {
             modify_ack_deadline(subscription, body, handle)
@@ -1197,7 +1198,7 @@ fn parse_duration(value: &Value) -> Result<LogicalDuration, RestError> {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn pull(
+async fn pull(
     subscription: SubscriptionName,
     body: &Value,
     handle: &PubSubHandle,
@@ -1232,7 +1233,14 @@ fn pull(
             .dead_letter_policy
             .is_some();
     let received = handle
-        .pull(&subscription, max)
+        .pull_unary(
+            &subscription,
+            max,
+            field(body, "returnImmediately")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        )
+        .await
         .map_err(RestError::from_core)?;
     let mut body = json!({});
     if !received.is_empty() {
@@ -1918,7 +1926,8 @@ mod production_shape_tests {
                 }
                 handle.state().create_subscription(config).unwrap();
                 handle.state().publish(&topic, vec![PubsubMessage {data:vec![b'x'], ..Default::default()}], LogicalInstant::from_unix_seconds(0)).unwrap();
-                let (_, response) = pull(subscription, &json!({"maxMessages":1}), &handle).unwrap();
+                let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+                let (_, response) = runtime.block_on(pull(subscription, &json!({"maxMessages":1}), &handle)).unwrap();
                 let report = policy == crate::PagingPolicy::Emulator || dead_letter;
                 prop_assert_eq!(response["receivedMessages"][0].get("deliveryAttempt").is_some(), report);
                 if report { prop_assert_eq!(&response["receivedMessages"][0]["deliveryAttempt"], &json!(1)); }

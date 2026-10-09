@@ -3552,6 +3552,7 @@ async fn streaming_pull_exhaustion_forwards_to_the_destination_exactly_once() {
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn push_exhaustion_forwards_to_the_destination_exactly_once() {
     let h = start().await;
     // Every source delivery fails, so the delivery budget is exhausted by push alone.
@@ -3582,7 +3583,7 @@ async fn push_exhaustion_forwards_to_the_destination_exactly_once() {
                 .pull(pb::PullRequest {
                     subscription: "projects/demo-app/subscriptions/dlq-push-destination".to_owned(),
                     max_messages: 10,
-                    ..Default::default()
+                    return_immediately: true,
                 })
                 .await
                 .unwrap()
@@ -3776,6 +3777,7 @@ async fn seeking_to_a_snapshot_replays_the_backlog_to_an_idle_push_subscriber() 
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn a_failed_push_delivery_counts_one_delivery_attempt_against_the_dead_letter_budget() {
     let h = start().await;
     // More failures than the budget allows: only the budget may decide when forwarding happens.
@@ -3806,7 +3808,7 @@ async fn a_failed_push_delivery_counts_one_delivery_attempt_against_the_dead_let
                     subscription: "projects/demo-app/subscriptions/dlq-attempts-destination"
                         .to_owned(),
                     max_messages: 10,
-                    ..Default::default()
+                    return_immediately: true,
                 })
                 .await
                 .unwrap()
@@ -4518,6 +4520,209 @@ async fn issued_deleted_cursors_continue_on_all_native_list_routes() {
             .map(|t| t.name.clone())
             .collect::<Vec<_>>(),
         vec!["projects/demo-app/topics/cursor-b", topic]
+    );
+    h.shutdown().await;
+}
+
+#[tokio::test]
+#[allow(deprecated, clippy::too_many_lines)]
+async fn strict_pending_unary_pull_cancel_does_not_lease_or_ack_outstanding_message() {
+    let h = start().await;
+    let topic = "projects/demo-app/topics/pending-cancel";
+    let sub = "projects/demo-app/subscriptions/pending-cancel";
+    let mut publisher = h.publisher().await;
+    let mut subscriber = h.subscriber().await;
+    publisher
+        .create_topic(pb::Topic {
+            name: topic.into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    subscriber
+        .create_subscription(pb::Subscription {
+            name: sub.into(),
+            topic: topic.into(),
+            ack_deadline_seconds: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    publisher
+        .publish(pb::PublishRequest {
+            topic: topic.into(),
+            messages: vec![msg(b"outstanding"), msg(b"control")],
+        })
+        .await
+        .unwrap();
+    let initial = subscriber
+        .pull(pb::PullRequest {
+            subscription: sub.into(),
+            max_messages: 2,
+            return_immediately: true,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert_eq!(initial.len(), 2);
+    let outstanding = initial
+        .iter()
+        .find(|m| m.message.as_ref().unwrap().data == b"outstanding")
+        .unwrap();
+    let control = initial
+        .iter()
+        .find(|m| m.message.as_ref().unwrap().data == b"control")
+        .unwrap();
+    subscriber
+        .acknowledge(pb::AcknowledgeRequest {
+            subscription: sub.into(),
+            ack_ids: vec![control.ack_id.clone()],
+        })
+        .await
+        .unwrap();
+    let mut pending_client = h.subscriber().await;
+    let mut pending = tokio::spawn(async move {
+        pending_client
+            .pull(pb::PullRequest {
+                subscription: sub.into(),
+                max_messages: 2,
+                return_immediately: false,
+            })
+            .await
+    });
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(1), &mut pending)
+            .await
+            .is_err(),
+        "strict non-immediate Pull must still be pending at cancellation"
+    );
+    pending.abort();
+    assert!(pending.await.unwrap_err().is_cancelled());
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    advance(&h, LogicalDuration::from_seconds(11));
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let fresh = subscriber
+        .pull(pb::PullRequest {
+            subscription: sub.into(),
+            max_messages: 2,
+            return_immediately: true,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert_eq!(
+        fresh.len(),
+        1,
+        "cancelled server future must not steal redelivery"
+    );
+    assert_eq!(fresh[0].message, outstanding.message);
+    assert_ne!(fresh[0].ack_id, outstanding.ack_id);
+    subscriber
+        .acknowledge(pb::AcknowledgeRequest {
+            subscription: sub.into(),
+            ack_ids: vec![fresh[0].ack_id.clone()],
+        })
+        .await
+        .unwrap();
+    let mut wake_client = h.subscriber().await;
+    let mut wake = tokio::spawn(async move {
+        wake_client
+            .pull(pb::PullRequest {
+                subscription: sub.into(),
+                max_messages: 2,
+                return_immediately: false,
+            })
+            .await
+    });
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut wake)
+            .await
+            .is_err()
+    );
+    publisher
+        .publish(pb::PublishRequest {
+            topic: topic.into(),
+            messages: vec![msg(b"wake")],
+        })
+        .await
+        .unwrap();
+    let response = tokio::time::timeout(std::time::Duration::from_secs(1), wake)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.received_messages.len(), 1);
+    assert_eq!(
+        response.received_messages[0].message.as_ref().unwrap().data,
+        b"wake"
+    );
+    h.shutdown().await;
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn strict_unary_pull_earlier_grpc_deadline_drops_waiter() {
+    let h = start().await;
+    let topic = "projects/demo-app/topics/pull-deadline";
+    let sub = "projects/demo-app/subscriptions/pull-deadline";
+    let mut publisher = h.publisher().await;
+    let mut subscriber = h.subscriber().await;
+    publisher
+        .create_topic(pb::Topic {
+            name: topic.into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    subscriber
+        .create_subscription(pb::Subscription {
+            name: sub.into(),
+            topic: topic.into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut request = tonic::Request::new(pb::PullRequest {
+        subscription: sub.into(),
+        max_messages: 1,
+        return_immediately: false,
+    });
+    request.set_timeout(std::time::Duration::from_millis(100));
+    let error = tokio::time::timeout(std::time::Duration::from_secs(1), subscriber.pull(request))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        matches!(
+            error.code(),
+            tonic::Code::Cancelled | tonic::Code::DeadlineExceeded
+        ),
+        "{error}"
+    );
+    publisher
+        .publish(pb::PublishRequest {
+            topic: topic.into(),
+            messages: vec![msg(b"after deadline")],
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let fresh = subscriber
+        .pull(pb::PullRequest {
+            subscription: sub.into(),
+            max_messages: 1,
+            return_immediately: true,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(fresh.received_messages.len(), 1);
+    assert_eq!(
+        fresh.received_messages[0].message.as_ref().unwrap().data,
+        b"after deadline"
     );
     h.shutdown().await;
 }

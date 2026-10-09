@@ -20,6 +20,7 @@
 // The runs are sequential: several harnesses listen on fixed loopback ports (32291-32298,
 // 32320-32322).
 import { validateEventarcSemantics } from "./eventarc-production/run.mjs";
+import { gunzipSync } from "node:zlib";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
@@ -43,6 +44,29 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const CONFORMANCE = join(ROOT, "conformance");
 const RUNS_DIR = join(CONFORMANCE, ".runs");
 const CLOSURE_DIR = "spec/compatibility/closure";
+const EVENTARC_GZIP = `${CLOSURE_DIR}/evidence/EVENTARC-comparison.json.gz`;
+
+/** Read the canonical EVENTARC gzip without changing its original JSON bytes. */
+export function readReleaseJson(root, path) {
+  let bytes = readFileSync(join(root, path));
+  if (path === EVENTARC_GZIP) {
+    const closure = JSON.parse(readFileSync(join(root, `${CLOSURE_DIR}/EVENTARC.json`), "utf8"));
+    const entry = closure.integratedRegression?.comparisons?.find((item) => item.path === path);
+    if (
+      !entry ||
+      !Number.isSafeInteger(entry.decodedBytes) ||
+      entry.decodedBytes <= 0 ||
+      !/^[0-9a-f]{64}$/.test(entry.decodedSha256 ?? "") ||
+      sha256Bytes(bytes) !== entry.sha256
+    )
+      throw new Error("EVENTARC gzip storage/provenance mismatch");
+    bytes = gunzipSync(bytes, { maxOutputLength: entry.decodedBytes });
+    if (bytes.length !== entry.decodedBytes || sha256Bytes(bytes) !== entry.decodedSha256)
+      throw new Error("EVENTARC gzip decoded identity mismatch");
+  }
+  return JSON.parse(bytes.toString("utf8"));
+}
+
 const COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_ANNOTATIONS = 50;
 
@@ -615,7 +639,9 @@ export function planComparisons(
       pendingEventarc &&
       (!Array.isArray(comparisons) ||
         comparisons.length !== 1 ||
-        comparisons[0]?.path !== "spec/compatibility/closure/evidence/EVENTARC-comparison.json")
+        !["spec/compatibility/closure/evidence/EVENTARC-comparison.json", EVENTARC_GZIP].includes(
+          comparisons[0]?.path,
+        ))
     ) {
       errors.push("EVENTARC: R20 requires its authentic integratedRegression comparison");
       continue;
@@ -1304,7 +1330,10 @@ export function exportCopies(comparisons, runs) {
     .filter((comparison) => exporting.has(comparison.runIds[0]))
     .map((comparison) => ({
       from: `${comparison.runIds[0]}-export.json`,
-      to: comparison.path.split("/").at(-1),
+      to:
+        comparison.path === EVENTARC_GZIP
+          ? "EVENTARC-comparison.json"
+          : comparison.path.split("/").at(-1),
     }));
 }
 
@@ -1328,7 +1357,7 @@ async function main() {
   const out = resolve(args.out);
   await rm(out, { recursive: true, force: true });
   await mkdir(join(out, "logs"), { recursive: true });
-  const readJson = (path) => JSON.parse(readFileSync(join(ROOT, path), "utf8"));
+  const readJson = (path) => readReleaseJson(ROOT, path);
   const closures = readdirSync(join(ROOT, CLOSURE_DIR))
     .filter((name) => name.endsWith(".json") && name !== "record-digests.json")
     .map((name) => ({ name, closure: readJson(`${CLOSURE_DIR}/${name}`) }));

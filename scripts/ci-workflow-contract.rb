@@ -97,7 +97,7 @@ assert(strict["continue-on-error"].nil?, "strict-production must block publicati
 assert(release.dig("jobs", "publish", "needs").include?("strict-production"), "release publish must depend on the strict production comparison")
 assert(release.dig("jobs", "publish", "needs").include?("verify-artifact"), "release publish must depend on verify-artifact")
 strict_timeout = strict["timeout-minutes"]
-assert(strict_timeout.is_a?(Integer) && strict_timeout.positive? && strict_timeout <= 60, "strict-production must have a timeout of at most an hour")
+assert(strict_timeout.is_a?(Integer) && strict_timeout == 180, "strict-production must retain the exact 180-minute bound for finite R20 check/export and the other replay runs")
 assert(strict["permissions"] == { "contents" => "read" }, "strict-production must only read the repository")
 assert(!strict.key?("environment"), "strict-production must not use a deployment environment")
 assert(!YAML.dump(strict).include?("secrets."), "strict-production must not read secrets")

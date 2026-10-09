@@ -112,6 +112,7 @@
     "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-credential-regression.json": "7a238530f99fe847422dd6653ac21b1d5b36f1daeacb0a0848f7703418c61547",
     "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-mfa-regression.json": "b6b582b1180a32fb70fd8aeb75ce159115ec5a54440ca4fea6d15ce5fc2cf760",
     "spec/compatibility/closure/evidence/AUTH-TENANT-BLOCKING-tenant-comparison.json": "98e91d6835758483b7f565abd514bb4151c7196dd4a31c1d7d45be3cac36c58d",
+    "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
     "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json": "3ed1df56800142cdf2e9e1c45c8cc9c870571d6592490382892be87fe91211e7",
     "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json": "8a76294de3d75e651a9999736f7fbfe2a1c38a6540f9954154fb106895a5d8ec",
     "spec/compatibility/closure/evidence/FS-DATA-WRITE-current-accepted-conditions.json": "64c3ee1f361944c780f7601ece224d9fc8e2cf11e8c58e4309237814e47e9976",

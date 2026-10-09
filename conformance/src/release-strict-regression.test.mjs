@@ -3,6 +3,7 @@
 // checks (no recording mode, no production credential, no route out) are tested here on inputs
 // built from the committed evidence, each broken in one place.
 import assert from "node:assert/strict";
+import { gzipSync } from "node:zlib";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -43,6 +44,7 @@ import {
   parseArguments,
   planComparisons,
   planRelease,
+  readReleaseJson,
 } from "./release-strict-regression.mjs";
 import { PROGRAMS } from "./firestore-probe/programs.mjs";
 import { historicalProductionSummary } from "./firestore-probe/run.mjs";
@@ -63,7 +65,7 @@ const judgeFsDataWriteHistorical = (expected, observed, binary) =>
   );
 
 const repo = (path) => fileURLToPath(new URL(`../../${path}`, import.meta.url));
-const readJson = (path) => JSON.parse(readFileSync(repo(path), "utf8"));
+const readJson = (path) => readReleaseJson(repo(""), path);
 const clone = (value) => structuredClone(value);
 const sha256 = (path) =>
   createHash("sha256")
@@ -2262,5 +2264,62 @@ test("R20 plans all seventy producer inventory rows with their declared transpor
     assert.deepEqual(compareLaneExport(document, reordered, BINARY), [
       "EVENTARC semantic evidence: missing bound semantic comparands",
     ]);
+  }
+});
+
+test("the exact EVENTARC gzip canonical preserves decoded bytes and plain artifact aliases", () => {
+  const root = mkdtempSync(join(tmpdir(), "eventarc-gzip-"));
+  const path = "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz";
+  const raw = Buffer.from('{"rows":[{"row":"eventarc/test#case"}],"summary":{"PENDING":1}}\n');
+  const zipped = gzipSync(raw, { mtime: 0 });
+  const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const entry = {
+    path,
+    sha256: digest(zipped),
+    decodedSha256: digest(raw),
+    decodedBytes: raw.length,
+  };
+  const target = join(root, path);
+  mkdirSync(join(root, "spec/compatibility/closure/evidence"), { recursive: true });
+  const save = () => {
+    writeFileSync(target, zipped);
+    writeFileSync(
+      join(root, "spec/compatibility/closure/EVENTARC.json"),
+      JSON.stringify({ integratedRegression: { comparisons: [entry] } }),
+    );
+  };
+  try {
+    save();
+    assert.deepEqual(readReleaseJson(root, path), JSON.parse(raw));
+    const plain = "plain.json";
+    writeFileSync(join(root, plain), raw);
+    assert.deepEqual(readReleaseJson(root, plain), JSON.parse(raw));
+    assert.deepEqual(exportCopies([{ path, runIds: ["R20"] }], RUNS), [
+      { from: "R20-export.json", to: "EVENTARC-comparison.json" },
+    ]);
+    entry.sha256 = "0".repeat(64);
+    save();
+    assert.throws(() => readReleaseJson(root, path));
+    entry.sha256 = digest(zipped);
+    save();
+    entry.decodedSha256 = "0".repeat(64);
+    save();
+    assert.throws(() => readReleaseJson(root, path));
+    entry.decodedSha256 = digest(raw);
+    entry.decodedBytes = raw.length - 1;
+    save();
+    assert.throws(() => readReleaseJson(root, path));
+    entry.decodedBytes = raw.length;
+    save();
+    writeFileSync(target, zipped.subarray(0, zipped.length - 1));
+    assert.throws(() => readReleaseJson(root, path));
+    entry.sha256 = digest(zipped.subarray(0, zipped.length - 1));
+    writeFileSync(
+      join(root, "spec/compatibility/closure/EVENTARC.json"),
+      JSON.stringify({ integratedRegression: { comparisons: [entry] } }),
+    );
+    assert.throws(() => readReleaseJson(root, path));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

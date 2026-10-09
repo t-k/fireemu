@@ -1,5 +1,6 @@
 """The records every closure cites must exist and must not change silently."""
 
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -125,3 +126,29 @@ def test_markdown_fragments_are_heading_anchors(repo):
     write(repo, "spec/compatibility/closure/X.json", json.dumps(closure))
     problems = check(repo)
     assert problems == ["X.json: docs/compatibility/goals.md#missing-heading names no entry in the file"]
+
+
+@pytest.mark.parametrize("change", [None, "fragment", "decoded_hash", "decoded_size", "corruption", "storage_hash"])
+def test_exact_eventarc_gzip_storage_and_original_identity(repo, change):
+    path = "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz"
+    raw = b'{"rows":[{"row":"eventarc/test#case"}]}\n'
+    zipped = gzip.compress(raw, mtime=0)
+    target = repo / path
+    target.write_bytes(zipped)
+    entry = {"path": path, "sha256": hashlib.sha256(zipped).hexdigest(),
+             "decodedSha256": hashlib.sha256(raw).hexdigest(), "decodedBytes": len(raw)}
+    closure = {"integratedRegression": {"comparisons": [entry]}, "source": path + "#eventarc/test#case"}
+    if change == "fragment": closure["source"] = path + "#absent"
+    if change == "decoded_hash": entry["decodedSha256"] = "0" * 64
+    if change == "decoded_size": entry["decodedBytes"] = len(raw) - 1
+    if change == "storage_hash": entry["sha256"] = "0" * 64
+    if change == "corruption":
+        target.write_bytes(zipped[:-1])
+        entry["sha256"] = hashlib.sha256(zipped[:-1]).hexdigest()
+    write(repo, "spec/compatibility/closure/EVENTARC.json", json.dumps(closure))
+    lock = build_lock(repo)
+    assert lock["records"][path] == hashlib.sha256(target.read_bytes()).hexdigest()
+    write(repo, "spec/compatibility/closure/record-digests.json", json.dumps(lock))
+    problems = check(repo)
+    if change is None: assert problems == []
+    else: assert any("EVENTARC-comparison" in problem or "decoded" in problem for problem in problems)

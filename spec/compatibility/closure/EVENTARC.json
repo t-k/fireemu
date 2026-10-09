@@ -12,7 +12,24 @@
     "generation": 2
   },
   "closureReview": {
-    "decision": "PENDING"
+    "decision": "PENDING",
+    "reviewedCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
+    "finalArtifactSha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a",
+    "reviews": [
+      {
+        "reportPath": "docs.local/reviews/2026-10-09-eventarc-full70-current-candidate-review.md",
+        "reportSha256": "aa4b7a854ece0acfa8470ec319f4a5006c15dd9041c2b4d5c2b00439b3fcc224"
+      },
+      {
+        "reportPath": "docs.local/reviews/2026-10-10-eventarc-internal-id-actual-semantic-review.md",
+        "reportSha256": "028acb97375eb3ad92d71c0cd0ed0d4c8cfaab898c56bf9bb05c1eb4ec7941fc"
+      },
+      {
+        "reportPath": "docs.local/reviews/2026-10-10-eventarc-internal-id-actual-lifecycle-review.md",
+        "reportSha256": "b1d865c39b2db2accbc45d313a9477af875b4740370c799da68cbb3a0c7e0a83"
+      }
+    ],
+    "note": "The accepted retrospective composition establishes 69 scoped technical predicates. Independent approval of this final canonical candidate remains pending; the current-artifact export retains all 70 generated PENDING rows. Final-version R20 acceptance remains required before release."
   },
   "scopeDecisions": [
     {
@@ -56,7 +73,9 @@
     {
       "conditionId": "EVENTARC/channel-lifecycle",
       "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
-      "recipeIds": ["eventarc/channels"],
+      "recipeIds": [
+        "eventarc/channels"
+      ],
       "cases": [
         "providerless-create-capability",
         "get-channel",
@@ -66,19 +85,40 @@
         "readiness-shape",
         "delete-owned-channel"
       ],
-      "transports": ["rest"],
-      "status": "PENDING_CORPUS",
+      "transports": [
+        "rest"
+      ],
+      "status": "PRODUCTION_RECORDED",
       "applicability": {
         "mode": "OBSERVE_CAPABILITY",
         "unsupportedDisposition": "OUT_OF_SCOPE_OBSERVED",
         "scopeDecision": "E1",
         "requiredEvidence": "Two production records of the provider-less create refusal and coordinator scope review; no exclusion inferred from the emulator."
+      },
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
+        "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
+        "originalCaseProofPath": "docs.local/runs/coordinator-codex-20261007/eventarc-full-parent-review-inputs/reviewer-output/full70-per-case-proof.json",
+        "originalCaseProofSha256": "a82eded4a149e795d62b8a78fbc400de7e8f4e11de9e7e897ebb1ae29ba04678",
+        "originalCaseProofSelectors": [
+          "/cases/0",
+          "/cases/1",
+          "/cases/2",
+          "/cases/3",
+          "/cases/4",
+          "/cases/5",
+          "/cases/6"
+        ],
+        "sourceCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
+        "finalArtifactSha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a"
       }
     },
     {
       "conditionId": "EVENTARC/publish-envelope",
       "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
-      "recipeIds": ["eventarc/publish/wire"],
+      "recipeIds": [
+        "eventarc/publish/wire"
+      ],
       "cases": [
         "single-event",
         "multiple-events",
@@ -89,13 +129,35 @@
         "response-shape",
         "event-id-correlation"
       ],
-      "transports": ["rest"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
+        "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
+        "originalCaseProofPath": "docs.local/runs/coordinator-codex-20261007/eventarc-full-parent-review-inputs/reviewer-output/full70-per-case-proof.json",
+        "originalCaseProofSha256": "a82eded4a149e795d62b8a78fbc400de7e8f4e11de9e7e897ebb1ae29ba04678",
+        "originalCaseProofSelectors": [
+          "/cases/7",
+          "/cases/8",
+          "/cases/9",
+          "/cases/10",
+          "/cases/11",
+          "/cases/12",
+          "/cases/13",
+          "/cases/14"
+        ],
+        "sourceCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
+        "finalArtifactSha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a"
+      }
     },
     {
       "conditionId": "EVENTARC/publish-content",
       "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
-      "recipeIds": ["eventarc/publish/content"],
+      "recipeIds": [
+        "eventarc/publish/content"
+      ],
       "cases": [
         "json-object",
         "json-scalar",
@@ -108,13 +170,37 @@
         "invalid-base64",
         "oneof-collision"
       ],
-      "transports": ["rest"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
+        "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
+        "originalCaseProofPath": "docs.local/runs/coordinator-codex-20261007/eventarc-full-parent-review-inputs/reviewer-output/full70-per-case-proof.json",
+        "originalCaseProofSha256": "a82eded4a149e795d62b8a78fbc400de7e8f4e11de9e7e897ebb1ae29ba04678",
+        "originalCaseProofSelectors": [
+          "/cases/15",
+          "/cases/16",
+          "/cases/17",
+          "/cases/18",
+          "/cases/19",
+          "/cases/20",
+          "/cases/21",
+          "/cases/22",
+          "/cases/23",
+          "/cases/24"
+        ],
+        "sourceCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
+        "finalArtifactSha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a"
+      }
     },
     {
       "conditionId": "EVENTARC/admin-sdk-publish",
       "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
-      "recipeIds": ["eventarc/sdk"],
+      "recipeIds": [
+        "eventarc/sdk"
+      ],
       "cases": [
         "full-channel",
         "relative-channel",
@@ -126,13 +212,36 @@
         "allowed-event-types",
         "client-validation-refusal"
       ],
-      "transports": ["rest"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
+        "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
+        "originalCaseProofPath": "docs.local/runs/coordinator-codex-20261007/eventarc-full-parent-review-inputs/reviewer-output/full70-per-case-proof.json",
+        "originalCaseProofSha256": "a82eded4a149e795d62b8a78fbc400de7e8f4e11de9e7e897ebb1ae29ba04678",
+        "originalCaseProofSelectors": [
+          "/cases/25",
+          "/cases/26",
+          "/cases/27",
+          "/cases/28",
+          "/cases/29",
+          "/cases/30",
+          "/cases/31",
+          "/cases/32",
+          "/cases/33"
+        ],
+        "sourceCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
+        "finalArtifactSha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a"
+      }
     },
     {
       "conditionId": "EVENTARC/publish-limits",
       "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
-      "recipeIds": ["eventarc/publish/limits"],
+      "recipeIds": [
+        "eventarc/publish/limits"
+      ],
       "cases": [
         "request-bytes-boundary",
         "event-count-boundary",
@@ -140,13 +249,32 @@
         "attribute-shape-boundary",
         "batch-delivered-subset"
       ],
-      "transports": ["rest"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
+        "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
+        "originalCaseProofPath": "docs.local/runs/coordinator-codex-20261007/eventarc-full-parent-review-inputs/reviewer-output/full70-per-case-proof.json",
+        "originalCaseProofSha256": "a82eded4a149e795d62b8a78fbc400de7e8f4e11de9e7e897ebb1ae29ba04678",
+        "originalCaseProofSelectors": [
+          "/cases/34",
+          "/cases/35",
+          "/cases/36",
+          "/cases/37",
+          "/cases/38"
+        ],
+        "sourceCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
+        "finalArtifactSha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a"
+      }
     },
     {
       "conditionId": "EVENTARC/custom-handler-envelope",
       "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
-      "recipeIds": ["eventarc/delivery/envelope"],
+      "recipeIds": [
+        "eventarc/delivery/envelope"
+      ],
       "cases": [
         "required-attributes",
         "optional-attribute-absence",
@@ -156,13 +284,34 @@
         "binary-data",
         "stable-id-correlation"
       ],
-      "transports": ["rest"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
+        "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
+        "originalCaseProofPath": "docs.local/runs/coordinator-codex-20261007/eventarc-full-parent-review-inputs/reviewer-output/full70-per-case-proof.json",
+        "originalCaseProofSha256": "a82eded4a149e795d62b8a78fbc400de7e8f4e11de9e7e897ebb1ae29ba04678",
+        "originalCaseProofSelectors": [
+          "/cases/39",
+          "/cases/40",
+          "/cases/41",
+          "/cases/42",
+          "/cases/43",
+          "/cases/44",
+          "/cases/45"
+        ],
+        "sourceCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
+        "finalArtifactSha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a"
+      }
     },
     {
       "conditionId": "EVENTARC/trigger-filters",
       "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
-      "recipeIds": ["eventarc/delivery/filters"],
+      "recipeIds": [
+        "eventarc/delivery/filters"
+      ],
       "cases": [
         "type",
         "source",
@@ -174,21 +323,63 @@
         "multiple-handlers",
         "unsupported-filter-refusal"
       ],
-      "transports": ["rest"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
+        "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
+        "originalCaseProofPath": "docs.local/runs/coordinator-codex-20261007/eventarc-full-parent-review-inputs/reviewer-output/full70-per-case-proof.json",
+        "originalCaseProofSha256": "a82eded4a149e795d62b8a78fbc400de7e8f4e11de9e7e897ebb1ae29ba04678",
+        "originalCaseProofSelectors": [
+          "/cases/46",
+          "/cases/47",
+          "/cases/48",
+          "/cases/49",
+          "/cases/50",
+          "/cases/51",
+          "/cases/52",
+          "/cases/53",
+          "/cases/54"
+        ],
+        "sourceCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
+        "finalArtifactSha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a"
+      }
     },
     {
       "conditionId": "EVENTARC/delivery-retry-identity",
       "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
-      "recipeIds": ["eventarc/delivery/retry"],
-      "cases": ["fail-then-succeed", "stable-id-and-data"],
-      "transports": ["rest"],
-      "status": "PENDING_CORPUS"
+      "recipeIds": [
+        "eventarc/delivery/retry"
+      ],
+      "cases": [
+        "fail-then-succeed",
+        "stable-id-and-data"
+      ],
+      "transports": [
+        "rest"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
+        "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
+        "originalCaseProofPath": "docs.local/runs/coordinator-codex-20261007/eventarc-full-parent-review-inputs/reviewer-output/full70-per-case-proof.json",
+        "originalCaseProofSha256": "a82eded4a149e795d62b8a78fbc400de7e8f4e11de9e7e897ebb1ae29ba04678",
+        "originalCaseProofSelectors": [
+          "/cases/55",
+          "/cases/56"
+        ],
+        "sourceCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
+        "finalArtifactSha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a"
+      }
     },
     {
       "conditionId": "EVENTARC/errors-authentication",
       "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
-      "recipeIds": ["eventarc/errors"],
+      "recipeIds": [
+        "eventarc/errors"
+      ],
       "cases": [
         "missing-channel",
         "invalid-event",
@@ -197,13 +388,33 @@
         "invalid-token",
         "canonical-error-shape"
       ],
-      "transports": ["rest"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
+        "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
+        "originalCaseProofPath": "docs.local/runs/coordinator-codex-20261007/eventarc-full-parent-review-inputs/reviewer-output/full70-per-case-proof.json",
+        "originalCaseProofSha256": "a82eded4a149e795d62b8a78fbc400de7e8f4e11de9e7e897ebb1ae29ba04678",
+        "originalCaseProofSelectors": [
+          "/cases/57",
+          "/cases/58",
+          "/cases/59",
+          "/cases/60",
+          "/cases/61",
+          "/cases/62"
+        ],
+        "sourceCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
+        "finalArtifactSha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a"
+      }
     },
     {
       "conditionId": "EVENTARC/final-artifact-regression",
       "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
-      "recipeIds": ["eventarc/final"],
+      "recipeIds": [
+        "eventarc/final"
+      ],
       "cases": [
         "strict-production",
         "emulator-official",
@@ -212,16 +423,103 @@
         "same-final-artifact",
         "runner-tree"
       ],
-      "transports": ["artifact"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "artifact"
+      ],
+      "status": "PRODUCTION_RECORDED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
+        "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
+        "originalCaseProofPath": "docs.local/runs/coordinator-codex-20261007/eventarc-full-parent-review-inputs/reviewer-output/full70-per-case-proof.json",
+        "originalCaseProofSha256": "a82eded4a149e795d62b8a78fbc400de7e8f4e11de9e7e897ebb1ae29ba04678",
+        "originalCaseProofSelectors": [
+          "/cases/63",
+          "/cases/64",
+          "/cases/65",
+          "/cases/66",
+          "/cases/67",
+          "/cases/68"
+        ],
+        "sourceCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
+        "finalArtifactSha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a"
+      }
     },
     {
       "conditionId": "EVENTARC/closure-review",
       "source": "spec/compatibility/contract.json#EVENTARC-CLAIM-LOCAL-PUBLISH",
-      "recipeIds": ["eventarc/closure"],
-      "cases": ["independent-approval"],
-      "transports": ["artifact"],
-      "status": "PENDING_CORPUS"
+      "recipeIds": [
+        "eventarc/closure"
+      ],
+      "cases": [
+        "independent-approval"
+      ],
+      "transports": [
+        "artifact"
+      ],
+      "status": "PENDING_CORPUS",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
+        "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
+        "originalCaseProofPath": "docs.local/runs/coordinator-codex-20261007/eventarc-full-parent-review-inputs/reviewer-output/full70-per-case-proof.json",
+        "originalCaseProofSha256": "a82eded4a149e795d62b8a78fbc400de7e8f4e11de9e7e897ebb1ae29ba04678",
+        "originalCaseProofSelectors": [
+          "/cases/69"
+        ],
+        "sourceCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
+        "finalArtifactSha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a"
+      }
     }
-  ]
+  ],
+  "integratedRegression": {
+    "integrationCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
+    "releaseBinarySha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a",
+    "buildReceiptPath": "docs.local/runs/coordinator-codex-20261007/eventarc-current-final-artifact-build/binary-receipt.json",
+    "buildReceiptSha256": "70a503b4edaa6babf8d8362c07199f5b274b9b4aaf5971fe9180a7981b0b4f34",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
+        "sha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
+        "rows": 70,
+        "summary": {
+          "PENDING": 70
+        },
+        "decodedSha256": "76c47b99496a616e8c2faab841e8267901f985e95221b43cd38dbf82d973f907",
+        "decodedBytes": 141778655
+      }
+    ],
+    "productionRequests": 0,
+    "result": "RECORDED_NOT_COMPARED",
+    "releaseBindingNote": "The successful current-artifact check/export is bound to unchanged 337 Rust inputs and the 16 installed runner members. R20 must replay the final packaged release binary against this authentic canonical comparison; current-artifact evidence does not grant final-version acceptance."
+  },
+  "closureNotes": {
+    "retrospectiveComposition": "The original 70 coordinates retain their case-specific native and current witnesses in the accepted per-case proof. The original 11 criteria and all cases/transports are unchanged. The new 1029 raw predicates supplement this composition; they do not alone adjudicate handler, filter, retry, payload-boundary or final-approval requirements.",
+    "currentActualIndexPath": "docs.local/runs/coordinator-codex-20261007/eventarc-semantic-current-actual-preparation/actual-internal-id-v1-bare-index.json",
+    "currentActualIndexSha256": "5d382bae47bd8482ca245867d18cf46b6f29691f5fcfa5d983c1a011947f24f4",
+    "currentPredicateResultPath": "docs.local/runs/coordinator-codex-20261007/eventarc-semantic-current-actual-preparation/actual-internal-id-v1/batch-predicate-check/predicate-results.json",
+    "currentPredicateResultSha256": "b6709853d4c381100fecd70db1837d54b419e48658b063be847f5be3549af8d7",
+    "sdkSettlementPath": "docs.local/runs/coordinator-codex-20261007/eventarc-semantic-current-actual-preparation/actual-internal-id-v1/sdk-settlement-primitives.json",
+    "sdkSettlementSha256": "90fdd13951f2f8378bd95ee7b5d9c84f5578855eb01a194ae03d488a61319977",
+    "canonicalIndependentApproval": "PENDING"
+  },
+  "limitations": {
+    "historicalPublish404": {
+      "cases": [
+        "C182",
+        "C183",
+        "C307"
+      ],
+      "native404Local200Unresolved": true,
+      "scope": "Only the three historical publication differences are nonblocking under owner1181. Normal single/three-event REST publication and genuine SDK relative-name parity remain independently required and evidenced by the retained composition and current SDK invocation."
+    },
+    "mockCredentialCatalog": {
+      "googleTokenValidityVerified": false,
+      "defaultConfigurationGapDisclosed": true,
+      "scope": "Owner1144 authorizes only the configured mock token digest/scope catalog. General IAM, real Google credential validity and default-configuration equivalence remain unproved."
+    },
+    "lifecycleDisposition": "Owner1145 permits LIST page placement/order and intermediate LRO done timing only. Successful resource/operation fields, full own-cursor sets/counts without duplication/loss and own-operation terminal/delete absence remain mandatory.",
+    "compositionDisposition": "Owner1170 permits at least one valid native observation per case and retrospective composition; distinct projects/recordings and numeric project projection remain disclosed by the accepted case proof.",
+    "physicalParity": "Scoped semantic acceptance does not assert physical byte/header equality. Historical physical differences and native/current runtime qualifications remain retained in the accepted composition.",
+    "sdkSupervision": "The historical SDK outer IdentityRefused receipt remains unchanged. The new genuine SDK witness has 13 calls, 6 forwarded requests, fulfilled work, closed resources and no unsettled work under the current owned lifecycle. Full historical SDK runtime closure identity remains unestablished; 73 old relative paths are absent.",
+    "generatedInternalErrorId": "The exact internal-error wrapper normalizes independently generated hexadecimal UUID8-4-4-4-12 IDs using the existing Rust replay rule, without restricting version/variant. The native-v4/local-version0 generator shape difference remains unresolved; arbitrary messages, status/code/details differences are not masked."
+  }
 }

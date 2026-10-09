@@ -22,6 +22,7 @@ import {
   exportComparison,
   deriveLocalBudget,
   selectSessionProject,
+  sessionEndpoint,
   buildExecArgs as buildSessionExecArgs,
 } from "./run.mjs";
 const hash = (x) => createHash("sha256").update(x).digest("hex");
@@ -898,4 +899,31 @@ test("named authority refuses missing and foreign-only paths while retaining adv
     assert.equal(selectSessionProject(input), "fireemu-oracle-idp");
     assert.deepEqual(input, before);
   }
+});
+
+test("actual full Eventarc URL enters the session unchanged with strict numeric loopback", () => {
+  const actual = "http://127.0.0.1:54126";
+  assert.equal(sessionEndpoint(actual), actual);
+  const url = new URL(sessionEndpoint(actual));
+  assert.equal(url.origin, actual);
+  assert.equal(url.hostname, "127.0.0.1");
+  assert.equal(url.pathname, "/");
+  assert.equal(sessionEndpoint("http://[::1]:54126"), "http://[::1]:54126");
+});
+
+test("session endpoint rejects doubled scheme and every nonnative URL shape before wire", () => {
+  for (const value of [
+    undefined,
+    "",
+    "http://http://127.0.0.1:54126",
+    "http://localhost:54126",
+    "http://example.com:54126",
+    "https://127.0.0.1:54126",
+    "http://user:secret@127.0.0.1:54126",
+    "http://127.0.0.1:54126/path",
+    "http://127.0.0.1:54126/?query",
+    "http://127.0.0.1:54126/#fragment",
+    "127.0.0.1:54126",
+  ])
+    assert.throws(() => sessionEndpoint(value));
 });

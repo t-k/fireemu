@@ -915,13 +915,16 @@ export async function collectFacets(inputs, label, base, { fetchImpl = fetch } =
     ...(failure ? { failure } : {}),
   };
 }
+export function sessionEndpoint(host) {
+  assert.ok(host, "missing owned exec endpoint");
+  const base = host;
+  loopback(base);
+  return base;
+}
 async function session(path) {
   const options = json(path),
     inputs = loadInputs(options.inputDirectory);
-  const host = process.env.CLOUD_EVENTARC_EMULATOR_HOST;
-  assert.ok(host, "missing owned exec endpoint");
-  const base = `http://${host}`;
-  loopback(base);
+  const base = sessionEndpoint(process.env.CLOUD_EVENTARC_EMULATOR_HOST);
   let report;
   try {
     if (options.phase === "raw") {

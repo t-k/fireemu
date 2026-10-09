@@ -903,3 +903,219 @@ test("repeated delivery may reuse an actual token while the original stale-token
     "same-actual-token",
   ]);
 });
+
+import * as cReplay from "./pubsub-observation-c/replay.mjs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
+const configDigest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+test("C lifecycle persists bounded strict config before runtime-start and survives temporary removal", () => {
+  const dir = mkdtempSync(join(tmpdir(), "c-lifecycle-test-"));
+  try {
+    const temporary = join(dir, "temporary.json"),
+      out = join(dir, "out");
+    const bytes = Buffer.from(JSON.stringify({ daemon: { clockStart: time } }));
+    // The producer's output directory already exists before the worker starts.
+    mkdirSync(out);
+    writeFileSync(temporary, bytes);
+    cReplay.persistRuntimeStart(
+      out,
+      {
+        config: temporary,
+        configSha256: configDigest(bytes),
+        serverPid: 101,
+      },
+      time,
+    );
+    rmSync(temporary);
+    const receipt = JSON.parse(readFileSync(join(out, "runtime-start.json")));
+    assert.equal(receipt.serverPid, 101);
+    assert.equal(receipt.workerPid, process.pid);
+    assert.equal(receipt.strictConfigPath, join(out, "strict-config.json"));
+    assert.equal(receipt.strictConfigBytes, bytes.length);
+    assert.equal(receipt.strictConfigSha256, configDigest(bytes));
+    assert.deepEqual(readFileSync(receipt.strictConfigPath), bytes);
+    assert.throws(
+      () =>
+        cReplay.persistRuntimeStart(
+          out,
+          {
+            config: receipt.strictConfigPath,
+            configSha256: configDigest(bytes),
+            serverPid: 101,
+          },
+          time,
+        ),
+      /EEXIST/,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+test("C lifecycle refuses bad hash clock symlink or oversized config before runtime-start", () => {
+  const dir = mkdtempSync(join(tmpdir(), "c-lifecycle-rejection-"));
+  try {
+    assert.equal(typeof cReplay.persistRuntimeStart, "function");
+    for (const mode of ["hash", "clock", "symlink", "oversize"]) {
+      const temporary = join(dir, `${mode}.json`),
+        out = join(dir, mode);
+      const bytes = Buffer.from(
+        mode === "oversize"
+          ? JSON.stringify({ daemon: { clockStart: time } }) + " ".repeat(1_000_001)
+          : JSON.stringify({ daemon: { clockStart: mode === "clock" ? "wrong" : time } }),
+      );
+      mkdirSync(out);
+      writeFileSync(temporary, bytes);
+      let path = temporary;
+      if (mode === "symlink") {
+        path += ".link";
+        symlinkSync(temporary, path);
+      }
+      assert.throws(() =>
+        cReplay.persistRuntimeStart(
+          out,
+          {
+            config: path,
+            configSha256: mode === "hash" ? "0".repeat(64) : configDigest(bytes),
+            serverPid: 101,
+          },
+          time,
+        ),
+      );
+      assert.throws(() => readFileSync(join(out, "runtime-start.json")), /ENOENT/);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("C lifecycle cannot publish runtime-start when persistent config creation fails", () => {
+  const dir = mkdtempSync(join(tmpdir(), "c-lifecycle-order-"));
+  try {
+    const temporary = join(dir, "temporary.json"),
+      out = join(dir, "out");
+    mkdirSync(out);
+    const bytes = Buffer.from(JSON.stringify({ daemon: { clockStart: time } }));
+    writeFileSync(temporary, bytes);
+    writeFileSync(join(out, "strict-config.json"), "existing");
+    assert.throws(
+      () =>
+        cReplay.persistRuntimeStart(
+          out,
+          {
+            config: temporary,
+            configSha256: configDigest(bytes),
+            serverPid: 101,
+          },
+          time,
+        ),
+      /EEXIST/,
+    );
+    assert.throws(() => readFileSync(join(out, "runtime-start.json")), /ENOENT/);
+    assert.equal(readFileSync(join(out, "strict-config.json"), "utf8"), "existing");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("C runtime joins persisted publication clock with approved source and build disposition", async () => {
+  for (const variant of [
+    "valid",
+    "absent",
+    "stale-source",
+    "wrong-binary",
+    "wrong-inputs",
+    "wrong-owner",
+    "stale-clock",
+    "stale-request-id",
+    "wrong-clock",
+  ]) {
+    const f = fixture();
+    exchange(
+      f,
+      "R1",
+      "CreateSubscription",
+      { name: sub("R1"), topic: topic("R1") },
+      reply({ name: sub("R1"), topic: topic("R1") }),
+      10,
+    );
+    const deliveriesInput = deliveries();
+    for (const source of importRecording(deliveriesInput).cells[0].exchanges)
+      exchange(f, "R1", source.method, source.request, source.reply, source.requestId);
+    f.rows.find(
+      (r) => r.event === "response" && r.method === "Pull",
+    ).reply.body.receivedMessages[0].message.publishTime = "2026-10-09T00:00:02.000Z";
+    const input = importRecording(f);
+    const build = { ...pin, binaryInputsSha256: "c".repeat(64) };
+    const disposition = {
+      owner1135: {
+        proposalSha256: "8238575c8202949f721b59bb9c97ee36b3f0ae701efd552f4169c70fcf0c1c53",
+      },
+      owner1146: {
+        proposalSha256: "c11c23ae6486c496c9f8f5469dd8bed3ac2630f0274b0f44b270196df4c35a78",
+      },
+      source: { runId, sourceHead: head, packetSha256, descriptorSha256 },
+      runtimeInputs: { binarySha256: build.sha256, inputsSha256: build.binaryInputsSha256 },
+      cellIds: ["R1"],
+    };
+    if (variant === "stale-source") disposition.source.packetSha256 = "f".repeat(64);
+    if (variant === "wrong-binary") disposition.runtimeInputs.binarySha256 = "f".repeat(64);
+    if (variant === "wrong-inputs") disposition.runtimeInputs.inputsSha256 = "f".repeat(64);
+    if (variant === "wrong-owner") disposition.owner1135.proposalSha256 = "f".repeat(64);
+    // An untrusted source input must not replace the current build witness.
+    input.runtimeInputs = { ...disposition.runtimeInputs };
+    const persisted = [],
+      calls = [];
+    const report = await replayLocal(
+      input,
+      {
+        PUBSUB_EMULATOR_HOST: "127.0.0.1:1234",
+        FIREEMU_CONTROL_URL: "http://127.0.0.1:1235/v1/",
+        FIREEMU_CONTROL_TOKEN: "test",
+      },
+      build,
+      {
+        timestampDisposition: variant === "absent" ? undefined : disposition,
+        fetch: async () =>
+          new Response(
+            JSON.stringify({
+              clock: variant === "wrong-clock" ? "2026-10-09T00:00:00.001Z" : time,
+            }),
+            { status: 200 },
+          ),
+        persist: (kind, value) => {
+          persisted.push({ kind, value: structuredClone(value) });
+          if (kind === "clock" && variant === "stale-clock") value.sourceN++;
+          if (kind === "clock" && variant === "stale-request-id") value.sourceRequestId++;
+        },
+        wireFactory: () => ({
+          close() {},
+          abortSource() {},
+          call: async (call) => {
+            calls.push(call);
+            const source = input.cells[0].exchanges.find((s) => s.method === call.method);
+            const actual = local(source);
+            if (call.method === "Pull") actual.body.receivedMessages[0].message.publishTime = time;
+            return actual;
+          },
+        }),
+      },
+    );
+    if (variant === "wrong-clock") {
+      assert.equal(calls.length, 0);
+      continue;
+    }
+    const pulled = report.cells[0].exchanges.find((e) => e.method === "Pull");
+    assert.equal(
+      pulled.semanticVerdict,
+      variant === "valid" ? "MATCH" : variant === "absent" ? "DIVERGES" : "NOT_COMPARABLE",
+      variant,
+    );
+    assert.equal(persisted.filter((e) => e.kind === "clock").length, calls.length);
+    assert.deepEqual(report.runtimeInputs, {
+      binarySha256: build.sha256,
+      inputsSha256: build.binaryInputsSha256,
+    });
+  }
+});

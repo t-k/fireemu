@@ -83,9 +83,11 @@ export async function replayLocal(
     wireFactory = createWire,
     persist = () => {},
     now = () => performance.now(),
+    timestampDisposition,
   } = {},
 ) {
   validateRuntime(pin, environment);
+  const runtimeInputs = { binarySha256: pin.sha256, inputsSha256: pin.binaryInputsSha256 };
   const meter = createMeter({ plan: input.packet.plan, now }),
     localRows = [],
     clockReceipts = [];
@@ -131,7 +133,7 @@ export async function replayLocal(
   };
   try {
     const report = await replayRecording(
-      input,
+      { ...input, runtimeInputs },
       async (call, source) => {
         activeSource = source;
         const next = Date.parse(source.at);
@@ -179,6 +181,12 @@ export async function replayLocal(
       {
         enter: (cell) => meter.enter(input.packet.plan.cells.find((c) => c.id === cell.id)),
         observe: (entry) => persist("comparison", entry),
+        timestampDisposition,
+        clockReceiptFor: (source) =>
+          clockReceipts.find(
+            (receipt) =>
+              receipt.sourceRequestId === source.requestId && receipt.sourceN === source.n,
+          ),
       },
     );
     return {
@@ -186,7 +194,7 @@ export async function replayLocal(
       clockReceipts,
       localRows,
       meter: meter.snapshot(),
-      runtimeInputs: { binarySha256: pin.sha256, inputsSha256: pin.binaryInputsSha256 },
+      runtimeInputs,
     };
   } finally {
     wire.abortSource();
@@ -205,6 +213,24 @@ function options(argv) {
   if (Object.keys(opts).length !== allowed.length)
     throw new Error("C replay input/build pins and output required");
   return opts;
+}
+export function persistRuntimeStart(out, launch, clockStart) {
+  const bytes = pinned(launch.config, launch.configSha256, 1_000_000);
+  const config = JSON.parse(bytes);
+  if (config.daemon.clockStart !== clockStart) throw new Error("C strict clock start refused");
+  const strictConfigPath = resolve(out, "strict-config.json");
+  writeFileSync(strictConfigPath, bytes, { flag: "wx", mode: 0o600, flush: true });
+  writeFileSync(
+    join(out, "runtime-start.json"),
+    JSON.stringify({
+      serverPid: launch.serverPid,
+      workerPid: process.pid,
+      strictConfigPath,
+      strictConfigBytes: bytes.length,
+      strictConfigSha256: launch.configSha256,
+    }) + "\n",
+    { flag: "wx", mode: 0o600, flush: true },
+  );
 }
 export async function main(argv = process.argv.slice(2), environment = process.env, launch = null) {
   const opts = options(argv),
@@ -230,18 +256,7 @@ export async function main(argv = process.argv.slice(2), environment = process.e
     });
   }
   verifyStrictWorker({ pin, project: input.metadata.project, launch });
-  const config = JSON.parse(pinned(launch.config, launch.configSha256));
-  if (config.daemon.clockStart !== input.metadata.at)
-    throw new Error("C strict clock start refused");
-  writeFileSync(
-    join(opts.out, "runtime-start.json"),
-    JSON.stringify({
-      serverPid: launch.serverPid,
-      workerPid: process.pid,
-      strictConfigSha256: launch.configSha256,
-    }) + "\n",
-    { flag: "wx" },
-  );
+  persistRuntimeStart(opts.out, launch, input.metadata.at);
   let bodySequence = 0;
   const persist = (kind, value) => {
     if (kind === "body")
@@ -256,7 +271,10 @@ export async function main(argv = process.argv.slice(2), environment = process.e
     else
       writeFileSync(join(opts.out, `${kind}.jsonl`), JSON.stringify(value) + "\n", { flag: "a" });
   };
-  const report = await replayLocal(input, environment, pin, { persist });
+  const report = await replayLocal(input, environment, pin, {
+    persist,
+    timestampDisposition: binding.timestampDisposition,
+  });
   report.inputPins = binding;
   report.buildPinSha256 = opts["build-pin-sha256"];
   writeFileSync(join(opts.out, "comparison.json"), JSON.stringify(report, null, 2) + "\n", {

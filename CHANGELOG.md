@@ -8,6 +8,22 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-10
+
+### Added
+
+- Release verification replays Eventarc production recordings through the installed artifact, validates channel lifecycle responses, own-cursor inventories and operation completion, and invokes the real Admin SDK for publication outcomes and forwarded payloads. The canonical comparison retains the original 70 pending obligations and the reviewed retrospective evidence composition; final release acceptance remains required.
+
+### Changed
+
+- Eventarc release evidence uses lossless gzip storage with separate compressed and original-byte digests. R20 still generates plain JSON and validates the genuine semantic proof independently.
+
+### Limitations
+
+- Historical Eventarc cases C182, C183 and C307 retain unresolved production HTTP 404/local HTTP 200 publication differences. Only those three differences are nonblocking under the owner decision; normal single/three-event REST publication and genuine SDK relative-name parity remain required.
+- Eventarc authentication uses only the configured mock token digest/scope catalog. Real Google token validity, general IAM and the unused/default configuration discrepancy remain unproved. Semantic acceptance does not claim physical byte/header parity.
+
+
 ## [0.15.0] - 2026-10-09
 
 Firestore transactions (FS-TRANSACTION) are now `COMPAT_VERIFIED` within the frozen production scope: saved transaction programs, Admin and Web SDK retry, and atomic commit visibility. The expiry campaign retains its `PARTIAL` qualification; this closure does not cover the full native Listen corpus.

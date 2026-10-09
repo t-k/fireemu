@@ -55,6 +55,12 @@ export function makePlan() {
           kind,
           permutation,
           reserve: false,
+          cellMs:
+            transport === "grpc" && kind === "snapshots"
+              ? 135000
+              : transport === "rest" && kind === "subscriptions"
+                ? 105000
+                : 120000,
           coordinates: ["/conditions/2/cases/0", "/conditions/2/cases/1", "/conditions/2/cases/2"],
         });
   for (const original of ["R1", "N1"])

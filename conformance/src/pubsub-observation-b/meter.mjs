@@ -49,7 +49,7 @@ export function createMeter({ now = () => performance.now(), a2 = false } = {}) 
         out: 0,
         in: 0,
       };
-      end = time() + (a2 ? 600000 : CAPS[value.group].cellMs);
+      end = time() + (a2 ? 600000 : value.cellMs);
       remaining();
     },
     remaining,

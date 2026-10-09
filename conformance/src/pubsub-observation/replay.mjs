@@ -341,6 +341,26 @@ export async function replayA(
             )?.n ?? null,
           durationMs: reply.durationMs,
         });
+        if (
+          row.cellId === "S07" &&
+          row.method === "Pull" &&
+          expected.response.body?.receivedMessages?.length
+        ) {
+          const witness = native.witnesses.get(row.cellId),
+            observed = local.exchanges.at(-1);
+          if (witness) {
+            witness.ordinaryPulls ??= [];
+            witness.ordinaryPulls.push({
+              sourceDispatchN: row.n,
+              sourceResponseN: expected.n,
+              localDispatchN: observed.dispatchN,
+              localResponseN: observed.n,
+              sourceAck: expected.response.body.receivedMessages[0]?.ackId,
+              localAck: reply.body?.receivedMessages?.[0]?.ackId,
+              clock: clockReceipt,
+            });
+          }
+        }
       } else if (row.event === "stream-frame") {
         if (row.direction === "out" && !native.witnesses.has(row.cellId)) terminalDetails.clear();
         await native.frame(row);
@@ -350,6 +370,17 @@ export async function replayA(
         await native.action(row);
       else if (row.event === "case-result" || row.event === "case-budget-overrun")
         native.closeCell(row.cellId);
+    }
+    for (const [cellId, witness] of native.witnesses) {
+      const cell = localCells.find((c) => c.id === cellId);
+      for (const pull of witness.ordinaryPulls ?? [])
+        pull.tokenUse =
+          cell.exchanges.some(
+            (e) => e.method === "Acknowledge" && e.request.body.ackIds?.includes(pull.localAck),
+          ) ||
+          cell.frames.some((f) => f.direction === "out" && f.body.ackIds?.includes(pull.localAck))
+            ? "observed"
+            : "notObserved";
     }
     const local = {
       ...source,
@@ -424,7 +455,9 @@ export async function main(argv = process.argv.slice(2), environment = process.e
     index = JSON.parse(pinned(opts.input, opts["input-sha256"]));
   if (
     !index.source ||
-    Object.keys(index).some((k) => !["source", "publishTimeDisposition"].includes(k))
+    Object.keys(index).some(
+      (k) => !["source", "publishTimeDisposition", "s06OrderingAuthority"].includes(k),
+    )
   )
     throw new Error("replay index requires pinned source and optional publishTime disposition");
   const input = readPinnedBundle(index.source),
@@ -517,6 +550,21 @@ export async function main(argv = process.argv.slice(2), environment = process.e
       sourceFrameBytes,
       remainingDebts: {},
     };
+  }
+  if (index.s06OrderingAuthority) {
+    if (!publishTimeDisposition) throw new Error("S06 publication proof required");
+    const digest = "846f39d9ac6179a62e177206d9e6a95f7e2765af305cf6771445a8c610e796f7";
+    if (index.s06OrderingAuthority.sha256 !== digest)
+      throw new Error("S06 ordering authority refused");
+    pinned(index.s06OrderingAuthority.path, digest, 65536);
+    const bytes = Buffer.from(
+      JSON.stringify({
+        ownerRow: 1171,
+        proposalSha256: "cb37288c3197dace9acd60a2a2b0ba0694efd3077dde4f019e3b863e383dd700",
+        lineSha256: digest,
+      }),
+    );
+    publishTimeDisposition.s06OrderingAuthority = { bytes, sha256: sha(bytes) };
   }
   const journalPath = resolve(opts.out, "local.jsonl");
   writeFileSync(journalPath, "", { flag: "wx", mode: 0o600 });

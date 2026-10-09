@@ -639,9 +639,270 @@ function nativeTerminalVerdict(original, actual) {
         : "DIVERGES";
 }
 
+function declaredPhaseComparison(original, actual, proof, eligible) {
+  const variants = new Map([
+    ["S01", "opening-frame"],
+    ["S02", "future-publications"],
+    ["S04", "in-stream-nack"],
+    ["S05", "in-stream-deadline-update"],
+    ["S06", "flow-control"],
+  ]);
+  if (!variants.has(original.id)) return null;
+  const declared = original.events.some(
+    (event) =>
+      event.event === "stream-cancel" ||
+      (event.event === "stream-case-observation" &&
+        ["windowMs", "windowExpired", "inboundEnded", "received"].some((field) =>
+          Object.hasOwn(event.state ?? {}, field),
+        )),
+  );
+  if (!declared) return null;
+  const result = {
+    verdict: "NOT_COMPARABLE",
+    scope: "original bounded observation through own disposal boundary",
+  };
+  if (
+    !eligible ||
+    [original, actual].some(
+      (cell) =>
+        cell.variant !== variants.get(original.id) ||
+        cell.coordinate !== `/conditions/13/cases/${Number(original.id.slice(1)) - 1}`,
+    )
+  )
+    return result;
+  const observations = original.events.filter((e) => e.event === "stream-case-observation");
+  const sourceCancels = original.events.filter((e) => e.event === "stream-cancel");
+  const localCancels = actual.events.filter((e) => e.event === "stream-cancel");
+  if (observations.length !== 1 || sourceCancels.length !== 1 || localCancels.length !== 1)
+    return result;
+  const [observation] = observations,
+    [sourceCancel] = sourceCancels,
+    [localCancel] = localCancels;
+  const state = observation.state;
+  if (
+    sourceCancel.reason !== "dispose" ||
+    localCancel.reason !== "dispose" ||
+    !(observation.n < sourceCancel.n) ||
+    state?.terminal !== null ||
+    state.inboundEnded !== false ||
+    state.incomplete !== false ||
+    state.windowExpired !== false ||
+    state.windowMs !== 90000
+  )
+    return result;
+  const observationAction = proof.actions.filter(
+    (a) => a.sourceN === observation.n && a.event === observation.event,
+  );
+  const cancelAction = proof.actions.filter(
+    (a) => a.sourceN === sourceCancel.n && a.event === sourceCancel.event,
+  );
+  if (
+    observationAction.length !== 1 ||
+    cancelAction.length !== 1 ||
+    proof.actions.indexOf(observationAction[0]) >= proof.actions.indexOf(cancelAction[0]) ||
+    !Number.isFinite(localCancel.elapsedMs) ||
+    localCancel.elapsedMs < observationAction[0].elapsedMs ||
+    cancelAction[0].elapsedMs < observationAction[0].elapsedMs
+  )
+    return result;
+  const forbidden = new Set([
+    "stream-error",
+    "stream-status",
+    "stream-inbound-end",
+    "stream-close",
+    "stream-observation-window-end",
+    "stream-frame-refused",
+  ]);
+  for (const [cell, cancel] of [
+    [original, sourceCancel],
+    [actual, localCancel],
+  ]) {
+    if (
+      cell.events.some(
+        (event, i) =>
+          !Number.isSafeInteger(event.n) || event.n < 1 || (i && cell.events[i - 1].n >= event.n),
+      )
+    )
+      return result;
+    if (cell.events.some((event) => event.n < cancel.n && forbidden.has(event.event)))
+      return { ...result, verdict: "DIVERGES" };
+    if (
+      cell.frames.some(
+        (frame) =>
+          !(frame.n < cancel.n) ||
+          !cell.events.some(
+            (event) =>
+              event.n === frame.n &&
+              event.event === "stream-frame" &&
+              isDeepStrictEqual(event.body, frame.body),
+          ),
+      )
+    )
+      return result;
+    const received = cell.frames
+      .filter((f) => f.direction === "in")
+      .reduce((n, f) => n + (f.body.receivedMessages?.length ?? 0), 0);
+    if (
+      received !== state.received ||
+      ["in", "out"].some(
+        (direction) => cell.frames.filter((f) => f.direction === direction).length > 6,
+      )
+    )
+      return result;
+  }
+  return {
+    ...result,
+    verdict: "MATCH",
+    sourceObservationN: observation.n,
+    sourceCancelN: sourceCancel.n,
+    localCancelN: localCancel.n,
+  };
+}
+
+function unorderedFramePairs(original, actual, proof, authority) {
+  if (
+    original.id !== "S06" ||
+    original.variant !== "flow-control" ||
+    original.coordinate !== "/conditions/13/cases/5" ||
+    !authority
+  )
+    return null;
+  let approval;
+  try {
+    if (
+      !Buffer.isBuffer(authority.bytes) ||
+      authority.bytes.length > 65536 ||
+      createHash("sha256").update(authority.bytes).digest("hex") !== authority.sha256
+    )
+      throw new Error("unordered authority pin");
+    approval = JSON.parse(authority.bytes);
+  } catch {
+    throw new Error("unordered authority invalid");
+  }
+  if (
+    approval.ownerRow !== 1171 ||
+    approval.proposalSha256 !==
+      "cb37288c3197dace9acd60a2a2b0ba0694efd3077dde4f019e3b863e383dd700" ||
+    approval.lineSha256 !== "846f39d9ac6179a62e177206d9e6a95f7e2765af305cf6771445a8c610e796f7"
+  )
+    throw new Error("unordered authority scope");
+  const pairs = new Map(),
+    mappings = [];
+  for (const cell of [original, actual]) {
+    const setup = (method) =>
+      cell.exchanges.filter(
+        (e) => e.method === method && e.response.ok === true && e.response.unknown !== true,
+      );
+    const creates = setup("CreateSubscription"),
+      gets = setup("GetSubscription");
+    if (creates.length !== 1 || gets.length !== 1) throw new Error("unordered setup missing");
+    const values = [
+      creates[0].request.body.enableMessageOrdering,
+      creates[0].response.body.enableMessageOrdering,
+      gets[0].response.body.enableMessageOrdering,
+    ];
+    if (values.some((v) => v !== undefined && typeof v !== "boolean"))
+      throw new Error("unordered setup unknown");
+    if (values.some((v) => v === true)) return null;
+    const opener = cell.frames[0]?.body;
+    if (
+      creates[0].request.body.name !== opener?.subscription ||
+      creates[0].response.body.name !== opener.subscription ||
+      gets[0].request.body.name !== opener.subscription ||
+      gets[0].response.body.name !== opener.subscription ||
+      creates[0].request.body.topic !== creates[0].response.body.topic ||
+      creates[0].request.body.topic !== gets[0].response.body.topic ||
+      opener.maxOutstandingMessages !== "1" ||
+      opener.maxOutstandingBytes !== "1024"
+    )
+      throw new Error("unordered setup contradictory");
+    const published = setup("Publish");
+    if (
+      published.length !== 3 ||
+      new Set(published.map((e) => e.response.body.messageIds?.[0])).size !== 3 ||
+      published.some(
+        (e) =>
+          e.request.body.topic !== creates[0].request.body.topic ||
+          e.request.body.messages?.length !== 1 ||
+          e.response.body.messageIds?.length !== 1 ||
+          e.request.body.messages[0].orderingKey,
+      )
+    )
+      throw new Error("unordered publication cardinality or key");
+    if (
+      cell.frames.length !== 7 ||
+      cell.frames.some(
+        (f, i) => f.direction !== (i % 2 ? "in" : "out") || (i && cell.frames[i - 1].n >= f.n),
+      )
+    )
+      throw new Error("unordered credit frame sequence");
+    const ids = [];
+    for (const i of [1, 3, 5]) {
+      const received = cell.frames[i].body.receivedMessages,
+        ack = cell.frames[i + 1].body.ackIds;
+      if (
+        received?.length !== 1 ||
+        typeof received[0].ackId !== "string" ||
+        !received[0].ackId ||
+        ack?.length !== 1 ||
+        ack[0] !== received[0].ackId ||
+        received[0].message?.orderingKey
+      )
+        throw new Error("unordered receive or actual ACK association");
+      ids.push(received[0].message.messageId);
+    }
+    if (
+      new Set(ids).size !== 3 ||
+      ids.some((id) => published.filter((e) => e.response.body.messageIds[0] === id).length !== 1)
+    )
+      throw new Error("unordered missing or duplicate own receive");
+  }
+  for (const publication of original.exchanges.filter((e) => e.method === "Publish")) {
+    const candidates =
+      proof.publishTime?.publications?.filter((p) => p.sourceDispatchN === publication.dispatchN) ??
+      [];
+    if (candidates.length !== 1) throw new Error("unordered publication binding missing");
+    const p = candidates[0],
+      sourceId = publication.response.body.messageIds[0],
+      localId = p.localReply?.body?.messageIds?.[0];
+    const localPublished = actual.exchanges.filter(
+      (e) => e.method === "Publish" && e.response.body?.messageIds?.[0] === localId,
+    );
+    if (
+      localPublished.length !== 1 ||
+      !isDeepStrictEqual(p.sourceRequest, publication.request.body) ||
+      !isDeepStrictEqual(p.sourceReply.body, publication.response.body) ||
+      !isDeepStrictEqual(p.localRequest, localPublished[0].request.body) ||
+      !isDeepStrictEqual(p.localReply.body, localPublished[0].response.body)
+    )
+      throw new Error("unordered publication transcript mismatch");
+    const sourceIndex = original.frames.findIndex(
+      (f) => f.direction === "in" && f.body.receivedMessages[0].message.messageId === sourceId,
+    );
+    const localIndex = actual.frames.findIndex(
+      (f) => f.direction === "in" && f.body.receivedMessages[0].message.messageId === localId,
+    );
+    if (sourceIndex < 0 || localIndex < 0) throw new Error("unordered receive identity missing");
+    pairs.set(original.frames[sourceIndex].n, actual.frames[localIndex]);
+    pairs.set(original.frames[sourceIndex + 1].n, actual.frames[localIndex + 1]);
+    mappings.push({
+      sourcePublicationN: publication.dispatchN,
+      sourceReceiveN: original.frames[sourceIndex].n,
+      localReceiveN: actual.frames[localIndex].n,
+      sourceAckN: original.frames[sourceIndex + 1].n,
+      localAckN: actual.frames[localIndex + 1].n,
+    });
+  }
+  pairs.set(original.frames[0].n, actual.frames[0]);
+  if (pairs.size !== 7 || new Set([...pairs.values()].map((f) => f.n)).size !== 7)
+    throw new Error("unordered frame binding ambiguous");
+  return { pairs, mappings, authoritySha256: approval.lineSha256 };
+}
+
 function approvedNativeComparison(original, actual, proof, disposition, binding) {
   const terminalVerdict = nativeTerminalVerdict(original, actual);
   const frames = [];
+  let ownPublicationAckBindings;
   const complete = [original, actual].every(
     (cell) =>
       cell.result?.complete === true &&
@@ -674,9 +935,18 @@ function approvedNativeComparison(original, actual, proof, disposition, binding)
           !isDeepStrictEqual(generated.runtime, disposition.publishTime.runtime))
       )
         verdict = "NOT_COMPARABLE";
+      const unordered = unorderedFramePairs(
+        original,
+        actual,
+        proof,
+        disposition.s06OrderingAuthority,
+      );
       for (const [i, sourceFrame] of original.frames.entries()) {
-        const localFrame = actual.frames[i];
-        const raw = disposition.rawFrames.find((f) => f.sourceN === sourceFrame.n);
+        const localFrame = unordered?.pairs.get(sourceFrame.n) ?? actual.frames[i];
+        const sourceRaw = disposition.rawFrames.find((f) => f.sourceN === sourceFrame.n);
+        const localRaw = disposition.rawFrames.filter((f) => f.localN === localFrame?.n);
+        if (localRaw.length !== 1) throw new Error("native local raw binding missing");
+        const raw = { sourceBytes: sourceRaw.sourceBytes, localBytes: localRaw[0].localBytes };
         let timeVerdict = "MATCH";
         if (
           generated &&
@@ -727,20 +997,232 @@ function approvedNativeComparison(original, actual, proof, disposition, binding)
         });
         if (!matches) verdict = "DIVERGES";
       }
+      if (unordered) ownPublicationAckBindings = unordered.mappings;
     } catch {
       verdict = "NOT_COMPARABLE";
     }
   }
-  if (terminalVerdict === "DIVERGES") verdict = "DIVERGES";
+  const declaredPhase = declaredPhaseComparison(
+    original,
+    actual,
+    proof,
+    binding && complete && proof.completed === true && verdict === "MATCH",
+  );
+  if (declaredPhase) {
+    if (declaredPhase.verdict !== "MATCH" && verdict === "MATCH") verdict = declaredPhase.verdict;
+  } else if (terminalVerdict === "DIVERGES") verdict = "DIVERGES";
   else if (terminalVerdict !== "MATCH" && verdict === "MATCH") verdict = "NOT_COMPARABLE";
   return {
     verdict,
     authoritySha256: disposition?.authority?.sha256 ?? null,
     terminalVerdict,
+    ...(declaredPhase ? { declaredPhase } : {}),
     frames,
+    ...(ownPublicationAckBindings
+      ? {
+          ownPublicationAckBindings,
+          orderingAuthoritySha256:
+            "846f39d9ac6179a62e177206d9e6a95f7e2765af305cf6771445a8c610e796f7",
+        }
+      : {}),
     scope: disposition?.publishTime
       ? "explicit ACK and publication-bound generated publishTime disposition; literal physical result retained"
       : "explicit offline ACK-only wire disposition; literal physical result retained",
+  };
+}
+
+// The original cancellation case observes a fresh ordinary Pull token without using it.
+function ownPullComparison(original, actual, expected, observed, proof, disposition) {
+  const missing = () =>
+    decision("NOT_COMPARABLE", "own Pull selector or publication proof incomplete");
+  const differs = () => decision("DIVERGES", "own Pull nonopaque response or timeline differs");
+  const timestamp = (value) => {
+    const match =
+      typeof value === "string" &&
+      /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.(\d{3}|\d{6}|\d{9})Z$/.exec(value);
+    if (!match) return null;
+    const ms = Date.parse(`${match[1]}Z`);
+    if (!Number.isFinite(ms) || new Date(ms).toISOString().slice(0, 19) !== match[1]) return null;
+    return { seconds: String(ms / 1000), nanos: Number(match[2].padEnd(9, "0")) };
+  };
+  const selectors =
+    proof.ordinaryPulls?.filter((p) => p.sourceDispatchN === expected.dispatchN) ?? [];
+  if (selectors.length !== 1 || !observed || !proof.publishTime || !disposition?.publishTime)
+    return missing();
+  const selector = selectors[0],
+    generated = proof.publishTime;
+  if (
+    ![expected, observed].every(
+      (e) =>
+        e.method === "Pull" &&
+        e.transport === "rest" &&
+        e.response.ok === true &&
+        e.response.unknown !== true &&
+        successful(e),
+    ) ||
+    !isDeepStrictEqual(expected.request, observed.request) ||
+    !isDeepStrictEqual(expected.request.body, {
+      subscription: generated.subscription?.opener,
+      maxMessages: 1,
+      returnImmediately: true,
+    }) ||
+    selector.sourceResponseN !== expected.n ||
+    selector.localDispatchN !== observed.dispatchN ||
+    selector.localResponseN !== observed.n ||
+    selector.tokenUse !== "notObserved" ||
+    generated.cellId !== original.id ||
+    generated.cellId !== actual.id ||
+    !isDeepStrictEqual(generated.source, disposition.source) ||
+    !isDeepStrictEqual(generated.runtime, disposition.publishTime.runtime)
+  )
+    return missing();
+  const items = [
+    expected.response.body?.receivedMessages,
+    observed.response.body?.receivedMessages,
+  ];
+  if (!items.every((a) => Array.isArray(a) && a.length === 1)) return missing();
+  const [sourceItem, localItem] = items.map((a) => a[0]);
+  if (
+    ![sourceItem, localItem].every((i) => typeof i.ackId === "string" && i.ackId.length > 0) ||
+    selector.sourceAck !== sourceItem.ackId ||
+    selector.localAck !== localItem.ackId
+  )
+    return missing();
+  const times = [sourceItem, localItem].map((i) => timestamp(i.message?.publishTime));
+  if (times.some((v) => v === null)) return missing();
+  const sourceBody = {
+    receivedMessages: [
+      { ...sourceItem, message: { ...sourceItem.message, publishTime: times[0] } },
+    ],
+  };
+  const localBody = {
+    receivedMessages: [{ ...localItem, message: { ...localItem.message, publishTime: times[1] } }],
+  };
+  const publications =
+    generated.publications?.filter(
+      (p) =>
+        p.sourceReply?.body?.messageIds?.includes(sourceItem.message?.messageId) &&
+        p.localReply?.body?.messageIds?.includes(localItem.message?.messageId),
+    ) ?? [];
+  if (publications.length !== 1) return missing();
+  const publicationProof = publications[0];
+  for (const [cell, request, reply, id] of [
+    [
+      original,
+      publicationProof.sourceRequest,
+      publicationProof.sourceReply,
+      sourceItem.message.messageId,
+    ],
+    [
+      actual,
+      publicationProof.localRequest,
+      publicationProof.localReply,
+      localItem.message.messageId,
+    ],
+  ]) {
+    const published = cell.exchanges.filter(
+      (e) => e.method === "Publish" && e.response.body?.messageIds?.includes(id),
+    );
+    if (
+      published.length !== 1 ||
+      !successful(published[0]) ||
+      published[0].response.ok !== true ||
+      published[0].response.unknown === true ||
+      !isDeepStrictEqual(published[0].request.body, request) ||
+      !isDeepStrictEqual(published[0].response.body, reply.body) ||
+      !(published[0].dispatchN < (cell === original ? expected : observed).dispatchN) ||
+      (cell === original && published[0].dispatchN !== publicationProof.sourceDispatchN)
+    )
+      return missing();
+  }
+  const publication = publicationTimeVerdict(sourceBody, localBody, generated);
+  if (publication !== "MATCH") return decision(publication, "own Pull publication timestamp proof");
+  const clock = selector.clock;
+  try {
+    const bytes = Buffer.from(clock.responseBytes, "base64");
+    if (
+      bytes.length > 65536 ||
+      createHash("sha256").update(bytes).digest("hex") !== clock.responseSha256 ||
+      !isDeepStrictEqual(JSON.parse(bytes), clock.body) ||
+      clock.status !== 200 ||
+      clock.session !== "default" ||
+      clock.sourceDispatchN !== expected.dispatchN ||
+      !isDeepStrictEqual(timestamp(clock.instant), timestamp(expected.at)) ||
+      !isDeepStrictEqual(timestamp(clock.body.clock), timestamp(expected.at))
+    )
+      return missing();
+  } catch {
+    return missing();
+  }
+  for (const [cell, exchange, item, time] of [
+    [original, expected, sourceItem, times[0]],
+    [actual, observed, localItem, times[1]],
+  ]) {
+    const cancels = cell.events.filter(
+      (e) => e.event === "stream-cancel" && e.reason === "unacked-owned-delivery",
+    );
+    if (cancels.length !== 1 || !(cancels[0].n < exchange.dispatchN)) return missing();
+    const statuses = cell.events.filter(
+      (e) => e.event === "stream-status" && e.n > cancels[0].n && e.n < exchange.dispatchN,
+    );
+    if (
+      statuses.length !== 1 ||
+      canonicalStatus(statuses[0].code) !== "CANCELLED" ||
+      statuses[0].details !== "Cancelled on client"
+    )
+      return missing();
+    const prior = cell.frames
+      .filter((f) => f.direction === "in" && f.n < cancels[0].n)
+      .flatMap((f) => f.body.receivedMessages ?? [])
+      .filter((i) => i.message?.messageId === item.message.messageId);
+    if (
+      prior.length !== 1 ||
+      prior[0].ackId === item.ackId ||
+      !isDeepStrictEqual(prior[0].message.publishTime, time)
+    )
+      return differs();
+    if (
+      cell.exchanges.filter((e) => e.method === "Pull" && e.response.body?.receivedMessages?.length)
+        .length !== 1 ||
+      cell.exchanges.some(
+        (e) => e.method === "Acknowledge" && e.request.body.ackIds?.includes(item.ackId),
+      ) ||
+      cell.frames.some((f) => f.direction === "out" && f.body.ackIds?.includes(item.ackId))
+    )
+      return missing();
+  }
+  if (
+    ![expected.response.bodyBytes, observed.response.bodyBytes].every(
+      (n) => Number.isSafeInteger(n) && n >= 0,
+    )
+  )
+    return missing();
+  if (
+    expected.response.bodyBytes !== observed.response.bodyBytes ||
+    sourceItem.message.publishTime.length !== localItem.message.publishTime.length
+  )
+    return differs();
+  const project = (body) => ({
+    ...body,
+    receivedMessages: body.receivedMessages.map((i) => ({
+      ...i,
+      ackId: { type: "string", nonempty: true },
+      message: {
+        ...i.message,
+        messageId: { publication: true },
+        publishTime: { publication: true },
+      },
+    })),
+  });
+  if (!isDeepStrictEqual(project(expected.response.body), project(observed.response.body)))
+    return differs();
+  const hashes = [expected.response.bodySha256, observed.response.bodySha256];
+  if (!hashes.every((value) => /^[a-f0-9]{64}$/.test(value ?? "")))
+    return { ...missing(), physicalVerdict: "NOT_COMPARABLE" };
+  return {
+    ...decision("MATCH", "explicit own Pull redelivery, fresh ACK and publication proof"),
+    tokenUse: "notObserved",
+    physicalVerdict: hashes[0] === hashes[1] ? "MATCH" : "DIVERGES",
   };
 }
 
@@ -785,6 +1267,20 @@ export function compareExecutedObservation(source, local, nativeWitnesses, appro
         (observation.invalidAckObservedMs >= 30000 && proof.silenceMs >= 30000));
     if (!exact) continue;
     cell.debts = cell.debts.filter((debt) => debt !== nativeDebt);
+    if (cell.id === "S07" && approvedBound && proof.semanticsVerified === true) {
+      for (const row of cell.rows.filter(
+        (r) =>
+          r.method === "Pull" &&
+          r.reason === "ACK selector unresolved; no shape selection inferred",
+      )) {
+        const expected = original.exchanges.find((e) => e.dispatchN === row.sourceDispatchN);
+        const observed = actual.exchanges.find((e) => e.n === row.localN);
+        Object.assign(
+          row,
+          ownPullComparison(original, actual, expected, observed, proof, approvedDisposition),
+        );
+      }
+    }
     const shapeMatches =
       original.frames.length === actual.frames.length &&
       original.frames.every((f, i) => f.direction === actual.frames[i].direction);

@@ -1604,3 +1604,955 @@ test("mixed generated-time runs retain strict timestamp-free negative cells", as
     );
   }
 });
+
+export function ownPullFixture() {
+  const f = generatedTimeFixture();
+  for (const observation of [f.source, f.local]) {
+    observation.cells = observation.cells.filter((c) => c.id !== "S07");
+    const cell = observation.cells.find((c) => c.id === "S03");
+    cell.id = "S07";
+    cell.variant = "client-cancel";
+  }
+  const proof = f.witness.S03;
+  f.witness = { S07: proof };
+  proof.publishTime.cellId = "S07";
+  proof.publishTime.publications[0].sourceDispatchN = 2;
+  proof.publishTime.publications[0].clock.sourceDispatchN = 2;
+  for (const [observation, offset, id, time, ack] of [
+    [f.source, 0, "source-1", "2026-10-09T01:17:42.021Z", "fresh-source-ack"],
+    [f.local, 10, "actual-1", "2026-10-09T01:17:41.899Z", "fresh-local-ack!"],
+  ]) {
+    const cell = observation.cells.find((c) => c.id === "S07");
+    const publication = proof.publishTime.publications[0];
+    const reply = offset ? publication.localReply : publication.sourceReply;
+    cell.exchanges = [
+      {
+        n: 3 + offset,
+        dispatchN: 2 + offset,
+        at: "2026-10-09T01:17:41.899Z",
+        method: "Publish",
+        op: "publish",
+        category: "publish",
+        transport: "rest",
+        request: { body: publication.sourceRequest },
+        response: { ...reply, status: 200, code: "OK", bodyBytes: 30 },
+      },
+      {
+        n: 11 + offset,
+        dispatchN: 10 + offset,
+        at: "2026-10-09T01:17:55.000Z",
+        method: "Pull",
+        op: "pull",
+        category: "target",
+        transport: "rest",
+        request: {
+          body: { subscription: "owned-subscription", maxMessages: 1, returnImmediately: true },
+        },
+        response: {
+          ok: true,
+          unknown: false,
+          status: 200,
+          code: "OK",
+          bodyBytes: 200,
+          body: {
+            receivedMessages: [
+              { ackId: ack, message: { data: "bWFya2Vy", messageId: id, publishTime: time } },
+            ],
+          },
+        },
+      },
+    ];
+    cell.events = [
+      { n: 8 + offset, event: "stream-cancel", reason: "unacked-owned-delivery", elapsedMs: 2000 },
+      {
+        n: 9 + offset,
+        event: "stream-status",
+        code: 1,
+        details: "Cancelled on client",
+        elapsedMs: 2001,
+      },
+      {
+        n: 14 + offset,
+        event: "stream-case-observation",
+        state: { incomplete: false },
+        elapsedMs: 13000,
+      },
+    ];
+  }
+  proof.actions = [
+    { sourceN: 8, event: "stream-cancel", elapsedMs: 2000 },
+    { sourceN: 14, event: "stream-case-observation", elapsedMs: 13000 },
+  ];
+  const clockBody = { clock: "2026-10-09T01:17:55.000000000Z", backwardsSets: 0 };
+  const bytes = Buffer.from(JSON.stringify(clockBody));
+  proof.ordinaryPulls = [
+    {
+      sourceDispatchN: 10,
+      sourceResponseN: 11,
+      localDispatchN: 20,
+      localResponseN: 21,
+      tokenUse: "notObserved",
+      sourceAck: "fresh-source-ack",
+      localAck: "fresh-local-ack!",
+      clock: {
+        sourceDispatchN: 10,
+        session: "default",
+        instant: "2026-10-09T01:17:55.000Z",
+        status: 200,
+        body: clockBody,
+        responseBytes: bytes.toString("base64"),
+        responseSha256: sha(bytes),
+      },
+    },
+  ];
+  for (const [observation, digest] of [
+    [f.source, "a".repeat(64)],
+    [f.local, "b".repeat(64)],
+  ])
+    observation.cells.find((c) => c.id === "S07").exchanges[1].response.bodySha256 = digest;
+  return f;
+}
+
+test("S07 own Pull compares only the explicit fresh redelivery selector", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const f = ownPullFixture();
+  const row = compareExecutedObservation(f.source, f.local, f.witness, f.disposition)
+    .cells.find((c) => c.id === "S07")
+    .rows.find((r) => r.sourceDispatchN === 10);
+  assert.equal(row.verdict, "MATCH");
+  assert.equal(row.tokenUse, "notObserved");
+  assert.equal(row.physicalVerdict, "DIVERGES");
+});
+
+for (const [name, alter] of [
+  ["missing selector", (f) => delete f.witness.S07.ordinaryPulls],
+  ["duplicate selector", (f) => f.witness.S07.ordinaryPulls.push(f.witness.S07.ordinaryPulls[0])],
+  ["wrong dispatch", (f) => f.witness.S07.ordinaryPulls[0].sourceDispatchN++],
+  ["wrong response", (f) => f.witness.S07.ordinaryPulls[0].localResponseN++],
+  ["fabricated ACK use", (f) => (f.witness.S07.ordinaryPulls[0].tokenUse = "acknowledged")],
+  [
+    "unknown Pull",
+    (f) => (f.local.cells.find((c) => c.id === "S07").exchanges[1].response.unknown = true),
+  ],
+  [
+    "duplicate receive",
+    (f) => {
+      const a = f.local.cells.find((c) => c.id === "S07").exchanges[1].response.body
+        .receivedMessages;
+      a.push(a[0]);
+    },
+  ],
+  [
+    "foreign subscription",
+    (f) =>
+      (f.local.cells.find((c) => c.id === "S07").exchanges[1].request = {
+        body: { subscription: "foreign", maxMessages: 1, returnImmediately: true },
+      }),
+  ],
+  [
+    "foreign message",
+    (f) =>
+      (f.local.cells.find(
+        (c) => c.id === "S07",
+      ).exchanges[1].response.body.receivedMessages[0].message.messageId = "foreign"),
+  ],
+  [
+    "changed payload",
+    (f) =>
+      (f.local.cells.find(
+        (c) => c.id === "S07",
+      ).exchanges[1].response.body.receivedMessages[0].message.data = "d3Jvbmc="),
+  ],
+  [
+    "empty ACK",
+    (f) =>
+      (f.local.cells.find(
+        (c) => c.id === "S07",
+      ).exchanges[1].response.body.receivedMessages[0].ackId = ""),
+  ],
+  [
+    "ACK type",
+    (f) =>
+      (f.local.cells.find(
+        (c) => c.id === "S07",
+      ).exchanges[1].response.body.receivedMessages[0].ackId = 1),
+  ],
+  [
+    "stale stream ACK",
+    (f) => {
+      const c = f.local.cells.find((c) => c.id === "S07");
+      c.exchanges[1].response.body.receivedMessages[0].ackId =
+        c.frames[0].body.receivedMessages[0].ackId;
+      f.witness.S07.ordinaryPulls[0].localAck = c.frames[0].body.receivedMessages[0].ackId;
+    },
+  ],
+  ["missing cancel", (f) => f.local.cells.find((c) => c.id === "S07").events.shift()],
+  ["wrong terminal", (f) => (f.local.cells.find((c) => c.id === "S07").events[1].code = 0)],
+  ["missing clock", (f) => delete f.witness.S07.ordinaryPulls[0].clock],
+  [
+    "early clock",
+    (f) => (f.witness.S07.ordinaryPulls[0].clock.instant = "2026-10-09T01:17:41.899Z"),
+  ],
+  [
+    "changed stored time",
+    (f) =>
+      (f.local.cells.find(
+        (c) => c.id === "S07",
+      ).exchanges[1].response.body.receivedMessages[0].message.publishTime =
+        "2026-10-09T01:17:41.898Z"),
+  ],
+  [
+    "illegal timestamp",
+    (f) =>
+      (f.local.cells.find(
+        (c) => c.id === "S07",
+      ).exchanges[1].response.body.receivedMessages[0].message.publishTime =
+        "2026-02-30T01:17:41.899Z"),
+  ],
+  [
+    "unrelated field",
+    (f) => (f.local.cells.find((c) => c.id === "S07").exchanges[1].response.body.extra = true),
+  ],
+  [
+    "unapproved length",
+    (f) => f.local.cells.find((c) => c.id === "S07").exchanges[1].response.bodyBytes++,
+  ],
+  [
+    "missing length",
+    (f) => delete f.local.cells.find((c) => c.id === "S07").exchanges[1].response.bodyBytes,
+  ],
+  ["missing publication", (f) => f.witness.S07.publishTime.publications.splice(0)],
+  [
+    "false publication transcript",
+    (f) =>
+      (f.local.cells.find((c) => c.id === "S07").exchanges[0].response = {
+        ok: false,
+        unknown: true,
+        body: {},
+      }),
+  ],
+])
+  test(`S07 own Pull refuses ${name}`, async () => {
+    const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+    const f = ownPullFixture();
+    alter(f);
+    const row = compareExecutedObservation(f.source, f.local, f.witness, f.disposition)
+      .cells.find((c) => c.id === "S07")
+      .rows.find((r) => r.sourceDispatchN === 10);
+    assert.notEqual(row.verdict, "MATCH");
+  });
+
+test("S07 own Pull missing physical hash never fabricates byte parity", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const f = ownPullFixture();
+  delete f.local.cells.find((c) => c.id === "S07").exchanges[1].response.bodySha256;
+  const row = compareExecutedObservation(f.source, f.local, f.witness, f.disposition)
+    .cells.find((c) => c.id === "S07")
+    .rows.find((r) => r.sourceDispatchN === 10);
+  assert.equal(row.physicalVerdict, "NOT_COMPARABLE");
+});
+
+export function quietPhaseFixture(id = "S01") {
+  const f = generatedTimeFixture(),
+    planCell = makePlan().cells.find((c) => c.id === id);
+  for (const observation of [f.source, f.local]) {
+    observation.cells = observation.cells.filter((c) => c.id !== id || c.id === "S03");
+    const cell = observation.cells.find((c) => c.id === "S03");
+    Object.assign(cell, { id, coordinate: planCell.coordinate, variant: planCell.variant });
+  }
+  f.witness[id] = f.witness.S03;
+  if (id !== "S03") delete f.witness.S03;
+  const proof = f.witness[id];
+  proof.publishTime.cellId = id;
+  for (const [observation, offset, rawSide] of [
+    [f.source, 0, "sourceBytes"],
+    [f.local, 10, "localBytes"],
+  ]) {
+    const cell = observation.cells.find((c) => c.id === id);
+    const body = { subscription: "owned-subscription", streamAckDeadlineSeconds: 10 };
+    const Type = protos.google.pubsub.v1.StreamingPullRequest,
+      raw = Buffer.from(Type.encode(Type.fromObject(body)).finish());
+    cell.frames.unshift({
+      n: 6 + offset,
+      direction: "out",
+      verified: true,
+      body,
+      blob: { bytes: raw.length, sha256: sha(raw) },
+    });
+    const pin = f.disposition.rawFrames.find((p) => p.sourceN === 6) ?? { sourceN: 6, localN: 16 };
+    pin[rawSide] = raw;
+    if (!f.disposition.rawFrames.includes(pin)) f.disposition.rawFrames.unshift(pin);
+    cell.events = cell.frames.map((f) => ({ ...f, event: "stream-frame" }));
+    if (!offset)
+      cell.events.push({
+        n: 8,
+        event: "stream-case-observation",
+        elapsedMs: 2000,
+        state: {
+          terminal: null,
+          inboundEnded: false,
+          incomplete: false,
+          windowExpired: false,
+          windowMs: 90000,
+          received: 1,
+        },
+      });
+    cell.events.push({ n: 9 + offset, event: "stream-cancel", reason: "dispose", elapsedMs: 2010 });
+    if (offset)
+      cell.events.push(
+        { n: 20, event: "stream-error", code: 1, details: "Cancelled on client", elapsedMs: 2011 },
+        { n: 21, event: "stream-status", code: 1, details: "Cancelled on client", elapsedMs: 2012 },
+      );
+  }
+  proof.sourceFrames = [6, 7];
+  proof.actions = [
+    { sourceN: 8, event: "stream-case-observation", elapsedMs: 2000 },
+    { sourceN: 9, event: "stream-cancel", elapsedMs: 2010 },
+  ];
+  return f;
+}
+
+test("declared quiet phase retains full disposal terminal NC separately", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const f = quietPhaseFixture();
+  const cell = compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+    (c) => c.id === "S01",
+  );
+  assert.equal(cell.verdict, "MATCH");
+  assert.equal(cell.approvedComparison.terminalVerdict, "NOT_COMPARABLE");
+  assert.equal(cell.approvedComparison.declaredPhase.verdict, "MATCH");
+  assert.equal(cell.nativeLayout.verdict, "DIVERGES");
+  assert.equal(
+    f.local.cells
+      .find((c) => c.id === "S01")
+      .events.filter((e) => ["stream-error", "stream-status"].includes(e.event)).length,
+    2,
+  );
+});
+
+for (const [name, alter] of [
+  ["missing boundary", (f) => f.local.cells.find((c) => c.id === "S01").events.splice(2, 1)],
+  [
+    "duplicate boundary",
+    (f) => {
+      const c = f.local.cells.find((c) => c.id === "S01");
+      c.events.splice(2, 0, { ...c.events[2], n: 18 });
+    },
+  ],
+  ["truncated frame prefix", (f) => f.local.cells.find((c) => c.id === "S01").events.shift()],
+  ["unordered journal", (f) => f.local.cells.find((c) => c.id === "S01").events.reverse()],
+  [
+    "missing source observation",
+    (f) => f.source.cells.find((c) => c.id === "S01").events.splice(2, 1),
+  ],
+  [
+    "expired source",
+    (f) => (f.source.cells.find((c) => c.id === "S01").events[2].state.windowExpired = true),
+  ],
+  [
+    "incomplete source",
+    (f) => (f.source.cells.find((c) => c.id === "S01").events[2].state.incomplete = true),
+  ],
+  ["wrong count", (f) => f.source.cells.find((c) => c.id === "S01").events[2].state.received++],
+  [
+    "foreign coordinate",
+    (f) => (f.source.cells.find((c) => c.id === "S01").coordinate = "/conditions/13/cases/2"),
+  ],
+  [
+    "foreign variant",
+    (f) => (f.source.cells.find((c) => c.id === "S01").variant = "in-stream-ack"),
+  ],
+  ["missing action", (f) => f.witness.S01.actions.pop()],
+  ["invalid action timing", (f) => (f.witness.S01.actions[1].elapsedMs = NaN)],
+  ["cancel before observation", (f) => (f.witness.S01.actions[1].elapsedMs = 1)],
+  [
+    "foreign proof binding",
+    (f) =>
+      (f.witness.S01.publishTime.source = {
+        ...f.witness.S01.publishTime.source,
+        runId: "foreign",
+      }),
+  ],
+  [
+    "unclosed cleanup",
+    (f) => (f.local.cells.find((c) => c.id === "S01").result.cleanupClosed = false),
+  ],
+])
+  test(`declared quiet phase refuses ${name}`, async () => {
+    const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+    const f = quietPhaseFixture();
+    alter(f);
+    assert.notEqual(
+      compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+        (c) => c.id === "S01",
+      ).verdict,
+      "MATCH",
+    );
+  });
+for (const event of [
+  "stream-error",
+  "stream-status",
+  "stream-inbound-end",
+  "stream-close",
+  "stream-observation-window-end",
+  "stream-frame-refused",
+])
+  test(`declared quiet phase refuses pre-cancel ${event} including the checkpoint race`, async () => {
+    const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+    const f = quietPhaseFixture(),
+      cell = f.local.cells.find((c) => c.id === "S01");
+    cell.events.splice(2, 0, {
+      n: 18,
+      event,
+      code: 1,
+      details: "Cancelled on client",
+      elapsedMs: 2005,
+    });
+    assert.notEqual(
+      compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+        (c) => c.id === "S01",
+      ).verdict,
+      "MATCH",
+    );
+  });
+for (const id of ["S03", "S07", "S08", "S09"])
+  test(`declared quiet phase does not waive ${id} terminals`, async () => {
+    const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+    const f = quietPhaseFixture(id),
+      cell = compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+        (c) => c.id === id,
+      );
+    assert.notEqual(cell.verdict, "MATCH");
+    assert.equal(cell.approvedComparison.declaredPhase, undefined);
+  });
+
+export function unorderedComparisonFixture(localOrder = [0, 1, 2]) {
+  const f = quietPhaseFixture("S06"),
+    proof = f.witness.S06.publishTime;
+  const basePublication = structuredClone(proof.publications[0]);
+  const encode = (body, direction) => {
+    const Type =
+      protos.google.pubsub.v1[
+        direction === "out" ? "StreamingPullRequest" : "StreamingPullResponse"
+      ];
+    return Buffer.from(Type.encode(Type.fromObject(body)).finish());
+  };
+  proof.publications = [0, 1, 2].map((i) => {
+    const p = structuredClone(basePublication);
+    p.sourceDispatchN = 10 + i * 2;
+    p.clock.sourceDispatchN = p.sourceDispatchN;
+    p.sourceRequest.messages[0].data = Buffer.from(`marker${i}`).toString("base64");
+    p.localRequest = structuredClone(p.sourceRequest);
+    p.sourceReply.body.messageIds = [`214384260697775${i}`];
+    p.localReply.body.messageIds = [`222570820393249${i}`];
+    return p;
+  });
+  proof.deliveries = [];
+  const authority = Buffer.from(
+    JSON.stringify({
+      ownerRow: 1171,
+      proposalSha256: "cb37288c3197dace9acd60a2a2b0ba0694efd3077dde4f019e3b863e383dd700",
+      lineSha256: "846f39d9ac6179a62e177206d9e6a95f7e2765af305cf6771445a8c610e796f7",
+    }),
+  );
+  f.disposition.s06OrderingAuthority = { bytes: authority, sha256: sha(authority) };
+  f.disposition.rawFrames = [];
+  for (const [observation, side, offset, order] of [
+    [f.source, "source", 0, [0, 2, 1]],
+    [f.local, "local", 100, localOrder],
+  ]) {
+    const cell = observation.cells.find((c) => c.id === "S06");
+    const setup = proof.subscription;
+    cell.exchanges = ["CreateSubscription", "GetSubscription"].map((method, i) => ({
+      n: 3 + i * 2 + offset,
+      dispatchN: 2 + i * 2 + offset,
+      method,
+      op: method[0].toLowerCase() + method.slice(1),
+      transport: "rest",
+      category: "get",
+      request: {
+        body:
+          method === "CreateSubscription"
+            ? { name: setup.opener, topic: "owned-topic" }
+            : { name: setup.opener },
+      },
+      response: {
+        ok: true,
+        unknown: false,
+        status: 200,
+        code: "OK",
+        bodyBytes: 30,
+        body: { name: setup.opener, topic: "owned-topic" },
+      },
+    }));
+    cell.exchanges.push(
+      ...proof.publications.map((p) => ({
+        n: p.sourceDispatchN + 1 + offset,
+        dispatchN: p.sourceDispatchN + offset,
+        method: "Publish",
+        op: "publish",
+        transport: "rest",
+        category: "publish",
+        request: { body: p.sourceRequest },
+        response: {
+          ...(side === "source" ? p.sourceReply : p.localReply),
+          status: 200,
+          code: "OK",
+          bodyBytes: 30,
+        },
+      })),
+    );
+    const bodies = [
+      {
+        subscription: setup.opener,
+        streamAckDeadlineSeconds: 10,
+        maxOutstandingMessages: "1",
+        maxOutstandingBytes: "1024",
+      },
+    ];
+    for (const i of order) {
+      const ack = `${side}-ack-${i}`;
+      bodies.push(
+        {
+          receivedMessages: [
+            {
+              ackId: ack,
+              message: {
+                messageId: side === "source" ? `214384260697775${i}` : `222570820393249${i}`,
+                data: Buffer.from(`marker${i}`).toString("base64"),
+                publishTime:
+                  side === "source"
+                    ? { seconds: "1791508662", nanos: 21000000 }
+                    : { seconds: "1791508661", nanos: 899000000 },
+              },
+            },
+          ],
+          subscriptionProperties: {},
+        },
+        { ackIds: [ack] },
+      );
+    }
+    cell.frames = bodies.map((body, i) => {
+      const direction = i % 2 === 0 ? "out" : "in",
+        raw = encode(body, direction);
+      const sourceN = 100 + i;
+      const pin = f.disposition.rawFrames.find((p) => p.sourceN === sourceN) ?? {
+        sourceN,
+        localN: sourceN + 100,
+      };
+      pin[side + "Bytes"] = raw;
+      if (!f.disposition.rawFrames.includes(pin)) f.disposition.rawFrames.push(pin);
+      return {
+        n: sourceN + offset,
+        direction,
+        verified: true,
+        body,
+        blob: { bytes: raw.length, sha256: sha(raw) },
+      };
+    });
+    cell.events = cell.frames.map((f) => ({ ...f, event: "stream-frame" }));
+    if (!offset)
+      cell.events.push({
+        n: 107,
+        event: "stream-case-observation",
+        state: {
+          terminal: null,
+          inboundEnded: false,
+          incomplete: false,
+          windowExpired: false,
+          windowMs: 90000,
+          received: 3,
+        },
+        elapsedMs: 8120,
+      });
+    cell.events.push({
+      n: 108 + offset,
+      event: "stream-cancel",
+      reason: "dispose",
+      elapsedMs: 8130,
+    });
+    if (offset)
+      cell.events.push(
+        { n: 209, event: "stream-error", code: 1, details: "Cancelled on client" },
+        { n: 210, event: "stream-status", code: 1, details: "Cancelled on client" },
+      );
+  }
+  f.witness.S06.sourceFrames = [100, 101, 102, 103, 104, 105, 106];
+  f.witness.S06.actions = [
+    { sourceN: 107, event: "stream-case-observation", elapsedMs: 8120 },
+    { sourceN: 108, event: "stream-cancel", elapsedMs: 8130 },
+  ];
+  return f;
+}
+
+test("S06 approved unordered comparison binds each own receive to its actual ACK", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const f = unorderedComparisonFixture();
+  const cell = compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+    (c) => c.id === "S06",
+  );
+  assert.equal(cell.verdict, "MATCH");
+  assert.equal(cell.approvedComparison.terminalVerdict, "NOT_COMPARABLE");
+  assert.equal(cell.nativeLayout.verdict, "DIVERGES");
+  assert.deepEqual(
+    cell.approvedComparison.frames.map((f) => [f.sourceN, f.localN]),
+    [
+      [100, 200],
+      [101, 201],
+      [102, 202],
+      [103, 205],
+      [104, 206],
+      [105, 203],
+      [106, 204],
+    ],
+  );
+});
+
+for (const order of [
+  [0, 1, 2],
+  [0, 2, 1],
+  [1, 0, 2],
+  [1, 2, 0],
+  [2, 0, 1],
+  [2, 1, 0],
+]) {
+  test(`S06 approved unordered own publication permutation ${order.join("")}`, async () => {
+    const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+    const f = unorderedComparisonFixture(order);
+    assert.equal(
+      compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+        (c) => c.id === "S06",
+      ).verdict,
+      "MATCH",
+    );
+  });
+}
+
+function repinUnordered(f) {
+  for (const [observation, side] of [
+    [f.source, "source"],
+    [f.local, "local"],
+  ]) {
+    for (const frame of observation.cells.find((c) => c.id === "S06").frames) {
+      const Type =
+        protos.google.pubsub.v1[
+          frame.direction === "out" ? "StreamingPullRequest" : "StreamingPullResponse"
+        ];
+      const raw = Buffer.from(Type.encode(Type.fromObject(frame.body)).finish());
+      frame.blob = { bytes: raw.length, sha256: sha(raw) };
+      const pin = f.disposition.rawFrames.find(
+        (p) => p[side === "source" ? "sourceN" : "localN"] === frame.n,
+      );
+      pin[side + "Bytes"] = raw;
+      const event = observation.cells
+        .find((c) => c.id === "S06")
+        .events.find((e) => e.n === frame.n);
+      event.body = frame.body;
+      event.blob = frame.blob;
+    }
+  }
+}
+
+for (const [name, change] of [
+  [
+    "missing authority",
+    (f) => {
+      delete f.disposition.s06OrderingAuthority;
+    },
+  ],
+  [
+    "wrong owner authority",
+    (f) => {
+      const a = JSON.parse(f.disposition.s06OrderingAuthority.bytes);
+      a.ownerRow = 1170;
+      const bytes = Buffer.from(JSON.stringify(a));
+      f.disposition.s06OrderingAuthority = { bytes, sha256: sha(bytes) };
+    },
+  ],
+  [
+    "ordered subscription",
+    (f) => {
+      f.local.cells.find((c) => c.id === "S06").exchanges[0].request.body.enableMessageOrdering =
+        true;
+    },
+  ],
+  [
+    "unknown ordering",
+    (f) => {
+      f.local.cells.find((c) => c.id === "S06").exchanges[0].request.body.enableMessageOrdering =
+        "false";
+    },
+  ],
+  [
+    "ordering key",
+    (f) => {
+      f.local.cells.find(
+        (c) => c.id === "S06",
+      ).frames[1].body.receivedMessages[0].message.orderingKey = "key";
+    },
+  ],
+  [
+    "wrong ACK",
+    (f) => {
+      f.local.cells.find((c) => c.id === "S06").frames[2].body.ackIds = ["other-ack"];
+    },
+  ],
+  [
+    "duplicate delivery",
+    (f) => {
+      const c = f.local.cells.find((c) => c.id === "S06");
+      c.frames[3].body.receivedMessages[0].message.messageId =
+        c.frames[1].body.receivedMessages[0].message.messageId;
+    },
+  ],
+  [
+    "foreign delivery",
+    (f) => {
+      f.local.cells.find(
+        (c) => c.id === "S06",
+      ).frames[1].body.receivedMessages[0].message.messageId = "2225708203932499";
+    },
+  ],
+  [
+    "payload changed",
+    (f) => {
+      f.local.cells.find((c) => c.id === "S06").frames[1].body.receivedMessages[0].message.data =
+        Buffer.from("different").toString("base64");
+    },
+  ],
+  [
+    "credit widened",
+    (f) => {
+      f.local.cells.find((c) => c.id === "S06").frames[0].body.maxOutstandingMessages = "2";
+    },
+  ],
+  [
+    "publication binding missing",
+    (f) => {
+      f.witness.S06.publishTime.publications.pop();
+    },
+  ],
+  [
+    "publication transcript changed",
+    (f) => {
+      f.local.cells
+        .find((c) => c.id === "S06")
+        .exchanges.find((e) => e.method === "Publish").request.body.topic = "foreign-topic";
+    },
+  ],
+]) {
+  test(`S06 approved unordered rejects ${name}`, async () => {
+    const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+    const f = unorderedComparisonFixture();
+    change(f);
+    repinUnordered(f);
+    assert.notEqual(
+      compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+        (c) => c.id === "S06",
+      ).verdict,
+      "MATCH",
+    );
+  });
+}
+
+test("S06 ordered same-position control remains strict and matches", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const f = unorderedComparisonFixture([0, 2, 1]);
+  for (const observation of [f.source, f.local]) {
+    const c = observation.cells.find((c) => c.id === "S06");
+    c.exchanges[0].request.body.enableMessageOrdering = true;
+    c.exchanges[0].response.body.enableMessageOrdering = true;
+    c.exchanges[1].response.body.enableMessageOrdering = true;
+  }
+  assert.equal(
+    compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+      (c) => c.id === "S06",
+    ).verdict,
+    "MATCH",
+  );
+});
+
+function phaseFixtureActions(f) {
+  f.witness.S01.actions = f.source.cells
+    .find((c) => c.id === "S01")
+    .events.filter((e) =>
+      ["stream-case-observation", "stream-cancel", "stream-write-end"].includes(e.event),
+    )
+    .map((e) => ({ sourceN: e.n, event: e.event, elapsedMs: e.elapsedMs ?? 2010 }));
+}
+
+function legacyPhaseControl() {
+  const f = quietPhaseFixture();
+  const source = f.source.cells.find((c) => c.id === "S01");
+  const local = f.local.cells.find((c) => c.id === "S01");
+  source.events = source.events.filter((e) => e.event !== "stream-cancel");
+  source.events.find((e) => e.event === "stream-case-observation").state = {
+    terminal: null,
+    incomplete: false,
+  };
+  source.events.push(
+    { n: 9, event: "stream-error", code: 0, details: "" },
+    { n: 10, event: "stream-status", code: 0, details: "" },
+  );
+  local.events = local.events.filter((e) => e.event !== "stream-cancel");
+  for (const e of local.events.filter((e) => ["stream-error", "stream-status"].includes(e.event))) {
+    e.code = 0;
+    e.details = "";
+  }
+  phaseFixtureActions(f);
+  return f;
+}
+
+test("declared quiet legacy control retains strict full terminal without phase proof", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const f = legacyPhaseControl();
+  const c = compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+    (c) => c.id === "S01",
+  );
+  assert.equal(c.verdict, "MATCH");
+  assert.equal(c.approvedComparison.declaredPhase, undefined);
+  assert.equal(c.approvedComparison.terminalVerdict, "MATCH");
+  assert.equal(c.nativeLayout.verdict, "DIVERGES");
+});
+
+for (const [name, change, verdict] of [
+  [
+    "different terminal",
+    (e) => {
+      e.code = 13;
+    },
+    "DIVERGES",
+  ],
+  [
+    "different details",
+    (e) => {
+      e.details = "different";
+    },
+    "DIVERGES",
+  ],
+  [
+    "missing details",
+    (e) => {
+      delete e.details;
+    },
+    "NOT_COMPARABLE",
+  ],
+  [
+    "unknown terminal",
+    (e) => {
+      e.code = "UNKNOWN";
+    },
+    "NOT_COMPARABLE",
+  ],
+])
+  test(`declared quiet legacy strict fallback rejects ${name}`, async () => {
+    const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+    const f = legacyPhaseControl();
+    change(f.local.cells.find((c) => c.id === "S01").events.at(-1));
+    const c = compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+      (c) => c.id === "S01",
+    );
+    assert.equal(c.verdict, verdict);
+    assert.equal(c.approvedComparison.declaredPhase, undefined);
+  });
+
+test("declared quiet legacy strict fallback preserves unequal terminal NC", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const f = legacyPhaseControl();
+  f.local.cells.find((c) => c.id === "S01").events.pop();
+  const c = compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+    (c) => c.id === "S01",
+  );
+  assert.equal(c.verdict, "NOT_COMPARABLE");
+  assert.equal(c.approvedComparison.declaredPhase, undefined);
+});
+
+for (const [name, change] of [
+  [
+    "source cancel only",
+    (f) => {
+      f.source.cells.find((c) => c.id === "S01").events[2].state = {
+        terminal: null,
+        incomplete: false,
+      };
+    },
+  ],
+  [
+    "source bounded state only",
+    (f) => {
+      f.source.cells.find((c) => c.id === "S01").events.splice(3, 1);
+    },
+  ],
+  [
+    "source bounded partial field",
+    (f) => {
+      const c = f.source.cells.find((c) => c.id === "S01");
+      c.events.splice(3, 1);
+      c.events[2].state = { windowMs: 90000, incomplete: false };
+    },
+  ],
+  [
+    "source bad metadata",
+    (f) => {
+      f.source.cells.find((c) => c.id === "S01").coordinate = "/conditions/13/cases/2";
+    },
+  ],
+  [
+    "source wrong count",
+    (f) => {
+      f.source.cells.find((c) => c.id === "S01").events[2].state.received = 2;
+    },
+  ],
+  [
+    "local boundary missing",
+    (f) => {
+      f.local.cells.find((c) => c.id === "S01").events.splice(2, 1);
+    },
+  ],
+])
+  test(`declared quiet partial declaration never falls back on terminal MATCH: ${name}`, async () => {
+    const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+    const f = quietPhaseFixture();
+    const source = f.source.cells.find((c) => c.id === "S01");
+    source.events.push(
+      { n: 10, event: "stream-error", code: 1, details: "Cancelled on client" },
+      { n: 11, event: "stream-status", code: 1, details: "Cancelled on client" },
+    );
+    change(f);
+    phaseFixtureActions(f);
+    const c = compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+      (c) => c.id === "S01",
+    );
+    assert.equal(c.approvedComparison.terminalVerdict, "MATCH");
+    assert.equal(c.approvedComparison.declaredPhase?.verdict, "NOT_COMPARABLE");
+    assert.notEqual(c.verdict, "MATCH");
+  });
+
+test("declared quiet phase refuses actual cancel before the observation action", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const f = quietPhaseFixture();
+  f.local.cells
+    .find((c) => c.id === "S01")
+    .events.find((e) => e.event === "stream-cancel").elapsedMs = 1;
+  const c = compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+    (c) => c.id === "S01",
+  );
+  assert.equal(c.approvedComparison.declaredPhase?.verdict, "NOT_COMPARABLE");
+  assert.notEqual(c.verdict, "MATCH");
+});
+
+test("S06 approved unordered refuses coherently ordered cross-run positions", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const f = unorderedComparisonFixture();
+  for (const observation of [f.source, f.local]) {
+    const c = observation.cells.find((c) => c.id === "S06");
+    c.exchanges[0].request.body.enableMessageOrdering = true;
+    c.exchanges[0].response.body.enableMessageOrdering = true;
+    c.exchanges[1].response.body.enableMessageOrdering = true;
+  }
+  const c = compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+    (c) => c.id === "S06",
+  );
+  assert.equal(c.approvedComparison.verdict, "DIVERGES");
+  assert.notEqual(c.verdict, "MATCH");
+});

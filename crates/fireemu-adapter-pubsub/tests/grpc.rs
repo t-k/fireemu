@@ -1646,9 +1646,14 @@ async fn streaming_pull_strict_message_credit_waits_for_real_ack() {
         .await
         .unwrap();
         drop(tx);
-        assert_credit_held(&mut responses).await;
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
         advance(&h, LogicalDuration::from_seconds(11));
-        assert_credit_held(&mut responses).await;
         let after_ack = h
             .subscriber()
             .await
@@ -1806,14 +1811,18 @@ async fn streaming_pull_credit_is_per_stream() {
     drop(tx_b);
     drop(tx_c);
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(200), responses_b.message())
+        tokio::time::timeout(std::time::Duration::from_secs(2), responses_b.message())
             .await
-            .is_err()
+            .unwrap()
+            .unwrap()
+            .is_none()
     );
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(200), responses_c.message())
+        tokio::time::timeout(std::time::Duration::from_secs(2), responses_c.message())
             .await
-            .is_err()
+            .unwrap()
+            .unwrap()
+            .is_none()
     );
     let mut subscriber = h.subscriber().await;
     let before = subscriber
@@ -1854,6 +1863,7 @@ async fn streaming_pull_credit_is_per_stream() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn streaming_pull_half_close_preserves_strict_delivery_and_emulator_eof() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -1903,6 +1913,22 @@ fn streaming_pull_half_close_preserves_strict_delivery_and_emulator_eof() {
                         .unwrap()
                         .is_none());
                     } else {
+                        let (other_subscription, other_published) =
+                            setup_stream_credit(&h, "other-half-close", 1).await;
+                        let (other_tx, mut other_responses) =
+                            open_credit_stream(&h, &other_subscription).await;
+                        next_credit_delivery(&mut other_responses, &other_published).await;
+                        drop(other_tx);
+                        assert!(tokio::time::timeout(
+                            std::time::Duration::from_secs(2),
+                            other_responses.message()
+                        )
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .is_none());
+                        drop(other_responses);
+                        // A delivery on another stream does not satisfy this stream's EOF condition.
                         // The original native observation waits after ending both outbound frames.
                         assert!(
                             tokio::time::timeout(
@@ -1932,6 +1958,15 @@ fn streaming_pull_half_close_preserves_strict_delivery_and_emulator_eof() {
                         let message = response.received_messages[0].message.as_ref().unwrap();
                         assert_eq!(message.message_id, publication.message_ids[0]);
                         assert_eq!(message.data, b"after-half-close");
+                        assert!(
+                            tokio::time::timeout(
+                                std::time::Duration::from_millis(200),
+                                responses.message()
+                            )
+                            .await
+                            .is_err(),
+                            "delivery after a latched EOF does not create a new EOF event"
+                        );
                     }
                     drop(responses);
                     drop(publisher);
@@ -1950,6 +1985,65 @@ fn streaming_pull_half_close_preserves_strict_delivery_and_emulator_eof() {
             })
             .await
             .expect("half-close delivery and shutdown finish within the owned bound");
+        });
+    }));
+    runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[test]
+fn streaming_pull_half_close_after_owned_delivery_finishes_naturally() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(8), async {
+                let h = start().await;
+                let (subscription, published) =
+                    setup_stream_credit(&h, "delivered-half-close", 1).await;
+                let (tx, mut responses) = open_credit_stream(&h, &subscription).await;
+                let delivery = next_credit_delivery(&mut responses, &published).await;
+                drop(tx);
+                assert!(tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    responses.message()
+                )
+                .await
+                .expect("clean EOF after an owned delivery finishes the response")
+                .expect("natural completion has no RPC error")
+                .is_none());
+                advance(&h, LogicalDuration::from_seconds(11));
+                let redelivery = h
+                    .subscriber()
+                    .await
+                    .pull(pb::PullRequest {
+                        subscription,
+                        max_messages: 1,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner();
+                assert_eq!(redelivery.received_messages.len(), 1);
+                assert_eq!(
+                    redelivery.received_messages[0]
+                        .message
+                        .as_ref()
+                        .unwrap()
+                        .message_id,
+                    delivery.message.as_ref().unwrap().message_id,
+                    "response completion does not acknowledge the owned delivery"
+                );
+                drop(responses);
+                h.shutdown().await;
+            })
+            .await
+            .expect("delivery, natural EOF and shutdown remain bounded");
         });
     }));
     runtime.shutdown_timeout(std::time::Duration::from_secs(1));
@@ -2072,9 +2166,11 @@ async fn streaming_pull_delivers_and_acks() {
         .unwrap();
         drop(tx);
         assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(200), responses.message())
+            tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
                 .await
-                .is_err()
+                .unwrap()
+                .unwrap()
+                .is_none()
         );
         advance(&h, LogicalDuration::from_seconds(11));
         let after_ack = subc

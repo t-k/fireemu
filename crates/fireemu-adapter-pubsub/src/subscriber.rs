@@ -424,6 +424,7 @@ impl Subscriber for SubscriberService {
     type StreamingPullStream =
         Pin<Box<dyn tokio_stream::Stream<Item = Result<pb::StreamingPullResponse, Status>> + Send>>;
 
+    #[allow(clippy::too_many_lines)]
     async fn streaming_pull(
         &self,
         request: Request<tonic::Streaming<pb::StreamingPullRequest>>,
@@ -471,6 +472,7 @@ impl Subscriber for SubscriberService {
             let mut outstanding_ack_ids = BTreeSet::new();
             let mut first = Some(first);
             let mut inbound_open = true;
+            let mut delivered = false;
             // A short poll delivers messages published after the stream opened. This is a
             // delivery cadence only; ack-deadline and redelivery timing run on the virtual clock.
             let mut interval = tokio::time::interval(Duration::from_millis(25));
@@ -490,8 +492,8 @@ impl Subscriber for SubscriberService {
                                     break;
                                 }
                             },
-                            Ok(None) if handle.paging_policy == crate::PagingPolicy::Strict => {
-                                // A clean request half-close leaves the Strict response live.
+                            Ok(None) if handle.paging_policy == crate::PagingPolicy::Strict && !delivered => {
+                                // Before any successful delivery, a clean half-close keeps polling.
                                 inbound_open = false;
                             }
                             Ok(None) | Err(_) => break,
@@ -523,6 +525,7 @@ impl Subscriber for SubscriberService {
                                 if tx.send(Ok(resp)).await.is_err() {
                                     break;
                                 }
+                                delivered = true;
                             }
                             Ok(_) => {}
                             Err(e) => {

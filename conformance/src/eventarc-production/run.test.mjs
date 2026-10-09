@@ -21,6 +21,8 @@ import {
   loadInputs,
   exportComparison,
   deriveLocalBudget,
+  selectSessionProject,
+  buildExecArgs as buildSessionExecArgs,
 } from "./run.mjs";
 const hash = (x) => createHash("sha256").update(x).digest("hex");
 const journal = "a".repeat(64),
@@ -842,4 +844,58 @@ test("local budget rejects a raw cadence that cannot fit its unchanged session c
 test("local budget rejects nonfinite caps and does not silently extend a requested cap", () => {
   for (const cap of [Infinity, NaN, -1, 7360000.5, 7360001])
     assert.throws(() => deriveLocalBudget(budgetInputs(), cap), /finite local budget cap/);
+});
+
+test("original native rows select the declared named daemon authority without changing requests", () => {
+  const inputs = loadInputs();
+  let count = 0;
+  for (const [label, corpus] of Object.entries(inputs.corpora)) {
+    const before = structuredClone(corpus.rows);
+    assert.equal(corpus.rows[0].n, 1);
+    assert.match(corpus.rows[0].request.path, /^\/v1\/projects\/123456789012\/services\//);
+    const project = selectSessionProject(corpus.rows);
+    assert.equal(project, "fireemu-oracle-idp", label);
+    const config = sessionConfiguration({
+      project,
+      ports: [32001, 32002, 32003, 32004, 32005, 32006, 32007],
+      runner: "runner",
+      guard: "guard",
+      fixture: "fixture",
+    });
+    assert.equal(config.fireemu.daemon.authProject, project);
+    assert.equal(config.fireemu.daemon.authProjectNumbers[project], "123456789012");
+    const args = buildSessionExecArgs({
+      work: "work",
+      project,
+      tasksPort: config.tasksPort,
+      guard: "guard",
+      session: "session",
+    });
+    assert.equal(args[args.indexOf("--project") + 1], project);
+    assert.deepEqual(corpus.rows, before);
+    count += corpus.rows.length;
+  }
+  assert.equal(count, 1043);
+});
+
+test("named authority refuses missing and foreign-only paths while retaining adversarial order", () => {
+  const named = "/v1/projects/fireemu-oracle-idp/locations/us-central1/channels";
+  const foreign = "/v1/projects/fireemu-no-such-project-0/locations/us-central1/channels";
+  const numeric = "/v1/projects/123456789012/services/eventarcpublishing.googleapis.com";
+  const rows = (paths) => paths.map((path) => ({ request: { path } }));
+  for (const paths of [
+    [],
+    [numeric],
+    [foreign],
+    ["/elsewhere"],
+    ["/v1/projects/fireemu-oracle-idp-suffix/locations/us-central1/channels"],
+  ])
+    assert.throws(() => selectSessionProject(rows(paths)), /public named project authority/);
+  for (let i = 0; i < 32; i++) {
+    const paths = i % 2 ? [numeric, foreign, named] : [foreign, numeric, named];
+    const input = rows(paths),
+      before = structuredClone(input);
+    assert.equal(selectSessionProject(input), "fireemu-oracle-idp");
+    assert.deepEqual(input, before);
+  }
 });

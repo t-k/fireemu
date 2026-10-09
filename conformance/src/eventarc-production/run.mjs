@@ -300,6 +300,15 @@ export async function replayWithWire(rows, { base, fetchImpl = fetch, requestTim
   assert.equal(index, queue.length);
   return { complete: wire.every((x) => !x.failure), results, ...summarize(results), wire };
 }
+// Authority declared by the existing Rust replay fixture and its recording READMEs.
+export function selectSessionProject(rows) {
+  const project = "fireemu-oracle-idp";
+  assert.ok(
+    rows.some((row) => row.request.path.startsWith(`/v1/projects/${project}/locations/`)),
+    "public named project authority",
+  );
+  return project;
+}
 export function sessionConfiguration({ project, ports, runner, guard, fixture }) {
   assert.ok(typeof project === "string" && /^[a-zA-Z0-9-]+$/.test(project));
   assert.ok(
@@ -1046,10 +1055,7 @@ export async function check({
         sessionPath = join(work, "session.json");
       writeFileSync(guard, offlineGuardSource);
       const rows = inputs.corpora[label].rows;
-      const project = rows
-        .map((x) => /^\/v1\/projects\/([^/]+)/.exec(x.request.path)?.[1])
-        .find(Boolean);
-      assert.ok(project && !/^\d+$/.test(project), "public named project authority");
+      const project = selectSessionProject(rows);
       const ports = await reservePorts(),
         config = sessionConfiguration({ project, ports, runner, guard, fixture });
       save(join(work, "fireemu.json"), config.fireemu);

@@ -1160,3 +1160,287 @@ test("S03 disposal terminal comparison retains cause and never fills the prior n
     assert.equal(actual.events.find((e) => e.n === 22).state.terminal, null);
   }
 });
+
+export function generatedTimeProof() {
+  const bytes = Buffer.from(
+    JSON.stringify({
+      ownerRow: 1135,
+      proposalSha256: "8238575c8202949f721b59bb9c97ee36b3f0ae701efd552f4169c70fcf0c1c53",
+    }),
+  );
+  const request = { topic: "owned-topic", messages: [{ data: "bWFya2Vy" }] };
+  const clockBody = { clock: "2026-10-09T01:17:41.899000000Z", backwardsSets: 0 };
+  const clockBytes = Buffer.from(JSON.stringify(clockBody));
+  return {
+    authority: { bytes, sha256: createHash("sha256").update(bytes).digest("hex") },
+    runtime: { binarySha256: "a".repeat(64), inputsSha256: "b".repeat(64) },
+    compiledInputs: { binarySha256: "a".repeat(64), inputsSha256: "b".repeat(64) },
+    publications: [
+      {
+        sourceDispatchN: 10,
+        sourceRequest: request,
+        localRequest: structuredClone(request),
+        sourceReply: { ok: true, unknown: false, body: { messageIds: ["source"] } },
+        localReply: { ok: true, unknown: false, body: { messageIds: ["local"] } },
+        clock: {
+          sourceDispatchN: 10,
+          session: "default",
+          instant: "2026-10-09T01:17:41.899Z",
+          status: 200,
+          body: clockBody,
+          responseBytes: clockBytes.toString("base64"),
+          responseSha256: createHash("sha256").update(clockBytes).digest("hex"),
+        },
+      },
+    ],
+    subscription: {
+      opener: "owned-subscription",
+      sourceRequest: { name: "owned-subscription" },
+      localRequest: { name: "owned-subscription" },
+      sourceReply: {
+        ok: true,
+        unknown: false,
+        body: { name: "owned-subscription", topic: "owned-topic" },
+      },
+      localReply: {
+        ok: true,
+        unknown: false,
+        body: { name: "owned-subscription", topic: "owned-topic" },
+      },
+    },
+    deliveries: [],
+  };
+}
+
+export function generatedTimeFixture() {
+  const f = approvedNativeFixture(),
+    proof = generatedTimeProof();
+  for (const observation of [f.source, f.local]) {
+    observation.cells = observation.cells.filter((c) => c.id !== "S03");
+    observation.cells.find((c) => c.id === "S16").id = "S03";
+  }
+  f.witness.S03 = f.witness.S16;
+  delete f.witness.S16;
+  const source = f.source.cells.find((c) => c.id === "S03"),
+    local = f.local.cells.find((c) => c.id === "S03");
+  proof.publications[0].sourceReply.body.messageIds = ["source-1"];
+  proof.publications[0].localReply.body.messageIds = ["actual-1"];
+  proof.source = f.disposition.source;
+  f.disposition.publishTime = proof;
+  f.witness.S03.publishTime = proof;
+  const Type = protos.google.pubsub.v1.StreamingPullResponse;
+  for (const [cell, timestamp, side] of [
+    [source, { seconds: "1791508662", nanos: 21000000 }, "sourceBytes"],
+    [local, { seconds: "1791508661", nanos: 899000000 }, "localBytes"],
+  ]) {
+    cell.frames[0].body.receivedMessages[0].message.publishTime = timestamp;
+    const raw = Buffer.from(Type.encode(Type.fromObject(cell.frames[0].body)).finish());
+    cell.frames[0].blob = {
+      bytes: raw.length,
+      sha256: createHash("sha256").update(raw).digest("hex"),
+    };
+    f.disposition.rawFrames[0][side] = raw;
+  }
+  return f;
+}
+test("generated publishTime raw projection admits only its induced scalar and ancestor lengths", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const verdict = (f) =>
+    compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+      (c) => c.id === "S03",
+    ).approvedComparison.verdict;
+  assert.equal(verdict(generatedTimeFixture()), "MATCH");
+  for (const [alter, expected] of [
+    [(f) => f.disposition.publishTime.publications.splice(0), "NOT_COMPARABLE"],
+    [
+      (f) => {
+        const clock = f.disposition.publishTime.publications[0].clock;
+        clock.body.clock = "2026-10-09T01:17:41.898Z";
+        const bytes = Buffer.from(JSON.stringify(clock.body));
+        clock.responseBytes = bytes.toString("base64");
+        clock.responseSha256 = createHash("sha256").update(bytes).digest("hex");
+      },
+      "DIVERGES",
+    ],
+    [(f) => delete f.disposition.publishTime, "DIVERGES"],
+  ]) {
+    const f = generatedTimeFixture();
+    alter(f);
+    assert.equal(verdict(f), expected);
+  }
+  const Type = protos.google.pubsub.v1.StreamingPullResponse;
+  for (const alter of [
+    (body) => (body.receivedMessages[0].message.orderingKey = "other"),
+    (body) => body.receivedMessages[0].message.publishTime.nanos++,
+    (body) => delete body.receivedMessages[0].message.publishTime.seconds,
+    (body) => (body.receivedMessages[0].deliveryAttempt = 1),
+  ]) {
+    const f = generatedTimeFixture(),
+      frame = f.local.cells.find((c) => c.id === "S03").frames[0];
+    alter(frame.body);
+    const raw = Buffer.from(Type.encode(Type.fromObject(frame.body)).finish());
+    frame.blob = { bytes: raw.length, sha256: createHash("sha256").update(raw).digest("hex") };
+    f.disposition.rawFrames[0].localBytes = raw;
+    assert.notEqual(verdict(f), "MATCH");
+  }
+});
+
+test("generated timestamp projection preserves shortest widths, field layout and sibling bytes", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const Response = protos.google.pubsub.v1.StreamingPullResponse,
+    Timestamp = protos.google.protobuf.Timestamp;
+  const encode = (Type, body) => Buffer.from(Type.encode(Type.fromObject(body)).finish());
+  const frameOf = (f, side) => f[side].cells.find((c) => c.id === "S03").frames[0];
+  const pin = (f, side, raw) => {
+    const frame = frameOf(f, side);
+    frame.body = Response.toObject(Response.decode(raw), {
+      longs: String,
+      enums: String,
+      bytes: String,
+      defaults: false,
+    });
+    frame.blob = { bytes: raw.length, sha256: createHash("sha256").update(raw).digest("hex") };
+    f.disposition.rawFrames[0][`${side}Bytes`] = raw;
+  };
+  const projectedCell = (f) =>
+    compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+      (c) => c.id === "S03",
+    );
+  for (const bytes of [105, 113, 120]) {
+    const f = generatedTimeFixture(),
+      data = Buffer.alloc(bytes, 0x61).toString("base64");
+    for (const side of ["source", "local"]) {
+      frameOf(f, side).body.receivedMessages[0].message.data = data;
+      f.disposition.publishTime.publications[0][`${side}Request`].messages[0].data = data;
+      pin(f, side, encode(Response, frameOf(f, side).body));
+    }
+    const cell = projectedCell(f);
+    assert.equal(cell.approvedComparison.verdict, "MATCH");
+    assert.equal(cell.approvedComparison.physicalVerdict, "DIVERGES");
+    assert.equal(frameOf(f, "source").body.receivedMessages[0].message.publishTime.nanos, 21000000);
+  }
+  const length = (value) => {
+    const bytes = [];
+    do {
+      bytes.push((value & 127) | (value > 127 ? 128 : 0));
+      value = Math.floor(value / 128);
+    } while (value);
+    return Buffer.from(bytes);
+  };
+  const field = (tag, raw) => Buffer.concat([Buffer.from([tag]), length(raw.length), raw]);
+  for (const alter of [
+    (raw) => Buffer.concat([raw, Buffer.from([0x08, 1])]),
+    (raw) => Buffer.concat([raw, Buffer.from([0x18, 1])]),
+    (raw) => Buffer.concat([Buffer.from([0x0a, 1, 1]), raw.subarray(6)]),
+    (raw) => Buffer.concat([Buffer.from([0x08, raw[1] | 128, 0]), raw.subarray(2)]),
+    (raw) => Buffer.concat([raw.subarray(6), raw.subarray(0, 6)]),
+  ]) {
+    const f = generatedTimeFixture(),
+      body = frameOf(f, "local").body;
+    const item = body.receivedMessages[0],
+      { publishTime, ...message } = item.message,
+      { message: _message, ...received } = item;
+    const timestamp = alter(encode(Timestamp, publishTime));
+    const rawMessage = Buffer.concat([
+      encode(protos.google.pubsub.v1.PubsubMessage, message),
+      field(0x22, timestamp),
+    ]);
+    const rawReceived = Buffer.concat([
+      encode(protos.google.pubsub.v1.ReceivedMessage, received),
+      field(0x12, rawMessage),
+    ]);
+    const raw = Buffer.concat([
+      field(0x0a, rawReceived),
+      encode(Response, { subscriptionProperties: body.subscriptionProperties }),
+    ]);
+    try {
+      pin(f, "local", raw);
+    } catch {
+      frameOf(f, "local").body = {};
+      frameOf(f, "local").blob = {
+        bytes: raw.length,
+        sha256: createHash("sha256").update(raw).digest("hex"),
+      };
+      f.disposition.rawFrames[0].localBytes = raw;
+    }
+    assert.notEqual(projectedCell(f).approvedComparison.verdict, "MATCH");
+  }
+});
+
+test("generated Timestamp raw scalars reject int32 aliases and retain signed int64 seconds", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const Response = protos.google.pubsub.v1.StreamingPullResponse;
+  const encode = (Type, body) => Buffer.from(Type.encode(Type.fromObject(body)).finish());
+  const unsigned = (value) => {
+    const bytes = [];
+    do {
+      bytes.push(Number(value & 127n) | (value > 127n ? 128 : 0));
+      value >>= 7n;
+    } while (value);
+    return Buffer.from(bytes);
+  };
+  const field = (tag, body) =>
+    Buffer.concat([Buffer.from([tag]), unsigned(BigInt(body.length)), body]);
+  const frameOf = (f, side) => f[side].cells.find((c) => c.id === "S03").frames[0];
+  const replaceRaw = (f, side, rawNanos) => {
+    const frame = frameOf(f, side),
+      item = frame.body.receivedMessages[0];
+    const { publishTime, ...message } = item.message,
+      { message: _message, ...received } = item;
+    const timestamp = Buffer.concat([
+      Buffer.from([8]),
+      unsigned(BigInt.asUintN(64, BigInt(publishTime.seconds))),
+      Buffer.from([16]),
+      unsigned(rawNanos),
+    ]);
+    const rawMessage = Buffer.concat([
+      encode(protos.google.pubsub.v1.PubsubMessage, message),
+      field(0x22, timestamp),
+    ]);
+    const rawReceived = Buffer.concat([
+      encode(protos.google.pubsub.v1.ReceivedMessage, received),
+      field(0x12, rawMessage),
+    ]);
+    const raw = Buffer.concat([
+      field(0x0a, rawReceived),
+      encode(Response, { subscriptionProperties: frame.body.subscriptionProperties }),
+    ]);
+    const decoded = Response.toObject(Response.decode(raw), {
+      longs: String,
+      enums: String,
+      bytes: String,
+      defaults: false,
+    });
+    assert.deepEqual(decoded, frame.body);
+    frame.blob = { bytes: raw.length, sha256: createHash("sha256").update(raw).digest("hex") };
+    f.disposition.rawFrames[0][`${side}Bytes`] = raw;
+  };
+  const verdict = (f) =>
+    compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+      (c) => c.id === "S03",
+    ).approvedComparison.verdict;
+  for (const side of ["source", "local"]) {
+    for (const excess of [1n << 32n, 2n << 32n, 3n << 32n]) {
+      const f = generatedTimeFixture(),
+        nanos = frameOf(f, side).body.receivedMessages[0].message.publishTime.nanos;
+      replaceRaw(f, side, BigInt(nanos) + excess);
+      assert.notEqual(verdict(f), "MATCH", `${side} raw nanos alias`);
+    }
+  }
+  for (const side of ["source", "local"])
+    for (const seconds of ["-62135596800", "-1", "253402300799"]) {
+      const f = generatedTimeFixture(),
+        frame = frameOf(f, side);
+      frame.body.receivedMessages[0].message.publishTime.seconds = seconds;
+      if (side === "local") {
+        const clock = f.disposition.publishTime.publications[0].clock;
+        clock.instant = new Date(Number(seconds) * 1000).toISOString().replace(".000Z", ".899Z");
+        clock.body.clock = clock.instant;
+        const bytes = Buffer.from(JSON.stringify(clock.body));
+        clock.responseBytes = bytes.toString("base64");
+        clock.responseSha256 = createHash("sha256").update(bytes).digest("hex");
+      }
+      replaceRaw(f, side, BigInt(frame.body.receivedMessages[0].message.publishTime.nanos));
+      assert.equal(verdict(f), "MATCH", `${side} signed seconds ${seconds}`);
+    }
+});

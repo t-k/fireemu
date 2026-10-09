@@ -1,3 +1,4 @@
+import { publicationTimeVerdict, publishTimeAuthorized } from "./replay-native.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 import { protos } from "@google-cloud/pubsub";
@@ -451,7 +452,24 @@ function compareZeroOutcome(source, local, original, actual, proof) {
 }
 
 // Preserve field order and non-ACK values and widths, except bound message identities.
-function ackWireProjection(raw, kind) {
+// Generated timestamp scalar placeholders retain presence and derive each ancestor length exactly.
+function ackWireProjection(raw, kind, generatedTime = false) {
+  let normalizedBytes = raw.length;
+  const timestamp =
+    generatedTime && kind === "timestamp"
+      ? protos.google.protobuf.Timestamp.toObject(protos.google.protobuf.Timestamp.decode(raw), {
+          longs: String,
+          defaults: false,
+        })
+      : null;
+  const encodeLength = (value) => {
+    const bytes = [];
+    do {
+      bytes.push((value & 127) | (value > 127 ? 128 : 0));
+      value = Math.floor(value / 128);
+    } while (value);
+    return Buffer.from(bytes);
+  };
   let offset = 0,
     containsAck = false;
   const fields = [],
@@ -495,21 +513,42 @@ function ackWireProjection(raw, kind) {
     if (singular && seen.has(number)) throw new Error("duplicate native field");
     seen.add(number);
     if ((ack || childKind) && wire !== 2) throw new Error("native field wire type");
-    let payload, prefix;
+    let payload, prefix, scalar;
     if (wire === 2) {
       prefix = varint();
       if (prefix.value > BigInt(raw.length - offset)) throw new Error("truncated native field");
       const length = Number(prefix.value);
       payload = raw.subarray(offset, offset + length);
       offset += length;
-    } else if (wire === 0) payload = varint().bytes;
-    else if ([1, 5].includes(wire)) {
+    } else if (wire === 0) {
+      scalar = varint();
+      payload = scalar.bytes;
+    } else if ([1, 5].includes(wire)) {
       const length = wire === 1 ? 8 : 4;
       if (offset + length > raw.length) throw new Error("truncated native field");
       payload = raw.subarray(offset, offset + length);
       offset += length;
     } else throw new Error("unsupported native wire type");
     const field = { number, wire, tag: tag.bytes.toString("hex") };
+    if (generatedTime && kind === "timestamp") {
+      if (![1, 2].includes(number) || wire !== 0)
+        throw new Error("generated timestamp field layout invalid");
+      const key = number === 1 ? "seconds" : "nanos";
+      const value = number === 1 ? BigInt.asIntN(64, scalar.value) : scalar.value;
+      if (
+        !Object.hasOwn(timestamp, key) ||
+        (number === 1
+          ? value < -62135596800n || value > 253402300799n
+          : value < 0n || value > 999999999n) ||
+        value !== BigInt(timestamp[key])
+      )
+        throw new Error("generated timestamp raw scalar invalid");
+      field.bytes = 1;
+      field.value = "generated";
+      normalizedBytes += 1 - payload.length;
+      fields.push(field);
+      continue;
+    }
     if (ack) {
       const text = payload.toString("utf8");
       if (!text || !Buffer.from(text).equals(payload) || acks.has(text))
@@ -518,9 +557,13 @@ function ackWireProjection(raw, kind) {
       field.ack = true;
       containsAck = true;
     } else if (childKind) {
-      const child = ackWireProjection(payload, childKind);
+      const child = ackWireProjection(payload, childKind, generatedTime);
       field.fields = child.fields;
-      if (!child.containsAck) field.prefix = prefix.bytes.toString("hex");
+      const normalizedPrefix = encodeLength(child.normalizedBytes);
+      normalizedBytes +=
+        child.normalizedBytes - payload.length + normalizedPrefix.length - prefix.bytes.length;
+      if (!child.containsAck)
+        field.prefix = (generatedTime ? normalizedPrefix : prefix.bytes).toString("hex");
       containsAck ||= child.containsAck;
     } else {
       field.bytes = payload.length;
@@ -531,7 +574,7 @@ function ackWireProjection(raw, kind) {
     fields.push(field);
   }
   if (kind === "received" && !seen.has(1)) throw new Error("native ACK absent");
-  return { fields, containsAck };
+  return { fields, containsAck, normalizedBytes };
 }
 
 function approvedBinding(source, local, disposition) {
@@ -609,9 +652,26 @@ function approvedNativeComparison(original, actual, proof, disposition, binding)
     !binding || !complete || proof.semanticsVerified !== true ? "NOT_COMPARABLE" : "MATCH";
   if (verdict === "MATCH") {
     try {
+      const generated = original.id === "S03" ? disposition.publishTime : null;
+      if (
+        generated &&
+        (!publishTimeAuthorized(generated) ||
+          !isDeepStrictEqual(generated.source, disposition.source) ||
+          !isDeepStrictEqual(proof.publishTime?.runtime, generated.runtime))
+      )
+        verdict = "NOT_COMPARABLE";
       for (const [i, sourceFrame] of original.frames.entries()) {
         const localFrame = actual.frames[i];
         const raw = disposition.rawFrames.find((f) => f.sourceN === sourceFrame.n);
+        let timeVerdict = "MATCH";
+        if (
+          generated &&
+          sourceFrame.direction === "in" &&
+          sourceFrame.body.receivedMessages?.length
+        ) {
+          timeVerdict = publicationTimeVerdict(sourceFrame.body, localFrame.body, generated);
+          if (timeVerdict !== "MATCH") verdict = timeVerdict;
+        }
         const projections = [
           [sourceFrame, raw.sourceBytes],
           [localFrame, raw.localBytes],
@@ -635,8 +695,11 @@ function approvedNativeComparison(original, actual, proof, disposition, binding)
           });
           if (!isDeepStrictEqual(sanitize(decoded), frame.body))
             throw new Error("native decoded body mismatch");
-          return ackWireProjection(bytes, frame.direction === "out" ? "request" : "response")
-            .fields;
+          return ackWireProjection(
+            bytes,
+            frame.direction === "out" ? "request" : "response",
+            Boolean(generated),
+          ).fields;
         });
         const matches =
           sourceFrame.direction === localFrame.direction &&
@@ -646,7 +709,7 @@ function approvedNativeComparison(original, actual, proof, disposition, binding)
           localN: localFrame.n,
           sourceSha256: sourceFrame.blob.sha256,
           localSha256: localFrame.blob.sha256,
-          verdict: matches ? "MATCH" : "DIVERGES",
+          verdict: matches ? timeVerdict : "DIVERGES",
         });
         if (!matches) verdict = "DIVERGES";
       }
@@ -661,7 +724,9 @@ function approvedNativeComparison(original, actual, proof, disposition, binding)
     authoritySha256: disposition?.authority?.sha256 ?? null,
     terminalVerdict,
     frames,
-    scope: "explicit offline ACK-only wire disposition; literal physical result retained",
+    scope: disposition?.publishTime
+      ? "explicit ACK and publication-bound generated publishTime disposition; literal physical result retained"
+      : "explicit offline ACK-only wire disposition; literal physical result retained",
   };
 }
 

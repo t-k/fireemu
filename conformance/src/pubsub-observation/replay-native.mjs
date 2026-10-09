@@ -1,4 +1,5 @@
 import grpc from "@grpc/grpc-js";
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { CAPS } from "./plan.mjs";
 
@@ -108,7 +109,122 @@ function legalTimestamp(value) {
   );
 }
 
-export function matchNativeReceive(source, actual, bindings) {
+export function publishTimeAuthorized(proof) {
+  try {
+    const { bytes, sha256 } = proof.authority;
+    const approval = JSON.parse(bytes);
+    return (
+      Buffer.isBuffer(bytes) &&
+      bytes.length <= 65536 &&
+      createHash("sha256").update(bytes).digest("hex") === sha256 &&
+      approval.ownerRow === 1135 &&
+      approval.proposalSha256 ===
+        "8238575c8202949f721b59bb9c97ee36b3f0ae701efd552f4169c70fcf0c1c53" &&
+      [proof.runtime?.binarySha256, proof.runtime?.inputsSha256].every((v) =>
+        /^[a-f0-9]{64}$/.test(v),
+      ) &&
+      isDeepStrictEqual(proof.runtime, proof.compiledInputs)
+    );
+  } catch {
+    return false;
+  }
+}
+function instantNanos(value) {
+  const match =
+    typeof value === "string" &&
+    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{3}|\d{6}|\d{9}))?Z$/.exec(value);
+  if (!match || !Number.isFinite(Date.parse(`${match[1]}Z`))) return null;
+  return BigInt(Date.parse(`${match[1]}Z`)) * 1000000n + BigInt((match[2] ?? "").padEnd(9, "0"));
+}
+const timestampNanos = (value) =>
+  BigInt(value.seconds ?? 0) * 1000000000n + BigInt(value.nanos ?? 0);
+export function publicationTimeVerdict(source, actual, proof) {
+  if (!publishTimeAuthorized(proof)) return "NOT_COMPARABLE";
+  if (
+    !Array.isArray(source.receivedMessages) ||
+    !Array.isArray(actual.receivedMessages) ||
+    source.receivedMessages.length !== actual.receivedMessages.length
+  )
+    return "DIVERGES";
+  for (const [i, item] of source.receivedMessages.entries()) {
+    const peer = actual.receivedMessages[i];
+    if (!legalTimestamp(item.message?.publishTime)) return "NOT_COMPARABLE";
+    if (
+      !legalTimestamp(peer.message?.publishTime) ||
+      !isDeepStrictEqual(
+        Object.keys(item.message.publishTime).toSorted(),
+        Object.keys(peer.message.publishTime).toSorted(),
+      ) ||
+      Object.keys(item.message.publishTime).some(
+        (key) => typeof item.message.publishTime[key] !== typeof peer.message.publishTime[key],
+      )
+    )
+      return "DIVERGES";
+    const id = peer.message?.messageId;
+    const publications =
+      proof.publications?.filter(
+        (p) =>
+          p.sourceReply?.body?.messageIds?.includes(item.message?.messageId) &&
+          p.localReply?.body?.messageIds?.includes(id),
+      ) ?? [];
+    if (publications.length !== 1) return "NOT_COMPARABLE";
+    const p = publications[0],
+      subscription = proof.subscription,
+      index = p.sourceReply.body.messageIds.indexOf(item.message.messageId);
+    if (
+      !subscription ||
+      ![subscription.sourceReply, subscription.localReply].every(
+        (r) => r?.ok === true && r.unknown !== true,
+      ) ||
+      ![subscription.sourceReply, subscription.localReply].every(
+        (r) => r.body?.topic === p.sourceRequest.topic,
+      ) ||
+      typeof subscription.opener !== "string" ||
+      subscription.sourceRequest?.name !== subscription.opener ||
+      subscription.sourceReply.body.name !== subscription.sourceRequest?.name ||
+      subscription.localReply.body.name !== subscription.localRequest?.name ||
+      !isDeepStrictEqual(subscription.sourceRequest, subscription.localRequest) ||
+      ![p.sourceReply, p.localReply].every((r) => r.ok === true && r.unknown !== true) ||
+      !isDeepStrictEqual(p.sourceRequest, p.localRequest) ||
+      typeof p.sourceRequest?.topic !== "string" ||
+      p.sourceReply.body.messageIds.length !== p.sourceRequest.messages?.length ||
+      p.localReply.body.messageIds.length !== p.localRequest.messages?.length ||
+      p.localReply.body.messageIds[index] !== id ||
+      !["data", "attributes", "orderingKey"].every(
+        (key) =>
+          isDeepStrictEqual(p.sourceRequest.messages[index][key], item.message[key]) &&
+          isDeepStrictEqual(p.localRequest.messages[index][key], peer.message[key]),
+      ) ||
+      p.clock?.sourceDispatchN !== p.sourceDispatchN ||
+      p.clock?.session !== "default" ||
+      p.clock?.status !== 200 ||
+      instantNanos(p.clock.instant) === null ||
+      instantNanos(p.clock.body?.clock) === null
+    )
+      return "NOT_COMPARABLE";
+    try {
+      const bytes = Buffer.from(p.clock.responseBytes, "base64");
+      if (
+        bytes.length > 65536 ||
+        createHash("sha256").update(bytes).digest("hex") !== p.clock.responseSha256 ||
+        !isDeepStrictEqual(JSON.parse(bytes), p.clock.body)
+      )
+        return "NOT_COMPARABLE";
+    } catch {
+      return "NOT_COMPARABLE";
+    }
+    if (
+      instantNanos(p.clock.instant) !== instantNanos(p.clock.body.clock) ||
+      timestampNanos(peer.message.publishTime) !== instantNanos(p.clock.body.clock) ||
+      proof.deliveries?.some(
+        (d) => d.messageId === id && !isDeepStrictEqual(d.publishTime, peer.message.publishTime),
+      )
+    )
+      return "DIVERGES";
+  }
+  return "MATCH";
+}
+export function matchNativeReceive(source, actual, bindings, publishTime = null) {
   if (
     !Array.isArray(source.receivedMessages) ||
     !Array.isArray(actual.receivedMessages) ||
@@ -125,17 +241,47 @@ export function matchNativeReceive(source, actual, bindings) {
     )
       throw new Error("native receive timestamp presence or structure mismatch");
   }
+  let verdict = "MATCH";
+  if (publishTime) {
+    for (const [i, item] of source.receivedMessages.entries()) {
+      const peer = actual.receivedMessages[i];
+      if (
+        !Object.hasOwn(item.message, "publishTime") ||
+        !isDeepStrictEqual(
+          Object.keys(item.message.publishTime).toSorted(),
+          Object.keys(peer.message.publishTime).toSorted(),
+        ) ||
+        Object.keys(item.message.publishTime).some(
+          (key) => typeof item.message.publishTime[key] !== typeof peer.message.publishTime[key],
+        )
+      )
+        throw new Error("native receive timestamp presence or structure mismatch");
+    }
+    verdict = publicationTimeVerdict(source, actual, publishTime);
+    if (verdict === "DIVERGES") throw new Error("native publication timestamp mismatch");
+  }
   bindings.linkReceive(source, actual);
   const rewrite = (body) => ({
     ...body,
     receivedMessages: body.receivedMessages.map((item) => ({
       ...item,
       ackId: undefined,
-      message: { ...item.message, messageId: undefined },
+      message: {
+        ...item.message,
+        messageId: undefined,
+        ...(publishTime ? { publishTime: undefined } : {}),
+      },
     })),
   });
   if (!isDeepStrictEqual(rewrite(source), rewrite(actual)))
     throw new Error("native receive semantic mismatch");
+  if (publishTime && verdict === "MATCH")
+    for (const item of actual.receivedMessages)
+      publishTime.deliveries?.push({
+        messageId: item.message.messageId,
+        publishTime: structuredClone(item.message.publishTime),
+      });
+  return verdict;
 }
 export function createActionClock({
   advance,
@@ -150,8 +296,9 @@ export function createActionClock({
     if (!Number.isFinite(instant) || instant < last) throw new Error("logical clock regressed");
     last = instant;
     const receipt = { n: row.n ?? null, instant: new Date(instant).toISOString() };
-    await advance(receipt);
+    const observed = await advance(receipt);
     requests.push(receipt);
+    return observed;
   }
   return {
     dispatch,
@@ -197,6 +344,7 @@ export function createNativeReplay({
   cells,
   sourceCells = [],
   journal = null,
+  publishTime = null,
 }) {
   let active = null;
   const witnesses = new Map();
@@ -272,6 +420,7 @@ export function createNativeReplay({
           unordered,
           cellId: cell.id,
           sourceOpenedAt: Date.parse(row.at),
+          subscription: row.body.subscription,
         };
         active.stream = await wire.open({ cellId: cell.id, opener: row.body });
         witnesses.set(cell.id, {
@@ -340,13 +489,24 @@ export function createNativeReplay({
             if (matches.length !== 1)
               throw new Error("native unordered owned receive missing or duplicate");
             const [id, candidate] = matches[0];
-            matchNativeReceive({ ...row.body, receivedMessages: [candidate] }, actual, bindings);
+            const result = matchNativeReceive(
+              { ...row.body, receivedMessages: [candidate] },
+              actual,
+              bindings,
+              publishTime?.(cell.id, active.subscription),
+            );
+            if (result !== "MATCH") witnesses.get(cell.id).publicationIncomplete = true;
             const slot = row.body.receivedMessages[0].ackId;
             if (active.unordered.ackSlots.has(slot))
               throw new Error("native ACK slot already live");
             active.unordered.ackSlots.set(slot, received.ackId);
             active.unordered.pending.delete(id);
-          } else matchNativeReceive(row.body, actual, bindings);
+          } else {
+            const evidence = publishTime?.(cell.id, active.subscription);
+            const result = matchNativeReceive(row.body, actual, bindings, evidence);
+            if (evidence) witnesses.get(cell.id).publishTime = evidence;
+            if (result !== "MATCH") witnesses.get(cell.id).publicationIncomplete = true;
+          }
           if (cell.variant === "flow-control" && actual.receivedMessages?.length) {
             const instant = receivedAt.get(actual);
             if (!Number.isFinite(instant))
@@ -468,7 +628,7 @@ export function createNativeReplay({
             throw new Error("native unordered owned multiset or live ACK slots incomplete");
         }
         proof.completed = !state.incomplete;
-        proof.semanticsVerified = proof.completed;
+        proof.semanticsVerified = proof.completed && proof.publicationIncomplete !== true;
       } else throw new Error("unlisted native action");
       proof.actions.push({
         sourceN: row.n,

@@ -10,7 +10,7 @@ import {
   createActionClock,
 } from "./pubsub-observation/replay-native.mjs";
 import { validateReplaySource } from "./pubsub-observation/replay.mjs";
-import { fixture } from "./pubsub-production-observation-compare.test.mjs";
+import { fixture, generatedTimeProof } from "./pubsub-production-observation-compare.test.mjs";
 
 const message = (id, ack, data = "bWFya2Vy") => ({
   receivedMessages: [{ ackId: ack, message: { messageId: id, data } }],
@@ -1651,5 +1651,344 @@ test("S03 recorded dispose awaits bounded actual diagnostic callbacks after a nu
     } finally {
       replay.close();
     }
+  }
+});
+
+test("explicit generated publishTime requires successful readback and publication identity", async () => {
+  const proof = generatedTimeProof();
+  const source = message("source", "source-ack"),
+    local = message("local", "local-ack");
+  source.receivedMessages[0].message.publishTime = { seconds: "1791508662", nanos: 21000000 };
+  local.receivedMessages[0].message.publishTime = { seconds: "1791508661", nanos: 899000000 };
+  const bindings = () => {
+    const b = createBindings();
+    b.linkPublish(
+      proof.publications[0].sourceRequest,
+      { messageIds: ["source"] },
+      { messageIds: ["local"] },
+    );
+    return b;
+  };
+  assert.equal(matchNativeReceive(source, local, bindings(), proof), "MATCH");
+  assert.throws(() => matchNativeReceive(source, local, bindings()), /semantic mismatch/);
+  for (const alter of [
+    (p) => p.publications.splice(0),
+    (p) => {
+      p.publications[0].sourceRequest.messages[0].data = "d3Jvbmc=";
+      p.publications[0].localRequest.messages[0].data = "d3Jvbmc=";
+    },
+    (p) => {
+      const bytes = Buffer.from(
+        JSON.stringify({
+          ownerRow: 1100,
+          proposalSha256: "8238575c8202949f721b59bb9c97ee36b3f0ae701efd552f4169c70fcf0c1c53",
+        }),
+      );
+      p.authority = { bytes, sha256: createHash("sha256").update(bytes).digest("hex") };
+    },
+    (p) => delete p.publications[0].clock.body,
+    (p) => (p.publications[0].clock.status = 503),
+    (p) => (p.publications[0].sourceReply.ok = false),
+    (p) => (p.publications[0].sourceRequest.topic = "foreign"),
+    (p) => (p.compiledInputs.inputsSha256 = "c".repeat(64)),
+    (p) => (p.subscription.localReply.body.topic = "foreign"),
+    (p) => (p.publications[0].clock.responseSha256 = "c".repeat(64)),
+    (p) => (p.authority.bytes = Buffer.from("{}")),
+  ]) {
+    const missing = generatedTimeProof();
+    alter(missing);
+    assert.equal(matchNativeReceive(source, local, bindings(), missing), "NOT_COMPARABLE");
+  }
+  for (const alter of [
+    (p) => (p.publications[0].clock.body.clock = "2026-10-09T01:17:41.898Z"),
+    (p) =>
+      p.deliveries.push({
+        messageId: "local",
+        publishTime: { seconds: "1791508661", nanos: 898000000 },
+      }),
+  ]) {
+    const wrong = generatedTimeProof();
+    alter(wrong);
+    const clock = wrong.publications[0].clock,
+      bytes = Buffer.from(JSON.stringify(clock.body));
+    clock.responseBytes = bytes.toString("base64");
+    clock.responseSha256 = createHash("sha256").update(bytes).digest("hex");
+    assert.throws(
+      () => matchNativeReceive(source, local, bindings(), wrong),
+      /publication timestamp mismatch/,
+    );
+  }
+  for (const alter of [
+    (b) => b.receivedMessages[0].message.publishTime.nanos++,
+    (b) => delete b.receivedMessages[0].message.publishTime.seconds,
+    (b) => (b.receivedMessages[0].message.publishTime.nanos = 1000000000),
+    (b) => (b.receivedMessages[0].message.orderingKey = "other"),
+    (b) => (b.subscriptionProperties = { retainAckedMessages: true }),
+  ]) {
+    const wrong = structuredClone(local);
+    alter(wrong);
+    assert.throws(() => matchNativeReceive(source, wrong, bindings(), generatedTimeProof()));
+  }
+});
+
+test("S03 replay persists actual clock readback before Publish and carries generated-time proof", async () => {
+  const { replayA } = await import("./pubsub-observation/replay.mjs");
+  const base = Date.parse("2026-10-09T01:17:41.899Z"),
+    topic = "projects/fireemu-oracle-idp/topics/fe012345abcdef-s03-topic",
+    subscription = "projects/fireemu-oracle-idp/subscriptions/fe012345abcdef-s03-sub";
+  const encode = (body, direction) =>
+    Buffer.from(
+      protos.google.pubsub.v1[
+        direction === "out" ? "StreamingPullRequest" : "StreamingPullResponse"
+      ]
+        .encode(
+          protos.google.pubsub.v1[
+            direction === "out" ? "StreamingPullRequest" : "StreamingPullResponse"
+          ].fromObject(body),
+        )
+        .finish(),
+    );
+  for (const variant of [
+    "valid",
+    "invalid-identifiers",
+    "missing-readback",
+    "wrong-readback",
+    "wrong-received",
+  ]) {
+    const sourceId = variant === "invalid-identifiers" ? "source" : "1234567890123456";
+    const localId = variant === "invalid-identifiers" ? "local" : "9876543210987654";
+    const actualBlobs = new Map();
+    const input = fixture(),
+      proof = generatedTimeProof(),
+      saved = [],
+      frameBytes = new Map();
+    const success = (body) => ({
+      ok: true,
+      status: 200,
+      code: "OK",
+      unknown: false,
+      body,
+      bodyBytes: 2,
+    });
+    const exchanges = [
+      ["CreateTopic", { name: topic }, { name: topic }],
+      ["CreateSubscription", { name: subscription, topic }, { name: subscription, topic }],
+      ["Publish", { topic, messages: [{ data: "bWFya2Vy" }] }, { messageIds: [sourceId] }],
+    ];
+    input.rows = [input.rows[0]];
+    for (const [method, request, body] of exchanges) {
+      const requestId = input.rows.length;
+      input.rows.push({
+        event: "request-dispatch",
+        cellId: "S03",
+        requestId,
+        method,
+        transport: "grpc",
+        category: "target",
+        request,
+      });
+      input.rows.push({
+        event: "response",
+        cellId: "S03",
+        requestId,
+        method,
+        transport: "grpc",
+        durationMs: 0,
+        reply: success(body),
+      });
+    }
+    const opener = { subscription, streamAckDeadlineSeconds: 10 };
+    const sourceReceive = message(sourceId, "source-ack"),
+      localReceive = message(localId, "local-ack");
+    sourceReceive.receivedMessages[0].message.publishTime = {
+      seconds: "1791508662",
+      nanos: 21000000,
+    };
+    localReceive.receivedMessages[0].message.publishTime = {
+      seconds: "1791508661",
+      nanos: variant === "wrong-received" ? 898000000 : 899000000,
+    };
+    for (const [direction, body, elapsedMs] of [
+      ["out", opener, 0],
+      ["in", sourceReceive, 1],
+    ]) {
+      const raw = encode(body, direction);
+      input.rows.push({
+        event: "stream-frame",
+        cellId: "S03",
+        direction,
+        body,
+        elapsedMs,
+        blob: { bytes: raw.length, sha256: createHash("sha256").update(raw).digest("hex") },
+      });
+    }
+    input.rows.push({
+      event: "stream-case-observation",
+      cellId: "S03",
+      elapsedMs: 2,
+      state: { incomplete: false, terminal: null },
+      invalidAckObservedMs: null,
+    });
+    input.rows.push({
+      event: "case-result",
+      cellId: "S03",
+      complete: true,
+      cleanupClosed: true,
+      budgetOverrun: false,
+    });
+    input.rows = input.rows.map((row, i) => ({
+      ...row,
+      n: i + 1,
+      at: new Date(i <= 5 ? base - 10 + i : base + Math.max(0, i - 6)).toISOString(),
+    }));
+    // Publish is n6, and its actual virtual instant is the fixed publication instant.
+    input.rows[5].at = new Date(base).toISOString();
+    input.rows[6].at = new Date(base).toISOString();
+    input.verifiedFrames = new Set(
+      input.rows.filter((r) => r.event === "stream-frame").map((r) => r.n),
+    );
+    input.summary.results = [
+      { cellId: "S03", complete: true, cleanupClosed: true, budgetOverrun: false },
+    ];
+    const source = validateReplaySource(input);
+    proof.source = {
+      runId: source.runId,
+      packetSha256: source.packetSha256,
+      descriptorSha256: source.descriptorSha256,
+    };
+    for (const row of input.rows.filter((r) => r.event === "stream-frame"))
+      frameBytes.set(row.n, encode(row.body, row.direction));
+    let now = 0,
+      journal,
+      actualClock;
+    const run = replayA(
+      input,
+      {
+        PUBSUB_EMULATOR_HOST: "127.0.0.1:1234",
+        FIREEMU_CONTROL_URL: "http://127.0.0.1:4321/v1/",
+        FIREEMU_CONTROL_TOKEN: "synthetic",
+      },
+      {
+        profile: "release",
+        rustcWrapper: "",
+        path: "/fixture/release/fireemu",
+        head: "a".repeat(40),
+        sha256: "b".repeat(64),
+        command: ["cargo", "build", "--release"],
+      },
+      {
+        publishTimeDisposition: {
+          authority: proof.authority,
+          source: proof.source,
+          publishTime: proof,
+          sourceFrameBytes: frameBytes,
+        },
+        now: () => now,
+        wait: async (ms) => {
+          now += ms;
+        },
+        persist: (row, bytes) => {
+          if (bytes) actualBlobs.set(row.blob.sha256, Buffer.from(bytes));
+          else saved.push(row);
+        },
+        advance: async (receipt) => {
+          actualClock = receipt.instant;
+          const body = {
+            clock:
+              variant === "wrong-readback"
+                ? new Date(Date.parse(receipt.instant) - 1).toISOString()
+                : receipt.instant,
+            backwardsSets: 0,
+          };
+          return variant === "missing-readback"
+            ? undefined
+            : { status: 200, body, bytes: Buffer.from(JSON.stringify(body)) };
+        },
+        wireFactory: (options) => {
+          journal = options.journal;
+          return {
+            close() {},
+            call: async ({ method, request }) => {
+              assert.ok(
+                saved.some((r) => r.event === "clock-control" && r.instant === actualClock),
+              );
+              journal.write({ event: "request-dispatch", cellId: "S03", method, request });
+              const reply = success(
+                method === "Publish"
+                  ? { messageIds: [localId] }
+                  : exchanges.find((e) => e[0] === method)[2],
+              );
+              journal.write({ event: "response", cellId: "S03", method, reply });
+              return reply;
+            },
+            open: async ({ opener: actualOpener }) => {
+              const writes = [];
+              const stream = {
+                write(body) {
+                  const bytes = encode(body, "out");
+                  writes.push(bytes);
+                  journal.frame(bytes, {
+                    event: "stream-frame",
+                    cellId: "S03",
+                    direction: "out",
+                    elapsedMs: now,
+                    body,
+                  });
+                },
+                next: async () => {
+                  journal.frame(encode(localReceive, "in"), {
+                    event: "stream-frame",
+                    cellId: "S03",
+                    direction: "in",
+                    elapsedMs: now,
+                    body: localReceive,
+                  });
+                  return localReceive;
+                },
+                state: () => ({ incomplete: false, terminal: null }),
+                dispose() {},
+              };
+              stream.write(actualOpener);
+              assert.equal(writes.length, 1);
+              return stream;
+            },
+          };
+        },
+      },
+    );
+    if (["wrong-readback", "wrong-received"].includes(variant)) {
+      await assert.rejects(run, /publication timestamp mismatch/);
+      continue;
+    }
+    const report = await run,
+      witness = report.nativeWitnesses.S03;
+    assert.equal(witness.semanticsVerified, ["valid", "invalid-identifiers"].includes(variant));
+    assert.equal(witness.publishTime.publications[0].clock.sourceDispatchN, 6);
+    assert.equal(witness.publishTime.publications[0].clock.instant, new Date(base).toISOString());
+    assert.equal(
+      report.cells.find((c) => c.id === "S03").approvedComparison.verdict,
+      variant === "valid"
+        ? "MATCH"
+        : variant === "invalid-identifiers"
+          ? "DIVERGES"
+          : "NOT_COMPARABLE",
+      JSON.stringify(report.cells.find((c) => c.id === "S03")),
+    );
+    const frames = report.localRows.filter((r) => r.event === "stream-frame" && r.cellId === "S03");
+    assert.deepEqual(
+      frames.map((f) => f.direction),
+      ["out", "in"],
+    );
+    for (const frame of frames) {
+      const bytes = actualBlobs.get(frame.blob.sha256);
+      assert.equal(bytes.length, frame.blob.bytes);
+      assert.equal(createHash("sha256").update(bytes).digest("hex"), frame.blob.sha256);
+    }
+    if (variant === "invalid-identifiers")
+      assert.equal(
+        report.cells.find((c) => c.id === "S03").rows.find((r) => r.method === "Publish").verdict,
+        "DIVERGES",
+      );
+    assert.equal(report.parentClosureReady, false);
   }
 });

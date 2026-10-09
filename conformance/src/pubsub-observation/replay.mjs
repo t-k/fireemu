@@ -8,9 +8,10 @@ export function validateReplaySource(input) {
 }
 
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { lstatSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { resolve, dirname } from "node:path";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { readPinnedBundle } from "./compare.mjs";
 import { compareExecutedObservation } from "./compare-core.mjs";
 import { createWire } from "./wire.mjs";
@@ -24,7 +25,12 @@ import {
   runStrictRuntime,
   verifyStrictWorker,
 } from "../pubsub-production/stream-dlq-compare.mjs";
-import { createActionClock, createNativeReplay, createReplayClient } from "./replay-native.mjs";
+import {
+  createActionClock,
+  createNativeReplay,
+  createReplayClient,
+  publishTimeAuthorized,
+} from "./replay-native.mjs";
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 function pinned(path, digest, max = 1000000) {
   const stat = lstatSync(path);
@@ -70,7 +76,14 @@ export async function replayA(
   input,
   environment,
   pin,
-  { wireFactory = createWire, advance = null, now, wait, persist = () => {} } = {},
+  {
+    wireFactory = createWire,
+    advance = null,
+    now,
+    wait,
+    persist = () => {},
+    publishTimeDisposition = null,
+  } = {},
 ) {
   validateRuntime(pin, environment);
   const source = validateReplaySource(input),
@@ -78,6 +91,9 @@ export async function replayA(
   const bindings = createBindings(),
     meter = createMeter(),
     raw = [],
+    localFrameBytes = new Map(),
+    publications = [],
+    deliveries = [],
     localCells = source.cells.map((c) => ({
       ...c,
       exchanges: [],
@@ -93,25 +109,46 @@ export async function replayA(
   const clock = createActionClock({
     now,
     wait,
-    advance:
-      advance ??
-      (async (receipt) => {
-        const response = await fetch(
-          `${environment.FIREEMU_CONTROL_URL}sessions/default/clock:advanceTo`,
-          {
-            method: "POST",
-            headers: {
-              authorization: `Bearer ${environment.FIREEMU_CONTROL_TOKEN}`,
-              "content-type": "application/json",
+    advance: async (receipt) => {
+      const result = await (
+        advance ??
+        (async (requested) => {
+          const response = await fetch(
+            `${environment.FIREEMU_CONTROL_URL}sessions/default/clock:advanceTo`,
+            {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${environment.FIREEMU_CONTROL_TOKEN}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({ instant: requested.instant }),
+              redirect: "manual",
+              signal: AbortSignal.timeout(30000),
             },
-            body: JSON.stringify({ instant: receipt.instant }),
-            redirect: "manual",
-            signal: AbortSignal.timeout(30000),
-          },
-        );
-        if (!response.ok) throw new Error("local clock advance refused");
-        await response.arrayBuffer();
-      }),
+          );
+          if (!response.ok) throw new Error("local clock advance refused");
+          const bytes = Buffer.from(await response.arrayBuffer());
+          if (!publishTimeDisposition) return undefined;
+          return { status: response.status, bytes, body: JSON.parse(bytes.toString("utf8")) };
+        })
+      )(receipt);
+      if (publishTimeDisposition) {
+        const bytes = result?.bytes;
+        const record = {
+          sourceDispatchN: receipt.n,
+          session: "default",
+          instant: receipt.instant,
+          status: result?.status,
+          body: result?.body,
+          ...(Buffer.isBuffer(bytes)
+            ? { responseBytes: bytes.toString("base64"), responseSha256: sha(bytes) }
+            : {}),
+        };
+        journal.write({ event: "clock-control", ...record });
+        return record;
+      }
+      return result;
+    },
   });
   const terminalDetails = new Map();
   let sequence = 0,
@@ -144,10 +181,9 @@ export async function replayA(
         sha256: sha(bytes),
       };
       persist({ blob: identity }, bytes);
-      journal.write({ ...value, blob: identity });
-      localCells
-        .find((c) => c.id === value.cellId)
-        ?.frames.push({ ...value, blob: identity, verified: true });
+      const entry = journal.write({ ...value, blob: identity });
+      localFrameBytes.set(entry.n, Buffer.from(bytes));
+      localCells.find((c) => c.id === value.cellId)?.frames.push({ ...entry, verified: true });
     },
   };
   const client = createReplayClient(environment.PUBSUB_EMULATOR_HOST, {
@@ -186,6 +222,42 @@ export async function replayA(
       cells,
       sourceCells: source.cells,
       journal,
+      publishTime: publishTimeDisposition
+        ? (cellId, opener) => {
+            if (cellId !== "S03") return null;
+            const sourceCell = source.cells.find((c) => c.id === cellId),
+              localCell = localCells.find((c) => c.id === cellId);
+            const sourceSetup = sourceCell.exchanges.find(
+              (e) =>
+                e.method === "CreateSubscription" &&
+                e.request.body.name === opener &&
+                e.response.ok &&
+                !e.response.unknown,
+            );
+            const localSetup = localCell.exchanges.find(
+              (e) =>
+                e.method === "CreateSubscription" &&
+                e.request.body.name === opener &&
+                e.response.ok &&
+                !e.response.unknown,
+            );
+            return {
+              ...publishTimeDisposition.publishTime,
+              publications,
+              deliveries,
+              subscription:
+                sourceSetup && localSetup
+                  ? {
+                      opener,
+                      sourceRequest: sourceSetup.request.body,
+                      localRequest: localSetup.request.body,
+                      sourceReply: sourceSetup.response,
+                      localReply: localSetup.response,
+                    }
+                  : null,
+            };
+          }
+        : null,
     });
     await clock.dispatch(input.rows[0]);
     for (const row of input.rows) {
@@ -216,7 +288,7 @@ export async function replayA(
             throw new Error("foreign replay resource refused");
         expected.request.body = request;
         const rewritten = bindings.request(expected);
-        await clock.dispatch(row);
+        const clockReceipt = await clock.dispatch(row);
         dispatchN = row.n;
         const observed = await wire.call({
           category: row.category,
@@ -234,8 +306,17 @@ export async function replayA(
           reply.ok &&
           !expected.response.unknown &&
           !reply.unknown
-        )
+        ) {
           bindings.linkPublish(request, expected.response.body, reply.body);
+          publications.push({
+            sourceDispatchN: row.n,
+            sourceRequest: structuredClone(request),
+            localRequest: structuredClone(rewritten.body),
+            sourceReply: structuredClone(expected.response),
+            localReply: structuredClone(reply),
+            clock: clockReceipt,
+          });
+        }
         if (
           row.method === "Pull" &&
           expected.response.body?.receivedMessages?.length &&
@@ -268,7 +349,30 @@ export async function replayA(
       evidenceKind: input.evidenceKind === "fixture" ? "fixture" : "local",
       cells: localCells,
     };
-    const report = compareExecutedObservation(source, local, Object.fromEntries(native.witnesses));
+    let disposition;
+    if (publishTimeDisposition) {
+      const evidence = native.witnesses.get("S03")?.publishTime;
+      disposition = {
+        ...publishTimeDisposition,
+        publishTime: evidence ?? publishTimeDisposition.publishTime,
+        rawFrames: source.cells.flatMap((cell) =>
+          cell.frames.map((f, i) => ({
+            sourceN: f.n,
+            localN: local.cells.find((c) => c.id === cell.id)?.frames[i]?.n,
+            sourceBytes: publishTimeDisposition.sourceFrameBytes.get(f.n),
+            localBytes: localFrameBytes.get(
+              local.cells.find((c) => c.id === cell.id)?.frames[i]?.n,
+            ),
+          })),
+        ),
+      };
+    }
+    const report = compareExecutedObservation(
+      source,
+      local,
+      Object.fromEntries(native.witnesses),
+      disposition,
+    );
     return {
       ...report,
       kind: "pubsub-observation-a-executed-replay",
@@ -313,8 +417,11 @@ function options(argv) {
 export async function main(argv = process.argv.slice(2), environment = process.env, launch = null) {
   const opts = options(argv),
     index = JSON.parse(pinned(opts.input, opts["input-sha256"]));
-  if (!index.source || Object.keys(index).some((k) => k !== "source"))
-    throw new Error("replay index requires source only");
+  if (
+    !index.source ||
+    Object.keys(index).some((k) => !["source", "publishTimeDisposition"].includes(k))
+  )
+    throw new Error("replay index requires pinned source and optional publishTime disposition");
   const input = readPinnedBundle(index.source),
     source = validateReplaySource(input);
   const pin = JSON.parse(pinned(opts["build-pin"], opts["build-pin-sha256"]));
@@ -337,10 +444,80 @@ export async function main(argv = process.argv.slice(2), environment = process.e
     `${JSON.stringify({ serverPid: launch.serverPid, workerPid: process.pid, strictConfigSha256: launch.configSha256, inputSha256: opts["input-sha256"], buildPinSha256: opts["build-pin-sha256"] })}\n`,
     { flag: "wx", mode: 0o600 },
   );
+  let publishTimeDisposition = null;
+  if (index.publishTimeDisposition) {
+    const config = JSON.parse(
+      pinned(index.publishTimeDisposition.path, index.publishTimeDisposition.sha256),
+    );
+    if (Object.keys(config).some((key) => !["authority", "source", "runtime"].includes(key)))
+      throw new Error("publishTime disposition fields refused");
+    const authorityBytes = pinned(config.authority.path, config.authority.sha256, 65536);
+    const inputs = JSON.parse(pinned(pin.binaryInputsPath, pin.binaryInputsSha256));
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+    const entries = Object.entries(inputs.files);
+    if (
+      entries.length < 8 ||
+      entries.length > 4000 ||
+      ![
+        "crates/fireemu-core-session/src/clock.rs",
+        "crates/fireemu-adapter-pubsub/src/publisher.rs",
+        "crates/fireemu-adapter-pubsub/src/lib.rs",
+        "crates/fireemu-core-pubsub/src/state.rs",
+        "crates/fireemu-core-pubsub/src/message.rs",
+        "crates/fireemu-core-pubsub/src/subscription.rs",
+        "crates/fireemu-adapter-pubsub/src/convert.rs",
+        "crates/fireemu-adapter-http/src/control.rs",
+      ].every((path) => Object.hasOwn(inputs.files, path))
+    )
+      throw new Error("compiled clock/storage input coverage required");
+    let inputBytes = 0;
+    for (const [path, digest] of entries) {
+      if (resolve(root, path).startsWith(`${root}/`) !== true)
+        throw new Error("compiled input path refused");
+      inputBytes += pinned(resolve(root, path), digest, 400000000).length;
+      if (inputBytes > 400 * 1024 * 1024) throw new Error("compiled input byte bound");
+    }
+    const compiledInputs = { binarySha256: pin.sha256, inputsSha256: pin.binaryInputsSha256 };
+    const proof = {
+      authority: { bytes: authorityBytes, sha256: config.authority.sha256 },
+      source: config.source,
+      runtime: config.runtime,
+      compiledInputs,
+    };
+    if (
+      !publishTimeAuthorized(proof) ||
+      !isDeepStrictEqual(config.source, {
+        runId: source.runId,
+        packetSha256: source.packetSha256,
+        descriptorSha256: source.descriptorSha256,
+      })
+    )
+      throw new Error("publishTime authority/source/runtime binding refused");
+    const sourceFrameBytes = new Map(
+      input.rows
+        .filter((row) => row.event === "stream-frame")
+        .map((row) => [
+          row.n,
+          pinned(
+            resolve(dirname(index.source.capture.path), row.blob.path),
+            row.blob.sha256,
+            65536,
+          ),
+        ]),
+    );
+    publishTimeDisposition = {
+      authority: proof.authority,
+      source: config.source,
+      publishTime: proof,
+      sourceFrameBytes,
+      remainingDebts: {},
+    };
+  }
   const journalPath = resolve(opts.out, "local.jsonl");
   writeFileSync(journalPath, "", { flag: "wx", mode: 0o600 });
   const { appendFileSync } = await import("node:fs");
   const report = await replayA(input, environment, pin, {
+    publishTimeDisposition,
     persist: (row, bytes) => {
       if (bytes)
         writeFileSync(resolve(opts.out, row.blob.path), bytes, { flag: "wx", mode: 0o600 });

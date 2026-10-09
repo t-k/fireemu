@@ -298,8 +298,8 @@ test("C legal precision properties compare nanoseconds exactly", async () => {
     assert.equal(entry(await run(f), "Pull").semanticVerdict, "MATCH");
   }
 });
-function snapshotFixture() {
-  const f = fixture("R12");
+function snapshotFixture(cellId = "R12") {
+  const f = fixture(cellId);
   setup(f);
   publish(f, "123", time);
   pull(f, "123", "2026-10-09T00:00:00.097Z", time);
@@ -326,19 +326,26 @@ function snapshotFixture() {
     local,
     "2026-10-09T01:00:00.000Z",
   );
-  add(f, "GetSnapshot", { name: f.snapshot }, body, local, "2026-10-09T01:10:00.000Z");
+  add(
+    f,
+    "GetSnapshot",
+    { name: f.snapshot },
+    structuredClone(body),
+    local,
+    "2026-10-09T01:10:00.000Z",
+  );
   return f;
 }
 test("C Snapshot lifetime uses the oldest proven unacknowledged publication and finalizes Create before Get", async () => {
   const r = await run(snapshotFixture());
-  assert.equal(entry(r, "CreateSnapshot").semanticVerdict, "NOT_COMPARABLE");
-  assert.equal(entry(r, "GetSnapshot").semanticVerdict, "NOT_COMPARABLE");
+  assert.equal(entry(r, "CreateSnapshot").semanticVerdict, "MATCH");
+  assert.equal(entry(r, "GetSnapshot").semanticVerdict, "MATCH");
   const notifications = r.observed.filter((e) => /Snapshot/.test(e.method));
   assert.deepEqual(
     notifications.map((e) => e.method),
     ["CreateSnapshot", "GetSnapshot"],
   );
-  assert.ok(notifications.every((e) => e.semanticVerdict === "NOT_COMPARABLE"));
+  assert.ok(notifications.every((e) => e.semanticVerdict === "MATCH"));
   assert.equal(notifications[0].timestampProofs[0].owner, 1146);
 });
 test("C Snapshot newest publication and changed Get are divergences", async () => {
@@ -515,12 +522,12 @@ test("C predicates are invariant under an aged virtual clock", async () => {
     assert.ok(
       r.cell.exchanges
         .filter((e) => ["Pull", "CreateSnapshot", "GetSnapshot"].includes(e.method))
-        .every((e) => e.semanticVerdict === (e.method === "Pull" ? "MATCH" : "NOT_COMPARABLE")),
+        .every((e) => e.semanticVerdict === "MATCH"),
     );
   }
 });
 
-test("C Snapshot source lifetime remains NC with a production clock two seconds ahead", async () => {
+test("C Snapshot bounded proof does not require a production creation clock", async () => {
   const f = fixture("R12");
   setup(f);
   publish(f, "123", time);
@@ -538,8 +545,8 @@ test("C Snapshot source lifetime remains NC with a production clock two seconds 
   add(f, "GetSnapshot", { name: f.snapshot }, body, local, "2026-10-09T00:00:01.500Z");
   const r = await run(f);
   assert.equal(entry(r, "Pull").semanticVerdict, "MATCH");
-  assert.equal(entry(r, "CreateSnapshot").semanticVerdict, "NOT_COMPARABLE");
-  assert.equal(entry(r, "GetSnapshot").semanticVerdict, "NOT_COMPARABLE");
+  assert.equal(entry(r, "CreateSnapshot").semanticVerdict, "MATCH");
+  assert.equal(entry(r, "GetSnapshot").semanticVerdict, "MATCH");
 });
 for (const coordinate of ["sourceN", "sourceRequestId"]) {
   test(`C stale clock receipt ${coordinate} directly yields NC`, async () => {
@@ -550,13 +557,21 @@ for (const coordinate of ["sourceN", "sourceRequestId"]) {
   });
 }
 
-test("C Snapshot source oldest-publication relation remains strict without server creation evidence", async () => {
+test("C Snapshot public-field arithmetic stays separate from bounded source correlation", async () => {
   const f = snapshotFixture();
   for (const row of f.rows.filter((r) => r.event === "response" && /Snapshot/.test(r.method)))
     row.reply.body.expireTime = "2026-10-16T00:00:00.098Z";
   const r = await run(f);
-  assert.equal(entry(r, "CreateSnapshot").semanticVerdict, "DIVERGES");
-  assert.equal(entry(r, "GetSnapshot").semanticVerdict, "DIVERGES");
+  assert.equal(entry(r, "CreateSnapshot").semanticVerdict, "MATCH");
+  assert.equal(entry(r, "GetSnapshot").semanticVerdict, "MATCH");
+  assert.equal(
+    entry(r, "CreateSnapshot").timestampProofs[0].sourcePublicExpiryRelationVerdict,
+    "NOT_COMPARABLE",
+  );
+  assert.equal(
+    entry(r, "CreateSnapshot").timestampProofs[0].sourceInternalLifetimeVerdict,
+    "NOT_COMPARABLE",
+  );
 });
 test("C Snapshot actual local creation clock remains required", async () => {
   for (const change of [
@@ -570,5 +585,288 @@ test("C Snapshot actual local creation clock remains required", async () => {
     f.locals.get(7).body.expireTime = "2026-10-16T00:00:00.001Z";
     f.locals.get(8).body.expireTime = "2026-10-16T00:00:00.001Z";
     assert.equal(entry(await run(f, change), "CreateSnapshot").semanticVerdict, "NOT_COMPARABLE");
+  }
+});
+
+function acknowledgedSnapshotFixture(cellId = "R12") {
+  const f = snapshotFixture(cellId);
+  for (const row of f.rows.filter((r) => r.event === "response" && /Snapshot/.test(r.method)))
+    row.reply.body.expireTime = "2026-10-16T00:20:00.097Z";
+  for (const id of [7, 8]) f.locals.get(id).body.expireTime = "2026-10-16T00:20:00.000Z";
+  const index = f.rows.findIndex(
+    (r) =>
+      r.event === "request-dispatch" &&
+      r.method === "Publish" &&
+      r.request.messages[0].attributes.id === "124",
+  );
+  const requestId = add(
+    f,
+    "Acknowledge",
+    { subscription: f.subscription, ackIds: ["source-123"] },
+    {},
+    {},
+    "2026-10-09T00:10:00.500Z",
+  );
+  const ackRows = f.rows.splice(
+    f.rows.findIndex((r) => r.requestId === requestId),
+    2,
+  );
+  f.rows.splice(index, 0, ...ackRows);
+  for (const row of f.rows.filter(
+    (r) => r.event === "response" && r.method === "CreateSubscription",
+  ))
+    row.reply.body.ackDeadlineSeconds = 10;
+  f.locals.get(2).body.ackDeadlineSeconds = 10;
+  f.rows.forEach((r, i) => (r.n = i + 1));
+  return f;
+}
+test("C known current ACK cannot hide an incorrect stable local Snapshot lifetime", async () => {
+  const f = acknowledgedSnapshotFixture();
+  // The ACKed control at 00:00 and unACKed marker at 00:20 have distinct publication clocks.
+  for (const id of [7, 8]) f.locals.get(id).body.expireTime = "2026-10-16T00:00:00.000Z";
+  const r = await run(f);
+  assert.equal(entry(r, "CreateSnapshot").semanticVerdict, "DIVERGES");
+  assert.equal(entry(r, "GetSnapshot").semanticVerdict, "DIVERGES");
+});
+
+test("C current ACK excludes only its control and retains bounded source limitations", async () => {
+  const r = await run(acknowledgedSnapshotFixture());
+  assert.equal(entry(r, "CreateSnapshot").semanticVerdict, "MATCH");
+  assert.equal(entry(r, "GetSnapshot").semanticVerdict, "MATCH");
+  const proof = entry(r, "CreateSnapshot").timestampProofs[0];
+  assert.equal(proof.localLifetimeVerdict, "MATCH");
+  assert.equal(proof.sourceCorrelationVerdict, "MATCH");
+  assert.equal(proof.sourceInternalLifetimeVerdict, "NOT_COMPARABLE");
+  assert.equal(proof.sourceCreationBoundsVerdict, "NOT_COMPARABLE");
+  assert.equal(proof.automaticExpiryVerdict, "NOT_COMPARABLE");
+  assert.equal(proof.publicationSourceNs.length, 1);
+  assert.equal(r.result.parentClosureReady, false);
+});
+test("C local Snapshot lifetime is validated before an uncertain source ACK", async () => {
+  const f = acknowledgedSnapshotFixture();
+  f.rows.find((r) => r.event === "response" && r.method === "Acknowledge").reply.unknown = true;
+  for (const id of [7, 8]) f.locals.get(id).body.expireTime = "2026-10-16T00:00:00.000Z";
+  assert.equal(entry(await run(f), "CreateSnapshot").semanticVerdict, "DIVERGES");
+  for (const id of [7, 8]) f.locals.get(id).body.expireTime = "2026-10-16T00:20:00.000Z";
+  const r = await run(f);
+  assert.equal(entry(r, "CreateSnapshot").semanticVerdict, "NOT_COMPARABLE");
+  assert.equal(entry(r, "CreateSnapshot").timestampProofs[0].localLifetimeVerdict, "MATCH");
+  assert.match(entry(r, "CreateSnapshot").timestampProofs[0].gap, /source current token\/effect/);
+});
+test("C expired or unavailable local ACK leases retain a specific backlog gap", async () => {
+  for (const mode of ["expired", "missing-deadline", "missing-clock", "noncanonical-success"]) {
+    const f = acknowledgedSnapshotFixture();
+    if (mode === "expired") {
+      for (const row of f.rows.filter((r) => r.method === "Acknowledge"))
+        row.at = "2026-10-09T00:10:10.000Z";
+      for (const id of [7, 8]) f.locals.get(id).body.expireTime = "2026-10-16T00:00:00.000Z";
+    }
+    if (mode === "missing-deadline") {
+      delete f.rows.find((r) => r.event === "response" && r.method === "CreateSubscription").reply
+        .body.ackDeadlineSeconds;
+      delete f.locals.get(2).body.ackDeadlineSeconds;
+    }
+    if (mode === "noncanonical-success") f.locals.get(9).code = "INTERNAL";
+    const r = await run(f, ({ receipts }) => {
+      if (mode === "missing-clock") receipts.delete(9);
+    });
+    assert.equal(entry(r, "CreateSnapshot").semanticVerdict, "NOT_COMPARABLE", mode);
+    assert.match(entry(r, "CreateSnapshot").timestampProofs[0].gap, /ACK/, mode);
+  }
+});
+
+test("C generated ACK splits use each own saved publication without source-clock fitting", async () => {
+  let seed = 747;
+  for (let i = 0; i < 12; i++) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    const minute = 20 + (seed % 10);
+    const prefix = String(minute).padStart(2, "0");
+    const f = acknowledgedSnapshotFixture(i % 2 ? "N12" : "R12");
+    for (const row of f.rows.filter(
+      (r) =>
+        r.event === "request-dispatch" &&
+        r.method === "Publish" &&
+        r.request.messages[0].attributes.id === "124",
+    ))
+      row.at = `2026-10-09T00:${prefix}:00.000Z`;
+    f.rows.find(
+      (r) =>
+        r.event === "response" &&
+        r.method === "Pull" &&
+        r.reply.body.receivedMessages[0].message.messageId === "124",
+    ).reply.body.receivedMessages[0].message.publishTime = `2026-10-09T00:${prefix}:00.097Z`;
+    f.locals.get(6).body.receivedMessages[0].message.publishTime =
+      `2026-10-09T00:${prefix}:00.000Z`;
+    for (const row of f.rows.filter((r) => r.event === "response" && /Snapshot/.test(r.method)))
+      row.reply.body.expireTime = `2026-10-16T00:${prefix}:00.${i % 2 ? "095" : "094"}Z`;
+    for (const id of [7, 8]) f.locals.get(id).body.expireTime = `2026-10-16T00:${prefix}:00.000Z`;
+    const positive = await run(f);
+    assert.equal(entry(positive, "CreateSnapshot").semanticVerdict, "MATCH");
+    assert.equal(
+      entry(positive, "CreateSnapshot").timestampProofs[0].sourcePublicExpiryRelationVerdict,
+      "NOT_COMPARABLE",
+    );
+    if (f.cellId === "N12")
+      assert.equal(entry(positive, "CreateSnapshot").wireVerdict, "NOT_COMPARABLE");
+    for (const id of [7, 8]) f.locals.get(id).body.expireTime = `2026-10-16T00:${prefix}:00.001Z`;
+    assert.equal(entry(await run(f), "CreateSnapshot").semanticVerdict, "DIVERGES");
+  }
+});
+
+test("C stale ACK delivery bindings cannot manufacture a known Snapshot backlog", async () => {
+  const f = acknowledgedSnapshotFixture();
+  const requestId = pull(f, "123", "2026-10-09T00:00:00.097Z", time, "2026-10-09T00:10:00.250Z");
+  f.rows.find(
+    (r) => r.event === "response" && r.requestId === requestId,
+  ).reply.body.receivedMessages[0].ackId = "source-new";
+  f.locals.get(requestId).body.receivedMessages[0].ackId = "local-new";
+  const inserted = f.rows.splice(
+    f.rows.findIndex((r) => r.requestId === requestId),
+    2,
+  );
+  const ackIndex = f.rows.findIndex(
+    (r) => r.event === "request-dispatch" && r.method === "Acknowledge",
+  );
+  f.rows.splice(ackIndex, 0, ...inserted);
+  f.rows.forEach((r, i) => (r.n = i + 1));
+  for (const id of [7, 8]) f.locals.get(id).body.expireTime = "2026-10-16T00:00:00.000Z";
+  const r = await run(f);
+  assert.equal(entry(r, "CreateSnapshot").semanticVerdict, "NOT_COMPARABLE");
+  assert.match(entry(r, "CreateSnapshot").timestampProofs[0].gap, /not the current delivery/);
+});
+test("C local ACK lease boundary does not clear expired control messages", async () => {
+  for (const [instant, active] of [
+    ["2026-10-09T00:10:09.999Z", true],
+    ["2026-10-09T00:10:10.000Z", false],
+    ["2026-10-09T00:10:10.001Z", false],
+  ]) {
+    const f = acknowledgedSnapshotFixture();
+    for (const row of f.rows.filter((r) => r.method === "Acknowledge")) row.at = instant;
+    if (!active)
+      for (const id of [7, 8]) f.locals.get(id).body.expireTime = "2026-10-16T00:00:00.000Z";
+    const r = await run(f);
+    const proof = entry(r, "CreateSnapshot").timestampProofs[0];
+    assert.equal(proof.localLifetimeVerdict, "MATCH");
+    assert.equal(entry(r, "CreateSnapshot").semanticVerdict, active ? "MATCH" : "NOT_COMPARABLE");
+    assert.equal(proof.publicationSourceNs.length, active ? 1 : 2);
+    if (!active) assert.match(proof.gap, /expired local lease/);
+  }
+});
+
+test("C Snapshot fixture keeps independent source Create and Get bodies", () => {
+  const f = snapshotFixture();
+  const create = f.rows.find((r) => r.event === "response" && r.method === "CreateSnapshot").reply
+    .body;
+  const get = f.rows.find((r) => r.event === "response" && r.method === "GetSnapshot").reply.body;
+  assert.deepEqual(create, get);
+  assert.notEqual(create, get);
+  get.expireTime = "2026-10-16T00:00:00.098Z";
+  assert.equal(create.expireTime, "2026-10-16T00:00:00.097Z");
+  assert.equal(get.expireTime, "2026-10-16T00:00:00.098Z");
+});
+
+test("C unknown source Snapshot creation does not suppress known local lifetime errors", async () => {
+  const f = snapshotFixture();
+  f.rows.find((r) => r.event === "response" && r.method === "CreateSnapshot").reply.unknown = true;
+  const unknown = await run(f);
+  assert.equal(entry(unknown, "CreateSnapshot").semanticVerdict, "NOT_COMPARABLE");
+  assert.equal(entry(unknown, "CreateSnapshot").timestampProofs[0].localLifetimeVerdict, "MATCH");
+  for (const id of [7, 8]) f.locals.get(id).body.expireTime = "2026-10-16T00:20:00.000Z";
+  assert.equal(entry(await run(f), "CreateSnapshot").semanticVerdict, "DIVERGES");
+});
+
+function twoOutstandingSnapshotFixture() {
+  const f = acknowledgedSnapshotFixture();
+  const ackRows = f.rows.splice(
+    f.rows.findIndex((r) => r.method === "Acknowledge"),
+    2,
+  );
+  for (const row of ackRows) row.at = "2026-10-09T00:30:00.500Z";
+  const requestId = pull(f, "123", "2026-10-09T00:00:00.097Z", time, "2026-10-09T00:30:00.250Z");
+  const delivered = f.rows.splice(
+    f.rows.findIndex((r) => r.requestId === requestId),
+    2,
+  );
+  const index = f.rows.findIndex(
+    (r) => r.event === "request-dispatch" && r.method === "CreateSnapshot",
+  );
+  f.rows.splice(index, 0, ...delivered, ...ackRows);
+  f.rows.forEach((r, i) => (r.n = i + 1));
+  return f;
+}
+test("C successful ACK retains a different already-published unACKed message", async () => {
+  const r = await run(twoOutstandingSnapshotFixture());
+  assert.equal(entry(r, "CreateSnapshot").semanticVerdict, "MATCH");
+  assert.equal(entry(r, "CreateSnapshot").timestampProofs[0].publicationSourceNs.length, 1);
+});
+test("C ACK membership cannot migrate to another subscription on the same topic", async () => {
+  const f = twoOutstandingSnapshotFixture();
+  const subscription = f.subscription + "-other";
+  const requestId = add(
+    f,
+    "CreateSubscription",
+    { name: subscription, topic: f.topic },
+    { name: subscription, topic: f.topic, ackDeadlineSeconds: 10 },
+  );
+  const created = f.rows.splice(
+    f.rows.findIndex((r) => r.requestId === requestId),
+    2,
+  );
+  const index = f.rows.findIndex((r) => r.event === "request-dispatch" && r.method === "Publish");
+  f.rows.splice(index, 0, ...created);
+  f.rows.find(
+    (r) => r.event === "request-dispatch" && r.method === "CreateSnapshot",
+  ).request.subscription = subscription;
+  for (const row of f.rows.filter((r) => r.event === "response" && /Snapshot/.test(r.method)))
+    row.reply.body.expireTime = "2026-10-16T00:00:00.097Z";
+  for (const id of [7, 8]) f.locals.get(id).body.expireTime = "2026-10-16T00:00:00.000Z";
+  f.rows.forEach((r, i) => (r.n = i + 1));
+  const r = await run(f);
+  assert.equal(entry(r, "CreateSnapshot").semanticVerdict, "MATCH");
+  assert.equal(entry(r, "CreateSnapshot").timestampProofs[0].publicationSourceNs.length, 2);
+});
+
+test("C unknown source Snapshot Get cannot finalize persistence or suppress known differences", async () => {
+  for (const mode of ["stable", "bad-expiry", "body", "status", "code"]) {
+    const f = snapshotFixture();
+    f.rows.find((r) => r.event === "response" && r.method === "GetSnapshot").reply.unknown = true;
+    if (mode === "bad-expiry")
+      for (const id of [7, 8]) f.locals.get(id).body.expireTime = "2026-10-16T00:20:00.000Z";
+    if (mode === "body") f.locals.get(8).body.labels.proof = "changed";
+    if (mode === "status") f.locals.get(8).status = 201;
+    if (mode === "code") f.locals.get(8).code = "INTERNAL";
+    const r = await run(f);
+    const expected = mode === "stable" ? "NOT_COMPARABLE" : "DIVERGES";
+    assert.equal(entry(r, "CreateSnapshot").semanticVerdict, expected, mode);
+    assert.equal(entry(r, "GetSnapshot").semanticVerdict, expected, mode);
+  }
+});
+
+test("C fully ACKed Snapshot backlog uses its actual creation clock", async () => {
+  for (const expiry of ["2026-10-16T01:00:00.000Z", "2026-10-16T00:20:00.000Z"]) {
+    const f = acknowledgedSnapshotFixture();
+    const requestId = add(
+      f,
+      "Acknowledge",
+      { subscription: f.subscription, ackIds: ["source-124"] },
+      {},
+      {},
+      "2026-10-09T00:30:00.500Z",
+    );
+    const ackRows = f.rows.splice(
+      f.rows.findIndex((r) => r.requestId === requestId),
+      2,
+    );
+    const snapshotIndex = f.rows.findIndex(
+      (r) => r.event === "request-dispatch" && r.method === "CreateSnapshot",
+    );
+    f.rows.splice(snapshotIndex, 0, ...ackRows);
+    f.rows.forEach((r, i) => (r.n = i + 1));
+    for (const id of [7, 8]) f.locals.get(id).body.expireTime = expiry;
+    const r = await run(f);
+    const expected = expiry === "2026-10-16T01:00:00.000Z" ? "MATCH" : "DIVERGES";
+    assert.equal(entry(r, "CreateSnapshot").semanticVerdict, expected, expiry);
+    assert.equal(entry(r, "GetSnapshot").semanticVerdict, expected, expiry);
+    assert.deepEqual(entry(r, "CreateSnapshot").timestampProofs[0].publicationSourceNs, []);
   }
 });

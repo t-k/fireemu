@@ -456,7 +456,7 @@
       "transports": [
         "artifact"
       ],
-      "status": "PENDING_CORPUS",
+      "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
         "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
@@ -521,5 +521,10 @@
     "physicalParity": "Scoped semantic acceptance does not assert physical byte/header equality. Historical physical differences and native/current runtime qualifications remain retained in the accepted composition.",
     "sdkSupervision": "The historical SDK outer IdentityRefused receipt remains unchanged. The new genuine SDK witness has 13 calls, 6 forwarded requests, fulfilled work, closed resources and no unsettled work under the current owned lifecycle. Full historical SDK runtime closure identity remains unestablished; 73 old relative paths are absent.",
     "generatedInternalErrorId": "The exact internal-error wrapper normalizes independently generated hexadecimal UUID8-4-4-4-12 IDs using the existing Rust replay rule, without restricting version/variant. The native-v4/local-version0 generator shape difference remains unresolved; arbitrary messages, status/code/details differences are not masked."
+  },
+  "retrospectiveAdjudication": {
+    "mode": "reviewed-retrospective-composition",
+    "path": "spec/compatibility/closure/evidence/EVENTARC-adjudication.json",
+    "sha256": "b6678e29df3a3841addca7c5ee8d8213cdc5d1a09704b6afc42bd5dceacacad2"
   }
 }

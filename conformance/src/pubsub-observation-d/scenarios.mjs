@@ -334,7 +334,10 @@ export async function runCell({
         messages: [expected],
       });
       const windowStart = meter.clock(),
-        end = Math.min(windowStart + 900000, windowStart + meter.remaining());
+        end = Math.min(
+          windowStart + (cell.mode === "720-second-source-inactivity" ? 1020000 : 900000),
+          windowStart + meter.remaining(),
+        );
       let sourceAttempts = 0,
         sinkAttempts = 0,
         forwarded = false;

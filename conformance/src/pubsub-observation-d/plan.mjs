@@ -1,4 +1,4 @@
-// Fixed approved per-set reservations. Unused categories and fresh cells cannot be reassigned.
+// Fixed per-set reservations. Unused categories and fresh cells cannot be reassigned.
 export const SUITE = "pubsub-observation-d-v1";
 export const TASK = "PUBSUB-OBSERVATION-D";
 export const PROJECT = "fireemu-oracle-idp";
@@ -27,7 +27,7 @@ export const CAPS = Object.freeze({
   largeEncodedPayloadBytes: 0,
   smallPublishes: 14,
   smallEncodedPayloadBytes: 1024,
-  sourceWallMs: 19800000,
+  sourceWallMs: 21120000,
 });
 export const iamCategory = (name) =>
   name.includes("Iam") || name.startsWith("iam") || name.startsWith("cleanupIam");
@@ -64,7 +64,14 @@ export function makePlan() {
           mode,
           arm,
           reserve: false,
-          cellMs: arm === "no-new-grant" ? 900000 : 1800000,
+          cellMs:
+            mode === "720-second-source-inactivity"
+              ? arm === "no-new-grant"
+                ? 1200000
+                : 2160000
+              : arm === "no-new-grant"
+                ? 900000
+                : 1800000,
           cleanupReserveMs: arm === "no-new-grant" ? 60000 : 120000,
         });
   }
@@ -100,6 +107,7 @@ export function makePlan() {
       principalSource: "Future authentic source-bound APPROVE scope; never argv",
     },
     observationWindowMs: 900000,
+    inactivityObservationWindowMs: 1020000,
     timeoutPolicy: {
       createMs: 80000,
       otherMs: 30000,

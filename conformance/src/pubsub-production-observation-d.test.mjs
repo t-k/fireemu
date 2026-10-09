@@ -38,7 +38,7 @@ test("D independent fixed approval vector and nontransferable categories", () =>
   }
   assert.deepEqual(
     [rest, grpc, CAPS.sourceRequests, CAPS.totalRequests, CAPS.sourceWallMs],
-    [1501, 1393, 2894, 2908, 19800000],
+    [1501, 1393, 2894, 2908, 21120000],
   );
   assert.equal(p.iam.waitAfterLastGrantMs, 900000);
   assert.equal(p.iam.convergenceClaim, false);
@@ -317,22 +317,63 @@ test("D unknown grant or restore stops and protects all four resources without r
   }
 });
 
-test("D recorded maximum create/Pull/sink delays clip windows and never claim720seconds or convergence", async () => {
+test("D normal latency completes all four inactivity cells across forwarding, empty and nine nacks", async (t) => {
+  for (const cell of makePlan().cells.filter(
+    (c) => c.mode === "720-second-source-inactivity" && !c.reserve,
+  )) {
+    for (const options of [{ forwarding: true }, { empty: true }, { forwarding: false }]) {
+      await t.test(`${cell.id} ${JSON.stringify(options)}`, async () => {
+        const w = world(cell, { ...options, latency: true });
+        const r = await runCell(w);
+        assert.equal(
+          r.complete,
+          true,
+          `${cell.id}: ${JSON.stringify(options)} ${JSON.stringify(r)}`,
+        );
+        assert.equal(r.cleanupClosed, true);
+        assert.equal(w.resources.size, 0);
+        assert.ok(w.clock() <= cell.cellMs + clockEpoch);
+        const start = r.observations.find((o) => o.stage === "inactivity-start");
+        const done = r.observations.find((o) => o.stage === "inactivity-completed");
+        const pulls = w.calls.filter((c) => c.category === "sourcePull");
+        assert.equal(start.sourceAttempts, 9);
+        assert.ok(done.elapsedMs >= 720000);
+        assert.ok(pulls[9].at >= start.resumeAt);
+        assert.equal(pulls.filter((c) => c.at >= start.clockMs && c.at < start.resumeAt).length, 0);
+        if (options.forwarding === false)
+          assert.ok(w.calls.filter((c) => c.category === "nack").length >= 10);
+        if (cell.arm !== "no-new-grant")
+          assert.ok(
+            w.calls.find((c) => c.method === "Publish").at -
+              w.rows.find((row) => row.stage === "iam-window").grantedAt >=
+              900000,
+          );
+      });
+    }
+  }
+});
+
+test("D deliberately unfit inactivity timing remains incomplete with confirmed cleanup", async () => {
   for (const cell of makePlan().cells.filter(
     (c) => c.mode === "720-second-source-inactivity" && !c.reserve,
   )) {
     const w = world(cell, { latency: true, empty: true });
+    const original = w.wire.call;
+    w.wire.call = async (c) => {
+      const reply = await original(c);
+      if (c.category === "sourcePull") await w.sleep(50000);
+      return reply;
+    };
     const r = await runCell(w);
-    assert.ok(w.clock() <= cell.cellMs + clockEpoch);
-    assert.equal(r.parityEstablished, false);
-    assert.ok(r.observations.every((o) => o.iamConvergenceClaim !== true));
+    assert.equal(r.complete, false);
     assert.ok(r.observations.some((o) => o.stage === "inactivity-not-completed"));
     assert.equal(
-      w.calls
-        .filter((c) => c.category === "sinkPull")
-        .every((c) => c.request.returnImmediately === true),
-      true,
+      r.observations.some((o) => o.stage === "inactivity-completed"),
+      false,
     );
+    assert.equal(w.calls.filter((c) => c.category === "sourcePull").length, 9);
+    assert.equal(r.parityEstablished, false);
+    assert.equal(r.cleanupClosed, true);
   }
 });
 
@@ -555,7 +596,9 @@ import { EventEmitter } from "node:events";
 import { createWire } from "./pubsub-observation-d/wire.mjs";
 
 test("D main records12 complete cells and durable IAM proofs then stops unknown before next cell", async () => {
-  for (const unknown of [false, true]) {
+  for (const mode of ["complete", "unknown", "unfit-R6"]) {
+    const unknown = mode === "unknown",
+      unfit = mode === "unfit-R6";
     const out = mkdtempSync(join(tmpdir(), "pubsub-d-main-")),
       tick = { value: clockEpoch },
       worlds = new Map(),
@@ -600,16 +643,26 @@ test("D main records12 complete cells and durable IAM proofs then stops unknown 
                     tick,
                     meterOverride: meter,
                     fault: unknown ? (c) => c.category === "iamSetupWrite" : null,
+                    latency: unfit && cell.id === "R6",
+                    empty: unfit && cell.id === "R6",
                   }),
                 );
               }
-              return worlds.get(call.cellId).wire.call(call);
+              const reply = await worlds.get(call.cellId).wire.call(call);
+              if (unfit && call.cellId === "R6" && call.category === "sourcePull")
+                tick.value += 50000;
+              return reply;
             },
           }),
         },
       );
-      assert.equal(result.recordingComplete, !unknown);
-      assert.equal(result.results.length, unknown ? 2 : 12);
+      assert.equal(result.recordingComplete, !unknown && !unfit);
+      assert.equal(result.results.length, unknown ? 2 : unfit ? 6 : 12);
+      if (unfit) {
+        assert.equal(worlds.has("N1"), false);
+        assert.equal(result.results.at(-1).complete, false);
+        assert.equal(result.results.at(-1).cleanupClosed, true);
+      }
       assert.equal(result.resourcesClosed, !unknown);
       assert.equal(result.parentClosureReady, false);
       assert.match(result.iamSha256, /^[a-f0-9]{64}$/);
@@ -619,7 +672,8 @@ test("D main records12 complete cells and durable IAM proofs then stops unknown 
         .split("\n")
         .map(JSON.parse);
       assert.ok(rows.some((r) => r.phase === "grant-intent"));
-      if (!unknown) assert.equal(rows.filter((r) => r.phase === "restore-confirmed").length, 12);
+      if (!unknown)
+        assert.equal(rows.filter((r) => r.phase === "restore-confirmed").length, unfit ? 6 : 12);
     } finally {
       rmSync(out, { recursive: true });
     }
@@ -703,7 +757,9 @@ test("D bounded observation clock records actual elapsed duration and aggregate1
     const end = r.observations.find((o) => o.stage === "bounded-window-end"),
       begin = r.observations.find((o) => o.stage === "publication-binding");
     assert.equal(end.observedWindowMs, end.clockMs - begin.clockMs);
-    assert.ok(end.observedWindowMs <= 900000);
+    assert.ok(
+      end.observedWindowMs <= (c.mode === "720-second-source-inactivity" ? 1020000 : 900000),
+    );
   }
   const m = createMeter({ now: () => 0 });
   for (const c of makePlan().cells) {
@@ -824,7 +880,16 @@ test("D pure generated near misses keep source tokens and recovery age closed", 
   for (const age of [0, 599999, NaN, -1])
     await assert.rejects(() => recoverA2({ elapsedMs: age }), /minimum age/);
   for (const c of makePlan().cells) {
-    assert.equal(c.cellMs, c.arm === "no-new-grant" ? 900000 : 1800000);
+    assert.equal(
+      c.cellMs,
+      c.mode === "720-second-source-inactivity"
+        ? c.arm === "no-new-grant"
+          ? 1200000
+          : 2160000
+        : c.arm === "no-new-grant"
+          ? 900000
+          : 1800000,
+    );
     assert.equal(c.cleanupReserveMs, c.arm === "no-new-grant" ? 60000 : 120000);
   }
 });
@@ -833,7 +898,7 @@ test("D source survives a completed720second pause in a publish-age retention mo
   for (const cell of makePlan().cells.filter(
     (c) => c.mode === "720-second-source-inactivity" && !c.reserve,
   )) {
-    const w = world(cell, { forwarding: false }),
+    const w = world(cell, { forwarding: false, latency: true }),
       result = await runCell(w);
     assert.equal(result.complete, true);
     const resumed = result.observations
@@ -1299,4 +1364,33 @@ test("Task24 D preserves returned unsettled entries even when the manager report
   assert.equal(w.calls.filter((c) => c.method.startsWith("Delete")).length, 0);
   assert.equal(checkpoints.at(-1).obligations.length, 4);
   assert.equal(checkpoints.at(-1).iam.length, 2);
+});
+
+test("D exact timing reservations include unused cells and exhaust the whole-set wall", () => {
+  const plan = makePlan();
+  assert.equal(plan.observationWindowMs, 900000);
+  assert.equal(plan.inactivityObservationWindowMs, 1020000);
+  assert.equal(
+    plan.cells.reduce((sum, c) => sum + c.cellMs, 0),
+    21120000,
+  );
+  assert.equal(
+    plan.cells.filter((c) => !c.reserve).reduce((sum, c) => sum + c.cellMs, 0),
+    17520000,
+  );
+  assert.equal(
+    plan.cells.filter((c) => c.reserve).reduce((sum, c) => sum + c.cellMs, 0),
+    3600000,
+  );
+  assert.deepEqual(plan.caps, CAPS);
+  const tick = { value: clockEpoch },
+    meter = createMeter({ now: () => tick.value });
+  for (const cell of plan.cells) {
+    meter.enter(cell);
+    tick.value += cell.cellMs - 1;
+    meter.start("cleanupGet", cell.transport);
+  }
+  assert.ok(tick.value > clockEpoch + 19800000);
+  tick.value = clockEpoch + 21120000;
+  assert.throws(() => meter.start("cleanupGet", "grpc"), /time exhausted/);
 });

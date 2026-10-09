@@ -3634,7 +3634,7 @@ async fn recorded_snapshot_and_seek_refusals_preserve_profile_diagnostics() {
         .await;
         if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
             let descriptions =
-                ["Invalid value (oneof), oneof field 'target' is already set. Cannot set 'time'"];
+                ["Invalid value (oneof), oneof field 'target' is already set. Cannot set 'time'", "Invalid JSON payload received. Unknown name \"subscription\": Root element must be a message."];
             assert_eq!(body["error"]["message"], descriptions.join("\n"));
             assert_eq!(
                 body["error"]["details"],
@@ -4142,10 +4142,67 @@ async fn issued_deleted_topic_cursor_continues_over_current_names() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn strict_seek_conflicts_preserve_request_order_and_present_fields() {
     let address = start().await;
     let path = "/v1/projects/demo-app/subscriptions/seek-errors:seek";
-    for (request, conflict, subscription) in [
+    let topic = "/v1/projects/demo-app/topics/seek-errors";
+    let sub = "projects/demo-app/subscriptions/seek-errors";
+    assert_eq!(rest_request(address, "PUT", topic, json!({})).await.0, 200);
+    assert_eq!(
+        rest_request(
+            address,
+            "PUT",
+            &format!("/v1/{sub}"),
+            json!({"topic":"projects/demo-app/topics/seek-errors"})
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("{topic}:publish"),
+            json!({"messages":[{"data":"cmVwbGF5"}]})
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        rest_request(
+            address,
+            "PUT",
+            "/v1/projects/demo-app/snapshots/saved",
+            json!({"subscription":sub})
+        )
+        .await
+        .0,
+        200
+    );
+    let (_, pulled) = rest_request(
+        address,
+        "POST",
+        &format!("/v1/{sub}:pull"),
+        json!({"maxMessages":1}),
+    )
+    .await;
+    let ack = pulled["receivedMessages"][0]["ackId"].as_str().unwrap();
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("/v1/{sub}:acknowledge"),
+            json!({"ackIds":[ack]})
+        )
+        .await
+        .0,
+        200
+    );
+    let before = rest_request(address, "GET", &format!("/v1/{sub}"), json!({})).await;
+    for (request, conflict, extra_violation) in [
         (
             r#"{"time":"2000-01-01T00:00:00Z","snapshot":"projects/demo-app/snapshots/saved"}"#,
             "snapshot",
@@ -4154,7 +4211,7 @@ async fn strict_seek_conflicts_preserve_request_order_and_present_fields() {
         (
             r#"{"snapshot":"projects/demo-app/snapshots/saved","time":"2000-01-01T00:00:00Z"}"#,
             "time",
-            false,
+            true,
         ),
         (
             r#"{"time":"2000-01-01T00:00:00Z","snapshot":"projects/demo-app/snapshots/saved","subscription":"projects/demo-app/subscriptions/seek-errors"}"#,
@@ -4169,20 +4226,77 @@ async fn strict_seek_conflicts_preserve_request_order_and_present_fields() {
     ] {
         let (status, bytes) = rest_request_bytes(address, "POST", path, request.as_bytes()).await;
         assert_eq!(status, 400);
-        if conflict == "snapshot" && !subscription {
+        if conflict == "snapshot" && !extra_violation {
             assert_eq!(bytes.len(), 447);
         }
         let body: Value = serde_json::from_slice(&bytes).unwrap();
         let mut descriptions = vec![format!(
             "Invalid value (oneof), oneof field 'target' is already set. Cannot set '{conflict}'"
         )];
-        if subscription {
+        if extra_violation {
             descriptions.push("Invalid JSON payload received. Unknown name \"subscription\": Root element must be a message.".into());
         }
+        assert_eq!(body["error"]["code"], 400);
+        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+        assert_eq!(
+            bytes.len(),
+            if extra_violation {
+                682 + usize::from(conflict == "snapshot") * 8
+            } else {
+                447
+            }
+        );
         assert_eq!(body["error"]["message"], descriptions.join("\n"));
         assert_eq!(
-            body["error"]["details"],
-            json!([{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":descriptions.iter().map(|description|json!({"description":description})).collect::<Vec<_>>()}])
+            body,
+            json!({"error": {
+                "code":400, "status":"INVALID_ARGUMENT", "message":descriptions.join("\n"),
+                "details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":descriptions.iter().map(|description|json!({"description":description})).collect::<Vec<_>>()}]
+            }})
+        );
+    }
+    assert_eq!(
+        rest_request(address, "GET", &format!("/v1/{sub}"), json!({})).await,
+        before
+    );
+    let (_, unchanged) = rest_request(
+        address,
+        "POST",
+        &format!("/v1/{sub}:pull"),
+        json!({"maxMessages":1}),
+    )
+    .await;
+    assert!(unchanged.get("receivedMessages").is_none(), "{unchanged}");
+    for target in [
+        json!({"snapshot":"projects/demo-app/snapshots/saved"}),
+        json!({"time":"2000-01-01T00:00:00Z"}),
+    ] {
+        assert_eq!(
+            rest_request(address, "POST", path, target).await,
+            (200, json!({}))
+        );
+        let (_, replayed) = rest_request(
+            address,
+            "POST",
+            &format!("/v1/{sub}:pull"),
+            json!({"maxMessages":1}),
+        )
+        .await;
+        assert_eq!(
+            replayed["receivedMessages"][0]["message"]["data"],
+            "cmVwbGF5"
+        );
+        let ack = replayed["receivedMessages"][0]["ackId"].as_str().unwrap();
+        assert_eq!(
+            rest_request(
+                address,
+                "POST",
+                &format!("/v1/{sub}:acknowledge"),
+                json!({"ackIds":[ack]})
+            )
+            .await
+            .0,
+            200
         );
     }
 }

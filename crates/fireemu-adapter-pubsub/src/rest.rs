@@ -1335,7 +1335,7 @@ fn seek(
             if handle.paging_policy == crate::PagingPolicy::Strict {
                 let conflict = seek_conflicting_target(raw_body)?;
                 let mut descriptions = vec![format!("Invalid value (oneof), oneof field 'target' is already set. Cannot set '{conflict}'")];
-                if field(body, "subscription").is_some() {
+                if conflict == "time" || field(body, "subscription").is_some() {
                     descriptions.push("Invalid JSON payload received. Unknown name \"subscription\": Root element must be a message.".to_owned());
                 }
                 let mut error = RestError::invalid(descriptions.join("\n"));
@@ -1831,6 +1831,23 @@ mod production_shape_tests {
     }
 
     proptest! {
+        #[test]
+        fn strict_seek_extra_violation_tracks_target_order(time_first in any::<bool>(), subscription_present in any::<bool>(), spaces in 0usize..8) {
+            let (first, second) = if time_first { ("time", "snapshot") } else { ("snapshot", "time") };
+            let subscription = if subscription_present { ",\"subscription\":\"projects/demo-app/subscriptions/saved\"" } else { "" };
+            let padding = " ".repeat(spaces);
+            let raw = format!("{{{padding}\"{first}\":\"value\",\"{second}\":\"value\"{subscription}{padding}}}");
+            let body = serde_json::from_str(&raw).unwrap();
+            let name = SubscriptionName::new("demo-app", "saved").unwrap();
+            let error = seek(name, &body, raw.as_bytes(), &local_handle(crate::PagingPolicy::Strict)).unwrap_err();
+            let count = error.details.unwrap()[0]["fieldViolations"].as_array().unwrap().len();
+            prop_assert_eq!(count, if !time_first || subscription_present { 2 } else { 1 });
+            let name = SubscriptionName::new("demo-app", "saved").unwrap();
+            let error = seek(name, &body, raw.as_bytes(), &local_handle(crate::PagingPolicy::Emulator)).unwrap_err();
+            prop_assert_eq!(error.message, "seek takes either a time or a snapshot");
+            prop_assert!(error.details.is_none());
+        }
+
         #[test]
         fn seek_target_order_ignores_escaped_and_nested_targets(time_first in any::<bool>(), noise in ".{0,80}", spaces in 0usize..8) {
             let nested = serde_json::to_string(&json!({"time":noise,"snapshot":[{"time":"ignored"}]})).unwrap();

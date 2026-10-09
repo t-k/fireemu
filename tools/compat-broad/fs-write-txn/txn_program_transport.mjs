@@ -2,20 +2,26 @@
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, statSync, readlinkSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import http from 'node:http';
 import https from 'node:https';
 
 const require = createRequire(new URL('../../../conformance/package.json', import.meta.url));
-const grpc = require('@grpc/grpc-js');
-const { v1: { FirestoreClient } } = require('@google-cloud/firestore');
-if (require('@grpc/grpc-js/package.json').version !== '1.14.4' || require('@google-cloud/firestore/package.json').version !== '8.7.1') throw new Error('program dependency pin differs');
-const descriptorClient = new FirestoreClient({ projectId: 'demo-descriptors' });
-const protos = descriptorClient._protos;
-const firestore = protos.google.firestore.v1;
-const empty = protos.google.protobuf.Empty;
-const RESPONSES = { BeginTransaction: firestore.BeginTransactionResponse, GetDocument: firestore.Document, BatchGetDocuments: firestore.BatchGetDocumentsResponse, Commit: firestore.CommitResponse, RunQuery: firestore.RunQueryResponse, Rollback: empty, DeleteDocument: empty };
+let nativeDependencies;
+function loadNativeDependencies() {
+  if (nativeDependencies) return nativeDependencies;
+  const grpc = require('@grpc/grpc-js');
+  const { v1: { FirestoreClient } } = require('@google-cloud/firestore');
+  if (require('@grpc/grpc-js/package.json').version !== '1.14.4' || require('@google-cloud/firestore/package.json').version !== '8.7.1') throw new Error('program dependency pin differs');
+  const descriptorClient = new FirestoreClient({ projectId: 'demo-descriptors' });
+  const protos = descriptorClient._protos;
+  const firestore = protos.google.firestore.v1;
+  const empty = protos.google.protobuf.Empty;
+  const RESPONSES = { BeginTransaction: firestore.BeginTransactionResponse, GetDocument: firestore.Document, BatchGetDocuments: firestore.BatchGetDocumentsResponse, Commit: firestore.CommitResponse, RunQuery: firestore.RunQueryResponse, Rollback: empty, DeleteDocument: empty };
+  nativeDependencies = { grpc, descriptorClient, firestore, RESPONSES };
+  return nativeDependencies;
+}
 const REST_METHODS = ['BeginTransaction', 'GetDocument', 'BatchGetDocuments', 'Commit', 'Rollback', 'RunQuery'];
 export const MAX_BATCH_FRAMES = 16;
 export const CHANNEL_OPTIONS = Object.freeze({ 'grpc.enable_retries': 0, 'grpc.max_send_message_length': 16384, 'grpc.max_receive_message_length': 65536 });
@@ -51,6 +57,7 @@ function timestamp(value) {
 }
 
 export function validateCall(spec) {
+  const { RESPONSES } = loadNativeDependencies();
   keys(spec, ['kind', 'transport', 'target', 'projectId', 'nonce', 'ownerId', 'slug', 'documents', 'states', 'method', 'request', 'bearer', 'deadlineMs'], ['cancelAfter', 'databases', 'placements']);
   // A native query stream the call cancels itself after N frames (N within the frame cap); nothing else may carry the key.
   if (spec.cancelAfter !== undefined && (spec.method !== 'RunQuery' || spec.transport !== 'grpc' || !Number.isInteger(spec.cancelAfter) || spec.cancelAfter < 1 || spec.cancelAfter > MAX_BATCH_FRAMES)) throw new Error('program cancel differs');
@@ -82,8 +89,11 @@ export function validateCall(spec) {
   if (new Set(declared).size !== declared.length || Object.entries(placements).some(([role, alias]) => !spec.documents.includes(role) || typeof alias !== 'string' || !Object.hasOwn(databases, alias))) throw new Error('program placement differs');
   const database = spec.request?.database ?? (spec.request?.name ?? spec.request?.parent ?? '').split('/documents/')[0];
   if (!declared.includes(database)) throw new Error('program database differs');
-  const prefix = `${database}/documents/oracle/${spec.nonce}/${spec.slug}/`;
-  const owned = name => typeof name === 'string' && name.startsWith(prefix) && spec.documents.includes(name.slice(prefix.length)) && (Object.hasOwn(placements, name.slice(prefix.length)) ? databases[placements[name.slice(prefix.length)]] : primary) === database;
+  const web = spec.slug === "txn-s5b";
+  const webRoles = ["node", "browser"].flatMap(transport => ["control", "control-other", "conflict", "probe"].map(role => `${transport}-${role}`));
+  if (web && (spec.projectId !== "fireemu-oracle-query" && spec.target.kind === "production" || JSON.stringify(spec.documents) !== JSON.stringify(webRoles) || JSON.stringify(spec.states) !== JSON.stringify(["seed", "witness", "final"]) || Object.keys(databases).length || Object.keys(placements).length || !["GetDocument", "Commit", "DeleteDocument"].includes(spec.method))) throw new Error("S5b fixed parent scope differs");
+  const prefix = web ? `${database}/documents/conf_txn/s5b_${spec.nonce}_` : `${database}/documents/oracle/${spec.nonce}/${spec.slug}/`;
+  const owned = web ? name => typeof name === "string" && webRoles.some(role => name === prefix + role.replaceAll("-", "_")) : name => typeof name === 'string' && name.startsWith(prefix) && spec.documents.includes(name.slice(prefix.length)) && (Object.hasOwn(placements, name.slice(prefix.length)) ? databases[placements[name.slice(prefix.length)]] : primary) === database;
   const request = spec.request;
   switch (spec.method) {
     case 'BeginTransaction': {
@@ -153,7 +163,26 @@ export function validateCall(spec) {
       if (request.transaction !== undefined) bytes(request.transaction, spec.transport);
       const seen = new Set();
       for (const write of request.writes) {
-        keys(write, ['update', 'currentDocument']); keys(write.update, ['name', 'fields']); keys(write.currentDocument, ['exists']);
+        keys(write, ['update', 'currentDocument']); keys(write.update, ['name', 'fields']);
+        if (web) {
+          if (request.writes.length !== 1 || request.transaction !== undefined || !owned(write.update.name) || write.update.name.endsWith('_probe')) throw new Error('S5b writable name differs');
+          const field = write.update.fields, marker = write.update.name.slice(prefix.length).split('_').slice(1).join('_');
+          keys(field, ['owner', 'nonce', 'case', 'value']);
+          for (const [key, expected] of Object.entries({ owner: spec.ownerId, nonce: spec.nonce, case: marker })) {
+            keys(field[key], ['stringValue']); if (field[key].stringValue !== expected) throw new Error('S5b write ownership differs');
+          }
+          keys(field.value, ['integerValue']);
+          if (!['1', '2'].includes(String(field.value.integerValue))) throw new Error('S5b parent value differs');
+          if (Object.hasOwn(write.currentDocument, 'updateTime')) {
+            keys(write.currentDocument, ['updateTime']); timestamp(write.currentDocument.updateTime);
+            if (marker !== 'conflict' || String(field.value.integerValue) !== '2') throw new Error('S5b witness version scope differs');
+          } else {
+            keys(write.currentDocument, ['exists']);
+            if (write.currentDocument.exists !== false || String(field.value.integerValue) !== (marker === 'control_other' ? '2' : '1')) throw new Error('S5b create precondition differs');
+          }
+          continue;
+        }
+        keys(write.currentDocument, ['exists']);
         if (!owned(write.update.name) || seen.has(write.update.name) || typeof write.currentDocument.exists !== 'boolean') throw new Error('program write scope differs');
         seen.add(write.update.name);
         keys(write.update.fields, ['owner', 'nonce', 'role', 'state']);
@@ -168,7 +197,7 @@ export function validateCall(spec) {
     }
     case 'DeleteDocument':
       keys(request, ['name', 'currentDocument']); keys(request.currentDocument, ['updateTime']);
-      if (!owned(request.name)) throw new Error('program delete scope differs');
+      if (!owned(request.name) || web && request.name.endsWith('_probe')) throw new Error('program delete scope differs');
       timestamp(request.currentDocument.updateTime);
       break;
   }
@@ -176,6 +205,7 @@ export function validateCall(spec) {
 }
 
 export function serviceDefinitions() {
+  const { firestore, RESPONSES } = loadNativeDependencies();
   return Object.fromEntries(Object.entries(RESPONSES).map(([method, response]) => [method, { path: `/google.firestore.v1.Firestore/${method}`, requestStream: false, responseStream: false, requestSerialize: firestore[`${method}Request`].serialize, requestDeserialize: firestore[`${method}Request`].deserialize, responseSerialize: response.serialize, responseDeserialize: response.deserialize }]));
 }
 
@@ -276,6 +306,7 @@ async function runRest(spec, exchange) {
 
 /** The gRPC call metadata: the credential, the user project in production only, and the routing parameter. */
 export function grpcMetadata(spec) {
+  const { grpc } = loadNativeDependencies();
   const metadata = new grpc.Metadata();
   metadata.set('authorization', `Bearer ${spec.bearer}`);
   if (spec.target.kind === 'production') metadata.set('x-goog-user-project', spec.projectId);
@@ -285,6 +316,7 @@ export function grpcMetadata(spec) {
 }
 
 async function runGrpc(spec, createClientOverride) {
+  const { grpc, firestore, RESPONSES } = loadNativeDependencies();
   const production = spec.target.kind === 'production';
   const createClient = createClientOverride ?? ((endpoint, credentials, options) => new grpc.Client(endpoint, credentials, options));
   const client = createClient(production ? 'firestore.googleapis.com:443' : `${spec.target.host}:${spec.target.port}`, production ? grpc.credentials.createSsl() : grpc.credentials.createInsecure(), CHANNEL_OPTIONS);
@@ -330,15 +362,21 @@ export async function runUnary(spec, injected) {
   if (injected !== undefined && (spec.target.kind === 'production' || typeof injected !== 'function')) throw new Error('program test injection requires a local target');
   try {
     return spec.transport === 'rest' ? await runRest(spec, injected ?? httpExchange) : await runGrpc(spec, injected);
-  } finally { await descriptorClient.close(); }
+  } finally { await nativeDependencies.descriptorClient.close(); }
 }
 
-export function runtimeInfo() {
+export function runtimeInfo(web = false) {
   const dependencies = {};
   const modules = realpathSync(new URL('../../../conformance/node_modules', import.meta.url));
   const resolveRoot = (name, resolver) => {
     let entry;
-    try { entry = resolver.resolve(`${name}/package.json`); } catch { entry = resolver.resolve(name); }
+    try { entry = resolver.resolve(`${name}/package.json`); } catch {
+      try { entry = resolver.resolve(name); } catch (error) {
+        // ESM-only exports can hide both the manifest and the CommonJS entry.
+        entry = (resolver.resolve.paths(name) ?? []).map(base => `${base}/${name}/package.json`).find(path => path.startsWith(modules + '/') && statSync(path, { throwIfNoEntry: false })?.isFile());
+        if (!entry) throw error;
+      }
+    }
     let root = dirname(realpathSync(entry));
     while (!statSync(join(root, 'package.json'), { throwIfNoEntry: false })?.isFile() || typeof JSON.parse(readFileSync(join(root, 'package.json'))).name !== 'string') {
       const parent = dirname(root);
@@ -348,7 +386,7 @@ export function runtimeInfo() {
     if (relative(modules, root).startsWith('..')) throw new Error('program dependency escaped its checkout');
     return root;
   };
-  const pending = ['@grpc/grpc-js', '@google-cloud/firestore'].map(name => resolveRoot(name, require));
+  const pending = ['@grpc/grpc-js', '@google-cloud/firestore', 'firebase-admin', ...(web ? ['firebase', 'playwright'] : [])].map(name => resolveRoot(name, require));
   while (pending.length) {
     const root = pending.pop();
     const key = relative(modules, root);
@@ -375,12 +413,38 @@ export function runtimeInfo() {
     scan(''); rows.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
     dependencies[key] = { root, name: manifest.name, version: manifest.version, requires, fileCount: rows.length, treeSha256: createHash('sha256').update(rows.map(([path, digest]) => `${path}\0${digest}\n`).join('')).digest('hex') };
   }
+  if (web) {
+    if (require('firebase/package.json').version !== '12.18.0') throw new Error('S5b Web SDK pin differs');
+    const chromiumExecutable = realpathSync(require('playwright').chromium.executablePath());
+    const app = dirname(dirname(dirname(chromiumExecutable)));
+    const chromiumRoot = app.endsWith('.app') ? app : dirname(chromiumExecutable);
+    const chromiumRows = [];
+    const scanChromium = path => {
+      for (const entry of readdirSync(join(chromiumRoot, path), { withFileTypes: true })) {
+        const child = path ? `${path}/${entry.name}` : entry.name;
+        const file = join(chromiumRoot, child);
+        if (entry.isDirectory()) scanChromium(child);
+        else if (entry.isFile()) chromiumRows.push([child, createHash('sha256').update(readFileSync(file)).digest('hex')]);
+        else if (entry.isSymbolicLink()) {
+          const target = relative(chromiumRoot, realpathSync(file));
+          if (target === '..' || target.startsWith('../')) throw new Error('S5b Chromium link escaped the selected bundle');
+          chromiumRows.push([child, createHash('sha256').update(`symlink\0${readlinkSync(file)}`).digest('hex')]);
+        } else throw new Error('S5b Chromium bundle contains a non-regular entry');
+      }
+    };
+    scanChromium(''); chromiumRows.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+    const firebaseRoot = dirname(require.resolve('firebase/package.json'));
+    return { nodeVersion: process.version, dependencies, webSdk: true, chromiumExecutable,
+      chromiumSha256: createHash('sha256').update(readFileSync(chromiumExecutable)).digest('hex'),
+      chromiumBundle: { root: chromiumRoot, fileCount: chromiumRows.length, treeSha256: createHash('sha256').update(chromiumRows.map(([path, digest]) => `${path}\0${digest}\n`).join('')).digest('hex') },
+      browserBundles: Object.fromEntries(['firebase-app.js', 'firebase-auth.js', 'firebase-firestore.js'].map(name => [name, createHash('sha256').update(readFileSync(join(firebaseRoot, name))).digest('hex')])) };
+  }
   return { nodeVersion: process.version, dependencies };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  if (process.argv[2] === '--runtime-info') {
-    process.stdout.write(`${JSON.stringify(runtimeInfo())}\n`);
+  if (['--runtime-info', '--runtime-info-s5b'].includes(process.argv[2])) {
+    process.stdout.write(`${JSON.stringify(runtimeInfo(process.argv[2] === '--runtime-info-s5b'))}\n`);
   } else {
     let size = 0;
     const chunks = [];

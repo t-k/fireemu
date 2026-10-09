@@ -5691,6 +5691,7 @@ impl LocalBackend {
         mut attempt: impl FnMut() -> Result<T, Status>,
     ) -> Result<T, Status> {
         let deadline = self.contention_deadline();
+        let mut owns_wait = false;
         loop {
             let handle = self.database_handle(parent)?;
             let marker = handle.release_marker();
@@ -5705,14 +5706,38 @@ impl LocalBackend {
                         }
                         return Err(status);
                     }
+                    owns_wait = true;
                     if !Self::should_wait_for_release(&handle, own, &deadline) {
+                        if let Some(id) = own {
+                            let _ = handle.with(|db| {
+                                db.stop_waiting_to_commit(id);
+                                Ok(())
+                            });
+                        }
                         return Err(status);
                     }
                     if !released {
                         handle.wait_for_release_until(marker, &deadline);
                     }
                 }
-                outcome => return outcome,
+                Err(status)
+                    if status.code() == tonic::Code::Aborted
+                        && status.message()
+                            == fireemu_core_firestore::store::CROSS_TRANSACTION_CONTENTION =>
+                {
+                    // Preserve lease bookkeeping even though a deadlock victim never waits.
+                    self.expire_lock_leases(&handle, lease_writes, own);
+                    return Err(status);
+                }
+                outcome => {
+                    if let Some(id) = own.filter(|_| owns_wait) {
+                        let _ = handle.with(|db| {
+                            db.stop_waiting_to_commit(id);
+                            Ok(())
+                        });
+                    }
+                    return outcome;
+                }
             }
         }
     }
@@ -5795,13 +5820,21 @@ impl LocalBackend {
         mut attempt: impl FnMut() -> Result<T, Status>,
     ) -> Result<T, Status> {
         let deadline = self.contention_deadline();
+        let mut owns_wait = false;
         loop {
             let handle = self.database_handle(parent)?;
             let marker = handle.release_marker();
             match attempt() {
                 Err(status) if Self::is_contention(&status) => {
                     let released = self.expire_lock_leases(&handle, lease_writes, own);
+                    owns_wait = true;
                     if !Self::should_wait_for_release(&handle, own, &deadline) {
+                        if let Some(id) = own {
+                            let _ = handle.with(|db| {
+                                db.stop_waiting_to_commit(id);
+                                Ok(())
+                            });
+                        }
                         return Err(status);
                     }
                     if !released {
@@ -5813,7 +5846,24 @@ impl LocalBackend {
                         .await;
                     }
                 }
-                outcome => return outcome,
+                Err(status)
+                    if status.code() == tonic::Code::Aborted
+                        && status.message()
+                            == fireemu_core_firestore::store::CROSS_TRANSACTION_CONTENTION =>
+                {
+                    // Preserve lease bookkeeping even though a deadlock victim never waits.
+                    self.expire_lock_leases(&handle, lease_writes, own);
+                    return Err(status);
+                }
+                outcome => {
+                    if let Some(id) = own.filter(|_| owns_wait) {
+                        let _ = handle.with(|db| {
+                            db.stop_waiting_to_commit(id);
+                            Ok(())
+                        });
+                    }
+                    return outcome;
+                }
             }
         }
     }

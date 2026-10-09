@@ -85,7 +85,9 @@ def main():
         raise ValueError("loopback local target required")
     source_path = Path(sys.argv[1])
     source = json.loads(source_path.read_text())
-    production = collector.projection(source)
+    from publish_recorded_comparison import release_input
+    expectation = release_input(source, native=True)
+    production = expectation["projection"] if expectation else collector.projection(source)
     runtime = wire_module.discover_runtime(Path(os.environ.get("NODE_BINARY") or shutil.which("node")))
     plan = program.compile_plan(os.urandom(16).hex(), os.urandom(16).hex())
     wire = wire_module.NodeWire(runtime, target={"kind": "local", "host": host, "port": int(port)})
@@ -94,7 +96,7 @@ def main():
         from txn_replay_clock import VirtualClock, paced_grpc, production_idle_gaps
 
         clock = VirtualClock(os.environ["FIREEMU_CONTROL_URL"], os.environ["FIREEMU_CONTROL_TOKEN"], frozen=True)
-        gaps = production_idle_gaps(source["steps"])
+        gaps = expectation["idleGaps"] if expectation else production_idle_gaps(source["steps"])
         paced = paced_grpc(collector.Collector)(gaps, plan, program.RequestBudget(plan), wire, "owner", save=lambda _state: None, monotonic=clock.now, utc=clock.utc,
                                                 sleep=clock.sleep, timing_mode="control-clock", emulator_clock=clock.emulator_now)
         receipt = paced.run()
@@ -120,11 +122,11 @@ def main():
             from txn_replay_clock import achieved_ages, production_idle_gaps
 
             sites = {row["site"] for row in production.get("idleCandidates", [])}
-            result["achievedAges"] = achieved_ages(production_idle_gaps(source["steps"]), production_idle_gaps(receipt["steps"]), sites=sites)
+            result["achievedAges"] = achieved_ages(expectation["idleGaps"] if expectation else production_idle_gaps(source["steps"]), production_idle_gaps(receipt["steps"]), sites=sites)
             # the idle the emulator itself saw before each long-idle request, beside the recorded one: a replay whose emulator-side idle is off is refused
             from txn_replay_clock import apply_age_rows, idle_before, judge_token_ages
 
-            apply_age_rows(result, judge_token_ages({site: gap for site, gap in production_idle_gaps(source["steps"]).items() if site in sites}, idle_before(paced.marks, sites),
+            apply_age_rows(result, judge_token_ages(expectation["tokenAges"] if expectation else {site: gap for site, gap in production_idle_gaps(source["steps"]).items() if site in sites}, idle_before(paced.marks, sites),
                                                     tolerance=TOKEN_AGE_TOLERANCE, minimum=TOKEN_AGE_MINIMUM))
         if not result["skipped"]:
             result["skipped"] = None

@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import importlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -32,6 +33,40 @@ OBSERVATION_LIMITS = [
     "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
     "The closure review and the final-artifact regression are separate conditions and stay open.",
 ]
+
+
+def release_input(source, *, native=False):
+    """An explicit expectation never substitutes for a complete raw recording."""
+    if source.get("kind") != "txn-release-expectation-v1":
+        return None
+    fields = ("projection", "idleGaps", "tokenAges") if native else ("projection", "commitRelations", "dispatchGaps", "waitGaps", "tokenAges", "orders", "clockEvidence")
+    for field in fields:
+        if not isinstance(source.get(field), dict):
+            raise ValueError(f"missing release evidence: {field}")
+    for field in ("idleGaps", "dispatchGaps", "waitGaps", "tokenAges"):
+        for seconds in source.get(field, {}).values():
+            if type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0:
+                raise ValueError(f"invalid relative timing: {field}")
+    return source
+
+
+def release_expectation(recording, plan, projected, *, native=False, clock="real"):
+    """Derive only the semantic and relative pacing inputs used by existing collectors."""
+    if recording.get("complete") is not True or recording.get("failureType") is not None:
+        raise ValueError("incomplete production recording")
+    from txn_replay_clock import production_idle_gaps, production_age_steps, production_token_ages, dispatch_gaps
+    value = {"kind": "txn-release-expectation-v1", "projection": projected}
+    if native:
+        gaps = production_idle_gaps(recording["steps"]) if clock == "virtual" else {}
+        sites = {row["site"] for row in projected.get("idleCandidates", [])}
+        value.update(idleGaps=gaps, tokenAges={site: gap for site, gap in gaps.items() if site in sites})
+    else:
+        from fs_txn_compare_local import commit_relations, writer_orders, clock_evidence
+        waited = {step["id"] for step in plan["steps"] if "waitSeconds" in step}
+        value.update(commitRelations=commit_relations(recording["steps"]), dispatchGaps=production_age_steps(recording["steps"]) if clock == "virtual" else {},
+                     waitGaps=dispatch_gaps(recording["steps"], waited) if clock == "virtual" else {}, tokenAges=production_token_ages(plan["steps"], recording["steps"]) if clock == "virtual" else {},
+                     orders=writer_orders(recording["steps"], plan), clockEvidence=clock_evidence(recording["steps"]))
+    return release_input(value, native=native)
 
 
 def _digest(path):

@@ -22,6 +22,67 @@ def runtime():
     return discover_runtime(Path(NODE))
 
 
+def test_s5b_runtime_variant_selects_only_the_fixed_worker_mode():
+    import json
+    import unittest
+    from unittest.mock import patch
+    import txn_program_wire as module
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, json.dumps({'nodeVersion': 'fixture'}).encode())
+    with patch.object(module.subprocess, 'run', run), patch.object(module, '_sha', return_value='0' * 64), patch.object(module, 'verify_runtime'), patch.object(module, 'require_packet_runtime'):
+        ordinary = discover_runtime(Path(NODE))
+        web = discover_runtime(Path(NODE), web_sdk=True)
+    assert calls[0][-1] == '--runtime-info'
+    assert calls[1][-1] == '--runtime-info-s5b'
+    assert ordinary == web
+    assert module._SEEDS == {'@grpc/grpc-js', '@google-cloud/firestore', 'firebase-admin'}
+    assert module._WEB_SEEDS - module._SEEDS == {'firebase', 'playwright'}
+    with unittest.TestCase().assertRaisesRegex(ValueError, 'reviewed interpreter'):
+        module._verify_runtime_full({'webSdk': False})
+
+
+def test_s5b_chromium_framework_and_helper_changes_invalidate_runtime_cache():
+    import hashlib
+    import json
+    import sys
+    import tempfile
+    import unittest
+    from unittest.mock import patch
+    import txn_program_wire as module
+    with tempfile.TemporaryDirectory() as directory:
+        bundle = Path(directory) / 'Selected.app'
+        launcher = bundle / 'Contents/MacOS/Selected'
+        framework = bundle / 'Contents/Frameworks/Selected.framework/Versions/1/Selected'
+        helper = bundle / 'Contents/Frameworks/Selected Helper.app/Contents/MacOS/Selected Helper'
+        for path in (launcher, framework, helper):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'fixture-executable')
+        count, digest = module._tree(bundle)
+        value = {'pythonExecutable': sys.executable, 'pythonVersion': module.PYTHON_VERSION,
+                 'nodeExecutable': sys.executable, 'dependencies': {}, 'webSdk': True,
+                 'chromiumExecutable': str(launcher),
+                 'chromiumBundle': {'root': str(bundle), 'fileCount': count, 'treeSha256': digest}}
+        key = hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+        for changed in (framework, helper):
+            paths = module._watch_paths(value)
+            stamps = tuple(module._stamp(path) for path in paths)
+            with patch.dict(module._RUNTIME_STAMPS, {key: (paths, stamps)}, clear=True):
+                module.verify_runtime(value)
+                before = changed.read_bytes()
+                if changed == framework:
+                    changed.write_bytes(before[:-1] + b'X')
+                else:
+                    replacement = changed.with_suffix('.replacement')
+                    replacement.write_bytes(before)
+                    replacement.replace(changed)
+                assert module._tree(bundle) != (count, digest) or changed == helper
+                with unittest.TestCase().assertRaisesRegex(ValueError, 'runtime or dependency resolution path changed'):
+                    module.verify_runtime(value)
+                changed.write_bytes(before)
+
+
 def receipt(transport='grpc', **changes):
     value = {'kind': 'txn-program-receipt-v1', 'transport': transport, 'complete': True, 'code': 0, 'details': '', 'response': {}, 'http': None if transport == 'grpc' else 200, 'dispatchedRequests': 1}
     return {**value, **changes}
@@ -35,6 +96,7 @@ def test_actual_node_dependency_trees_and_python_are_bound(runtime):
     verify_runtime(runtime)
     assert runtime['nodeVersion'] == 'v24.14.0'
     assert runtime['pythonVersion'] == '3.12.13'
+    assert runtime['dependencies']['firebase-admin']['version'] == '14.3.0'
     assert runtime['dependencies']['@grpc/grpc-js']['version'] == '1.14.4'
     assert runtime['dependencies']['@google-cloud/firestore']['version'] == '8.7.1'
     assert sum(row['fileCount'] for row in runtime['dependencies'].values()) > 1000
@@ -310,3 +372,44 @@ def test_local_rebase_does_not_convert_undeclared_database_prefixes(runtime, mon
     monkeypatch.setattr(wire, "_child", lambda spec, timeout: (seen.append(spec) or receipt(), {"childReaped": True}))
     wire.send("grpc", "Rollback", {"database": foreign, "transaction": "aXNzdWVk"}, nonce=NONCE, owner_id=OWNER, bearer="owner")
     assert seen[0]["request"]["database"] == foreign
+
+
+@pytest.mark.parametrize('shape', ['absent', 'dangling'])
+def test_runtime_stamp_distinguishes_absent_path_from_dangling_link(tmp_path, shape):
+    import txn_program_wire as module
+    path = tmp_path / shape
+    if shape == 'dangling': path.symlink_to(tmp_path / 'missing-referent')
+    value = module._stamp(path)
+    if shape == 'absent':
+        assert value is None
+    else:
+        info = path.lstat()
+        assert value == ((info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns), None)
+
+
+@pytest.mark.parametrize('stage', ['link', 'referent'])
+@pytest.mark.parametrize('error_type', [PermissionError, NotADirectoryError])
+def test_runtime_stamp_propagates_other_filesystem_errors_in_order(tmp_path, monkeypatch, stage, error_type):
+    import os
+    import txn_program_wire as module
+    path = tmp_path / 'watched'
+    path.write_bytes(b'fixture')
+    original_lstat, original_stat = os.lstat, os.stat
+    calls = []
+    error = error_type('fixture failure')
+    def observe(operation, fn, candidate, *args, **kwargs):
+        if os.fspath(candidate) == str(path):
+            calls.append(operation)
+            if operation == stage: raise error
+        return fn(candidate, *args, **kwargs)
+    def lstat(candidate, *args, **kwargs):
+        return observe('link', original_lstat, candidate, *args, **kwargs)
+    def stat(candidate, *args, **kwargs):
+        operation = 'referent' if kwargs.get('follow_symlinks', True) else 'link'
+        return observe(operation, original_stat, candidate, *args, **kwargs)
+    with monkeypatch.context() as patched:
+        patched.setattr(os, 'lstat', lstat)
+        patched.setattr(os, 'stat', stat)
+        with pytest.raises(error_type) as caught: module._stamp(path)
+    assert caught.value is error
+    assert calls == (['link'] if stage == 'link' else ['link', 'referent'])

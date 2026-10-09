@@ -19,7 +19,14 @@ import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
 
-import { createWireLedger, PRODUCTION_HOSTS } from "./sdk-wire.mjs";
+import {
+  createWireLedger,
+  createS5bAdmission,
+  PRODUCTION_HOSTS,
+  transactionMethod,
+  transactionWireEvidence,
+  TRANSACTION_BODY_LIMIT,
+} from "./sdk-wire.mjs";
 
 const require = createRequire(import.meta.url);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -57,6 +64,7 @@ export function webChannelBearer(url, body = null) {
 
 /** The hosts (with ports) the page may reach beyond its own server. */
 export function allowedHosts(config) {
+  if (config.s5bAdmission !== undefined) return ["firestore.googleapis.com"];
   if (config.mode !== "local") return PRODUCTION_HOSTS;
   const { host, port } = config.firestoreEmulator;
   return [new URL(config.authEmulator).host, `${host}:${port}`];
@@ -72,6 +80,11 @@ const FILES = {
 async function main() {
   const config = JSON.parse(process.env.AFC_SDK_CONFIG);
   const tokenOwner = new Map();
+  const admission = config.s5bAdmission === undefined ? null : createS5bAdmission(config, emit);
+  const capture = (config.mode === "local" || admission) && config.transactionCapture === true;
+  if (admission && !capture) throw new Error("S5b production capture is required");
+  const capturedRequests = new Map();
+  const pendingCapture = new Set();
   // Replaced once the browser is up; before that there is nothing to close but the process.
   let close = async (code) => process.exit(code);
   const ledger = createWireLedger({
@@ -104,16 +117,29 @@ async function main() {
     response.writeHead(200, { "content-type": entry.type, "cache-control": "no-store" });
     response.end(entry.body ?? readFileSync(entry.file));
   });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const fixedPort = admission ? Number(new URL(config.origin).port) : 0;
+  if (
+    admission &&
+    (!/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}$/.test(config.origin ?? "") || fixedPort > 65535)
+  )
+    throw new Error("S5b fixed browser origin differs");
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(fixedPort, "127.0.0.1", resolve);
+  });
   const origin = `http://127.0.0.1:${server.address().port}`;
 
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({
+    headless: true,
+    ...(admission ? { executablePath: config.chromiumExecutable } : {}),
+  });
   const context = await browser.newContext();
   const page = await context.newPage();
   let closing = false;
   close = async (code = 0) => {
     if (closing) return;
     closing = true;
+    await Promise.allSettled(pendingCapture);
     await browser.close().catch(() => {});
     server.close();
     process.exit(code);
@@ -163,21 +189,89 @@ async function main() {
     const headers = request.headers();
     try {
       const body = request.postData();
-      ledger.admit(
+      const record = ledger.admit(
         parsed.host,
         parsed.pathname,
         headers.authorization ?? webChannelBearer(url, body) ?? undefined,
       );
+      if (admission) {
+        if (typeof body !== "string" || Buffer.byteLength(body) > TRANSACTION_BODY_LIMIT)
+          throw new Error("S5b browser request missing or capped");
+        await admission.beforeTransaction({
+          method: transactionMethod(parsed.pathname),
+          request: JSON.parse(body),
+          record,
+        });
+      }
+      if (capture && transactionMethod(parsed.pathname))
+        capturedRequests.set(request, {
+          n: record.n,
+          method: transactionMethod(parsed.pathname),
+          body,
+        });
     } catch {
       // The ledger reported the first refusal and ends the client.
       return route.abort("blockedbyclient");
     }
     return route.continue();
   });
+  page.on("response", (response) => {
+    const request = response.request();
+    const observed = capturedRequests.get(request);
+    if (!observed) return;
+    capturedRequests.delete(request);
+    const task = (async () => {
+      let timer;
+      try {
+        const body = await Promise.race([
+          response.body(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("capture timeout")), 2000);
+          }),
+        ]);
+        if (body.length > TRANSACTION_BODY_LIMIT) throw new Error("capture cap");
+        emit({
+          event: "transaction-wire",
+          n: observed.n,
+          ...transactionWireEvidence(
+            observed.method,
+            observed.body,
+            body.toString("utf8"),
+            response.status(),
+          ),
+        });
+      } catch {
+        emit({
+          event: "transaction-wire",
+          n: observed.n,
+          method: observed.method,
+          complete: false,
+          reason: "capture-failed",
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    })();
+    pendingCapture.add(task);
+    task.finally(() => pendingCapture.delete(task));
+  });
+  page.on("requestfailed", (request) => {
+    const observed = capturedRequests.get(request);
+    if (!observed) return;
+    capturedRequests.delete(request);
+    emit({
+      event: "transaction-wire",
+      n: observed.n,
+      method: observed.method,
+      complete: false,
+      reason: "request-failed",
+    });
+  });
   await page.exposeFunction("afcToken", (hash, uid) => {
     tokenOwner.set(hash, uid);
   });
-  await page.exposeFunction("afcEmit", (event) => {
+  await page.exposeFunction("afcEmit", async (event) => {
+    if (capture && event?.event === "result") await Promise.allSettled(pendingCapture);
     if (event?.event === "page-closed") return close(0);
     return emit(event);
   });
@@ -186,6 +280,23 @@ async function main() {
   }, config);
   page.on("pageerror", (error) => emit({ event: "page-error", message: String(error.message) }));
   await page.goto(`${origin}/`);
+  if (admission) {
+    const browserSession = await browser.newBrowserCDPSession();
+    const processes = await browserSession.send("SystemInfo.getProcessInfo");
+    if (
+      !Array.isArray(processes.processInfo) ||
+      processes.processInfo.length > 20 ||
+      processes.processInfo.some((value) => !Number.isInteger(value.id) || value.id < 1)
+    )
+      throw new Error("S5b bounded browser process identities missing");
+    emit({
+      event: "browser-processes",
+      origin,
+      driverPid: process.pid,
+      processes: processes.processInfo.map(({ id, type }) => ({ pid: id, type })),
+    });
+    await browserSession.detach();
+  }
 
   createInterface({ input: process.stdin }).on("line", (line) => {
     let command;
@@ -194,6 +305,7 @@ async function main() {
     } catch {
       return emit({ event: "result", id: null, ok: false, error: "unparsable command" });
     }
+    if (admission?.accept(command)) return;
     // Dispatched, not awaited: a paused transaction must not block the command resuming it.
     return page
       .evaluate((c) => window.afcRun(c), command)

@@ -191,6 +191,8 @@ def main():
     project = table_project(table)
     wire = NodeWire(runtime, wire_scope({**table, **plan}), target={"kind": "local", "host": host, "port": int(port)}, **({} if project == DEFAULT_PROJECT else {"project": project}))
     source = json.loads(Path(sys.argv[1]).read_text())
+    from publish_recorded_comparison import release_input
+    expectation = release_input(source)
     recorded = "steps" in source
     if os.environ.get("COMPARE_CLOCK") == "frozen":
         # the emulator was started with `daemon.clockStart` (COMPARE_CLOCK_START): its clock moves only when advanced, so the waits advance it and nothing else does;
@@ -206,7 +208,7 @@ def main():
         from txn_replay_clock import PacedCollector, VirtualClock, production_age_steps
 
         clock = VirtualClock(os.environ["FIREEMU_CONTROL_URL"], os.environ["FIREEMU_CONTROL_TOKEN"], frozen=True)
-        steps = production_age_steps(source["steps"]) if recorded else {}
+        steps = expectation["dispatchGaps"] if expectation else production_age_steps(source["steps"]) if recorded else {}
         paced = PacedCollector(plan, table, RequestBudget(plan, table), wire, "owner", save=lambda _state: None, production_steps=steps, emulator_clock=clock.emulator_now,
                                monotonic=clock.now, utc=clock.utc, sleep=clock.sleep)
         receipt = paced.run()
@@ -218,28 +220,28 @@ def main():
     metadata.update({"clock": os.environ.get("COMPARE_CLOCK", "real"), "table": table["name"], "program": table["program"], "planCorpusDigest": plan["corpusDigest"],
                      "productionCorpusDigest": production["corpusDigest"], "productionFile": str(Path(sys.argv[1])),
                      "productionFileSha256": hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest(),
-                     "productionFileKind": "recording" if recorded else "freeze",
+                     "productionFileKind": "expectation" if expectation else "recording" if recorded else "freeze",
                      "localProject": "demo-program", "compareToolSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()})
     result = {"metadata": metadata, "complete": receipt["complete"], "failure": receipt["failureType"], "cases": None, "reads": None, "commitTimes": None}
     if receipt["complete"]:
         local = projection(receipt, table)
-        production_relations = commit_relations(source["steps"]) if recorded else None
+        production_relations = expectation["commitRelations"] if expectation else commit_relations(source["steps"]) if recorded else None
         local_relations = commit_relations(receipt["steps"])
-        result["cases"], result["reads"], result["commitTimes"] = compare(production, local, production_relations, local_relations, project, retention_cases(plan))
-        result["orders"] = compare_orders(writer_orders(source["steps"], plan), writer_orders(receipt["steps"], plan)) if recorded else None
-        result["clock"] = clock_rows_for(os.environ.get("COMPARE_CLOCK"), recorded, source["steps"] if recorded else None, receipt["steps"])
+        result["cases"], result["reads"], result["commitTimes"] = compare(production, local, production_relations, local_relations, "<project>" if expectation else project, retention_cases(plan))
+        result["orders"] = compare_orders(expectation["orders"] if expectation else writer_orders(source["steps"], plan), writer_orders(receipt["steps"], plan)) if recorded or expectation else None
+        result["clock"] = compare_clock(expectation["clockEvidence"], clock_evidence(receipt["steps"])) if expectation and os.environ.get("COMPARE_CLOCK") == "frozen" else clock_rows_for(os.environ.get("COMPARE_CLOCK"), recorded, source["steps"] if recorded else None, receipt["steps"])
         rows = result["cases"] + result["reads"] + (result["commitTimes"] or []) + (result["orders"] or []) + (result["clock"] or [])
         result["mismatches"] = sum(not row["match"] for row in rows)
-        if os.environ.get("COMPARE_CLOCK") == "virtual" and recorded:
+        if os.environ.get("COMPARE_CLOCK") == "virtual" and (recorded or expectation):
             # what each wait reached beside what the recording had: the record shows the boundary rows were compared at the recorded ages
             from txn_replay_clock import achieved_ages, dispatch_gaps
 
             waited = {step["id"] for step in plan["steps"] if "waitSeconds" in step}
-            result["achievedAges"] = achieved_ages(dispatch_gaps(source["steps"], waited), dispatch_gaps(receipt["steps"], waited))
+            result["achievedAges"] = achieved_ages(expectation["waitGaps"] if expectation else dispatch_gaps(source["steps"], waited), dispatch_gaps(receipt["steps"], waited))
             # the age the emulator itself saw at every request of a long-lived token, beside the recorded one: a replay whose emulator-side age is off is refused
             from txn_replay_clock import apply_age_rows, judge_token_ages, production_token_ages, token_ages
 
-            apply_age_rows(result, judge_token_ages(production_token_ages(plan["steps"], source["steps"]), token_ages(plan["steps"], paced.marks.before_times, paced.marks.after_times),
+            apply_age_rows(result, judge_token_ages(expectation["tokenAges"] if expectation else production_token_ages(plan["steps"], source["steps"]), token_ages(plan["steps"], paced.marks.before_times, paced.marks.after_times),
                                                     tolerance=TOKEN_AGE_TOLERANCE, minimum=TOKEN_AGE_MINIMUM))
     out.write_text(json.dumps(result, indent=1))
     print("complete", receipt["complete"], receipt["failureType"], "mismatches", result.get("mismatches"))

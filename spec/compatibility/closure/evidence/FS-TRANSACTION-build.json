@@ -1,0 +1,128 @@
+{
+  "sourceCommit": "dee94974292f4a49a10be6d586491e1ce663ad78",
+  "producerSourceCommit": "dee94974292f4a49a10be6d586491e1ce663ad78",
+  "binarySha256": "429bb8a023e5adc52acbe7c8ce318c23710e9e0de9059850496c1224776c0cf6",
+  "command": [
+    "cargo",
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "fireemu",
+    "--target",
+    "x86_64-unknown-linux-musl"
+  ],
+  "locked": true,
+  "profile": "release",
+  "target": "x86_64-unknown-linux-musl",
+  "targetDir": "target",
+  "rustcVersion": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+  "environment": {
+    "CARGO_INCREMENTAL": "0",
+    "SOURCE_DATE_EPOCH": "0",
+    "RUSTFLAGS": "--remap-path-prefix=<checkout>=/src --remap-path-prefix=<cargo-home>=/cargo -D warnings"
+  },
+  "buildInputs": {
+    "scheme": "crates-without-test-trees-v1",
+    "inputsSha256": "14fa8adc424c133022eb864d36894fd253a02f606a9ff8c30c81c48d47e99187",
+    "cargoLockSha256": "33d1fe3c5c74ff921b0412c443e9fc64883f1858813fc07959618eccb23a2888",
+    "dirty": false
+  },
+  "buildLogSha256": "929f34cf1e19db256ef4a62ff4ebd764b79a136bf6f73e21036192a84a9f0726",
+  "installedIdentityLogSha256": "3b628d441a8e2666086ee39830515b981eedb1203518dbf929ea11df3d2d6774",
+  "buildReceiptSha256": "42441dec890ee95112de80c022df6ec3a7a8cf2a7d097e5f8763c9ce00d56d5f",
+  "sourceBoundBuildProof": {
+    "headSha": "dee94974292f4a49a10be6d586491e1ce663ad78",
+    "buildJobId": 113609866005,
+    "buildJobUrl": "https://github.com/t-k/fireemu/actions/runs/37864004396/job/113609866005",
+    "buildConclusion": "success",
+    "strictInstalledJobId": 113612727302,
+    "strictInstalledJobUrl": "https://github.com/t-k/fireemu/actions/runs/37864004396/job/113612727302",
+    "installedIdentityStep": {
+      "completedAt": "2026-10-09T00:41:14Z",
+      "conclusion": "success",
+      "name": "the installed binary is the one publish ships",
+      "number": 12,
+      "startedAt": "2026-10-09T00:41:14Z",
+      "status": "completed"
+    },
+    "listenProvenance": "strict-regression/R19-export.json.replay/listen-local-1.json:provenance",
+    "workflowSource": ".github/workflows/release.yml@dee94974292f4a49a10be6d586491e1ce663ad78"
+  },
+  "package": {
+    "name": "package-linux-x64",
+    "artifactId": 11588191316,
+    "archiveSha256": "5b55c126d1d9abfb4272daaa7cca17d3724541134e4da1ca6753f38577553ac4",
+    "tarballs": {
+      "fireemu-0.15.0.tgz": "f01d01cd9f3edf37b7d0524f651e6818e8f74748c2ff5c7633460868fc5bcd68",
+      "fireemu-linux-x64-0.15.0.tgz": "c7ee94a418fd073d95924acb7224015cca4db08e217c8fcb6d964fdb9c1b5a7f"
+    }
+  },
+  "uiArtifact": {
+    "artifactId": 11586734206,
+    "archiveSha256": "44d458c243def5b7e4f59b4b305409f8e9d3def833ca49a09ff992978c64d7ec"
+  },
+  "rustSourceEquivalence": "The actual installed release artifact is bound to this CI source, successful musl release build, package identity and actual Listen provenance. Its Rust input scheme is retained exactly; the historical debug binary-v1 receipt is not reused.",
+  "debugBuild": {
+    "sourceCommit": "13bfd462df7fc7a9dc647f9545e4ae4800937a44",
+    "producerSourceCommit": "f6b0712426767da7dd0f364c849674476757f873",
+    "gitStatusOutsideBuildOutput": [],
+    "cargoVersion": "cargo 1.94.0 (85eff7c80 2026-01-15)",
+    "locked": true,
+    "binarySha256": "3bf21cb234845402af5e0e6906a3193d65be4e0babdd04369887b2880e0eb96f",
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "-p",
+      "fireemu",
+      "--bin",
+      "fireemu"
+    ],
+    "profile": "debug",
+    "targetDir": "target",
+    "RUSTC_WRAPPER": "",
+    "buildInputs": {
+      "scheme": "binary-v1",
+      "inputsSha256": "40c1daa78ad68d6c50fc56b19ae6e4fa7925070084b63280c4bf8f9401b40146",
+      "inputCount": 337,
+      "dirty": false
+    },
+    "buildReceiptSha256": "c75f8cf703c44279f52299fb83a79dfaed4dcfd79fad0023db6a44bc2ff801e2",
+    "buildLogSha256": "f64a2609035505d8422f32cf53f1b323c56635100737ce5a7008ca3989e93b51",
+    "cleanBuildIndexSha256": "9cd0e19a20ee87ff678d400079fd7157de9d041e900084b4daa9021c29994ae0",
+    "rustSourceEquivalence": "The binary-v1 Rust inputs match the signed debug build source and the replay producer source. The supplied binary reports version 0.15.0. This debug artifact is not the shipped release-profile artifact."
+  },
+  "historicalBuild": {
+    "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
+    "gitStatusOutsideBuildOutput": [],
+    "cargoVersion": "cargo 1.94.0 (85eff7c80 2026-01-15)",
+    "locked": true,
+    "binarySha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "-p",
+      "fireemu",
+      "--bin",
+      "fireemu"
+    ],
+    "profile": "release",
+    "targetDir": "target",
+    "RUSTC_WRAPPER": "",
+    "buildInputs": {
+      "scheme": "binary-v1",
+      "inputsSha256": "6df67f0ffad566b23ddf5fb94b0611bb72209c856797de45133d7fa9a28e9d55",
+      "inputCount": 337,
+      "dirty": false
+    },
+    "buildReceiptSha256": "aebf5d71ca344d70fc6d778a98c80d8fcef63c551ff5940875a8c1bc68316b06",
+    "buildPinSha256": "9228e4abcaf4fea66a36bf63218f1c062fa02e307f730bfdca1180b2b6f1a8f0",
+    "cleanBuildIndexSha256": "f2e03ad496c711beea6d590f57c495cafb2de333543b07533502e44decd48797",
+    "producerSourceCommit": "73b2c2b99b8f8d35a245ab795d2b09e7d9dd9399",
+    "rustSourceEquivalence": "The binary-v1 Rust build inputs are unchanged between the recorded build source and the producer source; canonical evidence assembly changes no Rust build input."
+  },
+  "environmentProvenance": "RUSTFLAGS source-path notation is normalized as <checkout> and <cargo-home>. Raw actual CI values remain in the buildLogSha256-pinned log, linked to the source and job by the unchanged buildReceiptSha256-pinned receipt."
+}

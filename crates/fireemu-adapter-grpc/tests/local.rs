@@ -609,10 +609,9 @@ async fn a_transaction_blocking_writers_past_the_lock_lease_is_rolled_back() {
     handle.abort();
 }
 
-/// A transaction whose held-back commit was abandoned by its client keeps its locks, and its
-/// waiting mark makes every later transactional commit into those locks the deadlock victim.
-/// The lock lease ends that: after it, the next such commit rolls the holder back and goes
-/// through, even though the victim itself could not wait.
+/// A transaction whose client stopped waiting keeps its read locks until the lock lease ends.
+/// Later clients receive the ordinary contention refusal, release their own locks, and can
+/// commit after lease bookkeeping rolls the abandoned holder back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_abandoned_waiting_holder_does_not_abort_other_transactions_forever() {
     let (mut client, handle) = start_with_contention_wait_and_lease(
@@ -672,7 +671,7 @@ async fn an_abandoned_waiting_holder_does_not_abort_other_transactions_forever()
         })
         .await
         .unwrap();
-    // Fresh transactions that read the document and commit are victims until the lease ends.
+    // Fresh transactions remain active on timeout; each client releases its own locks.
     let started = std::time::Instant::now();
     let mut attempts = 0;
     loop {
@@ -683,13 +682,25 @@ async fn an_abandoned_waiting_holder_does_not_abort_other_transactions_forever()
             .commit(pb::CommitRequest {
                 database: DB.to_owned(),
                 writes: vec![update_write("abandoned/doc", &[("v", i(2))])],
-                transaction: txn,
+                transaction: txn.clone(),
                 ..Default::default()
             })
             .await;
         match outcome {
             Ok(_) => break,
             Err(status) if status.code() == tonic::Code::Aborted && attempts < 100 => {
+                assert_eq!(
+                    status.message(),
+                    fireemu_core_firestore::store::TOO_MUCH_CONTENTION
+                );
+                client
+                    .rollback(pb::RollbackRequest {
+                        database: DB.into(),
+                        transaction: txn,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
             Err(status) => panic!("unexpected refusal: {status}"),
@@ -697,7 +708,7 @@ async fn an_abandoned_waiting_holder_does_not_abort_other_transactions_forever()
     }
     assert!(
         attempts >= 2,
-        "the first attempts were the deadlock victims"
+        "the first attempts timed out on the abandoned holder"
     );
     assert!(started.elapsed() >= std::time::Duration::from_millis(300));
     assert!(started.elapsed() < std::time::Duration::from_secs(10));
@@ -2706,8 +2717,8 @@ async fn a_read_transaction_locks_its_documents_and_batch_get_reports_missing() 
         contended.message(),
         "Too much contention on these documents. Please try again."
     );
-    // A second transaction reading the same document shares the lock; the first to commit
-    // is aborted for its client to retry.
+    // A second transaction shares the lock. With zero wait, each completed Commit receives
+    // ordinary contention and leaves its transaction active.
     let other = client
         .begin_transaction(pb::BeginTransactionRequest {
             database: DB.to_owned(),
@@ -2727,9 +2738,7 @@ async fn a_read_transaction_locks_its_documents_and_batch_get_reports_missing() 
         })
         .await
         .unwrap();
-    // The first committer is held back (this backend waits zero seconds, so the answer is the
-    // contention refusal) and stays active; the other transaction then runs into a waiting
-    // holder and is the deadlock victim, aborted for its client to retry.
+    // Neither completed request is still waiting, so this sequential pair is not a deadlock.
     let held = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
@@ -2740,6 +2749,10 @@ async fn a_read_transaction_locks_its_documents_and_batch_get_reports_missing() 
         .await
         .unwrap_err();
     assert_eq!(held.code(), tonic::Code::Aborted);
+    assert_eq!(
+        held.message(),
+        fireemu_core_firestore::store::TOO_MUCH_CONTENTION
+    );
     let victim = client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),
@@ -2750,6 +2763,18 @@ async fn a_read_transaction_locks_its_documents_and_batch_get_reports_missing() 
         .await
         .unwrap_err();
     assert_eq!(victim.code(), tonic::Code::Aborted);
+    assert_eq!(
+        victim.message(),
+        fireemu_core_firestore::store::TOO_MUCH_CONTENTION
+    );
+    client
+        .rollback(pb::RollbackRequest {
+            database: DB.into(),
+            transaction: other.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),

@@ -1,4 +1,4 @@
-//! Quint Connect driver for optimistic transaction conflict retries around a conditional lock.
+//! Quint Connect driver for pessimistic transaction deadlock retries around a conditional lock.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -35,6 +35,10 @@ const CLIENTS: [&str; 2] = ["c1", "c2"];
 pub struct TransactionConditionalLockState {
     /// Protocol phase for each bounded client.
     pub phase: BTreeMap<String, String>,
+    /// Begin order of the initial lazy transactions; zero means not begun.
+    pub age: BTreeMap<String, i64>,
+    /// Pinned begin instant, or -1 before the transaction begins.
+    pub started_at: BTreeMap<String, i64>,
     /// Value read from the real lock document.
     pub locked: bool,
     /// Values returned by real transaction reads for each attempt.
@@ -48,6 +52,10 @@ pub struct TransactionConditionalLockState {
 pub enum ProjectionFault {
     /// Change only one client phase.
     Phase,
+    /// Change only one initial begin order.
+    Age,
+    /// Change only one pinned begin instant.
+    StartedAt,
     /// Change only the real lock projection.
     Locked,
     /// Change only one observation list.
@@ -62,6 +70,8 @@ impl ProjectionFault {
     pub const fn field_name(self) -> &'static str {
         match self {
             Self::Phase => "phase",
+            Self::Age => "age",
+            Self::StartedAt => "startedAt",
             Self::Locked => "locked",
             Self::Observations => "observations",
             Self::Acted => "acted",
@@ -73,6 +83,7 @@ impl ProjectionFault {
 pub struct TransactionConditionalLockDriver {
     store: FirestoreState,
     phase: BTreeMap<String, String>,
+    age: BTreeMap<String, i64>,
     observations: BTreeMap<String, Vec<bool>>,
     acted: BTreeSet<String>,
     transactions: BTreeMap<String, TransactionId>,
@@ -93,6 +104,10 @@ impl TransactionConditionalLockDriver {
         Self {
             store: FirestoreState::new(),
             phase: client_map("Ready"),
+            age: CLIENTS
+                .into_iter()
+                .map(|client| (client.to_owned(), 0))
+                .collect(),
             observations: CLIENTS
                 .into_iter()
                 .map(|client| (client.to_owned(), Vec::new()))
@@ -127,6 +142,7 @@ impl TransactionConditionalLockDriver {
     pub fn init(&mut self) -> Result {
         self.store = FirestoreState::new();
         self.phase = client_map("Ready");
+        self.age.values_mut().for_each(|age| *age = 0);
         self.observations = CLIENTS
             .into_iter()
             .map(|client| (client.to_owned(), Vec::new()))
@@ -144,6 +160,9 @@ impl TransactionConditionalLockDriver {
                 "the bounded read requires an unlocked document",
             ));
         }
+        let age = i64::try_from(self.transactions.len())
+            .map_err(|_| invalid_data("too many clients"))?
+            + 1;
         let transaction = self
             .store
             .begin_transaction(false, LogicalInstant::UNIX_EPOCH)
@@ -159,6 +178,7 @@ impl TransactionConditionalLockDriver {
             ));
         }
         self.transactions.insert(client.to_owned(), transaction);
+        self.age.insert(client.to_owned(), age);
         self.observations
             .get_mut(client)
             .ok_or_else(|| invalid_data("unknown bounded client"))?
@@ -220,13 +240,23 @@ impl TransactionConditionalLockDriver {
             Some(&transaction),
             LogicalInstant::UNIX_EPOCH,
         ) {
+            Ok(_) => {
+                for other in &held {
+                    let victim = self.transaction(other)?.clone();
+                    if self.store.transaction_is_active(&victim) {
+                        return Err(invalid_data("waiting deadlock victim is still active"));
+                    }
+                    self.set_phase(other, "Aborted")?;
+                }
+                self.set_phase(client, "Committed")?;
+                return self.record_action("AbortStale");
+            }
             Err(FirestoreError::Aborted(_)) => {}
             Err(error) => {
                 return Err(invalid_data(&format!(
                     "stale production commit returned the wrong error: {error}"
                 )));
             }
-            Ok(_) => return Err(invalid_data("stale production transaction committed")),
         }
         self.set_phase(client, "Aborted")?;
         // The victim released its lock: a held-back commit goes through now, as the adapter's
@@ -318,6 +348,12 @@ impl TransactionConditionalLockDriver {
     pub fn project(&self) -> Result<TransactionConditionalLockState> {
         let mut projected = TransactionConditionalLockState {
             phase: self.phase.clone(),
+            age: self.age.clone(),
+            started_at: self
+                .age
+                .iter()
+                .map(|(client, age)| (client.clone(), if *age == 0 { -1 } else { 0 }))
+                .collect(),
             locked: self.locked()?,
             observations: self.observations.clone(),
             acted: self.acted.clone(),
@@ -328,6 +364,12 @@ impl TransactionConditionalLockDriver {
                 projected
                     .phase
                     .insert("c1".to_owned(), "Faulted".to_owned());
+            }
+            Some(ProjectionFault::Age) => {
+                projected.age.insert("c1".to_owned(), -1);
+            }
+            Some(ProjectionFault::StartedAt) => {
+                projected.started_at.insert("c1".to_owned(), 1);
             }
             Some(ProjectionFault::Locked) => projected.locked = !projected.locked,
             Some(ProjectionFault::Observations) => {

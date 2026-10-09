@@ -1,0 +1,2950 @@
+{
+  "receipt": {
+    "attempts": [
+      {
+        "callbackCount": 1,
+        "caseId": "conflict",
+        "finalState": {
+          "a": {
+            "nonce": "fixture-nonce",
+            "owner": "fixture-owner",
+            "role": "a",
+            "state": "baseline"
+          },
+          "b": {
+            "nonce": "fixture-nonce",
+            "owner": "fixture-owner",
+            "role": "b",
+            "state": "transaction-baseline"
+          },
+          "c": {
+            "nonce": "fixture-nonce",
+            "owner": "fixture-owner",
+            "role": "c",
+            "state": "baseline"
+          }
+        },
+        "refusalCode": 0,
+        "refusalMessage": "",
+        "writer": {
+          "code": 10,
+          "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+          "rpcSequence": [
+            {
+              "code": 0,
+              "message": "",
+              "rpc": "BatchGetDocuments",
+              "sequence": 7
+            },
+            {
+              "code": 10,
+              "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+              "rpc": "Commit",
+              "sequence": 8
+            },
+            {
+              "code": 0,
+              "message": "",
+              "rpc": "Rollback",
+              "sequence": 10
+            }
+          ]
+        },
+        "attempts": [
+          {
+            "callbackCount": 1,
+            "finalState": {
+              "a": {
+                "nonce": "fixture-nonce",
+                "owner": "fixture-owner",
+                "role": "a",
+                "state": "baseline"
+              },
+              "b": {
+                "nonce": "fixture-nonce",
+                "owner": "fixture-owner",
+                "role": "b",
+                "state": "transaction-baseline"
+              },
+              "c": {
+                "nonce": "fixture-nonce",
+                "owner": "fixture-owner",
+                "role": "c",
+                "state": "baseline"
+              }
+            },
+            "readState": {
+              "nonce": "fixture-nonce",
+              "owner": "fixture-owner",
+              "role": "a",
+              "state": "baseline"
+            },
+            "refusalCode": 0,
+            "refusalMessage": "",
+            "rpcSequence": [
+              {
+                "code": 0,
+                "rpc": "BatchGetDocuments",
+                "sequence": 6
+              },
+              {
+                "code": 0,
+                "rpc": "Commit",
+                "sequence": 9
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "callbackCount": 1,
+        "caseId": "control",
+        "finalState": {
+          "a": {
+            "nonce": "fixture-nonce",
+            "owner": "fixture-owner",
+            "role": "a",
+            "state": "baseline"
+          },
+          "b": {
+            "nonce": "fixture-nonce",
+            "owner": "fixture-owner",
+            "role": "b",
+            "state": "transaction-baseline"
+          },
+          "c": {
+            "nonce": "fixture-nonce",
+            "owner": "fixture-owner",
+            "role": "c",
+            "state": "writer"
+          }
+        },
+        "refusalCode": 0,
+        "refusalMessage": "",
+        "writer": {
+          "code": 0,
+          "message": "",
+          "rpcSequence": [
+            {
+              "code": 0,
+              "message": "",
+              "rpc": "Commit",
+              "sequence": 20
+            }
+          ]
+        },
+        "attempts": [
+          {
+            "callbackCount": 1,
+            "finalState": {
+              "a": {
+                "nonce": "fixture-nonce",
+                "owner": "fixture-owner",
+                "role": "a",
+                "state": "baseline"
+              },
+              "b": {
+                "nonce": "fixture-nonce",
+                "owner": "fixture-owner",
+                "role": "b",
+                "state": "transaction-baseline"
+              },
+              "c": {
+                "nonce": "fixture-nonce",
+                "owner": "fixture-owner",
+                "role": "c",
+                "state": "writer"
+              }
+            },
+            "readState": {
+              "nonce": "fixture-nonce",
+              "owner": "fixture-owner",
+              "role": "a",
+              "state": "baseline"
+            },
+            "refusalCode": 0,
+            "refusalMessage": "",
+            "rpcSequence": [
+              {
+                "code": 0,
+                "rpc": "BatchGetDocuments",
+                "sequence": 19
+              },
+              {
+                "code": 0,
+                "rpc": "Commit",
+                "sequence": 21
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "callbackCount": 1,
+        "caseId": "retry",
+        "finalState": {
+          "a": {
+            "nonce": "fixture-nonce",
+            "owner": "fixture-owner",
+            "role": "a",
+            "state": "baseline"
+          },
+          "b": {
+            "nonce": "fixture-nonce",
+            "owner": "fixture-owner",
+            "role": "b",
+            "state": "transaction-baseline"
+          },
+          "c": {
+            "nonce": "fixture-nonce",
+            "owner": "fixture-owner",
+            "role": "c",
+            "state": "baseline"
+          }
+        },
+        "refusalCode": 0,
+        "refusalMessage": "",
+        "writer": {
+          "code": 10,
+          "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+          "rpcSequence": [
+            {
+              "code": 0,
+              "message": "",
+              "rpc": "BatchGetDocuments",
+              "sequence": 31
+            },
+            {
+              "code": 10,
+              "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+              "rpc": "Commit",
+              "sequence": 32
+            },
+            {
+              "code": 0,
+              "message": "",
+              "rpc": "Rollback",
+              "sequence": 34
+            }
+          ]
+        },
+        "attempts": [
+          {
+            "callbackCount": 1,
+            "finalState": {
+              "a": {
+                "nonce": "fixture-nonce",
+                "owner": "fixture-owner",
+                "role": "a",
+                "state": "baseline"
+              },
+              "b": {
+                "nonce": "fixture-nonce",
+                "owner": "fixture-owner",
+                "role": "b",
+                "state": "transaction-baseline"
+              },
+              "c": {
+                "nonce": "fixture-nonce",
+                "owner": "fixture-owner",
+                "role": "c",
+                "state": "baseline"
+              }
+            },
+            "readState": {
+              "nonce": "fixture-nonce",
+              "owner": "fixture-owner",
+              "role": "a",
+              "state": "baseline"
+            },
+            "refusalCode": 0,
+            "refusalMessage": "",
+            "rpcSequence": [
+              {
+                "code": 0,
+                "rpc": "BatchGetDocuments",
+                "sequence": 30
+              },
+              {
+                "code": 0,
+                "rpc": "Commit",
+                "sequence": 33
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "callbackCount": 2,
+        "caseId": "retry-older",
+        "finalState": {
+          "a": {
+            "nonce": "fixture-nonce",
+            "owner": "fixture-owner",
+            "role": "a",
+            "state": "writer"
+          },
+          "b": {
+            "nonce": "fixture-nonce",
+            "owner": "fixture-owner",
+            "role": "b",
+            "state": "transaction-writer"
+          },
+          "c": {
+            "nonce": "fixture-nonce",
+            "owner": "fixture-owner",
+            "role": "c",
+            "state": "baseline"
+          }
+        },
+        "refusalCode": 0,
+        "refusalMessage": "",
+        "writer": {
+          "code": 0,
+          "message": "",
+          "rpcSequence": [
+            {
+              "code": 0,
+              "message": "",
+              "rpc": "BatchGetDocuments",
+              "sequence": 43
+            },
+            {
+              "code": 0,
+              "message": "",
+              "rpc": "Commit",
+              "sequence": 45
+            }
+          ]
+        },
+        "attempts": [
+          {
+            "callbackCount": 1,
+            "finalState": {
+              "a": {
+                "nonce": "fixture-nonce",
+                "owner": "fixture-owner",
+                "role": "a",
+                "state": "writer"
+              },
+              "b": {
+                "nonce": "fixture-nonce",
+                "owner": "fixture-owner",
+                "role": "b",
+                "state": "baseline"
+              },
+              "c": {
+                "nonce": "fixture-nonce",
+                "owner": "fixture-owner",
+                "role": "c",
+                "state": "baseline"
+              }
+            },
+            "readState": {
+              "nonce": "fixture-nonce",
+              "owner": "fixture-owner",
+              "role": "a",
+              "state": "baseline"
+            },
+            "refusalCode": 10,
+            "refusalMessage": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+            "rpcSequence": [
+              {
+                "code": 0,
+                "rpc": "BatchGetDocuments",
+                "sequence": 44
+              },
+              {
+                "code": 10,
+                "rpc": "Commit",
+                "sequence": 46
+              },
+              {
+                "code": 0,
+                "rpc": "Rollback",
+                "sequence": 48
+              }
+            ]
+          },
+          {
+            "callbackCount": 2,
+            "finalState": {
+              "a": {
+                "nonce": "fixture-nonce",
+                "owner": "fixture-owner",
+                "role": "a",
+                "state": "writer"
+              },
+              "b": {
+                "nonce": "fixture-nonce",
+                "owner": "fixture-owner",
+                "role": "b",
+                "state": "transaction-writer"
+              },
+              "c": {
+                "nonce": "fixture-nonce",
+                "owner": "fixture-owner",
+                "role": "c",
+                "state": "baseline"
+              }
+            },
+            "readState": {
+              "nonce": "fixture-nonce",
+              "owner": "fixture-owner",
+              "role": "a",
+              "state": "writer"
+            },
+            "refusalCode": 0,
+            "refusalMessage": "",
+            "rpcSequence": [
+              {
+                "code": 0,
+                "rpc": "BatchGetDocuments",
+                "sequence": 49
+              },
+              {
+                "code": 0,
+                "rpc": "Commit",
+                "sequence": 50
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "cleanup": {
+      "absent": true
+    },
+    "complete": true,
+    "deadlineAccounting": {
+      "campaignWallCapSeconds": 600,
+      "observationSeconds": 180,
+      "perRpcDeadlineSeconds": 30,
+      "recordingWallCapSeconds": 300,
+      "recoverySeconds": 120
+    },
+    "failureType": null,
+    "graphComplete": true,
+    "journalFailure": false,
+    "kind": "txn-program-recording-v1",
+    "nonce": "fixture-nonce",
+    "openTokens": [],
+    "ownerId": "fixture-owner",
+    "phaseRequests": {
+      "credential": 1,
+      "documentCleanup": 36,
+      "management": 6,
+      "observation": 53,
+      "tokenCleanup": 0
+    },
+    "program": "FS-TRANSACTION-P17-ADMIN-SDK-RETRY",
+    "sandboxRequests": 96,
+    "unknownCommits": [],
+    "unknownRollbacks": [],
+    "unknownStarts": [],
+    "unrecovered": false,
+    "documents": {
+      "conflict-a": {
+        "name": "projects/demo-fixture/databases/(default)/documents/fixture/conflict-a",
+        "status": "confirmed-absent"
+      },
+      "conflict-b": {
+        "name": "projects/demo-fixture/databases/(default)/documents/fixture/conflict-b",
+        "status": "confirmed-absent"
+      },
+      "conflict-c": {
+        "name": "projects/demo-fixture/databases/(default)/documents/fixture/conflict-c",
+        "status": "confirmed-absent"
+      },
+      "control-a": {
+        "name": "projects/demo-fixture/databases/(default)/documents/fixture/control-a",
+        "status": "confirmed-absent"
+      },
+      "control-b": {
+        "name": "projects/demo-fixture/databases/(default)/documents/fixture/control-b",
+        "status": "confirmed-absent"
+      },
+      "control-c": {
+        "name": "projects/demo-fixture/databases/(default)/documents/fixture/control-c",
+        "status": "confirmed-absent"
+      },
+      "retry-a": {
+        "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-a",
+        "status": "confirmed-absent"
+      },
+      "retry-b": {
+        "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-b",
+        "status": "confirmed-absent"
+      },
+      "retry-c": {
+        "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-c",
+        "status": "confirmed-absent"
+      },
+      "retry-older-a": {
+        "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-a",
+        "status": "confirmed-absent"
+      },
+      "retry-older-b": {
+        "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-b",
+        "status": "confirmed-absent"
+      },
+      "retry-older-c": {
+        "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-c",
+        "status": "confirmed-absent"
+      }
+    },
+    "steps": [
+      {
+        "attempt": 0,
+        "caseId": "conflict",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 0,
+        "site": "conflict/setup/a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "conflict",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 1,
+        "site": "conflict/setup/a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "conflict",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 2,
+        "site": "conflict/setup/b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "conflict",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 3,
+        "site": "conflict/setup/b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "conflict",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 4,
+        "site": "conflict/setup/c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "conflict",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 5,
+        "site": "conflict/setup/c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 1,
+        "caseId": "conflict",
+        "client": "transaction",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 6,
+        "site": "conflict/transaction",
+        "request": {},
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": "",
+          "response": {
+            "responses": [
+              {
+                "transaction": "aXNzdWVkLTE="
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "a",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/conflict-a"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "conflict",
+        "client": "writer",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 7,
+        "site": "conflict/writer",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": ""
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "conflict",
+        "client": "writer",
+        "outcomeClass": "REFUSED",
+        "rpc": "Commit",
+        "sequence": 8,
+        "site": "conflict/writer",
+        "result": {
+          "childReaped": true,
+          "code": 10,
+          "complete": true,
+          "details": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+        }
+      },
+      {
+        "attempt": 1,
+        "caseId": "conflict",
+        "client": "transaction",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 9,
+        "site": "conflict/transaction",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": ""
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "conflict",
+        "client": "writer",
+        "outcomeClass": "OK",
+        "rpc": "Rollback",
+        "sequence": 10,
+        "site": "conflict/writer",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": ""
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "conflict",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 11,
+        "site": "conflict/post-state",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "a",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/conflict-a"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "b",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "transaction-baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/conflict-b"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "c",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/conflict-c"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "conflict",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 12,
+        "site": "conflict/post-state",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "a",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/conflict-a"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "b",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "transaction-baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/conflict-b"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "c",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/conflict-c"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "control",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 13,
+        "site": "control/setup/a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "control",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 14,
+        "site": "control/setup/a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "control",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 15,
+        "site": "control/setup/b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "control",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 16,
+        "site": "control/setup/b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "control",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 17,
+        "site": "control/setup/c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "control",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 18,
+        "site": "control/setup/c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 1,
+        "caseId": "control",
+        "client": "transaction",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 19,
+        "site": "control/transaction",
+        "request": {},
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": "",
+          "response": {
+            "responses": [
+              {
+                "transaction": "aXNzdWVkLTM="
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "a",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/control-a"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "control",
+        "client": "writer",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 20,
+        "site": "control/writer",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": ""
+        }
+      },
+      {
+        "attempt": 1,
+        "caseId": "control",
+        "client": "transaction",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 21,
+        "site": "control/transaction",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": ""
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "control",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 22,
+        "site": "control/post-state",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "a",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/control-a"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "b",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "transaction-baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/control-b"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "c",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "writer",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/control-c"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "control",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 23,
+        "site": "control/post-state",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "a",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/control-a"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "b",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "transaction-baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/control-b"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "c",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "writer",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/control-c"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 24,
+        "site": "retry/setup/a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 25,
+        "site": "retry/setup/a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 26,
+        "site": "retry/setup/b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 27,
+        "site": "retry/setup/b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 28,
+        "site": "retry/setup/c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 29,
+        "site": "retry/setup/c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 1,
+        "caseId": "retry",
+        "client": "transaction",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 30,
+        "site": "retry/transaction",
+        "request": {},
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": "",
+          "response": {
+            "responses": [
+              {
+                "transaction": "aXNzdWVkLTQ="
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "a",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-a"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry",
+        "client": "writer",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 31,
+        "site": "retry/writer",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": ""
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry",
+        "client": "writer",
+        "outcomeClass": "REFUSED",
+        "rpc": "Commit",
+        "sequence": 32,
+        "site": "retry/writer",
+        "result": {
+          "childReaped": true,
+          "code": 10,
+          "complete": true,
+          "details": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+        }
+      },
+      {
+        "attempt": 1,
+        "caseId": "retry",
+        "client": "transaction",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 33,
+        "site": "retry/transaction",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": ""
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry",
+        "client": "writer",
+        "outcomeClass": "OK",
+        "rpc": "Rollback",
+        "sequence": 34,
+        "site": "retry/writer",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": ""
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 35,
+        "site": "retry/post-state",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "a",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-a"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "b",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "transaction-baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-b"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "c",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-c"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 36,
+        "site": "retry/post-state",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "a",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-a"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "b",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "transaction-baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-b"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "c",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-c"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry-older",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 37,
+        "site": "retry-older/setup/a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry-older",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 38,
+        "site": "retry-older/setup/a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry-older",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 39,
+        "site": "retry-older/setup/b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry-older",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 40,
+        "site": "retry-older/setup/b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry-older",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 41,
+        "site": "retry-older/setup/c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry-older",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 42,
+        "site": "retry-older/setup/c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry-older",
+        "client": "writer",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 43,
+        "site": "retry-older/writer",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": ""
+        }
+      },
+      {
+        "attempt": 1,
+        "caseId": "retry-older",
+        "client": "transaction",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 44,
+        "site": "retry-older/transaction",
+        "request": {},
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": "",
+          "response": {
+            "responses": [
+              {
+                "transaction": "aXNzdWVkLTc="
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "a",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-a"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry-older",
+        "client": "writer",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 45,
+        "site": "retry-older/writer",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": ""
+        }
+      },
+      {
+        "attempt": 1,
+        "caseId": "retry-older",
+        "client": "transaction",
+        "outcomeClass": "REFUSED",
+        "rpc": "Commit",
+        "sequence": 46,
+        "site": "retry-older/transaction",
+        "result": {
+          "childReaped": true,
+          "code": 10,
+          "complete": true,
+          "details": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability."
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry-older",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 47,
+        "site": "retry-older/post-state",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "a",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "writer",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-a"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "b",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-b"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "c",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-c"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 1,
+        "caseId": "retry-older",
+        "client": "transaction",
+        "outcomeClass": "OK",
+        "rpc": "Rollback",
+        "sequence": 48,
+        "site": "retry-older/transaction",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": ""
+        }
+      },
+      {
+        "attempt": 2,
+        "caseId": "retry-older",
+        "client": "transaction",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 49,
+        "site": "retry-older/transaction",
+        "request": {
+          "newTransaction": {
+            "readWrite": {
+              "retryTransaction": "aXNzdWVkLTc="
+            }
+          }
+        },
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": "",
+          "response": {
+            "responses": [
+              {
+                "transaction": "aXNzdWVkLTg="
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "a",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "writer",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-a"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 2,
+        "caseId": "retry-older",
+        "client": "transaction",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 50,
+        "site": "retry-older/transaction",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "details": ""
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry-older",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 51,
+        "site": "retry-older/post-state",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "a",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "writer",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-a"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "b",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "transaction-writer",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-b"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "c",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-c"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": "retry-older",
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 52,
+        "site": "retry-older/post-state",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "a",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "writer",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-a"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "b",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "transaction-writer",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-b"
+                }
+              },
+              {
+                "transaction": "",
+                "found": {
+                  "fields": {
+                    "nonce": {
+                      "stringValue": "fixture-nonce",
+                      "valueType": "stringValue"
+                    },
+                    "owner": {
+                      "stringValue": "fixture-owner",
+                      "valueType": "stringValue"
+                    },
+                    "role": {
+                      "stringValue": "c",
+                      "valueType": "stringValue"
+                    },
+                    "state": {
+                      "stringValue": "baseline",
+                      "valueType": "stringValue"
+                    }
+                  },
+                  "name": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-c"
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "cleanupSteps": [
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 53,
+        "site": "cleanup/conflict-a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 54,
+        "site": "cleanup/conflict-a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 55,
+        "site": "cleanup/conflict-a/verify",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "missing": "projects/demo-fixture/databases/(default)/documents/fixture/conflict-a",
+                "transaction": ""
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 56,
+        "site": "cleanup/conflict-b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 57,
+        "site": "cleanup/conflict-b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 58,
+        "site": "cleanup/conflict-b/verify",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "missing": "projects/demo-fixture/databases/(default)/documents/fixture/conflict-b",
+                "transaction": ""
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 59,
+        "site": "cleanup/conflict-c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 60,
+        "site": "cleanup/conflict-c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 61,
+        "site": "cleanup/conflict-c/verify",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "missing": "projects/demo-fixture/databases/(default)/documents/fixture/conflict-c",
+                "transaction": ""
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 62,
+        "site": "cleanup/control-a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 63,
+        "site": "cleanup/control-a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 64,
+        "site": "cleanup/control-a/verify",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "missing": "projects/demo-fixture/databases/(default)/documents/fixture/control-a",
+                "transaction": ""
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 65,
+        "site": "cleanup/control-b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 66,
+        "site": "cleanup/control-b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 67,
+        "site": "cleanup/control-b/verify",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "missing": "projects/demo-fixture/databases/(default)/documents/fixture/control-b",
+                "transaction": ""
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 68,
+        "site": "cleanup/control-c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 69,
+        "site": "cleanup/control-c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 70,
+        "site": "cleanup/control-c/verify",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "missing": "projects/demo-fixture/databases/(default)/documents/fixture/control-c",
+                "transaction": ""
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 71,
+        "site": "cleanup/retry-a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 72,
+        "site": "cleanup/retry-a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 73,
+        "site": "cleanup/retry-a/verify",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "missing": "projects/demo-fixture/databases/(default)/documents/fixture/retry-a",
+                "transaction": ""
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 74,
+        "site": "cleanup/retry-b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 75,
+        "site": "cleanup/retry-b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 76,
+        "site": "cleanup/retry-b/verify",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "missing": "projects/demo-fixture/databases/(default)/documents/fixture/retry-b",
+                "transaction": ""
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 77,
+        "site": "cleanup/retry-c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 78,
+        "site": "cleanup/retry-c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 79,
+        "site": "cleanup/retry-c/verify",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "missing": "projects/demo-fixture/databases/(default)/documents/fixture/retry-c",
+                "transaction": ""
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 80,
+        "site": "cleanup/retry-older-a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 81,
+        "site": "cleanup/retry-older-a",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 82,
+        "site": "cleanup/retry-older-a/verify",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "missing": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-a",
+                "transaction": ""
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 83,
+        "site": "cleanup/retry-older-b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 84,
+        "site": "cleanup/retry-older-b",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 85,
+        "site": "cleanup/retry-older-b/verify",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "missing": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-b",
+                "transaction": ""
+              }
+            ]
+          }
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 86,
+        "site": "cleanup/retry-older-c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "Commit",
+        "sequence": 87,
+        "site": "cleanup/retry-older-c",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true
+        }
+      },
+      {
+        "attempt": 0,
+        "caseId": null,
+        "client": "witness",
+        "outcomeClass": "OK",
+        "rpc": "BatchGetDocuments",
+        "sequence": 88,
+        "site": "cleanup/retry-older-c/verify",
+        "result": {
+          "childReaped": true,
+          "code": 0,
+          "complete": true,
+          "response": {
+            "responses": [
+              {
+                "missing": "projects/demo-fixture/databases/(default)/documents/fixture/retry-older-c",
+                "transaction": ""
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "runtime": {
+      "target": "production",
+      "node": "fixture-node",
+      "nodeSha256": "fixture-node-digest",
+      "lockSha256": "fixture-lock-digest",
+      "manifest": {}
+    },
+    "sourceDigest": "fixture-source-digest",
+    "corpusDigest": "fixture-corpus-digest",
+    "receiptDigest": "fixture-receipt-digest"
+  },
+  "expectedCases": [
+    {
+      "attempts": [
+        {
+          "callbackCount": 1,
+          "finalState": {
+            "a": "baseline",
+            "b": "transaction-baseline",
+            "c": "baseline"
+          },
+          "refusalCode": 0,
+          "refusalMessage": "",
+          "rpcSequence": [
+            {
+              "code": 0,
+              "rpc": "BatchGetDocuments"
+            },
+            {
+              "code": 0,
+              "rpc": "Commit"
+            }
+          ]
+        }
+      ],
+      "callbackCount": 1,
+      "caseId": "conflict",
+      "finalState": {
+        "a": "baseline",
+        "b": "transaction-baseline",
+        "c": "baseline"
+      },
+      "refusalCode": 0,
+      "refusalMessage": "",
+      "writer": {
+        "code": 10,
+        "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+        "rpcSequence": [
+          {
+            "code": 0,
+            "message": "",
+            "rpc": "BatchGetDocuments"
+          },
+          {
+            "code": 10,
+            "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+            "rpc": "Commit"
+          },
+          {
+            "code": 0,
+            "message": "",
+            "rpc": "Rollback"
+          }
+        ]
+      }
+    },
+    {
+      "attempts": [
+        {
+          "callbackCount": 1,
+          "finalState": {
+            "a": "baseline",
+            "b": "transaction-baseline",
+            "c": "writer"
+          },
+          "refusalCode": 0,
+          "refusalMessage": "",
+          "rpcSequence": [
+            {
+              "code": 0,
+              "rpc": "BatchGetDocuments"
+            },
+            {
+              "code": 0,
+              "rpc": "Commit"
+            }
+          ]
+        }
+      ],
+      "callbackCount": 1,
+      "caseId": "control",
+      "finalState": {
+        "a": "baseline",
+        "b": "transaction-baseline",
+        "c": "writer"
+      },
+      "refusalCode": 0,
+      "refusalMessage": "",
+      "writer": {
+        "code": 0,
+        "message": "",
+        "rpcSequence": [
+          {
+            "code": 0,
+            "message": "",
+            "rpc": "Commit"
+          }
+        ]
+      }
+    },
+    {
+      "attempts": [
+        {
+          "callbackCount": 1,
+          "finalState": {
+            "a": "baseline",
+            "b": "transaction-baseline",
+            "c": "baseline"
+          },
+          "refusalCode": 0,
+          "refusalMessage": "",
+          "rpcSequence": [
+            {
+              "code": 0,
+              "rpc": "BatchGetDocuments"
+            },
+            {
+              "code": 0,
+              "rpc": "Commit"
+            }
+          ]
+        }
+      ],
+      "callbackCount": 1,
+      "caseId": "retry",
+      "finalState": {
+        "a": "baseline",
+        "b": "transaction-baseline",
+        "c": "baseline"
+      },
+      "refusalCode": 0,
+      "refusalMessage": "",
+      "writer": {
+        "code": 10,
+        "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+        "rpcSequence": [
+          {
+            "code": 0,
+            "message": "",
+            "rpc": "BatchGetDocuments"
+          },
+          {
+            "code": 10,
+            "message": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+            "rpc": "Commit"
+          },
+          {
+            "code": 0,
+            "message": "",
+            "rpc": "Rollback"
+          }
+        ]
+      }
+    },
+    {
+      "attempts": [
+        {
+          "callbackCount": 1,
+          "finalState": {
+            "a": "writer",
+            "b": "baseline",
+            "c": "baseline"
+          },
+          "refusalCode": 10,
+          "refusalMessage": "Aborted due to cross-transaction contention. This occurs when multiple transactions attempt to access the same data, requiring Firestore to abort at least one in order to enforce serializability.",
+          "rpcSequence": [
+            {
+              "code": 0,
+              "rpc": "BatchGetDocuments"
+            },
+            {
+              "code": 10,
+              "rpc": "Commit"
+            },
+            {
+              "code": 0,
+              "rpc": "Rollback"
+            }
+          ]
+        },
+        {
+          "callbackCount": 2,
+          "finalState": {
+            "a": "writer",
+            "b": "transaction-writer",
+            "c": "baseline"
+          },
+          "refusalCode": 0,
+          "refusalMessage": "",
+          "rpcSequence": [
+            {
+              "code": 0,
+              "rpc": "BatchGetDocuments"
+            },
+            {
+              "code": 0,
+              "rpc": "Commit"
+            }
+          ]
+        }
+      ],
+      "callbackCount": 2,
+      "caseId": "retry-older",
+      "finalState": {
+        "a": "writer",
+        "b": "transaction-writer",
+        "c": "baseline"
+      },
+      "refusalCode": 0,
+      "refusalMessage": "",
+      "writer": {
+        "code": 0,
+        "message": "",
+        "rpcSequence": [
+          {
+            "code": 0,
+            "message": "",
+            "rpc": "BatchGetDocuments"
+          },
+          {
+            "code": 0,
+            "message": "",
+            "rpc": "Commit"
+          }
+        ]
+      }
+    }
+  ]
+}

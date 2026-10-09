@@ -119,7 +119,7 @@ export async function runCell({
   let complete = false,
     reason = null,
     budgetOverrun = false;
-  const send = async (category, method, request) => {
+  const send = async (category, method, request, cancelBinding = null) => {
     const maintenance = category.startsWith("cleanup");
     if (meter.remaining(maintenance) < minimumCallMs(method))
       throw new Error("recorded latency margin unavailable");
@@ -159,6 +159,7 @@ export async function runCell({
         method,
         request,
         cellId: cell.id,
+        ...(cancelBinding ? { cancelObservation: true, cancelBinding } : {}),
       });
     } catch (error) {
       if (intent) ledger.answered({ ...intent, kind: "unknown" });
@@ -178,7 +179,21 @@ export async function runCell({
       if (kind === "error" && reply.code === "NOT_FOUND" && !settled(ledger, name))
         absentSeen.add(name);
     }
-    if (kind === "unknown" || kind === "pending") throw new Error("unknown answer stops the cell");
+    const intentionalCancel =
+      cancelBinding &&
+      method === "Pull" &&
+      category === "pull" &&
+      cell.variant === "cancel-followup" &&
+      reply.unknown === true &&
+      reply.clientCancellation?.cellId === cell.id &&
+      reply.clientCancellation?.transport === cell.transport &&
+      reply.clientCancellation?.subscription === request.subscription &&
+      reply.clientCancellation?.method === "Pull" &&
+      reply.clientCancellation?.cause === "intentional-unary-cancel" &&
+      reply.clientCancellation?.pending === true &&
+      Number.isSafeInteger(reply.clientCancellation?.requestId);
+    if ((kind === "unknown" || kind === "pending") && !intentionalCancel)
+      throw new Error("unknown answer stops the cell");
     if (reply.budgetOverrun) budgetOverrun = true;
     try {
       meter.remaining(maintenance);
@@ -353,9 +368,70 @@ export async function runCell({
           reason:
             "Prior G4 resources must already be closed; no transferable outstanding subscription or correlated unary follow-up is supplied. No new stream is authorized by G2.",
         });
-        await publish([{}]);
-        const items = await pull(s, "fresh-unary-control-only", { attempts: 2, required: true });
-        await ack(s, items);
+        const [outstandingId, controlId] = await publish([
+          { attributes: { role: "outstanding" } },
+          { attributes: { role: "acked-control" } },
+        ]);
+        const items = await pull(s, "cancel-original-delivery", { attempts: 2, required: true });
+        const outstanding = items.find((item) => item.message.messageId === outstandingId),
+          control = items.find((item) => item.message.messageId === controlId);
+        if (!outstanding || !control)
+          throw new Error("cancel control delivery missing; NOT_COMPARABLE");
+        const deliveredAt = meter.clock();
+        await ack(s, [control]);
+        observe("outstanding-before-client-cancel", {
+          subscription: s,
+          messageId: outstandingId,
+          ackId: outstanding.ackId,
+          deliveredAt,
+          ackDeadlineSeconds: 60,
+          ackedControlId: controlId,
+        });
+        const cancelled = await send(
+          "pull",
+          "Pull",
+          { subscription: s, maxMessages: 1, returnImmediately: false },
+          {
+            outstandingMessageId: outstandingId,
+            outstandingAckId: outstanding.ackId,
+            ackedControlMessageId: controlId,
+            ackedControlAckId: control.ackId,
+            deliveredAt,
+          },
+        );
+        if (!cancelled.unknown || !cancelled.clientCancellation)
+          throw new Error("second Pull completed without pending cancel witness; NOT_COMPARABLE");
+        observe("intentional-client-cancel", {
+          subscription: s,
+          clientCancellation: cancelled.clientCancellation,
+          reply: cancelled,
+          serverOutcome: "UNKNOWN",
+          possibleServerLeaseEffect: "UNKNOWN",
+          redeliveryCause: "ordinary-ACK-deadline",
+        });
+        const deadlineAt = deliveredAt + 61000,
+          delay = deadlineAt - meter.clock();
+        if (delay > 0) await wait(delay);
+        if (meter.clock() < deadlineAt)
+          throw new Error("cancel follow-up before deadline; NOT_COMPARABLE");
+        observe("ordinary-ACK-deadline-elapsed", {
+          subscription: s,
+          deliveredAt,
+          deadlineAt,
+          messageId: outstandingId,
+          cause: "ordinary-ACK-deadline",
+          cancellationDoesNotProveCause: true,
+        });
+        const replay = await pull(s, "post-deadline-cancel-followup", {
+          attempts: 3,
+          required: true,
+        });
+        if (
+          replay.some((item) => item.message.messageId === controlId) ||
+          !replay.some((item) => item.message.messageId === outstandingId)
+        )
+          throw new Error("cancel follow-up identity or ACKed control differs; NOT_COMPARABLE");
+        await ack(s, replay);
       } else if (filters[cell.variant]) {
         const attrs =
           cell.variant === "filter-inequality"

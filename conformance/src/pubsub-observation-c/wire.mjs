@@ -135,7 +135,8 @@ export function createWire({
 } = {}) {
   let sequence = 0;
   const controllers = new Map();
-  let sourceStopped = false;
+  let sourceStopped = false,
+    cancelledProbe = null;
   const controllerFor = (maintenance) => {
     if (sourceStopped && !maintenance) throw new Error("source stopped");
     const controller = new AbortController();
@@ -182,9 +183,73 @@ export function createWire({
     },
     async call(call) {
       const { category, transport, service, method, request, routeName, cellId } = call;
+      const diagnosticCancel = call.cancelObservation === true;
+      if (
+        call.cancelObservation !== undefined &&
+        (!diagnosticCancel ||
+          method !== "Pull" ||
+          category !== "pull" ||
+          service !== "Subscriber" ||
+          cellId !== (transport === "rest" ? "R3" : transport === "grpc" ? "N3" : "") ||
+          !new RegExp(
+            `^projects/${PROJECT}/subscriptions/fe[a-f0-9]{12}-${cellId.toLowerCase()}-s$`,
+          ).test(request.subscription ?? "") ||
+          request.maxMessages !== 1 ||
+          request.returnImmediately !== false ||
+          !call.cancelBinding ||
+          ![
+            "outstandingMessageId",
+            "outstandingAckId",
+            "ackedControlMessageId",
+            "ackedControlAckId",
+          ].every(
+            (key) =>
+              typeof call.cancelBinding[key] === "string" &&
+              call.cancelBinding[key].length > 0 &&
+              Buffer.byteLength(call.cancelBinding[key]) <= 4096,
+          ) ||
+          call.cancelBinding.outstandingMessageId === call.cancelBinding.ackedControlMessageId ||
+          call.cancelBinding.outstandingAckId === call.cancelBinding.ackedControlAckId ||
+          !Number.isFinite(call.cancelBinding.deliveredAt) ||
+          call.cancelBinding.deliveredAt > meter.clock())
+      )
+        throw new Error("fixed unary cancel observation required");
       const maintenance =
         category.startsWith("cleanup") || ["resourceRead", "unknownDeleteRead"].includes(category);
       if (sourceStopped && !maintenance) throw new Error("source stopped");
+      if (cancelledProbe) {
+        const name = request.name ?? request.subscription ?? request.topic;
+        const ownTopic = cancelledProbe.subscription
+          .replace("/subscriptions/", "/topics/")
+          .replace(/-s$/, "-t");
+        const ownCleanup =
+          maintenance &&
+          ["cleanupGet", "cleanupDelete"].includes(category) &&
+          /^(Get|Delete)(Topic|Subscription)$/.test(method) &&
+          cellId === cancelledProbe.cellId &&
+          [cancelledProbe.subscription, ownTopic].includes(name);
+        const followUp =
+          !diagnosticCancel &&
+          cellId === cancelledProbe.cellId &&
+          transport === cancelledProbe.transport &&
+          service === "Subscriber" &&
+          request.subscription === cancelledProbe.subscription &&
+          meter.clock() >= cancelledProbe.notBefore &&
+          ((method === "Pull" && category === "pull") ||
+            (method === "Acknowledge" && category === "ackControl"));
+        if (!ownCleanup && !followUp)
+          throw new Error("only declared cancel follow-up or owned cleanup permitted");
+      }
+      const scopedResource = diagnosticCancel
+        ? request.subscription
+        : cancelledProbe
+          ? maintenance
+            ? (request.name ?? request.subscription ?? request.topic)
+            : cancelledProbe.subscription
+          : null;
+      const dispatchResource = routeName ?? request.name ?? request.topic ?? request.subscription;
+      if (transport === "rest" && scopedResource !== null && dispatchResource !== scopedResource)
+        throw new Error("scoped physical dispatch identity mismatch");
       meter.start(category, transport);
       if (meter.remaining(maintenance) < minimumCallMs(method))
         throw new Error("recorded latency margin unavailable");
@@ -237,7 +302,55 @@ export function createWire({
       });
       let reply;
       const controller = controllerFor(maintenance);
-      let requestTimer;
+      let requestTimer,
+        cancelTimer,
+        clientCancellation,
+        settled = false,
+        finished = false;
+      let abortListener, rpcHandle, statusListener, rejectCancel;
+      const cancelFailure = diagnosticCancel
+        ? new Promise((_, reject) => {
+            rejectCancel = reject;
+          })
+        : null;
+      const observeCancel = (action, transportAction) => {
+        if (!diagnosticCancel) return;
+        cancelTimer = setTimeout(
+          () => {
+            if (settled || finished) return;
+            try {
+              const event = {
+                event: "client-cancel",
+                cellId,
+                requestId,
+                transport,
+                method,
+                subscription: request.subscription,
+                cause: "intentional-unary-cancel",
+                pending: true,
+                transportAction,
+                lastObservedUnacked: {
+                  messageId: call.cancelBinding.outstandingMessageId,
+                  ackId: call.cancelBinding.outstandingAckId,
+                },
+                acknowledgedControl: {
+                  messageId: call.cancelBinding.ackedControlMessageId,
+                  ackId: call.cancelBinding.ackedControlAckId,
+                },
+                possibleServerLeaseEffect: "UNKNOWN",
+                clockMs: meter.clock(),
+                at: new Date(now()).toISOString(),
+              };
+              action();
+              journal.write(event);
+              clientCancellation = event;
+            } catch (error) {
+              rejectCancel(error);
+            }
+          },
+          Math.min(1000, meter.remaining()),
+        );
+      };
       try {
         beforeDispatch();
         const available = Math.min(
@@ -248,7 +361,7 @@ export function createWire({
           throw new Error("durable dispatch latency margin unavailable");
         requestTimer = setTimeout(() => controller.abort(), available);
         if (transport === "rest") {
-          const response = await fetch(address.url, {
+          const responsePromise = fetch(address.url, {
             method: address.verb,
             redirect: "manual",
             headers: {
@@ -259,6 +372,20 @@ export function createWire({
             ...(address.body === undefined ? {} : { body: raw }),
             signal: controller.signal,
           });
+          const completed = responsePromise.then(
+            (response) => {
+              settled = true;
+              return response;
+            },
+            (error) => {
+              settled = true;
+              throw error;
+            },
+          );
+          observeCancel(() => controller.abort(), "AbortController.abort");
+          const response = await (cancelFailure
+            ? Promise.race([completed, cancelFailure])
+            : completed);
           const bytes = await readResponse(response);
           let body;
           try {
@@ -296,7 +423,7 @@ export function createWire({
             bodyBytes: null,
             layoutVerdict: "NOT_COMPARABLE",
           };
-          reply = await new Promise((resolve) => {
+          const responsePromise = new Promise((resolve) => {
             const rpc = client.makeUnaryRequest(
               `${SERVICES[service].path}/${method}`,
               (value) => value,
@@ -305,6 +432,8 @@ export function createWire({
               metadata,
               { deadline: new Date(started + timeoutMs) },
               (error, bytes) => {
+                if (finished) return;
+                settled = true;
                 if (error) {
                   const code = statusNames[error.code] ?? "UNKNOWN";
                   const details =
@@ -354,7 +483,9 @@ export function createWire({
               metadataBytesIn += metadataBytes(value);
               if (metadataBytesIn > CAPS.metadataBytesEachDirection) rpc.cancel();
             });
-            rpc.on("status", (status) => {
+            rpcHandle = rpc;
+            statusListener = (status) => {
+              if (finished) return;
               metadataBytesIn += metadataBytes(status.metadata, status.details);
               if (metadataBytesIn + (candidate.bodyBytes ?? 0) > CAPS.metadataBytesEachDirection) {
                 rpc.cancel();
@@ -373,18 +504,45 @@ export function createWire({
                   metadataBytesIn,
                   unknown: candidate.unknown || statusNames[status.code] !== candidate.code,
                 });
-            });
-            controller.signal.addEventListener("abort", () => rpc.cancel(), { once: true });
+            };
+            rpc.on("status", statusListener);
+            abortListener = () => rpc.cancel();
+            controller.signal.addEventListener("abort", abortListener, { once: true });
+            observeCancel(() => rpc.cancel(), "ClientUnaryCall.cancel");
           });
+          reply = await (cancelFailure
+            ? Promise.race([responsePromise, cancelFailure])
+            : responsePromise);
         }
       } catch {
         reply = { ok: false, code: "UNKNOWN", unknown: true, body: {} };
       } finally {
+        finished = true;
         clearTimeout(requestTimer);
+        clearTimeout(cancelTimer);
+        if (abortListener) controller.signal.removeEventListener("abort", abortListener);
+        if (statusListener) rpcHandle.removeListener("status", statusListener);
         controllers.delete(controller);
       }
       reply = normalizeOutcome(reply);
-      if (reply.unknown && !maintenance) sourceStopped = true;
+      if (clientCancellation) {
+        reply.clientCancellation = clientCancellation;
+        cancelledProbe = {
+          cellId,
+          transport,
+          subscription: request.subscription,
+          notBefore: call.cancelBinding.deliveredAt + 61000,
+        };
+      }
+      if (
+        cancelledProbe &&
+        reply.unknown === false &&
+        request.name === cancelledProbe.subscription &&
+        ((reply.ok && method === "DeleteSubscription") ||
+          (!reply.ok && method === "GetSubscription" && reply.code === "NOT_FOUND"))
+      )
+        cancelledProbe = null;
+      if (reply.unknown && !maintenance && !clientCancellation) sourceStopped = true;
       reply.durationMs = meter.clock() - monotonicStarted;
       journal.write({
         event: "response",

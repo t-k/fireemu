@@ -2225,7 +2225,7 @@ test("successor actual admission returns its bound plan and refuses old second-r
     "unusedRunPreflight",
     `return (${admit.toString()});`,
   );
-  for (const selection of ["full", ...Object.keys(successorIds)]) {
+  for (const selection of ["full", ...Object.keys(successorIds), "s03-terminal-pair"]) {
     const descriptor = { head: "a".repeat(40), sources: [] };
     const descriptorFile = { value: descriptor, sha256: "b".repeat(64) };
     const runIds = ["123456abcdef", "123456abcdee"];
@@ -2722,4 +2722,79 @@ test("S03 disposal diagnostics seal on async metadata accounting failure", async
   await assert.rejects(f.stream.disposeWithDiagnostics(), /metadata accounting refused/);
   lateDisposalEvents(f);
   context.mock.timers.tick(180000);
+});
+
+test("S03 terminal pair fixes its singleton witness and conservative derived ceilings", async () => {
+  const { validatePlan } = await import("./pubsub-observation/plan.mjs");
+  const plan = makePlan("s03-terminal-pair");
+  assert.equal(plan.recordings, 2);
+  assert.deepEqual(plan.cells, [makePlan().cells.find((cell) => cell.id === "S03")]);
+  assert.equal(plan.cells[0].coordinate, "/conditions/13/cases/2");
+  assert.deepEqual(plan.caps, {
+    ...CAPS,
+    G1: { ...CAPS.G1, requests: 0, rest: 0, grpc: 0, streams: 0 },
+    G4: { ...CAPS.G4, requests: 18, rest: 17, grpc: 0, streams: 1 },
+    sourceRequests: 18,
+    totalRequests: 32,
+    framesOut: 6,
+    framesIn: 6,
+    smallPublishes: 3,
+    largePublishes: 0,
+    sourceWallMs: 180000,
+  });
+  assert.equal(plan.caps.cleanupReserveMs, 40000);
+  assert.equal(plan.caps.sourceWallMs, plan.caps.G4.cellMs);
+  assert.deepEqual(plan.timeoutPolicy, makePlan().timeoutPolicy);
+  assert.deepEqual(plan.a2, makePlan().a2);
+  assert.doesNotThrow(() => validatePlan(plan));
+  for (const mutate of [
+    (p) => {
+      p.recordings = 1;
+    },
+    (p) => {
+      p.cells.push(makePlan().cells[3]);
+    },
+    (p) => {
+      p.cells[0].coordinate = "/conditions/13/cases/3";
+    },
+    (p) => {
+      p.caps.totalRequests++;
+    },
+    (p) => {
+      p.caps.cleanupReserveMs--;
+    },
+  ]) {
+    const changed = structuredClone(plan);
+    mutate(changed);
+    assert.throws(() => validatePlan(changed), /plan/);
+  }
+});
+
+test("S03 terminal pair scope requires exactly two distinct run IDs", () => {
+  const ids = ["123456abcdef", "123456abcdee"];
+  const scope = {
+    taskId: "PUBSUB-OBSERVATION-A",
+    suite: "pubsub-observation-a-v1",
+    envelopeId: "FIXTURE-S03-PAIR",
+    sourceHead: "a".repeat(40),
+    descriptorSha256: "b".repeat(64),
+    packetSha256: "c".repeat(64),
+    project: "fireemu-oracle-idp",
+    runIds: ids,
+    runOutputs: Object.fromEntries(ids.map((id, i) => [id, `/fixture/run${i}`])),
+    recoveryOutputs: Object.fromEntries(ids.map((id, i) => [id, `/fixture/a2-${i}`])),
+    expiresAt: "2099-01-01T00:00:00Z",
+    plan: makePlan("s03-terminal-pair"),
+  };
+  const verify = (value) =>
+    verifyScope(
+      value,
+      { head: scope.sourceHead },
+      scope.descriptorSha256,
+      { runId: ids[0], out: scope.runOutputs[ids[0]] },
+      0,
+    );
+  assert.doesNotThrow(() => verify(scope));
+  for (const runIds of [[ids[0]], [ids[0], ids[0]], [...ids, "abcdef123456"]])
+    assert.throws(() => verify({ ...scope, runIds }), /scope/);
 });

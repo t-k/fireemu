@@ -77,9 +77,14 @@ const g1Case = (variant) =>
             : [4, 6];
 export function makePlan(selection = "full") {
   if (
-    !["full", "s10-diagnostic", "residual", "valid-stream-gap", "invalid-path-gap"].includes(
-      selection,
-    )
+    ![
+      "full",
+      "s10-diagnostic",
+      "residual",
+      "valid-stream-gap",
+      "invalid-path-gap",
+      "s03-terminal-pair",
+    ].includes(selection)
   )
     throw new Error("fixed observation selection required");
   const cells = [...streamCases, ...supplements].map((variant, index) => ({
@@ -144,10 +149,11 @@ export function makePlan(selection = "full") {
     },
   };
   if (selection === "full") return plan;
-  if (selection === "valid-stream-gap" || selection === "invalid-path-gap") {
+  if (["valid-stream-gap", "invalid-path-gap", "s03-terminal-pair"].includes(selection)) {
     const valid = selection === "valid-stream-gap",
-      streams = valid ? 9 : 4,
-      restCells = valid ? 0 : 2;
+      pair = selection === "s03-terminal-pair",
+      streams = pair ? 1 : valid ? 9 : 4,
+      restCells = valid || pair ? 0 : 2;
     plan.recordings = valid ? 1 : 2;
     plan.caps.G4 = {
       ...plan.caps.G4,
@@ -178,11 +184,13 @@ export function makePlan(selection = "full") {
         !cell.reserve &&
         (selection === "s10-diagnostic"
           ? cell.id === "S10"
-          : selection === "valid-stream-gap"
-            ? /^S0[1-9]$/.test(cell.id)
-            : selection === "invalid-path-gap"
-              ? ["S12", "S13", "S14", "S15", "R1", "R2"].includes(cell.id)
-              : !/^S0[1-9]$/.test(cell.id) && cell.id !== "S10"),
+          : selection === "s03-terminal-pair"
+            ? cell.id === "S03"
+            : selection === "valid-stream-gap"
+              ? /^S0[1-9]$/.test(cell.id)
+              : selection === "invalid-path-gap"
+                ? ["S12", "S13", "S14", "S15", "R1", "R2"].includes(cell.id)
+                : !/^S0[1-9]$/.test(cell.id) && cell.id !== "S10"),
     ),
   };
 }

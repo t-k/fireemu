@@ -34,12 +34,57 @@ function resourceIdentity(value) {
   assert.match(value.uid, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
   for (const key of ["createTime", "updateTime"]) checkTimestamp(value[key]);
 }
-function resource(value, expectedState = "ACTIVE") {
+function resource(
+  value,
+  expectedState = "ACTIVE",
+  topicProject = value.name.split("/")[1],
+  terminal = false,
+) {
   resourceIdentity(value);
+  resourceFields(value, terminal);
   assert.equal(value.state, expectedState);
   assert.equal(typeof value.pubsubTopic, "string");
-  assert.ok(value.pubsubTopic.startsWith(`projects/${value.name.split("/")[1]}/topics/`));
+  assert.ok(value.pubsubTopic.startsWith(`projects/${topicProject}/topics/`));
   assert.match(value.pubsubTopic, /-\d{3}$/);
+}
+function resourceFields(value, terminal = false) {
+  assert.deepEqual(
+    Object.keys(value),
+    [
+      ...(terminal ? ["@type"] : []),
+      "name",
+      "uid",
+      "createTime",
+      "updateTime",
+      "pubsubTopic",
+      "state",
+    ],
+    "active resource fields",
+  );
+}
+function terminalResource(body, target, verb, topicProject = target.split("/")[1]) {
+  assert.equal(body?.["@type"], "type.googleapis.com/google.cloud.eventarc.v1.Channel");
+  assert.equal(body.name, target);
+  if (verb === "create") {
+    resource(body, "ACTIVE", topicProject, true);
+  } else {
+    assert.equal(verb, "delete");
+    assert.deepEqual(Object.keys(body), ["@type", "name", "state", "pubsubTopic"]);
+    assert.equal(body.state, "INACTIVE");
+    assert.equal(body.pubsubTopic, "");
+  }
+}
+function ownPoll(row, issued, target, verb) {
+  assert.equal(row.response.status, 200);
+  assert.equal(row.request.method, "GET");
+  assert.equal(row.request.path, `/v1/${issued.body.name}`, "own poll path");
+  assert.equal(row.body.name, issued.body.name);
+  assert.equal(
+    row.body.metadata?.createTime,
+    issued.body.metadata.createTime,
+    "operation createTime changed",
+  );
+  operation(row.body, target, verb);
 }
 /** Bind exact requests to a checked native journal, never install recorded answers locally. */
 export function loadNativeRequests({ path, sha256, ordinals }) {
@@ -382,35 +427,12 @@ async function pollOperationTerminal({
       issued.exchange,
       deadline - performance.now(),
     );
-    assert.equal(row.response.status, 200);
-    assert.equal(row.body.name, issued.name);
-    assert.equal(
-      row.body.metadata?.createTime,
-      collector.exchanges[issued.exchange].body.metadata.createTime,
-      "operation createTime changed",
-    );
-    operation(row.body, issued.target, issued.verb);
+    ownPoll(row, collector.exchanges[issued.exchange], issued.target, issued.verb);
     if (row.body.done) break;
     await delay(Math.min(pollIntervalMs, Math.max(0, deadline - performance.now())));
   }
   assert.ok(row?.body.done, "terminal timeout");
-  assert.equal(
-    row.body.response?.["@type"],
-    "type.googleapis.com/google.cloud.eventarc.v1.Channel",
-  );
-  if (issued.verb === "create") {
-    resource(row.body.response);
-    assert.deepEqual(
-      Object.keys(row.body.response),
-      ["@type", "name", "uid", "createTime", "updateTime", "pubsubTopic", "state"],
-      "create terminal fields",
-    );
-  } else {
-    assert.deepEqual(Object.keys(row.body.response), ["@type", "name", "state", "pubsubTopic"]);
-    assert.equal(row.body.response.state, "INACTIVE");
-    assert.equal(row.body.response.pubsubTopic, "");
-  }
-  assert.equal(row.body.response.name, issued.target);
+  terminalResource(row.body.response, issued.target, issued.verb);
   return { row, deadline };
 }
 export async function collectOperationTerminal(options) {
@@ -450,6 +472,12 @@ export async function collectOperationTerminal(options) {
 }
 
 /** Record the native creating shape and own unfinished identity before a paired DELETE. */
+function unfinishedResource(body) {
+  assert.deepEqual(Object.keys(body), ["name", "uid", "createTime", "updateTime", "pubsubTopic"]);
+  assert.equal(body.pubsubTopic, "");
+  assert.equal(Object.hasOwn(body, "state"), false);
+  resourceIdentity(body);
+}
 export async function observeUnfinishedCreate({ collector, issued }) {
   const s = state(collector);
   assert.ok(s.issued.has(issued));
@@ -462,16 +490,7 @@ export async function observeUnfinishedCreate({ collector, issued }) {
   );
   assert.equal(channel.response.status, 200);
   assert.equal(channel.body.name, issued.target);
-  assert.deepEqual(Object.keys(channel.body), [
-    "name",
-    "uid",
-    "createTime",
-    "updateTime",
-    "pubsubTopic",
-  ]);
-  assert.equal(channel.body.pubsubTopic, "");
-  assert.equal(Object.hasOwn(channel.body, "state"), false);
-  resourceIdentity(channel.body);
+  unfinishedResource(channel.body);
   const unfinished = await call(
     collector,
     { method: "GET", path: `/v1/${issued.name}` },
@@ -543,4 +562,328 @@ export async function collectPairedOperationTerminals({
     deleteTerminal: inactive,
     target: create.target,
   });
+}
+
+/** Recheck retained collector exchanges with the same resource and operation predicates. */
+export function validateRetainedProofs(report, nativeInventories) {
+  assert.equal(report.complete, true, "incomplete lifecycle report");
+  assert.ok(Array.isArray(report.proofs) && report.proofs.length, "missing lifecycle proofs");
+  const exchanges = report.exchanges;
+  assert.ok(Array.isArray(exchanges) && exchanges.length, "missing lifecycle exchanges");
+  for (const [index, exchange] of exchanges.entries()) {
+    assert.equal(exchange.id, index, "exchange identity");
+    assert.ok(!exchange.failure, "failed lifecycle exchange");
+    const bytes = Buffer.from(exchange.response.base64, "base64");
+    assert.equal(bytes.toString("base64"), exchange.response.base64);
+    assert.equal(bytes.length, exchange.response.bytes);
+    assert.equal(sha(bytes), exchange.response.sha256);
+    assert.equal(exchange.response.headers["content-length"], String(bytes.length));
+    assert.deepEqual(JSON.parse(bytes.toString()), exchange.body, "physical lifecycle body");
+    const requestBytes = Buffer.from(exchange.requestBase64, "base64");
+    assert.equal(requestBytes.toString("base64"), exchange.requestBase64);
+    assert.equal(requestBytes.length, exchange.requestBytes);
+    assert.equal(sha(requestBytes), exchange.requestSha256);
+    assert.ok(
+      Number.isFinite(exchange.sentMonotonicMs) &&
+        exchange.receivedMonotonicMs >= exchange.sentMonotonicMs,
+    );
+    if (index > 0)
+      assert.ok(
+        exchange.sentMonotonicMs >= exchanges[index - 1].receivedMonotonicMs,
+        "retained exchange chronology",
+      );
+  }
+  const accounted = new Set();
+  const at = (id) => {
+    assert.ok(
+      Number.isSafeInteger(id) && id >= 0 && id < exchanges.length,
+      "missing proof exchange",
+    );
+    accounted.add(id);
+    return exchanges[id];
+  };
+  const terminal = (proof, createOnly = false) => {
+    const issued = at(proof.issuedExchange),
+      ended = at(proof.terminalExchange);
+    assert.ok(issued.id < ended.id, "terminal order");
+    assert.deepEqual(issued.source, proof.source, "issuing native binding");
+    assert.equal(issued.response.status, 200);
+    operation(issued.body, proof.target, proof.verb);
+    if (proof.verb === "create") {
+      assert.equal(issued.request.method, "POST");
+      assert.equal(issued.request.body?.name, proof.target);
+      const url = new URL(issued.request.path, "http://127.0.0.1");
+      assert.equal(url.pathname, `/v1/${proof.target.slice(0, proof.target.lastIndexOf("/"))}`);
+      assert.equal(url.searchParams.get("channelId"), proof.target.split("/").at(-1));
+    } else {
+      assert.equal(issued.request.method, "DELETE");
+      assert.equal(issued.request.path, `/v1/${proof.target}`);
+    }
+    assert.equal(issued.body.name, proof.name);
+    let previous = issued;
+    for (const poll of exchanges
+      .slice(issued.id + 1, ended.id + 1)
+      .filter(
+        (row) =>
+          row.request.path === `/v1/${proof.name}` ||
+          (row.derivedFrom === issued.id && row.request.path !== `/v1/${proof.target}`),
+      )) {
+      ownPoll(poll, issued, proof.target, proof.verb);
+      accounted.add(poll.id);
+      assert.equal(poll.derivedFrom, issued.id, "own poll linkage");
+      assert.deepEqual(poll.source, proof.source, "own poll native binding");
+      assert.ok(poll.sentMonotonicMs >= previous.receivedMonotonicMs, "own poll chronology");
+      if (previous.body.done) assert.equal(poll.body.done, true, "operation regressed");
+      if (poll.body.done) terminalResource(poll.body.response, proof.target, proof.verb);
+      previous = poll;
+    }
+    assert.equal(previous.id, ended.id, "missing terminal poll");
+    assert.equal(ended.response.status, 200);
+    assert.equal(ended.request.path, `/v1/${proof.name}`);
+    assert.equal(ended.derivedFrom, issued.id, "own terminal identity binding");
+    operation(ended.body, proof.target, proof.verb);
+    assert.equal(ended.body.name, proof.name);
+    assert.equal(ended.body.metadata.createTime, issued.body.metadata.createTime);
+    assert.equal(ended.body.done, true, "nonterminal proof");
+    terminalResource(ended.body.response, proof.target, proof.verb);
+    if (createOnly) return ended;
+    const later = at(proof.readbackExchange);
+    assert.ok(later.id > ended.id);
+    assert.equal(later.request.path, `/v1/${proof.target}`);
+    assert.equal(later.derivedFrom, ended.id);
+    if (proof.verb === "delete") {
+      assert.equal(later.response.status, 404, "deleted resource still present");
+      assert.equal(later.body.error?.code, 404);
+      assert.equal(later.body.error?.status, "NOT_FOUND");
+      assert.equal(typeof later.body.error?.message, "string");
+    } else {
+      assert.equal(later.response.status, 200);
+      resource(later.body);
+      resourceFields(later.body);
+      for (const key of ["name", "uid", "createTime", "pubsubTopic", "state"])
+        assert.equal(later.body[key], ended.body.response[key]);
+    }
+    return ended;
+  };
+  for (const proof of report.proofs) {
+    assert.equal(proof.complete, true);
+    if (proof.kind === "own-operation-terminal") terminal(proof);
+    else if (proof.kind === "paired-own-operation-terminals") {
+      const issued = at(proof.createIssuedExchange);
+      const ended = terminal(
+        {
+          source: proof.createSource,
+          issuedExchange: issued.id,
+          terminalExchange: proof.createTerminalExchange,
+          name: issued.body.name,
+          target: proof.target,
+          verb: "create",
+        },
+        true,
+      );
+      const start = at(proof.start.operationExchange),
+        channel = at(proof.start.channelExchange);
+      assert.ok(issued.id < start.id && start.id < proof.deleteIssuedExchange);
+      assert.ok(issued.id < channel.id && channel.id < start.id, "unfinished start chronology");
+      ownPoll(start, issued, proof.target, "create");
+      assert.equal(start.derivedFrom, issued.id);
+      assert.equal(channel.response.status, 200);
+      assert.equal(channel.request.method, "GET");
+      assert.equal(channel.request.path, `/v1/${proof.target}`);
+      assert.equal(channel.derivedFrom, issued.id);
+      assert.equal(channel.body.name, proof.target);
+      unfinishedResource(channel.body);
+      operation(start.body, proof.target, "create");
+      assert.equal(start.body.name, issued.body.name);
+      assert.equal(start.body.done, false);
+      resourceIdentity(channel.body);
+      for (const key of ["name", "uid", "createTime"])
+        assert.equal(ended.body.response[key], channel.body[key]);
+      assert.notEqual(proof.deleteTerminal.name, issued.body.name);
+      assert.equal(proof.deleteTerminal.issuedExchange, proof.deleteIssuedExchange);
+      assert.deepEqual(proof.deleteTerminal.source, proof.deleteSource);
+      terminal(proof.deleteTerminal);
+    } else {
+      assert.equal(proof.kind, "own-cursor-walk", "unknown lifecycle proof");
+      const before = at(proof.before),
+        after = at(proof.after);
+      const collection = before.request.path.slice(4);
+      const expected = inventoryRows(before, collection),
+        final = inventoryRows(after, collection);
+      if (nativeInventories) {
+        const native = nativeInventories[proof.key];
+        assert.ok(native, "missing native inventory");
+        assert.deepEqual(
+          [...expected.keys()].sort(),
+          native.map((channel) => channel.name).sort(),
+          "native inventory membership",
+        );
+        for (const channel of native)
+          assert.deepEqual(
+            Object.keys(expected.get(channel.name)),
+            Object.keys(channel),
+            "native resource fields",
+          );
+      }
+      assert.ok(isDeepStrictEqual(expected, final), "inventory changed");
+      assert.equal(proof.resourceCount, expected.size, "inventory count");
+      assert.ok(Array.isArray(proof.pages) && proof.pages.length, "missing walk pages");
+      const seen = new Set(),
+        uids = new Set(),
+        tokens = new Set();
+      let previous = null;
+      for (const id of proof.pages) {
+        const page = at(id),
+          params = new URLSearchParams(page.request.path.split("?")[1] ?? "");
+        assert.ok(before.id < id && id < after.id);
+        assert.equal(page.request.path.split("?")[0], `/v1/${collection}`);
+        assert.equal(page.response.status, 200);
+        assert.equal(page.derivedFrom, previous?.id ?? null, "own cursor issuer");
+        assert.equal(
+          params.get("pageToken"),
+          previous?.body.nextPageToken ?? null,
+          "own cursor value",
+        );
+        const size = Number(params.get("pageSize"));
+        assert.ok(Number.isSafeInteger(size) && size > 0);
+        assert.ok(page.body.channels.length > 0 && page.body.channels.length <= size);
+        assert.deepEqual(
+          Object.keys(page.body),
+          Object.hasOwn(page.body, "nextPageToken") ? ["channels", "nextPageToken"] : ["channels"],
+        );
+        for (const channel of page.body.channels) {
+          resource(channel);
+          assert.ok(!seen.has(channel.name) && !uids.has(channel.uid), "duplicate walk member");
+          assert.deepEqual(channel, expected.get(channel.name), "foreign walk member");
+          seen.add(channel.name);
+          uids.add(channel.uid);
+        }
+        if (Object.hasOwn(page.body, "nextPageToken")) {
+          const token = page.body.nextPageToken;
+          assert.match(token, /^[A-Za-z0-9_-]+$/);
+          assert.equal(Buffer.from(token, "base64url").toString("base64url"), token);
+          assert.ok(!tokens.has(token));
+          tokens.add(token);
+        }
+        previous = page;
+      }
+      assert.equal(Object.hasOwn(previous.body, "nextPageToken"), false, "walk nonterminal tail");
+      assert.equal(seen.size, expected.size, "missing walk member");
+    }
+  }
+  // Setup CREATEs are collected to terminal before selected case proofs; validate them identically.
+  for (const issued of exchanges.filter(
+    (row) =>
+      !accounted.has(row.id) &&
+      ["POST", "DELETE"].includes(row.request.method) &&
+      row.derivedFrom === null,
+  )) {
+    const target = issued.body.metadata?.target,
+      verb = issued.body.metadata?.verb;
+    const ended = exchanges.find(
+      (row) =>
+        row.id > issued.id &&
+        row.derivedFrom === issued.id &&
+        row.body.name === issued.body.name &&
+        row.body.done === true,
+    );
+    assert.ok(ended, "unproved setup terminal");
+    const later = exchanges.find((row) => row.derivedFrom === ended.id && row.id > ended.id);
+    assert.ok(later, "unproved setup readback");
+    terminal({
+      source: issued.source,
+      issuedExchange: issued.id,
+      terminalExchange: ended.id,
+      readbackExchange: later.id,
+      name: issued.body.name,
+      target,
+      verb,
+    });
+  }
+  assert.equal(accounted.size, exchanges.length, "unknown or detached retained exchange");
+  return true;
+}
+
+/** Reuse collector predicates for every retained successful raw lifecycle answer. */
+export function validateLifecycleAnswer(native, actual, wire, nativeResources) {
+  assert.equal(native.response.status, 200);
+  assert.equal(actual.status, 200, "successful lifecycle status");
+  const body = actual.body;
+  if (["createChannel", "deleteChannel", "getOperation"].includes(native.op)) {
+    const expected = native.response.body;
+    operation(body, expected.metadata.target, expected.metadata.verb);
+    if (native.op === "getOperation")
+      assert.equal(wire.path.split("?")[0], `/v1/${body.name}`, "raw own operation identity");
+    if (body.done) {
+      const original = nativeResources.find(
+        (resource) => resource.name === expected.metadata.target && resource.state === "ACTIVE",
+      );
+      if (expected.metadata.verb === "create")
+        assert.ok(original, "missing bound terminal authority");
+      terminalResource(
+        body.response,
+        expected.metadata.target,
+        expected.metadata.verb,
+        original?.pubsubTopic.split("/")[1],
+      );
+    }
+  } else if (native.op === "getChannel") {
+    assert.equal(body.name, native.response.body.name, "raw channel identity");
+    if (Object.hasOwn(body, "state")) {
+      const original = nativeResources.find(
+        (candidate) => candidate.name === body.name && candidate.state === "ACTIVE",
+      );
+      assert.ok(original, "missing bound channel authority");
+      resource(body, "ACTIVE", original.pubsubTopic.split("/")[1]);
+      assert.deepEqual(Object.keys(body), [
+        "name",
+        "uid",
+        "createTime",
+        "updateTime",
+        "pubsubTopic",
+        "state",
+      ]);
+    } else unfinishedResource(body);
+  } else {
+    assert.equal(native.op, "listChannels");
+    assert.ok(Array.isArray(body.channels), "raw list channels field");
+    assert.deepEqual(
+      Object.keys(body),
+      Object.hasOwn(body, "nextPageToken") ? ["channels", "nextPageToken"] : ["channels"],
+    );
+    for (const channel of body.channels) {
+      if (Object.hasOwn(channel, "state")) {
+        const original = nativeResources.find(
+          (candidate) => candidate.name === channel.name && candidate.state === "ACTIVE",
+        );
+        assert.ok(original, "raw list original identity");
+        resource(channel, "ACTIVE", original.pubsubTopic.split("/")[1]);
+      } else {
+        assert.ok(
+          nativeResources.some((candidate) => candidate.name === channel.name),
+          "foreign unfinished list member",
+        );
+        unfinishedResource(channel);
+      }
+      const scope = native.request.path.split("?")[0].slice(4);
+      const requested = scope.split("/"),
+        actual = channel.name.split("/");
+      assert.equal(actual.length, requested.length + 1, "raw list resource path");
+      for (let i = 0; i < requested.length; i++)
+        if (!(i === 3 && requested[i] === "-"))
+          assert.equal(actual[i], requested[i], "raw list resource authority");
+    }
+    const params = new URLSearchParams(native.request.path.split("?")[1] ?? "");
+    if (params.has("pageSize") && Number(params.get("pageSize")) > 0)
+      assert.ok(body.channels.length <= Number(params.get("pageSize")), "raw list upper bound");
+    if (Object.hasOwn(body, "nextPageToken")) {
+      assert.match(body.nextPageToken, /^[A-Za-z0-9_-]+$/);
+      assert.equal(
+        Buffer.from(body.nextPageToken, "base64url").toString("base64url"),
+        body.nextPageToken,
+      );
+      assert.ok(body.channels.length > 0, "raw token without members");
+    }
+  }
+  return true;
 }

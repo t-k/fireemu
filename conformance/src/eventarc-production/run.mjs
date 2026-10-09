@@ -17,7 +17,7 @@ import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { createServer } from "node:net";
 import { isDeepStrictEqual } from "node:util";
-import { replay, summarize, skipReason, requestBody } from "./compare.mjs";
+import { replay, summarize, skipReason, requestBody, compareAnswer } from "./compare.mjs";
 import { findPackagedRunner } from "../packaged-runner.mjs";
 import {
   loadNativeRequests,
@@ -27,7 +27,10 @@ import {
   collectOperationTerminal,
   observeUnfinishedCreate,
   collectPairedOperationTerminals,
+  validateRetainedProofs,
+  validateLifecycleAnswer,
 } from "./lifecycle-evidence.mjs";
+import { loadSdkInput, runProbe, validateSdkReport } from "./probe-sdk.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
 const sha = (value) => createHash("sha256").update(value).digest("hex");
@@ -215,6 +218,8 @@ export function loadInputs(directory = join(here, "fixtures/ad")) {
       "unavailable witness selector",
     );
   }
+  const outcomesPath = join(directory, "sdk-outcomes.json");
+  if (statSafe(outcomesPath)) projectionPins["sdk-outcomes.json"] = digest(outcomesPath);
   return { directory, provenance, plan, corpora, pins: projectionPins };
 }
 /** Pace original client start offsets before creating the fresh per-request deadline. */
@@ -515,7 +520,7 @@ const pending = [
   "C102/C110 native continuation tails",
   "Three production publish-404 witnesses",
   "Parsed-only A1/A2 original physical evidence",
-  "Unchanged eleven criteria and two-record requirement",
+  "All retained criteria require at least one valid native observation per original case",
   "Raw differences require separately authorized case disposition",
   "Release registration and final same-binary evidence",
 ];
@@ -545,18 +550,176 @@ function publicFacet(report, evidence) {
         item?.path !== undefined
       ) {
         assert.equal(evidence.physicalInputPins?.[item.path], item.sha256, "unbound facet source");
+        const originalSdk =
+          item.sha256 ===
+          evidence.sessions.find((session) => session.phase === "facets" && session.label === "B")
+            ?.report.sdk?.native?.sha256;
         assert.ok(
-          labels.some((label) => basename(item.path) === `${label}.jsonl`),
+          labels.some((label) => basename(item.path) === `${label}.jsonl`) || originalSdk,
           "foreign facet corpus",
         );
-        item.path = `conformance/src/eventarc-production/fixtures/ad/${basename(item.path)}`;
+        item.path = `conformance/src/eventarc-production/fixtures/ad/${originalSdk ? "sdk-native.jsonl" : basename(item.path)}`;
+      } else if (key === "sdkResolved") {
+        value[key] = Object.fromEntries(
+          Object.entries(item).map(([name, path]) => [
+            name,
+            `conformance/node_modules/firebase-admin/${path.split("/firebase-admin/").at(-1)}`,
+          ]),
+        );
       } else visit(item);
     }
   };
   visit(result);
   return result;
 }
-export function comparisonFromEvidence(evidence) {
+/** Normal original-B one-event and three-event publications retain strict production comparison. */
+export function validatePublishParity(native, wire) {
+  assert.deepEqual(
+    native.map((row) => row.n),
+    [81, 82],
+    "required normal publication cases",
+  );
+  assert.deepEqual(
+    native.map((row) => row.request.body.events.length),
+    [1, 3],
+  );
+  for (const row of native) {
+    const matches = wire.filter((exchange) => exchange.n === row.n);
+    assert.equal(matches.length, 1, "missing or duplicate publish exchange");
+    const actual = matches[0],
+      bytes = Buffer.from(actual.responseBase64, "base64");
+    assert.ok(!actual.failure);
+    assert.equal(bytes.toString("base64"), actual.responseBase64);
+    assert.equal(bytes.length, actual.responseBytes);
+    assert.equal(sha(bytes), actual.responseSha256);
+    assert.equal(
+      compareAnswer(row.response, { status: actual.status, body: JSON.parse(bytes.toString()) })
+        .verdict,
+      "match",
+      "normal publish production parity",
+    );
+  }
+  return true;
+}
+/** Release consumes the same narrow checks as export, including genuine SDK and lifecycle evidence. */
+function nativeResourceAuthority(native, rows) {
+  const successful = rows.filter((row) => row.response.status === 200);
+  if (native.op === "listChannels") {
+    const scope = native.request.path.split("?")[0];
+    const names = native.response.body.channels.map((channel) => channel.name);
+    const params = new URLSearchParams(native.request.path.split("?")[1] ?? "");
+    const inventories = successful.filter(
+      (row) =>
+        row.op === "listChannels" &&
+        row.request.path.split("?")[0] === scope &&
+        new URLSearchParams(row.request.path.split("?")[1] ?? "")
+          .getAll("pageToken")
+          .every((token) => token === "") &&
+        isDeepStrictEqual(
+          new URLSearchParams(row.request.path.split("?")[1] ?? "").getAll("filter"),
+          params.getAll("filter"),
+        ) &&
+        Array.isArray(row.response.body?.channels) &&
+        !Object.hasOwn(row.response.body, "nextPageToken") &&
+        names.every((name) => row.response.body.channels.some((channel) => channel.name === name)),
+    );
+    inventories.sort((a, b) => Math.abs(a.n - native.n) - Math.abs(b.n - native.n));
+    assert.ok(inventories.length, "missing complete scoped native inventory");
+    return inventories[0].response.body.channels;
+  }
+  return successful
+    .flatMap(
+      (row) => row.response.body?.channels ?? [row.response.body?.response, row.response.body],
+    )
+    .filter((resource) => resource?.name && Object.hasOwn(resource, "pubsubTopic"));
+}
+export function validateEventarcSemantics(comparison) {
+  const inputs = comparison.semanticInputs;
+  assert.ok(inputs, "missing bound semantic comparands");
+  const raw = comparison.raw.find((report) => report.label === "B");
+  assert.ok(raw, "missing original-B raw report");
+  validatePublishParity(inputs.publish, raw.wire);
+  assert.ok(comparison.sdk, "actual SDK invocation required; HTTP replay is insufficient");
+  validateSdkReport(comparison.sdk, inputs.sdk);
+  validateRetainedProofs(comparison.sdk);
+  for (const label of ["B", "C", "D"]) {
+    const facet = comparison.facets.find((report) => report.label === label);
+    assert.ok(facet, "missing lifecycle facet");
+    assert.deepEqual(
+      facet.proofs.map((proof) => proof.key).sort(),
+      inputs.lifecycleKeys[label],
+      "missing selected lifecycle case",
+    );
+    validateRetainedProofs(facet, inputs.lifecycleInventories[label]);
+  }
+  assert.deepEqual(
+    comparison.limitations,
+    {
+      historicalPublish404: { cases: ["C182", "C183", "C307"], native404Local200Unresolved: true },
+      mockCredentialCatalog: {
+        googleTokenValidityVerified: false,
+        defaultConfigurationGapDisclosed: true,
+      },
+    },
+    "required bounded gap disclosures",
+  );
+  for (const label of labels) {
+    const report = comparison.raw.find((report) => report.label === label);
+    assert.ok(report, "missing raw production session");
+    for (const native of inputs.rawComparands[label]) {
+      const matches = report.wire.filter((exchange) => exchange.n === native.n);
+      assert.equal(matches.length, 1, "missing or duplicate original-case wire");
+      const wire = matches[0],
+        bytes = Buffer.from(wire.responseBase64, "base64");
+      assert.ok(!wire.failure);
+      assert.equal(bytes.toString("base64"), wire.responseBase64);
+      assert.equal(bytes.length, wire.responseBytes);
+      assert.equal(sha(bytes), wire.responseSha256);
+      const actual = { status: wire.status, body: JSON.parse(bytes.toString()) };
+      if (label === "C" && [182, 183, 307].includes(native.n)) {
+        assert.equal(native.response.status, 404);
+        assert.equal(actual.status, 200);
+        assert.deepEqual(actual.body, {}, "historical gap widened");
+      } else if (
+        native.response.status === 200 &&
+        ["listChannels", "getOperation", "createChannel", "getChannel", "deleteChannel"].includes(
+          native.op,
+        )
+      ) {
+        try {
+          const emptyList =
+            native.op === "listChannels" &&
+            native.response.body &&
+            typeof native.response.body === "object" &&
+            !Array.isArray(native.response.body) &&
+            Object.keys(native.response.body).length === 0;
+          if (emptyList)
+            assert.equal(
+              compareAnswer(native.response, actual).verdict,
+              "match",
+              "original empty LIST response",
+            );
+          else
+            validateLifecycleAnswer(
+              native,
+              actual,
+              wire,
+              nativeResourceAuthority(native, inputs.rawComparands[label]),
+            );
+        } catch (error) {
+          throw new Error(`${label}${native.n}/${native.op}: ${error.message}`, { cause: error });
+        }
+      } else
+        assert.equal(
+          compareAnswer(native.response, actual).verdict,
+          "match",
+          "nonexempt production divergence",
+        );
+    }
+  }
+  return true;
+}
+export function comparisonFromEvidence(evidence, semanticInputs) {
   assert.equal(evidence.complete, true, "incomplete evidence");
   assert.ok(
     evidence.sessions?.every((x) => x.report.complete),
@@ -596,7 +759,34 @@ export function comparisonFromEvidence(evidence) {
     runnerPins: publicPins(evidence.runnerPins, "runner-node"),
     sessionPins: publicPins(evidence.sessionPins, "sessions"),
     pending,
+    ...(semanticInputs
+      ? {
+          semanticInputs,
+          sdk: publicFacet(
+            evidence.sessions.find((session) => session.phase === "facets" && session.label === "B")
+              .report.sdk,
+            evidence,
+          ),
+          limitations: {
+            historicalPublish404: {
+              cases: ["C182", "C183", "C307"],
+              native404Local200Unresolved: true,
+            },
+            mockCredentialCatalog: {
+              googleTokenValidityVerified: false,
+              defaultConfigurationGapDisclosed: true,
+            },
+          },
+        }
+      : {}),
   };
+}
+function statSafe(path) {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 function pins(paths) {
   return Object.fromEntries(paths.map((path) => [path, digest(path)]));
@@ -604,6 +794,57 @@ function pins(paths) {
 function verifyPins(values) {
   for (const [path, expected] of Object.entries(values))
     assert.equal(digest(path), expected, `changed pinned input: ${path}`);
+}
+function sdkInput(inputs) {
+  assert.ok(inputs.pins["sdk-outcomes.json"], "missing genuine original SDK outcome comparand");
+  return loadSdkInput({
+    path: inputs.corpora.B.path,
+    sha256: inputs.corpora.B.sha256,
+    sdkDir: join(root, "conformance/node_modules"),
+    outcomesPath: join(inputs.directory, "sdk-outcomes.json"),
+    outcomesSha256: inputs.pins["sdk-outcomes.json"],
+  });
+}
+function semanticInputs(inputs) {
+  const sdk = sdkInput(inputs);
+  return {
+    rawComparands: Object.fromEntries(
+      labels.map((label) => [
+        label,
+        inputs.corpora[label].rows
+          .filter((row) => skipReason(row) === null && requestBody(row) !== null)
+          .map((row) => ({
+            n: row.n,
+            op: row.op,
+            request: { method: row.request.method, path: row.request.path },
+            response: { status: row.response.status, body: row.response.body },
+          })),
+      ]),
+    ),
+    publish: inputs.corpora.B.rows.filter((row) => [81, 82].includes(row.n)),
+    sdk: { expected: sdk.expected, specs: sdk.specs, originalOutcomes: sdk.originalOutcomes },
+    lifecycleInventories: Object.fromEntries(
+      ["B", "C", "D"].map((label) => [
+        label,
+        Object.fromEntries(
+          inputs.plan.corpora[label].walks.map((walk) => [
+            `${label}${walk.rootN}`,
+            inputs.corpora[label].rows.find((row) => row.n === walk.inventoryN).response.body
+              .channels,
+          ]),
+        ),
+      ]),
+    ),
+    lifecycleKeys: Object.fromEntries(
+      ["B", "C", "D"].map((label) => [
+        label,
+        [
+          ...inputs.plan.corpora[label].walks.map((walk) => `${label}${walk.rootN}`),
+          ...inputs.plan.corpora[label].terminalN.map((n) => `${label}${n}`),
+        ].sort(),
+      ]),
+    ),
+  };
 }
 export function exportComparison({ evidencePath, output, binary }) {
   const evidence = json(evidencePath);
@@ -656,7 +897,15 @@ export function exportComparison({ evidencePath, output, binary }) {
     assert.equal(receipt.processGroupAbsent, true);
     assert.ok(!receipt.timedOut && !receipt.cleanupFailure && !receipt.interrupted);
   }
-  const comparison = comparisonFromEvidence(evidence);
+  const provenancePaths = Object.keys(evidence.physicalInputPins).filter(
+    (path) => basename(path) === "provenance.json",
+  );
+  assert.equal(provenancePaths.length, 1, "missing genuine native projection");
+  const inputs = loadInputs(dirname(provenancePaths[0]));
+  assert.deepEqual(inputs.pins, evidence.inputPins, "semantic input pins");
+  const comparison = comparisonFromEvidence(evidence, semanticInputs(inputs));
+  // All checks run after physical report binding, on the actual retained wire.
+  validateEventarcSemantics(comparison);
   comparison.checkEvidenceSha256 = digest(evidencePath);
   save(output, comparison);
   return comparison;
@@ -943,6 +1192,10 @@ async function session(path) {
     } else {
       assert.equal(options.phase, "facets");
       report = await collectFacets(inputs, options.label, base);
+      if (options.label === "B" && report.complete) {
+        report.sdk = await runProbe(sdkInput(inputs), { base });
+        report.complete &&= report.sdk.complete;
+      }
     }
   } catch (error) {
     report = { complete: false, failure: { name: error.name, message: error.message } };
@@ -1012,6 +1265,7 @@ export async function check({
   budgetMs = localOverallMs,
 }) {
   const inputs = loadInputs(inputDirectory);
+  sdkInput(inputs); // Refuse missing genuine SDK comparands before starting any installed session.
   const budget = deriveLocalBudget(inputs, budgetMs);
   binary = realpathSync(binary);
   const runner = findPackagedRunner(binary);
@@ -1024,6 +1278,7 @@ export async function check({
     fileURLToPath(import.meta.url),
     join(here, "compare.mjs"),
     join(here, "lifecycle-evidence.mjs"),
+    ...["sdk.mjs", "names.mjs", "rest.mjs", "probe-sdk.mjs"].map((name) => join(here, name)),
     resolve(here, "../packaged-runner.mjs"),
   ]);
   const installedRunnerPins = runnerPins(runner);
@@ -1148,7 +1403,11 @@ async function main(args) {
     out = flag("out");
   assert.ok(binary && out, "--binary and --out required");
   if (args[0] === "check") {
-    const result = await check({ binary, out: resolve(out) });
+    const result = await check({
+      binary,
+      out: resolve(out),
+      ...(flag("input-directory") ? { inputDirectory: resolve(flag("input-directory")) } : {}),
+    });
     if (!result.complete) process.exitCode = 1;
   } else
     exportComparison({

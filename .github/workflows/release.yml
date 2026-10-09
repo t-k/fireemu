@@ -341,7 +341,7 @@ jobs:
   strict-production:
     needs: [plan, build]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 180
     permissions:
       contents: read
     steps:

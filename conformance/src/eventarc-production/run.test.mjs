@@ -687,14 +687,9 @@ function exportFixture(t) {
 function dirnameForTest(path) {
   return join(path, "..");
 }
-test("export reads the same pinned check without spawning and stays pending", (t) => {
-  const f = exportFixture(t),
-    c = exportComparison(f);
-  assert.equal(c.raw.length, 5);
-  assert.equal(c.facets.length, 3);
-  assert.ok(c.rows.every((r) => r.status === "PENDING"));
-  assert.equal(c.checkEvidenceSha256, hash(readFileSync(f.evidencePath)));
-  assert.ok(!JSON.stringify(c).includes(f.dir));
+test("empty serialization fixture cannot satisfy strict semantic export", (t) => {
+  const f = exportFixture(t);
+  assert.throws(() => exportComparison(f), /missing genuine native projection/);
 });
 test("changed embedded wire/report cannot substitute for the physical check report", (t) => {
   const f = exportFixture(t);
@@ -789,9 +784,9 @@ test("missing selected witness roots cannot become a successful empty facet sess
     rmSync(dir, { recursive: true });
   }
 });
-test("case exports use the existing parent and recipe row keys with pending summaries", (t) => {
+test("projection retains parent and recipe row keys without claiming semantic export", (t) => {
   const f = exportFixture(t),
-    c = exportComparison(f);
+    c = comparisonFromEvidence(f.e);
   assert.equal(c.parent, "EVENTARC");
   assert.ok(
     c.rows.every(
@@ -927,3 +922,942 @@ test("session endpoint rejects doubled scheme and every nonnative URL shape befo
   ])
     assert.throws(() => sessionEndpoint(value));
 });
+
+test("SDK promotion retains original envelope checks rather than accepting HTTP-only publication", async () => {
+  const { checkWire } = await import("./probe-sdk.mjs");
+  const rows = readFileSync(new URL("./fixtures/ad/B.jsonl", import.meta.url), "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const relative = rows.find((entry) => entry.n === 157);
+  assert.equal(relative.op, "sdk.publishEvents");
+  const body = structuredClone(relative.request.body);
+  const generated = checkWire(body, relative.request.body);
+  assert.equal(generated.length, 1);
+  for (const modify of [
+    (value) => {
+      value.events = [];
+    },
+    (value) => {
+      value.events[0].id = "not-a-generated-id";
+    },
+    (value) => {
+      value.events[0].attributes.time.ceTimestamp = "yesterday";
+    },
+    (value) => {
+      value.events[0].source = "different";
+    },
+  ]) {
+    const changed = structuredClone(body);
+    modify(changed);
+    assert.throws(() => checkWire(changed, relative.request.body));
+  }
+});
+
+test(
+  "retained SDK lifecycle checks reject terminal identity, pending and live-after-delete drift",
+  { skip: !process.env.EVENTARC_ORIGINAL_SDK_REPORT },
+  async () => {
+    const { validateRetainedProofs } = await import("./lifecycle-evidence.mjs");
+    const original = JSON.parse(readFileSync(process.env.EVENTARC_ORIGINAL_SDK_REPORT, "utf8"));
+    validateRetainedProofs(original);
+    for (const modify of [
+      (value) => {
+        value.exchanges[value.proofs[0].terminalExchange].body.name += "x";
+      },
+      (value) => {
+        value.exchanges[value.proofs[0].terminalExchange].body.done = false;
+      },
+      (value) => {
+        value.exchanges[value.proofs[1].readbackExchange].response.status = 200;
+      },
+      (value) => {
+        value.proofs = [];
+      },
+    ]) {
+      const changed = structuredClone(original);
+      modify(changed);
+      // Rebind physical fields so each counter reaches the semantic assertions.
+      for (const exchange of changed.exchanges) {
+        const bytes = Buffer.from(JSON.stringify(exchange.body));
+        exchange.response.base64 = bytes.toString("base64");
+        exchange.response.bytes = bytes.length;
+        exchange.response.sha256 = hash(bytes);
+        exchange.response.headers["content-length"] = String(bytes.length);
+        exchange.response.text = bytes.toString();
+      }
+      assert.throws(() => validateRetainedProofs(changed));
+    }
+  },
+);
+
+test(
+  "bound SDK notes reject changed outcomes, forwards and HTTP-only reports",
+  { skip: !process.env.EVENTARC_ORIGINAL_SDK_REPORT || !process.env.EVENTARC_ORIGINAL_SDK_NATIVE },
+  async () => {
+    const { loadSdkInput, validateSdkReport } = await import("./probe-sdk.mjs");
+    const input = loadSdkInput({
+      path: process.env.EVENTARC_ORIGINAL_SDK_NATIVE,
+      sha256: hash(readFileSync(process.env.EVENTARC_ORIGINAL_SDK_NATIVE)),
+      sdkDir: "unused",
+    });
+    const original = JSON.parse(readFileSync(process.env.EVENTARC_ORIGINAL_SDK_REPORT, "utf8"));
+    validateSdkReport(original, input);
+    for (const modify of [
+      (value) => {
+        value.calls[1].outcome.threw = true;
+      },
+      (value) => {
+        value.sdkWire[1].request.body.events[0].source = "different";
+      },
+      (value) => {
+        value.sdkWire[1].response.status = 404;
+      },
+      (value) => {
+        value.calls = [];
+      },
+      (value) => {
+        value.fixtureOnly = true;
+      },
+      (value) => {
+        value.sdkResolved = {};
+      },
+    ]) {
+      const changed = structuredClone(original);
+      modify(changed);
+      for (const wire of changed.sdkWire) {
+        const bytes = Buffer.from(JSON.stringify(wire.response.body));
+        wire.response.bodyBase64 = bytes.toString("base64");
+        wire.response.bodyBytes = bytes.length;
+        wire.response.bodySha256 = hash(bytes);
+        wire.response.headers["content-length"] = String(bytes.length);
+      }
+      assert.throws(() => validateSdkReport(changed, input));
+    }
+  },
+);
+
+test("production single and three event wire drift cannot hide behind fixed pending rows", async () => {
+  const { validatePublishParity } = await import("./run.mjs");
+  const rows = readFileSync(new URL("./fixtures/ad/B.jsonl", import.meta.url), "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map(JSON.parse);
+  const native = rows.filter((entry) => [81, 82].includes(entry.n));
+  const wire = native.map((entry) => {
+    const bytes = Buffer.from(JSON.stringify(entry.response.body));
+    return {
+      n: entry.n,
+      status: entry.response.status,
+      responseBase64: bytes.toString("base64"),
+      responseBytes: bytes.length,
+      responseSha256: hash(bytes),
+    };
+  });
+  validatePublishParity(native, wire);
+  for (const modify of [
+    (value) => {
+      value[0].status = 404;
+    },
+    (value) => {
+      const bytes = Buffer.from('{"incorrect":true}');
+      value[1].responseBase64 = bytes.toString("base64");
+      value[1].responseBytes = bytes.length;
+      value[1].responseSha256 = hash(bytes);
+    },
+    (value) => {
+      value.pop();
+    },
+    (value) => {
+      value.push(structuredClone(value[0]));
+    },
+  ]) {
+    const changed = structuredClone(wire);
+    modify(changed);
+    assert.throws(() => validatePublishParity(native, changed));
+  }
+});
+
+const retainedBodyCache = new Map();
+function retainedBytes(path) {
+  const key = String(path);
+  if (!retainedBodyCache.has(key)) retainedBodyCache.set(key, readFileSync(path));
+  return retainedBodyCache.get(key);
+}
+function connectedSemanticFixture(t) {
+  const f = exportFixture(t),
+    directory = join(f.dir, "ad");
+  mkdirSync(directory);
+  for (const name of [
+    "provenance.json",
+    "witness-plan.json",
+    "A1.jsonl",
+    "A2.jsonl",
+    "B.jsonl",
+    "C.jsonl",
+    "D.jsonl",
+  ])
+    writeFileSync(
+      join(directory, name),
+      retainedBytes(new URL(`./fixtures/ad/${name}`, import.meta.url)),
+    );
+  writeFileSync(
+    join(directory, "sdk-outcomes.json"),
+    retainedBytes(process.env.EVENTARC_SDK_OUTCOMES),
+  );
+  const inputs = loadInputs(directory);
+  f.e.inputPins = inputs.pins;
+  f.e.physicalInputPins = Object.fromEntries(
+    Object.keys(inputs.pins).map((name) => [
+      join(directory, name),
+      hash(readFileSync(join(directory, name))),
+    ]),
+  );
+  const sdk = JSON.parse(retainedBytes(process.env.EVENTARC_ORIGINAL_SDK_REPORT));
+  // Genuine retained bodies; supervision below is a unit-test double, never a historical outer verdict.
+  for (const entry of f.e.sessions) {
+    if (entry.phase === "raw") {
+      const native = inputs.corpora[entry.label].rows.filter((row) => row.response && row.request);
+      entry.report.wire = native.map((row) => {
+        const historical = entry.label === "C" && [182, 183, 307].includes(row.n);
+        const bytes = Buffer.from(JSON.stringify(historical ? {} : row.response.body));
+        return {
+          n: row.n,
+          method: row.request.method,
+          path: row.request.path,
+          status: historical ? 200 : row.response.status,
+          responseBase64: bytes.toString("base64"),
+          responseBytes: bytes.length,
+          responseSha256: hash(bytes),
+        };
+      });
+    }
+    if (entry.phase === "facets") {
+      const name = { B: "facets-B-FEq3is", C: "facets-C-TXzo23", D: "facets-D-DkMbM6" }[
+        entry.label
+      ];
+      entry.report = JSON.parse(
+        retainedBytes(join(process.env.EVENTARC_ORIGINAL_FACET_DIR, name, "report.json")),
+      );
+      if (entry.label === "B") entry.report.sdk = structuredClone(sdk);
+      const visit = (value) => {
+        if (!value || typeof value !== "object") return;
+        for (const [key, item] of Object.entries(value)) {
+          if (
+            ["source", "inventorySource", "createSource", "deleteSource"].includes(key) &&
+            item?.path
+          ) {
+            f.e.physicalInputPins[item.path] = item.sha256;
+          } else visit(item);
+        }
+      };
+      visit(entry.report);
+    }
+  }
+  f.rebind = () => {
+    for (const entry of f.e.sessions) {
+      const path = Object.keys(f.e.sessionPins).find((path) =>
+        path.endsWith(`/${entry.id}/report.json`),
+      );
+      writeFileSync(path, JSON.stringify(entry.report));
+      f.e.sessionPins[path] = hash(readFileSync(path));
+    }
+    f.persist();
+  };
+  f.rebind();
+  return f;
+}
+const connectedEnabled = !!(
+  process.env.EVENTARC_ORIGINAL_FACET_DIR &&
+  process.env.EVENTARC_ORIGINAL_SDK_REPORT &&
+  process.env.EVENTARC_SDK_OUTCOMES
+);
+test(
+  "genuine retained original semantics connect strict export to release consumer with pending rows",
+  { skip: !connectedEnabled },
+  async (t) => {
+    const { compareLaneExport } = await import("../release-strict-regression.mjs");
+    const f = connectedSemanticFixture(t),
+      comparison = exportComparison(f);
+    assert.deepEqual(compareLaneExport(comparison, comparison, comparison.artifactSha256), []);
+    assert.ok(
+      comparison.semanticInputs.rawComparands.B.some(
+        (row) => row.n === 35 && row.op === "listChannels",
+      ),
+      "genuine numeric alias LIST retained",
+    );
+    assert.equal(comparison.rows.length, 70);
+    assert.ok(comparison.rows.every((row) => row.status === "PENDING"));
+  },
+);
+
+test(
+  "connected semantic export rejects rehashed wire, SDK and lifecycle counterexamples",
+  { skip: !connectedEnabled },
+  async (t) => {
+    const { compareLaneExport } = await import("../release-strict-regression.mjs");
+    const f = connectedSemanticFixture(t),
+      expected = exportComparison(f),
+      original = structuredClone(f.e.sessions);
+    const raw = (value) =>
+      value.find((entry) => entry.phase === "raw" && entry.label === "B").report;
+    const facet = (value) =>
+      value.find((entry) => entry.phase === "facets" && entry.label === "B").report;
+    const sdk = (value) => facet(value).sdk;
+    const terminal = (report) =>
+      report.proofs.find((proof) => proof.kind === "own-operation-terminal");
+    const cases = [
+      [
+        "numeric alias wrong topic project",
+        (value) => {
+          const wire = raw(value).wire.find((wire) => wire.n === 35);
+          const body = JSON.parse(Buffer.from(wire.responseBase64, "base64").toString());
+          body.channels[0].pubsubTopic = body.channels[0].pubsubTopic.replace(
+            /^projects\/[^/]+\//,
+            "projects/foreign/",
+          );
+          const bytes = Buffer.from(JSON.stringify(body));
+          Object.assign(wire, {
+            responseBase64: bytes.toString("base64"),
+            responseBytes: bytes.length,
+            responseSha256: hash(bytes),
+          });
+        },
+      ],
+      ...[
+        ["unexpected resource", { channels: [{ name: "foreign" }] }],
+        ["unexpected field", { extra: true }],
+        ["unexpected type", []],
+        ["unexpected status", null],
+      ].map(([name, body]) => [
+        "empty LIST " + name,
+        (value) => {
+          const report = value.find(
+            (entry) => entry.phase === "raw" && entry.label === "A1",
+          ).report;
+          const wire = report.wire.find((wire) => wire.n === 6);
+          if (body === null) wire.status = 404;
+          else {
+            const bytes = Buffer.from(JSON.stringify(body));
+            Object.assign(wire, {
+              responseBase64: bytes.toString("base64"),
+              responseBytes: bytes.length,
+              responseSha256: hash(bytes),
+            });
+          }
+        },
+      ]),
+      [
+        "successful raw lifecycle type",
+        (value) => {
+          const candidate = expected.semanticInputs.rawComparands.B.find(
+            (native) => native.op === "getChannel" && native.response.status === 200,
+          );
+          assert.ok(candidate, "successful native lifecycle comparand retained");
+          const report = value.find((entry) => entry.phase === "raw" && entry.label === "B").report;
+          const wire = report.wire.find((wire) => wire.n === candidate.n);
+          const body = JSON.parse(Buffer.from(wire.responseBase64, "base64").toString());
+          body.uid = 42;
+          const bytes = Buffer.from(JSON.stringify(body));
+          Object.assign(wire, {
+            responseBase64: bytes.toString("base64"),
+            responseBytes: bytes.length,
+            responseSha256: hash(bytes),
+          });
+        },
+      ],
+      [
+        "successful raw operation identity",
+        (value) => {
+          const candidate = expected.semanticInputs.rawComparands.B.find(
+            (native) => native.op === "getOperation" && native.response.status === 200,
+          );
+          assert.ok(candidate, "successful native operation comparand retained");
+          const report = value.find((entry) => entry.phase === "raw" && entry.label === "B").report;
+          const wire = report.wire.find((wire) => wire.n === candidate.n);
+          const body = JSON.parse(Buffer.from(wire.responseBase64, "base64").toString());
+          body.metadata.target += "-foreign";
+          const bytes = Buffer.from(JSON.stringify(body));
+          Object.assign(wire, {
+            responseBase64: bytes.toString("base64"),
+            responseBytes: bytes.length,
+            responseSha256: hash(bytes),
+          });
+        },
+      ],
+      [
+        "lifecycle auth/error response remains nonexempt",
+        (value) => {
+          const candidate = Object.values(expected.semanticInputs.rawComparands)
+            .flat()
+            .find((native) => native.op === "getChannel" && native.response.status !== 200);
+          assert.ok(candidate, "native auth/error comparand retained");
+          const report = value.find(
+            (entry) =>
+              entry.phase === "raw" &&
+              entry.report.wire.some(
+                (wire) => wire.n === candidate.n && wire.status === candidate.response.status,
+              ),
+          ).report;
+          report.wire.find((wire) => wire.n === candidate.n).status = 200;
+        },
+      ],
+      [
+        "single publish status",
+        (value) => {
+          raw(value).wire.find((wire) => wire.n === 81).status = 404;
+        },
+      ],
+      [
+        "three publish body",
+        (value) => {
+          const bytes = Buffer.from('{"unexpected":true}');
+          Object.assign(
+            raw(value).wire.find((wire) => wire.n === 82),
+            {
+              responseBase64: bytes.toString("base64"),
+              responseBytes: bytes.length,
+              responseSha256: hash(bytes),
+            },
+          );
+        },
+      ],
+      [
+        "SDK relative outcome",
+        (value) => {
+          sdk(value).calls[1].outcome.threw = true;
+        },
+      ],
+      [
+        "SDK relative forward",
+        (value) => {
+          sdk(value).sdkWire[1].request.body.events[0].source = "different";
+        },
+      ],
+      [
+        "HTTP-only evidence",
+        (value) => {
+          delete facet(value).sdk;
+        },
+      ],
+      [
+        "ownwalk missing member",
+        (value) => {
+          const report = facet(value),
+            proof = report.proofs.find((proof) => proof.kind === "own-cursor-walk");
+          report.exchanges[proof.pages.at(-1)].body.channels.pop();
+        },
+      ],
+      [
+        "ownwalk duplicate",
+        (value) => {
+          const report = facet(value),
+            proof = report.proofs.find((proof) => proof.kind === "own-cursor-walk");
+          report.exchanges[proof.pages.at(-1)].body.channels[0] = structuredClone(
+            report.exchanges[proof.pages[0]].body.channels[0],
+          );
+        },
+      ],
+      [
+        "ownwalk count",
+        (value) => {
+          facet(value).proofs.find((proof) => proof.kind === "own-cursor-walk").resourceCount++;
+        },
+      ],
+      [
+        "terminal identity",
+        (value) => {
+          const report = facet(value),
+            proof = terminal(report);
+          report.exchanges[proof.terminalExchange].body.name += "x";
+        },
+      ],
+      [
+        "nonterminal operation",
+        (value) => {
+          const report = facet(value),
+            proof = terminal(report);
+          report.exchanges[proof.terminalExchange].body.done = false;
+        },
+      ],
+      [
+        "deleted resource200",
+        (value) => {
+          const report = facet(value),
+            proof = terminal(report);
+          report.exchanges[proof.readbackExchange].response.status = 200;
+        },
+      ],
+      [
+        "missing selected lifecycle case",
+        (value) => {
+          facet(value).proofs.pop();
+        },
+      ],
+      [
+        "nonexempt gap",
+        (value) => {
+          const report = value.find((entry) => entry.phase === "raw" && entry.label === "C").report;
+          report.wire.find((wire) => wire.n === 184).status = 200;
+        },
+      ],
+    ];
+    for (const [name, modify] of cases) {
+      f.e.sessions = structuredClone(original);
+      modify(f.e.sessions);
+      for (const entry of f.e.sessions.filter((entry) => entry.phase === "facets")) {
+        for (const report of [entry.report, entry.report.sdk].filter(Boolean))
+          for (const exchange of report.exchanges) {
+            const bytes = Buffer.from(JSON.stringify(exchange.body));
+            Object.assign(exchange.response, {
+              base64: bytes.toString("base64"),
+              bytes: bytes.length,
+              sha256: hash(bytes),
+              text: bytes.toString(),
+            });
+            exchange.response.headers["content-length"] = String(bytes.length);
+          }
+      }
+      f.rebind();
+      assert.throws(() => exportComparison(f), undefined, name);
+    }
+    for (const [name, modify] of [
+      [
+        "missing historical disclosure",
+        (value) => {
+          value.limitations.historicalPublish404.cases.pop();
+        },
+      ],
+      [
+        "widened historical exemption",
+        (value) => {
+          value.limitations.historicalPublish404.cases.push("C184");
+        },
+      ],
+      [
+        "missing mock-auth qualification",
+        (value) => {
+          delete value.limitations.mockCredentialCatalog;
+        },
+      ],
+      [
+        "SDK outer IdentityRefused retained",
+        (value) => {
+          value.sdk.supervision = {
+            complete: false,
+            failure: { name: "IdentityRefused" },
+            ownedAbsence: false,
+            ownershipUnresolved: true,
+          };
+        },
+      ],
+    ]) {
+      const changed = structuredClone(expected);
+      modify(changed);
+      assert.notDeepEqual(compareLaneExport(expected, changed, expected.artifactSha256), [], name);
+    }
+  },
+);
+
+test("generated publish mutations preserve hash integrity while violating production parity", async () => {
+  const { validatePublishParity } = await import("./run.mjs");
+  const rows = JSON.parse("[]");
+  rows.push(
+    ...retainedBytes(new URL("./fixtures/ad/B.jsonl", import.meta.url))
+      .toString()
+      .split("\n")
+      .filter(Boolean)
+      .map(JSON.parse)
+      .filter((row) => [81, 82].includes(row.n)),
+  );
+  let state = 0x13579bdf;
+  for (let trial = 0; trial < 32; trial++) {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    const wire = rows.map((row) => {
+      const bytes = Buffer.from(JSON.stringify(row.response.body));
+      return {
+        n: row.n,
+        status: row.response.status,
+        responseBase64: bytes.toString("base64"),
+        responseBytes: bytes.length,
+        responseSha256: hash(bytes),
+      };
+    });
+    if (state & 1) wire.reverse();
+    validatePublishParity(rows, wire);
+    const selected = wire[state % 2];
+    if (trial % 2) selected.status = 201 + (state % 399);
+    else {
+      const bytes = Buffer.from(JSON.stringify({ mutation: state }));
+      Object.assign(selected, {
+        responseBase64: bytes.toString("base64"),
+        responseBytes: bytes.length,
+        responseSha256: hash(bytes),
+      });
+    }
+    assert.throws(() => validatePublishParity(rows, wire), undefined, `seeded trial ${trial}`);
+  }
+});
+
+test("direct check loads its explicit native input directory before any binary invocation", async (t) => {
+  const { spawnSync } = await import("node:child_process");
+  const directory = mkdtempSync(join(tmpdir(), "ea-explicit-input-"));
+  t.after(() => rmSync(directory, { recursive: true }));
+  const selected = join(directory, "selected");
+  mkdirSync(selected);
+  const result = spawnSync(
+    process.execPath,
+    [
+      new URL("./run.mjs", import.meta.url).pathname,
+      "check",
+      "--binary",
+      join(directory, "nonexistent-binary"),
+      "--out",
+      join(directory, "out"),
+      "--input-directory",
+      selected,
+    ],
+    { encoding: "utf8", timeout: 5000 },
+  );
+  assert.equal(result.status, 1);
+  assert.ok(result.stderr.includes(join(selected, "provenance.json")), result.stderr);
+});
+
+function rehashSemanticSessions(f) {
+  for (const entry of f.e.sessions) {
+    if (entry.phase === "raw") continue;
+    for (const report of [entry.report, entry.report.sdk].filter(Boolean))
+      for (const exchange of report.exchanges) {
+        const bytes = Buffer.from(JSON.stringify(exchange.body));
+        Object.assign(exchange.response, {
+          base64: bytes.toString("base64"),
+          bytes: bytes.length,
+          sha256: hash(bytes),
+          text: bytes.toString(),
+        });
+        exchange.response.headers["content-length"] = String(bytes.length);
+      }
+  }
+  f.rebind();
+}
+function replaceRawBody(wire, body) {
+  const bytes = Buffer.from(JSON.stringify(body));
+  Object.assign(wire, {
+    responseBase64: bytes.toString("base64"),
+    responseBytes: bytes.length,
+    responseSha256: hash(bytes),
+  });
+}
+test(
+  "reviewed lifecycle variants and every intermediate response connect export and consumer",
+  { skip: !connectedEnabled },
+  async (t) => {
+    const { compareLaneExport } = await import("../release-strict-regression.mjs");
+    const f = connectedSemanticFixture(t),
+      expected = exportComparison(f),
+      original = structuredClone(f.e.sessions);
+    const raw = () => f.e.sessions.find((x) => x.phase === "raw" && x.label === "B").report;
+    const facet = () => f.e.sessions.find((x) => x.phase === "facets" && x.label === "B").report;
+    const native = expected.semanticInputs.rawComparands.B;
+    const resources = native
+      .flatMap((x) => x.response.body?.channels ?? [x.response.body?.response, x.response.body])
+      .filter((x) => x?.state === "ACTIVE");
+    const unfinished = native.find(
+      (x) =>
+        ["createChannel", "getOperation"].includes(x.op) &&
+        x.response.status === 200 &&
+        x.response.body.done === false &&
+        resources.some((r) => r.name === x.response.body.metadata.target),
+    );
+    assert.ok(unfinished, "original unfinished operation with pinned terminal authority");
+    const terminalBody = () => {
+      const b = structuredClone(unfinished.response.body);
+      b.metadata = { ...b.metadata };
+      const { createTime, target, verb, requestedCancellation, apiVersion } = b.metadata;
+      b.metadata = {
+        "@type": b.metadata["@type"],
+        createTime,
+        endTime: createTime,
+        target,
+        verb,
+        requestedCancellation,
+        apiVersion,
+      };
+      b.done = true;
+      b.response = {
+        "@type": "type.googleapis.com/google.cloud.eventarc.v1.Channel",
+        ...structuredClone(resources.find((r) => r.name === target)),
+      };
+      return b;
+    };
+    const page = native.find(
+      (x) =>
+        x.op === "listChannels" &&
+        x.response.body?.nextPageToken &&
+        x.response.body.channels.length &&
+        Object.values(expected.semanticInputs.lifecycleInventories.B)
+          .flat()
+          .some((r) => !x.response.body.channels.some((c) => c.name === r.name)),
+    );
+    assert.ok(page, "original page with complete native inventory");
+    const moved = Object.values(expected.semanticInputs.lifecycleInventories.B)
+      .flat()
+      .find((r) => !page.response.body.channels.some((c) => c.name === r.name));
+    const tail = native.find(
+      (x) =>
+        x.op === "listChannels" &&
+        new URLSearchParams(x.request.path.split("?")[1]).get("pageToken") &&
+        Array.isArray(x.response.body?.channels) &&
+        !Object.hasOwn(x.response.body, "nextPageToken") &&
+        Object.values(expected.semanticInputs.lifecycleInventories.B)
+          .flat()
+          .some((r) => !x.response.body.channels.some((c) => c.name === r.name)),
+    );
+    assert.ok(tail, "genuine terminal continuation page");
+    const tailMoved = Object.values(expected.semanticInputs.lifecycleInventories.B)
+      .flat()
+      .find((r) => !tail.response.body.channels.some((c) => c.name === r.name));
+    const positive = [
+      [
+        "changed terminal continuation page",
+        () => {
+          const body = structuredClone(tail.response.body);
+          body.channels = [structuredClone(tailMoved)];
+          replaceRawBody(
+            raw().wire.find((w) => w.n === tail.n),
+            body,
+          );
+        },
+      ],
+      [
+        "changed done timing",
+        () =>
+          replaceRawBody(
+            raw().wire.find((w) => w.n === unfinished.n),
+            terminalBody(),
+          ),
+      ],
+      [
+        "changed native page placement",
+        () => {
+          const body = structuredClone(page.response.body);
+          body.channels = [structuredClone(moved)];
+          replaceRawBody(
+            raw().wire.find((w) => w.n === page.n),
+            body,
+          );
+          const report = facet(),
+            walk = report.proofs.find((p) => p.kind === "own-cursor-walk");
+          const a = report.exchanges[walk.pages[0]],
+            b = report.exchanges[walk.pages.at(-1)];
+          [a.body.channels[0], b.body.channels[0]] = [b.body.channels[0], a.body.channels[0]];
+        },
+      ],
+    ];
+    for (const [name, modify] of positive) {
+      f.e.sessions = structuredClone(original);
+      modify();
+      rehashSemanticSessions(f);
+      const actual = exportComparison(f);
+      assert.deepEqual(compareLaneExport(expected, actual, expected.artifactSha256), [], name);
+    }
+    const pairedReport = () =>
+      f.e.sessions.find(
+        (entry) =>
+          entry.phase === "facets" &&
+          entry.report.proofs.some((p) => p.kind === "paired-own-operation-terminals"),
+      ).report;
+    const paired = () =>
+      pairedReport().proofs.find((p) => p.kind === "paired-own-operation-terminals");
+    const intermediate = () => {
+      const report = facet(),
+        p = report.proofs.find(
+          (p) =>
+            p.kind === "own-operation-terminal" &&
+            report.exchanges.some(
+              (e) =>
+                e.id > p.issuedExchange &&
+                e.id < p.terminalExchange &&
+                e.request.path === `/v1/${p.name}` &&
+                !e.body.done,
+            ),
+        );
+      assert.ok(p, "retained genuine nonterminal poll");
+      return report.exchanges.find(
+        (e) =>
+          e.id > p.issuedExchange &&
+          e.id < p.terminalExchange &&
+          e.request.path === `/v1/${p.name}` &&
+          !e.body.done,
+      );
+    };
+    const negatives = [
+      [
+        "terminal wrong topic authority",
+        () => {
+          const b = terminalBody();
+          b.response.pubsubTopic = b.response.pubsubTopic.replace(
+            /^projects\/[^/]+\//,
+            "projects/foreign/",
+          );
+          replaceRawBody(
+            raw().wire.find((w) => w.n === unfinished.n),
+            b,
+          );
+        },
+      ],
+      [
+        "terminal extra nested field",
+        () => {
+          const b = terminalBody();
+          b.response.unexpected = true;
+          replaceRawBody(
+            raw().wire.find((w) => w.n === unfinished.n),
+            b,
+          );
+        },
+      ],
+      [
+        "terminal missing nested field",
+        () => {
+          const b = terminalBody();
+          delete b.response.uid;
+          replaceRawBody(
+            raw().wire.find((w) => w.n === unfinished.n),
+            b,
+          );
+        },
+      ],
+      [
+        "LIST extra nested field",
+        () => {
+          const b = structuredClone(page.response.body);
+          b.channels[0].unexpected = true;
+          replaceRawBody(
+            raw().wire.find((w) => w.n === page.n),
+            b,
+          );
+        },
+      ],
+      [
+        "LIST missing nested field",
+        () => {
+          const b = structuredClone(page.response.body);
+          delete b.channels[0].uid;
+          replaceRawBody(
+            raw().wire.find((w) => w.n === page.n),
+            b,
+          );
+        },
+      ],
+      [
+        "LIST foreign inventory member",
+        () => {
+          const b = structuredClone(page.response.body);
+          b.channels[0].name += "-foreign";
+          replaceRawBody(
+            raw().wire.find((w) => w.n === page.n),
+            b,
+          );
+        },
+      ],
+      [
+        "retained detached intermediate exchange",
+        () => {
+          const row = intermediate();
+          row.request.path = "/v1/foreign";
+          row.derivedFrom = null;
+          row.body = { unexpected: true };
+        },
+      ],
+      [
+        "retained intermediate malformed body",
+        () => {
+          intermediate().body = { unexpected: true };
+        },
+      ],
+      [
+        "retained intermediate status",
+        () => {
+          intermediate().response.status = 404;
+        },
+      ],
+      [
+        "retained intermediate own path",
+        () => {
+          intermediate().request.path += "/foreign";
+        },
+      ],
+      [
+        "retained intermediate metadata continuity",
+        () => {
+          intermediate().body.metadata.createTime = "2000-01-01T00:00:00.000000000Z";
+        },
+      ],
+      [
+        "retained intermediate chronology",
+        () => {
+          intermediate().sentMonotonicMs = 0;
+          intermediate().receivedMonotonicMs = 0;
+        },
+      ],
+      [
+        "retained terminal extra nested field",
+        () => {
+          const p = paired();
+          assert.ok(p);
+          pairedReport().exchanges[p.createTerminalExchange].body.response.unexpected = true;
+        },
+      ],
+      [
+        "paired unfinished channel status",
+        () => {
+          const p = paired();
+          assert.ok(p);
+          pairedReport().exchanges[p.start.channelExchange].response.status = 404;
+        },
+      ],
+      [
+        "paired unfinished channel shape",
+        () => {
+          const p = paired();
+          assert.ok(p);
+          pairedReport().exchanges[p.start.channelExchange].body.unexpected = true;
+        },
+      ],
+      [
+        "paired unfinished channel path",
+        () => {
+          const p = paired();
+          assert.ok(p);
+          pairedReport().exchanges[p.start.channelExchange].request.path += "/foreign";
+        },
+      ],
+      [
+        "paired unfinished operation status",
+        () => {
+          const p = paired();
+          assert.ok(p);
+          pairedReport().exchanges[p.start.operationExchange].response.status = 404;
+        },
+      ],
+      [
+        "paired unfinished operation createTime",
+        () => {
+          const p = paired();
+          assert.ok(p);
+          pairedReport().exchanges[p.start.operationExchange].body.metadata.createTime =
+            "2000-01-01T00:00:00.000000000Z";
+        },
+      ],
+    ];
+    for (const [name, modify] of negatives) {
+      f.e.sessions = structuredClone(original);
+      modify();
+      rehashSemanticSessions(f);
+      assert.throws(() => exportComparison(f), undefined, name);
+      const actual = comparisonFromEvidence(f.e, expected.semanticInputs);
+      assert.notDeepEqual(compareLaneExport(expected, actual, expected.artifactSha256), [], name);
+    }
+  },
+);

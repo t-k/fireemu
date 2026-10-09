@@ -19,6 +19,7 @@
 //
 // The runs are sequential: several harnesses listen on fixed loopback ports (32291-32298,
 // 32320-32322).
+import { validateEventarcSemantics } from "./eventarc-production/run.mjs";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
@@ -365,6 +366,47 @@ export const RUNS = [
       },
     ],
   },
+  {
+    id: "R20",
+    kind: "eventarc-production-comparison-v1",
+    rowPrefix: "eventarc/",
+    clear: ["eventarc-production"],
+    commands: [
+      {
+        mode: "check",
+        argv: [
+          "{functionsNode}",
+          "conformance/src/eventarc-production/run.mjs",
+          "check",
+          "--binary",
+          "{bin}",
+          "--out",
+          "{export}.check",
+        ],
+        env: {},
+        expectedExitCodes: [0],
+        timeoutMs: 7420000,
+      },
+      {
+        mode: "export-comparison",
+        argv: [
+          "{functionsNode}",
+          "conformance/src/eventarc-production/run.mjs",
+          "export-comparison",
+          "--binary",
+          "{bin}",
+          "--out",
+          "{export}.check",
+          "--evidence",
+          "{export}.check/check-evidence.json",
+          "--comparison",
+          "{export}",
+        ],
+        env: {},
+        expectedExitCodes: [0],
+      },
+    ],
+  },
 ];
 
 /** Composite comparison files: which part each run covers. Other keys are metadata. */
@@ -565,9 +607,19 @@ export function planComparisons(
   const errors = exclusionErrors(excludedKinds, allRuns);
   const byPath = new Map();
   for (const entry of closures) {
-    if (entry.closure.parentStatus !== "COMPAT_VERIFIED") continue;
     const parent = parentName(entry);
     const comparisons = entry.closure.integratedRegression?.comparisons;
+    const pendingEventarc = parent === "EVENTARC" && entry.closure.parentStatus === "IMPLEMENTING";
+    if (entry.closure.parentStatus !== "COMPAT_VERIFIED" && !pendingEventarc) continue;
+    if (
+      pendingEventarc &&
+      (!Array.isArray(comparisons) ||
+        comparisons.length !== 1 ||
+        comparisons[0]?.path !== "spec/compatibility/closure/evidence/EVENTARC-comparison.json")
+    ) {
+      errors.push("EVENTARC: R20 requires its authentic integratedRegression comparison");
+      continue;
+    }
     if (!Array.isArray(comparisons) || comparisons.length === 0) {
       errors.push(`${parent}: COMPAT_VERIFIED without integratedRegression comparisons`);
       continue;
@@ -583,6 +635,27 @@ export function planComparisons(
   for (const [path, parents] of byPath) {
     const document = readJson(path);
     const kind = document?.kind;
+    if (parents.has("EVENTARC") && kind !== "eventarc-production-comparison-v1") {
+      errors.push(`${path}: R20 requires its EVENTARC comparison kind`);
+      continue;
+    }
+    if (
+      kind === "eventarc-production-comparison-v1" &&
+      (document.parent !== "EVENTARC" ||
+        !Array.isArray(document.rows) ||
+        document.rows.length === 0 ||
+        document.rows.some(
+          (row) =>
+            row.transport !==
+            (/^eventarc\/(?:final|closure)#/.test(rowKey(row)) ? "artifact" : "rest"),
+        ) ||
+        new Set(document.rows.map(rowKey)).size !== document.rows.length)
+    ) {
+      errors.push(
+        `${path}: R20 requires unique nonempty EVENTARC rows with their declared transports`,
+      );
+      continue;
+    }
     const runs = runsForComparison(allRuns, kind, document, path, errors);
     if (runs === undefined) continue;
     if (runs.length === 0) {
@@ -665,7 +738,23 @@ export function compareLaneExport(expected, actual, binarySha256) {
     return ["no comparison was exported"];
   }
   const differences = [];
-  for (const field of ["kind", "fixtureSha256", "summary"]) {
+  const fields = ["kind", "fixtureSha256", "summary"];
+  if (expected.kind === "eventarc-production-comparison-v1") {
+    fields.push(
+      "parent",
+      "schemaVersion",
+      "inputPins",
+      "fixturePins",
+      "sourcePins",
+      "semanticInputs",
+    );
+    try {
+      validateEventarcSemantics(actual);
+    } catch (error) {
+      differences.push(`EVENTARC semantic evidence: ${error.message}`);
+    }
+  }
+  for (const field of fields) {
     if (!isDeepStrictEqual(expected[field], actual[field])) {
       differences.push(`${field}: expected ${brief(expected[field])} got ${brief(actual[field])}`);
     }
@@ -1003,7 +1092,9 @@ function killGroup(pid, signal) {
 }
 
 /** Runs one command in its own process group, with a deadline, logging to `logPath`. */
-async function runCommand(argv, env, cwd, logPath) {
+async function runCommand(argv, env, cwd, logPath, timeoutMs = COMMAND_TIMEOUT_MS) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)
+    throw new Error("positive safe command timeout required");
   const started = Date.now();
   const child = spawn(argv[0], argv.slice(1), {
     cwd,
@@ -1021,7 +1112,7 @@ async function runCommand(argv, env, cwd, logPath) {
   const timer = setTimeout(() => {
     timedOut = true;
     killGroup(child.pid, "SIGKILL");
-  }, COMMAND_TIMEOUT_MS);
+  }, timeoutMs);
   const exitCode = await new Promise((done) => {
     child.once("error", (error) => {
       append(`${error.stack}\n`);
@@ -1076,9 +1167,15 @@ export async function runEntry(run, context) {
       env.PATH = `${dirname(context.functionsNode)}:${env.PATH}`;
     }
     const logPath = join(context.out, "logs", `${run.id}-${index + 1}-${command.mode}.log`);
-    const result = await runCommand(argv, env, ROOT, logPath);
+    const result = await runCommand(argv, env, ROOT, logPath, command.timeoutMs);
     outputs.push(result.output);
-    record.commands.push({ mode: command.mode, argv, exitCode: result.exitCode, ms: result.ms });
+    record.commands.push({
+      mode: command.mode,
+      argv,
+      timeoutMs: command.timeoutMs ?? COMMAND_TIMEOUT_MS,
+      exitCode: result.exitCode,
+      ms: result.ms,
+    });
     if (!command.expectedExitCodes.includes(result.exitCode)) {
       record.errors.push(
         `${command.mode} exited ${result.exitCode}, expected ${command.expectedExitCodes.join(" or ")}`,

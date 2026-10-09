@@ -46,7 +46,7 @@ export const categoryCaps = (group) =>
       }
     : { resourceRead: 6, unknownDeleteRead: 6 };
 export function makePlan({ selection = "full" } = {}) {
-  if (!["full", "remaining-gap"].includes(selection))
+  if (!["full", "remaining-gap", "snapshot-origin-witness"].includes(selection))
     throw new Error("fixed observation selection mismatch");
   const cells = [];
   const coordinates = {
@@ -97,29 +97,42 @@ export function makePlan({ selection = "full" } = {}) {
       predecessor: original,
       activation: "explicit reason and settled predecessor only",
     });
-  const gap = selection === "remaining-gap";
-  const selected = gap
-    ? cells.filter(
-        (cell) => !cell.reserve && [1, 2, 3, 4, 5, 6, 8, 10, 11].includes(Number(cell.id.slice(1))),
-      )
-    : cells;
+  const gap = selection === "remaining-gap",
+    witness = selection === "snapshot-origin-witness";
+  const selected = witness
+    ? cells.filter((cell) => ["R11", "N11"].includes(cell.id))
+    : gap
+      ? cells.filter(
+          (cell) =>
+            !cell.reserve && [1, 2, 3, 4, 5, 6, 8, 10, 11].includes(Number(cell.id.slice(1))),
+        )
+      : cells;
   return {
     schema: 1,
-    ...(gap ? { selection } : {}),
+    ...(gap || witness ? { selection } : {}),
     suite: SUITE,
     project: PROJECT,
     groups: ["G2", "G7"],
     recordings: 2,
-    caps: gap
+    caps: witness
       ? {
           ...structuredClone(CAPS),
-          G2: { ...CAPS.G2, requests: 666, rest: 333, grpc: 333 },
-          sourceRequests: 666,
-          totalRequests: 680,
-          smallPublishes: 54,
-          sourceWallMs: 3240000,
+          G2: { ...CAPS.G2, requests: 68, rest: 34, grpc: 34 },
+          sourceRequests: 68,
+          totalRequests: 82,
+          smallPublishes: 4,
+          sourceWallMs: 360000,
         }
-      : structuredClone(CAPS),
+      : gap
+        ? {
+            ...structuredClone(CAPS),
+            G2: { ...CAPS.G2, requests: 666, rest: 333, grpc: 333 },
+            sourceRequests: 666,
+            totalRequests: 680,
+            smallPublishes: 54,
+            sourceWallMs: 3240000,
+          }
+        : structuredClone(CAPS),
     cells: selected,
     ackSelector: "NOT_COMPARABLE-until-observed",
     a2: { minAgeMs: 600000, resourceReads: 6, unknownDeleteReads: 6, iamReadsUnused: 2 },

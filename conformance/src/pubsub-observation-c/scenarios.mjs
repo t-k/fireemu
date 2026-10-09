@@ -535,7 +535,34 @@ export async function runCell({
           await ack(subscription, items);
         }
       } else if (cell.variant === "wrong-topic-snapshot") {
-        await publish([{}], manifest.otherTopic);
+        const [originId] = await publish([{}], manifest.otherTopic);
+        const originItems = await pull(manifest.origin, "snapshot-origin-delivery", {
+          attempts: 2,
+          required: true,
+          requiredMessageId: originId,
+        });
+        const originMessage = originItems.find(
+          (item) => item.message.messageId === originId,
+        )?.message;
+        const savedTime = originMessage?.publishTime;
+        const timestamp =
+          typeof savedTime === "string"
+            ? /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(?:\d{3}|\d{6}|\d{9}))?Z$/.exec(savedTime)
+            : null;
+        const seconds =
+          timestamp && Number(timestamp[1].slice(0, 4)) >= 1 ? Date.parse(`${timestamp[1]}Z`) : NaN;
+        if (
+          !Number.isFinite(seconds) ||
+          new Date(seconds).toISOString().slice(0, 19) !== timestamp[1]
+        )
+          throw new Error("exact origin saved publishTime witness required; NOT_COMPARABLE");
+        observe("snapshot-origin-saved-time", {
+          subscription: manifest.origin,
+          topic: manifest.otherTopic,
+          messageId: originId,
+          publishTime: savedTime,
+          acknowledged: false,
+        });
         await makeSnapshot();
         await publish([{}, {}]);
         const before = await pull(s, "target-before-wrong-Seek", { attempts: 3, required: true });

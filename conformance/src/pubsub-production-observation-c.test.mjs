@@ -338,7 +338,7 @@ function referenceWorld({
       body: receivedMessages.length ? { receivedMessages } : {},
     };
   };
-  return { resources, messages, calls, answer, pendingCancel, onPending };
+  return { resources, messages, calls, answer, pendingCancel, onPending, snapshots, acknowledged };
 }
 
 function referenceWire(meter, world, journal = { write() {} }) {
@@ -2320,4 +2320,329 @@ test("C R8 N8 predecessor search preserves unrelated batches within three attemp
       });
     }
   }
+});
+
+const supplementalCells = () =>
+  makePlan().cells.filter((c) => c.variant === "wrong-topic-snapshot");
+async function originWitnessWorld(
+  cell,
+  {
+    originAttempt = 1,
+    beforeAttempt = 1,
+    afterAttempt = 1,
+    epoch = 0,
+    fault = null,
+    latency = 0,
+    maxLatency = false,
+  } = {},
+) {
+  let clock = epoch,
+    originPulls = 0,
+    beforePulls = 0,
+    afterPulls = 0,
+    sought = false;
+  const manifest = scenarios.graph(cell, "123456abcdef"),
+    rows = [],
+    dispatches = [],
+    ledger = createLedger();
+  const elapsed = (method) =>
+    maxLatency ? (method.startsWith("Create") ? 80000 : 30000) : latency;
+  const world = referenceWorld({
+    now: () => clock,
+    clock: (method) => {
+      clock += elapsed(method);
+    },
+  });
+  const original = world.answer;
+  world.answer = (method, request) => {
+    if (method === "Seek") sought = true;
+    const origin = method === "Pull" && request.subscription === manifest.origin;
+    if (method === "Pull") {
+      const attempt = origin ? ++originPulls : sought ? ++afterPulls : ++beforePulls;
+      const required = origin ? originAttempt : sought ? afterAttempt : beforeAttempt;
+      if ((origin && fault === "empty") || attempt < required) {
+        world.calls.push({ method, request: structuredClone(request) });
+        clock += elapsed(method);
+        return { ok: true, code: "OK", status: 200, body: {} };
+      }
+    }
+    const reply = original(method, request);
+    if (
+      fault === "wrong-topic" &&
+      method === "CreateSubscription" &&
+      request.name === manifest.origin
+    )
+      world.resources.set(manifest.origin, {
+        ...world.resources.get(manifest.origin),
+        topic: manifest.topic,
+      });
+    if (origin && reply.body.receivedMessages?.length) {
+      const message = reply.body.receivedMessages[0].message;
+
+      if (fault === "foreign-id") message.messageId = "foreign";
+      if (fault === "foreign-payload") message.data = "Zm9yZWlnbg==";
+      if (fault === "foreign-marker") message.attributes = { recorderRun: "foreign" };
+    }
+    return reply;
+  };
+  const plan = makePlan({ selection: "snapshot-origin-witness" }),
+    meter = createMeter({ now: () => clock, plan });
+  meter.enter(cell);
+  const wire = referenceWire(meter, world, { write: (row) => rows.push(structuredClone(row)) });
+  const codecCall = wire.call;
+  wire.call = async (call) => {
+    dispatches.push({ ...structuredClone(call), at: clock });
+    const reply = await codecCall(call);
+    if (
+      call.method === "Pull" &&
+      call.request.subscription === manifest.origin &&
+      reply.body.receivedMessages?.length
+    ) {
+      const message = reply.body.receivedMessages[0].message;
+      if (fault === "missing-time") delete message.publishTime;
+      if (fault === "illegal-time") message.publishTime = "2026-02-30T00:00:00Z";
+      if (fault === "bad-time") message.publishTime = "not-a-timestamp";
+      if (fault === "fraction-width") message.publishTime = "2026-10-07T00:00:00.1Z";
+      if (fault === "year-zero") message.publishTime = "0000-01-01T00:00:00Z";
+      if (fault === "offset-time") message.publishTime = "2026-10-07T00:00:00+00:00";
+    }
+    return reply;
+  };
+  let result;
+  try {
+    result = await scenarios.runCell({
+      cell,
+      meter,
+      wire,
+      ledger,
+      runId: "123456abcdef",
+      journal: {
+        write: (row) => rows.push(structuredClone(row)),
+        recovery: (row) => rows.push({ event: "model-recovery", ...structuredClone(row) }),
+      },
+      sleep: async (ms) => {
+        clock += ms;
+      },
+    });
+  } finally {
+    wire.close();
+  }
+  return { result, world, rows, meter, manifest, clock, originPulls, dispatches };
+}
+
+test("C supplemental fixed selection preserves both transports and exact reduced caps", () => {
+  const plan = makePlan({ selection: "snapshot-origin-witness" });
+  assert.deepEqual(
+    plan.cells.map((c) => c.id),
+    ["R11", "N11"],
+  );
+  assert.deepEqual(plan.cells, supplementalCells());
+  assert.ok(plan.cells.every((c) => !c.reserve));
+  assert.deepEqual(plan.caps.G2, { requests: 68, rest: 34, grpc: 34, streams: 0, cellMs: 180000 });
+  assert.deepEqual(
+    [
+      plan.caps.sourceRequests,
+      plan.caps.totalRequests,
+      plan.caps.sourceWallMs,
+      plan.caps.smallPublishes,
+      plan.caps.cleanupReserveMs,
+    ],
+    [68, 82, 360000, 4, 40000],
+  );
+  assert.deepEqual(plan.caps.G7, CAPS.G7);
+  assert.deepEqual(plan.timeoutPolicy, makePlan().timeoutPolicy);
+  assert.deepEqual(validatePlan(plan), plan);
+  for (const mutate of [
+    (p) => p.cells.pop(),
+    (p) => p.caps.G2.requests++,
+    (p) => p.caps.sourceWallMs++,
+    (p) => (p.selection = "unknown"),
+  ]) {
+    const changed = structuredClone(plan);
+    mutate(changed);
+    assert.throws(() => validatePlan(changed));
+  }
+});
+
+test("C supplemental origin witness precedes Snapshot without ACK across bounded codec histories", async () => {
+  for (const cell of supplementalCells())
+    for (const epoch of [0, 3600000])
+      for (const originAttempt of [1, 2])
+        for (const beforeAttempt of [1, 2, 3])
+          for (const afterAttempt of [1, 2, 3]) {
+            const w = await originWitnessWorld(cell, {
+              epoch,
+              originAttempt,
+              beforeAttempt,
+              afterAttempt,
+              latency: 1000,
+            });
+            assert.equal(w.result.complete, true, w.result.reason);
+            assert.equal(w.result.cleanupClosed, true);
+            assert.equal(w.world.resources.size, 0);
+            assert.equal(w.originPulls, originAttempt);
+            const originPublish = w.world.calls.findIndex(
+              (c) => c.method === "Publish" && c.request.topic === w.manifest.otherTopic,
+            );
+            const originPull = w.world.calls.findIndex(
+              (c) => c.method === "Pull" && c.request.subscription === w.manifest.origin,
+            );
+            const snapshot = w.world.calls.findIndex((c) => c.method === "CreateSnapshot");
+            assert.ok(originPublish < originPull && originPull < snapshot);
+            assert.equal(
+              w.world.calls.filter(
+                (c) =>
+                  ["Acknowledge", "ModifyAckDeadline"].includes(c.method) &&
+                  c.request.subscription === w.manifest.origin,
+              ).length,
+              0,
+            );
+            const witness = w.result.observations.find(
+              (o) => o.stage === "snapshot-origin-saved-time",
+            );
+            const saved = w.world.messages.get(witness.messageId).message;
+            assert.equal(witness.publishTime, saved.publishTime);
+            assert.equal(witness.subscription, w.manifest.origin);
+            assert.equal(witness.topic, w.manifest.otherTopic);
+            assert.equal(witness.messageId, "own-1");
+            assert.equal(w.world.snapshots.get(w.manifest.snapshot).acknowledged.size, 0);
+            assert.equal(
+              w.world.calls.filter((c) => c.method === "Pull").length,
+              originAttempt + beforeAttempt + afterAttempt,
+            );
+            assert.equal(w.world.calls.length, 26 + originAttempt + beforeAttempt + afterAttempt);
+            assert.ok(w.world.calls.length <= 34);
+            assert.ok(w.rows.some((r) => r.event === "response" && r.transport === cell.transport));
+            assert.ok(
+              w.result.observations.some((o) => o.stage === "wrong-topic-Seek" && !o.reply.ok),
+            );
+            assert.ok(
+              w.result.observations.some((o) => o.stage === "target-config-after-wrong-Seek"),
+            );
+            assert.equal(
+              w.world.calls.filter(
+                (c) =>
+                  c.method === "Acknowledge" && c.request.subscription === w.manifest.subscription,
+              ).length,
+              2,
+            );
+            assert.equal(
+              w.world.calls.filter(
+                (c) =>
+                  c.method === "ModifyAckDeadline" &&
+                  c.request.subscription === w.manifest.subscription,
+              ).length,
+              1,
+            );
+          }
+});
+
+test("C supplemental absent malformed and foreign origin witnesses cannot complete", async () => {
+  for (const cell of supplementalCells())
+    for (const fault of [
+      "empty",
+      "missing-time",
+      "illegal-time",
+      "bad-time",
+      "foreign-id",
+      "foreign-payload",
+      "foreign-marker",
+      "wrong-topic",
+      "fraction-width",
+      "year-zero",
+      "offset-time",
+    ]) {
+      const w = await originWitnessWorld(cell, { fault });
+      assert.equal(w.result.complete, false, `${cell.id}/${fault}`);
+      assert.equal(w.result.cleanupClosed, true);
+      assert.equal(w.world.resources.size, 0);
+      assert.equal(w.world.calls.filter((c) => c.method === "CreateSnapshot").length, 0);
+      if (fault === "empty") assert.equal(w.originPulls, 2);
+    }
+});
+
+test("C supplemental near-cutoff and maximum legal timing remain incomplete with durable obligations", async () => {
+  for (const cell of supplementalCells())
+    for (const epoch of [0, 3600000])
+      for (const options of [
+        { latency: 10000, originAttempt: 2 },
+        { latency: 30000 },
+        { maxLatency: true },
+      ]) {
+        const w = await originWitnessWorld(cell, { ...options, epoch });
+        assert.equal(w.result.complete, false);
+        assert.ok(w.clock <= epoch + 180000 + 5 * 30000);
+        assert.equal(w.result.parityEstablished, false);
+        assert.ok(
+          w.result.cleanupClosed ||
+            w.rows.some((row) => row.event === "model-recovery" && row.obligations.length > 0),
+        );
+        for (const call of w.dispatches) {
+          const end = epoch + (call.category.startsWith("cleanup") ? 180000 : 140000);
+          assert.ok(call.at + minimumCallMs(call.method) <= end, `${cell.id}/${call.method}`);
+        }
+      }
+});
+
+test("C supplemental real meter enforces exact transport ceilings within unused category slots", () => {
+  const plan = makePlan({ selection: "snapshot-origin-witness" }),
+    meter = createMeter({ now: () => 0, plan });
+  const counts = {
+    create: 5,
+    get: 5,
+    publish: 2,
+    pull: 8,
+    ackControl: 3,
+    other: 1,
+    cleanupDelete: 5,
+    cleanupGet: 5,
+  };
+  for (const cell of plan.cells) {
+    meter.enter(cell);
+    for (const [category, count] of Object.entries(counts))
+      for (let i = 0; i < count; i++) meter.start(category, cell.transport);
+    assert.throws(() => meter.start("publish", cell.transport), /request cap/);
+  }
+  assert.equal(meter.snapshot().requests, 68);
+  assert.deepEqual(meter.snapshot().groups.G2, { requests: 68, rest: 34, grpc: 34, streams: 0 });
+});
+
+test("C supplemental admitted recorder completes exactly both fixed cells", async (t) => {
+  const plan = makePlan({ selection: "snapshot-origin-witness" });
+  await withCAdmission(t, plan, plan, async ({ admit, options }) => {
+    const admitted = admit(options),
+      signals = new EventEmitter();
+    let clock = 0;
+    t.mock.method(performance, "now", () => clock);
+    const world = referenceWorld({ now: () => clock });
+    const summary = await main(
+      [
+        "--record",
+        ...["authority", "descriptor", "packet", "E", "V", "lock", "run-id", "out"].flatMap(
+          (key) => [`--${key}`, key === "run-id" ? options.runId : options[key]],
+        ),
+      ],
+      {
+        admit: () => admitted,
+        sleep: async (ms) => {
+          clock += ms;
+        },
+        signals,
+        print() {},
+        setExitCode() {},
+        createCredentials: () => async () => "offline-fixture",
+        createWire: (o) => referenceWire(o.meter, world, o.journal),
+      },
+    );
+    assert.deepEqual(
+      summary.results.map((r) => r.cellId),
+      ["R11", "N11"],
+    );
+    assert.equal(summary.recordingComplete, true);
+    assert.equal(summary.resourcesClosed, true);
+    assert.equal(world.calls.length, 58);
+    assert.equal(world.resources.size, 0);
+    assert.equal(summary.parentClosureReady, false);
+    assert.equal(signals.listenerCount("SIGTERM") + signals.listenerCount("SIGINT"), 0);
+  });
 });

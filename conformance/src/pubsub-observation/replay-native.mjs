@@ -479,6 +479,10 @@ export function createNativeReplay({
             if (active.creditHeld || instant < active.deadlineUntilMs)
               throw new Error("native actual receive violated quiet interval");
           }
+          const evidence = publishTime?.(cell.id, active.subscription);
+          if (evidence && evidence.cellId !== cell.id)
+            throw new Error("native publication proof cell mismatch");
+          if (evidence) witnesses.get(cell.id).publishTime = evidence;
           if (active.unordered) {
             if (row.body.receivedMessages?.length !== 1 || actual.receivedMessages?.length !== 1)
               throw new Error("native receive cardinality mismatch");
@@ -493,7 +497,7 @@ export function createNativeReplay({
               { ...row.body, receivedMessages: [candidate] },
               actual,
               bindings,
-              publishTime?.(cell.id, active.subscription),
+              evidence,
             );
             if (result !== "MATCH") witnesses.get(cell.id).publicationIncomplete = true;
             const slot = row.body.receivedMessages[0].ackId;
@@ -502,9 +506,7 @@ export function createNativeReplay({
             active.unordered.ackSlots.set(slot, received.ackId);
             active.unordered.pending.delete(id);
           } else {
-            const evidence = publishTime?.(cell.id, active.subscription);
             const result = matchNativeReceive(row.body, actual, bindings, evidence);
-            if (evidence) witnesses.get(cell.id).publishTime = evidence;
             if (result !== "MATCH") witnesses.get(cell.id).publicationIncomplete = true;
           }
           if (cell.variant === "flow-control" && actual.receivedMessages?.length) {

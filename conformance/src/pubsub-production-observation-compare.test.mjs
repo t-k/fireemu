@@ -1226,6 +1226,7 @@ export function generatedTimeFixture() {
   proof.publications[0].sourceReply.body.messageIds = ["source-1"];
   proof.publications[0].localReply.body.messageIds = ["actual-1"];
   proof.source = f.disposition.source;
+  proof.cellId = "S03";
   f.disposition.publishTime = proof;
   f.witness.S03.publishTime = proof;
   const Type = protos.google.pubsub.v1.StreamingPullResponse;
@@ -1443,4 +1444,163 @@ test("generated Timestamp raw scalars reject int32 aliases and retain signed int
       replaceRaw(f, side, BigInt(frame.body.receivedMessages[0].message.publishTime.nanos));
       assert.equal(verdict(f), "MATCH", `${side} signed seconds ${seconds}`);
     }
+});
+
+test("generated publishTime proof is bound to its cell and global source and runtime", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  for (const alter of [
+    (f) => delete f.witness.S03.publishTime,
+    (f) => delete f.witness.S03.publishTime.cellId,
+    (f) => (f.witness.S03.publishTime.cellId = "S01"),
+    ...["runId", "packetSha256", "descriptorSha256"].map(
+      (field) => (f) => (f.witness.S03.publishTime.source[field] = "foreign"),
+    ),
+    ...["binarySha256", "inputsSha256"].map((field) => (f) => {
+      f.witness.S03.publishTime.runtime[field] = "f".repeat(64);
+      f.witness.S03.publishTime.compiledInputs[field] = "f".repeat(64);
+    }),
+  ]) {
+    const f = generatedTimeFixture();
+    f.witness.S03.publishTime = structuredClone(f.witness.S03.publishTime);
+    f.witness.S03.publishTime.authority.bytes = Buffer.from(
+      f.disposition.publishTime.authority.bytes,
+    );
+    assert.equal(
+      compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+        (c) => c.id === "S03",
+      ).approvedComparison.verdict,
+      "MATCH",
+    );
+    alter(f);
+    const cell = compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+      (c) => c.id === "S03",
+    );
+    assert.notEqual(cell.approvedComparison.verdict, "MATCH");
+    assert.equal(cell.nativeLayout.verdict, "DIVERGES");
+  }
+});
+
+test("two cells cannot exchange otherwise valid generated publishTime proofs", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const f = generatedTimeFixture();
+  for (const observation of [f.source, f.local]) {
+    observation.cells = observation.cells.filter((c) => c.id === "S03");
+    const second = structuredClone(observation.cells[0]);
+    second.id = "S01";
+    second.frames[0].n += 100;
+    observation.cells.push(second);
+  }
+  const raw = f.disposition.rawFrames[0];
+  f.disposition.rawFrames.push({ ...raw, sourceN: raw.sourceN + 100, localN: raw.localN + 100 });
+  f.witness.S01 = structuredClone(f.witness.S03);
+  f.witness.S01.publishTime.authority.bytes = Buffer.from(
+    f.disposition.publishTime.authority.bytes,
+  );
+  f.witness.S01.publishTime.cellId = "S01";
+  f.witness.S01.sourceFrames = f.source.cells
+    .find((c) => c.id === "S01")
+    .frames.map((frame) => frame.n);
+  const verdicts = () =>
+    compareExecutedObservation(f.source, f.local, f.witness, f.disposition)
+      .cells.filter((c) => ["S03", "S01"].includes(c.id))
+      .map((c) => c.approvedComparison.verdict);
+  assert.deepEqual(verdicts(), ["MATCH", "MATCH"]);
+  [f.witness.S03.publishTime, f.witness.S01.publishTime] = [
+    f.witness.S01.publishTime,
+    f.witness.S03.publishTime,
+  ];
+  assert.ok(verdicts().every((verdict) => verdict !== "MATCH"));
+});
+
+test("mixed generated-time runs retain strict timestamp-free negative cells", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  for (const [direction, body] of [
+    ["out", { subscription: "owned-subscription", streamAckDeadlineSeconds: 10 }],
+    ["in", { receivedMessages: [] }],
+  ]) {
+    const f = generatedTimeFixture(),
+      negative = approvedNativeFixture();
+    const Type =
+      protos.google.pubsub.v1[
+        direction === "out" ? "StreamingPullRequest" : "StreamingPullResponse"
+      ];
+    const bytes = Buffer.from(Type.encode(Type.fromObject(body)).finish());
+    for (const observation of [f.source, f.local]) {
+      const cell = structuredClone(negative.source.cells.find((c) => c.id === "S16"));
+      cell.frames = [
+        {
+          n: 107,
+          direction,
+          verified: true,
+          body: Type.toObject(Type.decode(bytes), {
+            longs: String,
+            enums: String,
+            bytes: String,
+            defaults: false,
+          }),
+          blob: { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") },
+        },
+      ];
+      cell.events[0].code = 3;
+      cell.events[0].details = "invalid argument";
+      observation.cells.push(cell);
+    }
+    f.witness.S16 = negative.witness.S16;
+    f.witness.S16.sourceFrames = [107];
+    f.disposition.rawFrames.push({
+      sourceN: 107,
+      localN: 107,
+      sourceBytes: bytes,
+      localBytes: bytes,
+    });
+    const compare = (disposition = f.disposition) =>
+      compareExecutedObservation(f.source, f.local, f.witness, disposition);
+    const strict = { ...f.disposition };
+    delete strict.publishTime;
+    assert.equal(
+      compare(strict).cells.find((c) => c.id === "S16").approvedComparison.verdict,
+      "MATCH",
+    );
+    assert.equal(compare().cells.find((c) => c.id === "S03").approvedComparison.verdict, "MATCH");
+    assert.equal(compare().cells.find((c) => c.id === "S16").approvedComparison.verdict, "MATCH");
+    const peer = f.local.cells.find((c) => c.id === "S16").frames[0];
+    const changed = Buffer.from(
+      Type.encode(
+        Type.fromObject(
+          direction === "out"
+            ? { ...body, streamAckDeadlineSeconds: 11 }
+            : { subscriptionProperties: { exactlyOnceDeliveryEnabled: true } },
+        ),
+      ).finish(),
+    );
+    const originalFrame = structuredClone(peer);
+    peer.body = Type.toObject(Type.decode(changed), {
+      longs: String,
+      enums: String,
+      bytes: String,
+      defaults: false,
+    });
+    peer.blob = {
+      bytes: changed.length,
+      sha256: createHash("sha256").update(changed).digest("hex"),
+    };
+    f.disposition.rawFrames.at(-1).localBytes = changed;
+    assert.equal(
+      compare().cells.find((c) => c.id === "S16").approvedComparison.verdict,
+      "DIVERGES",
+    );
+    Object.assign(peer, originalFrame);
+    f.disposition.rawFrames.at(-1).localBytes = bytes;
+    assert.equal(compare().cells.find((c) => c.id === "S16").approvedComparison.verdict, "MATCH");
+    f.local.cells.find((c) => c.id === "S16").events[0].details = "different error details";
+    assert.equal(
+      compare().cells.find((c) => c.id === "S16").approvedComparison.verdict,
+      "DIVERGES",
+    );
+    delete f.witness.S03.publishTime;
+    assert.notEqual(
+      compare().cells.find((c) => c.id === "S03").approvedComparison.verdict,
+      "MATCH",
+    );
+  }
 });

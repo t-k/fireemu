@@ -652,12 +652,26 @@ function approvedNativeComparison(original, actual, proof, disposition, binding)
     !binding || !complete || proof.semanticsVerified !== true ? "NOT_COMPARABLE" : "MATCH";
   if (verdict === "MATCH") {
     try {
-      const generated = original.id === "S03" ? disposition.publishTime : null;
+      const needsGeneratedTime =
+        disposition.publishTime &&
+        [original, actual].some((cell) =>
+          cell.frames.some(
+            (frame) =>
+              frame.direction === "in" &&
+              frame.body.receivedMessages?.some((received) =>
+                Object.hasOwn(received.message ?? {}, "publishTime"),
+              ),
+          ),
+        );
+      const generated = needsGeneratedTime ? proof.publishTime : null;
       if (
-        generated &&
-        (!publishTimeAuthorized(generated) ||
+        needsGeneratedTime &&
+        (!generated ||
+          generated.cellId !== original.id ||
+          generated.cellId !== actual.id ||
+          !publishTimeAuthorized(generated) ||
           !isDeepStrictEqual(generated.source, disposition.source) ||
-          !isDeepStrictEqual(proof.publishTime?.runtime, generated.runtime))
+          !isDeepStrictEqual(generated.runtime, disposition.publishTime.runtime))
       )
         verdict = "NOT_COMPARABLE";
       for (const [i, sourceFrame] of original.frames.entries()) {

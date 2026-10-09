@@ -224,9 +224,11 @@ export async function replayA(
       journal,
       publishTime: publishTimeDisposition
         ? (cellId, opener) => {
-            if (cellId !== "S03") return null;
-            const sourceCell = source.cells.find((c) => c.id === cellId),
-              localCell = localCells.find((c) => c.id === cellId);
+            const sourceMatches = source.cells.filter((c) => c.id === cellId),
+              localMatches = localCells.filter((c) => c.id === cellId);
+            if (sourceMatches.length !== 1 || localMatches.length !== 1) return null;
+            const [sourceCell] = sourceMatches,
+              [localCell] = localMatches;
             const sourceSetup = sourceCell.exchanges.find(
               (e) =>
                 e.method === "CreateSubscription" &&
@@ -243,7 +245,12 @@ export async function replayA(
             );
             return {
               ...publishTimeDisposition.publishTime,
-              publications,
+              cellId,
+              publications: publications.filter((publication) =>
+                sourceCell.exchanges.some(
+                  (exchange) => exchange.dispatchN === publication.sourceDispatchN,
+                ),
+              ),
               deliveries,
               subscription:
                 sourceSetup && localSetup
@@ -351,10 +358,8 @@ export async function replayA(
     };
     let disposition;
     if (publishTimeDisposition) {
-      const evidence = native.witnesses.get("S03")?.publishTime;
       disposition = {
         ...publishTimeDisposition,
-        publishTime: evidence ?? publishTimeDisposition.publishTime,
         rawFrames: source.cells.flatMap((cell) =>
           cell.frames.map((f, i) => ({
             sourceN: f.n,

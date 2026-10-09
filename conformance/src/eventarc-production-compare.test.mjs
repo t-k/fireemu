@@ -673,3 +673,73 @@ test("a failed same-scope complete inventory invalidates cached page authority",
     assert.equal(new URL(urls[3]).searchParams.get("pageToken"), sourceContinuationToken);
   }
 });
+
+async function captureIndependentWalks({
+  rootQuery = "",
+  originalStatus = 200,
+  localStatus = 200,
+  withoutInventory = false,
+} = {}) {
+  const inventory = structuredClone(b28Rows[0]),
+    firstRoot = structuredClone(b28Rows[1]),
+    secondRoot = structuredClone(b28Rows[1]),
+    consumer = structuredClone(b28Rows[2]);
+  secondRoot.request.path += rootQuery;
+  secondRoot.response.status = originalStatus;
+  const other = inventory.response.body.channels.find(
+    (member) => member.name !== firstRoot.response.body.channels[0].name,
+  );
+  const secondOwn = token("second independent own cursor");
+  const rows = [inventory, firstRoot, secondRoot, consumer];
+  const answers = [
+    { body: inventory.response.body },
+    { body: { channels: [other], nextPageToken: ownContinuationToken } },
+    {
+      status: localStatus,
+      body: { channels: secondRoot.response.body.channels, nextPageToken: secondOwn },
+    },
+    { body: consumer.response.body },
+  ];
+  if (withoutInventory) {
+    answers[1].body.channels = firstRoot.response.body.channels;
+    rows.shift();
+    answers.shift();
+  }
+  return { ...(await capture(rows, answers)), consumer, secondOwn };
+}
+test("independent validated token-free walks bind a repeated source cursor to their own current cursor", async () => {
+  for (const rootQuery of ["", "&pageToken="]) {
+    const got = await captureIndependentWalks({ rootQuery });
+    assert.equal(
+      new URL(got.urls.at(-1), "http://local").searchParams.get("pageToken"),
+      got.secondOwn,
+    );
+  }
+});
+test("unknown malformed duplicate or nonempty incoming cursors cannot reset same-walk conflicts", async () => {
+  for (const rootQuery of [
+    `&pageToken=${sourceContinuationToken}`,
+    `&pageToken=${token("unissued incoming cursor")}`,
+    "&pageToken=not%2Bbase64%21",
+    "&pageToken=&pageToken=",
+  ]) {
+    const got = await captureIndependentWalks({ rootQuery });
+    assert.equal(got.urls.at(-1), got.consumer.request.path);
+  }
+});
+test("negative and foreign-scope roots cannot reset an existing scoped walk", async () => {
+  for (const options of [
+    { originalStatus: 400 },
+    { localStatus: 400 },
+    { rootQuery: "&filter=state%3DINACTIVE" },
+    { rootQuery: "&orderBy=name" },
+  ]) {
+    const got = await captureIndependentWalks(options);
+    assert.equal(
+      new URL(got.urls.at(-1), "http://local").searchParams.get("pageToken"),
+      ownContinuationToken,
+    );
+  }
+  const unproven = await captureIndependentWalks({ withoutInventory: true });
+  assert.equal(unproven.urls.at(-1), unproven.consumer.request.path);
+});

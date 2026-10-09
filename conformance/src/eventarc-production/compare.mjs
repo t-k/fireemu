@@ -769,6 +769,17 @@ export async function replay(rows, options) {
         original.channels.length === local.channels.length &&
         ownPageMembers(row, actual, pageInventories.get(scope))
       ) {
+        const incoming = params.getAll("pageToken");
+        if (
+          pageInventories.has(scope) &&
+          incoming.length <= 1 &&
+          incoming.every((value) => value === "")
+        ) {
+          // A validated token-free root starts an independent walk in this scope.
+          for (const key of pageTokens.keys()) {
+            if (key.startsWith(`${scope}\0`)) pageTokens.delete(key);
+          }
+        }
         bindReference(pageTokens, `${scope}\0${original.nextPageToken}`, local.nextPageToken);
       }
     }

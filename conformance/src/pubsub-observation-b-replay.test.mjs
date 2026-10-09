@@ -397,7 +397,12 @@ test("B local transport executes witnessed dispatch clocks and closes on failure
   const factories = {
     fetch: async (url, opts) => {
       clocks.push(JSON.parse(opts.body).instant);
-      return { ok: true, arrayBuffer: async () => new ArrayBuffer(0) };
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () =>
+          Buffer.from(JSON.stringify({ clock: JSON.parse(opts.body).instant })),
+      };
     },
     rest: () => ({ request: async () => ({ status: 200, body: {} }) }),
     grpc: () => ({
@@ -877,7 +882,12 @@ test("B credential-free local transports send no PubSub Authorization", async ()
       FIREEMU_CONTROL_TOKEN: "control-only-test",
     };
   await replayLocal(input, environment, pin, {
-    fetch: async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(0) }),
+    fetch: async (_url, opts) => ({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () =>
+        Buffer.from(JSON.stringify({ clock: JSON.parse(opts.body).instant })),
+    }),
     rest: (options) =>
       createRest({
         ...options,
@@ -902,4 +912,649 @@ test("B credential-free local transports send no PubSub Authorization", async ()
       false,
       "PubSub REST/native requests must omit Authorization",
     );
+});
+
+// Independent local cursor evidence never changes the original recorded judgments.
+function independentListModel(input, edit = (reply) => reply, ownOrder = null) {
+  const resources = new Map(),
+    tokens = new Map(),
+    calls = [];
+  const order = ownOrder ?? input.cells[0].manifest.manifest.members.toReversed();
+  return {
+    calls,
+    async call(q) {
+      calls.push(structuredClone(q));
+      let reply;
+      if (q.method.startsWith("Create")) {
+        resources.set(q.request.name, { name: q.request.name });
+        reply = { code: "OK", status: 200, ok: true, body: { name: q.request.name } };
+      } else if (q.method.startsWith("Delete")) {
+        const existed = resources.delete(q.request.name);
+        reply = {
+          code: existed ? "OK" : "NOT_FOUND",
+          status: existed ? 200 : 404,
+          body: existed ? {} : { error: { status: "NOT_FOUND", message: "missing" } },
+        };
+      } else if (q.method.startsWith("Get"))
+        reply = resources.has(q.request.name)
+          ? { code: "OK", status: 200, body: resources.get(q.request.name) }
+          : {
+              code: "NOT_FOUND",
+              status: 404,
+              message: "missing",
+              body: { error: { status: "NOT_FOUND", message: "missing" } },
+            };
+      else {
+        const anchor = q.request.pageToken ? tokens.get(q.request.pageToken) : null;
+        if (q.request.pageToken && !anchor)
+          reply = {
+            code: "INVALID_ARGUMENT",
+            status: 400,
+            message: "invalid token",
+            body: { error: { status: "INVALID_ARGUMENT", message: "invalid token" } },
+          };
+        else {
+          const offset = anchor ? order.indexOf(anchor) + 1 : 0,
+            available = order.slice(offset).filter((n) => resources.has(n)),
+            names = available.slice(0, q.request.pageSize);
+          const token = names.length < available.length ? `issued-${names.at(-1)}` : null;
+          if (token) tokens.set(token, names.at(-1));
+          reply = {
+            code: "OK",
+            status: 200,
+            body: {
+              topics: names.map((n) => resources.get(n)),
+              ...(token ? { nextPageToken: token } : {}),
+            },
+          };
+        }
+      }
+      return edit(reply, q);
+    },
+  };
+}
+function oneListInput() {
+  const input = importRecording(fixture().rows, fixture().summary);
+  input.cells = input.cells.slice(0, 1);
+  return input;
+}
+test("B independent cursor witness preserves raw mismatch and proves its own deletion and full walks", async () => {
+  const input = oneListInput(),
+    local = independentListModel(input),
+    report = await replayRecording(input, local.call);
+  assert.equal(report.rows.find((r) => r.requestId === 9).semantic, "DIVERGES");
+  assert.equal(report.rows.find((r) => r.requestId === 11).semantic, "NOT_COMPARABLE");
+  assert.ok(Array.isArray(report.semanticWitnesses), "independent witnesses required");
+  const witness = report.semanticWitnesses[0];
+  assert.equal(witness.verdict, "MATCH");
+  assert.equal(witness.selectedMember, input.cells[0].manifest.manifest.members.at(-1));
+  assert.equal(witness.before.members.length, 4);
+  assert.equal(witness.after.members.length, 3);
+  assert.equal(witness.deleted.status, 200);
+  assert.equal(witness.absence.status, 404);
+  assert.ok(witness.requests.every((r) => r.originalRequest && r.actualSemanticRequest && r.ref));
+  assert.ok(
+    local.calls
+      .filter((c) => c.request.pageToken)
+      .every((c) => !c.request.pageToken.startsWith("production-")),
+  );
+  assert.equal(report.parentClosureReady, false);
+});
+test("B independent cursor witness rejects malformed fields, duplicate and missing inventory and overflow", async () => {
+  for (const change of [
+    (r) => {
+      r.body.topics[0].unexpected = true;
+    },
+    (r) => {
+      r.body.topics = [r.body.topics[0], r.body.topics[0]];
+    },
+    (r) => {
+      r.body.topics = [];
+      delete r.body.nextPageToken;
+    },
+    (r) => {
+      r.body.topics.push({ ...r.body.topics[0], name: "projects/foreign/topics/not-owned" });
+    },
+    (r) => {
+      r.body.topics = [...r.body.topics, ...r.body.topics];
+    },
+  ]) {
+    const input = oneListInput(),
+      local = independentListModel(input, (r, q) => {
+        if (q.semanticRef && q.method === "ListTopics") change(r);
+        return r;
+      });
+    const report = await replayRecording(input, local.call);
+    assert.ok(Array.isArray(report.semanticWitnesses), "independent witnesses required");
+    assert.equal(report.semanticWitnesses[0].verdict, "DIVERGES");
+  }
+});
+test("B independent cursor witness never follows repeated or foreign cursor or unknown native effects", async () => {
+  for (const mode of ["cursor", "unknown"]) {
+    const input = oneListInput();
+    if (mode === "unknown") input.cells[0].cell.transport = "grpc";
+    const local = independentListModel(input, (r, q) => {
+      if (q.semanticRef && q.method === "ListTopics") {
+        if (mode === "cursor") r.body.nextPageToken = "foreign-repeat";
+        else r = { code: "UNAVAILABLE", unknown: true };
+      }
+      return r;
+    });
+    const report = await replayRecording(input, local.call);
+    assert.ok(Array.isArray(report.semanticWitnesses), "independent witnesses required");
+    assert.equal(
+      report.semanticWitnesses[0].verdict,
+      mode === "unknown" ? "NOT_COMPARABLE" : "DIVERGES",
+    );
+    assert.ok(local.calls.filter((c) => c.request.pageToken === "foreign-repeat").length <= 1);
+  }
+});
+
+function generatedInput() {
+  const base = oneListInput(),
+    cell = base.cells[0].cell,
+    topic = `projects/${PROJECT}/topics/fe${runId}-r7-prereq`,
+    name = `projects/${PROJECT}/snapshots/fe${runId}-r7-a`,
+    at = "2026-10-09T00:00:00.123Z",
+    sourceExpiry = "2026-10-16T00:00:00.234Z";
+  cell.kind = "snapshots";
+  cell.id = "R7";
+  const make = (id, method, request, body) => ({
+    dispatch: { requestId: id, n: id, at, cellId: "R7", transport: "rest", method, request },
+    response: { reply: { code: "OK", status: 200, ok: true, body } },
+  });
+  base.cells[0] = {
+    cell,
+    manifest: { manifest: { members: [name], resources: [] } },
+    exchanges: [
+      make(
+        1,
+        "Publish",
+        { topic, messages: [{ data: "eA==" }] },
+        { messageIds: ["12345678901234567"] },
+      ),
+      make(
+        2,
+        "CreateSnapshot",
+        { name, subscription: `projects/${PROJECT}/subscriptions/fe${runId}-r7-prereq` },
+        { name, topic, expireTime: sourceExpiry },
+      ),
+      make(3, "GetSnapshot", { name }, { name, topic, expireTime: sourceExpiry }),
+    ],
+  };
+  return { input: base, at, name, topic };
+}
+test("B generated snapshot witness binds successful publication and stable Create/Get while expiry effects stay unobserved", async () => {
+  const { input, at, name, topic } = generatedInput();
+  const report = await replayRecording(input, async (q) => ({
+    code: "OK",
+    status: 200,
+    body:
+      q.method === "Publish"
+        ? { messageIds: ["22222222222222222"] }
+        : { name, topic, expireTime: "2026-10-16T00:00:00.123Z" },
+    clockReadback: { clock: at, sourceRequestId: q.requestId },
+  }));
+  assert.ok(Array.isArray(report.generatedWitnesses), "generated witnesses required");
+  assert.equal(report.generatedWitnesses.length, 3);
+  assert.ok(report.generatedWitnesses.every((w) => w.verdict === "MATCH"));
+  assert.ok(report.rows.every((r) => r.semantic === "DIVERGES"));
+  assert.equal(report.generatedWitnesses[1].expiryEffects, "NOT_COMPARABLE_NOT_OBSERVED");
+  assert.equal(report.parentClosureReady, false);
+});
+test("B generated witness rejects ID width/alphabet/collision and lifetime or stable-value drift", async () => {
+  for (const mode of ["width", "alphabet", "unbound", "lifetime", "drift", "extra", "unknown"]) {
+    const { input, at, name, topic } = generatedInput();
+    const report = await replayRecording(input, async (q) => {
+      let reply = {
+        code: "OK",
+        status: 200,
+        body:
+          q.method === "Publish"
+            ? {
+                messageIds: [
+                  mode === "width"
+                    ? "1"
+                    : mode === "alphabet"
+                      ? "a".repeat(17)
+                      : "22222222222222222",
+                ],
+              }
+            : {
+                name,
+                topic,
+                expireTime:
+                  mode === "lifetime" || (mode === "drift" && q.method === "GetSnapshot")
+                    ? "2026-10-16T00:00:00.124Z"
+                    : "2026-10-16T00:00:00.123Z",
+              },
+        ...(mode === "unbound"
+          ? {}
+          : { clockReadback: { clock: at, sourceRequestId: q.requestId } }),
+      };
+      if (mode === "extra" && q.method === "CreateSnapshot") reply.body.extra = true;
+      if (mode === "unknown" && q.method === "CreateSnapshot")
+        reply = { code: "UNAVAILABLE", unknown: true };
+      return reply;
+    });
+    assert.ok(Array.isArray(report.generatedWitnesses), "generated witnesses required");
+    assert.ok(
+      report.generatedWitnesses.some((w) => w.verdict !== "MATCH"),
+      mode,
+    );
+  }
+});
+
+test("B public virtual clock rejects nanosecond readback drift without a transport dispatch", async () => {
+  const { replayLocal } = await import("./pubsub-observation-b/replay.mjs"),
+    input = oneListInput();
+  let sent = 0;
+  const pin = {
+      profile: "release",
+      rustcWrapper: "",
+      sha256: "a".repeat(64),
+      head: "b".repeat(40),
+      command: ["cargo", "build", "--release"],
+      path: "/fixture/release/fireemu",
+    },
+    env = {
+      PUBSUB_EMULATOR_HOST: "127.0.0.1:1234",
+      FIREEMU_CONTROL_URL: "http://127.0.0.1:1235/v1/",
+      FIREEMU_CONTROL_TOKEN: "local-test",
+    };
+  await assert.rejects(
+    replayLocal(input, env, pin, {
+      fetch: async (_url, opts) => ({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () =>
+          Buffer.from(
+            JSON.stringify({
+              clock: JSON.parse(opts.body).instant.replace(/(\.\d{3})Z$/, "$1000001Z"),
+            }),
+          ),
+      }),
+      rest: () => ({
+        request: async () => {
+          sent++;
+          return { status: 200, body: {} };
+        },
+      }),
+      grpc: () => ({
+        close() {},
+        call: async () => {
+          sent++;
+          return { code: "OK", body: {} };
+        },
+      }),
+    }),
+    /readback/,
+  );
+  assert.equal(sent, 0);
+});
+
+test("B independent unknown selected DELETE stays unresolved and is never retried by cleanup", async () => {
+  const input = oneListInput(),
+    selected = input.cells[0].manifest.manifest.members.at(-1),
+    local = independentListModel(input, (reply, q) =>
+      q.semanticRef && q.method === "DeleteTopic" && q.request.name === selected
+        ? { code: "UNAVAILABLE", unknown: true }
+        : reply,
+    );
+  const report = await replayRecording(input, local.call),
+    witness = report.semanticWitnesses[0];
+  assert.equal(witness.verdict, "NOT_COMPARABLE");
+  assert.equal(witness.cleanup.complete, false);
+  assert.deepEqual(witness.cleanup.unknownDeletes, [selected]);
+  assert.equal(
+    local.calls.filter((q) => q.method === "DeleteTopic" && q.request.name === selected).length,
+    1,
+  );
+});
+test("B generated ID correspondence refuses collision across distinct successful publications", async () => {
+  const { input, at } = generatedInput();
+  const original = input.cells[0].exchanges[0],
+    second = structuredClone(original);
+  second.dispatch.requestId = 4;
+  second.dispatch.n = 4;
+  second.response.reply.body.messageIds = ["12345678901234568"];
+  input.cells[0].exchanges = [original, second];
+  const report = await replayRecording(input, async (q) => ({
+    code: "OK",
+    status: 200,
+    body: { messageIds: ["22222222222222222"] },
+    clockReadback: { clock: at, sourceRequestId: q.requestId },
+  }));
+  assert.equal(report.generatedWitnesses[0].verdict, "MATCH");
+  assert.equal(report.generatedWitnesses[1].verdict, "DIVERGES");
+});
+test("B independent inventory decisions agree with a finite permutation reference", async () => {
+  const permutations = [];
+  const visit = (remaining, prefix = []) => {
+    if (!remaining.length) {
+      permutations.push(prefix);
+      return;
+    }
+    remaining.forEach((value, index) =>
+      visit(
+        remaining.filter((_, i) => i !== index),
+        [...prefix, value],
+      ),
+    );
+  };
+  visit([0, 1, 2, 3]);
+  for (const permutation of permutations) {
+    const input = oneListInput(),
+      names = input.cells[0].manifest.manifest.members;
+    const firstOriginal = input.cells[0].exchanges.find((e) => e.page?.stage === "first").page
+      .names[0];
+    const transformed = {
+      ...input,
+      cells: [
+        {
+          ...input.cells[0],
+          manifest: {
+            ...input.cells[0].manifest,
+            manifest: {
+              ...input.cells[0].manifest.manifest,
+              members: permutation.map((i) => names[i]),
+            },
+          },
+        },
+      ],
+    };
+    const model = independentListModel(transformed),
+      report = await replayRecording(input, model.call),
+      witness = report.semanticWitnesses[0];
+    assert.equal(witness.verdict, "MATCH");
+    assert.equal(witness.before.members.length, 4);
+    assert.equal(witness.after.members.length, 3);
+    assert.equal(witness.sameSelectedMember, witness.selectedMember === firstOriginal);
+    assert.equal(witness.cleanup.complete, true);
+    assert.equal(report.parentClosureReady, false);
+  }
+});
+
+test("B independent page-size bound rejects an oversized otherwise complete unique walk", async () => {
+  const input = oneListInput(),
+    local = independentListModel(input);
+  const report = await replayRecording(input, (q) =>
+    local.call(
+      q.semanticRef && q.method === "ListTopics"
+        ? { ...q, request: { ...q.request, pageSize: 2 } }
+        : q,
+    ),
+  );
+  assert.equal(report.semanticWitnesses[0].verdict, "DIVERGES");
+  assert.match(report.semanticWitnesses[0].reason, /overflow/);
+});
+test("B independent own cursor cannot repeat even when a server advances its response members", async () => {
+  const input = oneListInput(),
+    local = independentListModel(input);
+  let issued;
+  const report = await replayRecording(input, async (q) => {
+    const mapped =
+      q.request.pageToken === "repeat-cursor"
+        ? { ...q, request: { ...q.request, pageToken: issued } }
+        : q;
+    const reply = await local.call(mapped);
+    if (q.semanticRef && q.method === "ListTopics" && reply.body?.nextPageToken) {
+      issued = reply.body.nextPageToken;
+      reply.body.nextPageToken = "repeat-cursor";
+    }
+    return reply;
+  });
+  assert.equal(report.semanticWitnesses[0].verdict, "DIVERGES");
+  assert.match(report.semanticWitnesses[0].reason, /repeated cursor/);
+});
+test("B snapshot backlog lifetime is exact even when a wrong value stays within creation bounds", async () => {
+  const { input, at, name, topic } = generatedInput();
+  input.cells[0].exchanges[1].dispatch.at = "2026-10-09T00:00:00.223Z";
+  input.cells[0].exchanges[2].dispatch.at = "2026-10-09T00:00:00.224Z";
+  const report = await replayRecording(input, async (q) => ({
+    code: "OK",
+    status: 200,
+    body:
+      q.method === "Publish"
+        ? { messageIds: ["22222222222222222"] }
+        : { name, topic, expireTime: "2026-10-16T00:00:00.124Z" },
+    clockReadback: { clock: q.method === "Publish" ? at : q.at, sourceRequestId: q.requestId },
+  }));
+  assert.equal(report.generatedWitnesses[1].verdict, "DIVERGES");
+  assert.match(report.generatedWitnesses[1].reason, /backlog lifetime/);
+});
+
+test("B observed selected DELETE and absence require confirmed actual replies", async () => {
+  for (const mode of ["refused-delete", "unknown-absence"]) {
+    const input = oneListInput();
+    const order = input.cells[0].exchanges.find((e) => e.page?.stage === "baseline").page.names;
+    const local = independentListModel(
+      input,
+      (reply, q) => {
+        if (!q.semanticRef && q.category === "cursorDelete" && mode === "refused-delete")
+          return { code: "PERMISSION_DENIED", status: 403, body: {} };
+        if (!q.semanticRef && q.category === "cursorGet" && mode === "unknown-absence")
+          return { ...reply, unknown: true };
+        return reply;
+      },
+      order,
+    );
+    const report = await replayRecording(input, local.call);
+    assert.notEqual(report.semanticWitnesses[0].verdict, "MATCH", mode);
+    assert.equal(
+      local.calls.filter((q) => q.method === "DeleteTopic" && q.request.name === order[0]).length,
+      1,
+      "selected DELETE never retried",
+    );
+  }
+});
+test("B snapshot disposition remains provisional without successful stable Get", async () => {
+  for (const mode of ["missing", "unknown", "refused", "drift"]) {
+    const { input, at, name, topic } = generatedInput();
+    if (mode === "missing") input.cells[0].exchanges.pop();
+    const report = await replayRecording(input, async (q) => {
+      if (q.method === "GetSnapshot" && mode === "unknown")
+        return { code: "UNAVAILABLE", unknown: true };
+      if (q.method === "GetSnapshot" && mode === "refused")
+        return { code: "PERMISSION_DENIED", status: 403 };
+      return {
+        code: "OK",
+        status: 200,
+        body:
+          q.method === "Publish"
+            ? { messageIds: ["22222222222222222"] }
+            : {
+                name,
+                topic,
+                expireTime:
+                  q.method === "GetSnapshot" && mode === "drift"
+                    ? "2026-10-16T00:00:00.124Z"
+                    : "2026-10-16T00:00:00.123Z",
+              },
+        clockReadback: { clock: at, sourceRequestId: q.requestId },
+      };
+    });
+    assert.notEqual(report.generatedWitnesses[1].verdict, "MATCH", mode);
+  }
+});
+test("B cleanup completion requires its actual absence readback", async () => {
+  for (const mode of ["present", "unknown"]) {
+    const input = oneListInput();
+    const local = independentListModel(input, (reply, q) => {
+      if (
+        q.semanticRef &&
+        q.method === "GetTopic" &&
+        q.category === "semanticWitness" &&
+        q.request.name !== input.cells[0].manifest.manifest.members.at(-1)
+      )
+        return mode === "unknown"
+          ? { code: "UNAVAILABLE", unknown: true }
+          : { code: "OK", status: 200, body: { name: q.request.name } };
+      return reply;
+    });
+    const report = await replayRecording(input, local.call);
+    assert.equal(report.semanticWitnesses[0].cleanup.complete, false, mode);
+  }
+});
+
+test("B failed or missing Snapshot Get cannot authorize LIST expiry substitution", async () => {
+  for (const mode of ["missing", "unknown", "drift"]) {
+    const { input, at, name, topic } = generatedInput();
+    if (mode === "missing") input.cells[0].exchanges.pop();
+    input.cells[0].manifest.manifest.resources = [{ name, method: "CreateSnapshot" }];
+    for (const stage of ["baseline", "first"])
+      input.cells[0].exchanges.push({
+        dispatch: {
+          requestId: stage === "baseline" ? 4 : 5,
+          n: stage === "baseline" ? 4 : 5,
+          at,
+          cellId: "R7",
+          transport: "rest",
+          method: "ListSnapshots",
+          request: { project: `projects/${PROJECT}`, pageSize: 1 },
+        },
+        response: {
+          reply: {
+            code: "OK",
+            status: 200,
+            ok: true,
+            body: { snapshots: [{ name, topic, expireTime: "2026-10-16T00:00:00.234Z" }] },
+          },
+        },
+        page: { stage, names: [name], nextPageToken: null },
+      });
+    const report = await replayRecording(input, async (q) => {
+      if (q.semanticRef && q.method === "GetSnapshot")
+        return { code: "NOT_FOUND", status: 404, body: {} };
+      if (q.method === "GetSnapshot" && mode === "unknown")
+        return { code: "UNAVAILABLE", unknown: true };
+      return {
+        code: "OK",
+        status: 200,
+        body:
+          q.method === "Publish"
+            ? { messageIds: ["22222222222222222"] }
+            : q.method === "ListSnapshots"
+              ? { snapshots: [{ name, topic, expireTime: "2026-10-16T00:00:00.123Z" }] }
+              : {
+                  name,
+                  topic,
+                  expireTime:
+                    q.method === "GetSnapshot" && mode === "drift"
+                      ? "2026-10-16T00:00:00.124Z"
+                      : "2026-10-16T00:00:00.123Z",
+                },
+        clockReadback: { clock: at, sourceRequestId: q.requestId },
+      };
+    });
+    assert.match(
+      report.semanticWitnesses[0].reason,
+      /snapshot generated lifetime binding missing/,
+      mode,
+    );
+  }
+});
+
+test("B verified Snapshot pair survives its recorded selected DELETE and confirmed absence only", async () => {
+  for (const mode of ["confirmed", "unknown", "unexpected", "unconfirmed-pair"]) {
+    const { input, at, name, topic } = generatedInput();
+    const expiry = "2026-10-16T00:00:00.123Z",
+      snapshot = { name, topic, expireTime: expiry };
+    for (const e of input.cells[0].exchanges)
+      if (e.dispatch.method !== "Publish") e.response.reply.body = structuredClone(snapshot);
+    const append = (id, method, category, request, reply, page = undefined) =>
+      input.cells[0].exchanges.push({
+        dispatch: {
+          requestId: id,
+          n: id,
+          at,
+          cellId: "R7",
+          transport: "rest",
+          method,
+          category,
+          request,
+        },
+        response: { reply },
+        ...(page ? { page } : {}),
+      });
+    append(
+      4,
+      "ListSnapshots",
+      "list",
+      { project: `projects/${PROJECT}`, pageSize: 100 },
+      { code: "OK", status: 200, ok: true, body: { snapshots: [snapshot] } },
+      { stage: "baseline", names: [name], nextPageToken: null },
+    );
+    append(
+      5,
+      "ListSnapshots",
+      "list",
+      { project: `projects/${PROJECT}`, pageSize: 1 },
+      {
+        code: "OK",
+        status: 200,
+        ok: true,
+        body: { snapshots: [snapshot], nextPageToken: "issued-empty" },
+      },
+      { stage: "first", names: [name], nextPageToken: "issued-empty" },
+    );
+    append(
+      6,
+      "DeleteSnapshot",
+      "cursorDelete",
+      { name },
+      { code: "OK", status: 200, ok: true, body: {} },
+    );
+    const absent = {
+      code: "NOT_FOUND",
+      status: 404,
+      body: { error: { status: "NOT_FOUND", message: "missing" } },
+    };
+    append(7, "GetSnapshot", "cursorGet", { name }, structuredClone(absent));
+    let deleted = false;
+    const report = await replayRecording(input, async (q) => {
+      if (q.method === "Publish")
+        return {
+          code: "OK",
+          status: 200,
+          body: { messageIds: ["22222222222222222"] },
+          clockReadback: { clock: at, sourceRequestId: q.requestId },
+        };
+      if (q.method === "DeleteSnapshot") {
+        deleted = true;
+        return { code: "OK", status: 200, body: {} };
+      }
+      if (q.method === "GetSnapshot" && deleted)
+        return mode === "unknown"
+          ? { ...absent, unknown: true }
+          : mode === "unexpected"
+            ? { code: "PERMISSION_DENIED", status: 403, body: {} }
+            : structuredClone(absent);
+      if (q.method === "ListSnapshots")
+        return {
+          code: "OK",
+          status: 200,
+          body: q.request.pageToken
+            ? { snapshots: [] }
+            : {
+                snapshots: [snapshot],
+                ...(q.request.pageSize === 1 ? { nextPageToken: "issued-empty" } : {}),
+              },
+        };
+      if (q.method === "GetSnapshot" && mode === "unconfirmed-pair")
+        return { code: "UNAVAILABLE", unknown: true };
+      return {
+        code: "OK",
+        status: 200,
+        body: structuredClone(snapshot),
+        clockReadback: { clock: at, sourceRequestId: q.requestId },
+      };
+    });
+    if (mode === "confirmed") {
+      assert.equal(report.rows.find((r) => r.requestId === 7).semantic, "MATCH");
+      assert.equal(report.semanticWitnesses[0].verdict, "MATCH");
+      assert.ok(report.generatedWitnesses.every((w) => w.verdict === "MATCH"));
+      assert.equal(report.generatedWitnesses.length, 3, "absence has its own existing witness");
+    } else assert.notEqual(report.generatedWitnesses[1].verdict, "MATCH", mode);
+  }
 });

@@ -11,7 +11,7 @@ import { createGrpc } from "../pubsub-production/grpc.mjs";
 import { createCapture, createBudget } from "../pubsub-production/capture.mjs";
 import { route } from "./wire.mjs";
 import { CAPS } from "./plan.mjs";
-import { importRecording, replayRecording } from "./replay-core.mjs";
+import { importRecording, replayRecording, sameVirtualInstant } from "./replay-core.mjs";
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export function pinnedBytes(path, sha256, maximum = 10_000_000) {
   if (!/^[a-f0-9]{64}$/.test(sha256 ?? "")) throw new Error("SHA256 input pin required");
@@ -35,7 +35,8 @@ export function nativeRequest(method, request) {
 export async function replayLocal(input, environment, pin, factories = {}) {
   validateRuntime(pin, environment);
   const captured = [],
-    budget = createBudget(input.summary.meter.requests);
+    clockReceipts = [],
+    budget = createBudget(CAPS.sourceRequests);
   const capture = createCapture({ journal: { write: (row) => captured.push(row) } });
   const getToken = null;
   const rest = (factories.rest ?? createRest)({
@@ -72,17 +73,38 @@ export async function replayLocal(input, environment, pin, factories = {}) {
           signal: AbortSignal.timeout(30000),
         },
       );
-      if (!clock.ok) throw new Error("local clock advance refused");
-      await clock.arrayBuffer();
+      if (!clock.ok || clock.status !== 200) throw new Error("local clock advance refused");
+      const clockBytes = Buffer.from(await clock.arrayBuffer());
+      if (clockBytes.length > 16384) throw new Error("local clock readback bound exceeded");
+      let readback;
+      try {
+        readback = JSON.parse(clockBytes.toString("utf8"));
+      } catch {
+        throw new Error("local clock readback missing");
+      }
+      if (!sameVirtualInstant(request.at, readback.clock))
+        throw new Error("local clock readback differs");
+      const clockReadback = {
+        clock: readback.clock,
+        status: clock.status,
+        sourceRequestId: request.requestId,
+        requestedInstant: request.at,
+        body: readback,
+        bodyBytes: clockBytes.length,
+        bodySha256: digest(clockBytes),
+      };
+      clockReceipts.push(clockReadback);
       const label = { case: request.cellId, step: request.requestId };
-      if (request.transport === "grpc")
-        return grpc.call({
+      if (request.transport === "grpc") {
+        const reply = await grpc.call({
           label,
           op: request.method,
           service: request.service,
           method: request.method,
           request: nativeRequest(request.method, request.request),
         });
+        return { ...reply, clockReadback };
+      }
       const address = route(request.method, request.request);
       const url = new URL(address.url);
       const reply = await rest.request({
@@ -94,10 +116,12 @@ export async function replayLocal(input, environment, pin, factories = {}) {
       });
       return {
         ...reply,
+        clockReadback,
         code: reply.status >= 200 && reply.status < 300 ? "OK" : reply.body?.error?.status,
         ok: reply.status >= 200 && reply.status < 300,
       };
     });
+    report.clockReceipts = clockReceipts;
     report.localRequests = captured.length;
     report.localCapture = captured;
     return report;

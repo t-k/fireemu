@@ -183,7 +183,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
         }
     };
 
-    match dispatch(&method, &path, &query, &value, &handle) {
+    match dispatch(&method, &path, &query, &value, &body, &handle) {
         Ok((status, response, schema)) => {
             json_response(status, response, handle.paging_policy, schema)
         }
@@ -250,6 +250,7 @@ fn dispatch(
     path: &str,
     query: &str,
     body: &Value,
+    raw_body: &[u8],
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value, Schema), RestError> {
     let parts = path
@@ -265,7 +266,7 @@ fn dispatch(
         return dispatch_topic(method, &parts[3..], project, query, body, handle);
     }
     if parts[2] == "subscriptions" {
-        return dispatch_subscription(method, &parts[3..], project, query, body, handle);
+        return dispatch_subscription(method, &parts[3..], project, query, body, raw_body, handle);
     }
     if parts[2] == "snapshots" {
         return dispatch_snapshot(method, &parts[3..], project, query, body, handle);
@@ -536,6 +537,7 @@ fn dispatch_subscription(
     project: &str,
     query: &str,
     body: &Value,
+    raw_body: &[u8],
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value, Schema), RestError> {
     if parts.is_empty() {
@@ -609,7 +611,7 @@ fn dispatch_subscription(
             handle.schedule_push(&topic);
             Ok((StatusCode::OK, json!({})))
         }
-        (&Method::POST, Some("seek")) => seek(subscription, body, handle),
+        (&Method::POST, Some("seek")) => seek(subscription, body, raw_body, handle),
         _ => Err(RestError::method_not_allowed()),
     }
     .map(|(status, value)| (status, value, schema))
@@ -1284,19 +1286,61 @@ fn modify_ack_deadline(
     Ok((StatusCode::OK, json!({})))
 }
 
+// The ordinary Value map sorts keys. Inspect only Seek's top-level target occurrence order;
+// serde_json consumes each value so nested fields and escaped strings cannot act as keys.
+fn seek_conflicting_target(raw_body: &[u8]) -> Result<&'static str, RestError> {
+    let invalid = || RestError::invalid("seek target order could not be read");
+    let mut rest = raw_body
+        .trim_ascii_start()
+        .strip_prefix(b"{")
+        .ok_or_else(invalid)?;
+    let mut conflict = None;
+    loop {
+        rest = rest.trim_ascii_start();
+        if rest.starts_with(b"}") {
+            break;
+        }
+        let mut key = serde_json::Deserializer::from_slice(rest).into_iter::<String>();
+        let key_name = key.next().ok_or_else(invalid)?.map_err(|_| invalid())?;
+        rest = rest[key.byte_offset()..]
+            .trim_ascii_start()
+            .strip_prefix(b":")
+            .ok_or_else(invalid)?;
+        let mut value = serde_json::Deserializer::from_slice(rest).into_iter::<Value>();
+        value.next().ok_or_else(invalid)?.map_err(|_| invalid())?;
+        rest = rest[value.byte_offset()..].trim_ascii_start();
+        match key_name.as_str() {
+            "time" => conflict = Some("time"),
+            "snapshot" => conflict = Some("snapshot"),
+            _ => {}
+        }
+        if let Some(tail) = rest.strip_prefix(b",") {
+            rest = tail;
+        } else {
+            break;
+        }
+    }
+    conflict.ok_or_else(invalid)
+}
+
 #[allow(clippy::needless_pass_by_value)]
 fn seek(
     subscription: SubscriptionName,
     body: &Value,
+    raw_body: &[u8],
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
     match (field(body, "snapshot"), field(body, "time")) {
         (Some(_), Some(_)) => {
             if handle.paging_policy == crate::PagingPolicy::Strict {
-                let descriptions = ["Invalid value (oneof), oneof field 'target' is already set. Cannot set 'time'", "Invalid JSON payload received. Unknown name \"subscription\": Root element must be a message."];
+                let conflict = seek_conflicting_target(raw_body)?;
+                let mut descriptions = vec![format!("Invalid value (oneof), oneof field 'target' is already set. Cannot set '{conflict}'")];
+                if field(body, "subscription").is_some() {
+                    descriptions.push("Invalid JSON payload received. Unknown name \"subscription\": Root element must be a message.".to_owned());
+                }
                 let mut error = RestError::invalid(descriptions.join("\n"));
                 error.details = Some(
-                    json!([{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":descriptions.map(|description|json!({"description":description}))}]),
+                    json!([{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":descriptions.iter().map(|description|json!({"description":description})).collect::<Vec<_>>()}]),
                 );
                 return Err(error);
             }
@@ -1787,6 +1831,15 @@ mod production_shape_tests {
     }
 
     proptest! {
+        #[test]
+        fn seek_target_order_ignores_escaped_and_nested_targets(time_first in any::<bool>(), noise in ".{0,80}", spaces in 0usize..8) {
+            let nested = serde_json::to_string(&json!({"time":noise,"snapshot":[{"time":"ignored"}]})).unwrap();
+            let padding=" ".repeat(spaces);
+            let (first, second)=if time_first { ("time", "snapshot") } else { ("snapshot", "time") };
+            let request=format!("{{{padding}\"noise\":{nested},\"{first}\":\"value\",\"{second}\":\"value\"{padding}}}");
+            prop_assert_eq!(seek_conflicting_target(request.as_bytes()).unwrap(),second);
+        }
+
         #[test]
         fn authentication_method_details_match_only_recorded_route_classes(project in "[a-z]{1,20}", leaf in "[a-z]{1,30}") {
             let resource = format!("/v1/projects/{project}/topics/{leaf}");

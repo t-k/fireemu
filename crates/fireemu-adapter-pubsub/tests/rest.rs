@@ -49,14 +49,22 @@ async fn rest_request_raw(
     path: &str,
     body: Value,
 ) -> (u16, Vec<u8>) {
+    rest_request_bytes(address, method, path, &serde_json::to_vec(&body).unwrap()).await
+}
+
+async fn rest_request_bytes(
+    address: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    body: &[u8],
+) -> (u16, Vec<u8>) {
     let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
-    let body = serde_json::to_vec(&body).unwrap();
     let request = format!(
         "{method} {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream.write_all(request.as_bytes()).await.unwrap();
-    stream.write_all(&body).await.unwrap();
+    stream.write_all(body).await.unwrap();
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.unwrap();
     let separator = response
@@ -3625,7 +3633,8 @@ async fn recorded_snapshot_and_seek_refusals_preserve_profile_diagnostics() {
         )
         .await;
         if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
-            let descriptions = ["Invalid value (oneof), oneof field 'target' is already set. Cannot set 'time'", "Invalid JSON payload received. Unknown name \"subscription\": Root element must be a message."];
+            let descriptions =
+                ["Invalid value (oneof), oneof field 'target' is already set. Cannot set 'time'"];
             assert_eq!(body["error"]["message"], descriptions.join("\n"));
             assert_eq!(
                 body["error"]["details"],
@@ -4130,4 +4139,119 @@ async fn issued_deleted_topic_cursor_continues_over_current_names() {
             {"name":"projects/demo-app/topics/cursor-e"}
         ])
     );
+}
+
+#[tokio::test]
+async fn strict_seek_conflicts_preserve_request_order_and_present_fields() {
+    let address = start().await;
+    let path = "/v1/projects/demo-app/subscriptions/seek-errors:seek";
+    for (request, conflict, subscription) in [
+        (
+            r#"{"time":"2000-01-01T00:00:00Z","snapshot":"projects/demo-app/snapshots/saved"}"#,
+            "snapshot",
+            false,
+        ),
+        (
+            r#"{"snapshot":"projects/demo-app/snapshots/saved","time":"2000-01-01T00:00:00Z"}"#,
+            "time",
+            false,
+        ),
+        (
+            r#"{"time":"2000-01-01T00:00:00Z","snapshot":"projects/demo-app/snapshots/saved","subscription":"projects/demo-app/subscriptions/seek-errors"}"#,
+            "snapshot",
+            true,
+        ),
+        (
+            r#"{"time":"snapshot,\"time\":","snapshot":"projects/demo-app/snapshots/saved"}"#,
+            "snapshot",
+            false,
+        ),
+    ] {
+        let (status, bytes) = rest_request_bytes(address, "POST", path, request.as_bytes()).await;
+        assert_eq!(status, 400);
+        if conflict == "snapshot" && !subscription {
+            assert_eq!(bytes.len(), 447);
+        }
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        let mut descriptions = vec![format!(
+            "Invalid value (oneof), oneof field 'target' is already set. Cannot set '{conflict}'"
+        )];
+        if subscription {
+            descriptions.push("Invalid JSON payload received. Unknown name \"subscription\": Root element must be a message.".into());
+        }
+        assert_eq!(body["error"]["message"], descriptions.join("\n"));
+        assert_eq!(
+            body["error"]["details"],
+            json!([{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":descriptions.iter().map(|description|json!({"description":description})).collect::<Vec<_>>()}])
+        );
+    }
+}
+
+#[tokio::test]
+async fn wrong_topic_seek_preserves_shared_core_message_on_both_transports() {
+    let address = start().await;
+    for topic in ["first", "second"] {
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/projects/demo-app/topics/{topic}"),
+                json!({})
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/projects/demo-app/subscriptions/{topic}"),
+                json!({"topic":format!("projects/demo-app/topics/{topic}")})
+            )
+            .await
+            .0,
+            200
+        );
+    }
+    let snapshot = "projects/demo-app/snapshots/saved";
+    assert_eq!(
+        rest_request(
+            address,
+            "PUT",
+            &format!("/v1/{snapshot}"),
+            json!({"subscription":"projects/demo-app/subscriptions/first"})
+        )
+        .await
+        .0,
+        200
+    );
+    let expected="The subscription's topic (projects/demo-app/topics/second) is different from that of the snapshot (projects/demo-app/topics/first); they must match in order for Seek work. Note that if a topic is deleted and then re-created with the same name, it is considered a distinct topic for these purposes.";
+    let (status, body) = rest_request(
+        address,
+        "POST",
+        "/v1/projects/demo-app/subscriptions/second:seek",
+        json!({"snapshot":snapshot}),
+    )
+    .await;
+    assert_eq!(status, 400);
+    assert_eq!(body["error"]["status"], "FAILED_PRECONDITION");
+    assert_eq!(body["error"]["message"], expected);
+    let mut native = SubscriberClient::new(grpc_channel(address).await);
+    let error = native
+        .seek(pb::SeekRequest {
+            subscription: "projects/demo-app/subscriptions/second".into(),
+            target: Some(pb::seek_request::Target::Snapshot(snapshot.into())),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(error.message(), expected);
+    native
+        .seek(pb::SeekRequest {
+            subscription: "projects/demo-app/subscriptions/first".into(),
+            target: Some(pb::seek_request::Target::Snapshot(snapshot.into())),
+        })
+        .await
+        .unwrap();
 }

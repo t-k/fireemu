@@ -1096,9 +1096,10 @@ impl PubSubState {
         if config.topic != snapshot.topic
             || current_topic_incarnation != Some(snapshot.topic_incarnation)
         {
-            return Err(PubSubError::failed_precondition(
-                "snapshot topic does not match subscription topic",
-            ));
+            return Err(PubSubError::failed_precondition(format!(
+                "The subscription's topic ({}) is different from that of the snapshot ({}); they must match in order for Seek work. Note that if a topic is deleted and then re-created with the same name, it is considered a distinct topic for these purposes.",
+                config.topic.to_full(), snapshot.topic.to_full(),
+            )));
         }
         self.sub_mut(subscription)?.seek_to_snapshot(
             &snapshot.captured_messages,
@@ -2982,6 +2983,7 @@ mod tests {
             .seek_to_snapshot(&wrong_target, snapshot, now)
             .unwrap_err();
         assert_eq!(error.code(), crate::error::Code::FailedPrecondition);
+        assert_eq!(error.message(), "The subscription's topic (projects/p/topics/second) is different from that of the snapshot (projects/p/topics/first); they must match in order for Seek work. Note that if a topic is deleted and then re-created with the same name, it is considered a distinct topic for these purposes.");
         assert_eq!(
             state
                 .acknowledge(&wrong_target, &[wrong_target_ack])

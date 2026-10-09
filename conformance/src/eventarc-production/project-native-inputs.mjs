@@ -148,7 +148,7 @@ function nativeBytes(response) {
   return bytes;
 }
 /** Keep the existing journal-row shape accepted by loadRows and loadNativeRequests. */
-export function projectJournal({ bytes, expectedSha256, numericProjectNumber }) {
+function projectRows({ bytes, expectedSha256, numericProjectNumber }, classifications) {
   assert.equal(sha(bytes), expectedSha256, "original journal digest");
   assert.match(numericProjectNumber, /^\d{12}$/, "project alias decimal width");
   assert.equal(
@@ -166,7 +166,15 @@ export function projectJournal({ bytes, expectedSha256, numericProjectNumber }) 
     ordinals = new Set();
   let omittedNotes = 0,
     nativeRows = 0;
-  for (const original of originals) {
+  for (const recorded of originals) {
+    const original =
+      classifications && recorded.n !== 25
+        ? {
+            ...recorded,
+            op: classifications[recorded.n - 1].op,
+            case: classifications[recorded.n - 1].case,
+          }
+        : recorded;
     if (typeof original.op !== "string") {
       if (original.note === "run-start") {
         assert.equal(typeof original.runId, "string");
@@ -278,6 +286,114 @@ export function projectJournal({ bytes, expectedSha256, numericProjectNumber }) 
       ordinals: [...ordinals],
     },
   };
+}
+export function projectJournal(options) {
+  return projectRows(options);
+}
+export const NATIVE_SUPPLEMENT_SHA256 =
+  "54765255731c0e0622a102abac4cd8e84e484ea9002a492de7113205b8cfb153";
+// Classification is derived from the closed capture, never claimed as recorded metadata.
+const supplementOps = [
+  "listServices",
+  "getChannel",
+  "getChannel",
+  "getChannel",
+  "listChannels",
+  "listChannels",
+  "listChannels",
+  "createChannel",
+  "getOperation",
+  "getOperation",
+  "getChannel",
+  "listChannels",
+  "createChannel",
+  "getOperation",
+  "getOperation",
+  "getChannel",
+  "listChannels",
+  "createChannel",
+  "getOperation",
+  "getOperation",
+  "getChannel",
+  "listChannels",
+  "publishEvents",
+  "publishEvents",
+  "sdk.publishEvents",
+  "publishEvents",
+  "publishEvents",
+  "publishEvents",
+  "getChannel",
+  "listChannels",
+  "getChannel",
+  "listChannels",
+  "getChannel",
+  "listChannels",
+  "listChannels",
+  "listChannels",
+  "listChannels",
+  "listChannels",
+  "listChannels",
+  "listChannels",
+  "listChannels",
+  "deleteChannel",
+  "getOperation",
+  "getChannel",
+  "deleteChannel",
+  "getOperation",
+  "getChannel",
+  "deleteChannel",
+  "getOperation",
+  "getChannel",
+  "listChannels",
+  "listChannels",
+];
+export function projectNativeSupplement({ bytes, numericProjectNumber }) {
+  assert.equal(sha(bytes), NATIVE_SUPPLEMENT_SHA256, "original supplement digest");
+  const originals = bytes.toString("utf8").split("\n").filter(Boolean).map(JSON.parse);
+  assert.equal(originals.length, 52, "closed supplement row count");
+  assert.deepEqual(
+    originals.map((r) => r.n),
+    Array.from({ length: 52 }, (_, i) => i + 1),
+    "closed supplement ordinals",
+  );
+  for (const r of originals) {
+    if (r.n === 25)
+      assert.deepEqual(
+        { op: r.op, case: r.case, step: r.step },
+        { op: "sdk.publishEvents", case: "native-c307", step: "s01-1" },
+        "unexpected recorded classification",
+      );
+    else
+      assert.ok(
+        ["op", "case", "step"].every((k) => !Object.hasOwn(r, k)),
+        "unexpected recorded classification",
+      );
+  }
+  const classifications = supplementOps.map((op, i) => ({
+    op,
+    case:
+      i === 24
+        ? "admin-sdk-publish"
+        : i >= 22 && i <= 27
+          ? "publish-envelope"
+          : "channel-lifecycle",
+    step: `native-${i + 1}`,
+  }));
+  const result = projectRows(
+    { bytes, expectedSha256: NATIVE_SUPPLEMENT_SHA256, numericProjectNumber },
+    classifications,
+  );
+  for (const row of result.rows)
+    Object.assign(row.projectionSource, {
+      classificationSource:
+        row.n === 25
+          ? "original-recorded-classification"
+          : "explicit-native-supplement-selectors-v1",
+      derivedClassification: classifications[row.n - 1],
+      originalRequestWireBytesPresent: false,
+    });
+  result.bytes = Buffer.from(result.rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  return result;
 }
 function expandPublicRepeat(value) {
   if (Array.isArray(value)) return value.map(expandPublicRepeat);

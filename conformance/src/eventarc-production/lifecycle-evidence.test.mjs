@@ -25,7 +25,7 @@ const channel = (id, n) => ({
 });
 const inventory = [channel("a", 1), channel("b", 2)];
 const op = `${collection.replace(/channels$/, "operations")}/operation-1234567890123-abcdef0123456-12345678-abcdef01`;
-function fixtures(t, overrides = {}) {
+function fixtures(t, overrides = {}, inventoryPath = `/v1/${collection}`) {
   const dir = mkdtempSync(join(tmpdir(), "eventarc-evidence-"));
   t.after(() => rmSync(dir, { recursive: true }));
   const rows = [
@@ -36,7 +36,7 @@ function fixtures(t, overrides = {}) {
     },
     {
       n: 2,
-      request: { method: "GET", path: `/v1/${collection}` },
+      request: { method: "GET", path: inventoryPath },
       response: { status: 200, body: { channels: inventory } },
     },
     {
@@ -623,4 +623,52 @@ test("own delete absence refuses an incomplete404 error even with canonical stat
   await assert.rejects(
     collectOperationTerminal({ collector, issued, pollIntervalMs: 1, timeoutMs: 100 }),
   );
+});
+
+// The supplemental native full inventory was recorded with exactly pageSize=10.
+test("recorded pageSize10 inventory preserves the exact query and own cursor chain", async (t) => {
+  const f = fixtures(t, {}, `/v1/${collection}?pageSize=10`);
+  const { collector, calls } = scripted(walkBodies());
+  const proof = await collectOwnCursorWalk({ collector, root: f.get(1), inventory: f.get(2) });
+  assert.equal(proof.complete, true);
+  assert.ok(calls[0][0].endsWith("?pageSize=10"));
+  assert.ok(calls.at(-1)[0].endsWith("?pageSize=10"));
+  assert.equal(collector.exchanges[2].derivedFrom, collector.exchanges[1].id);
+});
+for (const suffix of [
+  "?pageSize=9",
+  "?pageSize=10&pageToken=foreign",
+  "?pageSize=10&filter=state",
+  "?pageSize=10&orderBy=name",
+  "?pageSize=10&x=extra",
+  "?pageSize=10&pageSize=10",
+])
+  test(`inventory rejects unsupported query ${suffix} before transport`, async (t) => {
+    const f = fixtures(t, {}, `/v1/${collection}${suffix}`);
+    const { collector, calls } = scripted([]);
+    await assert.rejects(collectOwnCursorWalk({ collector, root: f.get(1), inventory: f.get(2) }));
+    assert.equal(calls.length, 0);
+  });
+
+test("pageSize10 inventory retains every full-field comparison property", async (t) => {
+  const changes = [
+    ["name", `${collection}/other`],
+    ["uid", "00000000-0000-4000-8000-000000000009"],
+    ["createTime", "2026-10-09T00:00:01.000000000Z"],
+    ["updateTime", "2026-10-09T00:00:01.000000000Z"],
+    ["state", "INACTIVE"],
+    ["pubsubTopic", "projects/test-project/topics/changed-123"],
+    ["provider", "unrecorded"],
+  ];
+  for (const [field, value] of changes) {
+    const f = fixtures(t, {}, `/v1/${collection}?pageSize=10`);
+    const { collector } = scripted(
+      walkBodies({ channels: [{ ...inventory[0], [field]: value }], nextPageToken: "bmV4dA" }),
+    );
+    await assert.rejects(
+      collectOwnCursorWalk({ collector, root: f.get(1), inventory: f.get(2) }),
+      undefined,
+      field,
+    );
+  }
 });

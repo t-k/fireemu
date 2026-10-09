@@ -927,3 +927,348 @@ test("session endpoint rejects doubled scheme and every nonnative URL shape befo
   ])
     assert.throws(() => sessionEndpoint(value));
 });
+
+test("supplement loader binds the fixed52 projection and preserves recorded SDK classification", async () => {
+  const m = await import("./run.mjs");
+  assert.equal(typeof m.loadNativeSupplement, "function");
+  const input = m.loadNativeSupplement();
+  assert.equal(input.rows.length, 52);
+  assert.equal(input.rows[24].case, "native-c307");
+  assert.equal(input.rows[24].step, "s01-1");
+  assert.equal(input.rows[24].projectionSource.derivedClassification.case, "admin-sdk-publish");
+  assert.deepEqual(input.selectors.publishN, [23, 24, 25, 26, 27, 28]);
+  assert.equal(
+    input.journalSha256,
+    "54765255731c0e0622a102abac4cd8e84e484ea9002a492de7113205b8cfb153",
+  );
+});
+test("supplement producer is distinct from original check and enforces its finite budget", async () => {
+  const m = await import("./run.mjs");
+  assert.equal(typeof m.deriveSupplementBudget, "function");
+  const b = m.deriveSupplementBudget(m.loadNativeSupplement());
+  assert.equal(b.sessionMs, 900000);
+  assert.equal(b.teardownMs, 12500);
+  assert.equal(b.overallMs, 972500);
+  assert.throws(
+    () => m.deriveSupplementBudget(m.loadNativeSupplement(), 912500),
+    /supplement budget infeasible/,
+  );
+  assert.throws(() => m.deriveSupplementBudget(m.loadNativeSupplement(), Infinity));
+});
+
+function nativeSupplementWorld(publishText = "{}\n") {
+  const rows = readFileSync(
+    new URL("./fixtures/native-supplement/recorded.jsonl", import.meta.url),
+    "utf8",
+  )
+    .trim()
+    .split("\n")
+    .map(JSON.parse);
+  const native = new Map(rows.map((r) => [r.n, r]));
+  const channels = structuredClone(native.get(35).response.body.channels).toReversed();
+  const deleted = new Set(),
+    calls = [];
+  let publish = 0;
+  const fetchImpl = async (url, init) => {
+    const u = new URL(url),
+      path = u.pathname + u.search;
+    calls.push({ path, method: init.method });
+    let body,
+      status = 200;
+    if (init.method === "POST" && u.pathname.endsWith(":publishEvents")) {
+      const n = 23 + publish++,
+        expected = native.get(n);
+      assert.equal(path, expected.request.path);
+      assert.deepEqual(JSON.parse(init.body), expected.request.body, "actual native publish body");
+      body = {};
+    } else if (init.method === "POST") {
+      const expected = [8, 13, 18].map((n) => native.get(n)).find((r) => r.request.path === path);
+      assert.ok(expected, "unplanned create");
+      assert.deepEqual(JSON.parse(Buffer.from(init.body).toString()), expected.request.body);
+      body = expected.response.body;
+    } else if (init.method === "DELETE") {
+      const expected = [43, 46, 49]
+        .map((n) => native.get(n))
+        .find((r) => `/v1/${r.response.body.metadata.target}` === path);
+      assert.ok(expected, "unowned cleanup");
+      deleted.add(expected.response.body.metadata.target);
+      body = expected.response.body;
+    } else if (u.pathname.includes("/operations/")) {
+      const expected = [10, 15, 20].map((n) => native.get(n)).find((r) => r.request.path === path);
+      assert.ok(expected, "unissued operation");
+      body = expected.response.body;
+    } else if (u.pathname.includes("/channels/")) {
+      const target = u.pathname.slice(4);
+      if (deleted.has(target)) {
+        status = 404;
+        body = { error: { code: 404, status: "NOT_FOUND", message: "absent" } };
+      } else {
+        body = channels.find((c) => c.name === target);
+        assert.ok(body, "foreign get");
+      }
+    } else {
+      assert.equal(init.method, "GET");
+      const size = Number(u.searchParams.get("pageSize"));
+      if (size === 10) body = { channels };
+      else {
+        assert.ok([1, 2].includes(size));
+        const token = u.searchParams.get("pageToken");
+        const offset = token ? Number(Buffer.from(token, "base64url").toString().split(":")[1]) : 0;
+        assert.equal(token, offset ? Buffer.from(`${size}:${offset}`).toString("base64url") : null);
+        body = { channels: channels.slice(offset, offset + size) };
+        if (offset + size < channels.length)
+          body.nextPageToken = Buffer.from(`${size}:${offset + size}`).toString("base64url");
+      }
+    }
+    const text =
+      init.method === "POST" && u.pathname.endsWith(":publishEvents")
+        ? publishText
+        : JSON.stringify(body) + "\n";
+    return new Response(text, {
+      status,
+      headers: {
+        "content-type": "application/json; charset=UTF-8",
+        "content-length": String(Buffer.byteLength(text)),
+      },
+    });
+  };
+  return { native, channels, calls, fetchImpl };
+}
+test("supplement actual-shape model binds six publication wires and both full own-cursor walks", async () => {
+  const m = await import("./run.mjs");
+  assert.equal(typeof m.collectNativeSupplement, "function");
+  const world = nativeSupplementWorld();
+  const report = await m.collectNativeSupplement(
+    m.loadNativeSupplement(),
+    "http://127.0.0.1:9999",
+    { fetchImpl: world.fetchImpl },
+  );
+  assert.equal(
+    report.complete,
+    true,
+    JSON.stringify({
+      failure: report.failure,
+      cleanupFailures: report.cleanup.filter((c) => !c.complete).map((c) => c.failure),
+    }),
+  );
+  assert.equal(report.kind, "eventarc-native-supplement-facets-v1");
+  assert.equal(report.localSDKCall, false);
+  assert.deepEqual(
+    report.publications.wire.map((r) => r.n),
+    [23, 24, 25, 26, 27, 28],
+  );
+  assert.ok(report.publications.results.every((r) => r.verdict === "match"));
+  assert.deepEqual(
+    report.proofs.map((p) => p.key),
+    [
+      "N1.publish.23",
+      "N1.publish.24",
+      "N1.publish.25",
+      "N1.publish.26",
+      "N1.publish.27",
+      "N1.publish.28",
+      "N1.walk.36",
+      "N1.walk.39",
+    ],
+  );
+  assert.equal(report.proofs[2].transport, "sdk-wire");
+  assert.equal(report.proofs[2].localSDKCall, false);
+  assert.ok(report.proofs.every((p) => p.status === "PENDING"));
+  assert.ok(report.cleanup.every((p) => p.complete));
+  assert.equal(report.cleanup.length, 3);
+  assert.equal(report.proofs[6].resourceCount, 3);
+  assert.equal(report.proofs[7].resourceCount, 3);
+  assert.equal(report.publications.wire[0].responseBytes, 3);
+  assert.equal(Object.hasOwn(world.native.get(23).response.headers, "content-length"), false);
+  assert.equal(report.publications.wire[0].headers["content-length"], "3");
+  assert.equal(report.publications.wire[0].physicalHeaderComparison.verdict, "DIVERGE");
+  assert.ok(
+    report.publications.wire[0].physicalHeaderComparison.differences.some(
+      (d) => d.header === "content-length" && d.nativePresent === false && d.actualPresent === true,
+    ),
+  );
+  assert.equal(report.proofs[0].physicalHeaderVerdict, "DIVERGE");
+  assert.equal(report.publications.wire[0].responseBase64, Buffer.from("{}\n").toString("base64"));
+  assert.ok(
+    report.publications.wire.at(-1).startedMonotonicMs -
+      report.publications.wire[0].startedMonotonicMs >=
+      5900,
+  );
+  assert.ok(report.exchanges.filter((x) => x.derivedFrom !== null).length);
+});
+test("supplement setup failure remains incomplete and cannot fabricate publication proofs", async () => {
+  const m = await import("./run.mjs");
+  assert.equal(typeof m.collectNativeSupplement, "function");
+  const world = nativeSupplementWorld();
+  let count = 0;
+  const report = await m.collectNativeSupplement(
+    m.loadNativeSupplement(),
+    "http://127.0.0.1:9999",
+    {
+      fetchImpl: async (...args) => {
+        if (count++ === 0) throw new Error("supplement transport failed");
+        return world.fetchImpl(...args);
+      },
+    },
+  );
+  assert.equal(report.complete, false);
+  assert.match(report.failure.message, /supplement transport failed/);
+  assert.equal(report.proofs.length, 0);
+  assert.equal(report.exchanges[0].failure.message, "supplement transport failed");
+});
+
+function supplementalCopy(t, mutate, repin = false) {
+  const dir = mkdtempSync(join(tmpdir(), "ea-supplement-input-"));
+  t.after(() => rmSync(dir, { recursive: true }));
+  const rows = readFileSync(
+    new URL("./fixtures/native-supplement/recorded.jsonl", import.meta.url),
+    "utf8",
+  )
+    .trim()
+    .split("\n")
+    .map(JSON.parse);
+  const provenance = JSON.parse(
+    readFileSync(new URL("./fixtures/native-supplement/provenance.json", import.meta.url), "utf8"),
+  );
+  mutate(rows, provenance);
+  const bytes = Buffer.from(rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  if (repin) provenance.projection.sha256 = hash(bytes);
+  writeFileSync(join(dir, "recorded.jsonl"), bytes);
+  writeFileSync(join(dir, "provenance.json"), JSON.stringify(provenance) + "\n");
+  return dir;
+}
+for (const [name, mutate] of [
+  ["wrong native authority", (_, p) => (p.source.journalSha256 = "0".repeat(64))],
+  ["foreign selector", (_, p) => (p.selectors.publishN[0] = 22)],
+  ["missing tail selector", (_, p) => p.selectors.walks[0].pageN.pop()],
+  ["recorded SDK classification", (rows) => (rows[24].case = "admin-sdk-publish")],
+  ["recorded SDK step", (rows) => (rows[24].step = "native-25")],
+  ["invented original step", (rows) => (rows[0].step = "native-1")],
+  ["duplicate ordinal", (rows) => (rows[1].n = 1)],
+  ["dropped row", (rows) => rows.pop()],
+  ["reordered rows", (rows) => ([rows[0], rows[1]] = [rows[1], rows[0]])],
+  [
+    "native full-field mutation",
+    (rows) => {
+      const r = rows[34];
+      r.response.body.channels[0].state = "INACTIVE";
+      const bytes = Buffer.from(JSON.stringify(r.response.body) + "\n");
+      r.response.bodyBase64 = bytes.toString("base64");
+      r.response.bodyBytes = bytes.length;
+      r.response.bodySha256 = hash(bytes);
+    },
+  ],
+])
+  test(`supplement loader refuses ${name} even with a rewritten projection digest`, async (t) => {
+    const m = await import("./run.mjs");
+    const dir = supplementalCopy(t, mutate, true);
+    assert.throws(() => m.loadNativeSupplement(dir));
+  });
+test("supplement-only budget refusal occurs before binary lookup or spawn", async () => {
+  const m = await import("./run.mjs");
+  assert.equal(typeof m.checkNativeSupplement, "function");
+  await assert.rejects(
+    m.checkNativeSupplement({
+      binary: "/missing/never-spawn",
+      out: "/missing/never-write",
+      budgetMs: 912500,
+    }),
+    /supplement budget infeasible/,
+  );
+});
+
+test("supplement public facet references retain exact binding without private input paths", async () => {
+  const m = await import("./run.mjs");
+  assert.equal(typeof m.publicSupplementReport, "function");
+  const input = m.loadNativeSupplement();
+  const boundSource = {
+    path: input.path,
+    sha256: input.sha256,
+    n: 36,
+    requestSha256: "a".repeat(64),
+  };
+  const report = {
+    proofs: [
+      {
+        source: boundSource,
+        inventorySource: { ...boundSource, n: 35 },
+        nativeAfterSource: { ...boundSource, n: 41 },
+        nativePageSources: [boundSource],
+      },
+    ],
+    exchanges: [
+      {
+        source: boundSource,
+        request: { path: "/v1/projects/unit/locations/us-central1/channels?pageSize=1" },
+      },
+    ],
+  };
+  const output = m.publicSupplementReport(report, input);
+  assert.equal(
+    output.proofs[0].source.path,
+    "conformance/src/eventarc-production/fixtures/native-supplement/recorded.jsonl",
+  );
+  assert.equal(output.proofs[0].nativePageSources[0].sha256, input.sha256);
+  assert.ok(!JSON.stringify(output).includes(input.path));
+  assert.equal(report.proofs[0].source.path, input.path);
+  assert.throws(() =>
+    m.publicSupplementReport({ source: { ...boundSource, sha256: "b".repeat(64) } }, input),
+  );
+  assert.throws(() =>
+    m.publicSupplementReport({ source: { ...boundSource, path: "/private/foreign.jsonl" } }, input),
+  );
+});
+
+test("supplement finite budget boundary property rejects every smaller allowance", async () => {
+  const m = await import("./run.mjs"),
+    input = m.loadNativeSupplement();
+  for (const value of [0, -1, 1, 60000, 900000, 912500, 972499, 972501, NaN, Infinity, 1.5])
+    assert.throws(() => m.deriveSupplementBudget(input, value));
+  assert.equal(m.deriveSupplementBudget(input, 972500).overallMs, 972500);
+  const changed = structuredClone(input);
+  changed.rows[27].at = "2026-10-10T00:00:00.000Z";
+  assert.throws(() => m.deriveSupplementBudget(changed), /session budget infeasible/);
+});
+
+test("supplement retains physical body layout D without changing the original semantic comparator", async () => {
+  const m = await import("./run.mjs"),
+    world = nativeSupplementWorld("{}");
+  const report = await m.collectNativeSupplement(
+    m.loadNativeSupplement(),
+    "http://127.0.0.1:9999",
+    { fetchImpl: world.fetchImpl },
+  );
+  assert.equal(report.complete, true, JSON.stringify(report.failure));
+  assert.ok(report.publications.results.every((r) => r.verdict === "match"));
+  assert.equal(report.publications.wire[0].responseBytes, 2);
+  assert.equal(report.publications.wire[0].physicalBodyComparison.nativeBytes, 3);
+  assert.equal(report.publications.wire[0].physicalBodyComparison.verdict, "DIVERGE");
+  assert.equal(report.publications.wire[0].responseBase64, Buffer.from("{}").toString("base64"));
+  assert.equal(report.proofs[0].physicalBodyVerdict, "DIVERGE");
+  assert.ok(report.proofs.every((p) => p.status === "PENDING"));
+});
+test("supplement wrong publish status cannot complete selected semantic proofs", async () => {
+  const m = await import("./run.mjs"),
+    world = nativeSupplementWorld();
+  const report = await m.collectNativeSupplement(
+    m.loadNativeSupplement(),
+    "http://127.0.0.1:9999",
+    {
+      fetchImpl: async (url, init) => {
+        const original = await world.fetchImpl(url, init);
+        return new URL(url).pathname.endsWith(":publishEvents")
+          ? new Response("{}\n", {
+              status: 400,
+              headers: { "content-type": "application/json; charset=UTF-8", "content-length": "3" },
+            })
+          : original;
+      },
+    },
+  );
+  assert.equal(report.complete, false);
+  assert.match(report.failure.message, /publication divergence/);
+  assert.equal(report.proofs.length, 0);
+  assert.ok(report.publications.results.every((r) => r.verdict === "diverge"));
+  assert.equal(report.publications.wire[0].status, 400);
+  assert.ok(report.cleanup.every((p) => p.complete));
+});

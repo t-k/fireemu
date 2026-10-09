@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "kind": "eventarc-native-supplement-projection-v1",
+  "numericAlias": "123456789012",
+  "source": {
+    "recording": "8bd0c714ef26",
+    "journalSha256": "54765255731c0e0622a102abac4cd8e84e484ea9002a492de7113205b8cfb153",
+    "rows": 52
+  },
+  "projection": {
+    "file": "recorded.jsonl",
+    "sha256": "598a984e700fc9f44ed726e9a9aa3881222f0ad026e2dd2cf3b20f5b0bbc5f82",
+    "rows": 52,
+    "nativeRows": 52
+  },
+  "selectors": {
+    "setupN": [
+      8,
+      13,
+      18
+    ],
+    "publishN": [
+      23,
+      24,
+      25,
+      26,
+      27,
+      28
+    ],
+    "inventoryBeforeN": 35,
+    "inventoryAfterN": 41,
+    "walks": [
+      {
+        "rootN": 36,
+        "pageN": [
+          36,
+          37,
+          38
+        ],
+        "pageSize": 1
+      },
+      {
+        "rootN": 39,
+        "pageN": [
+          39,
+          40
+        ],
+        "pageSize": 2
+      }
+    ]
+  },
+  "limitations": [
+    "SDK forward is wire evidence; no local SDK client invocation is proved.",
+    "Original A-D rows and verdicts are unchanged.",
+    "Case and parent outcomes remain PENDING."
+  ]
+}

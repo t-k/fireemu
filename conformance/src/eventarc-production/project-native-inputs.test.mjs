@@ -369,3 +369,84 @@ test("parsed-only absence contract explicitly names all four byte fields and hea
     );
   }
 });
+
+test(
+  "closed native supplement projects all52 rows with derived metadata and original source binding",
+  { skip: !process.env.EVENTARC_NATIVE_SUPPLEMENT_JOURNAL },
+  async () => {
+    const m = await subject();
+    assert.equal(typeof m.projectNativeSupplement, "function");
+    const bytes = readFileSync(process.env.EVENTARC_NATIVE_SUPPLEMENT_JOURNAL);
+    const projected = m.projectNativeSupplement({
+      bytes,
+      numericProjectNumber: process.env.EVENTARC_NATIVE_SUPPLEMENT_NUMBER,
+    });
+    assert.equal(
+      projected.bytes.compare(
+        readFileSync(new URL("./fixtures/native-supplement/recorded.jsonl", import.meta.url)),
+      ),
+      0,
+      "public projection equals actual closed native transformation",
+    );
+    assert.equal(projected.rows.length, 52);
+    assert.equal(projected.summary.nativeRows, 52);
+    assert.deepEqual(
+      projected.rows.map((r) => r.n),
+      Array.from({ length: 52 }, (_, i) => i + 1),
+    );
+    for (const r of projected.rows) {
+      assert.equal(
+        r.projectionSource.journalSha256,
+        "54765255731c0e0622a102abac4cd8e84e484ea9002a492de7113205b8cfb153",
+      );
+      assert.equal(
+        r.projectionSource.classificationSource,
+        r.n === 25 ? "original-recorded-classification" : "explicit-native-supplement-selectors-v1",
+      );
+      assert.ok(r.response.headers);
+      assert.ok(r.response.originalBodySha256);
+      if (r.n !== 25)
+        assert.equal(Object.hasOwn(r, "step"), false, "original missing step remains absent");
+    }
+    assert.equal(projected.rows[24].op, "sdk.publishEvents");
+    assert.equal(projected.rows[24].case, "native-c307");
+    assert.equal(projected.rows[24].step, "s01-1");
+    assert.deepEqual(projected.rows[24].projectionSource.derivedClassification, {
+      op: "sdk.publishEvents",
+      case: "admin-sdk-publish",
+      step: "native-25",
+    });
+    assert.equal(projected.rows[24].projectionSource.originalRequestWireBytesPresent, false);
+    assert.equal(projected.rows[24].requestBytes, 358);
+    assert.equal(projected.rows[34].request.path.split("?")[1], "pageSize=10");
+  },
+);
+test("native supplement rejects any nonauthoritative capture bytes", async () => {
+  const m = await subject();
+  assert.equal(typeof m.projectNativeSupplement, "function");
+  assert.throws(
+    () => m.projectNativeSupplement({ bytes: journal([row()]), numericProjectNumber: old }),
+    /original supplement digest/,
+  );
+});
+
+test(
+  "closed native SDK classification mutation is refused before projection",
+  { skip: !process.env.EVENTARC_NATIVE_SUPPLEMENT_JOURNAL },
+  async () => {
+    const m = await subject();
+    const bytes = readFileSync(process.env.EVENTARC_NATIVE_SUPPLEMENT_JOURNAL);
+    for (const key of ["op", "case", "step"]) {
+      const rows = bytes.toString("utf8").trim().split("\n").map(JSON.parse);
+      rows[24][key] = "unexpected-classification";
+      assert.throws(
+        () =>
+          m.projectNativeSupplement({
+            bytes: journal(rows),
+            numericProjectNumber: process.env.EVENTARC_NATIVE_SUPPLEMENT_NUMBER,
+          }),
+        /original supplement digest/,
+      );
+    }
+  },
+);

@@ -19,6 +19,7 @@ import { createServer } from "node:net";
 import { isDeepStrictEqual } from "node:util";
 import { replay, summarize, skipReason, requestBody } from "./compare.mjs";
 import { findPackagedRunner } from "../packaged-runner.mjs";
+import { NATIVE_SUPPLEMENT_SHA256 } from "./project-native-inputs.mjs";
 import {
   loadNativeRequests,
   createCollector,
@@ -216,6 +217,113 @@ export function loadInputs(directory = join(here, "fixtures/ad")) {
     );
   }
   return { directory, provenance, plan, corpora, pins: projectionPins };
+}
+const supplementSelectors = {
+  setupN: [8, 13, 18],
+  publishN: [23, 24, 25, 26, 27, 28],
+  inventoryBeforeN: 35,
+  inventoryAfterN: 41,
+  walks: [
+    { rootN: 36, pageN: [36, 37, 38], pageSize: 1 },
+    { rootN: 39, pageN: [39, 40], pageSize: 2 },
+  ],
+};
+/** This additional witness never replaces an original A-D recording or verdict. */
+export function loadNativeSupplement(directory = join(here, "fixtures/native-supplement")) {
+  const provenancePath = join(directory, "provenance.json"),
+    path = join(directory, "recorded.jsonl");
+  const provenance = json(provenancePath),
+    bytes = readFileSync(path);
+  assert.equal(provenance.kind, "eventarc-native-supplement-projection-v1");
+  assert.equal(provenance.numericAlias, "123456789012");
+  assert.deepEqual(
+    provenance.source,
+    { recording: "8bd0c714ef26", journalSha256: NATIVE_SUPPLEMENT_SHA256, rows: 52 },
+    "supplement native authority",
+  );
+  assert.equal(provenance.projection.file, "recorded.jsonl");
+  assert.equal(
+    provenance.projection.sha256,
+    "598a984e700fc9f44ed726e9a9aa3881222f0ad026e2dd2cf3b20f5b0bbc5f82",
+    "closed supplement projection authority",
+  );
+  assert.equal(sha(bytes), provenance.projection.sha256, "supplement projection digest");
+  assert.equal(provenance.projection.rows, 52);
+  assert.equal(provenance.projection.nativeRows, 52);
+  assert.deepEqual(provenance.selectors, supplementSelectors, "closed supplement selectors");
+  const rows = validateProjectedRows(
+    bytes.toString("utf8").split("\n").filter(Boolean).map(JSON.parse),
+    { journalSha256: NATIVE_SUPPLEMENT_SHA256 },
+  );
+  assert.deepEqual(
+    rows.map((r) => r.n),
+    Array.from({ length: 52 }, (_, i) => i + 1),
+    "closed supplement ordinals",
+  );
+  for (const row of rows) {
+    assert.equal(row.projectionSource.originalResponseBytesPresent, true);
+    assert.equal(row.projectionSource.originalRequestWireBytesPresent, false);
+    assert.equal(
+      row.projectionSource.classificationSource,
+      row.n === 25 ? "original-recorded-classification" : "explicit-native-supplement-selectors-v1",
+    );
+    const derived = row.projectionSource.derivedClassification;
+    assert.equal(derived?.step, `native-${row.n}`);
+    assert.equal(typeof derived?.op, "string");
+    assert.equal(typeof derived?.case, "string");
+    if (row.n === 25) {
+      assert.deepEqual(
+        { op: row.op, case: row.case, step: row.step },
+        { op: "sdk.publishEvents", case: "native-c307", step: "s01-1" },
+        "recorded SDK classification",
+      );
+      assert.deepEqual(derived, {
+        op: "sdk.publishEvents",
+        case: "admin-sdk-publish",
+        step: "native-25",
+      });
+    } else {
+      assert.equal(Object.hasOwn(row, "step"), false, "original missing step");
+      assert.equal(row.op, derived.op);
+      assert.equal(row.case, derived.case);
+    }
+  }
+  return {
+    directory,
+    path,
+    sha256: sha(bytes),
+    rows,
+    journalSha256: NATIVE_SUPPLEMENT_SHA256,
+    selectors: provenance.selectors,
+    pins: { "recorded.jsonl": sha(bytes), "provenance.json": digest(provenancePath) },
+  };
+}
+export function deriveSupplementBudget(input, overallMs = 972500) {
+  assert.ok(
+    Number.isSafeInteger(overallMs) && overallMs > 0 && overallMs <= 972500,
+    "finite supplement budget cap",
+  );
+  const rows = input.selectors.publishN.map((n) => input.rows.find((r) => r.n === n));
+  const starts = rows.map((r) => Date.parse(r.at) - r.ms);
+  assert.ok(
+    starts.every((n, i) => Number.isFinite(n) && (i === 0 || n >= starts[i - 1])),
+    "finite supplement cadence",
+  );
+  const cadenceMs = starts.at(-1) - starts[0];
+  assert.ok(cadenceMs + 30000 + 180000 <= 900000, "supplement session budget infeasible");
+  assert.ok(
+    overallMs >= 900000 + 12500 + 60000,
+    "supplement budget infeasible before binary spawn",
+  );
+  return {
+    overallMs,
+    sessionMs: 900000,
+    teardownMs: 12500,
+    preparationAllowanceMs: 60000,
+    collectorMs: 180000,
+    maxRequests: 600,
+    publishCadenceMs: cadenceMs,
+  };
 }
 /** Pace original client start offsets before creating the fresh per-request deadline. */
 export async function replayWithWire(rows, { base, fetchImpl = fetch, requestTimeoutMs = 30000 }) {
@@ -915,6 +1023,151 @@ export async function collectFacets(inputs, label, base, { fetchImpl = fetch } =
     ...(failure ? { failure } : {}),
   };
 }
+export function publicSupplementReport(report, input) {
+  const result = structuredClone(report),
+    visited = new WeakSet();
+  const visit = (value) => {
+    if (!value || typeof value !== "object" || visited.has(value)) return;
+    visited.add(value);
+    if (typeof value.path === "string" && Object.hasOwn(value, "sha256")) {
+      assert.equal(value.path, input.path, "foreign supplement source path");
+      assert.equal(value.sha256, input.sha256, "unbound supplement source");
+      value.path = "conformance/src/eventarc-production/fixtures/native-supplement/recorded.jsonl";
+    }
+    for (const item of Object.values(value)) visit(item);
+  };
+  visit(result);
+  return result;
+}
+/** Additional actual facets remain pending; SDK provenance here is the captured HTTP forward. */
+export async function collectNativeSupplement(input, base, { fetchImpl = fetch } = {}) {
+  deriveSupplementBudget(input);
+  const ordinals = [
+    ...new Set([
+      ...input.selectors.setupN,
+      ...input.selectors.publishN,
+      input.selectors.inventoryBeforeN,
+      input.selectors.inventoryAfterN,
+      ...input.selectors.walks.flatMap((w) => w.pageN),
+    ]),
+  ];
+  const native = loadNativeRequests({ path: input.path, sha256: input.sha256, ordinals });
+  const collector = createCollector({ base, fetchImpl, maxElapsedMs: 180000, maxRequests: 600 });
+  const issued = [],
+    proofs = [],
+    cleanupExchanges = [];
+  let failure, publications;
+  try {
+    for (const n of input.selectors.setupN) {
+      const operation = await issueOperation({ collector, input: native.get(n) });
+      issued.push(operation);
+      await collectOperationTerminal({ collector, issued: operation });
+    }
+    publications = await replayWithWire(
+      input.selectors.publishN.map((n) => input.rows.find((r) => r.n === n)),
+      { base, fetchImpl },
+    );
+    assert.ok(
+      publications.complete && publications.results.every((r) => r.verdict === "match"),
+      "supplement publication divergence",
+    );
+    for (const wire of publications.wire) {
+      const row = input.rows.find((r) => r.n === wire.n);
+      assert.equal(wire.status, 200);
+      wire.physicalBodyComparison = {
+        verdict:
+          wire.responseSha256 === row.response.bodySha256 &&
+          wire.responseBytes === row.response.bodyBytes
+            ? "MATCH"
+            : "DIVERGE",
+        nativeBytes: row.response.bodyBytes,
+        nativeSha256: row.response.bodySha256,
+        originalNativeSha256: row.response.originalBodySha256,
+        actualBytes: wire.responseBytes,
+        actualSha256: wire.responseSha256,
+      };
+      const headerDifferences = [
+        ...new Set([...Object.keys(row.response.headers), ...Object.keys(wire.headers)]),
+      ]
+        .filter((h) => row.response.headers[h] !== wire.headers[h])
+        .map((h) => ({
+          header: h,
+          nativePresent: Object.hasOwn(row.response.headers, h),
+          actualPresent: Object.hasOwn(wire.headers, h),
+          nativeValue: row.response.headers[h] ?? null,
+          actualValue: wire.headers[h] ?? null,
+        }));
+      wire.physicalHeaderComparison = {
+        verdict: headerDifferences.length ? "DIVERGE" : "MATCH",
+        differences: headerDifferences,
+      };
+      proofs.push({
+        physicalHeaderVerdict: wire.physicalHeaderComparison.verdict,
+        physicalBodyVerdict: wire.physicalBodyComparison.verdict,
+        key: `N1.publish.${wire.n}`,
+        conditionId: wire.n === 25 ? "EVENTARC/admin-sdk-publish" : "EVENTARC/publish-envelope",
+        caseId: wire.n === 24 ? "multiple-events" : "single-event",
+        transport: wire.n === 25 ? "sdk-wire" : "rest",
+        localSDKCall: false,
+        status: "PENDING",
+        complete: true,
+        source: native.get(wire.n).source,
+        nativeJournalSha256: input.journalSha256,
+        wireN: wire.n,
+      });
+    }
+    const before = native.get(input.selectors.inventoryBeforeN),
+      after = native.get(input.selectors.inventoryAfterN);
+    assert.ok(
+      isDeepStrictEqual(before.recorded.body, after.recorded.body),
+      "native inventory changed",
+    );
+    for (const walk of input.selectors.walks)
+      proofs.push({
+        key: `N1.walk.${walk.rootN}`,
+        conditionId: "EVENTARC/channel-lifecycle",
+        caseId: "list-channels",
+        transport: "rest",
+        status: "PENDING",
+        nativeJournalSha256: input.journalSha256,
+        ...(await collectOwnCursorWalk({
+          collector,
+          root: native.get(walk.rootN),
+          inventory: before,
+        })),
+        nativeAfterSource: after.source,
+        nativePageSources: walk.pageN.map((n) => native.get(n).source),
+      });
+  } catch (error) {
+    failure = { name: error.name, message: error.message };
+  }
+  const cleanup = await cleanupTargets(
+    base,
+    new Set(issued.map((o) => o.target)),
+    cleanupExchanges,
+    fetchImpl,
+  );
+  return {
+    kind: "eventarc-native-supplement-facets-v1",
+    complete: !failure && proofs.length === 8 && cleanup.every((c) => c.complete),
+    status: "PENDING",
+    localSDKCall: false,
+    nativeJournalSha256: input.journalSha256,
+    projectionSha256: input.sha256,
+    proofs,
+    publications: publications ?? null,
+    exchanges: collector.exchanges,
+    cleanup,
+    cleanupExchanges,
+    ...(failure ? { failure } : {}),
+    remaining: [
+      "Local SDK invocation is not proved by SDK wire replay.",
+      "Original A-D raw comparisons remain unchanged.",
+      "Physical body layout/digest and header presence/value differences remain recorded divergences.",
+      "Release composition and case/parent disposition require separate approval.",
+    ],
+  };
+}
 export function sessionEndpoint(host) {
   assert.ok(host, "missing owned exec endpoint");
   const base = host;
@@ -923,7 +1176,10 @@ export function sessionEndpoint(host) {
 }
 async function session(path) {
   const options = json(path),
-    inputs = loadInputs(options.inputDirectory);
+    inputs =
+      options.phase === "native-supplement"
+        ? loadNativeSupplement(options.inputDirectory)
+        : loadInputs(options.inputDirectory);
   const base = sessionEndpoint(process.env.CLOUD_EVENTARC_EMULATOR_HOST);
   let report;
   try {
@@ -940,6 +1196,9 @@ async function session(path) {
       report.cleanupExchanges = [];
       report.cleanup = await cleanupTargets(base, targets, report.cleanupExchanges);
       report.complete &&= report.cleanup.every((x) => x.complete);
+    } else if (options.phase === "native-supplement") {
+      assert.equal(options.label, "N1");
+      report = await collectNativeSupplement(inputs, base);
     } else {
       assert.equal(options.phase, "facets");
       report = await collectFacets(inputs, options.label, base);
@@ -1010,9 +1269,12 @@ export async function check({
   out,
   inputDirectory = join(here, "fixtures/ad"),
   budgetMs = localOverallMs,
+  supplementOnly = false,
 }) {
-  const inputs = loadInputs(inputDirectory);
-  const budget = deriveLocalBudget(inputs, budgetMs);
+  const inputs = supplementOnly ? loadNativeSupplement(inputDirectory) : loadInputs(inputDirectory);
+  const budget = supplementOnly
+    ? deriveSupplementBudget(inputs, budgetMs)
+    : deriveLocalBudget(inputs, budgetMs);
   binary = realpathSync(binary);
   const runner = findPackagedRunner(binary);
   assert.ok(runner, "installed packaged runner required");
@@ -1024,6 +1286,7 @@ export async function check({
     fileURLToPath(import.meta.url),
     join(here, "compare.mjs"),
     join(here, "lifecycle-evidence.mjs"),
+    join(here, "project-native-inputs.mjs"),
     resolve(here, "../packaged-runner.mjs"),
   ]);
   const installedRunnerPins = runnerPins(runner);
@@ -1032,7 +1295,9 @@ export async function check({
   );
   const evidence = {
     schemaVersion: 1,
-    kind: "eventarc-installed-check-v1",
+    kind: supplementOnly
+      ? "eventarc-installed-native-supplement-check-v1"
+      : "eventarc-installed-check-v1",
     complete: false,
     artifactSha256: digest(binary),
     inputPins: inputs.pins,
@@ -1046,10 +1311,12 @@ export async function check({
   };
   mkdirSync(out, { recursive: true });
   const deadline = performance.now() + budget.overallMs;
-  for (const [phase, corpusLabels] of [
-    ["raw", labels],
-    ["facets", ["B", "C", "D"]],
-  ]) {
+  for (const [phase, corpusLabels] of supplementOnly
+    ? [["native-supplement", ["N1"]]]
+    : [
+        ["raw", labels],
+        ["facets", ["B", "C", "D"]],
+      ]) {
     for (const label of corpusLabels) {
       assert.ok(performance.now() < deadline, "finite overall check deadline");
       const work = mkdtempSync(join(out, `${phase}-${label}-`));
@@ -1057,7 +1324,7 @@ export async function check({
         reportPath = join(work, "report.json"),
         sessionPath = join(work, "session.json");
       writeFileSync(guard, offlineGuardSource);
-      const rows = inputs.corpora[label].rows;
+      const rows = supplementOnly ? inputs.rows : inputs.corpora[label].rows;
       const project = selectSessionProject(rows);
       const ports = await reservePorts(),
         config = sessionConfiguration({ project, ports, runner, guard, fixture });
@@ -1104,6 +1371,10 @@ export async function check({
         processReceipt.processGroupAbsent &&
         !processReceipt.cleanupFailure &&
         !processReceipt.interrupted;
+      if (supplementOnly) {
+        report = publicSupplementReport(report, inputs);
+        save(reportPath, report);
+      }
       const receiptPath = join(work, "process-receipt.json");
       save(receiptPath, processReceipt);
       evidence.sessions.push({
@@ -1134,6 +1405,15 @@ export async function check({
   save(join(out, "check-evidence.json"), evidence);
   return evidence;
 }
+/** Separate bounded dispatch; the original eight-session check and export are not composed here. */
+export async function checkNativeSupplement({
+  binary,
+  out,
+  inputDirectory = join(here, "fixtures/native-supplement"),
+  budgetMs = 972500,
+}) {
+  return check({ binary, out, inputDirectory, budgetMs, supplementOnly: true });
+}
 async function main(args) {
   const flag = (name) => {
     const i = args.indexOf(`--${name}`);
@@ -1141,14 +1421,17 @@ async function main(args) {
   };
   if (args[0] === "--session") return session(args[1]);
   assert.ok(
-    ["check", "export-comparison"].includes(args[0]),
-    "expected check or export-comparison",
+    ["check", "check-native-supplement", "export-comparison"].includes(args[0]),
+    "expected check, check-native-supplement or export-comparison",
   );
   const binary = flag("binary"),
     out = flag("out");
   assert.ok(binary && out, "--binary and --out required");
-  if (args[0] === "check") {
-    const result = await check({ binary, out: resolve(out) });
+  if (args[0] === "check" || args[0] === "check-native-supplement") {
+    const result = await (args[0] === "check" ? check : checkNativeSupplement)({
+      binary,
+      out: resolve(out),
+    });
     if (!result.complete) process.exitCode = 1;
   } else
     exportComparison({

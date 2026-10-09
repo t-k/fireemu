@@ -203,7 +203,10 @@ export async function collectOwnCursorWalk({ collector, root, inventory }) {
   assert.ok(match, "list collection");
   assert.equal(root.request.method, "GET");
   assert.equal(inventory.request.method, "GET");
-  assert.equal(inventory.request.path, bare, "inventory scope");
+  assert.ok(
+    inventory.request.path === bare || inventory.request.path === `${bare}?pageSize=10`,
+    "inventory scope",
+  );
   assert.equal(root.recorded?.status, 200);
   assert.ok(Array.isArray(root.recorded.body?.channels));
   const params = new URLSearchParams(query);

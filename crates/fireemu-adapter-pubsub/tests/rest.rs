@@ -19,10 +19,18 @@ async fn start() -> std::net::SocketAddr {
 }
 
 async fn start_policy(policy: fireemu_adapter_pubsub::PagingPolicy) -> std::net::SocketAddr {
+    start_with_numbers(policy, std::collections::BTreeMap::new()).await
+}
+
+async fn start_with_numbers(
+    policy: fireemu_adapter_pubsub::PagingPolicy,
+    numbers: std::collections::BTreeMap<String, String>,
+) -> std::net::SocketAddr {
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_700_000_000),
     )));
     let state = Arc::new(Mutex::new(PubSubState::new(99)));
+    state.lock().unwrap().set_project_numbers(numbers).unwrap();
     let handle = PubSubHandle::new(state, clock, None).with_paging_policy(policy);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -4607,5 +4615,288 @@ async fn unary_rest_pull_immediate_invalid_and_emulator_controls_are_prompt() {
             .unwrap();
             assert_eq!(ordinary, (200, json!({})));
         }
+    }
+}
+
+#[tokio::test]
+async fn resource_iam_roundtrip_normalizes_version_and_restores_empty_bindings() {
+    let address = start().await;
+    let topic = "projects/demo-iam/topics/source";
+    let subscription = "projects/demo-iam/subscriptions/source";
+    for (resource, body) in [(topic, json!({})), (subscription, json!({"topic":topic}))] {
+        assert_eq!(
+            rest_request(address, "PUT", &format!("/v1/{resource}"), body)
+                .await
+                .0,
+            200
+        );
+    }
+    for (resource, role) in [
+        (topic, "roles/pubsub.publisher"),
+        (subscription, "roles/pubsub.subscriber"),
+    ] {
+        let get = format!("/v1/{resource}:getIamPolicy?options.requestedPolicyVersion=3");
+        let set = format!("/v1/{resource}:setIamPolicy");
+        let (status, baseline) = rest_request(address, "GET", &get, json!({})).await;
+        assert_eq!(status, 200);
+        assert_eq!(baseline.as_object().unwrap().len(), 1);
+        assert_eq!(baseline["etag"].as_str().unwrap().len(), 4);
+        let binding = json!({"role":role,"members":["serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com"]});
+        let (status, granted) = rest_request(
+            address,
+            "POST",
+            &set,
+            json!({"policy":{"version":3,"etag":baseline["etag"],"bindings":[binding.clone()]}}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(granted["version"], 1);
+        assert_eq!(granted["etag"].as_str().unwrap().len(), 12);
+        assert_eq!(granted["bindings"], json!([binding]));
+        assert_eq!(
+            rest_request(address, "GET", &get, json!({})).await.1,
+            granted
+        );
+        let (stale, _) = rest_request(
+            address,
+            "POST",
+            &set,
+            json!({"policy":{"etag":baseline["etag"],"bindings":[]}}),
+        )
+        .await;
+        assert_ne!(stale, 200);
+        assert_eq!(
+            rest_request(address, "GET", &get, json!({})).await.1,
+            granted
+        );
+        let (status, restored) = rest_request(
+            address,
+            "POST",
+            &set,
+            json!({"policy":{"version":1,"etag":granted["etag"],"bindings":[]}}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(restored["version"], 1);
+        assert!(restored.get("bindings").is_none());
+        assert_eq!(
+            rest_request(address, "GET", &get, json!({})).await.1,
+            restored
+        );
+    }
+}
+
+#[tokio::test]
+async fn strict_ungranted_dead_letter_keeps_positive_attempts_and_source_redelivery() {
+    let address = start().await;
+    let topic = "projects/demo-iam/topics/source";
+    let dead = "projects/demo-iam/topics/dead";
+    let source = "projects/demo-iam/subscriptions/source";
+    let sink = "projects/demo-iam/subscriptions/sink";
+    for resource in [topic, dead] {
+        assert_eq!(
+            rest_request(address, "PUT", &format!("/v1/{resource}"), json!({}))
+                .await
+                .0,
+            200
+        );
+    }
+    assert_eq!(rest_request(address,"PUT",&format!("/v1/{source}"),json!({"topic":topic,"deadLetterPolicy":{"deadLetterTopic":dead,"maxDeliveryAttempts":5}})).await.0,200);
+    assert_eq!(
+        rest_request(
+            address,
+            "PUT",
+            &format!("/v1/{sink}"),
+            json!({"topic":dead})
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("/v1/{topic}:publish"),
+            json!({"messages":[{"data":"eA=="}]})
+        )
+        .await
+        .0,
+        200
+    );
+    for attempt in 1..=6 {
+        let (_, body) = rest_request(
+            address,
+            "POST",
+            &format!("/v1/{source}:pull"),
+            json!({"maxMessages":1,"returnImmediately":true}),
+        )
+        .await;
+        assert_eq!(body["receivedMessages"][0]["deliveryAttempt"], attempt);
+        assert_eq!(
+            rest_request(
+                address,
+                "POST",
+                &format!("/v1/{source}:modifyAckDeadline"),
+                json!({"ackIds":[body["receivedMessages"][0]["ackId"]],"ackDeadlineSeconds":0})
+            )
+            .await
+            .0,
+            200
+        );
+    }
+    let (_, body) = rest_request(
+        address,
+        "POST",
+        &format!("/v1/{sink}:pull"),
+        json!({"maxMessages":1,"returnImmediately":true}),
+    )
+    .await;
+    assert!(body.get("receivedMessages").is_none());
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines, deprecated)]
+async fn actual_rest_iam_requires_both_grants_before_native_dead_letter_transfer() {
+    let address = start_with_numbers(
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        std::collections::BTreeMap::from([("demo-iam".to_owned(), "123456789".to_owned())]),
+    )
+    .await;
+    let topic = "projects/demo-iam/topics/source";
+    let dead = "projects/demo-iam/topics/dead";
+    let source = "projects/demo-iam/subscriptions/source";
+    let sink = "projects/demo-iam/subscriptions/sink";
+    for resource in [topic, dead] {
+        assert_eq!(
+            rest_request(address, "PUT", &format!("/v1/{resource}"), json!({}))
+                .await
+                .0,
+            200
+        );
+    }
+    assert_eq!(rest_request(address,"PUT",&format!("/v1/{source}"),json!({"topic":topic,"deadLetterPolicy":{"deadLetterTopic":dead,"maxDeliveryAttempts":5}})).await.0,200);
+    assert_eq!(
+        rest_request(
+            address,
+            "PUT",
+            &format!("/v1/{sink}"),
+            json!({"topic":dead})
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("/v1/{topic}:publish"),
+            json!({"messages":[{"data":"eA=="}]})
+        )
+        .await
+        .0,
+        200
+    );
+    let mut client = SubscriberClient::new(grpc_channel(address).await);
+    for attempt in 1..=6 {
+        let response = client
+            .pull(pb::PullRequest {
+                subscription: source.to_owned(),
+                max_messages: 1,
+                return_immediately: true,
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.received_messages.len(), 1);
+        assert_eq!(response.received_messages[0].delivery_attempt, attempt);
+        client
+            .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                subscription: source.to_owned(),
+                ack_ids: vec![response.received_messages[0].ack_id.clone()],
+                ack_deadline_seconds: 0,
+            })
+            .await
+            .unwrap();
+    }
+    let mut baselines = Vec::new();
+    for (resource, role) in [
+        (source, "roles/pubsub.subscriber"),
+        (dead, "roles/pubsub.publisher"),
+    ] {
+        let get = format!("/v1/{resource}:getIamPolicy?options.requestedPolicyVersion=3");
+        let (_, before) = rest_request(address, "GET", &get, json!({})).await;
+        let (_,after)=rest_request(address,"POST",&format!("/v1/{resource}:setIamPolicy"),json!({"policy":{"etag":before["etag"],"version":3,"bindings":[{"role":role,"members":["serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com"]}]}})).await;
+        assert_eq!(after["version"], 1);
+        assert_eq!(rest_request(address, "GET", &get, json!({})).await.1, after);
+        baselines.push((resource, after));
+        if resource == source {
+            let response = client
+                .pull(pb::PullRequest {
+                    subscription: source.to_owned(),
+                    max_messages: 1,
+                    return_immediately: true,
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(response.received_messages[0].delivery_attempt, 7);
+            client
+                .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                    subscription: source.to_owned(),
+                    ack_ids: vec![response.received_messages[0].ack_id.clone()],
+                    ack_deadline_seconds: 0,
+                })
+                .await
+                .unwrap();
+        }
+    }
+    assert!(client
+        .pull(pb::PullRequest {
+            subscription: source.to_owned(),
+            max_messages: 1,
+            return_immediately: true
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages
+        .is_empty());
+    let (_, received) = rest_request(
+        address,
+        "POST",
+        &format!("/v1/{sink}:pull"),
+        json!({"maxMessages":1,"returnImmediately":true}),
+    )
+    .await;
+    assert_eq!(received["receivedMessages"].as_array().unwrap().len(), 1);
+    assert!(received["receivedMessages"][0]
+        .get("deliveryAttempt")
+        .is_none());
+    let attributes = &received["receivedMessages"][0]["message"]["attributes"];
+    assert_eq!(
+        attributes["CloudPubSubDeadLetterSourceSubscription"],
+        "source"
+    );
+    assert_eq!(
+        attributes["CloudPubSubDeadLetterSourceSubscriptionProject"],
+        "demo-iam"
+    );
+    assert_eq!(attributes["CloudPubSubDeadLetterSourceDeliveryCount"], "7");
+    assert_eq!(
+        attributes["CloudPubSubDeadLetterSourceTopicPublishTime"],
+        "2023-11-14T22:13:20Z"
+    );
+    for (resource, after) in baselines {
+        let (status, restored) = rest_request(
+            address,
+            "POST",
+            &format!("/v1/{resource}:setIamPolicy"),
+            json!({"policy":{"etag":after["etag"],"version":1,"bindings":[]}}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert!(restored.get("bindings").is_none());
     }
 }

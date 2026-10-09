@@ -384,6 +384,7 @@ async fn dead_letter_transfer_retries_after_destination_admission_recovers() {
         })
         .await
         .unwrap();
+    grant_managed_dead_letter_resources(&harness, source_subscription, &destination);
     publisher
         .publish(pb::PublishRequest {
             topic: source_topic.to_owned(),
@@ -2603,6 +2604,7 @@ async fn ordered_push_delivers_successor_after_dead_letter_forwarding() {
     .await
     .unwrap();
 
+    grant_managed_dead_letter_resources(&h, subscription, dead_letter_topic);
     let mut first = msg(b"ordered-first");
     first.ordering_key = "same-key".to_owned();
     let mut successor = msg(b"ordered-successor");
@@ -3339,6 +3341,36 @@ async fn deleting_and_recreating_a_subscription_invalidates_the_old_push_generat
     worker_new.join().unwrap();
 }
 
+fn grant_managed_dead_letter_resources(harness: &Harness, source: &str, destination: &str) {
+    let mut state = harness.state.lock().unwrap();
+    state
+        .set_project_numbers(std::collections::BTreeMap::from([(
+            "demo-app".to_owned(),
+            "123456789".to_owned(),
+        )]))
+        .unwrap();
+    for (resource, role) in [
+        (source, "roles/pubsub.subscriber"),
+        (destination, "roles/pubsub.publisher"),
+    ] {
+        let before = state.get_resource_policy(resource).unwrap();
+        state
+            .set_resource_policy(
+                resource,
+                &before.etag,
+                Some(3),
+                vec![fireemu_core_pubsub::PolicyBinding {
+                    role: role.to_owned(),
+                    members: vec![
+                        "serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com"
+                            .to_owned(),
+                    ],
+                }],
+            )
+            .unwrap();
+    }
+}
+
 /// Creates a source topic, a destination topic and a source subscription whose dead-letter policy
 /// forwards after `max_delivery_attempts` deliveries. Returns the source subscription name.
 async fn setup_dead_letter_source(
@@ -3383,6 +3415,7 @@ async fn unary_pull_exhaustion_forwards_to_an_idle_destination_push_subscriber()
     let h = start().await;
     let (source_topic, destination_topic, subscription) =
         setup_dead_letter_source(&h, "dlq-unary", None).await;
+    grant_managed_dead_letter_resources(&h, &subscription, &destination_topic);
     let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
 
@@ -3475,6 +3508,7 @@ async fn streaming_pull_exhaustion_forwards_to_the_destination_exactly_once() {
     let h = start().await;
     let (source_topic, destination_topic, subscription) =
         setup_dead_letter_source(&h, "dlq-stream", None).await;
+    grant_managed_dead_letter_resources(&h, &subscription, &destination_topic);
     let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
     subc.create_subscription(pb::Subscription {
@@ -3558,8 +3592,9 @@ async fn push_exhaustion_forwards_to_the_destination_exactly_once() {
     // Every source delivery fails, so the delivery budget is exhausted by push alone.
     let (source_endpoint, _source_bodies, source_stop, source_worker) =
         push_sink_sequence(vec![500; 200]);
-    let (source_topic, destination_topic, _subscription) =
+    let (source_topic, destination_topic, subscription) =
         setup_dead_letter_source(&h, "dlq-push", Some(source_endpoint)).await;
+    grant_managed_dead_letter_resources(&h, &subscription, &destination_topic);
     let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
     subc.create_subscription(pb::Subscription {
@@ -3605,11 +3640,15 @@ async fn push_exhaustion_forwards_to_the_destination_exactly_once() {
 }
 
 #[tokio::test]
-async fn a_deleted_destination_topic_retains_the_forward_until_it_is_created_again() {
+async fn emulator_deleted_destination_retains_legacy_forward_until_recreation() {
     // The bridge records every committed publication, so the transfer is observable even though a
     // destination subscription cannot outlive the deleted topic.
     let recorder = Arc::new(RecordingTopicDelivery::default());
-    let h = start_with_bridge(Some(recorder.clone())).await;
+    let h = start_with_bridge_and_policy(
+        Some(recorder.clone()),
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    )
+    .await;
     let (source_topic, destination_topic, subscription) =
         setup_dead_letter_source(&h, "dlq-missing", None).await;
     let mut pubc = h.publisher().await;
@@ -3706,6 +3745,164 @@ async fn a_deleted_destination_topic_retains_the_forward_until_it_is_created_aga
 }
 
 #[tokio::test]
+#[allow(deprecated)]
+#[allow(clippy::too_many_lines)] // Keep deletion, recreation and fresh authority in one lifecycle scenario.
+async fn strict_deleted_destination_requires_a_fresh_grant_before_transfer() {
+    let recorder = Arc::new(RecordingTopicDelivery::default());
+    let h = start_with_bridge(Some(recorder.clone())).await;
+    let (source_topic, destination, source) =
+        setup_dead_letter_source(&h, "dlq-strict-recreate", None).await;
+    grant_managed_dead_letter_resources(&h, &source, &destination);
+    let original_policy = h
+        .state
+        .lock()
+        .unwrap()
+        .get_resource_policy(&destination)
+        .unwrap();
+    let mut publisher = h.publisher().await;
+    let mut subscriber = h.subscriber().await;
+    publisher
+        .publish(pb::PublishRequest {
+            topic: source_topic,
+            messages: vec![msg(b"poison")],
+        })
+        .await
+        .unwrap();
+    publisher
+        .delete_topic(pb::DeleteTopicRequest {
+            topic: destination.clone(),
+        })
+        .await
+        .unwrap();
+    for attempt in 1..=6 {
+        let received = subscriber
+            .pull(pb::PullRequest {
+                subscription: source.clone(),
+                max_messages: 1,
+                return_immediately: true,
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .received_messages;
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].delivery_attempt, attempt);
+        subscriber
+            .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                subscription: source.clone(),
+                ack_ids: vec![received[0].ack_id.clone()],
+                ack_deadline_seconds: 0,
+            })
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|topic| **topic == destination)
+            .count(),
+        0
+    );
+    publisher
+        .create_topic(pb::Topic {
+            name: destination.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let fresh = h
+        .state
+        .lock()
+        .unwrap()
+        .get_resource_policy(&destination)
+        .unwrap();
+    assert!(fresh.bindings.is_empty());
+    assert_ne!(fresh.etag, original_policy.etag);
+    assert_eq!(
+        recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|topic| **topic == destination)
+            .count(),
+        0,
+        "recreation alone cannot authorize a transfer"
+    );
+    let received = subscriber
+        .pull(pb::PullRequest {
+            subscription: source.clone(),
+            max_messages: 1,
+            return_immediately: true,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert_eq!(received[0].delivery_attempt, 7);
+    subscriber
+        .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+            subscription: source.clone(),
+            ack_ids: vec![received[0].ack_id.clone()],
+            ack_deadline_seconds: 0,
+        })
+        .await
+        .unwrap();
+    h.state
+        .lock()
+        .unwrap()
+        .set_resource_policy(
+            &destination,
+            &fresh.etag,
+            Some(3),
+            vec![fireemu_core_pubsub::PolicyBinding {
+                role: "roles/pubsub.publisher".to_owned(),
+                members: vec![
+                    "serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com"
+                        .to_owned(),
+                ],
+            }],
+        )
+        .unwrap();
+    assert!(subscriber
+        .pull(pb::PullRequest {
+            subscription: source.clone(),
+            max_messages: 1,
+            return_immediately: true
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages
+        .is_empty());
+    assert_eq!(
+        recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|topic| **topic == destination)
+            .count(),
+        1
+    );
+    assert!(subscriber
+        .pull(pb::PullRequest {
+            subscription: source,
+            max_messages: 1,
+            return_immediately: true
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages
+        .is_empty());
+    h.shutdown().await;
+}
+
+#[tokio::test]
 async fn seeking_to_a_snapshot_replays_the_backlog_to_an_idle_push_subscriber() {
     let h = start().await;
     let mut pubc = h.publisher().await;
@@ -3782,8 +3979,9 @@ async fn a_failed_push_delivery_counts_one_delivery_attempt_against_the_dead_let
     let h = start().await;
     // More failures than the budget allows: only the budget may decide when forwarding happens.
     let (endpoint, bodies, stop, worker) = push_sink_sequence(vec![500; 50]);
-    let (source_topic, destination_topic, _subscription) =
+    let (source_topic, destination_topic, subscription) =
         setup_dead_letter_source(&h, "dlq-attempts", Some(endpoint)).await;
+    grant_managed_dead_letter_resources(&h, &subscription, &destination_topic);
     let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
     subc.create_subscription(pb::Subscription {

@@ -7,6 +7,8 @@ use crate::PagingPolicy;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Schema {
+    Policy,
+    PolicyBinding,
     Topic,
     Subscription,
     Snapshot,
@@ -31,6 +33,8 @@ pub(crate) enum Schema {
 impl Schema {
     fn fields(self) -> &'static [&'static str] {
         match self {
+            Self::Policy => &["version", "bindings", "etag"],
+            Self::PolicyBinding => &["role", "members"],
             Self::Topic => &["name", "labels", "messageRetentionDuration"],
             Self::Subscription => &[
                 "name",
@@ -75,6 +79,7 @@ impl Schema {
 
     fn child(self, field: &str) -> Self {
         match (self, field) {
+            (Self::Policy, "bindings") => Self::PolicyBinding,
             (Self::Topics, "topics") => Self::Topic,
             (Self::Subscriptions, "subscriptions") => Self::Subscription,
             (Self::Snapshots, "snapshots") => Self::Snapshot,

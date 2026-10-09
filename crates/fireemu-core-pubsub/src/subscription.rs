@@ -609,8 +609,26 @@ impl SubscriptionState {
         &mut self,
         max: usize,
         now: LogicalInstant,
+        next_ack_id: impl FnMut() -> String,
+    ) -> PullOutcome {
+        self.pull_with_forwarding(max, now, true, next_ack_id)
+    }
+
+    /// Delivers messages while separating reported attempts from authority to reserve a transfer.
+    pub(crate) fn pull_with_forwarding(
+        &mut self,
+        max: usize,
+        now: LogicalInstant,
+        forwarding_authorized: bool,
         mut next_ack_id: impl FnMut() -> String,
     ) -> PullOutcome {
+        if !forwarding_authorized {
+            for entry in &mut self.entries {
+                if entry.state == Delivery::ForwardPending {
+                    entry.state = Delivery::Available { available_at: now };
+                }
+            }
+        }
         let mut out = PullOutcome::default();
         if max == 0 {
             return out;
@@ -622,6 +640,7 @@ impl SubscriptionState {
             .config
             .dead_letter_policy
             .as_ref()
+            .filter(|_| forwarding_authorized)
             .map(|d| d.max_delivery_attempts);
         let ordered = self.config.enable_message_ordering;
         let mut blocked_keys = BTreeSet::new();
@@ -710,6 +729,25 @@ impl SubscriptionState {
         entry.state = Delivery::Acked;
         self.advance_first_unacked();
         true
+    }
+
+    /// Returns the retained delivery counter for this exact pending message instance.
+    pub(crate) fn forwarding_attempt(&self, message: &Arc<StoredMessage>) -> Option<u32> {
+        self.entries
+            .iter()
+            .find(|entry| {
+                entry.state == Delivery::ForwardPending && Arc::ptr_eq(&entry.stored, message)
+            })
+            .map(|entry| entry.delivery_attempt)
+    }
+
+    /// Restores a retained transfer to source delivery after a revoked grant.
+    pub(crate) fn resume_forward(&mut self, message: &Arc<StoredMessage>, now: LogicalInstant) {
+        for entry in &mut self.entries {
+            if entry.state == Delivery::ForwardPending && Arc::ptr_eq(&entry.stored, message) {
+                entry.state = Delivery::Available { available_at: now };
+            }
+        }
     }
 
     /// Returns exhausted messages whose dead-letter destination has not accepted them yet.

@@ -23,3 +23,13 @@ Admission occurs before REST JSON parsing, gRPC message decoding or broker mutat
 ## Strict release note
 
 A client supplying a valid Google OAuth token receives HTTP 401 from the strict local Pub/Sub endpoint because the local supported credential set is empty. Production can accept that credential. This affects, for example, a Java client configured without NoCredentialsProvider, and a default credential-bearing Node REST fallback client. Use an explicitly credential-free local client when exercising the declared anonymous development exception.
+
+## Resource-local dead-letter authorization
+
+The local REST endpoint supports `GET /v1/{resource}:getIamPolicy?options.requestedPolicyVersion=3` and `POST /v1/{resource}:setIamPolicy` for topics and subscriptions. Administration follows the credential-free local boundary above. It does not authenticate the caller as the internal Pub/Sub service agent. Only unconditional bindings are supported; conditions, native IAM administration and TestIamPermissions are outside this subset.
+
+Policies belong to each resource instance. Baseline policies omit version and bindings. Successful unconditional writes normalize version to 1, omit empty bindings and issue a new opaque etag. Set requires the current etag; stale writes leave the policy unchanged. Deletion, recreation and project reset discard grants and invalidate old etags. Unrelated unconditional bindings are retained when clients include them in read-modify-write requests.
+
+Configure the source project's real Pub/Sub project number explicitly with `pubsub.projectNumbers`, for example `{"pubsub":{"projectNumbers":{"demo-source":"123456789"}}}` using a synthetic number in a local test. This mapping is independent of Auth configuration. The internal member is `serviceAccount:service-<number>@gcp-sa-pubsub.iam.gserviceaccount.com`. Strict forwarding requires `roles/pubsub.subscriber` on the source subscription and `roles/pubsub.publisher` on the destination topic for that exact member. Both grants are checked before reserving and publishing a transfer. An unconfigured source identity cannot authorize forwarding. Emulator retains its legacy forwarding behavior.
+
+Missing or revoked local grants keep the source message redeliverable and do not zero positive deliveryAttempt counters. Strict authorized transfers include the four observed CloudPubSubDeadLetterSource attributes; sink envelopes without a dead-letter policy omit deliveryAttempt. These resource-local checks do not model inherited production authority. An unaudited empty production policy is therefore not evidence of production denial. The recorded counter restart after an inactivity window remains unresolved; no fixed inactivity reset timer is inferred.

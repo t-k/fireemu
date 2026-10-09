@@ -445,7 +445,43 @@ function strictProcessIdentity(pid) {
   };
 }
 
-function verifyStandaloneWorker({ pin, project, launch, environment, worker, observe }) {
+function strictRuntimeConfig(project, clockStart, pubsubProjectNumbers) {
+  const config = {
+    schemaVersion: 1,
+    profile: "strict",
+    bind: "127.0.0.1",
+    daemon: {
+      pubsubPort: 0,
+      httpPort: 0,
+      hubPort: 0,
+      loggingPort: 0,
+      authProject: project,
+      clockStart,
+    },
+  };
+  if (pubsubProjectNumbers !== undefined) {
+    if (
+      !pubsubProjectNumbers ||
+      Array.isArray(pubsubProjectNumbers) ||
+      Object.keys(pubsubProjectNumbers).length !== 1 ||
+      typeof pubsubProjectNumbers[project] !== "string" ||
+      !/^[1-9]\d{0,19}$/.test(pubsubProjectNumbers[project])
+    )
+      throw new Error("explicit source-project PubSub identity mapping required");
+    config.pubsub = { projectNumbers: { [project]: pubsubProjectNumbers[project] } };
+  }
+  return config;
+}
+
+function verifyStandaloneWorker({
+  pin,
+  project,
+  launch,
+  environment,
+  worker,
+  observe,
+  pubsubProjectNumbers,
+}) {
   const refuse = () => {
     throw new Error("standalone strict launch provenance refused");
   };
@@ -474,19 +510,10 @@ function verifyStandaloneWorker({ pin, project, launch, environment, worker, obs
   pinnedBytes(launch.supervisor.path, launch.supervisor.sha256);
   const config = JSON.parse(pinnedBytes(launch.config, launch.configSha256));
   if (
-    !isDeepStrictEqual(config, {
-      schemaVersion: 1,
-      profile: "strict",
-      bind: "127.0.0.1",
-      daemon: {
-        pubsubPort: 0,
-        httpPort: 0,
-        hubPort: 0,
-        loggingPort: 0,
-        authProject: project,
-        clockStart: launch.clockStart,
-      },
-    }) ||
+    !isDeepStrictEqual(
+      config,
+      strictRuntimeConfig(project, launch.clockStart, pubsubProjectNumbers),
+    ) ||
     !Number.isFinite(Date.parse(launch.clockStart))
   )
     refuse();
@@ -523,9 +550,18 @@ export function verifyStrictWorker({
   environment = process.env,
   worker = process,
   observe = strictProcessIdentity,
+  pubsubProjectNumbers,
 }) {
   if (launch.mode === "standalone") {
-    verifyStandaloneWorker({ pin, project, launch, environment, worker, observe });
+    verifyStandaloneWorker({
+      pin,
+      project,
+      launch,
+      environment,
+      worker,
+      observe,
+      pubsubProjectNumbers,
+    });
     return;
   }
 
@@ -544,15 +580,16 @@ export function verifyStrictWorker({
   const configBytes = pinnedBytes(launch.config, launch.configSha256);
   const config = JSON.parse(configBytes);
   if (
-    config.profile !== "strict" ||
-    config.bind !== "127.0.0.1" ||
-    config.daemon.pubsubPort !== 0 ||
-    config.daemon.authProject !== project
+    !isDeepStrictEqual(
+      config,
+      strictRuntimeConfig(project, launch.clockStart, pubsubProjectNumbers),
+    )
   )
     throw new Error("internal strict launch config refused");
 }
 
 export async function runStrictRuntime({
+  pubsubProjectNumbers,
   pin,
   project,
   clockStart,
@@ -571,19 +608,7 @@ export async function runStrictRuntime({
     const config = join(temporary, "fireemu.json");
     writeFileSync(
       config,
-      JSON.stringify({
-        schemaVersion: 1,
-        profile: "strict",
-        bind: "127.0.0.1",
-        daemon: {
-          pubsubPort: 0,
-          httpPort: 0,
-          hubPort: 0,
-          loggingPort: 0,
-          authProject: project,
-          clockStart: clockStart,
-        },
-      }),
+      JSON.stringify(strictRuntimeConfig(project, clockStart, pubsubProjectNumbers)),
     );
     const bootstrap = `import {readFileSync} from 'node:fs'; import {main} from ${JSON.stringify(workerModule)}; const launch=JSON.parse(readFileSync(0,'utf8')); process.exitCode=await main(${JSON.stringify(argv)},process.env,launch);`;
     const child = spawn(
@@ -618,6 +643,7 @@ export async function runStrictRuntime({
         parentPid: process.pid,
         config,
         configSha256: digest(readFileSync(config)),
+        clockStart,
       }),
     );
     const stop = () => child.kill("SIGTERM");

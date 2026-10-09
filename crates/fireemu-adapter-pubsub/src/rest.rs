@@ -261,6 +261,22 @@ async fn dispatch(
     if parts.len() < 3 || parts[0] != "projects" || parts[1].is_empty() {
         return Err(RestError::not_found("invalid Pub/Sub REST resource path"));
     }
+    if parts.len() == 4 && ["topics", "subscriptions"].contains(&parts[2]) {
+        if let Some((leaf, operation)) = parts[3].split_once(':') {
+            if ["getIamPolicy", "setIamPolicy"].contains(&operation) {
+                let resource = if parts[2] == "topics" {
+                    TopicName::new(parts[1], leaf)
+                        .map_err(RestError::from_core)?
+                        .to_full()
+                } else {
+                    SubscriptionName::new(parts[1], leaf)
+                        .map_err(RestError::from_core)?
+                        .to_full()
+                };
+                return resource_policy(method, operation, &resource, query, body, handle);
+            }
+        }
+    }
     let project = parts[1];
     if parts[2] == "topics" {
         return dispatch_topic(method, &parts[3..], project, query, body, handle);
@@ -273,6 +289,133 @@ async fn dispatch(
         return dispatch_snapshot(method, &parts[3..], project, query, body, handle);
     }
     Err(RestError::not_found("unknown Pub/Sub REST resource"))
+}
+
+fn policy_json(policy: &fireemu_core_pubsub::ResourcePolicy) -> Value {
+    let mut body = Map::new();
+    if let Some(version) = policy.version {
+        body.insert("version".to_owned(), json!(version));
+    }
+    if !policy.bindings.is_empty() {
+        body.insert(
+            "bindings".to_owned(),
+            Value::Array(
+                policy
+                    .bindings
+                    .iter()
+                    .map(|b| json!({"role":b.role,"members":b.members}))
+                    .collect(),
+            ),
+        );
+    }
+    body.insert("etag".to_owned(), json!(policy.etag));
+    Value::Object(body)
+}
+
+fn resource_policy(
+    method: &Method,
+    operation: &str,
+    resource: &str,
+    query: &str,
+    body: &Value,
+    handle: &PubSubHandle,
+) -> Result<(StatusCode, Value, Schema), RestError> {
+    let policy = match (method, operation) {
+        (&Method::GET, "getIamPolicy") => {
+            for pair in query.split('&').filter(|p| !p.is_empty()) {
+                let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+                if decode_query(key)? != "options.requestedPolicyVersion"
+                    || !matches!(decode_query(value)?.as_str(), "0" | "1" | "3")
+                {
+                    return Err(RestError::invalid("unsupported resource policy options"));
+                }
+            }
+            handle
+                .state()
+                .get_resource_policy(resource)
+                .map_err(RestError::from_core)?
+        }
+        (&Method::POST, "setIamPolicy") => {
+            let request = body
+                .as_object()
+                .ok_or_else(|| RestError::invalid("policy request must be an object"))?;
+            for key in request.keys() {
+                if key != "policy" {
+                    return Err(RestError::unknown_json_field(key));
+                }
+            }
+            let policy = request
+                .get("policy")
+                .and_then(Value::as_object)
+                .ok_or_else(|| RestError::invalid("policy must be an object"))?;
+            for key in policy.keys() {
+                if !["version", "bindings", "etag"].contains(&key.as_str()) {
+                    return Err(RestError::unknown_json_field(key));
+                }
+            }
+            let etag = policy
+                .get("etag")
+                .and_then(Value::as_str)
+                .ok_or_else(|| RestError::invalid("policy.etag must be a string"))?;
+            let version = policy
+                .get("version")
+                .map(|v| {
+                    v.as_u64()
+                        .and_then(|n| u32::try_from(n).ok())
+                        .ok_or_else(|| RestError::invalid("policy.version must be an integer"))
+                })
+                .transpose()?;
+            let mut bindings = Vec::new();
+            if let Some(value) = policy.get("bindings") {
+                for binding in value
+                    .as_array()
+                    .ok_or_else(|| RestError::invalid("policy.bindings must be an array"))?
+                {
+                    let binding = binding
+                        .as_object()
+                        .ok_or_else(|| RestError::invalid("policy binding must be an object"))?;
+                    for key in binding.keys() {
+                        if !["role", "members"].contains(&key.as_str()) {
+                            return Err(RestError::unknown_json_field(key));
+                        }
+                    }
+                    let role = binding
+                        .get("role")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .ok_or_else(|| {
+                            RestError::invalid("binding.role must be a non-empty string")
+                        })?;
+                    let members = binding
+                        .get("members")
+                        .and_then(Value::as_array)
+                        .ok_or_else(|| RestError::invalid("binding.members must be an array"))?
+                        .iter()
+                        .map(|m| {
+                            m.as_str()
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_owned)
+                                .ok_or_else(|| {
+                                    RestError::invalid("binding members must be non-empty strings")
+                                })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    bindings.push(fireemu_core_pubsub::PolicyBinding {
+                        role: role.to_owned(),
+                        members,
+                    });
+                }
+            }
+            let _dead_letter = handle.lock_dead_letter();
+            let _publication = handle.lock_publication();
+            handle
+                .state()
+                .set_resource_policy(resource, etag, version, bindings)
+                .map_err(RestError::from_core)?
+        }
+        _ => return Err(RestError::method_not_allowed()),
+    };
+    Ok((StatusCode::OK, policy_json(&policy), Schema::Policy))
 }
 
 #[allow(clippy::too_many_lines)]

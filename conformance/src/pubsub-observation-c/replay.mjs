@@ -63,7 +63,8 @@ function compiledInputs(pin) {
   if (
     manifest.sourceHead !== pin.head ||
     manifest.sourceTree !== pin.tree ||
-    Object.keys(manifest.files ?? {}).length !== 337
+    Object.keys(manifest.files ?? {}).length !== 338 ||
+    !Object.hasOwn(manifest.files ?? {}, "crates/fireemu-core-pubsub/src/iam.rs")
   )
     throw new Error("C compiled input coverage refused");
   let bytes = 0;

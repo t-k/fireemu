@@ -1920,3 +1920,42 @@ test("standalone provenance rejects altered process, readiness, config, environm
     /pinned fireemu child/,
   );
 });
+
+test("strict provenance binds only explicit source-project PubSub numbers", () => {
+  const configured = (numbers) => {
+    const f = standaloneFixture();
+    f.pubsubProjectNumbers = { p: "123456789" };
+    const value = JSON.parse(readFileSync(f.launch.config));
+    value.pubsub = { projectNumbers: numbers };
+    const changed = f.put("pubsub-config.json", value);
+    f.launch.config = changed.path;
+    f.launch.configSha256 = changed.sha256;
+    f.launch.serverIdentity.args = `${f.pin.path} up --config ${changed.path} --only pubsub --ready-file ${f.launch.ready} --owner-stdin`;
+    f.observed.set(f.launch.serverIdentity.pid, structuredClone(f.launch.serverIdentity));
+    return f;
+  };
+  assert.doesNotThrow(() => cli.verifyStrictWorker(configured({ p: "123456789" })));
+  for (const numbers of [
+    { p: "987654321" },
+    { other: "123456789" },
+    { p: "123456789", other: "123456789" },
+    { p: "0" },
+    { p: 123456789 },
+  ])
+    assert.throws(() => cli.verifyStrictWorker(configured(numbers)));
+  const unexpected = configured({ p: "123456789" });
+  delete unexpected.pubsubProjectNumbers;
+  assert.throws(() => cli.verifyStrictWorker(unexpected));
+  for (const numbers of [
+    { p: "0" },
+    { p: "01" },
+    { other: "123456789" },
+    { p: "123456789", other: "123456789" },
+    null,
+    [],
+  ]) {
+    const f = configured({ p: "123456789" });
+    f.pubsubProjectNumbers = numbers;
+    assert.throws(() => cli.verifyStrictWorker(f));
+  }
+});

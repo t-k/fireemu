@@ -444,9 +444,11 @@ impl PubSubHandle {
         }
     }
 
-    /// Selects the list policy. The default follows the official emulator.
+    /// Selects compatibility behavior for lists, unary delivery and dead-letter authority. The default follows the official emulator.
     #[must_use]
     pub fn with_paging_policy(mut self, policy: PagingPolicy) -> Self {
+        self.state()
+            .set_dead_letter_iam_enforcement(policy == PagingPolicy::Strict);
         self.paging_policy = policy;
         self
     }
@@ -658,10 +660,10 @@ impl PubSubHandle {
 
     fn commit_dead_letter(&self, forward: &DeadLetterForward) {
         let _publication = self.lock_publication();
-        let published = self.publish_locked(
-            &forward.dead_letter_topic,
-            vec![forward.message.message.clone()],
-        );
+        let now = self.now();
+        let published = self.publish_prepared(&forward.dead_letter_topic, now, |state| {
+            state.prepare_dead_letter_publication(forward, now)
+        });
         if published.is_ok() {
             let mut state = self.state();
             let _ = state
@@ -2087,6 +2089,60 @@ mod dispatch_tests {
             assert_eq!(outcome.dead_lettered.len(), 1);
         }
         (state, destination_topic, source_subscription, now)
+    }
+
+    #[test]
+    fn strict_pending_retry_rechecks_revoked_authority_and_restores_source_delivery() {
+        let (state, destination, source, now) = pending_dead_letter_fixture();
+        let member = "serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com";
+        {
+            let mut state = state.lock().unwrap();
+            state
+                .set_project_numbers(BTreeMap::from([(
+                    "demo-project".to_owned(),
+                    "123456789".to_owned(),
+                )]))
+                .unwrap();
+            for (resource, role) in [
+                (source.to_full(), "roles/pubsub.subscriber"),
+                (destination.to_full(), "roles/pubsub.publisher"),
+            ] {
+                let policy = state.get_resource_policy(&resource).unwrap();
+                state
+                    .set_resource_policy(
+                        &resource,
+                        &policy.etag,
+                        Some(3),
+                        vec![fireemu_core_pubsub::PolicyBinding {
+                            role: role.to_owned(),
+                            members: vec![member.to_owned()],
+                        }],
+                    )
+                    .unwrap();
+            }
+        }
+        let handle = PubSubHandle::new(
+            state.clone(),
+            Arc::new(Mutex::new(VirtualClock::new(now))),
+            None,
+        )
+        .with_paging_policy(PagingPolicy::Strict);
+        let sink = SubscriptionName::new("demo-project", "sink").unwrap();
+        {
+            let mut state = state.lock().unwrap();
+            let mut config = state.subscription_config(&source).unwrap().clone();
+            config.name = sink.clone();
+            config.topic = destination.clone();
+            config.dead_letter_policy = None;
+            state.create_subscription(config).unwrap();
+            let before = state.get_resource_policy(&destination.to_full()).unwrap();
+            state
+                .set_resource_policy(&destination.to_full(), &before.etag, Some(1), Vec::new())
+                .unwrap();
+        }
+        handle.retry_pending_dead_letters();
+        assert!(handle.pull(&sink, 1).unwrap().is_empty());
+        assert_eq!(handle.pull(&source, 1).unwrap()[0].delivery_attempt, 6);
     }
 
     #[test]

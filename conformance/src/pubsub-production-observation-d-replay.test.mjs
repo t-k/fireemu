@@ -66,20 +66,61 @@ test("D rejects mutations to the full fixed plan including unused reservations",
   }
 });
 
-test("D local IAM evidence is explicit debt and never supplied by canned responses", async () => {
+test("D dispatches actual IAM only for confirmed locally owned resources and carries local CAS", async () => {
   const { replayRecording } = await core();
-  let called = false;
-  const input = executionInput([
-    source("SetIamPolicy", { resource: "synthetic-resource" }, {}, "iamSetupWrite"),
-  ]);
-  const result = await replayRecording(input, () => {
-    called = true;
-    throw new Error("unexpected call");
-  });
-  assert.equal(called, false);
-  assert.equal(result.verdict, "NOT_COMPARABLE");
-  assert.match(result.results[0].exchanges[0].debt, /IAM.*no verified local execution seam/);
+  const resource = "projects/synthetic/topics/owned";
+  const rows = [
+    source("CreateTopic", { name: resource }, { name: resource }, "create"),
+    source(
+      "GetIamPolicy",
+      { resource, requestedPolicyVersion: 3 },
+      { etag: "AAAA" },
+      "baselineIamGet",
+    ),
+    source(
+      "SetIamPolicy",
+      { resource, policy: { etag: "AAAA", version: 3, bindings: [] } },
+      { etag: "AAAAAAAAAAAB", version: 1 },
+      "iamSetupWrite",
+    ),
+    source(
+      "GetIamPolicy",
+      { resource, requestedPolicyVersion: 3 },
+      { etag: "AAAAAAAAAAAB", version: 1 },
+      "iamSetupReadback",
+    ),
+  ];
+  const calls = [];
+  const result = await replayRecording(
+    executionInput(rows),
+    async (call, row) => {
+      calls.push(structuredClone(call));
+      if (call.method === "SetIamPolicy") assert.equal(call.request.policy.etag, "BBBB");
+      return reply(
+        call.method === "CreateTopic"
+          ? { name: resource }
+          : call.method === "SetIamPolicy"
+            ? { etag: "BBBBBBBBBBBC", version: 1 }
+            : row.category === "baselineIamGet"
+              ? { etag: "BBBB" }
+              : { etag: "BBBBBBBBBBBC", version: 1 },
+      );
+    },
+    { clockReceiptFor: receipt },
+  );
+  assert.deepEqual(
+    calls.map((c) => c.method),
+    ["CreateTopic", "GetIamPolicy", "SetIamPolicy", "GetIamPolicy"],
+  );
+  assert.equal(result.results[0].exchanges[2].semanticVerdict, "MATCH");
   assert.equal(result.parityEstablished, false);
+  let unownedCalls = 0;
+  const rejected = await replayRecording(executionInput([rows[1]]), async () => {
+    unownedCalls++;
+    return rows[1].reply;
+  });
+  assert.equal(unownedCalls, 0);
+  assert.match(rejected.results[0].exchanges[0].debt, /ownership/);
 });
 
 test("D physical comparison requires clock readback associated with the exact source request", async () => {
@@ -318,7 +359,7 @@ async function syntheticRecording() {
       return write(value);
     };
     for (const name of names) {
-      const e = send(
+      send(
         "create",
         name.includes("/topics/") ? "CreateTopic" : "CreateSubscription",
         { name },
@@ -733,13 +774,21 @@ test("D local replay awaits exact clock readbacks and durably binds physical row
     const persisted = [],
       sent = [];
     const report = await replayLocal(input, environment, pin, {
-      fetch: async (_url, options) =>
-        new Response(
+      fetch: async (url, options) => {
+        if (url.includes(":getIamPolicy")) {
+          const resource = new URL(url).pathname.slice(4).split(":")[0];
+          const exchange = input.cells[0].exchanges.find(
+            (e) => e.method === "GetIamPolicy" && e.request.resource === resource,
+          );
+          return new Response(JSON.stringify(exchange.reply.body), { status: 200 });
+        }
+        return new Response(
           JSON.stringify({
             clock: wrong ? "2025-01-01T00:00:00Z" : JSON.parse(options.body).instant,
           }),
           { status: 200 },
-        ),
+        );
+      },
       persist: (kind, value) => persisted.push({ kind, value }),
       wireFactory: ({ journal, localRuntime }) => ({
         close() {},
@@ -768,8 +817,11 @@ test("D local replay awaits exact clock readbacks and durably binds physical row
       assert.equal(report.verdict, "NOT_COMPARABLE");
     } else {
       assert.ok(sent.length > 0);
-      assert.equal(report.clockReceipts.length, sent.length);
-      assert.equal(persisted.filter((p) => p.kind === "body").length, sent.length);
+      assert.equal(
+        report.clockReceipts.length,
+        sent.length + input.cells[0].exchanges.filter((e) => e.method === "GetIamPolicy").length,
+      );
+      assert.equal(persisted.filter((p) => p.kind === "body").length, report.clockReceipts.length);
       assert.ok(
         report.localRows.every(
           (r) => Number.isSafeInteger(r.sourceRequestId) && Number.isSafeInteger(r.sourceN),
@@ -951,4 +1003,107 @@ test("D malformed successful Create does not establish local ownership or permit
       );
       assert.deepEqual(calls, ["CreateTopic"]);
     });
+});
+
+test("D config derives the exact source service agent and rejects adjacent identity shapes", async () => {
+  const { sourceProjectNumbers } = await import("./pubsub-observation-d/replay.mjs");
+  const input = {
+    metadata: { project: "synthetic-source" },
+    cells: [
+      {
+        arm: "managed-grant-readback-wait",
+        exchanges: [
+          {
+            category: "iamSetupWrite",
+            request: {
+              resource: "projects/synthetic-source/subscriptions/source",
+              policy: {
+                bindings: [
+                  {
+                    role: "roles/pubsub.subscriber",
+                    members: [
+                      "serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com",
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+          {
+            category: "iamSetupWrite",
+            request: {
+              resource: "projects/synthetic-destination/topics/dead",
+              policy: {
+                bindings: [
+                  {
+                    role: "roles/pubsub.publisher",
+                    members: [
+                      "serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com",
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    ],
+  };
+  assert.deepEqual(sourceProjectNumbers(input), { "synthetic-source": "123456789" });
+  for (const mutate of [
+    (x) => x.cells[0].exchanges.pop(),
+    (x) => (x.metadata.project = "synthetic-destination"),
+    (x) => (x.cells[0].exchanges[0].request.resource = "projects/foreign/subscriptions/source"),
+    (x) =>
+      (x.cells[0].exchanges[1].request.policy.bindings[0].members = [
+        "serviceAccount:service-987654321@gcp-sa-pubsub.iam.gserviceaccount.com",
+      ]),
+    (x) =>
+      (x.cells[0].exchanges[0].request.policy.bindings[0].members = [
+        "serviceAccount:service-012345678@gcp-sa-pubsub.iam.gserviceaccount.com",
+      ]),
+    (x) => (x.cells[0].exchanges[0].request.policy.bindings[0].role = "roles/pubsub.publisher"),
+    (x) =>
+      (x.cells[0].exchanges[1].request.resource = "projects/synthetic-source/subscriptions/other"),
+    (x) => {
+      x.cells[0].exchanges[1].request.resource = "projects/synthetic-source/subscriptions/other";
+      x.cells[0].exchanges[1].request.policy.bindings[0].role = "roles/pubsub.subscriber";
+    },
+  ]) {
+    const changed = structuredClone(input);
+    mutate(changed);
+    assert.throws(() => sourceProjectNumbers(changed));
+  }
+});
+
+test("D refuses local policy drift before writing or restoring bindings", async () => {
+  const { replayRecording } = await core(),
+    resource = "projects/synthetic/topics/owned";
+  const rows = [
+    source("CreateTopic", { name: resource }, { name: resource }, "create"),
+    source("GetIamPolicy", { resource }, { etag: "AAAA" }, "cleanupIamConflictGet"),
+    source(
+      "SetIamPolicy",
+      { resource, policy: { etag: "AAAA", version: 1, bindings: [] } },
+      { etag: "AAAAAAAAAAAB", version: 1 },
+      "cleanupIamRestoreWrite",
+    ),
+  ];
+  const calls = [];
+  const result = await replayRecording(
+    executionInput(rows),
+    async (call, row) => {
+      calls.push(call.method);
+      return call.method === "GetIamPolicy"
+        ? reply({
+            etag: "BBBB",
+            version: 1,
+            bindings: [{ role: "roles/synthetic.reader", members: ["synthetic-member"] }],
+          })
+        : row.reply;
+    },
+    { clockReceiptFor: receipt },
+  );
+  assert.deepEqual(calls, ["CreateTopic", "GetIamPolicy"]);
+  assert.match(result.results[0].exchanges.at(-1).debt, /policy conflict/);
 });

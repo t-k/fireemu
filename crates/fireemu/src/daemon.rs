@@ -592,6 +592,11 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             Arc::new(functions::PubSubBridge::new(r.clone()))
                 as Arc<dyn fireemu_adapter_pubsub::TopicDelivery>
         });
+    pubsub_state
+        .lock()
+        .map_err(|_| "the Pub/Sub state lock is poisoned".to_owned())?
+        .set_project_numbers(cfg.pubsub_project_numbers.clone())
+        .map_err(|e| e.to_string())?;
     let pubsub_handle = fireemu_adapter_pubsub::PubSubHandle::new(
         pubsub_state.clone(),
         clock.clone(),

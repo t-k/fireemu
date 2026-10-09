@@ -121,6 +121,10 @@ struct TopicEntry {
 #[derive(Debug)]
 pub struct PubSubState {
     seed: u64,
+    resource_policies: BTreeMap<String, crate::iam::PolicyState>,
+    policy_incarnation: u32,
+    enforce_dead_letter_iam: bool,
+    project_numbers: BTreeMap<String, String>,
     issued_page_boundaries: BTreeMap<String, BTreeMap<String, Option<String>>>,
     topics: BTreeMap<String, TopicEntry>,
     subscriptions: BTreeMap<String, SubscriptionState>,
@@ -143,6 +147,10 @@ impl PubSubState {
     pub fn new(seed: u64) -> Self {
         Self {
             seed,
+            resource_policies: BTreeMap::new(),
+            policy_incarnation: 0,
+            enforce_dead_letter_iam: false,
+            project_numbers: BTreeMap::new(),
             issued_page_boundaries: BTreeMap::new(),
             topics: BTreeMap::new(),
             subscriptions: BTreeMap::new(),
@@ -160,6 +168,162 @@ impl PubSubState {
             push_minimum_redelivery_interval: LogicalDuration::from_millis(
                 DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
             ),
+        }
+    }
+
+    /// Configures explicit Pub/Sub service-agent identities, independently of Auth configuration.
+    pub fn set_project_numbers(&mut self, numbers: BTreeMap<String, String>) -> Result<()> {
+        for (project, number) in &numbers {
+            validate_project(project)?;
+            if number.is_empty()
+                || number.len() > 20
+                || !number.bytes().all(|b| b.is_ascii_digit())
+                || number.starts_with('0')
+            {
+                return Err(PubSubError::invalid_argument(
+                    "Pub/Sub project numbers must be positive decimal strings",
+                ));
+            }
+        }
+        self.project_numbers = numbers;
+        Ok(())
+    }
+
+    /// Strict adapters enforce forwarding authority; emulator adapters retain legacy transfers.
+    pub fn set_dead_letter_iam_enforcement(&mut self, enforce: bool) {
+        self.enforce_dead_letter_iam = enforce;
+    }
+
+    /// Reads the current policy of a live topic or subscription.
+    pub fn get_resource_policy(&self, resource: &str) -> Result<crate::ResourcePolicy> {
+        self.resource_policies
+            .get(resource)
+            .map(crate::iam::PolicyState::get)
+            .ok_or_else(|| PubSubError::not_found(format!("resource {resource} not found")))
+    }
+
+    /// Replaces a live resource policy only when its current opaque etag matches.
+    pub fn set_resource_policy(
+        &mut self,
+        resource: &str,
+        etag: &str,
+        version: Option<u32>,
+        bindings: Vec<crate::PolicyBinding>,
+    ) -> Result<crate::ResourcePolicy> {
+        self.resource_policies
+            .get_mut(resource)
+            .ok_or_else(|| PubSubError::not_found(format!("resource {resource} not found")))?
+            .set(etag, version, bindings)
+    }
+
+    fn create_resource_policy(&mut self, resource: String) -> Result<()> {
+        let incarnation = self
+            .policy_incarnation
+            .checked_add(1)
+            .filter(|n| *n <= 0x00ff_ffff)
+            .ok_or_else(|| {
+                PubSubError::resource_exhausted("resource policy incarnation space exhausted")
+            })?;
+        self.policy_incarnation = incarnation;
+        self.resource_policies
+            .insert(resource, crate::iam::PolicyState::new(incarnation));
+        Ok(())
+    }
+
+    /// Requires both exact resource-local grants for the source project's configured service agent.
+    #[must_use]
+    pub fn dead_letter_authorized(
+        &self,
+        source: &SubscriptionName,
+        destination: &TopicName,
+    ) -> bool {
+        if !self.enforce_dead_letter_iam {
+            return true;
+        }
+        let Some(number) = self.project_numbers.get(source.project()) else {
+            return false;
+        };
+        let member =
+            format!("serviceAccount:service-{number}@gcp-sa-pubsub.iam.gserviceaccount.com");
+        self.resource_policies
+            .get(&source.to_full())
+            .is_some_and(|p| p.grants("roles/pubsub.subscriber", &member))
+            && self
+                .resource_policies
+                .get(&destination.to_full())
+                .is_some_and(|p| p.grants("roles/pubsub.publisher", &member))
+    }
+
+    /// Checks the retained source reservation and current grants immediately before publication.
+    #[must_use]
+    pub fn can_commit_dead_letter(&self, forward: &DeadLetterForward) -> bool {
+        self.dead_letter_authorized(&forward.source_subscription, &forward.dead_letter_topic)
+            && self
+                .subscriptions
+                .get(&forward.source_subscription.to_full())
+                .is_some_and(|sub| {
+                    sub.config()
+                        .dead_letter_policy
+                        .as_ref()
+                        .is_some_and(|p| p.dead_letter_topic == forward.dead_letter_topic)
+                        && sub
+                            .pending_forwards()
+                            .iter()
+                            .any(|message| Arc::ptr_eq(message, &forward.message))
+                })
+    }
+
+    /// Admits an authorized transfer with the observed source metadata in strict mode.
+    pub fn prepare_dead_letter_publication(
+        &mut self,
+        forward: &DeadLetterForward,
+        now: LogicalInstant,
+    ) -> Result<PreparedPublication> {
+        if !self.can_commit_dead_letter(forward) {
+            self.resume_dead_letter(forward, now);
+            return Err(PubSubError::failed_precondition(
+                "dead-letter forwarding authority is absent",
+            ));
+        }
+        let mut message = forward.message.message.clone();
+        if self.enforce_dead_letter_iam {
+            let attempt = self
+                .subscriptions
+                .get(&forward.source_subscription.to_full())
+                .and_then(|sub| sub.forwarding_attempt(&forward.message))
+                .ok_or_else(|| {
+                    PubSubError::failed_precondition("dead-letter source reservation is absent")
+                })?;
+            let published = forward.message.publish_time.to_rfc3339().map_err(|_| {
+                PubSubError::failed_precondition("dead-letter publication time is outside RFC3339")
+            })?;
+            message.attributes.insert(
+                "CloudPubSubDeadLetterSourceSubscription".to_owned(),
+                forward.source_subscription.subscription().to_owned(),
+            );
+            message.attributes.insert(
+                "CloudPubSubDeadLetterSourceSubscriptionProject".to_owned(),
+                forward.source_subscription.project().to_owned(),
+            );
+            message.attributes.insert(
+                "CloudPubSubDeadLetterSourceDeliveryCount".to_owned(),
+                attempt.to_string(),
+            );
+            message.attributes.insert(
+                "CloudPubSubDeadLetterSourceTopicPublishTime".to_owned(),
+                published,
+            );
+        }
+        self.prepare_publish(&forward.dead_letter_topic, vec![message], now)
+    }
+
+    /// Releases a transfer reservation after authority is revoked, preserving delivered counters.
+    pub fn resume_dead_letter(&mut self, forward: &DeadLetterForward, now: LogicalInstant) {
+        if let Some(sub) = self
+            .subscriptions
+            .get_mut(&forward.source_subscription.to_full())
+        {
+            sub.resume_forward(&forward.message, now);
         }
     }
 
@@ -328,6 +492,7 @@ impl PubSubState {
     pub fn clear(&mut self) {
         self.issued_page_boundaries.clear();
         self.topics.clear();
+        self.resource_policies.clear();
         self.subscriptions.clear();
         self.topic_subs.clear();
         self.function_subscriptions.clear();
@@ -440,6 +605,7 @@ impl PubSubState {
             .topic_counter
             .checked_add(1)
             .ok_or_else(|| PubSubError::resource_exhausted("topic incarnation space exhausted"))?;
+        self.create_resource_policy(key.clone())?;
         self.topic_subs.entry(key.clone()).or_default();
         self.topics.insert(
             key,
@@ -491,6 +657,7 @@ impl PubSubState {
         if self.topics.remove(&key).is_none() {
             return Err(PubSubError::not_found(format!("topic {key} not found")));
         }
+        self.resource_policies.remove(&key);
         let prefix = format!("{key}/");
         self.issued_page_boundaries
             .retain(|context, _| !context.starts_with(&prefix));
@@ -545,6 +712,7 @@ impl PubSubState {
             .entry(topic_key)
             .or_default()
             .insert(key.clone());
+        self.create_resource_policy(key.clone())?;
         let mut subscription = SubscriptionState::new(config);
         subscription.set_push_minimum_redelivery_interval(self.push_minimum_redelivery_interval);
         self.subscriptions.insert(key, subscription);
@@ -621,6 +789,7 @@ impl PubSubState {
                 "subscription {key} not found"
             )));
         };
+        self.resource_policies.remove(&key);
         self.function_subscriptions.remove(&key);
         if let Some(set) = self.topic_subs.get_mut(&state.config().topic.to_full()) {
             set.remove(&key);
@@ -1428,18 +1597,13 @@ impl PubSubState {
     ) -> Result<Vec<ReceivedMessage>> {
         let outcome = self.pull_with_dead_letters(name, max, now)?;
         for forward in outcome.dead_lettered {
-            if self
-                .publish(
-                    &forward.dead_letter_topic,
-                    vec![forward.message.message.clone()],
-                    now,
-                )
-                .is_ok()
-            {
-                let _ = self.complete_dead_letter(
-                    &forward.source_subscription,
-                    &forward.message.message_id,
-                );
+            if let Ok(prepared) = self.prepare_dead_letter_publication(&forward, now) {
+                if self.commit_prepared(prepared, now).is_ok() {
+                    let _ = self.complete_dead_letter(
+                        &forward.source_subscription,
+                        &forward.message.message_id,
+                    );
+                }
             }
         }
         Ok(outcome.received)
@@ -1464,13 +1628,20 @@ impl PubSubState {
         if let Some(sub) = self.subscriptions.get_mut(&key) {
             sub.expire_deadlines(now);
         }
+        let authorized = self
+            .subscriptions
+            .get(&key)
+            .and_then(|s| s.config().dead_letter_policy.as_ref())
+            .is_some_and(|policy| self.dead_letter_authorized(name, &policy.dead_letter_topic));
         let seed_bump = &mut self.ack_rng;
         let outcome = {
             let sub = self
                 .subscriptions
                 .get_mut(&key)
                 .expect("subscription present");
-            sub.pull(max, now, || format!("ack-{:016x}", seed_bump.next_u64()))
+            sub.pull_with_forwarding(max, now, authorized, || {
+                format!("ack-{:016x}", seed_bump.next_u64())
+            })
         };
         let dead_letter_topic = self
             .subscriptions
@@ -1639,6 +1810,274 @@ mod tests {
             dead_letter_policy: None,
             retry_policy: None,
             push_config: PushConfig::default(),
+        }
+    }
+
+    fn iam_fixture() -> (PubSubState, SubscriptionName, TopicName, SubscriptionName) {
+        let mut state = PubSubState::new(42);
+        state.set_dead_letter_iam_enforcement(true);
+        state
+            .set_project_numbers(BTreeMap::from([(
+                "demo-model".to_owned(),
+                "123456789".to_owned(),
+            )]))
+            .unwrap();
+        let source_topic = topic("demo-model", "source");
+        let dead = topic("demo-other", "dead");
+        state
+            .create_topic(source_topic.clone(), BTreeMap::new())
+            .unwrap();
+        state.create_topic(dead.clone(), BTreeMap::new()).unwrap();
+        let mut config = sub_cfg("demo-model", "source", "source", Filter::always());
+        config.dead_letter_policy = Some(crate::DeadLetterPolicy {
+            dead_letter_topic: dead.clone(),
+            max_delivery_attempts: 5,
+        });
+        let source = config.name.clone();
+        state.create_subscription(config).unwrap();
+        let mut config = sub_cfg("demo-other", "sink", "dead", Filter::always());
+        config.enable_message_ordering = true;
+        let sink = config.name.clone();
+        state.create_subscription(config).unwrap();
+        state
+            .publish(
+                &source_topic,
+                vec![data(b"model")],
+                LogicalInstant::UNIX_EPOCH,
+            )
+            .unwrap();
+        (state, source, dead, sink)
+    }
+
+    fn write_iam(state: &mut PubSubState, resource: &str, role: &str, granted: bool, member: &str) {
+        let before = state.get_resource_policy(resource).unwrap();
+        let bindings = if granted {
+            vec![crate::PolicyBinding {
+                role: role.to_owned(),
+                members: vec![member.to_owned()],
+            }]
+        } else {
+            Vec::new()
+        };
+        state
+            .set_resource_policy(resource, &before.etag, Some(3), bindings)
+            .unwrap();
+    }
+
+    #[test]
+    fn resource_policies_do_not_survive_recreation_or_project_reset() {
+        let (mut state, source, dead, _sink) = iam_fixture();
+        let baseline_source = state.get_resource_policy(&source.to_full()).unwrap();
+        let baseline_dead = state.get_resource_policy(&dead.to_full()).unwrap();
+        let member = "serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com";
+        for (resource, role) in [
+            (source.to_full(), "roles/pubsub.subscriber"),
+            (dead.to_full(), "roles/pubsub.publisher"),
+        ] {
+            write_iam(&mut state, &resource, role, true, member);
+        }
+        assert!(state.dead_letter_authorized(&source, &dead));
+        let previous_policy = state.get_resource_policy(&dead.to_full()).unwrap();
+        state.delete_topic(&dead).unwrap();
+        state.create_topic(dead.clone(), BTreeMap::new()).unwrap();
+        assert!(!state.dead_letter_authorized(&source, &dead));
+        assert_ne!(
+            baseline_dead.etag,
+            state.get_resource_policy(&dead.to_full()).unwrap().etag
+        );
+        assert!(state
+            .set_resource_policy(
+                &dead.to_full(),
+                &previous_policy.etag,
+                None,
+                previous_policy.bindings
+            )
+            .is_err());
+        let old = state.get_resource_policy(&source.to_full()).unwrap();
+        let config = state.subscription_config(&source).unwrap().clone();
+        state.delete_subscription(&source).unwrap();
+        state.create_subscription(config).unwrap();
+        assert_ne!(
+            baseline_source.etag,
+            state.get_resource_policy(&source.to_full()).unwrap().etag
+        );
+        assert_ne!(
+            old.etag,
+            state.get_resource_policy(&source.to_full()).unwrap().etag
+        );
+        assert!(state
+            .set_resource_policy(&source.to_full(), &old.etag, None, old.bindings)
+            .is_err());
+        state.clear_project("demo-model");
+        assert!(state.get_resource_policy(&source.to_full()).is_err());
+        assert!(state.get_resource_policy(&dead.to_full()).is_ok());
+        state.clear_projects_where(|project| project == "demo-other");
+        assert!(state.get_resource_policy(&dead.to_full()).is_err());
+        state.clear();
+        state.create_topic(dead.clone(), BTreeMap::new()).unwrap();
+        assert_ne!(
+            previous_policy.etag,
+            state.get_resource_policy(&dead.to_full()).unwrap().etag
+        );
+        state.clear();
+        assert!(state.get_resource_policy(&dead.to_full()).is_err());
+    }
+
+    #[test]
+    fn strict_ungranted_counter_remains_positive_through_sixty_attempts_and_inactivity() {
+        let (mut state, source, _dead, sink) = iam_fixture();
+        let mut now = LogicalInstant::from_unix_seconds(1_700_000_000);
+        for attempt in 1..=60 {
+            if attempt == 10 {
+                now = now.checked_add(LogicalDuration::from_seconds(720)).unwrap();
+            }
+            let received = state.pull(&source, 1, now).unwrap();
+            assert_eq!(received.len(), 1);
+            assert_eq!(received[0].delivery_attempt, attempt);
+            state
+                .modify_ack_deadline(&source, &[received[0].ack_id.clone()], 0, now)
+                .unwrap();
+            assert!(state.pull(&sink, 1, now).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn strict_managed_deadline_transfer_keeps_original_source_metadata_and_five_attempts() {
+        let (mut state, source, dead, sink) = iam_fixture();
+        let member = "serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com";
+        for (resource, role) in [
+            (source.to_full(), "roles/pubsub.subscriber"),
+            (dead.to_full(), "roles/pubsub.publisher"),
+        ] {
+            write_iam(&mut state, &resource, role, true, member);
+        }
+        let mut now = LogicalInstant::UNIX_EPOCH;
+        for attempt in 1..=5 {
+            let received = state.pull(&source, 1, now).unwrap();
+            assert_eq!(received[0].delivery_attempt, attempt);
+            now = now.checked_add(LogicalDuration::from_seconds(11)).unwrap();
+        }
+        assert!(state.pull(&source, 1, now).unwrap().is_empty());
+        let received = state.pull(&sink, 1, now).unwrap();
+        assert_eq!(received.len(), 1);
+        let attrs = &received[0].message.message.attributes;
+        assert_eq!(attrs["CloudPubSubDeadLetterSourceSubscription"], "source");
+        assert_eq!(
+            attrs["CloudPubSubDeadLetterSourceSubscriptionProject"],
+            "demo-model"
+        );
+        assert_eq!(attrs["CloudPubSubDeadLetterSourceDeliveryCount"], "5");
+        assert_eq!(
+            attrs["CloudPubSubDeadLetterSourceTopicPublishTime"],
+            "1970-01-01T00:00:00Z"
+        );
+    }
+
+    #[test]
+    fn emulator_dead_letter_transfer_retains_legacy_behavior_without_resource_grants() {
+        let (mut state, source, _dead, sink) = iam_fixture();
+        state.set_dead_letter_iam_enforcement(false);
+        let now = LogicalInstant::UNIX_EPOCH;
+        for attempt in 1..=5 {
+            let received = state.pull(&source, 1, now).unwrap();
+            assert_eq!(received[0].delivery_attempt, attempt);
+            state
+                .modify_ack_deadline(&source, &[received[0].ack_id.clone()], 0, now)
+                .unwrap();
+        }
+        assert!(state.pull(&source, 1, now).unwrap().is_empty());
+        let received = state.pull(&sink, 1, now).unwrap();
+        assert_eq!(received.len(), 1);
+        assert!(received[0].message.message.attributes.is_empty());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn resource_iam_and_delivery_match_separate_reference_models(actions in proptest::collection::vec(0_u8..15,1..80)) {
+            let (mut state,source,dead,sink)=iam_fixture();
+            let member="serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com";
+            let mut subscriber=false; let mut publisher=false; let mut identity_matches=true; let mut attempts=0_u32; let mut completed=false;
+            let mut now=LogicalInstant::UNIX_EPOCH;
+            for action in actions {
+                match action {
+                    0..=3 => {
+                        let is_source=action<2; let granted=action%2==0;
+                        let resource=if is_source {source.to_full()} else {dead.to_full()};
+                        let role=if is_source {"roles/pubsub.subscriber"} else {"roles/pubsub.publisher"};
+                        write_iam(&mut state,&resource,role,granted,member);
+                        if is_source {subscriber=granted;} else {publisher=granted;}
+                        let policy=state.get_resource_policy(&resource).unwrap();
+                        proptest::prop_assert_eq!(policy.version,Some(1));
+                        proptest::prop_assert_eq!(policy.bindings.is_empty(),!granted);
+                    }
+                    4 => {
+                        let before=state.get_resource_policy(&source.to_full()).unwrap();
+                        proptest::prop_assert!(state.set_resource_policy(&source.to_full(),"stale",Some(3),Vec::new()).is_err());
+                        proptest::prop_assert_eq!(state.get_resource_policy(&source.to_full()).unwrap(),before);
+                    }
+                    5 => {
+                        write_iam(&mut state,&dead.to_full(),"roles/pubsub.publisher",true,"serviceAccount:service-987654321@gcp-sa-pubsub.iam.gserviceaccount.com");
+                        publisher=false;
+                    }
+                    8 => {
+                        let config=state.subscription_config(&sink).unwrap().clone();
+                        state.delete_subscription(&sink).unwrap();
+                        state.delete_topic(&dead).unwrap();
+                        state.create_topic(dead.clone(),BTreeMap::new()).unwrap();
+                        state.create_subscription(config).unwrap();
+                        publisher=false;
+                    }
+                    9 | 14 => {
+                        let config=state.subscription_config(&source).unwrap().clone();
+                        if action==14 {
+                            state.clear_project(source.project());
+                            state.create_topic(config.topic.clone(),BTreeMap::new()).unwrap();
+                        } else {state.delete_subscription(&source).unwrap();}
+                        let source_topic=config.topic.clone();
+                        state.create_subscription(config).unwrap();
+                        state.publish(&source_topic,vec![data(b"model")],now).unwrap();
+                        subscriber=false; attempts=0; completed=false;
+                    }
+                    10 => {
+                        now=now.checked_add(LogicalDuration::from_seconds(11)).unwrap();
+                        state.expire_all(now);
+                    }
+                    11 => {
+                        if !completed && subscriber && publisher && identity_matches && attempts>=5 {
+                            let outcome=state.pull_with_dead_letters(&source,1,now).unwrap();
+                            proptest::prop_assert!(outcome.received.is_empty());
+                            proptest::prop_assert_eq!(outcome.dead_lettered.len(),1);
+                            write_iam(&mut state,&dead.to_full(),"roles/pubsub.publisher",false,member);
+                            publisher=false;
+                            proptest::prop_assert!(state.prepare_dead_letter_publication(&outcome.dead_lettered[0],now).is_err());
+                            proptest::prop_assert!(state.pull(&sink,1,now).unwrap().is_empty());
+                        }
+                    }
+                    12 | 13 => {
+                        identity_matches=action==13;
+                        state.set_project_numbers(BTreeMap::from([("demo-model".to_owned(),if identity_matches {"123456789".to_owned()} else {"987654321".to_owned()})])).unwrap();
+                    }
+                    _ => {
+                        let received=state.pull(&source,1,now).unwrap();
+                        if completed || (subscriber && publisher && identity_matches && attempts>=5) {
+                            proptest::prop_assert!(received.is_empty());
+                            if !completed {
+                                let forwarded=state.pull(&sink,1,now).unwrap();
+                                proptest::prop_assert_eq!(forwarded.len(),1);
+                                state.acknowledge(&sink,&[forwarded[0].ack_id.clone()]).unwrap();
+                                completed=true;
+                            }
+                        } else {
+                            attempts+=1;
+                            proptest::prop_assert_eq!(received.len(),1);
+                            proptest::prop_assert_eq!(received[0].delivery_attempt,attempts);
+                            state.modify_ack_deadline(&source,&[received[0].ack_id.clone()],0,now).unwrap();
+                            proptest::prop_assert!(state.pull(&sink,1,now).unwrap().is_empty());
+                        }
+                    }
+                }
+                proptest::prop_assert_eq!(state.dead_letter_authorized(&source,&dead),subscriber&&publisher&&identity_matches);
+            }
         }
     }
 

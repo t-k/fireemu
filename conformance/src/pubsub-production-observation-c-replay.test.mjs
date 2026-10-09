@@ -296,6 +296,7 @@ test("C native unary captures actual successful protobuf and keeps exact error d
       e ? reject(e) : resolve(p),
     ),
   );
+  server.start();
   const meter = createMeter();
   meter.enter(makePlan().cells.find((c) => c.id === "N1"));
   const raw = [];
@@ -1117,5 +1118,109 @@ test("C runtime joins persisted publication clock with approved source and build
       binarySha256: build.sha256,
       inputsSha256: build.binaryInputsSha256,
     });
+  }
+});
+
+test("C entrypoint binds the 338 compiled inputs including resource IAM before worker admission", async () => {
+  const { fileURLToPath } = await import("node:url");
+  const { syncBuiltinESMExports } = await import("node:module");
+  const childProcess = (await import("node:child_process")).default;
+  const { main } = await import("./pubsub-observation-c/replay.mjs");
+  const directory = mkdtempSync(join(tmpdir(), "fireemu-c-inputs-"));
+  const root = fileURLToPath(new URL("../../", import.meta.url));
+  const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const put = (name, value) => {
+    const path = join(directory, name),
+      bytes = Buffer.from(typeof value === "string" ? value : JSON.stringify(value));
+    writeFileSync(path, bytes);
+    return { path, sha256: hash(bytes) };
+  };
+  const originalExec = childProcess.execFileSync;
+  try {
+    const recording = fixture();
+    recording.descriptor.sources = [];
+    const descriptor = put("descriptor.json", recording.descriptor);
+    recording.packet.descriptorSha256 = descriptor.sha256;
+    const packet = put("packet.json", recording.packet);
+    for (const object of [recording.rows[0], recording.summary]) {
+      object.packetSha256 = packet.sha256;
+      object.descriptorSha256 = descriptor.sha256;
+    }
+    const binding = put("input.json", {
+      packet,
+      descriptor,
+      summary: put("summary.json", recording.summary),
+      capture: put(
+        "capture.jsonl",
+        recording.rows.map((row) => JSON.stringify(row)).join("\n") + "\n",
+      ),
+      issued: put("issued.jsonl", ""),
+    });
+    const iam = "crates/fireemu-core-pubsub/src/iam.rs";
+    const candidates = originalExec("git", ["-C", root, "ls-files", "crates", "--", "*.rs"], {
+      encoding: "utf8",
+    })
+      .trim()
+      .split("\n")
+      .filter((path) => path !== iam);
+    const paths = [iam, ...candidates].slice(0, 338);
+    assert.equal(paths.length, 338);
+    const files = Object.fromEntries(
+      paths.map((path) => [path, hash(readFileSync(join(root, path)))]),
+    );
+    mkdirSync(join(directory, "release"));
+    const binary = put("release/fireemu", "synthetic pinned binary, never executed");
+    childProcess.execFileSync = (file, args, options) => {
+      if (file === "git" && args.includes("verify-commit")) return Buffer.alloc(0);
+      return originalExec(file, args, options);
+    };
+    syncBuiltinESMExports();
+    for (const variant of ["valid", "missing-iam", "wrong-source-pin", "wrong-file-pin"]) {
+      const manifest = {
+        sourceHead: head,
+        sourceTree: "d".repeat(40),
+        files: structuredClone(files),
+      };
+      if (variant === "missing-iam") {
+        delete manifest.files[iam];
+        const replacement = candidates.find((path) => !Object.hasOwn(manifest.files, path));
+        manifest.files[replacement] = hash(readFileSync(join(root, replacement)));
+      }
+      if (variant === "wrong-source-pin") manifest.sourceHead = "e".repeat(40);
+      if (variant === "wrong-file-pin") manifest.files[iam] = "0".repeat(64);
+      const inputs = put(`${variant}-compiled.json`, manifest);
+      const build = put(`${variant}-pin.json`, {
+        ...pin,
+        head,
+        tree: "d".repeat(40),
+        ...binary,
+        binaryInputsPath: inputs.path,
+        binaryInputsSha256: inputs.sha256,
+      });
+      const argv = [
+        "--input",
+        binding.path,
+        "--input-sha256",
+        binding.sha256,
+        "--build-pin",
+        build.path,
+        "--build-pin-sha256",
+        build.sha256,
+        "--out",
+        join(directory, variant),
+      ];
+      await assert.rejects(
+        main(argv, {}, { serverPid: -1 }),
+        variant === "valid"
+          ? /internal worker must be the pinned fireemu child/
+          : variant === "wrong-file-pin"
+            ? /input byte pin refused/
+            : /C compiled input coverage refused/,
+      );
+    }
+  } finally {
+    childProcess.execFileSync = originalExec;
+    syncBuiltinESMExports();
+    rmSync(directory, { recursive: true, force: true });
   }
 });

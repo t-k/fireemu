@@ -543,7 +543,8 @@ export async function replayRecording(
     const publications = new Map(),
       tokens = new Map(),
       exchanges = [],
-      localOwnership = new Map();
+      localOwnership = new Map(),
+      localPolicies = new Map();
     let stopped = false;
     for (const source of cell.exchanges) {
       const call = {
@@ -555,7 +556,11 @@ export async function replayRecording(
         request: structuredClone(source.request),
         at: source.at,
       };
-      const resource = call.request.name ?? call.request.topic ?? call.request.subscription;
+      const resource =
+        call.request.resource ??
+        call.request.name ??
+        call.request.topic ??
+        call.request.subscription;
       const creation = ["CreateTopic", "CreateSubscription"].includes(call.method);
       const maintenance = source.category.startsWith("cleanup") && !iamCategory(source.category);
       let entry;
@@ -589,7 +594,10 @@ export async function replayRecording(
           semanticVerdict: "NOT_COMPARABLE",
           debt: "Ordinary dispatch stopped after an incomplete local call",
         };
-      } else if (iamCategory(source.category)) {
+      } else if (
+        iamCategory(source.category) &&
+        localOwnership.get(resource)?.confirmedCreate !== true
+      ) {
         entry = {
           sourceRequestId: source.requestId,
           sourceN: source.n,
@@ -598,7 +606,8 @@ export async function replayRecording(
           category: source.category,
           physicalVerdict: "NOT_COMPARABLE",
           semanticVerdict: "NOT_COMPARABLE",
-          debt: "Resource-local IAM grant/readback/restoration has no verified local execution seam",
+          resource,
+          debt: "Local IAM ownership is unconfirmed; policy dispatch refused",
         };
       } else {
         try {
@@ -615,6 +624,16 @@ export async function replayRecording(
               if (!local) throw new Error("D own ACK selector unresolved");
               return local;
             });
+          if (call.method === "SetIamPolicy") {
+            const previous = localPolicies.get(resource);
+            refuse(
+              previous &&
+                previous.sourceEtag === call.request.policy?.etag &&
+                same(previous.sourceBindings, previous.localBindings),
+              "D local IAM CAS or policy conflict unresolved",
+            );
+            call.request.policy.etag = previous.localEtag;
+          }
           const actual = await execute(call, source),
             clock = clockReceiptFor(source);
           if (
@@ -661,7 +680,23 @@ export async function replayRecording(
           let expected = structuredClone(source.reply.body),
             local = structuredClone(actual?.body);
           const debts = [];
-          if (source.method === "Publish" && source.reply.ok && actual?.ok) {
+          if (iamCategory(source.category) && source.reply.ok && good(actual)) {
+            if (
+              typeof expected?.etag !== "string" ||
+              typeof local?.etag !== "string" ||
+              !local.etag
+            ) {
+              semantic = "DIVERGES";
+            } else {
+              localPolicies.set(resource, {
+                sourceEtag: expected.etag,
+                localEtag: local.etag,
+                sourceBindings: structuredClone(expected.bindings ?? []),
+                localBindings: structuredClone(local.bindings ?? []),
+              });
+              expected.etag = local.etag;
+            }
+          } else if (source.method === "Publish" && source.reply.ok && actual?.ok) {
             const sourceIds = expected?.messageIds,
               localIds = local?.messageIds;
             if (

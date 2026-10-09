@@ -11,6 +11,9 @@ import {
   runStrictRuntime,
 } from "../pubsub-production/stream-dlq-compare.mjs";
 import { createMeter } from "./meter.mjs";
+import { CAPS, iamCategory, minimumCallMs } from "./plan.mjs";
+import { readResponse } from "../pubsub-observation-c/wire.mjs";
+import { FRAMING_RESERVE } from "../pubsub-observation/metadata.mjs";
 import { createWire } from "../pubsub-observation-c/wire.mjs";
 import { importRecording, replayRecording, bindTerminal } from "./replay-core.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -82,7 +85,8 @@ function compiledInputs(pin) {
   if (
     manifest.sourceHead !== pin.head ||
     manifest.sourceTree !== pin.tree ||
-    Object.keys(manifest.files ?? {}).length !== 337
+    Object.keys(manifest.files ?? {}).length !== 338 ||
+    !Object.hasOwn(manifest.files ?? {}, "crates/fireemu-core-pubsub/src/iam.rs")
   )
     throw new Error("D compiled input coverage refused");
   let bytes = 0;
@@ -93,6 +97,43 @@ function compiledInputs(pin) {
     if (bytes > 20_000_000) throw new Error("compiled input byte bound");
   }
 }
+export function sourceProjectNumbers(input) {
+  const numbers = {};
+  for (const cell of input.cells.filter((c) => c.arm === "managed-grant-readback-wait")) {
+    const grants = cell.exchanges.filter((e) => e.category === "iamSetupWrite");
+    if (grants.length !== 2) throw new Error("D exact managed source grants required");
+    let sourceProject, principal;
+    const kinds = new Set();
+    for (const exchange of grants) {
+      const match = exchange.request.resource?.match(
+        /^projects\/([^/]+)\/(subscriptions|topics)\/[^/]+$/,
+      );
+      if (match && kinds.has(match[2]))
+        throw new Error("D distinct source and destination grants required");
+      if (match) kinds.add(match[2]);
+      const role =
+        match?.[2] === "subscriptions" ? "roles/pubsub.subscriber" : "roles/pubsub.publisher";
+      const binding = exchange.request.policy?.bindings?.find((b) => b.role === role);
+      const member = binding?.members?.find((m) =>
+        /^serviceAccount:service-[1-9]\d{0,19}@gcp-sa-pubsub\.iam\.gserviceaccount\.com$/.test(m),
+      );
+      if (!match || !member || (principal && principal !== member))
+        throw new Error("D matching source service-agent grants required");
+      principal = member;
+      if (match[2] === "subscriptions") sourceProject = match[1];
+    }
+    if (!sourceProject || sourceProject !== input.metadata.project)
+      throw new Error("D source-project identity mismatch");
+    const number = principal.match(/^serviceAccount:service-([1-9]\d{0,19})@/)[1];
+    if (numbers[sourceProject] && numbers[sourceProject] !== number)
+      throw new Error("D inconsistent source service-agent identity");
+    numbers[sourceProject] = number;
+  }
+  if (Object.keys(numbers).length !== 1)
+    throw new Error("D explicit source-project identity required");
+  return numbers;
+}
+
 export async function replayLocal(
   input,
   environment,
@@ -134,6 +175,97 @@ export async function replayLocal(
         persist("body", { transport, requestId, bytes }),
     },
   });
+  let iamSequence = 0;
+  const iamControllers = new Set();
+  const callIam = async (call) => {
+    if (
+      call.transport !== "rest" ||
+      !["GetIamPolicy", "SetIamPolicy"].includes(call.method) ||
+      !/^projects\/[^/]+\/(topics|subscriptions)\/[^/]+$/.test(call.request.resource ?? "")
+    )
+      throw new Error("D finite local IAM route required");
+    const maintenance = call.category.startsWith("cleanup"),
+      remaining = () => meter.remaining(maintenance);
+    meter.start(call.category, "rest");
+    if (remaining() < minimumCallMs(call.method))
+      throw new Error("D IAM latency margin unavailable");
+    const set = call.method === "SetIamPolicy",
+      url = `http://${environment.PUBSUB_EMULATOR_HOST}/v1/${call.request.resource.split("/").map(encodeURIComponent).join("/")}:${set ? "setIamPolicy" : "getIamPolicy?options.requestedPolicyVersion=3"}`,
+      raw = set ? Buffer.from(JSON.stringify({ policy: call.request.policy })) : Buffer.alloc(0),
+      metadataBytesOut = Buffer.byteLength(url) + 256 + FRAMING_RESERVE;
+    if (raw.length + metadataBytesOut > CAPS.metadataBytesEachDirection)
+      throw new Error("D IAM request byte cap");
+    const requestId = `iam-${++iamSequence}`,
+      started = meter.clock(),
+      controller = new AbortController();
+    iamControllers.add(controller);
+    const timer = setTimeout(() => controller.abort(), Math.min(30000, remaining()));
+    let reply;
+    try {
+      journal.write({
+        event: "request-dispatch",
+        cellId: call.cellId,
+        requestId,
+        transport: "rest",
+        category: call.category,
+        method: call.method,
+        request: call.request,
+        metadataBytesOut,
+        clockMs: started,
+      });
+      const response = await fetch(url, {
+        method: set ? "POST" : "GET",
+        redirect: "manual",
+        headers: { "content-type": "application/json" },
+        ...(set ? { body: raw } : {}),
+        signal: controller.signal,
+      });
+      const bytes = await readResponse(response),
+        body = JSON.parse(bytes);
+      if (!body || typeof body !== "object" || Array.isArray(body))
+        throw new Error("D IAM unreadable response object");
+      persist("body", { transport: "rest", requestId, bytes });
+      const metadataBytesIn = [...response.headers].reduce(
+        (sum, [key, value]) => sum + Buffer.byteLength(key) + Buffer.byteLength(value) + 4,
+        FRAMING_RESERVE,
+      );
+      reply = {
+        ok: response.ok,
+        status: response.status,
+        code: body.error?.status ?? (response.ok ? "OK" : "UNKNOWN"),
+        body,
+        bodyBytes: bytes.length,
+        bodySha256: digest(bytes),
+        metadataBytesIn,
+        unknown:
+          response.status < 200 ||
+          (response.status >= 300 && response.status < 400) ||
+          response.status >= 500 ||
+          response.status === 499,
+      };
+    } catch {
+      reply = { ok: false, code: "UNKNOWN", unknown: true, body: {}, bodyBytes: null };
+    } finally {
+      clearTimeout(timer);
+      iamControllers.delete(controller);
+    }
+    reply.durationMs = meter.clock() - started;
+    journal.write({
+      event: "response",
+      cellId: call.cellId,
+      requestId,
+      transport: "rest",
+      method: call.method,
+      durationMs: reply.durationMs,
+      reply,
+    });
+    try {
+      remaining();
+    } catch {
+      reply.budgetOverrun = true;
+    }
+    return reply;
+  };
   const bound = async (operation, ms) => {
     let timer;
     try {
@@ -142,6 +274,7 @@ export async function replayLocal(
         new Promise((_, reject) => {
           timer = setTimeout(() => {
             wire.abortSource();
+            for (const controller of iamControllers) controller.abort();
             reject(new Error("D local cell time exhausted"));
           }, ms);
         }),
@@ -195,7 +328,10 @@ export async function replayLocal(
         };
         clockReceipts.push(receipt);
         persist("clock", receipt);
-        return await bound(() => wire.call(call), remaining());
+        return await bound(
+          () => (iamCategory(call.category) ? callIam(call) : wire.call(call)),
+          remaining(),
+        );
       },
       {
         enter: (cell) => meter.enter(input.packet.plan.cells.find((c) => c.id === cell.id)),
@@ -216,6 +352,7 @@ export async function replayLocal(
       runtimeInputs,
     };
   } finally {
+    for (const controller of iamControllers) controller.abort();
     wire.abortSource();
     wire.close();
   }
@@ -272,9 +409,15 @@ export async function main(argv = process.argv.slice(2), environment = process.e
       argv,
       environment,
       workerModule: import.meta.url,
+      pubsubProjectNumbers: sourceProjectNumbers(input),
     });
   }
-  verifyStrictWorker({ pin, project: input.metadata.project, launch });
+  verifyStrictWorker({
+    pin,
+    project: input.metadata.project,
+    launch,
+    pubsubProjectNumbers: sourceProjectNumbers(input),
+  });
   persistRuntimeStart(opts.out, launch, input.metadata.at);
   writeFileSync(join(opts.out, "source-terminal.jsonl"), input.terminalBytes, { flag: "wx" });
   let bodySequence = 0;

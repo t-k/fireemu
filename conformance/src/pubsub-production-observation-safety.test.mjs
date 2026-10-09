@@ -1152,3 +1152,23 @@ test("other stream cells keep synchronous disposal without diagnostic drain", as
   assert.equal(drains, 0);
   assert.equal(seals, 1);
 });
+
+test("Task28 frozen complete-but-open summary is independent of actual A2 unclosed empty obligations", () => {
+  const name = `projects/fireemu-oracle-idp/subscriptions/fe${runId}-r2-sub`,
+    ledger = createLedger();
+  const id = ledger.sent({ name, action: "create", transport: "rest" });
+  ledger.answered({ name, action: "create", transport: "rest", requestId: id, kind: "ok" });
+  assert.deepEqual(ledger.outstanding(), []);
+  assert.equal(ledger.state().get(name).requests[0].resolution, "confirmed");
+  const semantic = Object.freeze({ recordingComplete: true, resourcesClosed: false });
+  assert.equal(
+    ledger.settleAbsent(
+      name,
+      { ok: true, code: "OK", status: 200, body: { name } },
+      { a2ElapsedMs: 600000 },
+    ),
+    false,
+  );
+  assert.equal(semantic.recordingComplete, true);
+  assert.equal(semantic.resourcesClosed, false);
+});

@@ -29,10 +29,13 @@ function checkTimestamp(value) {
     "timestamp calendar",
   );
 }
-function resource(value, expectedState = "ACTIVE") {
+function resourceIdentity(value) {
   assert.ok(value && channelPattern.test(value.name), "channel identity");
   assert.match(value.uid, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
   for (const key of ["createTime", "updateTime"]) checkTimestamp(value[key]);
+}
+function resource(value, expectedState = "ACTIVE") {
+  resourceIdentity(value);
   assert.equal(value.state, expectedState);
   assert.equal(typeof value.pubsubTopic, "string");
   assert.ok(value.pubsubTopic.startsWith(`projects/${value.name.split("/")[1]}/topics/`));
@@ -98,6 +101,7 @@ export function createCollector({
     maxRequests,
     start: performance.now(),
     issued: new WeakSet(),
+    unfinished: new WeakMap(),
     exchanges,
   });
   return collector;
@@ -359,7 +363,7 @@ export async function issueOperation({ collector, input }) {
   return issued;
 }
 /** Poll the unchanged own identity on ordinary elapsed time; never inject a recorded duration. */
-export async function collectOperationTerminal({
+async function pollOperationTerminal({
   collector,
   issued,
   timeoutMs = 30000,
@@ -407,6 +411,11 @@ export async function collectOperationTerminal({
     assert.equal(row.body.response.pubsubTopic, "");
   }
   assert.equal(row.body.response.name, issued.target);
+  return { row, deadline };
+}
+export async function collectOperationTerminal(options) {
+  const { collector, issued } = options;
+  const { row, deadline } = await pollOperationTerminal(options);
   const terminal = row.id;
   assert.ok(performance.now() < deadline, "terminal timeout");
   const later = await call(
@@ -437,5 +446,101 @@ export async function collectOperationTerminal({
     name: issued.name,
     target: issued.target,
     verb: issued.verb,
+  });
+}
+
+/** Record the native creating shape and own unfinished identity before a paired DELETE. */
+export async function observeUnfinishedCreate({ collector, issued }) {
+  const s = state(collector);
+  assert.ok(s.issued.has(issued));
+  assert.equal(issued.verb, "create");
+  const channel = await call(
+    collector,
+    { method: "GET", path: `/v1/${issued.target}` },
+    issued.source,
+    issued.exchange,
+  );
+  assert.equal(channel.response.status, 200);
+  assert.equal(channel.body.name, issued.target);
+  assert.deepEqual(Object.keys(channel.body), [
+    "name",
+    "uid",
+    "createTime",
+    "updateTime",
+    "pubsubTopic",
+  ]);
+  assert.equal(channel.body.pubsubTopic, "");
+  assert.equal(Object.hasOwn(channel.body, "state"), false);
+  resourceIdentity(channel.body);
+  const unfinished = await call(
+    collector,
+    { method: "GET", path: `/v1/${issued.name}` },
+    issued.source,
+    issued.exchange,
+  );
+  assert.equal(unfinished.response.status, 200);
+  assert.equal(unfinished.body.name, issued.name);
+  operation(unfinished.body, issued.target, "create");
+  assert.equal(unfinished.body.done, false);
+  assert.equal(
+    unfinished.body.metadata.createTime,
+    collector.exchanges[issued.exchange].body.metadata.createTime,
+  );
+  const marker = freeze({ channelExchange: channel.id, operationExchange: unfinished.id });
+  s.unfinished.set(issued, marker);
+  return marker;
+}
+/** Only an explicitly observed unfinished CREATE may skip its ordinary ACTIVE GET in this pair. */
+export async function collectPairedOperationTerminals({
+  collector,
+  create,
+  deleted,
+  timeoutMs = 30000,
+  pollIntervalMs = 100,
+}) {
+  const s = state(collector),
+    start = s.unfinished.get(create);
+  assert.ok(start, "missing unfinished-start proof");
+  assert.ok(s.issued.has(create) && s.issued.has(deleted));
+  assert.equal(create.verb, "create");
+  assert.equal(deleted.verb, "delete");
+  assert.equal(create.target, deleted.target);
+  assert.notEqual(create.name, deleted.name, "distinct own operations");
+  assert.ok(
+    create.exchange < start.operationExchange && start.operationExchange < deleted.exchange,
+    "delete must follow unfinished observation",
+  );
+  const deadline = performance.now() + timeoutMs;
+  const active = await pollOperationTerminal({
+    collector,
+    issued: create,
+    timeoutMs,
+    pollIntervalMs,
+  });
+  for (const key of ["name", "uid", "createTime"])
+    assert.equal(
+      active.row.body.response[key],
+      collector.exchanges[start.channelExchange].body[key],
+      "paired resource identity changed",
+    );
+  const remaining = Math.floor(deadline - performance.now());
+  assert.ok(remaining > 0, "paired terminal timeout");
+  const inactive = await collectOperationTerminal({
+    collector,
+    issued: deleted,
+    timeoutMs: remaining,
+    pollIntervalMs,
+  });
+  return freeze({
+    kind: "paired-own-operation-terminals",
+    complete: true,
+    createSource: create.source,
+    deleteSource: deleted.source,
+    start,
+    createIssuedExchange: create.exchange,
+    createTerminalExchange: active.row.id,
+    deleteIssuedExchange: deleted.exchange,
+    deleteTerminal: inactive,
+    target: create.target,
   });
 }

@@ -18,6 +18,7 @@
 
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
+import { validateLifecycleAnswer } from "./lifecycle-evidence.mjs";
 
 /**
  * The operations that are Service Usage's whatever their path: not part of the Eventarc surface a local
@@ -567,6 +568,83 @@ function validPageToken(token) {
   );
 }
 
+/** Complete own inventories authorize different default page placements, never foreign members. */
+function completePageInventory(row, actual) {
+  const original = row.response.body,
+    local = actual.body;
+  if (
+    !Array.isArray(original?.channels) ||
+    !Array.isArray(local?.channels) ||
+    Object.hasOwn(original, "nextPageToken") ||
+    Object.hasOwn(local, "nextPageToken")
+  )
+    return null;
+  const params = new URLSearchParams(row.request.path.split(/\?(.*)/s, 2)[1] ?? "");
+  if (params.getAll("pageToken").some((token) => token !== "")) return null;
+  const names = original.channels.map((channel) => channel.name),
+    localNames = local.channels.map((channel) => channel.name);
+  if (
+    new Set(names).size !== names.length ||
+    new Set(localNames).size !== localNames.length ||
+    names.length !== localNames.length ||
+    new Set(original.channels.map((channel) => channel.uid)).size !== original.channels.length ||
+    new Set(local.channels.map((channel) => channel.uid)).size !== local.channels.length ||
+    !names.every((name) => localNames.includes(name))
+  )
+    return null;
+  try {
+    validateLifecycleAnswer(row, row.response, { path: row.request.path }, original.channels);
+    validateLifecycleAnswer(row, actual, { path: row.request.path }, original.channels);
+  } catch {
+    return null;
+  }
+  return { original: original.channels, local: local.channels };
+}
+function ownPageMembers(row, actual, inventory) {
+  const original = row.response.body,
+    local = actual.body;
+  if (inventory) {
+    try {
+      validateLifecycleAnswer(row, row.response, { path: row.request.path }, inventory.original);
+      validateLifecycleAnswer(row, actual, { path: row.request.path }, inventory.original);
+    } catch {
+      return false;
+    }
+    return [
+      [original.channels, inventory.original],
+      [local.channels, inventory.local],
+    ].every(
+      ([members, full]) =>
+        new Set(members.map((member) => member.name)).size === members.length &&
+        members.every((member) =>
+          sameJson(
+            member,
+            full.find((candidate) => candidate.name === member.name),
+          ),
+        ),
+    );
+  }
+  // Preserve recorded minimal name-only reference fixtures; richer responses retain their fields/types.
+  const bare = row.request.path.split(/\?(.*)/s, 2)[0];
+  const samePositions = original.channels.every(
+    (item, index) =>
+      typeof item?.name === "string" &&
+      item.name.startsWith(`${bare.slice(4)}/`) &&
+      /^[^/?#]+$/.test(item.name.slice(bare.slice(4).length + 1)) &&
+      item.name === local.channels[index]?.name &&
+      Object.keys(item).length === Object.keys(local.channels[index]).length &&
+      Object.keys(item).every((key) => typeof item[key] === typeof local.channels[index][key]),
+  );
+  if (!samePositions) return false;
+  if (original.channels.every((item) => Object.keys(item).length === 1)) return true;
+  try {
+    validateLifecycleAnswer(row, row.response, { path: row.request.path }, original.channels);
+    validateLifecycleAnswer(row, actual, { path: row.request.path }, original.channels);
+    return true;
+  } catch {
+    return false;
+  }
+}
 /** Conflicting issuing responses invalidate a binding instead of silently changing its identity. */
 function bindReference(bindings, original, local) {
   bindings.set(original, bindings.has(original) && bindings.get(original) !== local ? null : local);
@@ -577,7 +655,8 @@ export async function replay(rows, options) {
   const modes = tokenModes(rows);
   const results = [];
   const operations = new Map(),
-    pageTokens = new Map();
+    pageTokens = new Map(),
+    pageInventories = new Map();
   for (const [index, row] of rows.entries()) {
     const skipped = skipReason(row);
     const common = {
@@ -606,6 +685,7 @@ export async function replay(rows, options) {
       if (
         row.op === "listChannels" &&
         row.request.method === "GET" &&
+        row.response.status === 200 &&
         query !== undefined &&
         new URLSearchParams(query).getAll("pageToken").length === 1
       ) {
@@ -630,6 +710,21 @@ export async function replay(rows, options) {
         paths: [],
       });
       continue;
+    }
+    const inventoryScope =
+      row.op === "listChannels" && row.request.method === "GET"
+        ? pageScope(row.request.path)
+        : null;
+    const inventoryParams = new URLSearchParams(row.request.path.split(/\?(.*)/s, 2)[1] ?? "");
+    if (
+      inventoryScope &&
+      row.response.status === 200 &&
+      !Object.hasOwn(row.response.body ?? {}, "nextPageToken") &&
+      inventoryParams.getAll("pageToken").every((value) => value === "")
+    ) {
+      const inventory = actual.status === 200 ? completePageInventory(row, actual) : null;
+      if (inventory) pageInventories.set(inventoryScope, inventory);
+      else pageInventories.delete(inventoryScope);
     }
     if (row.response.status === 200 && actual.status === 200) {
       const [bare, query = ""] = row.request.path.split(/\?(.*)/s, 2);
@@ -672,13 +767,7 @@ export async function replay(rows, options) {
         original.channels.length > 0 &&
         Array.isArray(local.channels) &&
         original.channels.length === local.channels.length &&
-        original.channels.every(
-          (item, i) =>
-            typeof item?.name === "string" &&
-            item.name.startsWith(`${bare.slice(4)}/`) &&
-            /^[^/?#]+$/.test(item.name.slice(bare.slice(4).length + 1)) &&
-            item.name === local.channels[i]?.name,
-        )
+        ownPageMembers(row, actual, pageInventories.get(scope))
       ) {
         bindReference(pageTokens, `${scope}\0${original.nextPageToken}`, local.nextPageToken);
       }

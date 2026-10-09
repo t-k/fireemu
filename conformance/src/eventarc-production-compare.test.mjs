@@ -485,3 +485,191 @@ test("direct replayRow rejects unsupported modes before fetch", async () => {
     assert.equal(sent, 0);
   }
 });
+
+const b28Rows = JSON.parse("[]");
+{
+  const { readFileSync } = await import("node:fs");
+  b28Rows.push(
+    ...readFileSync(new URL("./eventarc-production/fixtures/ad/B.jsonl", import.meta.url), "utf8")
+      .trim()
+      .split("\n")
+      .map(JSON.parse)
+      .filter((captured) => [26, 27, 28].includes(captured.n)),
+  );
+}
+const sourceContinuationToken = token("synthetic source B27 continuation");
+b28Rows[1].response.body.nextPageToken = sourceContinuationToken;
+b28Rows[2].request.path = b28Rows[2].request.path.replace(
+  /pageToken=[^&]+/,
+  `pageToken=${sourceContinuationToken}`,
+);
+const ownContinuationToken = token("own positive B27 continuation");
+async function captureB28({
+  changePlacement = true,
+  modifyRows = () => {},
+  modifyAnswers = () => {},
+} = {}) {
+  const rows = structuredClone(b28Rows);
+  const inventory = rows[0].response.body.channels;
+  const originalFirst = rows[1].response.body.channels[0];
+  const first = inventory.find((member) =>
+    changePlacement ? member.name !== originalFirst.name : member.name === originalFirst.name,
+  );
+  const last = inventory.find((member) => member.name !== first.name);
+  const answers = [
+    { status: 200, body: structuredClone(rows[0].response.body) },
+    {
+      status: 200,
+      body: { channels: [structuredClone(first)], nextPageToken: ownContinuationToken },
+    },
+  ];
+  modifyRows(rows);
+  modifyAnswers(answers);
+  const urls = [],
+    localPages = [];
+  const results = await replay(rows, {
+    base: "http://127.0.0.1:9999",
+    fetchImpl: async (url) => {
+      urls.push(url);
+      const answer =
+        urls.length <= 2
+          ? answers[urls.length - 1]
+          : new URL(url).searchParams.get("pageToken") === ownContinuationToken
+            ? { status: 200, body: { channels: [structuredClone(last)] } }
+            : { status: 400, body: { error: { code: 400, status: "INVALID_ARGUMENT" } } };
+      if (urls.length >= 2 && answer.status === 200) localPages.push(...answer.body.channels);
+      return { status: answer.status, text: async () => JSON.stringify(answer.body) };
+    },
+  });
+  return { rows, urls, results, localPages, inventory };
+}
+test("original B26/B27/B28 follows its own positive cursor despite reversed default page placement", async () => {
+  for (const changePlacement of [true, false]) {
+    const got = await captureB28({ changePlacement });
+    assert.equal(new URL(got.urls[2]).searchParams.get("pageToken"), ownContinuationToken);
+    assert.deepEqual(
+      new Set(got.localPages.map((member) => member.name)),
+      new Set(got.inventory.map((member) => member.name)),
+    );
+    assert.equal(got.localPages.length, got.inventory.length);
+    assert.equal(
+      got.results.at(-1).verdict,
+      changePlacement ? "diverge" : "match",
+      "raw page differences remain visible",
+    );
+    if (changePlacement) {
+      assert.equal(got.results.at(-1).reason, "body");
+      assert.equal(got.results.at(-1).actual.status, 200);
+    }
+  }
+});
+test("B28 positive binding rejects malformed, incomplete, foreign or changed inventory and page resources", async () => {
+  for (const [name, modifyAnswers] of [
+    ["missing inventory member", (answers) => answers[0].body.channels.pop()],
+    [
+      "duplicate inventory member",
+      (answers) => (answers[0].body.channels[1] = structuredClone(answers[0].body.channels[0])),
+    ],
+    [
+      "duplicate inventory uid",
+      (answers) => {
+        answers[0].body.channels[1].uid = answers[0].body.channels[0].uid;
+      },
+    ],
+    [
+      "wrong collection",
+      (answers) =>
+        (answers[1].body.channels[0].name = answers[1].body.channels[0].name.replace(
+          "/channels/",
+          "/foreign/",
+        )),
+    ],
+    ["foreign member", (answers) => (answers[1].body.channels[0].name += "-foreign")],
+    ["extra member field", (answers) => (answers[1].body.channels[0].unexpected = true)],
+    ["missing member field", (answers) => delete answers[1].body.channels[0].uid],
+    ["invalid member type", (answers) => (answers[1].body.channels[0].uid = 42)],
+    ["invalid member state", (answers) => (answers[1].body.channels[0].state = "UNKNOWN")],
+    ["malformed local cursor", (answers) => (answers[1].body.nextPageToken = "not+base64!")],
+    ["unsuccessful local issuance", (answers) => (answers[1].status = 400)],
+  ]) {
+    const got = await captureB28({ modifyAnswers });
+    assert.equal(
+      new URL(got.urls[2]).searchParams.get("pageToken"),
+      new URL(got.rows[2].request.path, "http://local").searchParams.get("pageToken"),
+      name,
+    );
+    assert.equal(got.results.at(-1).actual.status, 400, name);
+  }
+});
+test("B28 negative, unissued and wrong-selection consumers remain original requests", async () => {
+  for (const [name, modifyRows] of [
+    ["negative consumer", (rows) => (rows[2].response.status = 400)],
+    [
+      "unissued cursor",
+      (rows) =>
+        (rows[2].request.path = rows[2].request.path.replace(
+          /pageToken=[^&]+/,
+          "pageToken=dW5pc3N1ZWQ",
+        )),
+    ],
+    [
+      "malformed original cursor",
+      (rows) => {
+        rows[1].response.body.nextPageToken = "not+base64!";
+        rows[2].request.path = rows[2].request.path.replace(
+          /pageToken=[^&]+/,
+          "pageToken=not%2Bbase64%21",
+        );
+      },
+    ],
+    ["different filter", (rows) => (rows[2].request.path += "&filter=state%3DINACTIVE")],
+    ["different orderBy", (rows) => (rows[2].request.path += "&orderBy=name")],
+    [
+      "different collection",
+      (rows) => (rows[2].request.path = rows[2].request.path.replace("/channels?", "/foreign?")),
+    ],
+  ]) {
+    const got = await captureB28({ modifyRows });
+    assert.equal(got.urls[2].slice("http://127.0.0.1:9999".length), got.rows[2].request.path, name);
+  }
+});
+test("conflicting positive B27 issuers invalidate continuation lineage", async () => {
+  const original = structuredClone(b28Rows[1]),
+    consumer = structuredClone(b28Rows[2]);
+  const answers = [
+    { body: original.response.body },
+    { body: { ...original.response.body, nextPageToken: ownContinuationToken } },
+    { body: {} },
+  ];
+  const got = await capture([original, structuredClone(original), consumer], answers);
+  assert.equal(got.urls[2], consumer.request.path);
+});
+
+test("a failed same-scope complete inventory invalidates cached page authority", async () => {
+  for (const failed of [
+    { status: 200, body: { channels: [structuredClone(b28Rows[0].response.body.channels[0])] } },
+    { status: 400, body: { error: { code: 400 } } },
+    { status: 200, body: { unexpected: true } },
+  ]) {
+    const rows = structuredClone(b28Rows);
+    const first = rows[0].response.body.channels.find(
+      (member) => member.name !== rows[1].response.body.channels[0].name,
+    );
+    const answers = [
+      { status: 200, body: rows[0].response.body },
+      failed,
+      { status: 200, body: { channels: [first], nextPageToken: ownContinuationToken } },
+      { status: 400, body: { error: { code: 400 } } },
+    ];
+    const urls = [];
+    await replay([rows[0], structuredClone(rows[0]), rows[1], rows[2]], {
+      base: "http://127.0.0.1:9999",
+      fetchImpl: async (url) => {
+        urls.push(url);
+        const answer = answers[urls.length - 1];
+        return { status: answer.status, text: async () => JSON.stringify(answer.body) };
+      },
+    });
+    assert.equal(new URL(urls[3]).searchParams.get("pageToken"), sourceContinuationToken);
+  }
+});

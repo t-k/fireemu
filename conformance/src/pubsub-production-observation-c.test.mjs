@@ -2189,3 +2189,135 @@ test("C R8 N8 unbound follower or control stops before NACK without adopting its
     }
   }
 });
+
+test("C R8 N8 predecessor search preserves unrelated batches within three attempts", async (t) => {
+  for (const transport of ["rest", "grpc"]) {
+    for (const mode of ["redelivery", "absent", "premature-follower", "foreign", "missing-token"]) {
+      await t.test(`${transport}/${mode}`, async () => {
+        const cell = makePlan().cells.find(
+          (value) => value.transport === transport && value.variant === "nack-blocked-key",
+        );
+        const meter = createMeter({ now: () => 0 }),
+          world = referenceWorld(),
+          rows = [],
+          ledger = createLedger(),
+          waits = [];
+        const answer = world.answer;
+        let nacked = false,
+          beforeAttempts = 0,
+          predecessor,
+          beforeAck = false;
+        world.answer = (method, request) => {
+          if (method === "ModifyAckDeadline") nacked = true;
+          if (method === "Acknowledge" && nacked) beforeAck = true;
+          if (method === "Pull" && nacked && !beforeAck) {
+            beforeAttempts++;
+            if (beforeAttempts === 1) {
+              const reply = answer(method, request);
+              predecessor = reply.body.receivedMessages.find(
+                (item) => item.message.messageId === "own-1",
+              );
+              const control = reply.body.receivedMessages.find(
+                (item) => item.message.messageId === "own-3",
+              );
+              assert.ok(predecessor);
+              assert.ok(control);
+              const items = [control];
+              if (mode === "premature-follower")
+                items.push({
+                  ackId: "premature-follower-token",
+                  message: world.messages.get("own-2").message,
+                });
+              if (mode === "foreign")
+                items[0] = { ...control, message: { ...control.message, messageId: "foreign" } };
+              if (mode === "missing-token") items[0] = { ...control, ackId: "" };
+              return { ...reply, body: { receivedMessages: items } };
+            }
+            world.calls.push({ method, request: structuredClone(request) });
+            return {
+              ok: true,
+              code: "OK",
+              status: 200,
+              body: mode === "absent" ? {} : { receivedMessages: [predecessor] },
+            };
+          }
+          return answer(method, request);
+        };
+        meter.enter(cell);
+        const wire = referenceWire(meter, world, { write: (row) => rows.push(row) });
+        try {
+          const result = await scenarios.runCell({
+            cell,
+            meter,
+            wire,
+            ledger,
+            runId: "123456abcdef",
+            journal: { write: (row) => rows.push(row) },
+            sleep: async (ms) => waits.push(ms),
+          });
+          assert.equal(result.cleanupClosed, true);
+          assert.equal(result.budgetOverrun, false);
+          assert.equal(ledger.outstanding().length, 0);
+          assert.equal(world.resources.size, 0);
+          const before = result.observations.filter(
+            (row) => row.stage === "before-predecessor-ACK",
+          );
+          if (["foreign", "missing-token"].includes(mode)) {
+            assert.equal(result.complete, false);
+            assert.match(result.reason, /foreign|unbound/);
+            assert.equal(beforeAttempts, 1);
+            assert.equal(beforeAck, false);
+          } else if (mode === "absent") {
+            assert.equal(result.complete, false);
+            assert.match(
+              result.reason,
+              /correlated predecessor redelivery missing; NOT_COMPARABLE/,
+            );
+            assert.equal(beforeAttempts, 3);
+            assert.deepEqual(
+              before.map((row) => row.attempt),
+              [0, 1, 2],
+            );
+            assert.deepEqual(
+              before.map((row) => row.items.map((item) => item.message.messageId)),
+              [["own-3"], [], []],
+            );
+            assert.equal(beforeAck, false);
+            assert.deepEqual(waits, [1000, 1000, 1000]);
+          } else {
+            assert.equal(result.complete, true, result.reason);
+            assert.equal(beforeAttempts, 2);
+            assert.deepEqual(
+              before.map((row) => row.attempt),
+              [0, 1],
+            );
+            assert.deepEqual(
+              before[0].items.map((item) => item.message.messageId),
+              mode === "premature-follower" ? ["own-3", "own-2"] : ["own-3"],
+            );
+            assert.deepEqual(
+              before[1].items.map((item) => item.message.messageId),
+              ["own-1"],
+            );
+            const ack = world.calls.find((call) => call.method === "Acknowledge");
+            assert.deepEqual(
+              ack.request.ackIds,
+              before.flatMap((row) => row.items.map((item) => item.ackId)),
+            );
+            const initial = result.observations.find(
+              (row) => row.stage === "outstanding-predecessor",
+            ).items[0];
+            assert.notEqual(predecessor.ackId, initial.ackId);
+            assert.deepEqual(waits, [1000, 1000]);
+          }
+          assert.ok(
+            world.calls.filter((call) => call.method === "Pull").length <=
+              categoryCaps(cell.group).pull,
+          );
+        } finally {
+          wire.close();
+        }
+      });
+    }
+  }
+});

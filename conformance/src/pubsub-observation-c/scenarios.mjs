@@ -253,7 +253,7 @@ export async function runCell({
   const pull = async (
     subscription,
     stage,
-    { attempts = 1, maxMessages = 3, immediate = false, required = false } = {},
+    { attempts = 1, maxMessages = 3, immediate = false, required = false, requiredMessageId } = {},
   ) => {
     const received = [],
       seen = new Set();
@@ -277,7 +277,13 @@ export async function runCell({
           seen.add(item.message.messageId);
           received.push(item);
         }
-      if (items.length || attempt === attempts - 1) break;
+      if (
+        (requiredMessageId === undefined
+          ? items.length > 0
+          : received.some((item) => item.message.messageId === requiredMessageId)) ||
+        attempt === attempts - 1
+      )
+        break;
       await wait(1000);
     }
     if (required && !received.length)
@@ -481,7 +487,11 @@ export async function runCell({
           await publish([{ orderingKey: "key-A", attributes: { seq: "1" } }]);
           await publish([{ orderingKey: "key-B", attributes: { seq: "0" } }]);
           await nack(s, first);
-          const before = await pull(s, "before-predecessor-ACK", { attempts: 3, required: true });
+          const before = await pull(s, "before-predecessor-ACK", {
+            attempts: 3,
+            required: true,
+            requiredMessageId: firstId,
+          });
           if (!before.some((i) => i.message.messageId === firstId))
             throw new Error("correlated predecessor redelivery missing; NOT_COMPARABLE");
           await ack(s, before);

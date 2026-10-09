@@ -661,8 +661,8 @@ impl SubscriptionState {
                 }
             }
             if ordered && !ordering_key.is_empty() {
-                // Push sends one message at a time; unsent successors must not use an attempt.
-                if self.config.is_push() {
+                // Push and redelivery hold successors until the emitted predecessor is acknowledged.
+                if self.config.is_push() || self.entries[i].delivery_attempt > 0 {
                     blocked_keys.insert(ordering_key.clone());
                 }
                 emitted_keys.insert(ordering_key);
@@ -1401,6 +1401,55 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["2"]
         );
+    }
+
+    proptest! {
+        #[test]
+        fn redelivered_ordered_head_blocks_successors_until_current_ack(
+            ordered in any::<bool>(), expired in any::<bool>(), successors in 1usize..8,
+        ) {
+            let mut config = cfg();
+            config.enable_message_ordering = ordered;
+            let mut sub = SubscriptionState::new(config);
+            let mut now = LogicalInstant::from_unix_seconds(100);
+            let mut head = stored("head", b"head", 100);
+            head.message.ordering_key = "A".to_owned();
+            sub.enqueue(head, now).unwrap();
+            let mut ids = counter();
+            let first = sub.pull(1, now, &mut ids).received.remove(0);
+            for index in 0..successors {
+                let mut message = stored(&format!("next-{index}"), b"next", 100);
+                message.message.ordering_key = "A".to_owned();
+                sub.enqueue(message, now).unwrap();
+            }
+            let mut other = stored("other", b"other", 100);
+            other.message.ordering_key = "B".to_owned();
+            sub.enqueue(other, now).unwrap();
+            if expired {
+                now = now.checked_add(LogicalDuration::from_seconds(11)).unwrap();
+                sub.expire_deadlines(now);
+            } else {
+                sub.modify_ack_deadline(&first.ack_id, 0, now);
+            }
+            let replay = sub.pull(successors + 2, now, &mut ids).received;
+            let replay_ids: Vec<_> = replay.iter().map(|item| item.message.message_id.as_str()).collect();
+            if ordered {
+                prop_assert_eq!(replay_ids, vec!["head", "other"]);
+                prop_assert!(sub.pull(successors + 2, now, &mut ids).received.is_empty());
+                prop_assert_eq!(sub.acknowledge(&[first.ack_id]), 0);
+                prop_assert!(sub.pull(successors + 2, now, &mut ids).received.is_empty());
+                prop_assert_eq!(sub.acknowledge(&[replay[0].ack_id.clone()]), 1);
+                let released = sub.pull(successors + 2, now, &mut ids).received;
+                prop_assert_eq!(released.len(), successors);
+                for (index, item) in released.iter().enumerate() {
+                    prop_assert_eq!(&item.message.message_id, &format!("next-{index}"));
+                    prop_assert_eq!(item.delivery_attempt, 1);
+                }
+            } else {
+                prop_assert_eq!(replay.len(), successors + 2);
+            }
+            prop_assert_eq!(replay[0].delivery_attempt, 2);
+        }
     }
 
     #[test]

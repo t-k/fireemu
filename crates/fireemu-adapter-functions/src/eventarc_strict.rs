@@ -29,7 +29,7 @@
 //!   size that is not a number, the deletion of a channel a function declares. These answer
 //!   `501 UNIMPLEMENTED` and say so, rather than invent a shape.
 //! - not reproduced, because they are Google's state or not deterministic: whether a `ya29.` token is valid,
-//!   what its scopes are, the resolution of unconfigured project numbers, and the seconds
+//!   what its scopes are without an explicit local OAuth catalog, the resolution of unconfigured project numbers, and the seconds
 //!   after a creation during which a publication to the channel answers `404 Associated channel does not
 //!   exist.` although the channel reads as ACTIVE.
 //!
@@ -351,6 +351,68 @@ fn echo(text: &str) -> String {
     format!("{}...", &text[..end])
 }
 
+/// Explicit locally recognized OAuth credentials, indexed by SHA-256 of the bearer bytes.
+pub type OAuthCredentialCatalog =
+    std::collections::BTreeMap<[u8; 32], std::collections::BTreeSet<String>>;
+
+/// Immutable listener facts, separate from canonical Eventarc resource state.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EventarcContext {
+    /// Configured alias of the canonical project, for GET/LIST only.
+    pub project_number: Option<u64>,
+    /// Local OAuth authority; absence retains legacy shape-only authentication.
+    pub oauth_credentials: Option<std::sync::Arc<OAuthCredentialCatalog>>,
+}
+
+/// Evaluates a request using explicitly configured listener facts.
+#[must_use]
+pub fn evaluate_with_context(
+    input: &Input<'_>,
+    world: &World<'_>,
+    context: &EventarcContext,
+) -> Outcome {
+    let route = input.route;
+    let credential = classify_token(input.bearer);
+    if credential != Credential::WellFormed {
+        return credential_refusal(route, credential);
+    }
+    if let Some(catalog) = &context.oauth_credentials {
+        let digest = fireemu_core_types::hash::sha256(input.bearer.unwrap_or_default().as_bytes());
+        let Some(scopes) = catalog.get(&digest) else {
+            return oauth_refusal(route, false);
+        };
+        if !scopes.contains("https://www.googleapis.com/auth/cloud-platform") {
+            return oauth_refusal(route, true);
+        }
+    }
+    evaluate_admitted(input, world, context.project_number)
+}
+
+fn oauth_refusal(route: &Route, insufficient_scope: bool) -> Outcome {
+    let (code, status, message, reason) = if insufficient_scope {
+        (
+            403,
+            "PERMISSION_DENIED",
+            "Request had insufficient authentication scopes.",
+            "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+        )
+    } else {
+        (401, "UNAUTHENTICATED", "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.", "ACCESS_TOKEN_TYPE_UNSUPPORTED")
+    };
+    let info = Ordered::object([
+        ("@type", text("type.googleapis.com/google.rpc.ErrorInfo")),
+        ("reason", text(reason)),
+        (
+            "metadata",
+            Ordered::object([
+                ("method", text(route.method())),
+                ("service", text(route.service())),
+            ]),
+        ),
+    ]);
+    error(code, status, message, vec![info])
+}
+
 /// The credential of a request.
 ///
 /// An OAuth access token that Google issues starts with `ya29.`. Production refused, with "invalid
@@ -360,7 +422,7 @@ fn echo(text: &str) -> String {
 /// `ya29.`-prefixed garbage token (row 172, `ACCESS_TOKEN_TYPE_UNSUPPORTED`) and a real token of
 /// another scope (row 179, `ACCESS_TOKEN_SCOPE_INSUFFICIENT`): whether a well-formed token is valid, and
 /// what it may do, is Google's state, which a local listener does not have, so a `ya29.` token is
-/// accepted here and those two answers are not reproduced.
+/// accepted when no local catalog is configured. An explicit catalog supplies local recognition and scope facts; it does not verify Google credentials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Credential {
     /// No `Authorization: Bearer` header, or an empty token.
@@ -634,11 +696,18 @@ pub fn evaluate_with_project_number(
     world: &World<'_>,
     project_number: Option<u64>,
 ) -> Outcome {
+    evaluate_with_context(
+        input,
+        world,
+        &EventarcContext {
+            project_number,
+            oauth_credentials: None,
+        },
+    )
+}
+
+fn evaluate_admitted(input: &Input<'_>, world: &World<'_>, project_number: Option<u64>) -> Outcome {
     let route = input.route;
-    let credential = classify_token(input.bearer);
-    if credential != Credential::WellFormed {
-        return credential_refusal(route, credential);
-    }
     let read_alias = matches!(route, Route::GetChannel { .. } | Route::ListChannels(_))
         && project_number.is_some_and(|number| number > 0 && route.project() == number.to_string());
     if route.project() != world.project && !read_alias {
@@ -1652,6 +1721,77 @@ pub fn timestamp(text: &str) -> Option<(i64, u32)> {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    #[test]
+    fn local_catalog_denies_unknown_and_insufficient_credentials_before_project() {
+        let channels = ChannelStore::default();
+        let state = world(&|_| false, &|_, _| Vec::new(), &channels);
+        let route = route("GET", "/v1/projects/other/locations/invalid/channels").unwrap();
+        let input = Input {
+            route: &route,
+            query: None,
+            bearer: Some("ya29.rotated-credential"),
+            body: b"",
+        };
+        let mut catalog = OAuthCredentialCatalog::new();
+        let mut context = EventarcContext {
+            project_number: None,
+            oauth_credentials: Some(std::sync::Arc::new(catalog.clone())),
+        };
+        assert_eq!(
+            status_and_message(&evaluate_with_context(&input, &state, &context)).0,
+            401
+        );
+        catalog.insert(
+            fireemu_core_types::hash::sha256(input.bearer.unwrap().as_bytes()),
+            std::collections::BTreeSet::new(),
+        );
+        context.oauth_credentials = Some(std::sync::Arc::new(catalog.clone()));
+        assert_eq!(
+            status_and_message(&evaluate_with_context(&input, &state, &context)),
+            (
+                403,
+                "Request had insufficient authentication scopes.".to_owned()
+            )
+        );
+        catalog
+            .values_mut()
+            .next()
+            .unwrap()
+            .insert("https://www.googleapis.com/auth/cloud-platform".to_owned());
+        context.oauth_credentials = Some(std::sync::Arc::new(catalog));
+        assert_eq!(
+            status_and_message(&evaluate_with_context(&input, &state, &context)),
+            (
+                403,
+                "Permission denied on resource project other.".to_owned()
+            )
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn local_catalog_grants_follow_digest_not_opaque_spelling(suffix in "[a-zA-Z0-9]{1,32}", grant_first in any::<bool>()) {
+            let first = format!("ya29.{suffix}");
+            let second = format!("{first}-different");
+            let channels = ChannelStore::default();
+            let state = world(&|_| false, &|_, _| Vec::new(), &channels);
+            let route = route("GET", "/v1/projects/demo/locations/us-central1/channels").unwrap();
+            let mut catalog = OAuthCredentialCatalog::new();
+            for (token, grant) in [(&first, grant_first), (&second, !grant_first)] {
+                let scopes = if grant { ["https://www.googleapis.com/auth/cloud-platform".to_owned()].into_iter().collect() } else { std::collections::BTreeSet::new() };
+                catalog.insert(fireemu_core_types::hash::sha256(token.as_bytes()), scopes);
+            }
+            let context = EventarcContext { project_number: None, oauth_credentials: Some(std::sync::Arc::new(catalog)) };
+            for (token, expected) in [(&first, if grant_first { 200 } else { 403 }), (&second, if grant_first { 403 } else { 200 })] {
+                let input = Input { route: &route, query: None, bearer: Some(token), body: b"" };
+                prop_assert_eq!(status_and_message(&evaluate_with_context(&input, &state, &context)).0, expected);
+            }
+            let near = format!("{first}-unissued");
+            let input = Input { route: &route, query: None, bearer: Some(&near), body: b"" };
+            prop_assert_eq!(status_and_message(&evaluate_with_context(&input, &state, &context)).0, 401);
+        }
+    }
 
     const PROJECT: &str = "demo";
 
@@ -2862,8 +3002,8 @@ mod tests {
         };
         let mut padding = 0_isize;
         for _ in 0..3 {
-            padding +=
-                target as isize - request_size(&view.name, &parsed_samples(&samples)) as isize;
+            padding += isize::try_from(target).unwrap()
+                - isize::try_from(request_size(&view.name, &parsed_samples(&samples))).unwrap();
             let padding = usize::try_from(padding).unwrap();
             for (index, sample) in samples.iter_mut().enumerate() {
                 sample.data = Some(Ok(serde_json::to_string(
@@ -3028,8 +3168,11 @@ mod tests {
                         _ => panic!("text data"),
                     })
                     .sum();
-                let padding =
-                    usize::try_from(padding as isize + target as isize - current as isize).unwrap();
+                let padding = usize::try_from(
+                    isize::try_from(padding).unwrap() + isize::try_from(target).unwrap()
+                        - isize::try_from(current).unwrap(),
+                )
+                .unwrap();
                 for (index, sample) in samples.iter_mut().enumerate() {
                     sample.data = Some(Ok(serde_json::to_string(
                         &"x".repeat(padding / 100 + usize::from(index < padding % 100)),

@@ -57,6 +57,16 @@ async fn start_with_project_number(
     channels: Option<Arc<ChannelStore>>,
     project_number: Option<u64>,
 ) -> Listener {
+    start_with_context(profile, project, channels, project_number, None).await
+}
+
+async fn start_with_context(
+    profile: Option<FunctionsHttpProfile>,
+    project: &str,
+    channels: Option<Arc<ChannelStore>>,
+    project_number: Option<u64>,
+    context: Option<fireemu_adapter_functions::eventarc_strict::EventarcContext>,
+) -> Listener {
     // One scratch directory for each listener: tests run in parallel in one process, and a listener that
     // stops removes its directory.
     static LISTENERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -112,6 +122,17 @@ async fn start_with_project_number(
     let for_server = runtime.clone();
     let server = tokio::spawn(async move {
         let admission = HttpAdmission::new();
+        if let Some(context) = context {
+            return fireemu_adapter_functions::http::serve_eventarc_with_context(
+                listener,
+                for_server,
+                admission,
+                profile.unwrap_or(FunctionsHttpProfile::Emulator),
+                channels.unwrap_or_else(|| Arc::new(ChannelStore::default())),
+                context,
+            )
+            .await;
+        }
         match (profile, channels, project_number) {
             (Some(profile), channels, Some(number)) => {
                 serve_eventarc_with_channels_and_project_number(
@@ -1724,19 +1745,19 @@ async fn strict_configured_numeric_project_get_and_list_share_channel_identity()
     assert_eq!(id_list.0, 200);
     assert_eq!(alias_list.0, 200);
     let canonical_list: Value = serde_json::from_str(&id_list.1).unwrap();
-    let mut aliases: Value = serde_json::from_str(&alias_list.1).unwrap();
+    let mut numeric_channels: Value = serde_json::from_str(&alias_list.1).unwrap();
     assert_eq!(
-        aliases["channels"].as_array().unwrap().len(),
+        numeric_channels["channels"].as_array().unwrap().len(),
         canonical_list["channels"].as_array().unwrap().len()
     );
-    for item in aliases["channels"].as_array_mut().unwrap() {
+    for item in numeric_channels["channels"].as_array_mut().unwrap() {
         let name = item["name"]
             .as_str()
             .unwrap()
             .replace("projects/111111111111/", "projects/demo-app/");
         item["name"] = Value::String(name);
     }
-    assert_eq!(aliases, canonical_list);
+    assert_eq!(numeric_channels, canonical_list);
     assert_eq!(
         final_id_list, id_list,
         "an alias read cannot create a second namespace"
@@ -1830,4 +1851,201 @@ async fn configured_numeric_context_does_not_add_strict_routes_to_emulator_profi
     server.stop().await;
     assert_eq!(id.0, 404);
     assert_eq!(alias.0, 404);
+}
+
+fn assert_recorded_oauth_body(answer: &Exchange, method: &str) {
+    let expected_challenge = if answer.status == 401 {
+        "Bearer realm=\"https://accounts.google.com/\", error=\"invalid_token\""
+    } else {
+        "Bearer realm=\"https://accounts.google.com/\", error=\"insufficient_scope\", scope=\"https://www.googleapis.com/auth/cloud-platform\""
+    };
+    let challenge = answer
+        .head
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.eq_ignore_ascii_case("www-authenticate"))
+        .map(|(_, value)| value.trim());
+    assert_eq!(challenge, Some(expected_challenge), "{method}");
+
+    let expected_digest = match (answer.status, method) {
+        (401, "GET") => "30e5d4caf5df05cf9f1a3556fb131486d50cc47e6048e50651372dd6291925ca",
+        (401, _) => "8a91824b7f46984366f3eb8d2572a746e3610a0519699e7895ff85ef81f43f68",
+        (403, "GET") => "f6ccaa85496ff05bd9aae0c94317c1e69c270c3335f886378169c2b570a90bae",
+        _ => "0027991ab9f7a687105d57f2903f3ff9ff5deb1f9cc1141b62a55c304afa0cd0",
+    };
+    let digest = fireemu_core_types::hash::sha256(answer.body.as_bytes())
+        .iter()
+        .fold(String::new(), |mut out, byte| {
+            use std::fmt::Write as _;
+            write!(out, "{byte:02x}").unwrap();
+            out
+        });
+    assert_eq!(
+        digest, expected_digest,
+        "original C322/323/329/330 physical bodies"
+    );
+}
+
+async fn assert_catalog_delivery_barrier(server: &Listener) {
+    server
+        .runtime
+        .await_idle(Duration::from_secs(3))
+        .await
+        .expect("positive publication is a delivery barrier");
+    let frames = std::fs::read_to_string(&server.frames).unwrap();
+    let events: Vec<Value> = frames
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|frame| frame["function"] == "customEvent")
+        .collect();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0]["event"]["id"], "catalog-positive",
+        "no denied event may cross the positive delivery barrier"
+    );
+}
+
+#[tokio::test]
+async fn local_oauth_catalog_reaches_http_and_denies_before_delivery() {
+    use fireemu_adapter_functions::eventarc_strict::{EventarcContext, OAuthCredentialCatalog};
+    let mut catalog = OAuthCredentialCatalog::new();
+    catalog.insert(
+        fireemu_core_types::hash::sha256(b"ya29.rotation-good"),
+        ["https://www.googleapis.com/auth/cloud-platform".to_owned()]
+            .into_iter()
+            .collect(),
+    );
+    catalog.insert(
+        fireemu_core_types::hash::sha256(b"ya29.rotation-limited"),
+        std::collections::BTreeSet::new(),
+    );
+    let channels = Arc::new(ChannelStore::default());
+    let server = start_with_context(
+        Some(FunctionsHttpProfile::Strict),
+        PROJECT,
+        Some(channels.clone()),
+        None,
+        Some(EventarcContext {
+            project_number: Some(111_111_111_111),
+            oauth_credentials: Some(Arc::new(catalog)),
+        }),
+    )
+    .await;
+    let publication = publish_body(&[good_event("catalog-denied")]);
+    for (token, status, reason) in [
+        (
+            "ya29.rotation-good-near",
+            401,
+            "ACCESS_TOKEN_TYPE_UNSUPPORTED",
+        ),
+        (
+            "ya29.rotation-limited",
+            403,
+            "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+        ),
+    ] {
+        for (method, path) in [
+            ("GET", "/v1/projects/other/locations/invalid/channels"),
+            (
+                "POST",
+                "/v1/projects/demo-app/locations/us-central1/channels/custom:publishEvents",
+            ),
+        ] {
+            let answer = server
+                .exchange(method, path, Some(token), Some(&publication), "")
+                .await;
+            assert_eq!(answer.status, status);
+            assert_recorded_oauth_body(&answer, method);
+            let body: Value = serde_json::from_str(&answer.body).unwrap();
+            assert_eq!(body["error"]["details"][0]["reason"], reason);
+        }
+    }
+    assert!(matches!(
+        channels.lookup(CUSTOM, u64::MAX),
+        fireemu_adapter_functions::eventarc_channels::Lookup::Absent
+    ));
+    let event = publish_body(&[good_event("catalog-positive")]);
+    let delivered = server
+        .exchange(
+            "POST",
+            &format!("/v1/{CUSTOM}:publishEvents"),
+            Some("ya29.rotation-good"),
+            Some(&event),
+            "",
+        )
+        .await;
+    assert_eq!(delivered.status, 200);
+    assert_catalog_delivery_barrier(&server).await;
+    let allowed = server
+        .exchange(
+            "GET",
+            "/v1/projects/111111111111/locations/us-central1/channels",
+            Some("ya29.rotation-good"),
+            None,
+            "",
+        )
+        .await;
+    assert_eq!(allowed.status, 200);
+    let missing = server
+        .exchange(
+            "GET",
+            "/v1/projects/other/locations/invalid/channels",
+            None,
+            None,
+            "",
+        )
+        .await;
+    assert_eq!(missing.status, 401);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn local_oauth_catalog_empty_and_absent_and_emulator_are_distinct() {
+    use fireemu_adapter_functions::eventarc_strict::{EventarcContext, OAuthCredentialCatalog};
+    for (profile, catalog, status) in [
+        (FunctionsHttpProfile::Strict, None, 200),
+        (
+            FunctionsHttpProfile::Strict,
+            Some(Arc::new(OAuthCredentialCatalog::new())),
+            401,
+        ),
+        (
+            FunctionsHttpProfile::Emulator,
+            Some(Arc::new(OAuthCredentialCatalog::new())),
+            200,
+        ),
+    ] {
+        let server = start_with_context(
+            Some(profile),
+            PROJECT,
+            None,
+            None,
+            Some(EventarcContext {
+                project_number: None,
+                oauth_credentials: catalog,
+            }),
+        )
+        .await;
+        let path = if profile == FunctionsHttpProfile::Strict {
+            "/v1/projects/demo-app/locations/us-central1/channels"
+        } else {
+            "/projects/demo-app/locations/us-central1/channels/custom:publishEvents"
+        };
+        let body = publish_body(&[good_event("catalog-emulator")]);
+        let response = server
+            .exchange(
+                if profile == FunctionsHttpProfile::Strict {
+                    "GET"
+                } else {
+                    "POST"
+                },
+                path,
+                Some("ya29.arbitrary-unissued"),
+                Some(&body),
+                "",
+            )
+            .await;
+        server.stop().await;
+        assert_eq!(response.status, status);
+    }
 }

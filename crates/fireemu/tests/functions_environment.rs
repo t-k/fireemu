@@ -1285,7 +1285,14 @@ fn strict_numeric_project_mapping_reaches_eventarc_http() {
     write(
         &dir,
         "numeric-config.json",
-        r#"{"schemaVersion":1,"profile":"strict","daemon":{"authProjectNumbers":{"demo-numeric-read":"111111111111","demo-other":"222222222222"}}}"#,
+        &serde_json::json!({
+            "schemaVersion": 1, "profile": "strict",
+            "daemon": {"authProjectNumbers": {"demo-numeric-read": "111111111111", "demo-other": "222222222222"}},
+            "eventarc": {"oauthCredentials": {
+                fireemu_core_types::hash::sha256(b"ya29.cli-issued").iter().fold(String::new(), |mut out, byte| { use std::fmt::Write as _; write!(out, "{byte:02x}").unwrap(); out }): {"scopes": ["https://www.googleapis.com/auth/cloud-platform"]},
+                fireemu_core_types::hash::sha256(b"ya29.cli-limited").iter().fold(String::new(), |mut out, byte| { use std::fmt::Write as _; write!(out, "{byte:02x}").unwrap(); out }): {"scopes": []}
+            }}
+        }).to_string(),
     );
     let output = fireemu_exec(&dir, "demo-numeric-read")
         .args(["--config", dir.join("numeric-config.json").to_str().unwrap(), "--only", "functions,eventarc", "--", "node", "-e", r"
@@ -1295,11 +1302,16 @@ const assert = require('node:assert/strict');
   assert.ok(host, 'Eventarc must be started');
   const parent = 'projects/demo-numeric-read/locations/us-central1';
   const channel = `${parent}/channels/numeric-read`;
-  const headers = { authorization: 'Bearer ya29.replay-token', 'content-type': 'application/json' };
+  const headers = { authorization: 'Bearer ya29.cli-issued', 'content-type': 'application/json' };
   const call = async (path, init = {}) => {
     const response = await fetch(`${host}/v1/${path}`, { headers, ...init });
     return { status: response.status, body: await response.json() };
   };
+  for (const [token, status, reason] of [['ya29.cli-issued-near', 401, 'ACCESS_TOKEN_TYPE_UNSUPPORTED'], ['ya29.cli-limited', 403, 'ACCESS_TOKEN_SCOPE_INSUFFICIENT']]) {
+    const denied = await call('projects/other/locations/invalid/channels', { headers: { authorization: `Bearer ${token}` } });
+    assert.equal(denied.status, status);
+    assert.equal(denied.body.error.details[0].reason, reason);
+  }
   const created = await call(`${parent}/channels?channelId=numeric-read`, { method: 'POST', body: JSON.stringify({ name: channel }) });
   assert.equal(created.status, 200);
   const deadline = Date.now() + 15000;
@@ -1334,4 +1346,80 @@ const assert = require('node:assert/strict');
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn eventarc_catalog_cli_rejects_misplaced_canonical_settings() {
+    let dir = std::env::temp_dir().join(format!(
+        "fireemu-env-catalog-classification-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("settings.json");
+    for section in [
+        serde_json::json!({"oauthCredentials": {}}),
+        serde_json::Value::Null,
+        serde_json::json!({"oauthCredentials": {"invalid": {"scopes": [1]}}}),
+    ] {
+        std::fs::write(&path, serde_json::json!({"eventarc": section}).to_string()).unwrap();
+        for flag in ["--config", "--firebase-json"] {
+            let output = eventarc_catalog_config_cli(&path, flag);
+            assert_eq!(output.status.code(), Some(1));
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                error.contains("eventarc requires a fireemu canonical configuration"),
+                "{error}"
+            );
+            assert!(error.contains("add \"schemaVersion\": 1"), "{error}");
+            assert!(
+                !String::from_utf8_lossy(&output.stdout).contains("CONFIG_CLASSIFICATION_CHILD")
+            );
+        }
+        std::fs::write(
+            &path,
+            serde_json::json!({"schemaVersion": 1, "eventarc": section}).to_string(),
+        )
+        .unwrap();
+        let output = eventarc_catalog_config_cli(&path, "--firebase-json");
+        assert_eq!(output.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("not a firebase.json"));
+    }
+    std::fs::write(&path, serde_json::json!({"hosting": {"public": "dist"}, "customMetadata": {"eventarc": {"oauthCredentials": {}}}}).to_string()).unwrap();
+    for flag in ["--config", "--firebase-json"] {
+        let output = eventarc_catalog_config_cli(&path, flag);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("CONFIG_CLASSIFICATION_CHILD"));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn eventarc_catalog_config_cli(path: &Path, flag: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .args([
+            "exec",
+            flag,
+            path.to_str().unwrap(),
+            "--only",
+            "eventarc",
+            "--eventarc-port",
+            "0",
+            "--tasks-port",
+            "0",
+            "--logging-port",
+            "0",
+            "--hub-port",
+            "0",
+            "--ui-port",
+            "0",
+            "--",
+            "node",
+            "-e",
+            "console.log('CONFIG_CLASSIFICATION_CHILD')",
+        ])
+        .output()
+        .unwrap()
 }

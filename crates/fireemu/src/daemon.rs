@@ -1238,13 +1238,16 @@ async fn serve_suite(
         let project_number = cfg.auth_project_numbers.get(runtime.project()).copied();
         spawn_server!(
             "Eventarc",
-            fireemu_adapter_functions::http::serve_eventarc_with_channels_and_project_number(
+            fireemu_adapter_functions::http::serve_eventarc_with_context(
                 listener,
                 runtime,
                 functions_http_admission.clone(),
                 functions_http_profile,
                 Arc::new(fireemu_adapter_functions::eventarc_channels::ChannelStore::default()),
-                project_number,
+                fireemu_adapter_functions::eventarc_strict::EventarcContext {
+                    project_number,
+                    oauth_credentials: cfg.eventarc_oauth_credentials.clone().map(Arc::new)
+                },
             )
         );
     }

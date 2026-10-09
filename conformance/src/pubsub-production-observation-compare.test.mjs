@@ -1052,3 +1052,111 @@ test("native receive preserves publishTime values with actual publication bindin
     );
   }
 });
+
+test("S03 disposal terminal comparison retains cause and never fills the prior null observation", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const input = fixture();
+  while (input.rows.length < 21)
+    input.rows.push({
+      n: input.rows.length + 1,
+      at: new Date((input.rows.length + 1) * 1000).toISOString(),
+      event: "fixture-padding",
+    });
+  input.rows.push(
+    {
+      n: 22,
+      at: new Date(22000).toISOString(),
+      cellId: "S03",
+      event: "stream-case-observation",
+      state: { terminal: null, incomplete: false },
+    },
+    {
+      n: 23,
+      at: new Date(23000).toISOString(),
+      cellId: "S03",
+      event: "stream-cancel",
+      reason: "dispose",
+    },
+    {
+      n: 24,
+      at: new Date(24000).toISOString(),
+      cellId: "S03",
+      event: "stream-error",
+      code: 1,
+      details: "Cancelled on client",
+      phase: "disposal",
+      cancelReason: "dispose",
+    },
+    { n: 25, at: new Date(25000).toISOString(), cellId: "S03", event: "stream-metadata" },
+    {
+      n: 26,
+      at: new Date(26000).toISOString(),
+      cellId: "S03",
+      event: "stream-status",
+      code: 1,
+      details: "Cancelled on client",
+      phase: "disposal",
+      cancelReason: "dispose",
+    },
+  );
+  const exported = prepareObservation(input).cells.find((c) => c.id === "S03");
+  assert.equal(exported.events.find((e) => e.n === 22).state.terminal, null);
+  for (const mutation of [
+    "none",
+    "natural",
+    "phase",
+    "missing",
+    "both-missing",
+    "unknown",
+    "details",
+    "cause",
+    "code",
+  ]) {
+    const f = approvedNativeFixture();
+    const original = f.source.cells.find((c) => c.id === "S16");
+    const actual = f.local.cells.find((c) => c.id === "S16");
+    original.id = actual.id = "S03";
+    f.source.cells = [original];
+    f.local.cells = [actual];
+    original.events = structuredClone(exported.events);
+    actual.events = structuredClone(exported.events);
+    f.witness.S03 = {
+      ...f.witness.S16,
+      actions: [
+        { sourceN: 22, event: "stream-case-observation", elapsedMs: 1 },
+        { sourceN: 23, event: "stream-cancel", elapsedMs: 2 },
+      ],
+    };
+    original.events[0].invalidAckObservedMs = null;
+    if (mutation === "natural")
+      for (const event of actual.events.filter((e) => e.code === 1)) {
+        delete event.phase;
+        delete event.cancelReason;
+      }
+    if (mutation === "phase") delete actual.events.find((e) => e.event === "stream-status").phase;
+    if (mutation === "missing")
+      actual.events = actual.events.filter((e) => e.event !== "stream-status");
+    if (mutation === "both-missing")
+      for (const cell of [original, actual])
+        cell.events = cell.events.filter((e) => e.event !== "stream-status");
+    if (mutation === "code") actual.events.find((e) => e.event === "stream-status").code = 13;
+    if (mutation === "unknown")
+      actual.events.find((e) => e.event === "stream-status").code = "UNKNOWN";
+    if (mutation === "details")
+      actual.events.find((e) => e.event === "stream-status").details = "different";
+    if (mutation === "cause")
+      actual.events.find((e) => e.event === "stream-status").cancelReason = "window-end";
+    const cell = compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+      (c) => c.id === "S03",
+    );
+    const expected =
+      mutation === "none"
+        ? "MATCH"
+        : ["missing", "both-missing", "unknown"].includes(mutation)
+          ? "NOT_COMPARABLE"
+          : "DIVERGES";
+    assert.equal(cell.approvedComparison.verdict, expected, mutation);
+    assert.equal(cell.nativeSemantics.verdict, expected, mutation);
+    assert.equal(actual.events.find((e) => e.n === 22).state.terminal, null);
+  }
+});

@@ -568,7 +568,7 @@ function approvedBinding(source, local, disposition) {
   }
 }
 
-function approvedNativeComparison(original, actual, proof, disposition, binding) {
+function nativeTerminalVerdict(original, actual) {
   const terminal = (cell) =>
     cell.events.filter((e) => ["stream-error", "stream-status"].includes(e.event));
   const sourceTerminal = terminal(original),
@@ -576,17 +576,28 @@ function approvedNativeComparison(original, actual, proof, disposition, binding)
   const invalidTerminal = (events) =>
     events.some((e) => typeof e.details !== "string" || canonicalStatus(e.code) === "UNKNOWN") ||
     new Set(events.map((e) => e.event)).size !== events.length;
-  const terminalVerdict =
-    sourceTerminal.length !== localTerminal.length
+  if (
+    original.id === "S03" &&
+    original.events.some((e) => e.event === "stream-cancel" && e.reason === "dispose") &&
+    ![sourceTerminal, localTerminal].every((events) =>
+      events.some((e) => e.event === "stream-status"),
+    )
+  )
+    return "NOT_COMPARABLE";
+  return sourceTerminal.length !== localTerminal.length
+    ? "NOT_COMPARABLE"
+    : invalidTerminal(sourceTerminal) || invalidTerminal(localTerminal)
       ? "NOT_COMPARABLE"
-      : invalidTerminal(sourceTerminal) || invalidTerminal(localTerminal)
-        ? "NOT_COMPARABLE"
-        : isDeepStrictEqual(
-              sourceTerminal.map((e) => [e.event, e.code, e.details]),
-              localTerminal.map((e) => [e.event, e.code, e.details]),
-            )
-          ? "MATCH"
-          : "DIVERGES";
+      : isDeepStrictEqual(
+            sourceTerminal.map((e) => [e.event, e.code, e.details, e.phase, e.cancelReason]),
+            localTerminal.map((e) => [e.event, e.code, e.details, e.phase, e.cancelReason]),
+          )
+        ? "MATCH"
+        : "DIVERGES";
+}
+
+function approvedNativeComparison(original, actual, proof, disposition, binding) {
+  const terminalVerdict = nativeTerminalVerdict(original, actual);
   const frames = [];
   const complete = [original, actual].every(
     (cell) =>
@@ -701,9 +712,16 @@ export function compareExecutedObservation(source, local, nativeWitnesses, appro
     const layoutMatches =
       shapeMatches &&
       original.frames.every((f, i) => f.blob?.bytes === actual.frames[i].blob?.bytes);
+    const terminalVerdict = cell.id === "S03" ? nativeTerminalVerdict(original, actual) : "MATCH";
     cell.nativeSemantics = {
       verdict:
-        proof.semanticsVerified !== true ? "NOT_COMPARABLE" : shapeMatches ? "MATCH" : "DIVERGES",
+        proof.semanticsVerified !== true
+          ? "NOT_COMPARABLE"
+          : terminalVerdict !== "MATCH"
+            ? terminalVerdict
+            : shapeMatches
+              ? "MATCH"
+              : "DIVERGES",
       scope:
         "executed identity-bound receive, ACK, presence and timing guards; physical layout remains separate",
     };
@@ -734,7 +752,13 @@ export function compareExecutedObservation(source, local, nativeWitnesses, appro
     cell.rows.push({
       method: "StreamingPull",
       transport: "grpc",
-      verdict: approved ? cell.approvedComparison.verdict : layoutMatches ? "MATCH" : "DIVERGES",
+      verdict: approved
+        ? cell.approvedComparison.verdict
+        : terminalVerdict !== "MATCH"
+          ? terminalVerdict
+          : layoutMatches
+            ? "MATCH"
+            : "DIVERGES",
       ...(approved ? { physicalVerdict: cell.nativeLayout.verdict } : {}),
       reason: approved
         ? "explicit pinned ACK projection and recorded terminal details"

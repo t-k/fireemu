@@ -1552,3 +1552,104 @@ test("executed replay refuses foreign and duplicate actual outbound ACK receipts
       /outbound semantic/,
     );
 });
+
+test("S03 recorded dispose awaits bounded actual diagnostic callbacks after a null observation", async () => {
+  const { createNativeReplay } = await import("./pubsub-observation/replay-native.mjs");
+  const { openStream } = await import("./pubsub-observation/stream.mjs");
+  const { EventEmitter } = await import("node:events");
+  for (const failure of [false, true, "missing-status"]) {
+    let now = 0,
+      cancelled = 0,
+      replay;
+    const rows = [];
+    const rpc = new EventEmitter();
+    rpc.write = () => true;
+    rpc.cancel = () => {
+      cancelled++;
+      queueMicrotask(() => {
+        rpc.emit("error", { code: 1, details: "Cancelled on client" });
+        if (failure !== "missing-status")
+          rpc.emit("status", { code: 1, details: "Cancelled on client" });
+      });
+    };
+    const journal = {
+      write: (row) => {
+        if (failure === true && row.event === "stream-status")
+          throw new Error("diagnostic persistence failed");
+        const entry = { ...structuredClone(row), n: rows.length + 1 };
+        rows.push(entry);
+        return entry;
+      },
+      frame: (_bytes, row) => replay.recordFrame(row),
+    };
+    replay = createNativeReplay({
+      journal,
+      bindings: createBindings(),
+      cells: [{ id: "S03", group: "G4", variant: "ack-received-token" }],
+      clock: createActionClock({
+        now: () => now,
+        wait: async (ms) => (now += ms),
+        advance: async () => {},
+      }),
+      wire: {
+        open: (options) =>
+          openStream({
+            ...options,
+            journal,
+            credential: async () => "synthetic",
+            meter: { start() {}, frame() {}, remaining: () => 90001, clock: () => now },
+            client: { makeBidiStreamRequest: () => rpc },
+          }),
+      },
+    });
+    try {
+      await replay.frame({
+        n: 16,
+        cellId: "S03",
+        direction: "out",
+        elapsedMs: 0,
+        at: new Date(1000).toISOString(),
+        body: { subscription: "owned", streamAckDeadlineSeconds: 10 },
+      });
+      await replay.action({
+        n: 22,
+        cellId: "S03",
+        event: "stream-case-observation",
+        elapsedMs: 1000,
+        at: new Date(2000).toISOString(),
+        state: { incomplete: false, terminal: null },
+        invalidAckObservedMs: null,
+      });
+      const observation = rows.find((r) => r.event === "stream-case-observation");
+      assert.equal(observation?.state.terminal, null);
+      const disposal = replay.action({
+        n: 23,
+        cellId: "S03",
+        event: "stream-cancel",
+        reason: "dispose",
+        elapsedMs: 1001,
+        at: new Date(2001).toISOString(),
+      });
+      if (failure === true) {
+        await assert.rejects(disposal, /diagnostic persistence failed/);
+        assert.equal(replay.witnesses.get("S03").completed, false);
+        assert.equal(replay.witnesses.get("S03").semanticsVerified, false);
+      } else {
+        await disposal;
+        assert.equal(cancelled, 1);
+        const expected = [["stream-error", 1, "Cancelled on client", "disposal", "dispose"]];
+        if (failure !== "missing-status")
+          expected.push(["stream-status", 1, "Cancelled on client", "disposal", "dispose"]);
+        assert.deepEqual(
+          rows
+            .filter((r) => ["stream-error", "stream-status"].includes(r.event))
+            .map((r) => [r.event, r.code, r.details, r.phase, r.cancelReason]),
+          expected,
+        );
+        assert.equal(observation.state.terminal, null);
+      }
+    } finally {
+      replay.close();
+    }
+  }
+});

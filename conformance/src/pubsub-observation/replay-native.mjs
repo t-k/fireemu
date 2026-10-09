@@ -392,8 +392,17 @@ export function createNativeReplay({
       await clock.native(timed, sourceCells.find((cell) => cell.id === row.cellId)?.events);
       checkActualReceives();
       if (row.event === "stream-write-end") active.stream.end();
-      else if (row.event === "stream-cancel") active.stream.cancel(row.reason);
-      else if (row.event === "stream-case-observation") {
+      else if (row.event === "stream-cancel") {
+        if (row.cellId === "S03" && row.reason === "dispose") {
+          try {
+            await active.stream.disposeWithDiagnostics();
+          } catch (error) {
+            proof.completed = false;
+            proof.semanticsVerified = false;
+            throw error;
+          }
+        } else active.stream.cancel(row.reason);
+      } else if (row.event === "stream-case-observation") {
         const state = active.stream.state();
         if (
           Boolean(row.state?.terminal) !== Boolean(state.terminal) ||
@@ -421,6 +430,13 @@ export function createNativeReplay({
           proof.observedUntilMs = observedUntilMs;
           proof.deadlineUntilMs = active.deadlineUntilMs;
         }
+        if (active.cellId === "S03")
+          journal?.write({
+            event: "stream-case-observation",
+            cellId: active.cellId,
+            state: structuredClone(state),
+            elapsedMs: clock.elapsed(row.cellId),
+          });
         if (active.cellId === "S10") {
           const observedElapsedMs = clock.elapsed(row.cellId);
           const observation = journal?.write({

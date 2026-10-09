@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, chmodSync, symlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tempDir } from "./test-tmpdir.mjs";
@@ -1748,4 +1748,175 @@ test("normalized receive shape cannot certify a raw ACK binding or causal follow
   assert.throws(() => bindings.get("ack", pull.response.body.receivedMessages[0].ackId), /binding/);
   assert.equal(report.rows.find((row) => row.n === 115).verdict, "NOT_COMPARABLE");
   assert.deepEqual(called, [99, 114]);
+});
+
+function standaloneFixture() {
+  const directory = tempDir("standalone-provenance-");
+  const put = (name, value) => {
+    const path = join(directory, name);
+    const bytes = Buffer.from(typeof value === "string" ? value : JSON.stringify(value));
+    writeFileSync(path, bytes, { mode: 0o600 });
+    return { path, sha256: createHash("sha256").update(bytes).digest("hex") };
+  };
+  const binary = put("fireemu", "pinned binary");
+  const adapter = put("adapter.mjs", "pinned adapter");
+  const supervisor = put("caller.py", "pinned supervisor");
+  const config = put("config.json", {
+    schemaVersion: 1,
+    profile: "strict",
+    bind: "127.0.0.1",
+    daemon: {
+      pubsubPort: 0,
+      httpPort: 0,
+      hubPort: 0,
+      loggingPort: 0,
+      authProject: "p",
+      clockStart: "2026-10-01T00:00:00Z",
+    },
+  });
+  const environment = {
+    GOOGLE_CLOUD_PROJECT: "p",
+    GCLOUD_PROJECT: "p",
+    PUBSUB_EMULATOR_HOST: "127.0.0.1:12345",
+    FIREEMU_CONTROL_URL: "http://127.0.0.1:12346/v1/",
+    FIREEMU_CONTROL_TOKEN: "local-test",
+  };
+  const ready = put("ready.json", {
+    schemaVersion: 1,
+    pid: 102,
+    projectId: "p",
+    controlUrl: "http://127.0.0.1:12346",
+    controlToken: "local-test",
+    environment,
+  });
+  const identity = (pid, ppid, comm, args) => ({
+    pid,
+    ppid,
+    birth: "Thu Oct 1 00:00:00 2026",
+    comm,
+    args,
+  });
+  const ownerIdentity = identity(101, 100, "node", `/node ${adapter.path}`);
+  const supervisorIdentity = identity(100, 99, "python3", `/python3 ${supervisor.path}`);
+  const serverIdentity = identity(
+    102,
+    101,
+    binary.path,
+    `${binary.path} up --config ${config.path} --only pubsub --ready-file ${ready.path} --owner-stdin`,
+  );
+  const observed = new Map(
+    [ownerIdentity, supervisorIdentity, serverIdentity].map((value) => [
+      value.pid,
+      structuredClone(value),
+    ]),
+  );
+  return {
+    pin: { path: binary.path, sha256: binary.sha256 },
+    project: "p",
+    environment,
+    worker: { pid: 103, ppid: 101 },
+    observe: (pid) => observed.get(pid),
+    observed,
+    put,
+    launch: {
+      mode: "standalone",
+      parentPid: 101,
+      serverPid: 102,
+      config: config.path,
+      configSha256: config.sha256,
+      clockStart: "2026-10-01T00:00:00Z",
+      ready: ready.path,
+      readySha256: ready.sha256,
+      adapter,
+      supervisor,
+      nodePath: "/node",
+      pythonPath: "/python3",
+      ownerIdentity,
+      supervisorIdentity,
+      serverIdentity,
+    },
+  };
+}
+
+test("standalone provenance accepts only observed shared owner and pinned ready/config/environment", () => {
+  assert.doesNotThrow(() => cli.verifyStrictWorker(standaloneFixture()));
+});
+
+test("standalone provenance rejects altered process, readiness, config, environment and mode", () => {
+  const patches = [
+    (f) => {
+      f.worker.ppid = 999;
+    },
+    (f) => {
+      f.observed.get(102).ppid = 999;
+    },
+    (f) => {
+      f.observed.get(102).birth += "changed";
+    },
+    (f) => {
+      f.observed.get(101).args += " changed";
+    },
+    (f) => {
+      f.observed.get(100).comm = "unknown";
+    },
+    (f) => {
+      f.launch.serverIdentity.args += " changed";
+    },
+    (f) => {
+      f.launch.configSha256 = "0".repeat(64);
+    },
+    (f) => {
+      f.pin.sha256 = "0".repeat(64);
+    },
+    (f) => {
+      f.launch.readySha256 = "0".repeat(64);
+    },
+    (f) => {
+      chmodSync(f.launch.ready, 0o644);
+    },
+    (f) => {
+      const link = `${f.launch.ready}.link`;
+      symlinkSync(f.launch.ready, link);
+      f.launch.ready = link;
+    },
+    (f) => {
+      f.environment.GCLOUD_PROJECT = "other";
+    },
+    (f) => {
+      f.environment.GOOGLE_APPLICATION_CREDENTIALS = "/secret";
+    },
+    (f) => {
+      f.launch.clockStart = "2026-10-02T00:00:00Z";
+    },
+    (f) => {
+      f.launch.mode = "forged";
+    },
+    ...["pid", "projectId", "controlUrl", "controlToken"].map((key) => (f) => {
+      const value = JSON.parse(readFileSync(f.launch.ready));
+      value[key] = "wrong";
+      const changed = f.put("changed-ready.json", value);
+      f.launch.ready = changed.path;
+      f.launch.readySha256 = changed.sha256;
+      f.observed.get(102).args =
+        f.launch.serverIdentity.args = `${f.pin.path} up --config ${f.launch.config} --only pubsub --ready-file ${changed.path} --owner-stdin`;
+    }),
+    ...["pubsubPort", "httpPort", "hubPort", "loggingPort"].map((key) => (f) => {
+      const value = JSON.parse(readFileSync(f.launch.config));
+      value.daemon[key] = 123;
+      const changed = f.put("changed-config.json", value);
+      f.launch.config = changed.path;
+      f.launch.configSha256 = changed.sha256;
+      f.observed.get(102).args =
+        f.launch.serverIdentity.args = `${f.pin.path} up --config ${changed.path} --only pubsub --ready-file ${f.launch.ready} --owner-stdin`;
+    }),
+  ];
+  for (const patch of patches) {
+    const fixture = standaloneFixture();
+    patch(fixture);
+    assert.throws(() => cli.verifyStrictWorker(fixture));
+  }
+  assert.throws(
+    () => cli.verifyStrictWorker({ pin: {}, project: "p", launch: { serverPid: -1 } }),
+    /pinned fireemu child/,
+  );
 });

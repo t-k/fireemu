@@ -427,7 +427,108 @@ export async function replayLocal(input, environment, pin) {
   }
 }
 
-export function verifyStrictWorker({ pin, project, launch }) {
+function strictProcessIdentity(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("invalid strict process PID");
+  const text = execFileSync(
+    "ps",
+    ["-ww", "-p", String(pid), "-o", "pid=,ppid=,lstart=,comm=,args="],
+    { encoding: "utf8", timeout: 1000, maxBuffer: 65536 },
+  ).trim();
+  const match = text.match(/^(\d+)\s+(\d+)\s+(\S+\s+\S+\s+\d+\s+\S+\s+\d+)\s+(\S+)\s+(.+)$/);
+  if (!match) throw new Error("strict process identity unavailable");
+  return {
+    pid: Number(match[1]),
+    ppid: Number(match[2]),
+    birth: match[3].replace(/\s+/g, " "),
+    comm: match[4],
+    args: match[5],
+  };
+}
+
+function verifyStandaloneWorker({ pin, project, launch, environment, worker, observe }) {
+  const refuse = () => {
+    throw new Error("standalone strict launch provenance refused");
+  };
+  const owner = observe(launch.parentPid);
+  const server = observe(launch.serverPid);
+  const supervisor = observe(launch.supervisorIdentity?.pid);
+  if (
+    worker.ppid !== launch.parentPid ||
+    worker.pid === launch.serverPid ||
+    !owner ||
+    !server ||
+    !supervisor ||
+    !isDeepStrictEqual(owner, launch.ownerIdentity) ||
+    !isDeepStrictEqual(server, launch.serverIdentity) ||
+    !isDeepStrictEqual(supervisor, launch.supervisorIdentity) ||
+    server.ppid !== owner.pid ||
+    owner.ppid !== supervisor.pid ||
+    owner.args !== `${launch.nodePath} ${launch.adapter.path}` ||
+    supervisor.args !== `${launch.pythonPath} ${launch.supervisor.path}` ||
+    server.args !==
+      `${pin.path} up --config ${launch.config} --only pubsub --ready-file ${launch.ready} --owner-stdin`
+  )
+    refuse();
+  pinnedBytes(pin.path, pin.sha256, 100_000_000);
+  pinnedBytes(launch.adapter.path, launch.adapter.sha256);
+  pinnedBytes(launch.supervisor.path, launch.supervisor.sha256);
+  const config = JSON.parse(pinnedBytes(launch.config, launch.configSha256));
+  if (
+    !isDeepStrictEqual(config, {
+      schemaVersion: 1,
+      profile: "strict",
+      bind: "127.0.0.1",
+      daemon: {
+        pubsubPort: 0,
+        httpPort: 0,
+        hubPort: 0,
+        loggingPort: 0,
+        authProject: project,
+        clockStart: launch.clockStart,
+      },
+    }) ||
+    !Number.isFinite(Date.parse(launch.clockStart))
+  )
+    refuse();
+  const stat = lstatSync(launch.ready);
+  if (!stat.isFile() || (stat.mode & 0o777) !== 0o600 || stat.uid !== process.getuid()) refuse();
+  const ready = JSON.parse(pinnedBytes(launch.ready, launch.readySha256, 1_000_000));
+  if (
+    ready.schemaVersion !== 1 ||
+    ready.pid !== server.pid ||
+    ready.projectId !== project ||
+    ready.controlUrl + "/v1/" !== environment.FIREEMU_CONTROL_URL ||
+    ready.controlToken !== environment.FIREEMU_CONTROL_TOKEN ||
+    ready.environment?.GOOGLE_CLOUD_PROJECT !== project ||
+    ready.environment?.GCLOUD_PROJECT !== project ||
+    Object.entries(ready.environment ?? {}).some(
+      ([key, value]) => typeof value !== "string" || environment[key] !== value,
+    ) ||
+    Object.keys(environment).some(
+      (key) =>
+        /CREDENTIAL|TOKEN|NODE_OPTIONS|NODE_PATH/.test(key) && key !== "FIREEMU_CONTROL_TOKEN",
+    ) ||
+    !/^127\.0\.0\.1:[1-9]\d{0,4}$/.test(environment.PUBSUB_EMULATOR_HOST ?? "") ||
+    Number(environment.PUBSUB_EMULATOR_HOST.split(":")[1]) > 65535 ||
+    !/^http:\/\/127\.0\.0\.1:[1-9]\d{0,4}\/v1\/$/.test(environment.FIREEMU_CONTROL_URL ?? "") ||
+    !environment.FIREEMU_CONTROL_TOKEN
+  )
+    refuse();
+}
+
+export function verifyStrictWorker({
+  pin,
+  project,
+  launch,
+  environment = process.env,
+  worker = process,
+  observe = strictProcessIdentity,
+}) {
+  if (launch.mode === "standalone") {
+    verifyStandaloneWorker({ pin, project, launch, environment, worker, observe });
+    return;
+  }
+
   if (process.ppid !== launch.serverPid)
     throw new Error("internal worker must be the pinned fireemu child");
   const ancestry = execFileSync(

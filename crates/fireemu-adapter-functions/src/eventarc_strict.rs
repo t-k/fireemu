@@ -19,7 +19,7 @@
 //!   deletion and its operation, the answers for a channel being created or deleted, for a channel that is
 //!   gone and for an operation that was never issued, and every check `PublishEvents` makes (the parse, the
 //!   count of 100, the size, the channel lookup, the required attributes, the content type, the data, the
-//!   attribute quotas and the order of those checks).
+//!   attribute quotas and the order of those checks). Configured numeric project aliases are supported only for GET/LIST, preserving canonical channel state and Pub/Sub topic identity.
 //! - inferred (marked `INFERRED`): the locations beyond the seven probed (the documented regions), the page
 //!   size when none is given and the cap above which a page is clamped, the order of a list (production's is
 //!   stable but follows no rule the recordings reveal: fireemu lists in the order of creation), the method
@@ -29,7 +29,7 @@
 //!   size that is not a number, the deletion of a channel a function declares. These answer
 //!   `501 UNIMPLEMENTED` and say so, rather than invent a shape.
 //! - not reproduced, because they are Google's state or not deterministic: whether a `ya29.` token is valid,
-//!   what its scopes are, the project number (a path that names the project by number), and the seconds
+//!   what its scopes are, the resolution of unconfigured project numbers, and the seconds
 //!   after a creation during which a publication to the channel answers `404 Associated channel does not
 //!   exist.` although the channel reads as ACTIVE.
 //!
@@ -86,7 +86,7 @@ impl Answer {
 /// Where a request points: the project and the location of its path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Place {
-    /// The project of the path (an ID).
+    /// The project of the path: an ID, or the explicitly configured numeric alias for GET/LIST.
     pub project: String,
     /// The location of the path (`-` for every location in a list).
     pub location: String,
@@ -624,12 +624,24 @@ fn adopt(world: &World<'_>, name: &str) {
 /// Answers one request.
 #[must_use]
 pub fn evaluate(input: &Input<'_>, world: &World<'_>) -> Outcome {
+    evaluate_with_project_number(input, world, None)
+}
+
+/// Resolves only configured numeric GET/LIST aliases, keeping canonical state and topic identity.
+#[must_use]
+pub fn evaluate_with_project_number(
+    input: &Input<'_>,
+    world: &World<'_>,
+    project_number: Option<u64>,
+) -> Outcome {
     let route = input.route;
     let credential = classify_token(input.bearer);
     if credential != Credential::WellFormed {
         return credential_refusal(route, credential);
     }
-    if route.project() != world.project {
+    let read_alias = matches!(route, Route::GetChannel { .. } | Route::ListChannels(_))
+        && project_number.is_some_and(|number| number > 0 && route.project() == number.to_string());
+    if route.project() != world.project && !read_alias {
         return consumer_invalid(route);
     }
     match route {
@@ -639,11 +651,18 @@ pub fn evaluate(input: &Input<'_>, world: &World<'_>) -> Outcome {
                 return location_not_found(route);
             }
             let name = channel_name(place, channel);
-            adopt(world, &name);
-            match world.channels.lookup(&name, world.now) {
+            let canonical = format!(
+                "projects/{}/locations/{}/channels/{channel}",
+                world.project, place.location
+            );
+            adopt(world, &canonical);
+            match world.channels.lookup(&canonical, world.now) {
                 Lookup::Absent => resource_not_found(&name),
                 // A channel being created or deleted reads too (stage C): see `eventarc_channels`.
-                Lookup::Ready(view) | Lookup::Creating(view) | Lookup::Deleting(view) => {
+                Lookup::Ready(mut view)
+                | Lookup::Creating(mut view)
+                | Lookup::Deleting(mut view) => {
+                    view.name = name;
                     answer(200, view.to_json(false))
                 }
             }
@@ -742,7 +761,8 @@ fn internal_error(world: &World<'_>) -> Outcome {
 }
 
 fn list_channels(route: &Route, place: &Place, query: Option<&str>, world: &World<'_>) -> Outcome {
-    let Place { project, location } = place;
+    let location = &place.location;
+    let project = world.project;
     if location != "-" && !plausible_location(location) {
         return location_not_found(route);
     }
@@ -802,7 +822,15 @@ fn list_channels(route: &Route, place: &Place, query: Option<&str>, world: &Worl
             listing
                 .items
                 .iter()
-                .map(|view| view.to_json(false))
+                .map(|view| {
+                    let mut view = view.clone();
+                    view.name = view.name.replacen(
+                        &format!("projects/{project}/"),
+                        &format!("projects/{}/", place.project),
+                        1,
+                    );
+                    view.to_json(false)
+                })
                 .collect(),
         ),
     )];
@@ -3182,6 +3210,24 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn numeric_read_alias_requires_exact_explicit_mapping(number in 1u64..u64::MAX, list in any::<bool>()) {
+            let channels = ChannelStore::default();
+            let declared = |_: &str| false;
+            let declared_in = |_: &str, _: &str| Vec::new();
+            let world = world(&declared, &declared_in, &channels);
+            let suffix = if list { "" } else { "/missing" };
+            let path = format!("/v1/projects/{number}/locations/us-central1/channels{suffix}");
+            let route = route("GET", &path).unwrap();
+            let input = Input { route: &route, query: None, bearer: Some("ya29.a-token"), body: b"" };
+            let expected = if list { 200 } else { 404 };
+            prop_assert_eq!(status_and_message(&evaluate_with_project_number(&input, &world, Some(number))).0, expected);
+            prop_assert_eq!(status_and_message(&evaluate_with_project_number(&input, &world, None)).0, 403);
+            prop_assert_eq!(status_and_message(&evaluate_with_project_number(&input, &world, Some(number - 1))).0, 403);
+            let unauthorized = Input { bearer: None, ..input };
+            prop_assert_eq!(status_and_message(&evaluate_with_project_number(&unauthorized, &world, Some(number))).0, 401);
+        }
+
         #[test]
         fn mapped_publish_size_matches_independent_wire_encoding(
             samples in proptest::collection::vec(mapped_sample(), 0..4),

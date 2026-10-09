@@ -132,7 +132,7 @@ impl RequestAdmission {
 fn request_body_limit(surface: HttpSurface, path: &str) -> usize {
     if surface == HttpSurface::Tasks && crate::tasks::route(path).is_some() {
         MAX_TASK_BODY_BYTES
-    } else if surface == HttpSurface::Eventarc
+    } else if matches!(surface, HttpSurface::Eventarc(_))
         && matches!(
             crate::eventarc::route(path),
             Some(crate::eventarc::Route::Register { .. } | crate::eventarc::Route::Remove { .. })
@@ -1286,8 +1286,9 @@ async fn respond_eventarc_strict(
     req: Request<Incoming>,
     route: crate::eventarc_strict::Route,
     body_limit: usize,
+    project_number: Option<u64>,
 ) -> Response<OutBody> {
-    use crate::eventarc_strict::{evaluate, Input, Outcome, World};
+    use crate::eventarc_strict::{evaluate_with_project_number, Input, Outcome, World};
 
     let bearer = bearer_token(req.headers());
     let query = req.uri().query().map(str::to_owned);
@@ -1331,7 +1332,7 @@ async fn respond_eventarc_strict(
         bearer: bearer.as_deref(),
         body: &body,
     };
-    match evaluate(&input, &world) {
+    match evaluate_with_project_number(&input, &world, project_number) {
         Outcome::Answer(answer) => json_answer(&answer),
         Outcome::Deliver { channel, events } => deliver_strict(runtime, &channel, &events),
     }
@@ -1344,11 +1345,20 @@ async fn respond_eventarc_surface(
     body_limit: usize,
     profile: FunctionsHttpProfile,
     origin: Option<&str>,
+    project_number: Option<u64>,
 ) -> Response<OutBody> {
     if profile == FunctionsHttpProfile::Strict {
         if let Some(route) = crate::eventarc_strict::route(req.method().as_str(), req.uri().path())
         {
-            return respond_eventarc_strict(runtime, channels, req, route, body_limit).await;
+            return respond_eventarc_strict(
+                runtime,
+                channels,
+                req,
+                route,
+                body_limit,
+                project_number,
+            )
+            .await;
         }
     }
     let Some(route) = crate::eventarc::route(req.uri().path()) else {
@@ -1429,8 +1439,17 @@ async fn respond_support_surface(
 ) -> Response<OutBody> {
     let path = req.uri().path().to_owned();
     match surface {
-        HttpSurface::Eventarc => {
-            respond_eventarc_surface(&runtime, &channels, req, body_limit, profile, origin).await
+        HttpSurface::Eventarc(project_number) => {
+            respond_eventarc_surface(
+                &runtime,
+                &channels,
+                req,
+                body_limit,
+                profile,
+                origin,
+                project_number,
+            )
+            .await
         }
         HttpSurface::Tasks => {
             let Some(route) = crate::tasks::route(&path) else {
@@ -1693,7 +1712,7 @@ fn field_values(headers: &hyper::HeaderMap, name: &str) -> Vec<String> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HttpSurface {
     Functions,
-    Eventarc,
+    Eventarc(Option<u64>),
     Tasks,
 }
 
@@ -1819,10 +1838,25 @@ pub async fn serve_eventarc_with_channels(
     profile: FunctionsHttpProfile,
     channels: Arc<crate::eventarc_channels::ChannelStore>,
 ) -> std::io::Result<()> {
+    serve_eventarc_with_channels_and_project_number(
+        listener, runtime, admission, profile, channels, None,
+    )
+    .await
+}
+
+/// Serves Eventarc with the configured numeric alias of this runtime's canonical project.
+pub async fn serve_eventarc_with_channels_and_project_number(
+    listener: TcpListener,
+    runtime: Arc<FunctionsRuntime>,
+    admission: HttpAdmission,
+    profile: FunctionsHttpProfile,
+    channels: Arc<crate::eventarc_channels::ChannelStore>,
+    project_number: Option<u64>,
+) -> std::io::Result<()> {
     serve_surface(
         listener,
         runtime,
-        HttpSurface::Eventarc,
+        HttpSurface::Eventarc(project_number),
         admission,
         profile,
         channels,
@@ -1904,12 +1938,12 @@ mod admission_tests {
             MAX_FUNCTION_BODY_BYTES
         );
         assert_eq!(
-            request_body_limit(HttpSurface::Eventarc, route),
+            request_body_limit(HttpSurface::Eventarc(None), route),
             MAX_FUNCTION_BODY_BYTES
         );
         assert_eq!(
             request_body_limit(
-                HttpSurface::Eventarc,
+                HttpSurface::Eventarc(None),
                 "/emulator/v1/projects/demo-app/triggers/us-central1-worker-0"
             ),
             crate::eventarc::MAX_TRIGGER_DEFINITION_BYTES

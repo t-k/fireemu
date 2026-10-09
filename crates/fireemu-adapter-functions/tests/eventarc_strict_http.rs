@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use fireemu_adapter_functions::eventarc_channels::{ChannelStore, SystemEntropy, Timing};
 use fireemu_adapter_functions::http::{
-    serve_eventarc, serve_eventarc_with_channels, serve_eventarc_with_profile,
-    FunctionsHttpProfile, HttpAdmission,
+    serve_eventarc, serve_eventarc_with_channels, serve_eventarc_with_channels_and_project_number,
+    serve_eventarc_with_profile, FunctionsHttpProfile, HttpAdmission,
 };
 use fireemu_adapter_functions::manifest_json::parse_manifest;
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
@@ -47,6 +47,15 @@ async fn start_with(
     profile: Option<FunctionsHttpProfile>,
     project: &str,
     channels: Option<Arc<ChannelStore>>,
+) -> Listener {
+    start_with_project_number(profile, project, channels, None).await
+}
+
+async fn start_with_project_number(
+    profile: Option<FunctionsHttpProfile>,
+    project: &str,
+    channels: Option<Arc<ChannelStore>>,
+    project_number: Option<u64>,
 ) -> Listener {
     // One scratch directory for each listener: tests run in parallel in one process, and a listener that
     // stops removes its directory.
@@ -103,15 +112,26 @@ async fn start_with(
     let for_server = runtime.clone();
     let server = tokio::spawn(async move {
         let admission = HttpAdmission::new();
-        match (profile, channels) {
-            (Some(profile), Some(channels)) => {
+        match (profile, channels, project_number) {
+            (Some(profile), channels, Some(number)) => {
+                serve_eventarc_with_channels_and_project_number(
+                    listener,
+                    for_server,
+                    admission,
+                    profile,
+                    channels.unwrap_or_else(|| Arc::new(ChannelStore::default())),
+                    Some(number),
+                )
+                .await
+            }
+            (Some(profile), Some(channels), None) => {
                 serve_eventarc_with_channels(listener, for_server, admission, profile, channels)
                     .await
             }
-            (Some(profile), None) => {
+            (Some(profile), None, None) => {
                 serve_eventarc_with_profile(listener, for_server, admission, profile).await
             }
-            (None, _) => serve_eventarc(listener, for_server, admission).await,
+            (None, _, _) => serve_eventarc(listener, for_server, admission).await,
         }
     });
     Listener {
@@ -1618,4 +1638,196 @@ fn the_declared_eventarc_queue_bounds_are_the_numbers_capabilities_json_states_a
     assert!(!capabilities.contains("each publish to 256 input events"));
     assert!(!capabilities.contains("256 deliveries after fault expansion"));
     assert!(capabilities.contains("no per-publication cap on events or deliveries"));
+}
+
+#[tokio::test]
+async fn strict_configured_numeric_project_get_and_list_share_channel_identity() {
+    let channels = Arc::new(ChannelStore::new(
+        Box::new(SystemEntropy::default()),
+        Timing {
+            create: 0,
+            delete: 0,
+        },
+    ));
+    let server = start_with_project_number(
+        Some(FunctionsHttpProfile::Strict),
+        PROJECT,
+        Some(channels),
+        Some(111_111_111_111),
+    )
+    .await;
+    let canonical = "projects/demo-app/locations/us-central1/channels/numeric-made";
+    let body = json!({ "name": canonical }).to_string();
+    let created = server
+        .send(
+            "POST",
+            "/v1/projects/demo-app/locations/us-central1/channels?channelId=numeric-made",
+            true,
+            Some(&body),
+        )
+        .await;
+    let id_read = server
+        .send("GET", &format!("/v1/{canonical}"), true, None)
+        .await;
+    let id_list = server
+        .send(
+            "GET",
+            "/v1/projects/demo-app/locations/us-central1/channels",
+            true,
+            None,
+        )
+        .await;
+    let alias_read = server
+        .send(
+            "GET",
+            "/v1/projects/111111111111/locations/us-central1/channels/numeric-made",
+            true,
+            None,
+        )
+        .await;
+    let alias_list = server
+        .send(
+            "GET",
+            "/v1/projects/111111111111/locations/us-central1/channels",
+            true,
+            None,
+        )
+        .await;
+    let final_id_list = server
+        .send(
+            "GET",
+            "/v1/projects/demo-app/locations/us-central1/channels",
+            true,
+            None,
+        )
+        .await;
+    server.stop().await;
+    assert_eq!(created.0, 200);
+    assert_eq!(id_read.0, 200);
+    assert_eq!(alias_read.0, 200);
+    let canonical_value: Value = serde_json::from_str(&id_read.1).unwrap();
+    let mut aliased: Value = serde_json::from_str(&alias_read.1).unwrap();
+    assert_eq!(
+        aliased["name"],
+        "projects/111111111111/locations/us-central1/channels/numeric-made"
+    );
+    assert_eq!(aliased["state"], "ACTIVE");
+    assert!(aliased["pubsubTopic"]
+        .as_str()
+        .unwrap()
+        .starts_with("projects/demo-app/topics/"));
+    aliased["name"] = Value::String(canonical.to_owned());
+    assert_eq!(
+        aliased, canonical_value,
+        "UID, state, times and topic must share canonical identity"
+    );
+    assert_eq!(id_list.0, 200);
+    assert_eq!(alias_list.0, 200);
+    let canonical_list: Value = serde_json::from_str(&id_list.1).unwrap();
+    let mut aliases: Value = serde_json::from_str(&alias_list.1).unwrap();
+    assert_eq!(
+        aliases["channels"].as_array().unwrap().len(),
+        canonical_list["channels"].as_array().unwrap().len()
+    );
+    for item in aliases["channels"].as_array_mut().unwrap() {
+        let name = item["name"]
+            .as_str()
+            .unwrap()
+            .replace("projects/111111111111/", "projects/demo-app/");
+        item["name"] = Value::String(name);
+    }
+    assert_eq!(aliases, canonical_list);
+    assert_eq!(
+        final_id_list, id_list,
+        "an alias read cannot create a second namespace"
+    );
+}
+
+#[tokio::test]
+async fn strict_numeric_project_alias_is_explicit_scoped_and_preserves_auth_admission() {
+    for configured in [None, Some(111_111_111_111)] {
+        let server = start_with_project_number(
+            Some(FunctionsHttpProfile::Strict),
+            PROJECT,
+            None,
+            configured,
+        )
+        .await;
+        let mut results = Vec::new();
+        for project in ["111111111111", "222222222222", "demo-another"] {
+            for suffix in ["channels/custom", "channels"] {
+                let path = format!("/v1/projects/{project}/locations/us-central1/{suffix}");
+                results.push((project, server.send("GET", &path, true, None).await));
+                for token in [
+                    None,
+                    Some("invalid-token"),
+                    Some("eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJ4In0.signature"),
+                ] {
+                    results.push(("auth", {
+                        let response = server.exchange("GET", &path, token, None, "").await;
+                        (response.status, response.body)
+                    }));
+                }
+            }
+        }
+        let canonical = server
+            .send("GET", &format!("/v1/{CUSTOM}"), true, None)
+            .await;
+        for (method, suffix) in [
+            ("POST", "channels?channelId=new-channel"),
+            ("DELETE", "channels/custom"),
+            ("POST", "channels/custom:publishEvents"),
+            ("GET", "operations/operation-0-0-0-0"),
+        ] {
+            let response = server
+                .send(
+                    method,
+                    &format!("/v1/projects/111111111111/locations/us-central1/{suffix}"),
+                    true,
+                    Some("{}"),
+                )
+                .await;
+            results.push(("unobserved", response));
+        }
+        server.stop().await;
+        assert_eq!(canonical.0, 200);
+        for (project, (status, body)) in results {
+            let expected = if project == "auth" {
+                401
+            } else if configured.is_some() && project == "111111111111" {
+                200
+            } else {
+                403
+            };
+            assert_eq!(status, expected, "{project}: {body}");
+            if expected == 403 {
+                assert!(body.contains("CONSUMER_INVALID"));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn configured_numeric_context_does_not_add_strict_routes_to_emulator_profile() {
+    let server = start_with_project_number(
+        Some(FunctionsHttpProfile::Emulator),
+        PROJECT,
+        None,
+        Some(111_111_111_111),
+    )
+    .await;
+    let id = server
+        .send("GET", &format!("/v1/{CUSTOM}"), true, None)
+        .await;
+    let alias = server
+        .send(
+            "GET",
+            "/v1/projects/111111111111/locations/us-central1/channels/custom",
+            true,
+            None,
+        )
+        .await;
+    server.stop().await;
+    assert_eq!(id.0, 404);
+    assert_eq!(alias.0, 404);
 }

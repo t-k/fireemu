@@ -1254,3 +1254,84 @@ const assert = require('node:assert/strict');
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+/// The configured numeric alias shares the canonical Eventarc channel state through the real CLI.
+#[test]
+#[ignore = "requires installed SDK dependencies; run explicitly in the local Eventarc verification"]
+fn strict_numeric_project_mapping_reaches_eventarc_http() {
+    let dir = std::env::temp_dir().join(format!("fireemu-env-numeric-read-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dependencies = if have_sdk() {
+        sdk_root().join("node_modules")
+    } else {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance/node_modules")
+    };
+    assert!(
+        dependencies.join("firebase-functions").exists(),
+        "installed SDK dependencies are required"
+    );
+    std::fs::copy(
+        sdk_root().join("functions-project/fixtures/env-params/package.json"),
+        dir.join("package.json"),
+    )
+    .unwrap();
+    write(&dir, "index.js", "module.exports = {};\n");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        std::fs::canonicalize(dependencies).unwrap(),
+        dir.join("node_modules"),
+    )
+    .unwrap();
+    write(
+        &dir,
+        "numeric-config.json",
+        r#"{"schemaVersion":1,"profile":"strict","daemon":{"authProjectNumbers":{"demo-numeric-read":"111111111111","demo-other":"222222222222"}}}"#,
+    );
+    let output = fireemu_exec(&dir, "demo-numeric-read")
+        .args(["--config", dir.join("numeric-config.json").to_str().unwrap(), "--only", "functions,eventarc", "--", "node", "-e", r"
+const assert = require('node:assert/strict');
+(async () => {
+  const host = process.env.CLOUD_EVENTARC_EMULATOR_HOST;
+  assert.ok(host, 'Eventarc must be started');
+  const parent = 'projects/demo-numeric-read/locations/us-central1';
+  const channel = `${parent}/channels/numeric-read`;
+  const headers = { authorization: 'Bearer ya29.replay-token', 'content-type': 'application/json' };
+  const call = async (path, init = {}) => {
+    const response = await fetch(`${host}/v1/${path}`, { headers, ...init });
+    return { status: response.status, body: await response.json() };
+  };
+  const created = await call(`${parent}/channels?channelId=numeric-read`, { method: 'POST', body: JSON.stringify({ name: channel }) });
+  assert.equal(created.status, 200);
+  const deadline = Date.now() + 15000;
+  while (!(await call(created.body.name)).body.done) {
+    assert.ok(Date.now() < deadline, 'own operation must finish');
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  const canonical = await call(channel);
+  assert.equal(canonical.status, 200);
+  const alias = await call('projects/111111111111/locations/us-central1/channels/numeric-read');
+  assert.equal(alias.status, 200, 'configured alias must reach canonical channel');
+  assert.deepEqual({ ...alias.body, name: channel }, canonical.body);
+  assert.equal(alias.body.name, 'projects/111111111111/locations/us-central1/channels/numeric-read');
+  assert.ok(alias.body.pubsubTopic.startsWith('projects/demo-numeric-read/topics/'));
+  const listed = await call('projects/111111111111/locations/us-central1/channels');
+  assert.equal(listed.status, 200);
+  assert.deepEqual(listed.body.channels, [alias.body]);
+  const canonicalList = await call(`${parent}/channels`);
+  assert.equal(canonicalList.status, 200);
+  assert.deepEqual(canonicalList.body.channels, [canonical.body]);
+  for (const number of ['222222222222', '333333333333']) {
+    assert.equal((await call(`projects/${number}/locations/us-central1/channels`)).status, 403);
+    assert.equal((await call(`projects/${number}/locations/us-central1/channels/numeric-read`)).status, 403);
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"])
+        .stdin(Stdio::null()).output().unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

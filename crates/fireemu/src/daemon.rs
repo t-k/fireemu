@@ -1235,13 +1235,16 @@ async fn serve_suite(
         );
     }
     if let (Some(listener), Some(runtime)) = (eventarc_listener, functions_runtime.clone()) {
+        let project_number = cfg.auth_project_numbers.get(runtime.project()).copied();
         spawn_server!(
             "Eventarc",
-            fireemu_adapter_functions::http::serve_eventarc_with_profile(
+            fireemu_adapter_functions::http::serve_eventarc_with_channels_and_project_number(
                 listener,
                 runtime,
                 functions_http_admission.clone(),
                 functions_http_profile,
+                Arc::new(fireemu_adapter_functions::eventarc_channels::ChannelStore::default()),
+                project_number,
             )
         );
     }

@@ -51,7 +51,12 @@ export async function openStream({
     cancelled = false,
     cancelReason = null,
     ended = false,
-    disposed = false;
+    disposed = false,
+    draining = false,
+    drainPromise,
+    drainTimer,
+    finishDrain,
+    drainFailure;
   const state = {
     startedAt,
     windowMs,
@@ -70,14 +75,26 @@ export async function openStream({
   };
   const elapsed = () => meter.clock() - monotonicStarted;
   const event = (name, value = {}) => {
-    if (!disposed) journal.write({ event: name, cellId, elapsedMs: elapsed(), ...value });
+    if (!disposed)
+      journal.write({
+        event: name,
+        cellId,
+        elapsedMs: elapsed(),
+        ...value,
+        ...(draining && ["stream-status", "stream-error"].includes(name)
+          ? { phase: "disposal", cancelReason }
+          : {}),
+      });
   };
   const cancel = (reason) => {
     if (!cancelled && !state.terminal) {
       cancelled = true;
       cancelReason = reason;
-      event("stream-cancel", { reason });
-      rpc.cancel();
+      try {
+        event("stream-cancel", { reason });
+      } finally {
+        rpc.cancel();
+      }
     }
     wake();
   };
@@ -90,7 +107,7 @@ export async function openStream({
     Math.max(0, windowMs - (meter.clock() - monotonicStarted)),
   );
   rpc.on("data", (raw) => {
-    if (cancelled || disposed) return;
+    if (cancelled || draining || disposed) return;
     try {
       meter.frame("in", raw.length);
       const body = Response.toObject(Response.decode(raw), {
@@ -136,47 +153,73 @@ export async function openStream({
       cancel("metadata-overflow");
     }
   };
-  rpc.on("metadata", (value) => {
-    if (!disposed) acceptMetadata(value);
-  });
-  rpc.on("status", (status) => {
-    const details = diagnostic(status.details);
-    if (!disposed) acceptMetadata(status.metadata, status.details);
-    state.terminal = { code: status.code };
-    const localEnd =
-      cancelled &&
-      ((status.code === 1 && ["window-end", "unacked-owned-delivery"].includes(cancelReason)) ||
-        (status.code === 4 && state.windowExpired));
-    if ([1, 2, 4, 8, 13, 14, 15].includes(status.code) && !localEnd) state.incomplete = true;
-    event("stream-status", { ...state.terminal, ...details });
-    wake();
-  });
-  rpc.on("error", (error) => {
-    if (
-      [1, 2, 4, 8, 13, 14, 15].includes(error.code) &&
-      !(
+  const lifecycle = (callback) => (value) => {
+    if (disposed) return;
+    try {
+      callback(value);
+    } catch (error) {
+      if (!draining) throw error;
+      drainFailure ??= error;
+      finishDrain?.();
+    }
+  };
+  rpc.on(
+    "metadata",
+    lifecycle((value) => {
+      if (!disposed) acceptMetadata(value);
+    }),
+  );
+  rpc.on(
+    "status",
+    lifecycle((status) => {
+      const details = diagnostic(status.details);
+      if (!disposed) acceptMetadata(status.metadata, status.details);
+      state.terminal = { code: status.code };
+      const localEnd =
         cancelled &&
-        ((error.code === 1 && ["window-end", "unacked-owned-delivery"].includes(cancelReason)) ||
-          (error.code === 4 && state.windowExpired))
+        ((status.code === 1 && ["window-end", "unacked-owned-delivery"].includes(cancelReason)) ||
+          (status.code === 4 && state.windowExpired));
+      if ([1, 2, 4, 8, 13, 14, 15].includes(status.code) && !localEnd) state.incomplete = true;
+      event("stream-status", { ...state.terminal, ...details });
+      wake();
+      finishDrain?.();
+    }),
+  );
+  rpc.on(
+    "error",
+    lifecycle((error) => {
+      if (
+        [1, 2, 4, 8, 13, 14, 15].includes(error.code) &&
+        !(
+          cancelled &&
+          ((error.code === 1 && ["window-end", "unacked-owned-delivery"].includes(cancelReason)) ||
+            (error.code === 4 && state.windowExpired))
+        )
       )
-    )
-      state.incomplete = true;
-    event("stream-error", { code: error.code ?? null, ...diagnostic(error.details) });
-    wake();
-  });
-  rpc.on("end", () => {
-    state.inboundEnded = true;
-    event("stream-inbound-end");
-    wake();
-  });
-  rpc.on("close", () => {
-    event("stream-close");
-    if (!state.terminal && !state.windowExpired) state.incomplete = true;
-    wake();
-  });
+        state.incomplete = true;
+      event("stream-error", { code: error.code ?? null, ...diagnostic(error.details) });
+      wake();
+    }),
+  );
+  rpc.on(
+    "end",
+    lifecycle(() => {
+      state.inboundEnded = true;
+      event("stream-inbound-end");
+      wake();
+    }),
+  );
+  rpc.on(
+    "close",
+    lifecycle(() => {
+      event("stream-close");
+      if (!state.terminal && !state.windowExpired) state.incomplete = true;
+      wake();
+    }),
+  );
   const api = {
     write(body) {
-      if (cancelled || ended || disposed || state.terminal)
+      if (cancelled || draining || ended || disposed || state.terminal)
         throw new Error("closed stream cannot write");
       const raw = Buffer.from(Request.encode(Request.fromObject(body)).finish());
       meter.frame("out", raw.length);
@@ -194,7 +237,7 @@ export async function openStream({
       event("stream-local-write", { writable });
     },
     end() {
-      if (!ended && !cancelled && !state.terminal) {
+      if (!ended && !cancelled && !draining && !state.terminal) {
         ended = true;
         event("stream-write-end");
         beforeDispatch();
@@ -222,12 +265,48 @@ export async function openStream({
       return queue.shift() ?? null;
     },
     state: () => structuredClone(state),
+    disposeWithDiagnostics() {
+      if (drainPromise) return drainPromise;
+      let resolveDrain, rejectDrain;
+      drainPromise = new Promise((resolve, reject) => {
+        resolveDrain = resolve;
+        rejectDrain = reject;
+      });
+      (async () => {
+        try {
+          if (disposed || state.terminal) return;
+          draining = true;
+          clearTimeout(timer);
+          const delay = Math.min(1000, meter.remaining());
+          await new Promise((resolve) => {
+            finishDrain = resolve;
+            drainTimer = setTimeout(resolve, Math.max(0, delay));
+            cancel("dispose");
+            if (state.terminal) resolve();
+          });
+          if (drainFailure) throw drainFailure;
+        } finally {
+          try {
+            api.dispose();
+          } finally {
+            draining = false;
+            finishDrain = null;
+          }
+        }
+      })().then(resolveDrain, rejectDrain);
+      return drainPromise;
+    },
     dispose() {
       if (!disposed) {
-        cancel("dispose");
-        clearTimeout(timer);
-        disposed = true;
-        wake();
+        try {
+          cancel("dispose");
+        } finally {
+          clearTimeout(timer);
+          clearTimeout(drainTimer);
+          disposed = true;
+          wake();
+          finishDrain?.();
+        }
       }
     },
   };

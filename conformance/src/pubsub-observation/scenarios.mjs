@@ -389,7 +389,13 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
       reason = error.message;
       journal.write({ event: "case-incomplete", cellId: cell.id, reason });
     },
-    dispose: () => stream?.dispose(),
+    dispose: async () => {
+      try {
+        if (cell.id === "S03") await stream?.disposeWithDiagnostics?.();
+      } finally {
+        stream?.dispose();
+      }
+    },
     finalize: async () => {
       for (const name of ledger.state().keys()) if (owned(name, runId)) tracked.add(name);
       for (const name of [...tracked].sort(

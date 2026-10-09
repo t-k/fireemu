@@ -2498,3 +2498,228 @@ test("stream diagnostics honor metadata remaining before status accounting and p
     }
   }
 });
+
+async function disposalFixture(context, onCancel = () => {}) {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  let remaining = 120000,
+    cancelled = 0,
+    closed = false,
+    failWrite = false;
+  const rpc = new EventEmitter(),
+    rows = [];
+  rpc.write = () => true;
+  rpc.end = () => {};
+  rpc.cancel = () => {
+    cancelled++;
+    onCancel(rpc);
+  };
+  const stream = await openStream({
+    meter: {
+      start() {},
+      frame() {},
+      clock: () => 0,
+      remaining(maintenance) {
+        assert.notEqual(maintenance, true);
+        if (remaining <= 0) throw new Error("ordinary time exhausted");
+        return remaining;
+      },
+    },
+    client: { makeBidiStreamRequest: () => rpc },
+    journal: {
+      write(row) {
+        assert.equal(closed, false, "no journal writes after finalization");
+        if (failWrite && row.event === "stream-status") throw new Error("diagnostic write refused");
+        rows.push(row);
+      },
+      frame(_raw, row) {
+        assert.equal(closed, false);
+        rows.push(row);
+      },
+    },
+    credential: async () => "fixture-private-token",
+    cellId: "S03",
+    opener: { streamAckDeadlineSeconds: 10 },
+  });
+  context.after(() => stream.dispose());
+  return {
+    stream,
+    rpc,
+    rows,
+    cancelled: () => cancelled,
+    remaining: (value) => (remaining = value),
+    close: () => (closed = true),
+    failWrite: () => (failWrite = true),
+  };
+}
+
+function lateDisposalEvents(fixture) {
+  const count = fixture.rows.length;
+  fixture.close();
+  for (const event of ["status", "error", "end", "close", "metadata"])
+    assert.doesNotThrow(() => fixture.rpc.emit(event, { code: 1, details: "late" }));
+  assert.doesNotThrow(() => fixture.rpc.emit("data", Buffer.from([255])));
+  assert.equal(fixture.rows.length, count);
+  assert.throws(() => fixture.stream.write({ ackIds: ["late"] }), /closed stream/);
+}
+
+test("S03 disposal diagnostics retain async error then status before sealing", async (context) => {
+  const f = await disposalFixture(context, (rpc) => {
+    queueMicrotask(() => {
+      rpc.emit("error", { code: 1, details: "Cancelled on client" });
+      rpc.emit("status", { code: 1, details: "Cancelled on client" });
+    });
+  });
+  const before = f.stream.state();
+  const pending = f.stream.disposeWithDiagnostics();
+  const repeated = f.stream.disposeWithDiagnostics();
+  assert.equal(repeated, pending);
+  await pending;
+  assert.equal(before.terminal, null);
+  const diagnostics = f.rows.filter((row) => ["stream-error", "stream-status"].includes(row.event));
+  assert.deepEqual(
+    diagnostics.map((row) => row.event),
+    ["stream-error", "stream-status"],
+  );
+  for (const row of diagnostics) {
+    assert.equal(row.code, 1);
+    assert.equal(row.details, "Cancelled on client");
+    assert.equal(row.phase, "disposal");
+    assert.equal(row.cancelReason, "dispose");
+  }
+  assert.equal(f.cancelled(), 1);
+  assert.equal(f.stream.state().incomplete, true);
+  lateDisposalEvents(f);
+  context.mock.timers.tick(180000);
+  assert.equal(f.cancelled(), 1);
+});
+
+test("S03 disposal diagnostics register before synchronous cancel status", async (context) => {
+  const f = await disposalFixture(context, (rpc) =>
+    rpc.emit("status", { code: 1, details: "sync" }),
+  );
+  await f.stream.disposeWithDiagnostics();
+  assert.equal(f.rows.find((row) => row.event === "stream-status").phase, "disposal");
+  assert.equal(f.cancelled(), 1);
+  lateDisposalEvents(f);
+});
+
+test("S03 disposal diagnostics leave existing natural terminal unlabelled", async (context) => {
+  const f = await disposalFixture(context);
+  f.rpc.emit("status", { code: 0, details: "" });
+  await f.stream.disposeWithDiagnostics();
+  assert.equal(f.cancelled(), 0);
+  assert.equal(f.rows.filter((row) => row.event === "stream-status").length, 1);
+  assert.equal(
+    Object.hasOwn(
+      f.rows.find((row) => row.event === "stream-status"),
+      "phase",
+    ),
+    false,
+  );
+  lateDisposalEvents(f);
+});
+
+test("S03 disposal diagnostics clamp timeout to ordinary remaining and preserve absent status", async (context) => {
+  const f = await disposalFixture(context);
+  f.remaining(17);
+  const pending = f.stream.disposeWithDiagnostics();
+  let done = false;
+  pending.then(() => (done = true));
+  f.rpc.emit("error", { code: 1, details: "without status" });
+  f.rpc.emit("data", Buffer.from([255]));
+  await Promise.resolve();
+  assert.equal(done, false, "error is not terminal status");
+  context.mock.timers.tick(16);
+  await Promise.resolve();
+  assert.equal(done, false);
+  context.mock.timers.tick(1);
+  for (let step = 0; step < 8; step++) await Promise.resolve();
+  assert.equal(done, true, "bounded disposal finishes before journal finalization");
+  await pending;
+  assert.equal(f.stream.state().terminal, null);
+  assert.equal(f.stream.state().received, 0);
+  assert.equal(
+    f.rows.some((row) => row.event === "stream-status"),
+    false,
+  );
+  lateDisposalEvents(f);
+  context.mock.timers.tick(180000);
+  assert.equal(f.cancelled(), 1);
+});
+
+test("S03 disposal diagnostics use at most 1000ms and sync dispose stops pending drain", async (context) => {
+  const f = await disposalFixture(context);
+  const pending = f.stream.disposeWithDiagnostics();
+  context.mock.timers.tick(999);
+  let done = false;
+  pending.then(() => (done = true));
+  await Promise.resolve();
+  assert.equal(done, false);
+  context.mock.timers.tick(1);
+  for (let step = 0; step < 8; step++) await Promise.resolve();
+  assert.equal(done, true, "bounded disposal finishes before journal finalization");
+  await pending;
+  assert.equal(f.cancelled(), 1);
+  lateDisposalEvents(f);
+});
+
+test("S03 disposal diagnostics seal on exhaustion and cancel exceptions", async (context) => {
+  const f = await disposalFixture(context, () => {
+    throw new Error("cancel refused");
+  });
+  f.remaining(0);
+  await assert.rejects(f.stream.disposeWithDiagnostics(), /ordinary time exhausted|cancel refused/);
+  assert.equal(f.cancelled(), 1);
+  lateDisposalEvents(f);
+  assert.doesNotThrow(() => f.stream.dispose());
+  context.mock.timers.tick(180000);
+});
+
+test("S03 disposal diagnostics reject async accounting or capture failures then seal", async (context) => {
+  const f = await disposalFixture(context, (rpc) => {
+    queueMicrotask(() => rpc.emit("status", { code: 1, details: "capture" }));
+  });
+  f.failWrite();
+  await assert.rejects(f.stream.disposeWithDiagnostics(), /diagnostic write refused/);
+  assert.equal(f.cancelled(), 1);
+  lateDisposalEvents(f);
+  context.mock.timers.tick(180000);
+});
+
+test("S03 disposal diagnostics sync seal interrupts drain without leaving its timer", async (context) => {
+  const f = await disposalFixture(context);
+  const pending = f.stream.disposeWithDiagnostics();
+  f.stream.dispose();
+  await pending;
+  assert.equal(f.cancelled(), 1);
+  lateDisposalEvents(f);
+  context.mock.timers.tick(180000);
+});
+
+test("S03 disposal diagnostics seal on cancel throw without changing synchronous disposal", async (context) => {
+  const f = await disposalFixture(context, () => {
+    throw new Error("cancel refused");
+  });
+  await assert.rejects(f.stream.disposeWithDiagnostics(), /cancel refused/);
+  assert.equal(f.cancelled(), 1);
+  lateDisposalEvents(f);
+  context.mock.timers.tick(180000);
+});
+
+test("S03 disposal diagnostics seal on async metadata accounting failure", async (context) => {
+  const f = await disposalFixture(context, (rpc) => {
+    queueMicrotask(() =>
+      rpc.emit("status", {
+        code: 1,
+        metadata: {
+          getMap() {
+            throw new Error("metadata accounting refused");
+          },
+        },
+      }),
+    );
+  });
+  await assert.rejects(f.stream.disposeWithDiagnostics(), /metadata accounting refused/);
+  lateDisposalEvents(f);
+  context.mock.timers.tick(180000);
+});

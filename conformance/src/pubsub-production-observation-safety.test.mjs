@@ -1023,3 +1023,132 @@ test("actual admitted gap plan reaches the existing meter and refuses extra name
     }
   }
 });
+
+test("S03 waits for disposal diagnostics before cleanup and preserves the observation snapshot", async () => {
+  const w = world(),
+    originalCall = w.wire.call,
+    order = [];
+  let release,
+    draining = false,
+    deliveries = 0;
+  w.wire.call = async (call) => {
+    if (call.category.startsWith("cleanup")) order.push("cleanup");
+    if (call.method === "Publish")
+      return { ok: true, code: "OK", body: { messageIds: ["synthetic-message"] } };
+    return originalCall(call);
+  };
+  w.wire.open = async () => ({
+    write() {},
+    async next() {
+      return deliveries++ === 0
+        ? {
+            receivedMessages: [
+              {
+                ackId: "synthetic-ack",
+                message: {
+                  messageId: "synthetic-message",
+                  data: Buffer.from(`${runId}:S03:marker0`).toString("base64"),
+                },
+              },
+            ],
+          }
+        : null;
+    },
+    state: () => ({ incomplete: false, terminal: null, received: 1 }),
+    disposeWithDiagnostics() {
+      draining = true;
+      order.push("drain-start");
+      return new Promise((resolve) => {
+        release = () => {
+          order.push("drain-end");
+          resolve();
+        };
+      });
+    },
+    dispose: () => order.push("seal"),
+  });
+  const pending = runCell({
+    cell: makePlan().cells.find((c) => c.id === "S03"),
+    meter,
+    ledger: createLedger(),
+    runId,
+    ...w,
+  });
+  for (let step = 0; step < 100; step++) {
+    if (draining) break;
+    await Promise.resolve();
+  }
+  assert.equal(draining, true);
+  assert.equal(order.includes("cleanup"), false);
+  const observation = w.rows.find((row) => row.event === "stream-case-observation");
+  assert.equal(observation.state.terminal, null);
+  release();
+  const result = await pending;
+  assert.deepEqual(order.slice(0, 4), ["drain-start", "drain-end", "seal", "cleanup"]);
+  assert.equal(result.cleanupClosed, true);
+  assert.equal(observation.state.terminal, null);
+});
+
+test("S03 diagnostic drain rejection still seals, cleans resources and persists", async () => {
+  const w = world(),
+    originalCall = w.wire.call,
+    order = [];
+  w.wire.call = async (call) => {
+    if (call.category.startsWith("cleanup")) order.push("cleanup");
+    if (call.method === "Publish")
+      return { ok: true, code: "OK", body: { messageIds: ["synthetic-message"] } };
+    return originalCall(call);
+  };
+  w.wire.open = async () => ({
+    write() {},
+    next: async () => null,
+    state: () => ({ incomplete: false, terminal: null }),
+    async disposeWithDiagnostics() {
+      order.push("drain");
+      throw new Error("diagnostic accounting refused");
+    },
+    dispose: () => order.push("seal"),
+  });
+  w.journal.recovery = () => order.push("persist");
+  const result = await runCell({
+    cell: makePlan().cells.find((c) => c.id === "S03"),
+    meter,
+    ledger: createLedger(),
+    runId,
+    ...w,
+  });
+  assert.equal(result.complete, false);
+  assert.equal(result.cleanupClosed, true);
+  const drainIndex = order.indexOf("drain");
+  assert.notEqual(drainIndex, -1);
+  assert.equal(order[drainIndex + 1], "seal");
+  assert.equal(order.includes("cleanup"), true);
+  assert.equal(order.at(-1), "persist");
+  assert.equal(w.resources.size, 0);
+});
+
+test("other stream cells keep synchronous disposal without diagnostic drain", async () => {
+  const w = world();
+  let drains = 0,
+    seals = 0;
+  w.wire.open = async () => ({
+    write() {},
+    next: async () => null,
+    state: () => ({ incomplete: false, terminal: { code: 3 } }),
+    disposeWithDiagnostics() {
+      drains++;
+    },
+    dispose() {
+      seals++;
+    },
+  });
+  await runCell({
+    cell: makePlan().cells.find((c) => c.id === "S12"),
+    meter,
+    ledger: createLedger(),
+    runId,
+    ...w,
+  });
+  assert.equal(drains, 0);
+  assert.equal(seals, 1);
+});

@@ -130,10 +130,142 @@ const payload = (message) => ({
   attributes: message.attributes ?? {},
   orderingKey: message.orderingKey ?? "",
 });
+const publicationProposal = "8238575c8202949f721b59bb9c97ee36b3f0ae701efd552f4169c70fcf0c1c53";
+const snapshotProposal = "c11c23ae6486c496c9f8f5469dd8bed3ac2630f0274b0f44b270196df4c35a78";
+const week = 604800000000000n,
+  hour = 3600000000000n;
+function timestamp(value) {
+  if (typeof value !== "string") return null;
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{3}|\d{6}|\d{9}))?Z$/.exec(value);
+  if (!match || Number(match[1].slice(0, 4)) < 1) return null;
+  const ms = Date.parse(`${match[1]}Z`);
+  if (!Number.isFinite(ms) || new Date(ms).toISOString().slice(0, 19) !== match[1]) return null;
+  return {
+    instant: BigInt(ms) * 1000000n + BigInt((match[2] ?? "").padEnd(9, "0")),
+    precision: match[2]?.length ?? 0,
+  };
+}
+function authorityBound(disposition, input, cell, owner, proposal) {
+  const runtime = input.runtimeInputs;
+  return (
+    disposition?.[`owner${owner}`]?.proposalSha256 === proposal &&
+    ["runId", "sourceHead", "packetSha256", "descriptorSha256"].every(
+      (key) => disposition.source?.[key] === input.metadata[key],
+    ) &&
+    Array.isArray(disposition.cellIds) &&
+    disposition.cellIds.includes(cell.id) &&
+    runtime &&
+    ["binarySha256", "inputsSha256"].every(
+      (key) =>
+        /^[a-f0-9]{64}$/.test(runtime[key] ?? "") &&
+        disposition.runtimeInputs?.[key] === runtime[key],
+    )
+  );
+}
+function publicationClock(source, receipt) {
+  const requested = timestamp(receipt?.requestedInstant),
+    readback = timestamp(receipt?.body?.clock),
+    dispatch = timestamp(source.at);
+  return receipt?.sourceRequestId === source.requestId &&
+    receipt.sourceN === source.n &&
+    receipt.status === 200 &&
+    requested &&
+    readback &&
+    dispatch &&
+    requested.instant === dispatch.instant &&
+    readback.instant === requested.instant
+    ? readback
+    : null;
+}
+function publicationTime(publication, sourceValue, localValue, bound, topic) {
+  const source = timestamp(sourceValue),
+    local = timestamp(localValue);
+  const result = {
+    owner: 1135,
+    proposalSha256: publicationProposal,
+    publicationSourceRequestId: publication.source.requestId,
+    publicationSourceN: publication.source.n,
+    verdict: "NOT_COMPARABLE",
+  };
+  if (
+    !source ||
+    !local ||
+    source.precision !== local.precision ||
+    (publication.sourceTime !== undefined && publication.sourceTime !== sourceValue) ||
+    (publication.localTime !== undefined && publication.localTime !== localValue)
+  )
+    result.verdict = "DIVERGES";
+  else if (bound && topic === publication.topic && publication.clock)
+    result.verdict = local.instant === publication.clock.instant ? "MATCH" : "DIVERGES";
+  publication.sourceTime ??= sourceValue;
+  publication.localTime ??= localValue;
+  // Only independently validated saved messages can witness Snapshot backlog lifetime.
+  publication.timestampVerdict = verdict([publication.timestampVerdict ?? "MATCH", result.verdict]);
+  return result;
+}
+const snapshotFields = (body) => {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const { expireTime: _generated, ...fields } = body;
+  return fields;
+};
+function snapshotTime(source, actual, receipt, state, messages, topics, bound) {
+  const result = { owner: 1146, proposalSha256: snapshotProposal, verdict: "NOT_COMPARABLE" },
+    original = timestamp(source.reply.body?.expireTime),
+    local = timestamp(actual.body?.expireTime),
+    name = source.request.name,
+    subscription = state.get(source.request.subscription);
+  if (
+    !original ||
+    !local ||
+    original.precision !== local.precision ||
+    source.reply.body.name !== name ||
+    actual.body.name !== name ||
+    !same(snapshotFields(source.reply.body), snapshotFields(actual.body))
+  ) {
+    result.verdict = "DIVERGES";
+    return result;
+  }
+  if (
+    !bound ||
+    !subscription ||
+    subscription.tainted ||
+    !topics.has(subscription.topic) ||
+    subscription.topic !== source.reply.body.topic
+  )
+    return result;
+  const backlog = [...messages.values()].filter(
+    (p) => p.topic === subscription.topic && p.source.n > subscription.createdN,
+  );
+  // A fresh unfiltered subscription with no ACK/Seek/configuration changes proves this backlog in each run.
+  if (!backlog.length || backlog.some((p) => p.timestampVerdict !== "MATCH")) return result;
+  const clock = publicationClock(source, receipt);
+  if (!clock) return result;
+  const oldest = (key) =>
+    backlog.reduce((min, p) => {
+      const value = timestamp(p[key]).instant;
+      return min === null || value < min ? value : min;
+    }, null);
+  const validLifetime = (expiry, created, oldestPublication) =>
+    expiry === oldestPublication + week && expiry <= created + week && expiry >= created + hour;
+  // The journal dispatch clock cannot prove production server creation bounds.
+  result.verdict =
+    original.instant === oldest("sourceTime") + week &&
+    validLifetime(local.instant, clock.instant, oldest("localTime"))
+      ? "NOT_COMPARABLE"
+      : "DIVERGES";
+  result.subscription = source.request.subscription;
+  result.publicationSourceNs = backlog.map((p) => p.source.n);
+  return result;
+}
 export async function replayRecording(
   input,
   execute,
-  { enter = () => {}, observe = () => {} } = {},
+  {
+    enter = () => {},
+    observe = () => {},
+    timestampDisposition,
+    clockReceiptFor = () => undefined,
+  } = {},
 ) {
   const results = [];
   for (const cell of input.cells) {
@@ -141,6 +273,9 @@ export async function replayRecording(
     const messages = new Map(),
       publicationIds = new Map(),
       subscriptionTopics = new Map(),
+      subscriptions = new Map(),
+      freshTopics = new Set(),
+      snapshots = new Map(),
       tokens = new Map(),
       acked = new Set(),
       exchanges = [];
@@ -188,10 +323,14 @@ export async function replayRecording(
           };
         }
         const actual = await execute(call, source);
+        const clockReceipt = clockReceiptFor(source);
         if (!actual || (actual.unknown === true && !source.cancellation))
           throw new Error("unknown local response");
         let expected = structuredClone(source.reply.body),
           semantic = "MATCH";
+        const timestampProofs = [];
+        let heldSnapshot = null,
+          pairedSnapshot = null;
         if (source.method === "Publish" && source.reply.ok && actual.ok) {
           const ids = source.reply.body?.messageIds,
             local = actual.body?.messageIds;
@@ -228,6 +367,8 @@ export async function replayRecording(
               messageId: local[i],
               topic: source.request.topic,
               payload: payload(source.request.messages[i]),
+              source,
+              clock: publicationClock(source, clockReceipt),
             });
           });
           expected.messageIds = local;
@@ -243,6 +384,39 @@ export async function replayRecording(
             source.request.name ?? source.request.subscription,
             source.reply.body.topic,
           );
+        if (
+          source.method === "CreateTopic" &&
+          source.reply.ok &&
+          actual.ok &&
+          same(source.reply.body, actual.body) &&
+          source.reply.body?.name === source.request.name
+        )
+          freshTopics.add(source.request.name);
+        if (
+          source.method === "CreateSubscription" &&
+          source.reply.ok &&
+          actual.ok &&
+          same(source.reply.body, actual.body) &&
+          source.reply.body?.name === source.request.name &&
+          source.reply.body.topic === source.request.topic
+        )
+          subscriptions.set(source.request.name, {
+            topic: source.request.topic,
+            createdN: source.n,
+            tainted: Boolean(source.request.filter || source.reply.body.filter),
+          });
+        if (
+          [
+            "Acknowledge",
+            "Seek",
+            "ModifyAckDeadline",
+            "UpdateSubscription",
+            "DeleteSubscription",
+          ].includes(source.method)
+        ) {
+          const state = subscriptions.get(source.request.subscription ?? source.request.name);
+          if (state) state.tainted = true;
+        }
         if (source.method === "Pull" && source.reply.ok && actual.ok) {
           const received = expected?.receivedMessages ?? [],
             local = actual.body?.receivedMessages ?? [];
@@ -290,6 +464,17 @@ export async function replayRecording(
             if (prior && (prior.ackId !== binding.ackId || prior.messageId !== binding.messageId))
               throw new Error("same-delivery identity drift");
             tokens.set(`${source.request.subscription}\0${item.ackId}`, binding);
+            if (timestampDisposition) {
+              const proof = publicationTime(
+                publication,
+                item.message.publishTime,
+                delivered.message.publishTime,
+                authorityBound(timestampDisposition, input, cell, 1135, publicationProposal),
+                subscriptionTopics.get(source.request.subscription),
+              );
+              timestampProofs.push(proof);
+              item.message.publishTime = delivered.message.publishTime;
+            }
             item.ackId = delivered.ackId;
             item.message.messageId = delivered.message.messageId;
           }
@@ -299,6 +484,59 @@ export async function replayRecording(
               ? { receivedMessages: received }
               : {}),
           };
+        }
+        if (
+          timestampDisposition &&
+          source.reply.ok &&
+          actual.ok &&
+          source.method === "CreateSnapshot"
+        ) {
+          const proof = snapshotTime(
+            source,
+            actual,
+            clockReceipt,
+            subscriptions,
+            messages,
+            freshTopics,
+            authorityBound(timestampDisposition, input, cell, 1146, snapshotProposal),
+          );
+          timestampProofs.push(proof);
+          if (expected && actual.body) expected.expireTime = actual.body.expireTime;
+          heldSnapshot = {
+            sourceBody: structuredClone(source.reply.body),
+            localBody: structuredClone(actual.body),
+            proof,
+          };
+          snapshots.set(source.request.name, heldSnapshot);
+        }
+        if (
+          timestampDisposition &&
+          source.reply.ok &&
+          actual.ok &&
+          source.method === "GetSnapshot"
+        ) {
+          const pending = snapshots.get(source.request.name);
+          const proof = {
+            owner: 1146,
+            proposalSha256: snapshotProposal,
+            verdict: "NOT_COMPARABLE",
+          };
+          const a = timestamp(expected?.expireTime),
+            b = timestamp(actual.body?.expireTime);
+          if (!a || !b || a.precision !== b.precision) proof.verdict = "DIVERGES";
+          else if (pending)
+            proof.verdict =
+              same(source.reply.body, pending.sourceBody) && same(actual.body, pending.localBody)
+                ? pending.proof.verdict
+                : "DIVERGES";
+          timestampProofs.push(proof);
+          if (expected && actual.body) expected.expireTime = actual.body.expireTime;
+          pairedSnapshot = pending;
+          if (!authorityBound(timestampDisposition, input, cell, 1146, snapshotProposal))
+            proof.verdict = verdict([
+              proof.verdict === "DIVERGES" ? "DIVERGES" : "MATCH",
+              "NOT_COMPARABLE",
+            ]);
         }
         if (source.cancellation) {
           const c = actual.clientCancellation;
@@ -321,6 +559,12 @@ export async function replayRecording(
           !same(expected, actual.body)
         )
           semantic = "DIVERGES";
+        semantic = verdict([semantic, ...timestampProofs.map((p) => p.verdict)]);
+        if (pairedSnapshot?.entry) {
+          pairedSnapshot.entry.semanticVerdict = verdict([pairedSnapshot.baseVerdict, semantic]);
+          observe(pairedSnapshot.entry);
+          pairedSnapshot.entry = null;
+        }
         if (source.method === "Acknowledge" && actual.ok)
           call.request.ackIds.forEach((id) => acked.add(id));
         const physical =
@@ -338,9 +582,30 @@ export async function replayRecording(
           semanticVerdict: semantic,
           physicalVerdict: physical,
           actual,
+          ...(timestampProofs.length
+            ? {
+                timestampProofs: timestampProofs.map((proof) =>
+                  Object.assign(proof, {
+                    cellId: cell.id,
+                    sourceBinding: Object.fromEntries(
+                      ["runId", "sourceHead", "packetSha256", "descriptorSha256"].map((key) => [
+                        key,
+                        input.metadata[key],
+                      ]),
+                    ),
+                    runtimeInputs: structuredClone(input.runtimeInputs),
+                  }),
+                ),
+                ...(source.transport === "grpc" ? { wireVerdict: "NOT_COMPARABLE" } : {}),
+              }
+            : {}),
         };
         exchanges.push(entry);
-        observe(entry);
+        if (heldSnapshot) {
+          heldSnapshot.entry = entry;
+          heldSnapshot.baseVerdict = semantic;
+          entry.semanticVerdict = verdict([semantic, "NOT_COMPARABLE"]);
+        } else observe(entry);
       } catch (error) {
         const entry = {
           cellId: cell.id,
@@ -356,6 +621,7 @@ export async function replayRecording(
         stopped = true;
       }
     }
+    for (const pending of snapshots.values()) if (pending.entry) observe(pending.entry);
     results.push({
       id: cell.id,
       coordinates: cell.coordinates,

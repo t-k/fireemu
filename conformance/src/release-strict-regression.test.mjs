@@ -1822,3 +1822,72 @@ test("every release command binds its declared mode to the actual CLI action", (
     }
   }
 });
+
+test("R19 executes with the reviewed interpreter and owns both expanded output paths", async () => {
+  const { chmodSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "fireemu R19 setup-"));
+  try {
+    mkdirSync(join(dir, "logs"));
+    const fakeUv = `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const output = args[args.indexOf("--out") + 1];
+if (JSON.stringify(args.slice(0, 4)) !== JSON.stringify(["run", "--python", "3.12.13", "python"])) process.exit(3);
+if (!output.startsWith(process.env.R19_OWNED_OUT + "/")) process.exit(4);
+fs.writeFileSync(output + ".receipt", JSON.stringify(args));
+console.log(JSON.stringify({ args }));
+`;
+    for (const executable of ["uv", "python3"]) {
+      const path = join(dir, executable);
+      writeFileSync(path, fakeUv);
+      chmodSync(path, 0o700);
+    }
+    const run = clone(RUNS.find(({ id }) => id === "R19"));
+    run.clear = [];
+    const entry = await runEntry(run, {
+      binary: join(dir, "installed binary"),
+      functionsNode: process.execPath,
+      out: dir,
+      env: { PATH: dir, R19_OWNED_OUT: dir },
+    });
+    assert.deepEqual(entry.record.errors, []);
+    assert.equal(entry.record.commands.length, 2);
+    for (const [index, command] of entry.record.commands.entries()) {
+      assert.deepEqual(command.argv.slice(0, 5), ["uv", "run", "--python", "3.12.13", "python"]);
+      const output = command.argv[command.argv.indexOf("--out") + 1];
+      assert.equal(output, join(dir, index === 0 ? "R19-export.json.check" : "R19-export.json"));
+      assert.ok(existsSync(output + ".receipt"));
+      assert.deepEqual(
+        JSON.parse(readFileSync(output + ".receipt", "utf8")),
+        command.argv.slice(1),
+      );
+      assert.equal(command.exitCode, 0);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the strict-production job prepares pinned Python and Chromium before offline replay", () => {
+  const job = strictProductionJob();
+  const isolated = job.indexOf("unshare --net");
+  const installUv = job.indexOf("pipx install uv==0.11.28");
+  const installPython = job.indexOf("uv python install 3.12.13");
+  const checkPython = job.indexOf("assert sys.version_info[:3] == (3, 12, 13)");
+  const installNode = job.indexOf("pnpm -C conformance install --frozen-lockfile");
+  const installChromium = job.indexOf(
+    "pnpm -C conformance exec playwright install --with-deps chromium",
+  );
+  assert.ok(
+    installUv >= 0 &&
+      installPython > installUv &&
+      checkPython > installPython &&
+      checkPython < isolated,
+  );
+  assert.ok(installNode >= 0 && installChromium > installNode && installChromium < isolated);
+  assert.match(job, /UV_OFFLINE: "1"/);
+  assert.match(job, /UV_PYTHON_DOWNLOADS: never/);
+  const launch = job.slice(isolated);
+  assert.match(launch, /PATH="\$PATH" HOME="\$HOME"/);
+  assert.match(launch, /UV_OFFLINE="\$UV_OFFLINE" UV_PYTHON_DOWNLOADS="\$UV_PYTHON_DOWNLOADS"/);
+});

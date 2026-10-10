@@ -3620,3 +3620,435 @@ test("Task28 REST settlement rejects missing HTTP status or typed error evidence
     }
   }
 });
+
+test("closure mandatory gap fixes original predicates and selected-only caps", () => {
+  const plan = makePlan("closure-mandatory-gap");
+  assert.deepEqual(
+    plan.cells.map((c) => c.id),
+    [
+      "S10",
+      "S11",
+      "S12",
+      "S13",
+      "S14",
+      "S15",
+      "S16",
+      "R1",
+      "R2",
+      "R3",
+      "R4",
+      "R5",
+      "N1",
+      "N2",
+      "N3",
+      "N4",
+      "N5",
+      "R9",
+      "N9",
+      "R10",
+      "N10",
+      "R11",
+      "N13",
+      "N11",
+      "N12",
+    ],
+  );
+  assert.equal(plan.cells.length, 25);
+  assert.equal(
+    plan.cells.some((c) => c.reserve),
+    false,
+  );
+  assert.deepEqual(
+    [plan.caps.G1.rest, plan.caps.G1.grpc, plan.caps.G4.rest, plan.caps.G4.streams],
+    [97, 121, 119, 7],
+  );
+  assert.deepEqual(
+    [plan.caps.sourceRequests, plan.caps.totalRequests, plan.caps.sourceWallMs],
+    [344, 358, 3660000],
+  );
+  assert.deepEqual(
+    [
+      plan.caps.framesOut,
+      plan.caps.framesIn,
+      plan.caps.largePublishes,
+      plan.caps.largeEncodedPayloadBytes,
+    ],
+    [42, 42, 2, 1024],
+  );
+  assert.equal(makePlan().caps.G1.grpc, 120);
+  const meter = createMeter({ now: () => 0, plan });
+  meter.enter(plan.cells.find((c) => c.id === "N13"));
+  assert.equal(meter.remaining(), 200000);
+  meter.start("publish", "grpc");
+  assert.throws(() => meter.start("publish", "grpc"), /category/);
+  for (let i = 0; i < 4; i++) meter.start("target", "grpc");
+  assert.throws(() => meter.start("target", "grpc"), /category/);
+});
+
+async function closureWorld(
+  id,
+  {
+    partial = false,
+    substitute = false,
+    attributeSubstitute = false,
+    orderingSubstitute = false,
+    listOmitOwn = false,
+  } = {},
+) {
+  const plan = makePlan("closure-mandatory-gap"),
+    cell = plan.cells.find((c) => c.id === id);
+  const meter = createMeter({ now: () => 0, plan });
+  meter.enter(cell);
+  const resources = new Map(),
+    calls = [],
+    rows = [],
+    published = new Map(),
+    pendingTokens = new Map();
+  const runId = "123456abcdef";
+  const answer = (method, request, metadata) => {
+    calls.push({ method, request: structuredClone(request), metadata });
+    const name =
+      request.name ??
+      request.topic?.name ??
+      request.subscription?.name ??
+      request.topic ??
+      request.subscription;
+    if (method.startsWith("Create")) {
+      resources.set(name, structuredClone(request));
+      return { name, ...request };
+    }
+    if (method.startsWith("Get")) {
+      if (!resources.has(name)) throw { code: 5, details: "missing" };
+      return structuredClone(resources.get(name));
+    }
+    if (method.startsWith("Delete")) {
+      resources.delete(name);
+      return {};
+    }
+    if (method === "ListTopics") {
+      assert.equal(request.project, "projects/fireemu-oracle-idp");
+      assert.equal(Number(request.pageSize), 100);
+      return {
+        topics: [...resources.values()].filter(
+          (r) => r.name.includes("/topics/") && (!listOmitOwn || r.name.endsWith("-second")),
+        ),
+        nextPageToken: "foreign-page-not-followed",
+      };
+    }
+    if (method.startsWith("Update")) {
+      const body = request.topic ?? request.subscription;
+      if (
+        body.messageRetentionDuration === "599s" ||
+        request.updateMask.includes("field_that") ||
+        request.updateMask.includes("fieldThat")
+      )
+        throw { code: 3, details: "invalid" };
+      const merged = { ...resources.get(name), ...body };
+      resources.set(name, merged);
+      return structuredClone(merged);
+    }
+    if (method === "Publish") {
+      const ids = request.messages.map((m, i) => `id-${i}`);
+      request.messages.forEach((m, i) => published.set(ids[i], structuredClone(m)));
+      return { messageIds: ids };
+    }
+    if (method === "Pull") {
+      for (const [id] of published) pendingTokens.set(`token-${calls.length}-${id.slice(3)}`, id);
+      return {
+        receivedMessages: [...published]
+          .filter(([id]) => !partial || id !== "id-7")
+          .map(([messageId, m], i) => ({
+            ackId: `token-${calls.length}-${messageId.slice(3)}`,
+            message: {
+              ...m,
+              messageId,
+              ...(attributeSubstitute && i === 1 ? { attributes: { color: "blue", n: "1" } } : {}),
+              ...(orderingSubstitute && i === 4 ? { orderingKey: "other" } : {}),
+              ...(substitute && i === 0 ? { data: Buffer.from("other").toString("base64") } : {}),
+            },
+          })),
+      };
+    }
+    if (method === "Acknowledge") {
+      assert.ok(request.ackIds.every((x) => x.startsWith("token-")));
+      for (const token of request.ackIds) {
+        const id = pendingTokens.get(token);
+        assert.ok(id, "ACK requires actual current Pull token");
+        published.delete(id);
+        pendingTokens.delete(token);
+      }
+      return {};
+    }
+    throw new Error(`unexpected method ${method}`);
+  };
+  const { responseFromWire, requestToWire } = await import("./pubsub-production/grpc.mjs");
+  const wire = createWire({
+    meter,
+    journal: { write: (r) => rows.push(r) },
+    getToken: async () => "offline",
+    fetch: async (url, options) => {
+      const path = new URL(url).pathname.replace("/v1/", "");
+      let request = options.body ? JSON.parse(Buffer.from(options.body).toString()) : {};
+      let method;
+      if (path.endsWith("/topics")) {
+        method = "ListTopics";
+        request = {
+          project: "projects/fireemu-oracle-idp",
+          pageSize: new URL(url).searchParams.get("pageSize"),
+        };
+      } else if (path.endsWith(":publish")) {
+        method = "Publish";
+        request.topic = path.slice(0, -8);
+      } else if (path.endsWith(":pull")) {
+        method = "Pull";
+        request.subscription = path.slice(0, -5);
+      } else if (path.endsWith(":acknowledge")) {
+        method = "Acknowledge";
+        request.subscription = path.slice(0, -12);
+      } else {
+        method =
+          (options.method === "PUT"
+            ? "Create"
+            : options.method === "GET"
+              ? "Get"
+              : options.method === "DELETE"
+                ? "Delete"
+                : "Update") + (path.includes("/topics/") ? "Topic" : "Subscription");
+        if (["Get", "Delete"].some((x) => method.startsWith(x))) request.name = path;
+      }
+      try {
+        return new Response(JSON.stringify(answer(method, request, null)), { status: 200 });
+      } catch (e) {
+        return new Response(
+          JSON.stringify({ error: { status: e.code === 5 ? "NOT_FOUND" : "INVALID_ARGUMENT" } }),
+          { status: e.code === 5 ? 404 : 400 },
+        );
+      }
+    },
+    client: {
+      close() {},
+      makeUnaryRequest(path, encode, decode, raw, metadata, options, callback) {
+        const method = path.split("/").at(-1),
+          service = path.includes("Publisher") ? "Publisher" : "Subscriber";
+        const def = SERVICES[service].methods[method];
+        assert.ok(def, method);
+        const req = responseFromWire(
+          typeOf(def[0]).toObject(typeOf(def[0]).decode(raw), {
+            bytes: String,
+            longs: String,
+            defaults: false,
+          }),
+        );
+        if (method.startsWith("Get") || method.startsWith("Delete"))
+          req.name = req.topic ?? req.subscription;
+        if (req.updateMask) req.updateMask = req.updateMask.paths.join(",");
+        const rpc = new EventEmitter();
+        rpc.cancel = () => {};
+        queueMicrotask(() => {
+          try {
+            const body = answer(method, req, metadata.getMap());
+            const Type = typeOf(def[1]);
+            callback(null, Buffer.from(Type.encode(Type.fromObject(requestToWire(body))).finish()));
+            rpc.emit("status", { code: 0, details: "" });
+          } catch (e) {
+            callback(e);
+            rpc.emit("status", { code: e.code, details: e.details });
+          }
+        });
+        return rpc;
+      },
+    },
+  });
+  try {
+    const result = await runCell({
+      cell,
+      meter,
+      wire,
+      ledger: createLedger(),
+      runId,
+      journal: { write: (r) => rows.push(r) },
+    });
+    return { result, calls, rows, resources, meter };
+  } finally {
+    wire.close();
+  }
+}
+test("closure mandatory gap traverses real REST and native shapes for configuration and publication", async () => {
+  for (const id of ["R9", "N9", "R10", "N10", "R11", "N13", "N11", "N12"]) {
+    const f = await closureWorld(id);
+    assert.equal(f.result.complete, true, `${id}: ${f.result.reason}`);
+    assert.equal(f.result.cleanupClosed, true, id);
+    assert.equal(f.resources.size, 0, id);
+    if (["R9", "N9"].includes(id)) {
+      assert.equal(f.calls.filter((c) => c.method === "ListTopics").length, 2);
+      const u = f.calls.find((c) => c.method === "UpdateTopic");
+      assert.ok(u);
+      assert.deepEqual(u.request.topic.labels ?? {}, {});
+      assert.equal(u.request.updateMask, "labels");
+    }
+    if (["R10", "N10"].includes(id)) {
+      assert.equal(
+        f.calls.find((c) => c.method === "CreateSubscription").request.enableMessageOrdering ??
+          false,
+        false,
+      );
+      assert.deepEqual(
+        f.calls
+          .filter((c) => c.method === "UpdateSubscription")
+          .map((c) => c.request.subscription.messageRetentionDuration),
+        ["600s", "599s"],
+      );
+    }
+    if (["R11", "N13"].includes(id)) {
+      const p = f.calls.find((c) => c.method === "Publish");
+      assert.ok(p, "fixed batch Publish required");
+      assert.equal(p.request.messages.length, 8);
+      assert.equal(f.rows.filter((r) => r.event === "publication-binding").length, 8);
+      assert.ok(f.calls.some((c) => c.method === "Acknowledge" && c.request.ackIds.length === 8));
+      assert.equal(
+        f.calls.find((c) => c.method === "CreateSubscription").request.enableMessageOrdering,
+        true,
+      );
+    }
+    if (["N11", "N12"].includes(id)) {
+      const captured = f.calls.find(
+        (c) =>
+          c.method === (id === "N11" ? "CreateTopic" : "CreateSubscription") &&
+          c.metadata?.["x-goog-request-params"],
+      );
+      assert.ok(captured);
+      assert.ok(
+        decodeURIComponent(captured.metadata["x-goog-request-params"]).includes("-topic") ||
+          id === "N12",
+      );
+      assert.ok(!decodeURIComponent(captured.metadata["x-goog-request-params"]).endsWith("-body"));
+    }
+  }
+});
+test("closure mandatory gap incomplete publication delivery and data substitution stay incomplete", async () => {
+  for (const options of [
+    { partial: true },
+    { substitute: true },
+    { attributeSubstitute: true },
+    { orderingSubstitute: true },
+  ])
+    for (const id of ["R11", "N13"]) {
+      const f = await closureWorld(id, options);
+      assert.equal(f.result.complete, false);
+      assert.equal(f.result.cleanupClosed, true);
+      assert.equal(f.resources.size, 0);
+    }
+});
+
+test("closure mandatory gap LIST compares declared owned topics and preserves unrelated captured members", async () => {
+  const { projectOwnedTopics } = await import("./pubsub-observation/replay.mjs");
+  const names = [
+    "projects/fireemu-oracle-idp/topics/fe123456abcdef-r9-topic",
+    "projects/fireemu-oracle-idp/topics/fe123456abcdef-r9-topic-second",
+  ];
+  const body = {
+    topics: [
+      { name: names[0], labels: { env: "test" } },
+      { name: "projects/fireemu-oracle-idp/topics/unrelated" },
+      { name: names[1] },
+    ],
+    nextPageToken: "unfollowed",
+  };
+  const original = structuredClone(body);
+  assert.deepEqual(projectOwnedTopics(body, names, "123456abcdef"), {
+    topics: [body.topics[0], body.topics[2]],
+  });
+  assert.deepEqual(body, original);
+  assert.throws(
+    () => projectOwnedTopics(body, [names[0], body.topics[1].name], "123456abcdef"),
+    /foreign/,
+  );
+  assert.throws(() => projectOwnedTopics({}, names, "123456abcdef"), /topics/);
+  for (const id of ["R9", "N9"]) {
+    const f = await closureWorld(id, { listOmitOwn: true });
+    assert.equal(f.result.complete, false);
+    assert.equal(f.result.cleanupClosed, true);
+  }
+});
+
+test("closure mandatory gap refuses foreign native routing and unbounded project LIST before credentials", async () => {
+  let credentials = 0,
+    rpcs = 0;
+  const wire = createWire({
+    meter: {
+      start() {},
+      remaining() {
+        return 100000;
+      },
+      clock() {
+        return 0;
+      },
+    },
+    journal: { write() {} },
+    getToken: async () => {
+      credentials++;
+      return "offline";
+    },
+    client: {
+      close() {},
+      makeUnaryRequest() {
+        rpcs++;
+        throw new Error("must not dispatch");
+      },
+    },
+  });
+  const name = "projects/fireemu-oracle-idp/topics/fe123456abcdef-n11-topic-body",
+    routeName = name.slice(0, -5);
+  try {
+    for (const route of [
+      "projects/other/topics/fe123456abcdef-n11-topic",
+      routeName.replace("123456abcdef", "abcdef123456"),
+      routeName.replace("topics", "subscriptions"),
+      name,
+    ])
+      await assert.rejects(
+        wire.call({
+          category: "target",
+          transport: "grpc",
+          service: "Publisher",
+          method: "CreateTopic",
+          request: { name },
+          routeName: route,
+          cellId: "N11",
+        }),
+        /routing/,
+      );
+    for (const request of [
+      { project: "projects/other", pageSize: 100 },
+      { project: "projects/fireemu-oracle-idp", pageSize: 101 },
+      { project: "projects/fireemu-oracle-idp", pageSize: 100, pageToken: "foreign" },
+    ])
+      await assert.rejects(
+        wire.call({
+          category: "target",
+          transport: "grpc",
+          service: "Publisher",
+          method: "ListTopics",
+          request,
+          cellId: "N9",
+          ownedListNames: [name, routeName],
+        }),
+        /LIST/,
+      );
+    assert.equal(credentials, 0);
+    assert.equal(rpcs, 0);
+  } finally {
+    wire.close();
+  }
+});
+test("closure mandatory gap atomic refusal retains complete immutable postimage", async () => {
+  for (const id of ["R4", "N4"]) {
+    const f = await closureWorld(id);
+    assert.equal(f.result.complete, true, f.result.reason);
+    const reads = f.rows.filter((r) => r.event === "response" && r.method === "GetSubscription");
+    assert.equal(reads.length, 4);
+    assert.deepEqual(reads[0].reply.body, reads[1].reply.body);
+    assert.notDeepEqual(reads[1].reply.body, reads[2].reply.body);
+    assert.equal(f.result.cleanupClosed, true);
+  }
+});

@@ -27,6 +27,7 @@ export const SERVICES = Object.freeze({
     methods: {
       CreateTopic: ["Topic", "Topic"],
       GetTopic: ["GetTopicRequest", "Topic"],
+      UpdateTopic: ["UpdateTopicRequest", "Topic"],
       ListTopics: ["ListTopicsRequest", "ListTopicsResponse"],
       ListTopicSubscriptions: ["ListTopicSubscriptionsRequest", "ListTopicSubscriptionsResponse"],
       ListTopicSnapshots: ["ListTopicSnapshotsRequest", "ListTopicSnapshotsResponse"],

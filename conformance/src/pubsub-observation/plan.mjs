@@ -84,6 +84,7 @@ export function makePlan(selection = "full") {
       "valid-stream-gap",
       "invalid-path-gap",
       "s03-terminal-pair",
+      "closure-mandatory-gap",
     ].includes(selection)
   )
     throw new Error("fixed observation selection required");
@@ -148,6 +149,64 @@ export function makePlan(selection = "full") {
       minimumOtherMs: 10000,
     },
   };
+  if (selection === "closure-mandatory-gap") {
+    const extra = [
+      ["R9", "rest", "topic-labels-empty", 0, 1],
+      ["N9", "grpc", "topic-labels-empty", 0, 1],
+      ["R10", "rest", "retention-ordering", 4, 5],
+      ["N10", "grpc", "retention-ordering", 4, 5],
+      ["R11", "rest", "publish-wire-eight", 6, 0],
+      ["N13", "grpc", "publish-wire-eight", 6, 0],
+      ["N11", "grpc", "topic-path-body", 1, 4],
+      ["N12", "grpc", "subscription-path-body", 1, 4],
+    ].map(([id, transport, variant, condition, index]) => ({
+      id,
+      group: "G1",
+      transport,
+      variant,
+      coordinate: `/conditions/${condition}/cases/${index}`,
+      reserve: false,
+      ...(variant === "publish-wire-eight" ? { cellMs: 240000 } : {}),
+    }));
+    plan.selection = selection;
+    plan.cells = [
+      ...cells.filter((c) =>
+        [
+          "S10",
+          "S11",
+          "S12",
+          "S13",
+          "S14",
+          "S15",
+          "S16",
+          "R1",
+          "R2",
+          "R3",
+          "R4",
+          "R5",
+          "N1",
+          "N2",
+          "N3",
+          "N4",
+          "N5",
+        ].includes(c.id),
+      ),
+      ...extra,
+    ];
+    plan.caps.G1 = { ...plan.caps.G1, requests: 218, rest: 97, grpc: 121 };
+    plan.caps.G4 = { ...plan.caps.G4, requests: 126, rest: 119, streams: 7 };
+    Object.assign(plan.caps, {
+      sourceRequests: 344,
+      totalRequests: 358,
+      framesOut: 42,
+      framesIn: 42,
+      largePublishes: 2,
+      largeEncodedPayloadBytes: 1024,
+      smallPublishes: 21,
+      sourceWallMs: 3660000,
+    });
+    return plan;
+  }
   if (selection === "full") return plan;
   if (["valid-stream-gap", "invalid-path-gap", "s03-terminal-pair"].includes(selection)) {
     const valid = selection === "valid-stream-gap",
@@ -199,9 +258,11 @@ export function validatePlan(value) {
     throw new Error("fixed observation plan mismatch");
   return value;
 }
-export const categoryCaps = (group) =>
-  group === "G1"
-    ? { create: 2, get: 2, target: 4, cleanupDelete: 2, cleanupGet: 2 }
-    : group === "G4"
-      ? { create: 2, get: 2, publish: 3, target: 6, cleanupDelete: 2, cleanupGet: 2, stream: 1 }
-      : { resourceRead: 6, unknownDeleteRead: 6 };
+export const categoryCaps = (group, variant) =>
+  group === "G1" && variant === "publish-wire-eight"
+    ? { create: 2, get: 2, publish: 1, target: 4, cleanupDelete: 2, cleanupGet: 2 }
+    : group === "G1"
+      ? { create: 2, get: 2, target: 4, cleanupDelete: 2, cleanupGet: 2 }
+      : group === "G4"
+        ? { create: 2, get: 2, publish: 3, target: 6, cleanupDelete: 2, cleanupGet: 2, stream: 1 }
+        : { resourceRead: 6, unknownDeleteRead: 6 };

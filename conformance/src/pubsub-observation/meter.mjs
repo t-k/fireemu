@@ -45,19 +45,19 @@ export function createMeter({ now = () => performance.now(), a2 = false, plan = 
       cell = {
         ...value,
         categories: Object.fromEntries(
-          Object.keys(categoryCaps(value.group)).map((key) => [key, 0]),
+          Object.keys(categoryCaps(value.group, value.variant)).map((key) => [key, 0]),
         ),
         out: 0,
         in: 0,
       };
-      end = time() + (a2 ? 600000 : caps[value.group].cellMs);
+      end = time() + (a2 ? 600000 : (value.cellMs ?? caps[value.group].cellMs));
       remaining();
     },
     remaining,
     start(category, transport) {
       const maintenance = category.startsWith("cleanup") || a2;
       remaining(maintenance);
-      const limit = categoryCaps(cell.group)[category];
+      const limit = categoryCaps(cell.group, cell.variant)[category];
       if (!Number.isSafeInteger(limit) || cell.categories[category] >= limit)
         throw new Limit("category cap exhausted");
       if (

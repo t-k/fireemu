@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "EVENTARC",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "inventoryStatus": "FROZEN",
   "frozenOn": "2026-09-30",
   "freezeAuthority": "docs.local/instructions/owner-decisions.md (2026-09-30 PUBSUB and EVENTARC scope: coordinator rulings)",
@@ -12,9 +12,9 @@
     "generation": 2
   },
   "closureReview": {
-    "decision": "PENDING",
-    "reviewedCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
-    "finalArtifactSha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a",
+    "decision": "APPROVED",
+    "reviewedCommit": "a5ee6e570de450ac2b0e2db0b8d2fc1bb2afcf36",
+    "finalArtifactSha256": "da815371e28b782073d92450190266df51de8fb0ae382d25005e5457357e28f0",
     "reviews": [
       {
         "reportPath": "docs.local/reviews/2026-10-09-eventarc-full70-current-candidate-review.md",
@@ -27,9 +27,13 @@
       {
         "reportPath": "docs.local/reviews/2026-10-10-eventarc-internal-id-actual-lifecycle-review.md",
         "reportSha256": "b1d865c39b2db2accbc45d313a9477af875b4740370c799da68cbb3a0c7e0a83"
+      },
+      {
+        "reportPath": "docs.local/reviews/2026-10-10-eventarc-final-full70-closure-review.md",
+        "reportSha256": "646b907f518719a3508755400ac342b22c07c558ff4b564f513ffcbc6eec34cb"
       }
     ],
-    "note": "The accepted retrospective composition establishes 69 scoped technical predicates. Independent approval of this final canonical candidate remains pending; the current-artifact export retains all 70 generated PENDING rows. Final-version R20 acceptance remains required before release."
+    "note": "Independent final full70 approval binds the final installed release artifact and settled R20 comparison, retaining the original scoped qualifications. The retrospective acquisition export retains all 70 generated PENDING rows; release publication and final-tree CI are separate gates."
   },
   "scopeDecisions": [
     {
@@ -88,7 +92,7 @@
       "transports": [
         "rest"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "applicability": {
         "mode": "OBSERVE_CAPABILITY",
         "unsupportedDisposition": "OUT_OF_SCOPE_OBSERVED",
@@ -132,7 +136,7 @@
       "transports": [
         "rest"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
         "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
@@ -173,7 +177,7 @@
       "transports": [
         "rest"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
         "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
@@ -215,7 +219,7 @@
       "transports": [
         "rest"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
         "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
@@ -252,7 +256,7 @@
       "transports": [
         "rest"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
         "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
@@ -287,7 +291,7 @@
       "transports": [
         "rest"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
         "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
@@ -326,7 +330,7 @@
       "transports": [
         "rest"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
         "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
@@ -360,7 +364,7 @@
       "transports": [
         "rest"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
         "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
@@ -391,7 +395,7 @@
       "transports": [
         "rest"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
         "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
@@ -426,7 +430,7 @@
       "transports": [
         "artifact"
       ],
-      "status": "PRODUCTION_RECORDED",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
         "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
@@ -440,8 +444,8 @@
           "/cases/67",
           "/cases/68"
         ],
-        "sourceCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
-        "finalArtifactSha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a"
+        "sourceCommit": "a5ee6e570de450ac2b0e2db0b8d2fc1bb2afcf36",
+        "finalArtifactSha256": "da815371e28b782073d92450190266df51de8fb0ae382d25005e5457357e28f0"
       }
     },
     {
@@ -456,7 +460,7 @@
       "transports": [
         "artifact"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz",
         "comparisonSha256": "5dda2ef8de3aeeed554a54d63cb1bed50fedee538369e5f2408b7c9230d18ae1",
@@ -465,8 +469,8 @@
         "originalCaseProofSelectors": [
           "/cases/69"
         ],
-        "sourceCommit": "574fd3a0bc5e1b9a1f459d31f610bad66e3a6d13",
-        "finalArtifactSha256": "a0201e2b0e5c071a0b779b2b5d69182f108c3d73c1437be895ab3a58559eac4a"
+        "sourceCommit": "a5ee6e570de450ac2b0e2db0b8d2fc1bb2afcf36",
+        "finalArtifactSha256": "da815371e28b782073d92450190266df51de8fb0ae382d25005e5457357e28f0"
       }
     }
   ],
@@ -489,7 +493,7 @@
     ],
     "productionRequests": 0,
     "result": "RECORDED_NOT_COMPARED",
-    "releaseBindingNote": "The successful current-artifact check/export is bound to unchanged 337 Rust inputs and the 16 installed runner members. R20 must replay the final packaged release binary against this authentic canonical comparison; current-artifact evidence does not grant final-version acceptance."
+    "releaseBindingNote": "This registration retains the historical acquisition artifact and its immutable comparison. Final installed artifact R20 acceptance and independent full70 approval are bound in retrospectiveAdjudication.finalArtifact; the historical acquisition fields are not final release binary provenance."
   },
   "closureNotes": {
     "retrospectiveComposition": "The original 70 coordinates retain their case-specific native and current witnesses in the accepted per-case proof. The original 11 criteria and all cases/transports are unchanged. The new 1029 raw predicates supplement this composition; they do not alone adjudicate handler, filter, retry, payload-boundary or final-approval requirements.",
@@ -525,6 +529,6 @@
   "retrospectiveAdjudication": {
     "mode": "reviewed-retrospective-composition",
     "path": "spec/compatibility/closure/evidence/EVENTARC-adjudication.json",
-    "sha256": "b6678e29df3a3841addca7c5ee8d8213cdc5d1a09704b6afc42bd5dceacacad2"
+    "sha256": "1867b8fafd9df723f884939becf46610df7ceea4c3ce1bf94b43d8c7fec6201d"
   }
 }

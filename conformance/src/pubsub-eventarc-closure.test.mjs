@@ -577,9 +577,14 @@ function updateCaseBinding(entry) {
 test("EVENTARC retrospective composition uses genuine public comparison and private inspected custody", () => {
   const { closure, adjudication } = eventarcFixture();
   assertRetrospectiveClosure(closure, adjudication);
-  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  assert.equal(closure.parentStatus, "COMPAT_VERIFIED");
   assert.equal(
     adjudication.cases.filter(({ decision }) => decision === "DEFERRED_FINAL_CANONICAL_REVIEW")
+      .length,
+    0,
+  );
+  assert.equal(
+    adjudication.cases.filter(({ decision }) => decision === "APPROVED_FINAL_CANONICAL_REVIEW")
       .length,
     1,
   );
@@ -710,20 +715,27 @@ test("EVENTARC retrospective cannot turn generated PENDING into MATCH", () => {
   );
 });
 test("EVENTARC retrospective cannot promote without final approval and settled R20", () => {
-  const { closure, adjudication } = eventarcFixture();
-  closure.parentStatus = "COMPAT_VERIFIED";
-  closure.conditions.forEach((condition) => (condition.status = "VERIFIED"));
-  assert.throws(
-    () => assertRetrospectiveClosure(closure, adjudication, smallAcquisition(adjudication)),
-    /final independent approval/,
-  );
-  adjudication.parentClosureApproved = true;
-  adjudication.cases.at(-1).decision = "APPROVED_FINAL_CANONICAL_REVIEW";
-  updateCaseBinding(adjudication.cases.at(-1));
-  assert.throws(
-    () => assertRetrospectiveClosure(closure, adjudication, smallAcquisition(adjudication)),
-    /settled final R20/,
-  );
+  for (const [change, expected] of [
+    [
+      (a) => {
+        a.parentClosureApproved = false;
+      },
+      /final independent approval/,
+    ],
+    [
+      (a) => {
+        a.finalArtifact.finalR20 = "PENDING";
+      },
+      /settled final R20/,
+    ],
+  ]) {
+    const { closure, adjudication } = eventarcFixture();
+    change(adjudication);
+    assert.throws(
+      () => assertRetrospectiveClosure(closure, adjudication, smallAcquisition(adjudication)),
+      expected,
+    );
+  }
 });
 test("PUBSUB retains its two-recording contract", () => {
   assert.throws(
@@ -763,18 +775,13 @@ test("EVENTARC retrospective rejects corrupt public acquisition bytes", () => {
   );
 });
 test("EVENTARC retrospective cannot promote from flags without final evidence", () => {
-  const { closure, adjudication } = eventarcFixture();
-  closure.parentStatus = "COMPAT_VERIFIED";
-  closure.conditions.forEach((condition) => (condition.status = "VERIFIED"));
-  closure.closureReview.decision = "APPROVED";
-  closure.closureReview.finalArtifactSha256 = adjudication.finalArtifact.releaseBinarySha256;
-  adjudication.parentClosureApproved = true;
-  adjudication.cases.at(-1).decision = "APPROVED_FINAL_CANONICAL_REVIEW";
-  updateCaseBinding(adjudication.cases.at(-1));
-  adjudication.finalArtifact.finalR20 = "PASSED";
-  adjudication.finalArtifact.independentApproval = "APPROVED";
-  assert.throws(
-    () => assertRetrospectiveClosure(closure, adjudication, smallAcquisition(adjudication)),
-    /genuine final evidence required/,
-  );
+  for (const key of ["finalR20Evidence", "independentApprovalEvidence"]) {
+    const { closure, adjudication } = eventarcFixture();
+    delete adjudication.finalArtifact[key];
+    assert.throws(
+      () => assertRetrospectiveClosure(closure, adjudication, smallAcquisition(adjudication)),
+      /genuine final evidence required/,
+      key,
+    );
+  }
 });

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "parent": "EVENTARC",
   "mode": "reviewed-retrospective-composition",
-  "parentClosureApproved": false,
+  "parentClosureApproved": true,
   "originalCaseProof": {
     "path": "docs.local/runs/coordinator-codex-20261007/eventarc-full-parent-review-inputs/reviewer-output/full70-per-case-proof.json",
     "sha256": "a82eded4a149e795d62b8a78fbc400de7e8f4e11de9e7e897ebb1ae29ba04678",
@@ -101,12 +101,26 @@
     "generatedInternalErrorId": "The exact internal-error wrapper normalizes independently generated hexadecimal UUID8-4-4-4-12 IDs using the existing Rust replay rule, without restricting version/variant. The native-v4/local-version0 generator shape difference remains unresolved; arbitrary messages, status/code/details differences are not masked."
   },
   "finalArtifact": {
-    "sourceCommit": "a175708952e9a478ad5668d20d933feae497c8f9",
-    "releaseBinarySha256": "950406eb5fa9be535be1ab18c98b172dec2e8e9e043351f9428961c69d1ca4e6",
-    "finalR20": "PENDING",
-    "independentApproval": "PENDING",
-    "finalR20Evidence": null,
-    "independentApprovalEvidence": null
+    "sourceCommit": "a5ee6e570de450ac2b0e2db0b8d2fc1bb2afcf36",
+    "releaseBinarySha256": "da815371e28b782073d92450190266df51de8fb0ae382d25005e5457357e28f0",
+    "finalR20": "PASSED",
+    "independentApproval": "APPROVED",
+    "finalR20Evidence": {
+      "custody": "private-review-attested",
+      "artifactSha256": "da815371e28b782073d92450190266df51de8fb0ae382d25005e5457357e28f0",
+      "sourceCommit": "a5ee6e570de450ac2b0e2db0b8d2fc1bb2afcf36",
+      "path": "docs.local/runs/coordinator-codex-20261007/resume-after-daemon/eventarc-jsonl-ci-monitor/final-selected/summary.json",
+      "sha256": "bfb63e5c578cb0a60551078ac8a67775f29a9af4df21ce8f123508808ec0ab1b",
+      "selector": "/runs/19 (id R20), /comparisons (EVENTARC), /binary/sha256, /result"
+    },
+    "independentApprovalEvidence": {
+      "custody": "private-review-attested",
+      "artifactSha256": "da815371e28b782073d92450190266df51de8fb0ae382d25005e5457357e28f0",
+      "sourceCommit": "a5ee6e570de450ac2b0e2db0b8d2fc1bb2afcf36",
+      "path": "docs.local/reviews/2026-10-10-eventarc-final-full70-closure-review.md",
+      "sha256": "646b907f518719a3508755400ac342b22c07c558ff4b564f513ffcbc6eec34cb",
+      "selector": "Decision: APPROVE final full70 closure for the identified artifact"
+    }
   },
   "cases": [
     {
@@ -6052,7 +6066,7 @@
     {
       "id": "EVENTARC/closure-review/independent-approval",
       "transport": "artifact",
-      "decision": "DEFERRED_FINAL_CANONICAL_REVIEW",
+      "decision": "APPROVED_FINAL_CANONICAL_REVIEW",
       "originalProofSelector": "/cases/69",
       "nativePrimary": [],
       "currentPrimary": [
@@ -6070,7 +6084,7 @@
       "witnessCountQualification": "Selected native case-coordinate witnesses, not a claim of repeat executions; distinct original recording paths/digests remain below.",
       "nativeRecordingPaths": [],
       "independentReviews": [],
-      "reviewedBindingSha256": "93d48cf6b5d82c7fd9ae8e628d114e15b9f7f5218fa7ccc9dff8c34c2ba7aa46"
+      "reviewedBindingSha256": "295afb85256618cd484ec477d3a0d68d4ed2ad2b354017d5c61c1b0d1aba143d"
     }
   ],
   "retrospectiveSource": {

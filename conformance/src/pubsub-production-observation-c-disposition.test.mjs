@@ -1047,3 +1047,165 @@ test("N9 owner1215 retains exact scope, same-key order, contents, count and curr
   f.session.pull(f.source, reply(f.items([0, 1, 2])), f.publications, f.subscription);
   assert.equal(f.session.finish().verdict, "NOT_COMPARABLE");
 });
+
+function n13EmptyWindowFixture({
+  runId = "567e1cd860a1",
+  seekRequestId = 520,
+  seekN = 1305,
+  requests = [521, 522],
+} = {}) {
+  const f = n9SingleFixture();
+  f.cell.id = "N13";
+  f.input.metadata.runId = runId;
+  f.input.runtimeInputs = {
+    binarySha256: "53245a52140cc141ffd5438c858bcec0cdc8a0503891933aaff8e350a9c3a032",
+    inputsSha256: "65fa8b33ac8fd8e22d175709c4608fac43e8e12c6e1c35fddfffa62005f2b42e",
+  };
+  f.authority.runtimeInputs = f.input.runtimeInputs;
+  f.authority.cellIds = ["N13"];
+  delete f.authority.owner1215;
+  f.authority.owner1216 = {
+    proposalSha256: "beeeab3e7bf657b687e2d19bec5a7ff3a9d478e37319a2334448ae6c28411152",
+    erratumSha256: "f538a947916d564974e1f11c289a69f7bf0c7c2caae48b455a70d72a42bbe00d",
+    rowSha256WithLf: "1681aa44f5fa617cd39aded5acf296e8e62e64e2ed42c48265754a0e01998f88",
+  };
+  const subscription = `projects/fireemu-oracle-idp/subscriptions/fe${runId}-n13-s`;
+  f.source.n = seekN + 3;
+  f.source.responseN = seekN + 4;
+  f.source.requestId = requests[0];
+  f.source.request.subscription = subscription;
+  f.source.request.maxMessages = 2;
+  const second = structuredClone(f.source);
+  second.n = seekN + 6;
+  second.responseN = seekN + 7;
+  second.requestId = requests[1];
+  const seek = {
+    ...structuredClone(f.source),
+    n: seekN,
+    responseN: seekN + 1,
+    requestId: seekRequestId,
+    method: "Seek",
+    request: { subscription, time: f.source.at, snapshot: "snapshot" },
+    reply: { ok: true, code: "OK", status: 200, body: {} },
+  };
+  f.cell.exchanges = [seek, f.source, second];
+  f.cell.observations = [f.source, second].map((e) => ({
+    n: e.responseN + 1,
+    stage: "both-target-Seek-followup",
+    subscription,
+    items: [],
+    attempt: 0,
+  }));
+  f.publications = new Map([["0", f.publications.get("0")]]);
+  f.subscription.enableMessageOrdering = false;
+  f.session = createSchedulingDisposition(f.input, f.cell, f.authority);
+  f.second = second;
+  f.subscriptionName = subscription;
+  return f;
+}
+test("owner1216 changes only the exact source-empty window disposition and retains unacknowledged history", () => {
+  const f = n13EmptyWindowFixture();
+  f.session.pull(f.source, reply(f.items([0])), f.publications, f.subscription);
+  f.session.pull(f.second, reply([]), f.publications, f.subscription);
+  f.session.seek(f.subscriptionName, { ok: true, code: "OK", status: 200, body: {} });
+  const proof = f.session.finish();
+  assert.equal(proof.verdict, "MATCH");
+  assert.equal(proof.windows[0].priorVerdict, "NOT_COMPARABLE");
+  assert.deepEqual(proof.windows[0].acknowledged, []);
+  assert.deepEqual(proof.windows[0].invalidated, ["0"]);
+});
+test("N13 exception refuses approximate owner, run, window, runtime and missing observations", () => {
+  for (const mutate of [
+    (f) => delete f.authority.owner1216,
+    (f) => (f.authority.owner1216.rowSha256WithLf = "f".repeat(64)),
+    (f) => (f.input.metadata.runId = "45298b949da0"),
+    (f) => (f.input.runtimeInputs.binarySha256 = "d".repeat(64)),
+    (f) => f.source.requestId++,
+    (f) => f.second.requestId++,
+  ]) {
+    const f = n13EmptyWindowFixture();
+    mutate(f);
+    f.session = createSchedulingDisposition(f.input, f.cell, f.authority);
+    f.session.pull(f.source, reply(f.items([0])), f.publications, f.subscription);
+    f.session.pull(f.second, reply([]), f.publications, f.subscription);
+    f.session.seek(f.subscriptionName, { ok: true, code: "OK", status: 200, body: {} });
+    assert.notEqual(f.session.finish().verdict, "MATCH");
+  }
+  const f = n13EmptyWindowFixture();
+  f.session.pull(f.source, reply(f.items([0])), f.publications, f.subscription);
+  assert.notEqual(f.session.finish().verdict, "MATCH");
+});
+
+test("all three approved N13 windows are exact, while positive-source ACK and expiry remain strict", () => {
+  for (const scope of [
+    {
+      runId: "567e1cd860a1",
+      seekRequestId: 520,
+      seekN: 1305,
+      requests: [521, 522],
+      invalidated: true,
+    },
+    {
+      runId: "567e1cd860a1",
+      seekRequestId: 523,
+      seekN: 1314,
+      requests: [524, 525],
+      invalidated: false,
+    },
+    {
+      runId: "45298b949da0",
+      seekRequestId: 519,
+      seekN: 1302,
+      requests: [520, 521],
+      invalidated: true,
+    },
+  ]) {
+    const f = n13EmptyWindowFixture(scope);
+    f.session.pull(f.source, reply(f.items([0])), f.publications, f.subscription);
+    f.session.pull(f.second, reply([]), f.publications, f.subscription);
+    if (scope.invalidated) f.session.seek(f.subscriptionName, { ok: true, code: "OK", body: {} });
+    assert.equal(f.session.finish().verdict, "MATCH");
+  }
+  for (const variant of [
+    "positive-source",
+    "expired",
+    "unknown-seek",
+    "foreign-seek",
+    "duplicate",
+    "content",
+    "extra-publication",
+    "bad-clock",
+  ]) {
+    const f = n13EmptyWindowFixture();
+    if (variant === "positive-source") {
+      const item = {
+        ackId: "source0",
+        message: { messageId: "0", data: "0", attributes: {}, orderingKey: "key-A" },
+      };
+      f.source.reply.body.receivedMessages = [item];
+      f.cell.observations[0].items = [item];
+    }
+    if (variant === "expired") f.second.at = "2026-10-10T00:01:00.000Z";
+    if (variant === "bad-clock") f.second.at = "unknown";
+    if (variant === "extra-publication")
+      f.publications.set("1", {
+        ...f.publications.get("0"),
+        sourceMessageId: "1",
+        messageId: "101",
+        payload: { data: "1", attributes: {}, orderingKey: "key-A" },
+      });
+    let items = f.items(
+      variant === "duplicate" ? [0, 0] : variant === "extra-publication" ? [0, 1] : [0],
+    );
+    if (variant === "content") items[0].message.data = "changed";
+    f.session.pull(f.source, reply(items), f.publications, f.subscription);
+    f.session.pull(f.second, reply([]), f.publications, f.subscription);
+    f.session.seek(variant === "foreign-seek" ? "other" : f.subscriptionName, {
+      ok: true,
+      unknown: variant === "unknown-seek",
+      code: "OK",
+      body: {},
+    });
+    assert.notEqual(f.session.finish().verdict, "MATCH", variant);
+  }
+});

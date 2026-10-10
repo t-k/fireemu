@@ -35,3 +35,7 @@ Successful known Seek invalidates only the same subscription’s pending ACK bin
 ## Owner1215 single N9 response
 
 Only run45298b949da0 N9 source1065/request423 accepts cross-key placement permutations within the same three-item Pull. Exact owner/source/runtime bindings, per-key order, complete content, counts, bounds, current ACK and expiry remain strict. Original semantic/physical differences remain. The next Pull belongs to a separate unordered control subscription and supplies no ordered post-ACK release claim.
+
+## Owner1216 three source-empty N13 windows
+
+Only original567 Seek520/Pull521–522 and Seek523/Pull524–525, and original452 Seek519/Pull520–521 may receive the approved additive source-empty window MATCH. Exact owner/proposal/erratum, original source/runtime, complete window requests, one eligible publication, clock/deadline and observed Seek invalidation remain strict. The original raw DIVERGES/DIVERGES and prior additive NOT_COMPARABLE are retained. The source-positive452second window keeps its current ACK obligation. This finish-only change does not alter requests, replies, clocks or ACK generation; saved genuine v3 actuals are joined by exact request/response/clock identity.

@@ -4900,3 +4900,44 @@ async fn actual_rest_iam_requires_both_grants_before_native_dead_letter_transfer
         assert!(restored.get("bindings").is_none());
     }
 }
+
+#[tokio::test]
+async fn strict_rest_oversize_http1_delivers_complete_error() {
+    let state = Arc::new(Mutex::new(PubSubState::new(99)));
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(0),
+    )));
+    let handle = PubSubHandle::new(state, clock, None)
+        .with_paging_policy(fireemu_adapter_pubsub::PagingPolicy::Strict);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_pubsub(listener, handle));
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        for length in [10 * 1024 * 1024 - 1, 10 * 1024 * 1024] {
+            let mut body = vec![b' '; length];
+            body[..2].copy_from_slice(b"{}");
+            let (status, _) =
+                rest_request_bytes(address, "GET", "/v1/projects/demo-app/topics", &body).await;
+            assert_eq!(status, 200);
+        }
+        let body = vec![b' '; 10 * 1024 * 1024 + 3_495_194];
+        rest_request_bytes(
+            address,
+            "POST",
+            "/v1/projects/demo-app/topics/missing:publish",
+            &body,
+        )
+        .await
+    })
+    .await;
+    server.abort();
+    let _ = server.await;
+    let (status, body) = result.expect("oversized upload must finish within the watchdog");
+    assert_eq!(status, 400);
+    let error: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(error["error"]["status"], "INVALID_ARGUMENT");
+    assert_eq!(
+        error["error"]["message"],
+        "Request payload size exceeds the limit: 10485760 bytes."
+    );
+}

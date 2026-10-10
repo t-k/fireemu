@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{to_bytes, Body, Bytes};
 use axum::http::{Method, Request, StatusCode};
 use axum::response::Response;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -20,6 +20,7 @@ use fireemu_core_pubsub::{
 };
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Map, Value};
+use tokio_stream::StreamExt;
 
 use crate::convert::{
     is_declared_subscription_field, is_declared_topic_field, validate_subscription_update_paths,
@@ -146,26 +147,57 @@ fn recorded_auth_method(method: &Method, path: &str) -> Option<&'static str> {
     }
 }
 
+async fn strict_body_bytes(body: Body) -> Result<Bytes, String> {
+    let mut stream = body.into_data_stream();
+    let mut accepted = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| format!("request body is too large: {error}"))?;
+        if chunk.len() > MAX_MESSAGE_BYTES - accepted.len() {
+            drop(accepted);
+            drop(chunk);
+            // Local resource bounds for rejected uploads, not production acceptance limits.
+            // An unfinished upload may still reset when either drain bound is exhausted.
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+            let mut remaining = MAX_MESSAGE_BYTES;
+            loop {
+                if tokio::time::Instant::now() >= deadline {
+                    break;
+                }
+                match tokio::time::timeout_at(deadline, stream.next()).await {
+                    Ok(Some(Ok(chunk))) if chunk.len() <= remaining => {
+                        remaining -= chunk.len();
+                    }
+                    _ => break,
+                }
+            }
+            return Err("Request payload size exceeds the limit: 10485760 bytes.".to_owned());
+        }
+        if accepted.capacity() - accepted.len() < chunk.len() {
+            let capacity = (accepted.capacity() * 2)
+                .max(accepted.len() + chunk.len())
+                .min(MAX_MESSAGE_BYTES);
+            accepted.reserve_exact(capacity - accepted.len());
+        }
+        accepted.extend_from_slice(&chunk);
+    }
+    Ok(Bytes::from(accepted))
+}
+
 /// Handles one HTTP/JSON request that was not matched by a gRPC service route.
 pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
     let query = request.uri().query().unwrap_or_default().to_owned();
-    let limit = if handle.paging_policy == crate::PagingPolicy::Strict {
-        MAX_MESSAGE_BYTES
+    let body_result = if handle.paging_policy == crate::PagingPolicy::Strict {
+        strict_body_bytes(request.into_body()).await
     } else {
-        MAX_JSON_BYTES
+        to_bytes(request.into_body(), MAX_JSON_BYTES)
+            .await
+            .map_err(|error| format!("request body is too large: {error}"))
     };
-    let body = match to_bytes(request.into_body(), limit).await {
+    let body = match body_result {
         Ok(body) => body,
-        Err(error) => {
-            let message = if handle.paging_policy == crate::PagingPolicy::Strict
-                && error.to_string() == "length limit exceeded"
-            {
-                "Request payload size exceeds the limit: 10485760 bytes.".to_owned()
-            } else {
-                format!("request body is too large: {error}")
-            };
+        Err(message) => {
             return error_response(RestError::invalid(message), handle.paging_policy);
         }
     };
@@ -1979,6 +2011,109 @@ mod production_shape_tests {
             None,
         )
         .with_paging_policy(policy)
+    }
+
+    #[tokio::test]
+    async fn strict_rest_body_oversize_consumes_finite_tail() {
+        use tokio_stream::StreamExt;
+        let consumed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = consumed.clone();
+        let chunks = [vec![b' '; MAX_MESSAGE_BYTES], vec![b' '; 1], vec![b' '; 32]];
+        let stream = tokio_stream::iter(chunks).map(move |chunk| {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok::<_, std::io::Error>(chunk)
+        });
+        let request = Request::builder()
+            .uri("/v1/projects/demo-app/topics")
+            .body(Body::from_stream(stream))
+            .unwrap();
+        let response = handle(request, local_handle(crate::PagingPolicy::Strict)).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(consumed.load(std::sync::atomic::Ordering::SeqCst), 3);
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        assert!(std::str::from_utf8(&body)
+            .unwrap()
+            .contains("Request payload size exceeds the limit: 10485760 bytes."));
+    }
+
+    #[tokio::test]
+    async fn strict_rest_body_exact_limit_and_byte_budget() {
+        let exact = strict_body_bytes(Body::from(vec![b' '; MAX_MESSAGE_BYTES]))
+            .await
+            .unwrap();
+        assert_eq!(exact.len(), MAX_MESSAGE_BYTES);
+        let consumed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = consumed.clone();
+        let stream = tokio_stream::iter([
+            vec![0; MAX_MESSAGE_BYTES + 1],
+            vec![0; MAX_MESSAGE_BYTES],
+            vec![0; 1],
+            vec![0; 1],
+        ])
+        .map(move |chunk| {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok::<_, std::io::Error>(chunk)
+        });
+        assert!(strict_body_bytes(Body::from_stream(stream)).await.is_err());
+        assert_eq!(consumed.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn strict_rest_body_absolute_drain_deadline() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let producer = tokio::spawn(async move {
+            if sender
+                .send(Ok::<_, std::io::Error>(vec![0; MAX_MESSAGE_BYTES + 1]))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                if sender.send(Ok(vec![0; 1])).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(1800),
+            strict_body_bytes(Body::from_stream(
+                tokio_stream::wrappers::ReceiverStream::new(receiver),
+            )),
+        )
+        .await;
+        producer.abort();
+        let _ = producer.await;
+        assert!(outcome
+            .expect("draining must use one absolute deadline")
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn strict_rest_body_ready_empty_tail_obeys_deadline() {
+        struct ReadyTail {
+            first: Option<Vec<u8>>,
+            started: std::time::Instant,
+        }
+        impl tokio_stream::Stream for ReadyTail {
+            type Item = Result<Vec<u8>, std::io::Error>;
+            fn poll_next(
+                mut self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Self::Item>> {
+                assert!(
+                    self.started.elapsed() < std::time::Duration::from_millis(1800),
+                    "an always-ready empty tail must not bypass the deadline"
+                );
+                std::task::Poll::Ready(Some(Ok(self.first.take().unwrap_or_default())))
+            }
+        }
+        let stream = ReadyTail {
+            first: Some(vec![0; MAX_MESSAGE_BYTES + 1]),
+            started: std::time::Instant::now(),
+        };
+        assert!(strict_body_bytes(Body::from_stream(stream)).await.is_err());
     }
 
     proptest! {

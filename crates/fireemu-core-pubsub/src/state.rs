@@ -294,9 +294,15 @@ impl PubSubState {
                 .ok_or_else(|| {
                     PubSubError::failed_precondition("dead-letter source reservation is absent")
                 })?;
-            let published = forward.message.publish_time.to_rfc3339().map_err(|_| {
+            let mut published = forward.message.publish_time.to_rfc3339().map_err(|_| {
                 PubSubError::failed_precondition("dead-letter publication time is outside RFC3339")
             })?;
+            published.pop();
+            if published.contains('.') {
+                let trimmed_len = published.trim_end_matches('0').trim_end_matches('.').len();
+                published.truncate(trimmed_len);
+            }
+            published.push_str("+00:00");
             message.attributes.insert(
                 "CloudPubSubDeadLetterSourceSubscription".to_owned(),
                 forward.source_subscription.subscription().to_owned(),
@@ -1267,7 +1273,8 @@ impl PubSubState {
         {
             return Err(PubSubError::failed_precondition(format!(
                 "The subscription's topic ({}) is different from that of the snapshot ({}); they must match in order for Seek work. Note that if a topic is deleted and then re-created with the same name, it is considered a distinct topic for these purposes.",
-                config.topic.to_full(), snapshot.topic.to_full(),
+                config.topic.to_full(),
+                snapshot.topic.to_full(),
             )));
         }
         self.sub_mut(subscription)?.seek_to_snapshot(
@@ -1814,6 +1821,12 @@ mod tests {
     }
 
     fn iam_fixture() -> (PubSubState, SubscriptionName, TopicName, SubscriptionName) {
+        iam_fixture_at(LogicalInstant::UNIX_EPOCH)
+    }
+
+    fn iam_fixture_at(
+        published_at: LogicalInstant,
+    ) -> (PubSubState, SubscriptionName, TopicName, SubscriptionName) {
         let mut state = PubSubState::new(42);
         state.set_dead_letter_iam_enforcement(true);
         state
@@ -1840,11 +1853,7 @@ mod tests {
         let sink = config.name.clone();
         state.create_subscription(config).unwrap();
         state
-            .publish(
-                &source_topic,
-                vec![data(b"model")],
-                LogicalInstant::UNIX_EPOCH,
-            )
+            .publish(&source_topic, vec![data(b"model")], published_at)
             .unwrap();
         (state, source, dead, sink)
     }
@@ -1969,8 +1978,49 @@ mod tests {
         assert_eq!(attrs["CloudPubSubDeadLetterSourceDeliveryCount"], "5");
         assert_eq!(
             attrs["CloudPubSubDeadLetterSourceTopicPublishTime"],
-            "1970-01-01T00:00:00Z"
+            "1970-01-01T00:00:00+00:00"
         );
+    }
+
+    #[test]
+    fn strict_forwarded_source_publication_time_uses_trimmed_fraction_and_numeric_utc_offset() {
+        for (nanos, expected) in [
+            (0, "1970-01-01T00:00:00+00:00"),
+            (10_000_000_000, "1970-01-01T00:00:10+00:00"),
+            (120_000_000, "1970-01-01T00:00:00.12+00:00"),
+            (123_000_000, "1970-01-01T00:00:00.123+00:00"),
+            (123_456_780, "1970-01-01T00:00:00.12345678+00:00"),
+            (1, "1970-01-01T00:00:00.000000001+00:00"),
+            (999_999_999, "1970-01-01T00:00:00.999999999+00:00"),
+        ] {
+            let published_at = LogicalInstant::from_nanos(nanos);
+            let (mut state, source, dead, sink) = iam_fixture_at(published_at);
+            let member = "serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com";
+            for (resource, role) in [
+                (source.to_full(), "roles/pubsub.subscriber"),
+                (dead.to_full(), "roles/pubsub.publisher"),
+            ] {
+                write_iam(&mut state, &resource, role, true, member);
+            }
+            let mut now = published_at;
+            for attempt in 1..=5 {
+                let received = state.pull(&source, 1, now).unwrap();
+                assert_eq!(received[0].delivery_attempt, attempt);
+                assert_eq!(received[0].message.publish_time, published_at);
+                now = now.checked_add(LogicalDuration::from_seconds(11)).unwrap();
+            }
+            assert!(state.pull(&source, 1, now).unwrap().is_empty());
+            let received = state.pull(&sink, 1, now).unwrap();
+            assert_eq!(received.len(), 1);
+            assert_eq!(received[0].message.publish_time, now);
+            assert_ne!(now, published_at);
+            assert_eq!(
+                received[0].message.message.attributes
+                    ["CloudPubSubDeadLetterSourceTopicPublishTime"],
+                expected,
+                "source publication nanoseconds: {nanos}"
+            );
+        }
     }
 
     #[test]
@@ -1989,6 +2039,48 @@ mod tests {
         let received = state.pull(&sink, 1, now).unwrap();
         assert_eq!(received.len(), 1);
         assert!(received[0].message.message.attributes.is_empty());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn strict_forwarded_source_publication_time_preserves_every_legal_instant(
+            seconds in -62_167_219_200_i64..=253_402_300_799_i64,
+            nanos in 0_u32..1_000_000_000_u32,
+        ) {
+            let published_at = LogicalInstant::from_nanos(
+                i128::from(seconds) * 1_000_000_000 + i128::from(nanos),
+            );
+            let (mut state, source, dead, sink) = iam_fixture_at(published_at);
+            let member = "serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com";
+            for (resource, role) in [
+                (source.to_full(), "roles/pubsub.subscriber"),
+                (dead.to_full(), "roles/pubsub.publisher"),
+            ] {
+                write_iam(&mut state, &resource, role, true, member);
+            }
+            let mut now = published_at;
+            for attempt in 1..=5 {
+                let received = state.pull(&source, 1, now).unwrap();
+                proptest::prop_assert_eq!(received[0].delivery_attempt, attempt);
+                proptest::prop_assert_eq!(received[0].message.publish_time, published_at);
+                now = now.checked_add(LogicalDuration::from_seconds(11)).unwrap();
+            }
+            proptest::prop_assert!(state.pull(&source, 1, now).unwrap().is_empty());
+            let received = state.pull(&sink, 1, now).unwrap();
+            proptest::prop_assert_eq!(received.len(), 1);
+            proptest::prop_assert_eq!(received[0].message.publish_time, now);
+            let value = &received[0].message.message.attributes
+                ["CloudPubSubDeadLetterSourceTopicPublishTime"];
+            proptest::prop_assert!(value.ends_with("+00:00"));
+            proptest::prop_assert_eq!(LogicalInstant::parse_rfc3339(value).unwrap(), published_at);
+            let without_offset = value.strip_suffix("+00:00").unwrap();
+            if let Some((_, fraction)) = without_offset.split_once('.') {
+                proptest::prop_assert!(!fraction.is_empty());
+                proptest::prop_assert!(!fraction.ends_with('0'));
+            } else {
+                proptest::prop_assert_eq!(nanos, 0);
+            }
+        }
     }
 
     proptest::proptest! {
@@ -3422,7 +3514,10 @@ mod tests {
             .seek_to_snapshot(&wrong_target, snapshot, now)
             .unwrap_err();
         assert_eq!(error.code(), crate::error::Code::FailedPrecondition);
-        assert_eq!(error.message(), "The subscription's topic (projects/p/topics/second) is different from that of the snapshot (projects/p/topics/first); they must match in order for Seek work. Note that if a topic is deleted and then re-created with the same name, it is considered a distinct topic for these purposes.");
+        assert_eq!(
+            error.message(),
+            "The subscription's topic (projects/p/topics/second) is different from that of the snapshot (projects/p/topics/first); they must match in order for Seek work. Note that if a topic is deleted and then re-created with the same name, it is considered a distinct topic for these purposes."
+        );
         assert_eq!(
             state
                 .acknowledge(&wrong_target, &[wrong_target_ack])

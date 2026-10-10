@@ -238,10 +238,25 @@ export function createSchedulingDisposition(input, cell, authority) {
     owns(subscription) {
       return [...windows.values()].some((w) => w.subscription === subscription);
     },
+    seek(subscription, actual) {
+      if (
+        !actual?.ok ||
+        actual.unknown ||
+        actual.code !== "OK" ||
+        !same(actual.body, {}) ||
+        (actual.status !== 200 && actual.status !== undefined)
+      )
+        return;
+      for (const w of windows.values()) {
+        if (w.subscription !== subscription) continue;
+        for (const binding of w.pending.values()) binding.invalidated = true;
+      }
+    },
     ackIds(subscription, source) {
       const pending = [...windows.values()]
         .filter((w) => w.subscription === subscription)
-        .flatMap((w) => Array.from(w.pending.values()));
+        .flatMap((w) => Array.from(w.pending.values()))
+        .filter((binding) => !binding.invalidated);
       if (source) {
         const selected = (source.request.ackIds ?? []).map((id) => {
           const publication = cell.exchanges
@@ -279,10 +294,12 @@ export function createSchedulingDisposition(input, cell, authority) {
           [...windows.values()].find(
             (window) =>
               window.subscription === subscription &&
-              [...window.pending.values()].some((binding) => binding.ackId === id),
+              [...window.pending.values()].some(
+                (binding) => binding.ackId === id && !binding.invalidated,
+              ),
           ) ?? [...windows.values()].findLast((window) => window.subscription === subscription);
         const b = w && [...w.pending.values()].find((binding) => binding.ackId === id);
-        if (!b) {
+        if (!b || b.invalidated) {
           w?.verdicts.push("DIVERGES");
           continue;
         }
@@ -302,6 +319,9 @@ export function createSchedulingDisposition(input, cell, authority) {
         required: [...w.required],
         received: [...w.seen],
         acknowledged: [...w.acked],
+        invalidated: [...w.pending.values()]
+          .filter((b) => b.invalidated)
+          .map((b) => b.sourceMessageId),
         rawDeliveries: w.deliveries,
         verdict: combine([
           ...w.verdicts,

@@ -987,6 +987,7 @@ export async function replayRecording(
           observe(pairedSnapshot.entry);
           pairedSnapshot.entry = null;
         }
+        if (source.method === "Seek") scheduling?.seek?.(source.request.subscription, actual);
         if (source.method === "Acknowledge" && schedulingAck) {
           scheduling.ack(source.request.subscription, call.request.ackIds, actual, source.at);
           schedulingInvariants.push(

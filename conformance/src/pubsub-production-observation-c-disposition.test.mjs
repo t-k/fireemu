@@ -888,3 +888,75 @@ test("NACK allowance requires exact recording, source, runtime, fresh ACK and fu
     assert.notEqual(report.cells[0].dispositionVerdict, "MATCH");
   }
 });
+
+test("successful Seek invalidates current ACK candidates while retaining unacknowledged history", () => {
+  const f = setup();
+  f.session.pull(f.source, reply([delivery(0)]), f.publications, f.subscription);
+  f.session.seek("control", { ok: true, unknown: false, code: "OK", status: 200, body: {} });
+  assert.deepEqual(f.session.ackIds("control"), []);
+  f.session.ack("control", ["ack0"], { ok: true, code: "OK", status: 200, body: {} }, f.source.at);
+  const proof = f.session.finish();
+  assert.deepEqual(proof.windows[0].acknowledged, []);
+  assert.deepEqual(proof.windows[0].invalidated, ["0"]);
+  assert.notEqual(proof.verdict, "MATCH");
+});
+
+test("failed, unknown and foreign-subscription Seek preserve current ACK candidates", () => {
+  for (const actual of [
+    { ok: false, unknown: false, code: "NOT_FOUND", body: {} },
+    { ok: true, unknown: true, code: "OK", body: {} },
+    { ok: true, unknown: false, code: "OK", status: 500, body: {} },
+  ]) {
+    const f = setup();
+    f.session.pull(f.source, reply([delivery(0)]), f.publications, f.subscription);
+    f.session.seek("control", actual);
+    assert.deepEqual(f.session.ackIds("control"), ["ack0"]);
+  }
+  const f = setup();
+  f.session.pull(f.source, reply([delivery(0)]), f.publications, f.subscription);
+  f.session.seek("other", { ok: true, unknown: false, code: "OK", body: {} });
+  assert.deepEqual(f.session.ackIds("control"), ["ack0"]);
+});
+
+test("replay successful second Seek excludes first-window ACKs from the existing next ACK", async () => {
+  const input = preSeekWitnessFixture();
+  const cell = input.cells[0];
+  const postAck = cell.exchanges.findLast((e) => e.method === "Acknowledge");
+  postAck.method = "Seek";
+  postAck.request = { subscription: "control", snapshot: "snapshot" };
+  const postPull = cell.exchanges.findLast((e) => e.method === "Pull");
+  postPull.reply.body.receivedMessages = [
+    { ackId: "second0", message: { messageId: "0", data: "0", attributes: {}, orderingKey: "" } },
+  ];
+  cell.observations.at(-1).items = postPull.reply.body.receivedMessages;
+  const lastN = cell.observations.at(-1).n;
+  cell.exchanges.push({
+    ...structuredClone(postAck),
+    method: "Acknowledge",
+    n: lastN + 1,
+    responseN: lastN + 2,
+    requestId: lastN + 1,
+    request: { subscription: "control", ackIds: ["second0"] },
+  });
+  let pulls = 0;
+  let lastAck;
+  const result = await replayRecording(
+    input,
+    async (call, source) => {
+      if (call.method === "Publish")
+        return { ...source.reply, body: { messageIds: ["100", "101", "102"] } };
+      if (call.method === "Pull") {
+        const prefix = ["pre", "old", "new"][pulls++];
+        return reply([0, 1, 2].map((i) => delivery(i, `${prefix}${i}`)));
+      }
+      if (call.method === "Acknowledge") lastAck = [...call.request.ackIds];
+      return structuredClone(source.reply);
+    },
+    { schedulingDisposition: authority("R12"), clockReceiptFor },
+  );
+  assert.deepEqual(lastAck, ["new0", "new1", "new2"]);
+  const proof = result.cells[0].schedulingDisposition;
+  assert.deepEqual(proof.windows[0].invalidated, ["0", "1", "2"]);
+  assert.deepEqual(proof.windows[0].acknowledged, []);
+  assert.equal(proof.verdict, "NOT_COMPARABLE");
+});

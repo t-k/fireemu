@@ -27,3 +27,7 @@ When a finite approved Seek delivery contains an eligible publication absent fro
 
 
 Owner1213 separately authorizes only the original R8/N8 post-NACK finite windows in recordings567e1cd860a1 and45298b949da0. Tests preserve actual A1 redelivery, A2 blocked before the successful current A1 ACK, A2 delivered afterward, source publication content/types/order, total counts, duplicates/missing evidence, per-Pull limits and one outstanding batch per key. Five finite pre-ACK allocations are exhausted without changing recorded request counts or adding sleeps. Negatives cover early A2, duplicate/missing/over-limit deliveries, failed ACK, wrong recording/source/runtime/owner/cell, stale or expired ACK and full delivery field presence. The original physical and exact semantic differences remain visible; saved partial runs remain NOT_COMPARABLE and require fresh actual ACK/release evidence. Five meaningful mutants bypass run scope, owner binding, expiry, full shape and duplicate guards.
+
+## Successful Seek invalidates current ACK candidates
+
+Successful known Seek invalidates only the same subscription’s pending ACK bindings. Invalidated deliveries remain historical unacknowledged evidence and cannot become acknowledged from a later successful API response. Failed, unknown and foreign-subscription Seek preserve current candidates. Direct regressions and a two-Seek replay regression retain NOT_COMPARABLE for incomplete historical windows; no requests or comparison criteria are added.

@@ -44,6 +44,7 @@ fn emulator_state() -> AuthState {
         client_api_key: ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry: FakeCustomTokenExpiry::Ignore,
         custom_token_trust: None,
+        allow_unsigned_custom_tokens: true,
         idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         app_check: None,
         app_check_policy: None,
@@ -59,6 +60,7 @@ fn strict_state() -> AuthState {
         client_api_key: ClientApiKeyPolicy::Required,
         fake_custom_token_expiry: FakeCustomTokenExpiry::Reject,
         custom_token_trust: None,
+        allow_unsigned_custom_tokens: true,
         idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         ..emulator_state()
     }

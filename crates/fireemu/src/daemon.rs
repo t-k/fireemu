@@ -471,14 +471,11 @@ fn reapply_explicit_auth_quota(
     Ok(())
 }
 
-/// The startup notice for a strict profile without custom-token signers: production accepts only
-/// signed custom tokens, so strict refuses every custom token until `auth.customTokenSigners`
-/// names the service accounts whose keys verify them.
+/// The startup notice when neither unsigned custom tokens nor trusted signers are available.
 pub(crate) fn custom_token_signer_note(cfg: &RuntimeConfig) -> Option<&'static str> {
-    (cfg.profile == crate::config::CompatibilityProfile::Strict
-        && cfg.auth_custom_token_signers.is_none())
+    (!cfg.auth_allow_unsigned_custom_tokens && cfg.auth_custom_token_signers.is_none())
     .then_some(
-        "  custom tokens:    refused (strict accepts only signed tokens: set auth.customTokenSigners to the service accounts' public JWK sets, or use profile \"emulator\" for the Admin SDK's unsigned emulator tokens)",
+        "  custom tokens:    refused (set auth.customTokenSigners to the service accounts' public JWK sets, or set auth.allowUnsignedCustomTokens to true for the Admin SDK's unsigned emulator tokens)",
     )
 }
 
@@ -713,6 +710,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             }
         },
         custom_token_trust,
+        allow_unsigned_custom_tokens: cfg.auth_allow_unsigned_custom_tokens,
         idp_assertions,
         tenancy: Some(tenancy.clone()),
         app_check: app_check.clone(),

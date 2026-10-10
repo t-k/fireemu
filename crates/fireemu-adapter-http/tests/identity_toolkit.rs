@@ -631,6 +631,7 @@ fn state() -> AuthState {
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         custom_token_trust: None,
+        allow_unsigned_custom_tokens: true,
         idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         app_check: None,
         app_check_policy: None,
@@ -1943,28 +1944,118 @@ fn legacy_tokens_stop_only_where_a_blocking_trigger_is_selected() {
     }
 }
 
-/// Production accepts only signed custom tokens: without `auth.customTokenSigners` the strict
-/// profile refuses unsigned and JSON fake tokens as production refuses an unsigned one, and the
-/// emulator profile keeps accepting them as the official emulator does.
+/// Unsigned emulator custom JWTs are allowed by default in both profiles as a development
+/// exception to production's signed-token requirement; strict claim validation still applies.
 #[test]
-fn strict_refuses_unsigned_custom_tokens_without_configured_signers() {
+fn unsigned_custom_tokens_are_allowed_by_default_in_both_profiles() {
+    use fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
     let now = 1_788_004_860;
-    for (strict, expected) in [(true, 400), (false, 200)] {
+    for strict in [true, false] {
         let s = if strict { strict_state() } else { state() };
-        for token in [
-            custom_token("unsigned-user", &json!({}), now + 3600),
-            r#"{"uid":"json-user"}"#.to_owned(),
-        ] {
-            let (status, body) = post(
-                &s,
-                &format!("{V1}/accounts:signInWithCustomToken"),
-                &json!({"token": token, "returnSecureToken": true}),
-            );
-            assert_eq!(status, expected, "strict={strict}: {body}");
-            if strict {
-                assert_eq!(body["error"]["message"], "INVALID_CUSTOM_TOKEN");
+        let token = custom_token_from_payload(&json!({
+            "uid": "unsigned-user", "iss": TEST_SIGNER, "sub": TEST_SIGNER,
+            "aud": CUSTOM_TOKEN_AUDIENCE, "iat": now, "exp": now + 3600,
+        }));
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": token, "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "strict={strict}: {body}");
+    }
+}
+
+#[test]
+fn unsigned_custom_token_policy_preserves_signature_and_claim_boundaries() {
+    use fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
+    use fireemu_core_auth::jwt::base64url_encode;
+    let now = 1_788_004_860;
+    let payload = json!({"uid": "unsigned-policy", "iss": TEST_SIGNER, "sub": TEST_SIGNER,
+        "aud": CUSTOM_TOKEN_AUDIENCE, "iat": now, "exp": now + 3600});
+    for strict in [true, false] {
+        for trusted in [true, false] {
+            for allow in [true, false] {
+                let mut s = if strict { strict_state() } else { state() };
+                if trusted {
+                    s.custom_token_trust = strict_state_with_signer().custom_token_trust;
+                }
+                s.allow_unsigned_custom_tokens = allow;
+                let exchange = |token: &str| {
+                    post(
+                        &s,
+                        &format!("{V1}/accounts:signInWithCustomToken"),
+                        &json!({"token": token, "returnSecureToken": true}),
+                    )
+                };
+                let unsigned = custom_token_from_payload(&payload);
+                assert_eq!(
+                    exchange(&unsigned).0,
+                    if allow { 200 } else { 400 },
+                    "strict={strict}, trusted={trusted}, allow={allow}"
+                );
+                assert_eq!(
+                    exchange(r#"{"uid":"json-fake"}"#).0,
+                    if allow && !strict && !trusted {
+                        200
+                    } else {
+                        400
+                    }
+                );
+                for malformed in [
+                    "not-a-jwt".to_owned(),
+                    format!("{unsigned}forged"),
+                    format!(
+                        "{}.{}.signature",
+                        base64url_encode(br#"{"alg":"HS256"}"#),
+                        base64url_encode(payload.to_string().as_bytes())
+                    ),
+                ] {
+                    assert_eq!(exchange(&malformed).0, 400, "{malformed}");
+                }
+                let signed = trusted_custom_token("signed-policy", &json!({}), now);
+                assert_eq!(exchange(&signed).0, if trusted { 200 } else { 400 });
+                assert_eq!(exchange(&format!("{signed}forged")).0, 400);
+                for (field, bad) in [
+                    ("aud", json!("wrong")),
+                    ("exp", json!(now - 301)),
+                    ("iat", json!(now + 301)),
+                    ("sub", json!("different")),
+                ] {
+                    let mut bad_payload = payload.clone();
+                    bad_payload[field] = bad;
+                    if strict || trusted || field == "aud" || !allow {
+                        assert_eq!(
+                            exchange(&custom_token_from_payload(&bad_payload)).0,
+                            400,
+                            "strict={strict}, trusted={trusted}, allow={allow}, field={field}"
+                        );
+                    }
+                }
             }
         }
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(32))]
+    #[test]
+    fn unsigned_custom_token_policy_never_accepts_a_signature_segment(
+        strict in proptest::bool::ANY,
+        allowed in proptest::bool::ANY,
+        uid in "[a-zA-Z0-9_-]{1,40}",
+        suffix in "[a-zA-Z0-9_-]{1,40}",
+    ) {
+        use fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
+        let mut s = if strict { strict_state() } else { state() };
+        s.allow_unsigned_custom_tokens = allowed;
+        let token = custom_token_from_payload(&json!({
+            "uid": uid, "iss": TEST_SIGNER, "sub": TEST_SIGNER,
+            "aud": CUSTOM_TOKEN_AUDIENCE, "iat": 1_788_004_860, "exp": 1_788_008_460,
+        }));
+        let exchange = |token: &str| post(&s,
+            &format!("{V1}/accounts:signInWithCustomToken"), &json!({"token": token}));
+        proptest::prop_assert_eq!(exchange(&token).0, if allowed { 200 } else { 400 });
+        proptest::prop_assert_eq!(exchange(&format!("{token}{suffix}")).0, 400);
     }
 }
 
@@ -9446,6 +9537,7 @@ fn signed_custom_tokens_follow_production_claim_rules() {
     let trust = CustomTokenTrust::from_jwks(json!({account: jwks}).as_object().unwrap()).unwrap();
     let s = AuthState {
         custom_token_trust: Some(Arc::new(trust)),
+        allow_unsigned_custom_tokens: false,
         idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         ..strict_state()
     };
@@ -9615,6 +9707,7 @@ fn configured_signers_admit_only_the_tokens_they_signed() {
     .unwrap();
     let s = AuthState {
         custom_token_trust: Some(Arc::new(trust)),
+        allow_unsigned_custom_tokens: false,
         idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         ..strict_state()
     };
@@ -9662,7 +9755,7 @@ fn configured_signers_admit_only_the_tokens_they_signed() {
     assert_eq!(
         refused(custom_token("signed-3", &json!({}), now + 3600)),
         (400, "INVALID_CUSTOM_TOKEN".to_owned()),
-        "an unsigned token is refused once signers are configured"
+        "an unsigned token is refused when explicitly disabled"
     );
     assert_eq!(
         refused(signed_custom_token(

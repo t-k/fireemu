@@ -1219,9 +1219,10 @@ pub struct RuntimeConfig {
     /// ID token signing (`auth.idTokenSigning`): `unsigned-emulator` or `session-rsa`.
     pub id_token_signing: fireemu_core_auth::jwt::SigningMode,
     /// Service accounts whose signed custom tokens are accepted, each with its public JWK set
-    /// (`auth.customTokenSigners`). When set, only tokens they signed are accepted, as in
-    /// production; when absent, the unsigned tokens of the Admin SDK's emulator mode are.
+    /// (`auth.customTokenSigners`). Signed tokens must verify against these public keys.
     pub auth_custom_token_signers: Option<serde_json::Map<String, Value>>,
+    /// Allow unsigned emulator custom tokens in either profile (default true).
+    pub auth_allow_unsigned_custom_tokens: bool,
     /// OIDC issuers whose signed ID tokens the strict profile verifies, each with its public
     /// JWK set (`auth.idpSigners`, AUTH-FEDERATION owner decision O4). No key is fetched from
     /// an issuer; without an entry, strict refuses the issuer's sign-ins.
@@ -1460,6 +1461,7 @@ impl Default for RuntimeConfig {
             scheduler_overlap: None,
             scheduler_catch_up: "all".to_owned(),
             id_token_signing: fireemu_core_auth::jwt::SigningMode::UnsignedEmulator,
+            auth_allow_unsigned_custom_tokens: true,
             auth_custom_token_signers: None,
             auth_idp_signers: None,
             auth_api_keys: Vec::new(),
@@ -1469,12 +1471,13 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 24] = [
+pub(crate) const AUTH_KEYS: [&str; 25] = [
     "enabled",
     "apiKeys",
     "projectIssuer",
     "idTokenSigning",
     "customTokenSigners",
+    "allowUnsignedCustomTokens",
     "idpSigners",
     "providers",
     "totp",
@@ -3730,6 +3733,11 @@ impl RuntimeConfig {
                             })
                     })
                     .collect::<Result<_, _>>()?;
+            }
+            if let Some(value) = auth.get("allowUnsignedCustomTokens") {
+                cfg.auth_allow_unsigned_custom_tokens = value.as_bool().ok_or_else(|| {
+                    ConfigError("auth.allowUnsignedCustomTokens must be a boolean".to_owned())
+                })?;
             }
             if let Some(signers) = auth.get("customTokenSigners") {
                 let signers = signers.as_object().ok_or_else(|| {
@@ -6035,6 +6043,40 @@ mod tests {
             .unwrap_err()
             .0
             .contains("use sig"));
+    }
+
+    #[test]
+    fn unsigned_custom_token_policy_defaults_and_explicit_overrides() {
+        for profile in ["strict", "emulator"] {
+            for allowed in [None, Some(true), Some(false)] {
+                let mut auth = json!({});
+                if let Some(value) = allowed {
+                    auth["allowUnsignedCustomTokens"] = json!(value);
+                }
+                let cfg = RuntimeConfig::from_json(&json!({
+                    "schemaVersion": 1, "profile": profile,
+                    "firestore": {"edition": "standard", "apiMode": "native"},
+                    "auth": auth,
+                }))
+                .unwrap();
+                assert_eq!(
+                    cfg.auth_allow_unsigned_custom_tokens,
+                    allowed.unwrap_or(true)
+                );
+                assert_eq!(
+                    crate::daemon::custom_token_signer_note(&cfg).is_some(),
+                    allowed == Some(false)
+                );
+            }
+        }
+        for invalid in [json!(null), json!("true"), json!(1), json!([]), json!({})] {
+            assert_eq!(
+                parse(&json!({"allowUnsignedCustomTokens": invalid})),
+                Err(ConfigError(
+                    "auth.allowUnsignedCustomTokens must be a boolean".to_owned()
+                ))
+            );
+        }
     }
 
     #[test]

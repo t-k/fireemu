@@ -225,8 +225,11 @@ The `auth` section of `fireemu.json` lets you configure sign-in methods, passwor
 | Project- and tenant-specific password policies and account permissions | `auth.passwordPolicyOverrides`, `auth.configOverrides` |
 | Blocking functions before account creation or sign-in, and credential forwarding to those functions | `auth.blockingFunctions` |
 | Initial custom OIDC and SAML provider resources | `auth.providers.oidc`, `auth.providers.saml` |
+| Accept unsigned emulator custom tokens (default `true` in both profiles) | `auth.allowUnsignedCustomTokens` |
 | Public keys for verifying custom tokens and OIDC ID tokens | `auth.customTokenSigners`, `auth.idpSigners` |
 | Sign-up quota configuration and local quota-exceeded simulation | `auth.quota`, `auth.quotaSimulation` |
+
+Unsigned custom tokens minted by the Firebase Admin SDK in emulator mode are accepted by default, including with the recommended `strict` profile and with `auth.customTokenSigners` configured. To require signed custom tokens, set `auth.allowUnsignedCustomTokens` to `false` and configure `auth.customTokenSigners` with the service accounts' public JWK sets. The setting applies only to custom-token sign-in; strict claim checks and signed-token verification still apply. In the `emulator` profile, setting it to `false` also disables JSON fake custom tokens.
 
 See the [configuration schema](spec/config/fireemu.schema.json) for the format and accepted values of each setting.  
 

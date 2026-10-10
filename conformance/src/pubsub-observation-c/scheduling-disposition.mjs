@@ -66,6 +66,28 @@ export function createSchedulingDisposition(input, cell, authority) {
       subscription?.enableMessageOrdering !== true
     )
       return { kind: "control", key: source.request.subscription };
+    if (cell.id === "N9") {
+      const approved = authority.owner1215;
+      if (
+        approved?.proposalSha256 !==
+          "10462775738fa3a1de9fae803e285bb385fd379ff6cf0ddadb856b5c93457b05" ||
+        approved.rowSha256WithLf !==
+          "60d325e05acea467d78513e2ebcc474f62e8f9bde8971e8118d644bb33225606" ||
+        input.metadata.runId !== "45298b949da0" ||
+        input.metadata.sourceHead !== "3235e54940ff1ece6004d3e78e70548ca6eba85c" ||
+        input.metadata.packetSha256 !==
+          "285a6220ed6c7e7efdafbe8618a52e3f87aac1be57a0ea7a684ae80b75126c80" ||
+        input.metadata.descriptorSha256 !==
+          "3b455b9613b20aa89d2ea277962652f110f45847c9b80668a66605517aba5707" ||
+        source.n !== 1065 ||
+        source.requestId !== 423 ||
+        source.request.maxMessages !== 3 ||
+        o.stage !== "first-Pull-exact-order" ||
+        subscription?.enableMessageOrdering !== true
+      )
+        return null;
+      return { kind: "cross-key", key: source.request.subscription };
+    }
     if (
       cell.id === "R9" &&
       ["first-Pull-exact-order", "subsequent-Pull-exact-order"].includes(o.stage)
@@ -135,6 +157,8 @@ export function createSchedulingDisposition(input, cell, authority) {
         }
         w = {
           kind: r.kind,
+          seekRequestId: r.seek?.requestId,
+          seekN: r.seek?.n,
           subscription: source.request.subscription,
           required,
           forbidden,
@@ -149,6 +173,7 @@ export function createSchedulingDisposition(input, cell, authority) {
         windows.set(r.key, w);
       }
       w.requests.push(source.requestId);
+      w.lastAt = source.at;
       if (
         !actual?.ok ||
         actual.unknown ||
@@ -238,10 +263,25 @@ export function createSchedulingDisposition(input, cell, authority) {
     owns(subscription) {
       return [...windows.values()].some((w) => w.subscription === subscription);
     },
+    seek(subscription, actual) {
+      if (
+        !actual?.ok ||
+        actual.unknown ||
+        actual.code !== "OK" ||
+        !same(actual.body, {}) ||
+        (actual.status !== 200 && actual.status !== undefined)
+      )
+        return;
+      for (const w of windows.values()) {
+        if (w.subscription !== subscription) continue;
+        for (const binding of w.pending.values()) binding.invalidated = true;
+      }
+    },
     ackIds(subscription, source) {
       const pending = [...windows.values()]
         .filter((w) => w.subscription === subscription)
-        .flatMap((w) => Array.from(w.pending.values()));
+        .flatMap((w) => Array.from(w.pending.values()))
+        .filter((binding) => !binding.invalidated);
       if (source) {
         const selected = (source.request.ackIds ?? []).map((id) => {
           const publication = cell.exchanges
@@ -279,10 +319,12 @@ export function createSchedulingDisposition(input, cell, authority) {
           [...windows.values()].find(
             (window) =>
               window.subscription === subscription &&
-              [...window.pending.values()].some((binding) => binding.ackId === id),
+              [...window.pending.values()].some(
+                (binding) => binding.ackId === id && !binding.invalidated,
+              ),
           ) ?? [...windows.values()].findLast((window) => window.subscription === subscription);
         const b = w && [...w.pending.values()].find((binding) => binding.ackId === id);
-        if (!b) {
+        if (!b || b.invalidated) {
           w?.verdicts.push("DIVERGES");
           continue;
         }
@@ -295,25 +337,79 @@ export function createSchedulingDisposition(input, cell, authority) {
       }
     },
     finish() {
-      const proof = [...windows.values()].map((w) => ({
-        kind: w.kind,
-        subscription: w.subscription,
-        sourceRequestIds: w.requests,
-        required: [...w.required],
-        received: [...w.seen],
-        acknowledged: [...w.acked],
-        rawDeliveries: w.deliveries,
-        verdict: combine([
+      const emptyWindowAllowed = (w) => {
+        const owner = authority.owner1216;
+        const scope = {
+          "567e1cd860a1:520": { seekN: 1305, requests: [521, 522], invalidated: true },
+          "567e1cd860a1:523": { seekN: 1314, requests: [524, 525], invalidated: false },
+          "45298b949da0:519": { seekN: 1302, requests: [520, 521], invalidated: true },
+        }[`${input.metadata.runId}:${w.seekRequestId}`];
+        const binding = [...w.pending.values()][0];
+        return (
+          cell.id === "N13" &&
+          owner?.proposalSha256 ===
+            "beeeab3e7bf657b687e2d19bec5a7ff3a9d478e37319a2334448ae6c28411152" &&
+          owner.erratumSha256 ===
+            "f538a947916d564974e1f11c289a69f7bf0c7c2caae48b455a70d72a42bbe00d" &&
+          owner.rowSha256WithLf ===
+            "1681aa44f5fa617cd39aded5acf296e8e62e64e2ed42c48265754a0e01998f88" &&
+          input.metadata.sourceHead === "3235e54940ff1ece6004d3e78e70548ca6eba85c" &&
+          input.metadata.packetSha256 ===
+            "285a6220ed6c7e7efdafbe8618a52e3f87aac1be57a0ea7a684ae80b75126c80" &&
+          input.metadata.descriptorSha256 ===
+            "3b455b9613b20aa89d2ea277962652f110f45847c9b80668a66605517aba5707" &&
+          input.runtimeInputs.binarySha256 ===
+            "53245a52140cc141ffd5438c858bcec0cdc8a0503891933aaff8e350a9c3a032" &&
+          input.runtimeInputs.inputsSha256 ===
+            "65fa8b33ac8fd8e22d175709c4608fac43e8e12c6e1c35fddfffa62005f2b42e" &&
+          scope &&
+          w.kind === "seek" &&
+          w.seekN === scope.seekN &&
+          w.subscription ===
+            `projects/fireemu-oracle-idp/subscriptions/fe${input.metadata.runId}-n13-s` &&
+          same(w.requests, scope.requests) &&
+          w.required.size === 0 &&
+          w.seen.size === 1 &&
+          w.acked.size === 0 &&
+          w.pending.size === 1 &&
+          Boolean(binding.invalidated) === scope.invalidated &&
+          binding.deadline !== null &&
+          instant(w.lastAt) !== null &&
+          instant(w.lastAt) < binding.deadline
+        );
+      };
+      const proof = [...windows.values()].map((w) => {
+        const priorVerdict = combine([
           ...w.verdicts,
           !w.required.size ||
           [...w.required].some((id) => !w.seen.has(id) || !w.acked.has(id)) ||
           w.pending.size
             ? "NOT_COMPARABLE"
             : "MATCH",
-        ]),
-      }));
+        ]);
+        const allowed = emptyWindowAllowed(w);
+        const result = {
+          kind: w.kind,
+          subscription: w.subscription,
+          sourceRequestIds: w.requests,
+          required: [...w.required],
+          received: [...w.seen],
+          acknowledged: [...w.acked],
+          invalidated: [...w.pending.values()]
+            .filter((b) => b.invalidated)
+            .map((b) => b.sourceMessageId),
+          rawDeliveries: w.deliveries,
+          verdict: allowed ? combine([...w.verdicts, "MATCH"]) : priorVerdict,
+        };
+        if (allowed)
+          Object.assign(result, { owner1216: structuredClone(authority.owner1216), priorVerdict });
+        return result;
+      });
       return {
-        approval: structuredClone(SCHEDULING_APPROVAL),
+        approval: {
+          ...structuredClone(SCHEDULING_APPROVAL),
+          ...(cell.id === "N9" ? { owner1215: structuredClone(authority.owner1215) } : {}),
+        },
         source: structuredClone(input.metadata),
         runtimeInputs: structuredClone(input.runtimeInputs),
         cellId: cell.id,

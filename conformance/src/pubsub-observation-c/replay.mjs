@@ -121,6 +121,7 @@ export async function replayLocal(
     now = () => performance.now(),
     timestampDisposition,
     schedulingDisposition,
+    nackDisposition,
     emptyAttributeValueDisposition,
     emptyAttributeValueComparator,
   } = {},
@@ -244,6 +245,7 @@ export async function replayLocal(
         observe: (entry) => persist("comparison", entry),
         timestampDisposition,
         schedulingDisposition,
+        nackDisposition,
         emptyAttributeValueDisposition,
         emptyAttributeValueComparator,
         emptyAttributeValueRawBodyFor: (source) => {
@@ -343,6 +345,7 @@ export async function main(argv = process.argv.slice(2), environment = process.e
     persist,
     timestampDisposition: binding.timestampDisposition,
     schedulingDisposition: binding.schedulingDisposition,
+    nackDisposition: binding.nackDisposition,
     emptyAttributeValueDisposition: binding.emptyAttributeValueDisposition,
   });
   report.inputPins = binding;

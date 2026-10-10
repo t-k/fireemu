@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "kind": "eventarc-own-witness-plan-v1",
+  "corpora": {
+    "B": {
+      "setupN": [
+        16,
+        20
+      ],
+      "walks": [
+        {
+          "rootN": 27,
+          "inventoryN": 26,
+          "setupThroughN": 20
+        }
+      ],
+      "terminalN": [
+        202
+      ],
+      "projectionSha256": "489039f08f7f7485a5e27aa93067617e246fcaa3b9f0bd6ec98a03c68fb3323b"
+    },
+    "C": {
+      "setupN": [
+        16,
+        20,
+        41,
+        46,
+        64,
+        76,
+        80,
+        84,
+        88,
+        92,
+        96
+      ],
+      "walks": [
+        {
+          "rootN": 27,
+          "inventoryN": 26,
+          "setupThroughN": 20
+        },
+        {
+          "rootN": 102,
+          "inventoryN": 101,
+          "setupThroughN": 96
+        },
+        {
+          "rootN": 110,
+          "inventoryN": 101,
+          "setupThroughN": 96
+        },
+        {
+          "rootN": 115,
+          "inventoryN": 101,
+          "setupThroughN": 96
+        }
+      ],
+      "terminalN": [
+        398
+      ],
+      "projectionSha256": "f7a665a61e1c83c926fd919dd204ac8f8b196edc85accaa2475f273cea3355f4"
+    },
+    "D": {
+      "setupN": [
+        16,
+        19,
+        23,
+        27,
+        31,
+        35
+      ],
+      "walks": [
+        {
+          "rootN": 41,
+          "inventoryN": 40,
+          "setupThroughN": 35
+        },
+        {
+          "rootN": 47,
+          "inventoryN": 40,
+          "setupThroughN": 35
+        },
+        {
+          "rootN": 50,
+          "inventoryN": 40,
+          "setupThroughN": 35
+        }
+      ],
+      "terminalN": [
+        16,
+        66,
+        186
+      ],
+      "independentLifecycleSlices": [
+        {
+          "createN": 61,
+          "deleteN": 66,
+          "overlap": true
+        },
+        {
+          "createN": 87,
+          "deleteN": 186,
+          "overlap": false
+        }
+      ],
+      "projectionSha256": "df9e8223538f5f7676d1900c2b6df60884a521e2e4215892efca7d0c80183c88"
+    }
+  },
+  "nativeMissing": [
+    "C102/C110 complete continuation tails"
+  ],
+  "disposition": "owner1145 facets only; no raw verdict, case or parent promotion",
+  "timing": "ordinary real clock; no operation duration injection; finite deadlines owned by producer"
+}

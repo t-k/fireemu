@@ -12,6 +12,8 @@ so a cited record can only change together with an explicit lock update
 from __future__ import annotations
 
 import argparse
+import gzip
+import io
 import hashlib
 import json
 import re
@@ -88,8 +90,9 @@ def _markdown_anchors(text: str) -> set[str]:
     return anchors
 
 
-def _fragment_present(target: Path, fragment: str) -> bool:
-    text = target.read_text(errors="replace")
+def _fragment_present(target: Path, fragment: str, text: str | None = None) -> bool:
+    if text is None:
+        text = target.read_text(errors="replace")
     if target.suffix == ".md":
         return fragment in _markdown_anchors(text)
     return fragment in text
@@ -126,16 +129,47 @@ def retired_suites(root: Path) -> list[str]:
     ]
 
 
+EVENTARC_GZIP = "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz"
+
+
+def _eventarc_decoded(root: Path) -> str:
+    closure = json.loads((root / CLOSURE_DIR / "EVENTARC.json").read_text())
+    entry = next(item for item in closure["integratedRegression"]["comparisons"]
+                 if item["path"] == EVENTARC_GZIP)
+    size = entry.get("decodedBytes")
+    digest = entry.get("decodedSha256")
+    if type(size) is not int or size <= 0 or not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+        raise ValueError("EVENTARC decoded provenance is missing or malformed")
+    stored = (root / EVENTARC_GZIP).read_bytes()
+    if hashlib.sha256(stored).hexdigest() != entry.get("sha256"):
+        raise ValueError("EVENTARC gzip storage digest mismatch")
+    with gzip.GzipFile(fileobj=io.BytesIO(stored)) as stream:
+        raw = stream.read(size + 1)
+    if len(raw) != size or hashlib.sha256(raw).hexdigest() != digest:
+        raise ValueError("EVENTARC decoded identity mismatch")
+    return raw.decode("utf8")
+
+
 def check(root: Path) -> list[str]:
     problems = []
     references = closure_references(root)
     retired = retired_suites(root)
+    decoded = None
+    decoded_failed = False
+    if any(ref.path == EVENTARC_GZIP for ref in references) and (root / EVENTARC_GZIP).is_file():
+        try:
+            decoded = _eventarc_decoded(root)
+        except (OSError, EOFError, ValueError, KeyError, StopIteration) as error:
+            problems.append(f"{EVENTARC_GZIP}: {error}")
+            decoded_failed = True
     for ref in references:
         target = root / ref.path
         if not target.exists():
             problems.append(f"{ref.closure}: {ref.path} is missing")
             continue
-        if ref.fragment and target.is_file() and not _fragment_present(target, ref.fragment):
+        if (ref.fragment and target.is_file()
+                and not (ref.path == EVENTARC_GZIP and decoded_failed)
+                and not _fragment_present(target, ref.fragment, decoded if ref.path == EVENTARC_GZIP else None)):
             problems.append(f"{ref.closure}: {ref.path}#{ref.fragment} names no entry in the file")
         if any(ref.path == suite or ref.path.startswith(f"{suite}/") for suite in retired):
             problems.append(f"{ref.closure}: {ref.path} is in a retired suite CI no longer runs")

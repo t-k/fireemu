@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use fireemu_adapter_functions::eventarc_channels::{ChannelStore, SystemEntropy, Timing};
 use fireemu_adapter_functions::http::{
-    serve_eventarc, serve_eventarc_with_channels, serve_eventarc_with_profile,
-    FunctionsHttpProfile, HttpAdmission,
+    serve_eventarc, serve_eventarc_with_channels, serve_eventarc_with_channels_and_project_number,
+    serve_eventarc_with_profile, FunctionsHttpProfile, HttpAdmission,
 };
 use fireemu_adapter_functions::manifest_json::parse_manifest;
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
@@ -47,6 +47,25 @@ async fn start_with(
     profile: Option<FunctionsHttpProfile>,
     project: &str,
     channels: Option<Arc<ChannelStore>>,
+) -> Listener {
+    start_with_project_number(profile, project, channels, None).await
+}
+
+async fn start_with_project_number(
+    profile: Option<FunctionsHttpProfile>,
+    project: &str,
+    channels: Option<Arc<ChannelStore>>,
+    project_number: Option<u64>,
+) -> Listener {
+    start_with_context(profile, project, channels, project_number, None).await
+}
+
+async fn start_with_context(
+    profile: Option<FunctionsHttpProfile>,
+    project: &str,
+    channels: Option<Arc<ChannelStore>>,
+    project_number: Option<u64>,
+    context: Option<fireemu_adapter_functions::eventarc_strict::EventarcContext>,
 ) -> Listener {
     // One scratch directory for each listener: tests run in parallel in one process, and a listener that
     // stops removes its directory.
@@ -103,15 +122,37 @@ async fn start_with(
     let for_server = runtime.clone();
     let server = tokio::spawn(async move {
         let admission = HttpAdmission::new();
-        match (profile, channels) {
-            (Some(profile), Some(channels)) => {
+        if let Some(context) = context {
+            return fireemu_adapter_functions::http::serve_eventarc_with_context(
+                listener,
+                for_server,
+                admission,
+                profile.unwrap_or(FunctionsHttpProfile::Emulator),
+                channels.unwrap_or_else(|| Arc::new(ChannelStore::default())),
+                context,
+            )
+            .await;
+        }
+        match (profile, channels, project_number) {
+            (Some(profile), channels, Some(number)) => {
+                serve_eventarc_with_channels_and_project_number(
+                    listener,
+                    for_server,
+                    admission,
+                    profile,
+                    channels.unwrap_or_else(|| Arc::new(ChannelStore::default())),
+                    Some(number),
+                )
+                .await
+            }
+            (Some(profile), Some(channels), None) => {
                 serve_eventarc_with_channels(listener, for_server, admission, profile, channels)
                     .await
             }
-            (Some(profile), None) => {
+            (Some(profile), None, None) => {
                 serve_eventarc_with_profile(listener, for_server, admission, profile).await
             }
-            (None, _) => serve_eventarc(listener, for_server, admission).await,
+            (None, _, _) => serve_eventarc(listener, for_server, admission).await,
         }
     });
     Listener {
@@ -266,6 +307,163 @@ fn publish_body(events: &[Value]) -> String {
 
 fn error_of(body: &str) -> Value {
     serde_json::from_str::<Value>(body).expect("a JSON error body")["error"].clone()
+}
+
+fn aggregate_batch(padding: usize, region: &str) -> Vec<Value> {
+    (0..100)
+        .map(|index| {
+            let mut value = event(region);
+            value["id"] = json!(format!("aggregate-{index:03}"));
+            value["attributes"]["time"] = json!({"ceTimestamp": "2026-10-07T00:00:00Z"});
+            value["textData"] = json!(serde_json::to_string(&"x".repeat(padding)).unwrap());
+            value
+        })
+        .collect()
+}
+
+/// Explicit protobuf tags, independent of the runtime metric, bind the actual listener topic.
+fn aggregate_wire_size(topic: &str, events: &[Value]) -> usize {
+    fn field(out: &mut Vec<u8>, tag: u8, value: &[u8]) {
+        out.push((tag << 3) | 2);
+        let mut length = value.len();
+        while length >= 128 {
+            out.push(u8::try_from(length & 127).unwrap() | 128);
+            length >>= 7;
+        }
+        out.push(u8::try_from(length).unwrap());
+        out.extend_from_slice(value);
+    }
+    let mut request = Vec::new();
+    field(&mut request, 1, topic.as_bytes());
+    for event in events {
+        let mut message = Vec::new();
+        field(
+            &mut message,
+            1,
+            event["textData"].as_str().unwrap().as_bytes(),
+        );
+        for (key, value) in [
+            ("ce-id", event["id"].as_str().unwrap()),
+            ("ce-source", event["source"].as_str().unwrap()),
+            ("ce-specversion", event["specVersion"].as_str().unwrap()),
+            ("ce-type", event["type"].as_str().unwrap()),
+            ("ce-time", "2026-10-07T00:00:00Z"),
+            ("ce-datacontenttype", "application/json"),
+            (
+                "ce-region",
+                event["attributes"]["region"]["ceString"].as_str().unwrap(),
+            ),
+        ] {
+            let mut entry = Vec::new();
+            field(&mut entry, 1, key.as_bytes());
+            field(&mut entry, 2, value.as_bytes());
+            field(&mut message, 2, &entry);
+        }
+        field(&mut request, 2, &message);
+    }
+    request.len()
+}
+
+#[tokio::test]
+async fn strict_aggregate_refusals_use_native_http_bytes_and_never_deliver() {
+    let channels = Arc::new(ChannelStore::new(
+        Box::new(SystemEntropy::default()),
+        Timing {
+            create: 0,
+            delete: 0,
+        },
+    ));
+    let server = start_with(Some(FunctionsHttpProfile::Strict), PROJECT, Some(channels)).await;
+    let made = "projects/demo-app/locations/us-central1/channels/aggregate";
+    let created = server
+        .send(
+            "POST",
+            "/v1/projects/demo-app/locations/us-central1/channels?channelId=aggregate",
+            true,
+            Some(&json!({"name": made}).to_string()),
+        )
+        .await;
+    let passing = server
+        .send(
+            "POST",
+            &format!("/v1/{CUSTOM}:publishEvents"),
+            true,
+            Some(&publish_body(&[event("eu")])),
+        )
+        .await;
+    let before = server.wait_for_frames(1).await;
+    let mut results = Vec::new();
+    for channel in [CUSTOM, made] {
+        let read = server
+            .send("GET", &format!("/v1/{channel}"), true, None)
+            .await;
+        let resource: Value = serde_json::from_str(&read.1).unwrap();
+        let topic = resource["pubsubTopic"].as_str().unwrap();
+        for padding in [100_000, 106_000] {
+            let events = aggregate_batch(padding, "eu");
+            let size = aggregate_wire_size(topic, &events);
+            let body = publish_body(&events);
+            for prefix in ["/v1", ""] {
+                let reply = server
+                    .exchange(
+                        "POST",
+                        &format!("{prefix}/{channel}:publishEvents"),
+                        Some("ya29.a-token"),
+                        Some(&body),
+                        "",
+                    )
+                    .await;
+                results.push((size, reply));
+            }
+        }
+    }
+    let after = server.frames_so_far().await;
+    server.stop().await;
+    assert_eq!(created.0, 200);
+    assert_eq!(passing, (200, "{}\n".to_owned()));
+    assert_eq!(before, 1);
+    assert_eq!(
+        after, before,
+        "neither matching nor unmatched refused batch reaches enqueue"
+    );
+    for (size, reply) in results {
+        assert_eq!(reply.status, 400);
+        assert!(reply
+            .head
+            .to_ascii_lowercase()
+            .contains("content-type: application/json"));
+        let message = if size > 10_485_760 {
+            "Request payload size exceeds the limit: 10485760 bytes.".to_owned()
+        } else {
+            assert!(size > 10_000_000);
+            format!("The value for request_size is too large. You passed {size} in the request, but the maximum value is 10000000.")
+        };
+        assert_eq!(reply.body, format!("{{\n  \"error\": {{\n    \"code\": 400,\n    \"message\": \"{message}\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }}\n}}\n"));
+    }
+}
+
+#[tokio::test]
+async fn emulator_aggregate_batches_keep_the_official_plain_ok_behavior() {
+    let server = start(Some(FunctionsHttpProfile::Emulator)).await;
+    let mut replies = Vec::new();
+    for padding in [100_000, 106_000] {
+        replies.push(
+            server
+                .send(
+                    "POST",
+                    &format!("/{CUSTOM}:publishEvents"),
+                    false,
+                    Some(&publish_body(&aggregate_batch(padding, "unmatched"))),
+                )
+                .await,
+        );
+    }
+    let frames = server.frames_so_far().await;
+    server.stop().await;
+    for reply in replies {
+        assert_eq!(reply, (200, "OK".to_owned()));
+    }
+    assert_eq!(frames, 0);
 }
 
 #[tokio::test]
@@ -1461,4 +1659,393 @@ fn the_declared_eventarc_queue_bounds_are_the_numbers_capabilities_json_states_a
     assert!(!capabilities.contains("each publish to 256 input events"));
     assert!(!capabilities.contains("256 deliveries after fault expansion"));
     assert!(capabilities.contains("no per-publication cap on events or deliveries"));
+}
+
+#[tokio::test]
+async fn strict_configured_numeric_project_get_and_list_share_channel_identity() {
+    let channels = Arc::new(ChannelStore::new(
+        Box::new(SystemEntropy::default()),
+        Timing {
+            create: 0,
+            delete: 0,
+        },
+    ));
+    let server = start_with_project_number(
+        Some(FunctionsHttpProfile::Strict),
+        PROJECT,
+        Some(channels),
+        Some(111_111_111_111),
+    )
+    .await;
+    let canonical = "projects/demo-app/locations/us-central1/channels/numeric-made";
+    let body = json!({ "name": canonical }).to_string();
+    let created = server
+        .send(
+            "POST",
+            "/v1/projects/demo-app/locations/us-central1/channels?channelId=numeric-made",
+            true,
+            Some(&body),
+        )
+        .await;
+    let id_read = server
+        .send("GET", &format!("/v1/{canonical}"), true, None)
+        .await;
+    let id_list = server
+        .send(
+            "GET",
+            "/v1/projects/demo-app/locations/us-central1/channels",
+            true,
+            None,
+        )
+        .await;
+    let alias_read = server
+        .send(
+            "GET",
+            "/v1/projects/111111111111/locations/us-central1/channels/numeric-made",
+            true,
+            None,
+        )
+        .await;
+    let alias_list = server
+        .send(
+            "GET",
+            "/v1/projects/111111111111/locations/us-central1/channels",
+            true,
+            None,
+        )
+        .await;
+    let final_id_list = server
+        .send(
+            "GET",
+            "/v1/projects/demo-app/locations/us-central1/channels",
+            true,
+            None,
+        )
+        .await;
+    server.stop().await;
+    assert_eq!(created.0, 200);
+    assert_eq!(id_read.0, 200);
+    assert_eq!(alias_read.0, 200);
+    let canonical_value: Value = serde_json::from_str(&id_read.1).unwrap();
+    let mut aliased: Value = serde_json::from_str(&alias_read.1).unwrap();
+    assert_eq!(
+        aliased["name"],
+        "projects/111111111111/locations/us-central1/channels/numeric-made"
+    );
+    assert_eq!(aliased["state"], "ACTIVE");
+    assert!(aliased["pubsubTopic"]
+        .as_str()
+        .unwrap()
+        .starts_with("projects/demo-app/topics/"));
+    aliased["name"] = Value::String(canonical.to_owned());
+    assert_eq!(
+        aliased, canonical_value,
+        "UID, state, times and topic must share canonical identity"
+    );
+    assert_eq!(id_list.0, 200);
+    assert_eq!(alias_list.0, 200);
+    let canonical_list: Value = serde_json::from_str(&id_list.1).unwrap();
+    let mut numeric_channels: Value = serde_json::from_str(&alias_list.1).unwrap();
+    assert_eq!(
+        numeric_channels["channels"].as_array().unwrap().len(),
+        canonical_list["channels"].as_array().unwrap().len()
+    );
+    for item in numeric_channels["channels"].as_array_mut().unwrap() {
+        let name = item["name"]
+            .as_str()
+            .unwrap()
+            .replace("projects/111111111111/", "projects/demo-app/");
+        item["name"] = Value::String(name);
+    }
+    assert_eq!(numeric_channels, canonical_list);
+    assert_eq!(
+        final_id_list, id_list,
+        "an alias read cannot create a second namespace"
+    );
+}
+
+#[tokio::test]
+async fn strict_numeric_project_alias_is_explicit_scoped_and_preserves_auth_admission() {
+    for configured in [None, Some(111_111_111_111)] {
+        let server = start_with_project_number(
+            Some(FunctionsHttpProfile::Strict),
+            PROJECT,
+            None,
+            configured,
+        )
+        .await;
+        let mut results = Vec::new();
+        for project in ["111111111111", "222222222222", "demo-another"] {
+            for suffix in ["channels/custom", "channels"] {
+                let path = format!("/v1/projects/{project}/locations/us-central1/{suffix}");
+                results.push((project, server.send("GET", &path, true, None).await));
+                for token in [
+                    None,
+                    Some("invalid-token"),
+                    Some("eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJ4In0.signature"),
+                ] {
+                    results.push(("auth", {
+                        let response = server.exchange("GET", &path, token, None, "").await;
+                        (response.status, response.body)
+                    }));
+                }
+            }
+        }
+        let canonical = server
+            .send("GET", &format!("/v1/{CUSTOM}"), true, None)
+            .await;
+        for (method, suffix) in [
+            ("POST", "channels?channelId=new-channel"),
+            ("DELETE", "channels/custom"),
+            ("POST", "channels/custom:publishEvents"),
+            ("GET", "operations/operation-0-0-0-0"),
+        ] {
+            let response = server
+                .send(
+                    method,
+                    &format!("/v1/projects/111111111111/locations/us-central1/{suffix}"),
+                    true,
+                    Some("{}"),
+                )
+                .await;
+            results.push(("unobserved", response));
+        }
+        server.stop().await;
+        assert_eq!(canonical.0, 200);
+        for (project, (status, body)) in results {
+            let expected = if project == "auth" {
+                401
+            } else if configured.is_some() && project == "111111111111" {
+                200
+            } else {
+                403
+            };
+            assert_eq!(status, expected, "{project}: {body}");
+            if expected == 403 {
+                assert!(body.contains("CONSUMER_INVALID"));
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn configured_numeric_context_does_not_add_strict_routes_to_emulator_profile() {
+    let server = start_with_project_number(
+        Some(FunctionsHttpProfile::Emulator),
+        PROJECT,
+        None,
+        Some(111_111_111_111),
+    )
+    .await;
+    let id = server
+        .send("GET", &format!("/v1/{CUSTOM}"), true, None)
+        .await;
+    let alias = server
+        .send(
+            "GET",
+            "/v1/projects/111111111111/locations/us-central1/channels/custom",
+            true,
+            None,
+        )
+        .await;
+    server.stop().await;
+    assert_eq!(id.0, 404);
+    assert_eq!(alias.0, 404);
+}
+
+fn assert_recorded_oauth_body(answer: &Exchange, method: &str) {
+    let expected_challenge = if answer.status == 401 {
+        "Bearer realm=\"https://accounts.google.com/\", error=\"invalid_token\""
+    } else {
+        "Bearer realm=\"https://accounts.google.com/\", error=\"insufficient_scope\", scope=\"https://www.googleapis.com/auth/cloud-platform\""
+    };
+    let challenge = answer
+        .head
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.eq_ignore_ascii_case("www-authenticate"))
+        .map(|(_, value)| value.trim());
+    assert_eq!(challenge, Some(expected_challenge), "{method}");
+
+    let expected_digest = match (answer.status, method) {
+        (401, "GET") => "30e5d4caf5df05cf9f1a3556fb131486d50cc47e6048e50651372dd6291925ca",
+        (401, _) => "8a91824b7f46984366f3eb8d2572a746e3610a0519699e7895ff85ef81f43f68",
+        (403, "GET") => "f6ccaa85496ff05bd9aae0c94317c1e69c270c3335f886378169c2b570a90bae",
+        _ => "0027991ab9f7a687105d57f2903f3ff9ff5deb1f9cc1141b62a55c304afa0cd0",
+    };
+    let digest = fireemu_core_types::hash::sha256(answer.body.as_bytes())
+        .iter()
+        .fold(String::new(), |mut out, byte| {
+            use std::fmt::Write as _;
+            write!(out, "{byte:02x}").unwrap();
+            out
+        });
+    assert_eq!(
+        digest, expected_digest,
+        "original C322/323/329/330 physical bodies"
+    );
+}
+
+async fn assert_catalog_delivery_barrier(server: &Listener) {
+    server
+        .runtime
+        .await_idle(Duration::from_secs(3))
+        .await
+        .expect("positive publication is a delivery barrier");
+    let frames = std::fs::read_to_string(&server.frames).unwrap();
+    let events: Vec<Value> = frames
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|frame| frame["function"] == "customEvent")
+        .collect();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0]["event"]["id"], "catalog-positive",
+        "no denied event may cross the positive delivery barrier"
+    );
+}
+
+#[tokio::test]
+async fn local_oauth_catalog_reaches_http_and_denies_before_delivery() {
+    use fireemu_adapter_functions::eventarc_strict::{EventarcContext, OAuthCredentialCatalog};
+    let mut catalog = OAuthCredentialCatalog::new();
+    catalog.insert(
+        fireemu_core_types::hash::sha256(b"ya29.rotation-good"),
+        ["https://www.googleapis.com/auth/cloud-platform".to_owned()]
+            .into_iter()
+            .collect(),
+    );
+    catalog.insert(
+        fireemu_core_types::hash::sha256(b"ya29.rotation-limited"),
+        std::collections::BTreeSet::new(),
+    );
+    let channels = Arc::new(ChannelStore::default());
+    let server = start_with_context(
+        Some(FunctionsHttpProfile::Strict),
+        PROJECT,
+        Some(channels.clone()),
+        None,
+        Some(EventarcContext {
+            project_number: Some(111_111_111_111),
+            oauth_credentials: Some(Arc::new(catalog)),
+        }),
+    )
+    .await;
+    let publication = publish_body(&[good_event("catalog-denied")]);
+    for (token, status, reason) in [
+        (
+            "ya29.rotation-good-near",
+            401,
+            "ACCESS_TOKEN_TYPE_UNSUPPORTED",
+        ),
+        (
+            "ya29.rotation-limited",
+            403,
+            "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+        ),
+    ] {
+        for (method, path) in [
+            ("GET", "/v1/projects/other/locations/invalid/channels"),
+            (
+                "POST",
+                "/v1/projects/demo-app/locations/us-central1/channels/custom:publishEvents",
+            ),
+        ] {
+            let answer = server
+                .exchange(method, path, Some(token), Some(&publication), "")
+                .await;
+            assert_eq!(answer.status, status);
+            assert_recorded_oauth_body(&answer, method);
+            let body: Value = serde_json::from_str(&answer.body).unwrap();
+            assert_eq!(body["error"]["details"][0]["reason"], reason);
+        }
+    }
+    assert!(matches!(
+        channels.lookup(CUSTOM, u64::MAX),
+        fireemu_adapter_functions::eventarc_channels::Lookup::Absent
+    ));
+    let event = publish_body(&[good_event("catalog-positive")]);
+    let delivered = server
+        .exchange(
+            "POST",
+            &format!("/v1/{CUSTOM}:publishEvents"),
+            Some("ya29.rotation-good"),
+            Some(&event),
+            "",
+        )
+        .await;
+    assert_eq!(delivered.status, 200);
+    assert_catalog_delivery_barrier(&server).await;
+    let allowed = server
+        .exchange(
+            "GET",
+            "/v1/projects/111111111111/locations/us-central1/channels",
+            Some("ya29.rotation-good"),
+            None,
+            "",
+        )
+        .await;
+    assert_eq!(allowed.status, 200);
+    let missing = server
+        .exchange(
+            "GET",
+            "/v1/projects/other/locations/invalid/channels",
+            None,
+            None,
+            "",
+        )
+        .await;
+    assert_eq!(missing.status, 401);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn local_oauth_catalog_empty_and_absent_and_emulator_are_distinct() {
+    use fireemu_adapter_functions::eventarc_strict::{EventarcContext, OAuthCredentialCatalog};
+    for (profile, catalog, status) in [
+        (FunctionsHttpProfile::Strict, None, 200),
+        (
+            FunctionsHttpProfile::Strict,
+            Some(Arc::new(OAuthCredentialCatalog::new())),
+            401,
+        ),
+        (
+            FunctionsHttpProfile::Emulator,
+            Some(Arc::new(OAuthCredentialCatalog::new())),
+            200,
+        ),
+    ] {
+        let server = start_with_context(
+            Some(profile),
+            PROJECT,
+            None,
+            None,
+            Some(EventarcContext {
+                project_number: None,
+                oauth_credentials: catalog,
+            }),
+        )
+        .await;
+        let path = if profile == FunctionsHttpProfile::Strict {
+            "/v1/projects/demo-app/locations/us-central1/channels"
+        } else {
+            "/projects/demo-app/locations/us-central1/channels/custom:publishEvents"
+        };
+        let body = publish_body(&[good_event("catalog-emulator")]);
+        let response = server
+            .exchange(
+                if profile == FunctionsHttpProfile::Strict {
+                    "GET"
+                } else {
+                    "POST"
+                },
+                path,
+                Some("ya29.arbitrary-unissued"),
+                Some(&body),
+                "",
+            )
+            .await;
+        server.stop().await;
+        assert_eq!(response.status, status);
+    }
 }

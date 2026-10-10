@@ -3216,12 +3216,18 @@ fn manifest_for_profile(
                 channel, filters, ..
             } = &function.trigger
             {
-                // EVENTARC packet H v4: only the exact source filter on a custom-event channel is recorded as refused.
+                // Production refused exact source and subject filters on custom-event channels.
+                // Source precedence and subject-only refusal are conservative local policies.
                 if channel != fireemu_adapter_functions::eventarc::GOOGLE_CHANNEL
-                    && filters.contains_key("source")
+                    && (filters.contains_key("source") || filters.contains_key("subject"))
                 {
+                    let attribute = if filters.contains_key("source") {
+                        "source"
+                    } else {
+                        "subject"
+                    };
                     return Err(format!(
-                        "manifest: function {:?}: Cloud Functions refuses this Eventarc trigger (HTTP 400): Validation failed for trigger projects/<project>/locations/{}/triggers/<trigger-id>: The request was invalid: invalid filter 'source' in trigger.event_filters: filter 'source' is not allowed for this trigger",
+                        "manifest: function {:?}: Cloud Functions refuses this Eventarc trigger (HTTP 400): Validation failed for trigger projects/<project>/locations/{}/triggers/<trigger-id>: The request was invalid: invalid filter '{attribute}' in trigger.event_filters: filter '{attribute}' is not allowed for this trigger",
                         function.name, function.region
                     ));
                 }
@@ -7442,7 +7448,8 @@ mod tests {
             json!({"type": "com.example.done"}),
             json!({"type": "com.example.done", "sourcex": "urn:example:source"}),
             json!({"type": "com.example.done", "Source": "urn:example:source"}),
-            json!({"type": "com.example.done", "subject": "example"}),
+            json!({"type": "com.example.done", "tenant": "example"}),
+            json!({"type": "com.example.done", "subjectx": "example"}),
         ] {
             let document = json!({"functions": [{"name": "custom", "generation": 2,
                 "trigger": {"type": "eventarc", "eventType": "com.example.done", "filters": filters}
@@ -7463,10 +7470,54 @@ mod tests {
     }
 
     #[test]
+    fn strict_refuses_eventarc_subject_filters_and_keeps_source_precedence() {
+        for channel in [
+            None,
+            Some("locations/us-central1/channels/custom"),
+            Some("projects/demo-test/locations/us-central1/channels/custom"),
+        ] {
+            for (filters, attribute) in [
+                (
+                    json!({"tenant": "example", "subject": "example"}),
+                    "subject",
+                ),
+                // Subject-only and combined-filter ordering are conservative local policies.
+                (json!({"subject": "example"}), "subject"),
+                (
+                    json!({"source": "urn:example:source", "subject": "example"}),
+                    "source",
+                ),
+            ] {
+                let mut document = json!({"functions": [{"name": "customFilter",
+                    "region": "us-central1", "generation": 2, "trigger": {
+                        "type": "eventarc", "eventType": "com.example.done", "filters": filters
+                    }
+                }]});
+                if let Some(channel) = channel {
+                    document["functions"][0]["trigger"]["channel"] = json!(channel);
+                }
+                let now = crate::config::RuntimeConfig::default().clock_start;
+                assert_eq!(
+                    super::manifest_for_profile(CompatibilityProfile::Strict, &document, now)
+                        .unwrap_err(),
+                    format!(
+                        "manifest: function \"customFilter\": Cloud Functions refuses this Eventarc trigger (HTTP 400): Validation failed for trigger projects/<project>/locations/us-central1/triggers/<trigger-id>: The request was invalid: invalid filter '{attribute}' in trigger.event_filters: filter '{attribute}' is not allowed for this trigger"
+                    )
+                );
+                assert_eq!(
+                    super::manifest_for_profile(CompatibilityProfile::Emulator, &document, now)
+                        .unwrap(),
+                    parse_manifest(&document).unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn eventarc_source_refusal_does_not_claim_google_channel_triggers() {
         let document = json!({"functions": [{"name": "alert", "generation": 2,
             "trigger": {"type": "eventarc", "eventType": "google.firebase.firebasealerts.alerts.v1.published",
-                "channel": "google", "filters": {"source": "urn:example:source"}}
+                "channel": "google", "filters": {"source": "urn:example:source", "subject": "example"}}
         }]});
         assert_eq!(
             super::manifest_for_profile(

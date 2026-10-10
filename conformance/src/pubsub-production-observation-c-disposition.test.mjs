@@ -675,3 +675,216 @@ test("Seek pre-window witness retains full delivery field presence", async () =>
   const r = await replayPreSeekFixture(preSeekWitnessFixture(), true);
   assert.equal(r.cells[0].dispositionVerdict, "DIVERGES");
 });
+
+const nackApproval = {
+  proposalSha256: "aab063ec406aa8ad4395b8f21eb251e0157d6a933576ff66ecdd906f89e0961b",
+  owner1213LineSha256: "b05cb78d655502359c268032d1893991bb6c4e19a2370cf05f6133c02675f775",
+};
+function nackFixture() {
+  const input = preSeekWitnessFixture();
+  input.metadata = {
+    ...metadata,
+    runId: "567e1cd860a1",
+    sourceHead: "3235e54940ff1ece6004d3e78e70548ca6eba85c",
+    packetSha256: "285a6220ed6c7e7efdafbe8618a52e3f87aac1be57a0ea7a684ae80b75126c80",
+    descriptorSha256: "3b455b9613b20aa89d2ea277962652f110f45847c9b80668a66605517aba5707",
+  };
+  const c = input.cells[0];
+  c.id = "R8";
+  c.observations = [];
+  c.exchanges = [];
+  let n = 0;
+  const add = (method, request, body) => {
+    const e = {
+      n: ++n,
+      responseN: ++n,
+      requestId: n,
+      at: "2026-10-10T00:00:00.000Z",
+      transport: "rest",
+      category: "other",
+      method,
+      request,
+      reply: { ok: true, code: "OK", status: 200, body },
+    };
+    c.exchanges.push(e);
+    return e;
+  };
+  const pub = (i) =>
+    add(
+      "Publish",
+      { topic: "topic", messages: [{ data: String(i), orderingKey: i === 2 ? "B" : "A" }] },
+      { messageIds: [String(i)] },
+    );
+  const pull = (ids, stage) => {
+    const e = add(
+      "Pull",
+      { subscription: "control", maxMessages: stage === "outstanding-predecessor" ? 1 : 3 },
+      {
+        receivedMessages: ids.map((i) => ({
+          ackId: `${stage}${i}`,
+          message: {
+            messageId: String(i),
+            data: String(i),
+            attributes: {},
+            orderingKey: i === 2 ? "B" : "A",
+          },
+        })),
+      },
+    );
+    c.observations.push({
+      n: ++n,
+      stage,
+      subscription: "control",
+      items: e.reply.body.receivedMessages,
+    });
+    return e;
+  };
+  add("CreateTopic", { name: "topic" }, { name: "topic" });
+  add(
+    "CreateSubscription",
+    { name: "control", topic: "topic", ackDeadlineSeconds: 60, enableMessageOrdering: true },
+    { name: "control", topic: "topic", ackDeadlineSeconds: 60, enableMessageOrdering: true },
+  );
+  pub(0);
+  const initial = pull([0], "outstanding-predecessor");
+  pub(1);
+  pub(2);
+  add(
+    "ModifyAckDeadline",
+    {
+      subscription: "control",
+      ackIds: [initial.reply.body.receivedMessages[0].ackId],
+      ackDeadlineSeconds: 0,
+    },
+    {},
+  );
+  pull([2], "before-predecessor-ACK");
+  pull([0], "before-predecessor-ACK");
+  add(
+    "Acknowledge",
+    { subscription: "control", ackIds: ["before-predecessor-ACK2", "before-predecessor-ACK0"] },
+    {},
+  );
+  pull([1], "after-predecessor-ACK");
+  add("Acknowledge", { subscription: "control", ackIds: ["after-predecessor-ACK1"] }, {});
+  return input;
+}
+async function replayNack({
+  batches = [[0], [0, 2], [], [1]],
+  badAck = false,
+  authorityChange = null,
+  stale = false,
+  inputChange = null,
+  localChange = null,
+} = {}) {
+  const input = nackFixture();
+  inputChange?.(input);
+  const nackAuthority = { ...nackApproval, source: input.metadata, runtimeInputs, cellIds: ["R8"] };
+  authorityChange?.(nackAuthority);
+  let pulls = 0;
+  const actualAcks = [];
+  const report = await replayRecording(
+    input,
+    async (call, source) => {
+      if (call.method === "Publish")
+        return {
+          ...source.reply,
+          body: { messageIds: source.reply.body.messageIds.map((x) => String(100 + Number(x))) },
+        };
+      if (call.method === "Pull") {
+        const ids = batches[pulls++] ?? [];
+        const result = reply(
+          ids.map((i) => {
+            const value = delivery(i, `local${pulls}-${i}`);
+            value.message.orderingKey = i === 2 ? "B" : "A";
+            return value;
+          }),
+        );
+        localChange?.(result, pulls);
+        return result;
+      }
+      if (call.method === "Acknowledge") {
+        actualAcks.push(call.request.ackIds);
+        if (badAck)
+          return { ...source.reply, ok: false, code: "INVALID_ARGUMENT", status: 400, body: {} };
+      }
+      return structuredClone(source.reply);
+    },
+    {
+      nackDisposition: nackAuthority,
+      clockReceiptFor: (source) => ({
+        ...clockReceiptFor(source),
+        ...(stale ? { body: { clock: "2026-10-10T00:02:00.000Z" } } : {}),
+      }),
+    },
+  );
+  return { report, actualAcks };
+}
+test("approved NACK finite window uses current redelivery ACK and then releases A2", async () => {
+  const { report: r, actualAcks } = await replayNack();
+  assert.equal(r.cells[0].dispositionVerdict, "MATCH");
+  assert.equal(r.cells[0].semanticVerdict, "DIVERGES");
+  assert.deepEqual(actualAcks, [["local2-2", "local2-0"], ["local4-1"]]);
+  assert.equal(r.parentClosureReady, false);
+});
+test("NACK window rejects early A2, duplicate, missing, over-limit, failed ACK and unbound authority", async () => {
+  for (const options of [
+    { batches: [[0], [0, 1, 2], [], [1]] },
+    { batches: [[0], [0, 2], [0], [1]] },
+    { batches: [[0], [2], [], [1]] },
+    { batches: [[0], [0, 2, 2, 2], [], [1]] },
+    { badAck: true },
+    { authorityChange: (a) => (a.owner1213LineSha256 = "0".repeat(64)) },
+    { stale: true },
+  ]) {
+    const { report } = await replayNack(options);
+    assert.notEqual(report.cells[0].dispositionVerdict, "MATCH");
+  }
+});
+
+test("NACK finite allocation permutations preserve same-key causal release", async () => {
+  for (const before of [
+    [[0, 2], []],
+    [[2, 0], []],
+    [[0], [2]],
+    [[2], [0]],
+    [[], [0, 2]],
+  ]) {
+    const { report } = await replayNack({ batches: [[0], ...before, [1]] });
+    assert.equal(report.cells[0].dispositionVerdict, "MATCH");
+  }
+});
+
+test("NACK allowance requires exact recording, source, runtime, fresh ACK and full delivery shape", async () => {
+  for (const options of [
+    { inputChange: (i) => (i.metadata.runId = "abcdef012345") },
+    { inputChange: (i) => (i.metadata.sourceHead = "f".repeat(40)) },
+    {
+      authorityChange: (a) =>
+        (a.runtimeInputs = { ...runtimeInputs, binarySha256: "0".repeat(64) }),
+    },
+    { authorityChange: (a) => (a.cellIds = []) },
+    {
+      inputChange: (i) => {
+        i.cells[0].exchanges.find((e) => e.method === "Acknowledge").request.ackIds = [
+          "outstanding-predecessor0",
+        ];
+      },
+    },
+    {
+      inputChange: (i) => {
+        i.cells[0].exchanges
+          .filter((e) => e.method === "Acknowledge")
+          .forEach((e) => (e.at = "2026-10-10T00:02:00.000Z"));
+      },
+    },
+    {
+      localChange: (response, n) => {
+        if (n === 2) response.body.receivedMessages[0].deliveryAttempt = 1;
+      },
+    },
+  ]) {
+    const { report } = await replayNack(options);
+    assert.notEqual(report.cells[0].dispositionVerdict, "MATCH");
+  }
+});

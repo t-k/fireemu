@@ -305,6 +305,252 @@ function snapshotTime(source, actual, receipt, state, messages, topics, bound) {
   result.verdict = "MATCH";
   return result;
 }
+function createNackDisposition(input, cell, authority) {
+  if (
+    !authority ||
+    !["R8", "N8"].includes(cell.id) ||
+    !["567e1cd860a1", "45298b949da0"].includes(input.metadata.runId) ||
+    input.metadata.sourceHead !== "3235e54940ff1ece6004d3e78e70548ca6eba85c" ||
+    input.metadata.packetSha256 !==
+      "285a6220ed6c7e7efdafbe8618a52e3f87aac1be57a0ea7a684ae80b75126c80" ||
+    input.metadata.descriptorSha256 !==
+      "3b455b9613b20aa89d2ea277962652f110f45847c9b80668a66605517aba5707" ||
+    authority.proposalSha256 !==
+      "aab063ec406aa8ad4395b8f21eb251e0157d6a933576ff66ecdd906f89e0961b" ||
+    authority.owner1213LineSha256 !==
+      "b05cb78d655502359c268032d1893991bb6c4e19a2370cf05f6133c02675f775" ||
+    !["runId", "sourceHead", "packetSha256", "descriptorSha256"].every(
+      (k) => authority.source?.[k] === input.metadata[k],
+    ) ||
+    !["binarySha256", "inputsSha256"].every(
+      (k) =>
+        /^[a-f0-9]{64}$/.test(input.runtimeInputs?.[k] ?? "") &&
+        authority.runtimeInputs?.[k] === input.runtimeInputs[k],
+    ) ||
+    !Array.isArray(authority.cellIds) ||
+    !authority.cellIds.includes(cell.id)
+  )
+    return null;
+  const stages = ["before-predecessor-ACK", "after-predecessor-ACK"];
+  const role = (e) => {
+    const next = cell.exchanges.find((x) => x.n > e.n)?.n ?? Infinity;
+    const obs = cell.observations.filter(
+      (o) =>
+        o.n > e.responseN &&
+        o.n < next &&
+        o.subscription === e.request.subscription &&
+        stages.includes(o.stage),
+    );
+    return obs.length === 1 ? obs[0].stage : null;
+  };
+  const windows = new Map(),
+    checks = [];
+  let nacked = false,
+    predecessor = null,
+    subscriptionName = null;
+  const current = () =>
+    windows.get("after-predecessor-ACK") ?? windows.get("before-predecessor-ACK");
+  return {
+    owner: 1213,
+    nack(source, call, actual, subscriptions, tokens) {
+      if (source.method !== "ModifyAckDeadline" || source.request.ackDeadlineSeconds !== 0) return;
+      const prior = cell.exchanges.findLast(
+        (e) =>
+          e.n < source.n &&
+          e.method === "Pull" &&
+          e.request.subscription === source.request.subscription &&
+          e.reply.ok,
+      );
+      const initial = prior?.reply.body?.receivedMessages;
+      const binding =
+        initial?.length === 1
+          ? tokens.get(`${source.request.subscription}\0${initial[0].ackId}`)
+          : null;
+      const sub = subscriptions.get(source.request.subscription);
+      const valid =
+        binding &&
+        sub?.enableMessageOrdering === true &&
+        source.request.ackIds?.length === 1 &&
+        source.request.ackIds[0] === initial[0].ackId &&
+        call.request.ackIds[0] === binding.ackId;
+      if (!valid) {
+        checks.push("NOT_COMPARABLE");
+        return;
+      }
+      predecessor = binding.sourceMessageId;
+      subscriptionName = source.request.subscription;
+      nacked =
+        source.reply.ok &&
+        actual.ok &&
+        source.reply.code === actual.code &&
+        source.reply.status === actual.status &&
+        same(source.reply.body, actual.body);
+      checks.push(nacked ? "MATCH" : "DIVERGES");
+    },
+    pull(source, actual, publications, subscription) {
+      const stage = role(source);
+      if (!stage || !nacked) return null;
+      if (
+        source.request.subscription !== subscriptionName ||
+        subscription?.enableMessageOrdering !== true
+      ) {
+        checks.push("NOT_COMPARABLE");
+        return null;
+      }
+      let w = windows.get(stage);
+      if (!w) {
+        const sources = cell.exchanges.filter(
+          (e) =>
+            e.method === "Pull" && role(e) === stage && e.request.subscription === subscriptionName,
+        );
+        const sourceItems = sources.flatMap((e) => e.reply.body?.receivedMessages ?? []);
+        w = {
+          stage,
+          sources,
+          sourceItems,
+          required: new Set(sourceItems.map((i) => i.message?.messageId)),
+          seen: new Map(),
+          pending: new Map(),
+          acked: new Set(),
+          verdicts: [],
+        };
+        windows.set(stage, w);
+      }
+      const pre = windows.get(stages[0]);
+      if (stage === stages[1] && (!pre?.acked.has(predecessor) || pre.pending.size)) {
+        w.verdicts.push("DIVERGES");
+      }
+      const items = actual.body?.receivedMessages ?? [];
+      if (
+        !Array.isArray(items) ||
+        !Number.isSafeInteger(source.request.maxMessages) ||
+        items.length > source.request.maxMessages
+      ) {
+        w.verdicts.push("DIVERGES");
+        return { kind: "nack", bindings: [] };
+      }
+      const envelope = { ...actual.body },
+        expected = { ...source.reply.body };
+      delete envelope.receivedMessages;
+      delete expected.receivedMessages;
+      if (!same(envelope, expected)) w.verdicts.push("DIVERGES");
+      for (const item of items) {
+        const matches = [...publications.values()].filter(
+          (p) =>
+            p.topic === subscription.topic &&
+            p.messageId === item.message?.messageId &&
+            same(p.payload, payload(item.message)),
+        );
+        const p = matches.length === 1 ? matches[0] : null;
+        if (
+          !p ||
+          !w.required.has(p.sourceMessageId) ||
+          w.seen.has(p.sourceMessageId) ||
+          typeof item.ackId !== "string" ||
+          !item.ackId ||
+          [...w.pending.values()].some(
+            (b) =>
+              b.delivered.ackId === item.ackId ||
+              b.publication.payload.orderingKey === p.payload.orderingKey,
+          )
+        ) {
+          w.verdicts.push("DIVERGES");
+          continue;
+        }
+        const deadline = timestamp(source.at)?.instant;
+        if (
+          deadline === undefined ||
+          !Number.isSafeInteger(subscription.ackDeadlineSeconds) ||
+          subscription.ackDeadlineSeconds <= 0
+        ) {
+          w.verdicts.push("NOT_COMPARABLE");
+          continue;
+        }
+        const binding = {
+          publication: p,
+          delivered: item,
+          witnesses: w.sourceItems.filter((i) => i.message?.messageId === p.sourceMessageId),
+          deadline: deadline + BigInt(subscription.ackDeadlineSeconds) * 1000000000n,
+        };
+        w.seen.set(p.sourceMessageId, binding);
+        w.pending.set(p.sourceMessageId, binding);
+      }
+      return { kind: "nack", bindings: [...w.pending.values()] };
+    },
+    owns(subscription) {
+      return nacked && subscription === subscriptionName;
+    },
+    ackIds(subscription, source) {
+      const w = current();
+      if (subscription !== subscriptionName || !w)
+        throw new Error("NACK window current ACK unavailable");
+      const ids = (source.request.ackIds ?? []).map((id) => {
+        const items = w.sourceItems.filter((i) => i.ackId === id);
+        if (items.length !== 1) throw new Error("NACK source ACK identity unavailable");
+        return items[0].message?.messageId;
+      });
+      if (
+        ids.length !== w.pending.size ||
+        new Set(ids).size !== ids.length ||
+        ids.some((id) => !w.pending.has(id))
+      )
+        throw new Error("NACK delivered batch incomplete before ACK");
+      const now = timestamp(source.at)?.instant;
+      if (now === undefined || ids.some((id) => now >= w.pending.get(id).deadline))
+        throw new Error("NACK current ACK expired");
+      return ids.map((id) => w.pending.get(id).delivered.ackId);
+    },
+    ack(subscription, ids, actual, at) {
+      const w = current();
+      if (subscription !== subscriptionName || !w) return;
+      const now = timestamp(at)?.instant;
+      if (
+        !actual.ok ||
+        now === undefined ||
+        ids.length !== w.pending.size ||
+        [...w.pending.values()].some((b) => !ids.includes(b.delivered.ackId) || now >= b.deadline)
+      ) {
+        w.verdicts.push("DIVERGES");
+        return;
+      }
+      for (const id of w.pending.keys()) w.acked.add(id);
+      w.pending.clear();
+    },
+    finish() {
+      const proof = [...windows.values()].map((w) => ({
+        stage: w.stage,
+        required: [...w.required],
+        received: [...w.seen.keys()],
+        acknowledged: [...w.acked],
+        verdict: verdict([
+          ...w.verdicts,
+          w.required.size > 0 &&
+          w.seen.size === w.required.size &&
+          w.acked.size === w.required.size &&
+          !w.pending.size
+            ? "MATCH"
+            : "NOT_COMPARABLE",
+        ]),
+      }));
+      return {
+        owner: 1213,
+        proposalSha256: authority.proposalSha256,
+        owner1213LineSha256: authority.owner1213LineSha256,
+        source: authority.source,
+        runtimeInputs: authority.runtimeInputs,
+        windows: proof,
+        verdict: verdict([
+          ...checks,
+          ...proof.map((w) => w.verdict),
+          proof.length === 2 && proof[0].required.includes(predecessor)
+            ? "MATCH"
+            : "NOT_COMPARABLE",
+        ]),
+      };
+    },
+  };
+}
+
 export async function replayRecording(
   input,
   execute,
@@ -313,6 +559,7 @@ export async function replayRecording(
     observe = () => {},
     timestampDisposition,
     schedulingDisposition,
+    nackDisposition,
     emptyAttributeValueDisposition,
     emptyAttributeValueComparator,
     emptyAttributeValueRawBodyFor = () => undefined,
@@ -334,7 +581,9 @@ export async function replayRecording(
       tokens = new Map(),
       acked = new Set(),
       exchanges = [];
-    const scheduling = createSchedulingDisposition(input, cell, schedulingDisposition);
+    const scheduling =
+      createSchedulingDisposition(input, cell, schedulingDisposition) ??
+      createNackDisposition(input, cell, nackDisposition);
     const schedulingInvariants = [];
     let stopped = false;
     for (const source of cell.exchanges) {
@@ -482,6 +731,11 @@ export async function replayRecording(
           const state = subscriptions.get(source.request.subscription ?? source.request.name);
           if (state) state.tainted = true;
         }
+        scheduling?.nack?.(source, call, actual, subscriptions, tokens);
+        if (source.method === "ModifyAckDeadline" && scheduling?.owner === 1213)
+          schedulingInvariants.push(
+            publicationClock(source, clockReceipt) ? "MATCH" : "NOT_COMPARABLE",
+          );
         if (source.method === "Pull" && source.reply.ok && actual.ok && scheduling) {
           schedulingPull = scheduling.pull(
             source,
@@ -884,7 +1138,9 @@ export async function replayRecording(
     results.push({
       ...(schedulingProof?.windows.length
         ? {
-            schedulingDisposition: schedulingProof,
+            ...(schedulingProof.owner === 1213
+              ? { nackDisposition: schedulingProof }
+              : { schedulingDisposition: schedulingProof }),
             dispositionVerdict: verdict([
               ...retainedVerdicts,
               ...schedulingInvariants,

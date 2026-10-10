@@ -23,8 +23,13 @@ function resources(request, runId, cellId) {
 export function importRecording(input) {
   const { packet, descriptor, summary, rows, issued, packetSha256, descriptorSha256 } = input;
   validatePlan(packet.plan);
-  if (packet.plan.selection || packet.plan.cells.filter((c) => !c.reserve).length !== 26)
-    throw new Error("original C26 plan required");
+  const witness = packet.plan.selection === "snapshot-origin-witness";
+  const expectedCells = witness ? 2 : 26;
+  if (
+    (!witness && packet.plan.selection) ||
+    packet.plan.cells.filter((c) => !c.reserve).length !== expectedCells
+  )
+    throw new Error("original C26 or approved snapshot witness plan required");
   if (!Array.isArray(rows) || rows.length < 1 || rows.length > 10000 || !Array.isArray(issued))
     throw new Error("bounded C journals required");
   const metadata = rows[0];
@@ -120,7 +125,7 @@ export function importRecording(input) {
       finished.add(cell.id);
     } else throw new Error("unlisted C journal event");
   }
-  if (pending.size || finished.size !== 26 || summary.results?.length !== 26)
+  if (pending.size || finished.size !== expectedCells || summary.results?.length !== expectedCells)
     throw new Error("original C26 completion required");
   for (const item of issued)
     if (!cells.some((c) => owned(item.name, metadata.runId, c.id)))
@@ -514,7 +519,25 @@ export async function replayRecording(
               if (timestampDisposition) item.message.publishTime = delivered.message.publishTime;
             }
             for (const { publication, delivered, witnesses } of schedulingPull.bindings) {
-              const normalized = witnesses.map((item) => {
+              const savedWitnesses =
+                witnesses.length || schedulingPull.kind !== "seek"
+                  ? witnesses
+                  : cell.exchanges
+                      .filter(
+                        (e) =>
+                          e.method === "Pull" &&
+                          e.reply.ok &&
+                          !e.reply.unknown &&
+                          e.request.subscription === source.request.subscription &&
+                          e.n > publication.source.n &&
+                          e.n < schedulingPull.seek.n &&
+                          exchanges.some(
+                            (entry) => entry.sourceN === e.n && entry.semanticVerdict === "MATCH",
+                          ),
+                      )
+                      .flatMap((e) => e.reply.body?.receivedMessages ?? [])
+                      .filter((item) => item.message?.messageId === publication.sourceMessageId);
+              const normalized = savedWitnesses.map((item) => {
                 const value = structuredClone(item);
                 value.ackId = delivered.ackId;
                 value.message.messageId = delivered.message.messageId;
@@ -522,7 +545,7 @@ export async function replayRecording(
                 return value;
               });
               schedulingInvariants.push(
-                !witnesses.length
+                !savedWitnesses.length
                   ? "NOT_COMPARABLE"
                   : normalized.some((item) => same(item, delivered))
                     ? "MATCH"

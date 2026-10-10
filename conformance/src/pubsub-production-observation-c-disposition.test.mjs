@@ -544,3 +544,134 @@ test("nanosecond ACK boundary is evaluated without millisecond rounding", () => 
     assert.equal(f.session.finish().windows[0].acknowledged.includes("0"), acked);
   }
 });
+
+function preSeekWitnessFixture({
+  witnessSubscription = "control",
+  witnessSuccess = true,
+  witnessData = "2",
+} = {}) {
+  let n = 0;
+  const exchanges = [],
+    observations = [];
+  const add = (method, request, body) => {
+    const e = {
+      n: ++n,
+      responseN: ++n,
+      requestId: n,
+      at: "2026-10-10T00:00:00.000Z",
+      transport: "rest",
+      category: "other",
+      method,
+      request,
+      reply: { ok: true, code: "OK", status: 200, body },
+    };
+    exchanges.push(e);
+    return e;
+  };
+  add("CreateTopic", { name: "topic" }, { name: "topic" });
+  add(
+    "CreateSubscription",
+    { name: "control", topic: "topic", ackDeadlineSeconds: 60 },
+    { name: "control", topic: "topic", ackDeadlineSeconds: 60 },
+  );
+  if (witnessSubscription !== "control")
+    add(
+      "CreateSubscription",
+      { name: witnessSubscription, topic: "topic", ackDeadlineSeconds: 60 },
+      { name: witnessSubscription, topic: "topic", ackDeadlineSeconds: 60 },
+    );
+  add(
+    "Publish",
+    { topic: "topic", messages: [0, 1, 2].map((i) => ({ data: String(i) })) },
+    { messageIds: ["0", "1", "2"] },
+  );
+  add("CreateSnapshot", { name: "snapshot", subscription: "control" }, { name: "snapshot" });
+  const pre = add(
+    "Pull",
+    { subscription: witnessSubscription, maxMessages: 3 },
+    {
+      receivedMessages: [0, 1, 2].map((i) => ({
+        ackId: `pre${i}`,
+        message: {
+          messageId: String(i),
+          data: i === 2 ? witnessData : String(i),
+          attributes: {},
+          orderingKey: "",
+        },
+      })),
+    },
+  );
+  pre.reply.ok = witnessSuccess;
+  add("Acknowledge", { subscription: witnessSubscription, ackIds: ["pre0", "pre1", "pre2"] }, {});
+  add("Seek", { subscription: "control", snapshot: "snapshot" }, {});
+  for (const ids of [[0, 1], []]) {
+    const e = add(
+      "Pull",
+      { subscription: "control", maxMessages: 3 },
+      {
+        receivedMessages: ids.map((i) => ({
+          ackId: `post${i}`,
+          message: { messageId: String(i), data: String(i), attributes: {}, orderingKey: "" },
+        })),
+      },
+    );
+    observations.push({
+      n: ++n,
+      stage: "snapshot-replay",
+      subscription: "control",
+      items: e.reply.body.receivedMessages,
+    });
+    if (ids.length)
+      add("Acknowledge", { subscription: "control", ackIds: ids.map((i) => `post${i}`) }, {});
+  }
+  return {
+    metadata,
+    runtimeInputs,
+    cells: [{ id: "R12", coordinates: {}, exchanges, observations }],
+  };
+}
+async function replayPreSeekFixture(input, extraField = false) {
+  let pulls = 0;
+  return replayRecording(
+    input,
+    async (call, source) => {
+      if (call.method === "Publish")
+        return { ...source.reply, body: { messageIds: ["100", "101", "102"] } };
+      if (call.method === "Pull")
+        return reply(
+          (pulls++ < 2 ? [0, 1, 2] : []).map((i) =>
+            Object.assign(
+              delivery(i, pulls === 1 ? `prelocal${i}` : `postlocal${i}`),
+              extraField && pulls === 2 && i === 2 ? { deliveryAttempt: 1 } : {},
+            ),
+          ),
+        );
+      return structuredClone(source.reply);
+    },
+    { schedulingDisposition: authority("R12"), clockReceiptFor },
+  );
+}
+test("Seek uses genuine pre-Seek same-subscription full delivery witness for eligible local extras", async () => {
+  const input = preSeekWitnessFixture();
+  const original = structuredClone(input);
+  const r = await replayPreSeekFixture(input);
+  assert.equal(r.cells[0].dispositionVerdict, "MATCH", JSON.stringify(r.cells[0].schedulingProof));
+  assert.equal(r.cells[0].semanticVerdict, "DIVERGES");
+  assert.deepEqual(input, original);
+  assert.equal(r.parentClosureReady, false);
+});
+test("Seek pre-window witness cannot migrate subscription, success or content", async () => {
+  for (const options of [
+    { witnessSubscription: "other" },
+    { witnessSuccess: false },
+    { witnessData: "changed" },
+  ]) {
+    const r = await replayPreSeekFixture(preSeekWitnessFixture(options));
+    assert.notEqual(r.cells[0].dispositionVerdict, "MATCH");
+  }
+});
+
+test("Seek pre-window witness retains full delivery field presence", async () => {
+  const r = await replayPreSeekFixture(preSeekWitnessFixture(), true);
+  assert.equal(r.cells[0].dispositionVerdict, "DIVERGES");
+});

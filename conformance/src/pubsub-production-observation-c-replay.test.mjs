@@ -1321,3 +1321,43 @@ test("N7 auxiliary failure preserves original comparison", async () => {
   assert.equal(report.cells[0].exchanges[0].wireDisposition.verdict, "NOT_COMPARABLE");
   assert.equal(report.parentClosureReady, false);
 });
+
+test("approved snapshot witness imports exactly two complete cells without weakening C26", () => {
+  const input = fixture();
+  input.packet.plan = makePlan({ selection: "snapshot-origin-witness" });
+  input.rows = input.rows.filter(
+    (r) => r.event === "run-start" || ["R11", "N11"].includes(r.cellId),
+  );
+  input.rows.forEach((r, n) => (r.n = n + 1));
+  input.summary.results = input.summary.results.filter((r) => ["R11", "N11"].includes(r.cellId));
+  assert.deepEqual(
+    importRecording(input).cells.map((c) => c.id),
+    ["R11", "N11"],
+  );
+  for (const change of [
+    (x) => x.rows.pop(),
+    (x) => x.summary.results.pop(),
+    (x) => {
+      x.rows[1].cleanupClosed = false;
+    },
+    (x) => {
+      x.packet.plan.cells[0].id = "R10";
+    },
+    (x) => {
+      x.packet.plan.selection = "unknown";
+    },
+    (x) => {
+      delete x.packet.plan.selection;
+    },
+  ]) {
+    const bad = structuredClone(input);
+    change(bad);
+    assert.throws(() => importRecording(bad));
+  }
+  const full = fixture();
+  full.rows.pop();
+  assert.throws(() => importRecording(full), /completion/);
+  const gap = fixture();
+  gap.packet.plan = makePlan({ selection: "remaining-gap" });
+  assert.throws(() => importRecording(gap), /original C26/);
+});

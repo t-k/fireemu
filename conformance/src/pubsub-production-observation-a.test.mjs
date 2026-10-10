@@ -3651,20 +3651,24 @@ test("closure mandatory gap fixes original predicates and selected-only caps", (
       "N13",
       "N11",
       "N12",
+      "R12",
+      "N14",
+      "R13",
+      "N15",
     ],
   );
-  assert.equal(plan.cells.length, 25);
+  assert.equal(plan.cells.length, 29);
   assert.equal(
     plan.cells.some((c) => c.reserve),
     false,
   );
   assert.deepEqual(
     [plan.caps.G1.rest, plan.caps.G1.grpc, plan.caps.G4.rest, plan.caps.G4.streams],
-    [97, 121, 119, 7],
+    [124, 148, 119, 7],
   );
   assert.deepEqual(
     [plan.caps.sourceRequests, plan.caps.totalRequests, plan.caps.sourceWallMs],
-    [344, 358, 3660000],
+    [398, 412, 4860000],
   );
   assert.deepEqual(
     [
@@ -3673,7 +3677,7 @@ test("closure mandatory gap fixes original predicates and selected-only caps", (
       plan.caps.largePublishes,
       plan.caps.largeEncodedPayloadBytes,
     ],
-    [42, 42, 2, 1024],
+    [42, 42, 6, 1024],
   );
   assert.equal(makePlan().caps.G1.grpc, 120);
   const meter = createMeter({ now: () => 0, plan });

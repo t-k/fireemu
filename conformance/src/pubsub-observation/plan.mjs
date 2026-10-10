@@ -159,6 +159,10 @@ export function makePlan(selection = "full") {
       ["N13", "grpc", "publish-wire-eight", 6, 0],
       ["N11", "grpc", "topic-path-body", 1, 4],
       ["N12", "grpc", "subscription-path-body", 1, 4],
+      ["R12", "rest", "filter-negation", 10, 7],
+      ["N14", "grpc", "filter-negation", 10, 7],
+      ["R13", "rest", "positive-deadline-extension", 9, 1],
+      ["N15", "grpc", "positive-deadline-extension", 9, 1],
     ].map(([id, transport, variant, condition, index]) => ({
       id,
       group: "G1",
@@ -166,7 +170,11 @@ export function makePlan(selection = "full") {
       variant,
       coordinate: `/conditions/${condition}/cases/${index}`,
       reserve: false,
-      ...(variant === "publish-wire-eight" ? { cellMs: 240000 } : {}),
+      ...(variant === "publish-wire-eight" || variant === "filter-negation"
+        ? { cellMs: 240000 }
+        : variant === "positive-deadline-extension"
+          ? { cellMs: 360000 }
+          : {}),
     }));
     plan.selection = selection;
     plan.cells = [
@@ -193,17 +201,17 @@ export function makePlan(selection = "full") {
       ),
       ...extra,
     ];
-    plan.caps.G1 = { ...plan.caps.G1, requests: 218, rest: 97, grpc: 121 };
+    plan.caps.G1 = { ...plan.caps.G1, requests: 272, rest: 124, grpc: 148 };
     plan.caps.G4 = { ...plan.caps.G4, requests: 126, rest: 119, streams: 7 };
     Object.assign(plan.caps, {
-      sourceRequests: 344,
-      totalRequests: 358,
+      sourceRequests: 398,
+      totalRequests: 412,
       framesOut: 42,
       framesIn: 42,
-      largePublishes: 2,
+      largePublishes: 6,
       largeEncodedPayloadBytes: 1024,
       smallPublishes: 21,
-      sourceWallMs: 3660000,
+      sourceWallMs: 4860000,
     });
     return plan;
   }
@@ -259,10 +267,12 @@ export function validatePlan(value) {
   return value;
 }
 export const categoryCaps = (group, variant) =>
-  group === "G1" && variant === "publish-wire-eight"
-    ? { create: 2, get: 2, publish: 1, target: 4, cleanupDelete: 2, cleanupGet: 2 }
-    : group === "G1"
-      ? { create: 2, get: 2, target: 4, cleanupDelete: 2, cleanupGet: 2 }
-      : group === "G4"
-        ? { create: 2, get: 2, publish: 3, target: 6, cleanupDelete: 2, cleanupGet: 2, stream: 1 }
-        : { resourceRead: 6, unknownDeleteRead: 6 };
+  group === "G1" && variant === "positive-deadline-extension"
+    ? { create: 2, get: 2, publish: 1, target: 5, cleanupDelete: 2, cleanupGet: 2 }
+    : group === "G1" && ["publish-wire-eight", "filter-negation"].includes(variant)
+      ? { create: 2, get: 2, publish: 1, target: 4, cleanupDelete: 2, cleanupGet: 2 }
+      : group === "G1"
+        ? { create: 2, get: 2, target: 4, cleanupDelete: 2, cleanupGet: 2 }
+        : group === "G4"
+          ? { create: 2, get: 2, publish: 3, target: 6, cleanupDelete: 2, cleanupGet: 2, stream: 1 }
+          : { resourceRead: 6, unknownDeleteRead: 6 };

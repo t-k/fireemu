@@ -190,6 +190,247 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
         for (const name of [routeName, bodyName])
           await send("target", resourceMethod(name, "Get"), { name });
         complete = true;
+      } else if (cell.variant === "filter-negation") {
+        await setup(false, {}, { filter: 'NOT attributes.color = "red"' });
+        const messages = [
+          { data: Buffer.from("negation-red").toString("base64"), attributes: { color: "red" } },
+          { data: Buffer.from("negation-blue").toString("base64"), attributes: { color: "blue" } },
+          { data: Buffer.from("negation-missing").toString("base64"), attributes: {} },
+        ];
+        const published = await send("publish", "Publish", { topic, messages });
+        const ids = published.body?.messageIds;
+        if (
+          !published.ok ||
+          !Array.isArray(ids) ||
+          ids.length !== 3 ||
+          new Set(ids).size !== 3 ||
+          ids.some((id) => typeof id !== "string" || !id)
+        )
+          throw new Error("negation Publish identity missing");
+        ids.forEach((messageId, batchIndex) =>
+          journal.write({
+            event: "publication-binding",
+            cellId: cell.id,
+            messageId,
+            ...messages[batchIndex],
+            batchIndex,
+            batchCount: 3,
+          }),
+        );
+        const delivered = new Set();
+        const attributes = (value) =>
+          JSON.stringify(Object.entries(value ?? {}).toSorted(([a], [b]) => a.localeCompare(b)));
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const dispatch = meter.clock();
+          const reply = await send("target", "Pull", {
+            subscription,
+            maxMessages: 3,
+            returnImmediately: true,
+          });
+          const replied = meter.clock(),
+            received = reply.body?.receivedMessages ?? [];
+          if (!reply.ok || !Array.isArray(received)) throw new Error("negation Pull refused");
+          const tokens = [];
+          for (const item of received) {
+            const index = ids.indexOf(item.message?.messageId),
+              expected = messages[index];
+            if (
+              !expected ||
+              delivered.has(index) ||
+              typeof item.ackId !== "string" ||
+              !item.ackId ||
+              tokens.includes(item.ackId) ||
+              Buffer.from(item.message.data ?? "", "base64").compare(
+                Buffer.from(expected.data, "base64"),
+              ) !== 0 ||
+              attributes(item.message.attributes) !== attributes(expected.attributes) ||
+              (item.message.orderingKey ?? "") !== ""
+            )
+              throw new Error("negation delivery correlation mismatch");
+            delivered.add(index);
+            tokens.push(item.ackId);
+            journal.write({
+              event: "publication-delivery-binding",
+              cellId: cell.id,
+              messageId: ids[index],
+              ackId: item.ackId,
+              batchIndex: index,
+              ...expected,
+            });
+          }
+          journal.write({
+            event: "negation-pull-window",
+            cellId: cell.id,
+            attempt,
+            dispatch,
+            replied,
+          });
+          if (tokens.length) {
+            const ack = { dispatch: meter.clock() };
+            if (ack.dispatch >= dispatch + 10000)
+              throw new Error("negation current ACK token may have expired");
+            const acknowledged = await send("target", "Acknowledge", {
+              subscription,
+              ackIds: tokens,
+            });
+            ack.replied = meter.clock();
+            journal.write({
+              event: "negation-ack-window",
+              cellId: cell.id,
+              attempt,
+              pull: { dispatch, replied },
+              ack,
+            });
+            if (!acknowledged.ok || ack.replied >= dispatch + 10000)
+              throw new Error("negation current ACK refused or expiry uncertain");
+          }
+        }
+        journal.write({
+          event: "negation-bounded-witness",
+          cellId: cell.id,
+          deliveredIndices: [...delivered].toSorted((a, b) => a - b),
+          unobservedIndices: [0, 1, 2].filter((index) => !delivered.has(index)),
+          permanentExclusionClaimed: false,
+          missingRuleAssumed: false,
+        });
+        if (!delivered.has(1)) throw new Error("negation positive blue control unobserved");
+        complete = true;
+      } else if (cell.variant === "positive-deadline-extension") {
+        await setup();
+        const message = {
+          data: Buffer.from("extension-identity").toString("base64"),
+          attributes: { phase: "extension" },
+        };
+        const published = await send("publish", "Publish", { topic, messages: [message] });
+        const ids = published.body?.messageIds;
+        if (
+          !published.ok ||
+          !Array.isArray(ids) ||
+          ids.length !== 1 ||
+          typeof ids[0] !== "string" ||
+          !ids[0]
+        )
+          throw new Error("extension Publish identity missing");
+        const messageId = ids[0],
+          intervals = {};
+        journal.write({
+          event: "publication-binding",
+          cellId: cell.id,
+          messageId,
+          ...message,
+          batchIndex: 0,
+          batchCount: 1,
+        });
+        const pull = async (phase) => {
+          const dispatch = meter.clock();
+          const reply = await send("target", "Pull", {
+            subscription,
+            maxMessages: 1,
+            returnImmediately: true,
+          });
+          const interval = { dispatch, replied: meter.clock() };
+          intervals[phase] = interval;
+          journal.write({ event: "extension-pull-window", cellId: cell.id, phase, ...interval });
+          if (!reply.ok || !Array.isArray(reply.body?.receivedMessages ?? []))
+            throw new Error("extension Pull refused");
+          return reply.body?.receivedMessages ?? [];
+        };
+        const correlated = (received) => {
+          if (received.length !== 1)
+            throw new Error("extension same-publication delivery unobserved");
+          const item = received[0];
+          if (
+            item.message?.messageId !== messageId ||
+            typeof item.ackId !== "string" ||
+            !item.ackId ||
+            Buffer.from(item.message.data ?? "", "base64").compare(
+              Buffer.from(message.data, "base64"),
+            ) !== 0 ||
+            JSON.stringify(Object.entries(item.message.attributes ?? {}).toSorted()) !==
+              JSON.stringify(Object.entries(message.attributes).toSorted()) ||
+            (item.message.orderingKey ?? "") !== ""
+          )
+            throw new Error("extension delivery correlation mismatch");
+          return item;
+        };
+        const first = correlated(await pull("initial"));
+        journal.write({
+          event: "extension-initial-binding",
+          cellId: cell.id,
+          messageId,
+          ackId: first.ackId,
+          ...intervals.initial,
+        });
+        const modify = { dispatch: meter.clock() };
+        const updated = await send("target", "ModifyAckDeadline", {
+          subscription,
+          ackIds: [first.ackId],
+          ackDeadlineSeconds: 60,
+        });
+        modify.replied = meter.clock();
+        journal.write({
+          event: "extension-modify-window",
+          cellId: cell.id,
+          messageId,
+          ackId: first.ackId,
+          originalSeconds: 10,
+          extensionSeconds: 60,
+          ...modify,
+        });
+        if (!updated.ok || modify.replied >= intervals.initial.dispatch + 10000)
+          throw new Error("extension update may cross original deadline");
+        await wait(Math.max(0, intervals.initial.replied + 10000 - meter.clock()));
+        if (meter.clock() + 25000 >= modify.dispatch + 60000)
+          throw new Error("extension before-probe margin unavailable");
+        const before = await pull("before");
+        if (
+          intervals.before.dispatch < intervals.initial.replied + 10000 ||
+          intervals.before.replied >= modify.dispatch + 60000 ||
+          before.length
+        )
+          throw new Error("extension before-probe witness ambiguous");
+        await wait(Math.max(0, modify.replied + 60000 - meter.clock()));
+        const last = correlated(await pull("after"));
+        if (intervals.after.dispatch < modify.replied + 60000)
+          throw new Error("extension after-probe too early");
+        journal.write({
+          event: "extension-redelivery-binding",
+          cellId: cell.id,
+          messageId,
+          ackId: last.ackId,
+          ...intervals.after,
+        });
+        const ack = { dispatch: meter.clock() };
+        if (ack.dispatch >= intervals.after.dispatch + 10000)
+          throw new Error("extension latest current ACK token may have expired");
+        const acknowledged = await send("target", "Acknowledge", {
+          subscription,
+          ackIds: [last.ackId],
+        });
+        ack.replied = meter.clock();
+        journal.write({
+          event: "extension-ack-window",
+          cellId: cell.id,
+          messageId,
+          pull: intervals.after,
+          ack,
+        });
+        if (!acknowledged.ok || ack.replied >= intervals.after.dispatch + 10000)
+          throw new Error("extension latest current ACK refused or expiry uncertain");
+        journal.write({
+          event: "deadline-extension-witness",
+          cellId: cell.id,
+          messageId,
+          originalSeconds: 10,
+          extensionSeconds: 60,
+          applicationInstantKnown: false,
+          initial: intervals.initial,
+          modify,
+          before: intervals.before,
+          after: intervals.after,
+          ack,
+        });
+        complete = true;
       } else if (cell.variant === "topic-labels-empty") {
         await setup(true, { labels: { env: "test", ttl: "7" } });
         const list = async () => {

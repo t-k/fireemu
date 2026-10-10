@@ -535,12 +535,19 @@ function validateCell(cell, metadata, iam, issued, recovery) {
 export async function replayRecording(
   input,
   execute,
-  { enter = () => {}, observe = () => {}, clockReceiptFor = () => undefined } = {},
+  {
+    enter = () => {},
+    observe = () => {},
+    clockReceiptFor = () => undefined,
+    timestampDisposition,
+  } = {},
 ) {
   const results = [];
   for (const cell of input.cells) {
     enter(cell);
     const publications = new Map(),
+      publicationEvidence = new Map(),
+      subscriptionTopics = new Map(),
       tokens = new Map(),
       exchanges = [],
       localOwnership = new Map(),
@@ -679,7 +686,17 @@ export async function replayRecording(
               : "DIVERGES";
           let expected = structuredClone(source.reply.body),
             local = structuredClone(actual?.body);
-          const debts = [];
+          const debts = [],
+            timestampProofs = [];
+          if (
+            ["CreateSubscription", "GetSubscription"].includes(source.method) &&
+            good(source.reply) &&
+            good(actual) &&
+            same(expected, local) &&
+            expected?.name === (source.request.name ?? source.request.subscription) &&
+            typeof expected?.topic === "string"
+          )
+            subscriptionTopics.set(expected.name, expected.topic);
           if (iamCategory(source.category) && source.reply.ok && good(actual)) {
             if (
               typeof expected?.etag !== "string" ||
@@ -708,7 +725,25 @@ export async function replayRecording(
             )
               semantic = "DIVERGES";
             else {
-              sourceIds.forEach((id, i) => publications.set(id, localIds[i]));
+              sourceIds.forEach((id, i) => {
+                publications.set(id, localIds[i]);
+                if (
+                  source.request.messages?.length === sourceIds.length &&
+                  new Set(sourceIds).size === sourceIds.length &&
+                  new Set(localIds).size === localIds.length &&
+                  !publicationEvidence.has(id) &&
+                  good(source.reply) &&
+                  good(actual)
+                )
+                  publicationEvidence.set(id, {
+                    source,
+                    call,
+                    actual,
+                    clock,
+                    localId: localIds[i],
+                    payload: source.request.messages[i],
+                  });
+              });
               expected.messageIds = [...localIds];
             }
           } else if (source.method === "Pull" && source.reply.ok && actual?.ok) {
@@ -728,7 +763,113 @@ export async function replayRecording(
                 a.ackId = b.ackId;
                 if (source.category === "sourcePull") {
                   if (publications.get(a.message.messageId) !== b.message.messageId)
-                    semantic = "DIVERGES";
+                    semantic =
+                      timestampDisposition && !publications.has(a.message.messageId)
+                        ? "NOT_COMPARABLE"
+                        : "DIVERGES";
+                  const publication = publicationEvidence.get(a.message.messageId);
+                  if (timestampDisposition && source.transport === "rest") {
+                    const proof = {
+                      publicationSourceN: publication?.source.n,
+                      sourceValue: a.message.publishTime,
+                      localValue: b.message.publishTime,
+                      selector: `body.receivedMessages[${i}].message.publishTime`,
+                      sourceBodySha256: source.reply.bodySha256,
+                      localBodySha256: actual.bodySha256,
+                      verdict: "NOT_COMPARABLE",
+                    };
+                    const time = (value) => {
+                      const m =
+                        typeof value === "string" &&
+                        /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{3}|\d{6}|\d{9}))?Z$/.exec(
+                          value,
+                        );
+                      const ms = m && Date.parse(`${m[1]}Z`);
+                      return m &&
+                        Number(m[1].slice(0, 4)) > 0 &&
+                        Number.isFinite(ms) &&
+                        new Date(ms).toISOString().slice(0, 19) === m[1]
+                        ? {
+                            instant: BigInt(ms) * 1000000n + BigInt((m[2] ?? "").padEnd(9, "0")),
+                            precision: m[2]?.length ?? 0,
+                          }
+                        : null;
+                    };
+                    const sourceTime = time(proof.sourceValue),
+                      localTime = time(proof.localValue);
+                    const payload = (message) => ({
+                      data: message?.data,
+                      attributes: message?.attributes ?? {},
+                      orderingKey: message?.orderingKey ?? "",
+                    });
+                    const bound =
+                      timestampDisposition.owner1135?.proposalSha256 ===
+                        "8238575c8202949f721b59bb9c97ee36b3f0ae701efd552f4169c70fcf0c1c53" &&
+                      ["runId", "sourceHead", "packetSha256", "descriptorSha256"].every(
+                        (k) =>
+                          input.metadata[k] !== undefined &&
+                          timestampDisposition.source?.[k] === input.metadata[k],
+                      ) &&
+                      Array.isArray(timestampDisposition.cellIds) &&
+                      timestampDisposition.cellIds.includes(cell.id) &&
+                      ["binarySha256", "inputsSha256"].every(
+                        (k) =>
+                          /^[a-f0-9]{64}$/.test(input.runtimeInputs?.[k] ?? "") &&
+                          timestampDisposition.runtimeInputs?.[k] === input.runtimeInputs[k],
+                      );
+                    if (!sourceTime || !localTime || sourceTime.precision !== localTime.precision)
+                      proof.verdict = "DIVERGES";
+                    else if (publication) {
+                      const p = publication,
+                        c = p.clock,
+                        requested = time(c?.requestedInstant),
+                        savedClock = time(c?.body?.clock),
+                        dispatch = time(p.source.at);
+                      if (
+                        !same(payload(a.message), payload(p.payload)) ||
+                        !same(payload(b.message), payload(p.payload)) ||
+                        p.localId !== b.message.messageId ||
+                        (p.sourceTime !== undefined && p.sourceTime !== proof.sourceValue) ||
+                        (p.localTime !== undefined && p.localTime !== proof.localValue)
+                      )
+                        proof.verdict = "DIVERGES";
+                      else if (
+                        c?.sourceRequestId === p.source.requestId &&
+                        c.sourceN === p.source.n &&
+                        c.status === 200 &&
+                        requested &&
+                        savedClock &&
+                        dispatch
+                      ) {
+                        if (
+                          requested.instant !== dispatch.instant ||
+                          savedClock.instant !== requested.instant ||
+                          localTime.instant !== savedClock.instant
+                        )
+                          proof.verdict = "DIVERGES";
+                        else if (
+                          bound &&
+                          bodyBound(c) &&
+                          bodyBound(p.source.reply) &&
+                          bodyBound(p.actual) &&
+                          bodyBound(source.reply) &&
+                          bodyBound(actual) &&
+                          source.transport === "rest" &&
+                          subscriptionTopics.get(call.request.subscription) ===
+                            p.source.request.topic
+                        )
+                          proof.verdict = "MATCH";
+                      }
+                      p.sourceTime ??= proof.sourceValue;
+                      p.localTime ??= proof.localValue;
+                    }
+                    proof.gap =
+                      proof.verdict === "NOT_COMPARABLE"
+                        ? `sourceN=${source.n}: successful Publish/clock/subscription/authority binding unavailable`
+                        : undefined;
+                    timestampProofs.push(proof);
+                    semantic = aggregate([semantic, proof.verdict]);
+                  }
                   a.message.messageId = b.message.messageId;
                 } else {
                   if (typeof b.message.messageId !== "string" || !b.message.messageId)
@@ -736,7 +877,14 @@ export async function replayRecording(
                   a.message.messageId = b.message.messageId;
                 }
                 // Publication instants are retained separately; a source response timestamp is not a local clock receipt.
-                if (a.message.publishTime !== b.message.publishTime)
+                if (
+                  a.message.publishTime !== b.message.publishTime &&
+                  !(
+                    source.category === "sourcePull" &&
+                    source.transport === "rest" &&
+                    timestampDisposition
+                  )
+                )
                   debts.push("Observed publication timestamp requires source/local clock evidence");
                 delete a.message.publishTime;
                 delete b.message.publishTime;
@@ -779,7 +927,11 @@ export async function replayRecording(
             category: source.category,
             sourceReply: source.reply,
             localReply: actual,
-            physicalVerdict: physical,
+            physicalVerdict:
+              physical === "MATCH" && timestampProofs.some((p) => p.sourceValue !== p.localValue)
+                ? "DIVERGES"
+                : physical,
+            timestampProofs,
             semanticVerdict:
               semantic === "DIVERGES" ? semantic : debts.length ? "NOT_COMPARABLE" : semantic,
             debts,

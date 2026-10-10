@@ -1107,3 +1107,215 @@ test("D refuses local policy drift before writing or restoring bindings", async 
   assert.deepEqual(calls, ["CreateTopic", "GetIamPolicy"]);
   assert.match(result.results[0].exchanges.at(-1).debt, /policy conflict/);
 });
+
+const publicationProposal = "8238575c8202949f721b59bb9c97ee36b3f0ae701efd552f4169c70fcf0c1c53";
+function publicationFixture() {
+  const topic = "synthetic-topic",
+    subscription = "synthetic-subscription";
+  const rows = [
+    source("GetSubscription", { subscription }, { name: subscription, topic }, "inspect"),
+    source(
+      "Publish",
+      { topic, messages: [{ data: "eA==" }] },
+      { messageIds: ["source-id"] },
+      "publish",
+    ),
+    source(
+      "Pull",
+      { subscription },
+      {
+        receivedMessages: [
+          {
+            ackId: "source-ack",
+            message: {
+              messageId: "source-id",
+              data: "eA==",
+              publishTime: "2026-01-01T00:00:00.097Z",
+            },
+          },
+        ],
+      },
+    ),
+  ];
+  rows.forEach((r, i) => {
+    r.requestId = i + 1;
+    r.n = i + 1;
+  });
+  const input = executionInput(rows);
+  input.metadata = {
+    ...input.metadata,
+    sourceHead: "b".repeat(40),
+    packetSha256: digest,
+    descriptorSha256: digest,
+  };
+  input.runtimeInputs = { binarySha256: digest, inputsSha256: digest };
+  const options = {
+    clockReceiptFor: (r) => ({ ...receipt(r), bodyBytes: 40, bodySha256: digest }),
+    timestampDisposition: {
+      owner1135: { proposalSha256: publicationProposal },
+      source: { ...input.metadata },
+      runtimeInputs: input.runtimeInputs,
+      cellIds: ["R1"],
+    },
+  };
+  const actual = rows.map((r) => structuredClone(r.reply));
+  actual[1] = reply({ messageIds: ["local-id"] });
+  actual[2] = reply({
+    receivedMessages: [
+      {
+        ackId: "local-ack",
+        message: { messageId: "local-id", data: "eA==", publishTime: rows[1].at },
+      },
+    ],
+  });
+  return { input, options, actual };
+}
+test("D approved REST publication time preserves physical differences and saved delivery invariants", async (t) => {
+  const { replayRecording } = await core();
+  for (const [name, change, expected] of [
+    ["bound publication", () => {}, "MATCH"],
+    [
+      "missing publication",
+      (f) => {
+        f.input.cells[0].exchanges.splice(1, 1);
+      },
+      "NOT_COMPARABLE",
+    ],
+    [
+      "runtime mismatch",
+      (f) =>
+        (f.options.timestampDisposition.runtimeInputs = {
+          ...f.input.runtimeInputs,
+          binarySha256: "e".repeat(64),
+        }),
+      "NOT_COMPARABLE",
+    ],
+    [
+      "source mismatch",
+      (f) => (f.options.timestampDisposition.source.sourceHead = "e".repeat(40)),
+      "NOT_COMPARABLE",
+    ],
+    ["nonarray cells", (f) => (f.options.timestampDisposition.cellIds = "R1"), "NOT_COMPARABLE"],
+    [
+      "wrong topic",
+      (f) => {
+        f.input.cells[0].exchanges[0].reply.body.topic = "different-topic";
+        f.actual[0].body.topic = "different-topic";
+      },
+      "NOT_COMPARABLE",
+    ],
+    [
+      "wrong proposal",
+      (f) => (f.options.timestampDisposition.owner1135.proposalSha256 = digest),
+      "NOT_COMPARABLE",
+    ],
+    ["raw clock binding absent", (f) => (f.options.clockReceiptFor = receipt), "NOT_COMPARABLE"],
+    [
+      "different ID",
+      (f) => (f.actual[2].body.receivedMessages[0].message.messageId = "other-id"),
+      "DIVERGES",
+    ],
+    ["approval absent", (f) => delete f.options.timestampDisposition, "NOT_COMPARABLE"],
+    [
+      "clock inconsistent",
+      (f) =>
+        (f.options.clockReceiptFor = (r) => ({
+          ...receipt(r),
+          body: { clock: "2026-01-01T00:00:01.000Z" },
+        })),
+      "DIVERGES",
+    ],
+    [
+      "both payloads changed",
+      (f) => {
+        f.actual[2].body.receivedMessages[0].message.data = "eQ==";
+        f.input.cells[0].exchanges[2].reply.body.receivedMessages[0].message.data = "eQ==";
+      },
+      "DIVERGES",
+    ],
+    [
+      "local publication instant mismatch",
+      (f) =>
+        (f.actual[2].body.receivedMessages[0].message.publishTime = "2026-01-01T00:00:00.001Z"),
+      "DIVERGES",
+    ],
+    [
+      "other payload",
+      (f) => (f.actual[2].body.receivedMessages[0].message.data = "eQ=="),
+      "DIVERGES",
+    ],
+    [
+      "other timestamp",
+      (f) => (f.actual[2].body.receivedMessages[0].message.expireTime = "2026-01-02T00:00:00.000Z"),
+      "DIVERGES",
+    ],
+    [
+      "invalid time",
+      (f) =>
+        (f.actual[2].body.receivedMessages[0].message.publishTime = "2026-02-30T00:00:00.000Z"),
+      "DIVERGES",
+    ],
+    [
+      "source redelivery changed",
+      (f) => {
+        f.input.cells[0].exchanges.push({
+          ...structuredClone(f.input.cells[0].exchanges[2]),
+          requestId: 4,
+          n: 4,
+        });
+        f.actual.push(structuredClone(f.actual[2]));
+        f.input.cells[0].exchanges[3].reply.body.receivedMessages[0].message.publishTime =
+          "2026-01-01T00:00:00.098Z";
+      },
+      "DIVERGES",
+    ],
+    [
+      "saved value changed",
+      (f) => {
+        f.input.cells[0].exchanges.push({
+          ...structuredClone(f.input.cells[0].exchanges[2]),
+          requestId: 4,
+          n: 4,
+        });
+        f.actual.push(structuredClone(f.actual[2]));
+        f.actual[3].body.receivedMessages[0].message.publishTime = "2026-01-01T00:00:01.000Z";
+      },
+      "DIVERGES",
+    ],
+  ])
+    await t.test(name, async () => {
+      const f = publicationFixture();
+      change(f);
+      const r = await replayRecording(
+        f.input,
+        async (_call, row) => f.actual[row.requestId - 1],
+        f.options,
+      );
+      const row = r.results[0].exchanges.at(-1);
+      assert.equal(row.semanticVerdict, expected);
+      if (name === "bound publication") {
+        assert.equal(row.physicalVerdict, "DIVERGES");
+        assert.equal(row.timestampProofs[0].verdict, "MATCH");
+        assert.notEqual(row.timestampProofs[0].sourceValue, row.timestampProofs[0].localValue);
+      }
+    });
+});
+
+test("D REST publication time preserves all legal Z precisions across generated instants", async () => {
+  const { replayRecording } = await core();
+  for (const precision of [0, 3, 6, 9])
+    for (let seconds = 0; seconds < 16; seconds++) {
+      const f = publicationFixture(),
+        prefix = `2026-01-01T00:00:${String(seconds).padStart(2, "0")}`;
+      const suffix = precision ? `.${"0".repeat(precision)}` : "";
+      f.input.cells[0].exchanges[1].at = `${prefix}${suffix}Z`;
+      f.input.cells[0].exchanges[2].reply.body.receivedMessages[0].message.publishTime = `${prefix}${precision ? `.${"1".repeat(precision)}` : ""}Z`;
+      f.actual[2].body.receivedMessages[0].message.publishTime = `${prefix}${suffix}Z`;
+      const r = await replayRecording(
+        f.input,
+        async (_call, row) => f.actual[row.requestId - 1],
+        f.options,
+      );
+      assert.equal(r.results[0].exchanges[2].semanticVerdict, "MATCH");
+    }
+});

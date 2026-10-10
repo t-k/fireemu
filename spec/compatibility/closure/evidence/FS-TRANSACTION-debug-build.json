@@ -1,0 +1,61 @@
+{
+  "sourceCommit": "13bfd462df7fc7a9dc647f9545e4ae4800937a44",
+  "producerSourceCommit": "f6b0712426767da7dd0f364c849674476757f873",
+  "gitStatusOutsideBuildOutput": [],
+  "cargoVersion": "cargo 1.94.0 (85eff7c80 2026-01-15)",
+  "locked": true,
+  "binarySha256": "3bf21cb234845402af5e0e6906a3193d65be4e0babdd04369887b2880e0eb96f",
+  "command": [
+    "cargo",
+    "build",
+    "--locked",
+    "-p",
+    "fireemu",
+    "--bin",
+    "fireemu"
+  ],
+  "profile": "debug",
+  "targetDir": "target",
+  "RUSTC_WRAPPER": "",
+  "buildInputs": {
+    "scheme": "binary-v1",
+    "inputsSha256": "40c1daa78ad68d6c50fc56b19ae6e4fa7925070084b63280c4bf8f9401b40146",
+    "inputCount": 337,
+    "dirty": false
+  },
+  "buildReceiptSha256": "c75f8cf703c44279f52299fb83a79dfaed4dcfd79fad0023db6a44bc2ff801e2",
+  "buildLogSha256": "f64a2609035505d8422f32cf53f1b323c56635100737ce5a7008ca3989e93b51",
+  "cleanBuildIndexSha256": "9cd0e19a20ee87ff678d400079fd7157de9d041e900084b4daa9021c29994ae0",
+  "rustSourceEquivalence": "The binary-v1 Rust inputs match the signed debug build source and the replay producer source. The supplied binary reports version 0.15.0. This debug artifact is not the shipped release-profile artifact.",
+  "historicalBuild": {
+    "sourceCommit": "e49c1da6dc73187ae333ff17deb314e2e217b385",
+    "gitStatusOutsideBuildOutput": [],
+    "cargoVersion": "cargo 1.94.0 (85eff7c80 2026-01-15)",
+    "locked": true,
+    "binarySha256": "6fd622fc26c14d1e86a7cde0ea1849af41ce65e733358767bdc4f96397bba612",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "-p",
+      "fireemu",
+      "--bin",
+      "fireemu"
+    ],
+    "profile": "release",
+    "targetDir": "target",
+    "RUSTC_WRAPPER": "",
+    "buildInputs": {
+      "scheme": "binary-v1",
+      "inputsSha256": "6df67f0ffad566b23ddf5fb94b0611bb72209c856797de45133d7fa9a28e9d55",
+      "inputCount": 337,
+      "dirty": false
+    },
+    "buildReceiptSha256": "aebf5d71ca344d70fc6d778a98c80d8fcef63c551ff5940875a8c1bc68316b06",
+    "buildPinSha256": "9228e4abcaf4fea66a36bf63218f1c062fa02e307f730bfdca1180b2b6f1a8f0",
+    "cleanBuildIndexSha256": "f2e03ad496c711beea6d590f57c495cafb2de333543b07533502e44decd48797",
+    "producerSourceCommit": "73b2c2b99b8f8d35a245ab795d2b09e7d9dd9399",
+    "rustSourceEquivalence": "The binary-v1 Rust build inputs are unchanged between the recorded build source and the producer source; canonical evidence assembly changes no Rust build input."
+  }
+}

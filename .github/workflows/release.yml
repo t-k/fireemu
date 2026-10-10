@@ -341,7 +341,7 @@ jobs:
   strict-production:
     needs: [plan, build]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 180
     permissions:
       contents: read
     steps:
@@ -370,6 +370,10 @@ jobs:
         run: |
           pipx install uv==0.11.28
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: pinned Python for transaction replay
+        run: |
+          uv python install 3.12.13
+          uv run --python 3.12.13 python -c 'import sys; assert sys.version_info[:3] == (3, 12, 13)'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: package-linux-x64
@@ -401,6 +405,7 @@ jobs:
           uv --version
           "$FIREEMU_NODE" --version
           pnpm -C conformance install --frozen-lockfile
+          pnpm -C conformance exec playwright install --with-deps chromium
           npm ci --prefix conformance/functions-http/fixtures --ignore-scripts --no-audit --no-fund
           # The AUTH-TENANT-BLOCKING blocking fixture's Functions dependencies, served by the daemon.
           npm ci --prefix conformance/src/auth-tenant-blocking/function --ignore-scripts --no-audit --no-fund

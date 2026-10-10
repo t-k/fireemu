@@ -99,6 +99,7 @@ fn strict_state() -> AuthState {
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         custom_token_trust: None,
+        allow_unsigned_custom_tokens: true,
         idp_assertions: IdpAssertionPolicy::SignedOidc(signers(ISSUER, signer().jwks())),
         app_check: None,
         app_check_policy: None,

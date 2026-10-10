@@ -59,7 +59,7 @@
     "conformance/functions/index.js": "72ae82eb08f58affa6fa756ab7daca6687fa2de3880938a8ef88b8e4fe8e66b7",
     "conformance/src/corpus/firestore.mjs": "f079f9cb0ccbc7412b7f83f3a02c068428557aa6ea1aece01df35de47e0d12ee",
     "conformance/src/corpus/functions.mjs": "4a05876e3edf238c3825f4bb58db96bdfffac90f0cbba9d92eb4c415182da147",
-    "crates/fireemu-core-firestore/src/store.rs": "bf4a3941055ef3d6e93ef7c4642ded88d4f4404ffd2f9a4367e02049193f7c49",
+    "crates/fireemu-core-firestore/src/store.rs": "b57616d2ef461779a91cdeb902e65666ba6e65d40a86c85eb45dfff0a13d77cf",
     "crates/fireemu-core-firestore/src/value.rs": "f8630eacab922b0c90467fe37b44dc4e80af30cfb0e942e21b6e05abce0b2c07",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",
@@ -67,27 +67,28 @@
     "verification/quint/bin/process-group": "842349d6136e1fbb9f2c6015cbdcae5b9a972e4e795a27cca473251a15968798",
     "verification/quint/bin/quint": "ef9df9d26e4e2ee2e081ae407c0e10d82fcad75c75bad6fb93a62046192507ed",
     "verification/quint/configs/TransactionConditionalLock.json": "e46a8cd3559c3c7c1efb240e78c2b2a4fd54a42dca1736e079c209d290408ff7",
-    "verification/quint/evidence/cargo-authority.json": "4430beacf19d7662fe2bd729de55dcffcc722777a6b9f19bdb99a6810fc2d781",
+    "verification/quint/evidence/cargo-authority.json": "4fba8ccb5a774057de5495c54df13c2c914172a42b5772ef19fc05999ca7199f",
     "verification/quint/java/io/fireemu/verification/LoopbackServerProviderAgent.java": "6f4f23bb6cf8f2d8da2d55478c409bfe30f56d1a78296b5259647df4511888dc",
-    "verification/quint/mutations/TransactionConditionalLock.json": "5257389ab69f768c2a6b5179a9755fa2bcfe64114901260df202716e67bacfd4",
+    "verification/quint/mutations/TransactionConditionalLock.json": "d0464ac9d948b669e65709bbc19316ebf9f5d8d837167b91f1aee81354797265",
     "verification/quint/package.json": "0544cbb331fabdba1e770dbfd72fc7521ace0dc17cf60ee96df0ae27384552d4",
     "verification/quint/pnpm-lock.yaml": "c46de8feb983d78945bf816a5a4d54d505d3840c88f1ebe19772a08acd9f0556",
     "verification/quint/run-verification.sh": "57eeb07ba39d042eea571b8a939e35ab05dd37218a30aa559785788d2aa81b7f",
-    "verification/quint/specs/TransactionConditionalLock.qnt": "a6bd967a949b46adb402f22a45616736c6a38f229d0d762b0b04f08670eb6faa",
+    "verification/quint/specs/TransactionConditionalLock.qnt": "5b64bbdf4bec11d1cb4e55434797a42e2221eb38a5c2e399e3f4a14e7e254a64",
     "verification/quint/src/cargo_authority.rs": "2c67dbd90419daa38f42f44b5f62c87388d5a15637ced48a2110b252dcbbd33a",
     "verification/quint/src/evidence.rs": "2fcf95169ee6ae80bb768c874430e3869d2a29dadf4c87f7cae2794c64dbf4be",
     "verification/quint/src/lib.rs": "2addd005fe8bee74c693854dc7ccb19dde14153b408f3d3e7335c5a8abbe929f",
     "verification/quint/src/main.rs": "f8ada163629ef231fc5e580031fab6d5f2fcdbd9b2e0cff3604a192ff24a043f",
-    "verification/quint/src/model.rs": "3e16546cf010a3bcd0257099b61e92dc935a8d56eb8631fa528eebaf804ba79f",
+    "verification/quint/src/model.rs": "9f212a716e29ac0e834a9053ba8c057bacb363d5a12fd4de378272bc2acf39e3",
     "verification/quint/src/process.rs": "56fbdc380eb60993a038366f050f45c030b22f5dc7048971aa451f54883dbb5f",
     "verification/quint/src/publication.rs": "e4b57348c74d51585609b9f114ad56366309f90fa6e2297639546f42922e53a8",
     "verification/quint/src/server.rs": "b0d10768918bf0449419d9e6384a574e14db01f651264e6037856c3367e05c0a",
-    "verification/quint/src/transaction_conditional_lock.rs": "6de4f50ac004de8bb41797f8eecbbbd5378abc3e4239f18554458903f6efc9d8",
-    "verification/quint/tests/transaction_conditional_lock_connect.rs": "dc2583296e799c8f5b60a0bc1dd789e99ff1a0016e0fe5577330487f9aa89135"
+    "verification/quint/src/transaction_conditional_lock.rs": "7d3938f78a6a29fc96034e1a99e86ec9a50542344503806f17faf07340e7a00a",
+    "verification/quint/tests/transaction_conditional_lock_connect.rs": "0ef093717104256c7d6af4896956acbbbd7298949ac9d58b0381a86c98d84ab5"
   },
   "invariants": [
     "TypeOK",
     "OneWinner",
+    "OlderWins",
     "AtMostOneProtectedAction",
     "RetryReadsCommittedLock"
   ],
@@ -104,11 +105,18 @@
       "property": "RetryReadsCommittedLock",
       "outcome": "killed_safety",
       "diagnostic": "TLC invariant violation"
+    },
+    {
+      "id": "M-FORMAL-TXN-LOCK-AGE-001",
+      "property": "OlderWins",
+      "outcome": "killed_safety",
+      "diagnostic": "TLC invariant violation"
     }
   ],
   "scenarios": [
     "firstClientWins",
     "secondClientWins",
+    "youngerWaitsThenLoses",
     "retrySeesCommittedLock"
   ],
   "actions": [
@@ -122,6 +130,8 @@
   ],
   "projectionFields": [
     "phase",
+    "age",
+    "startedAt",
     "locked",
     "observations",
     "acted"

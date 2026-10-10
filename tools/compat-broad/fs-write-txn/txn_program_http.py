@@ -23,7 +23,7 @@ def _secret(value, limit=8192):
 
 
 def worker_call(value):
-    if not isinstance(value, dict) or set(value) not in ({'slot', 'secret', 'resource'}, {'slot', 'secret', 'resource', 'project'}):
+    if not isinstance(value, dict) or (set(value) != {'slot', 'secret', 'resource', 'project', 'projectNumber'} if value.get('slot') == 's5b-key-metadata' else set(value) not in ({'slot', 'secret', 'resource'}, {'slot', 'secret', 'resource', 'project'})):
         raise ValueError('closed P10-A REST worker schema required')
     slot, secret, resource = value['slot'], value['secret'], value['resource']
     project = value.get('project', PROJECT)
@@ -40,7 +40,7 @@ def worker_call(value):
         headers['Content-Type'] = 'application/x-www-form-urlencoded'
     else:
         if not _secret(secret): raise ValueError('P10-A bounded bearer required')
-        if slot not in ('ruleset-source', 'named-database', 'create-database', 'delete-database', 'database-operation') and resource is not None: raise ValueError('P10-A REST resource override refused')
+        if slot not in ('s5b-key-metadata', 'ruleset-source', 'named-database', 'create-database', 'delete-database', 'database-operation') and resource is not None: raise ValueError('P10-A REST resource override refused')
         if slot == 'oauth-tokeninfo':
             host, path = 'www.googleapis.com', '/oauth2/v1/tokeninfo?' + urlencode({'access_token': secret})
         elif slot == 'project':
@@ -60,6 +60,14 @@ def worker_call(value):
                 headers['Content-Type'] = 'application/json'
             elif slot == 'delete-database':
                 method = 'DELETE'
+        elif slot == 's5b-key-metadata':
+            number = value['projectNumber']
+            if not isinstance(number, str) or not re.fullmatch(r'[1-9][0-9]{5,19}', number):
+                raise ValueError('S5b numeric project number required')
+            selected = f'projects/{number}/locations/global/keys/644789b7-ac0a-47ff-a740-8836448a0633'
+            if project != 'fireemu-oracle-query' or resource != selected:
+                raise ValueError('S5b selected key metadata resource differs')
+            host, path = 'apikeys.googleapis.com', f'/v2/{selected}'
         elif slot == 'rules-release':
             host, path = 'firebaserules.googleapis.com', f'/v1/projects/{project}/releases/cloud.firestore'
         elif slot == 'ruleset-source' and isinstance(resource, str) and re.fullmatch(rf'projects/{project}/rulesets/[A-Za-z0-9_-]+', resource):
@@ -80,11 +88,15 @@ def worker_call(value):
         connection.close()
 
 
-def request_once(slot, secret, resource=None, *, project=PROJECT):
+def request_once(slot, secret, resource=None, *, project=PROJECT, project_number=None):
     """Secrets enter stdin; returned OAuth bodies must never be journaled. The project rides in the payload only when it is not the shared one."""
     if project not in PROJECTS:
         raise ValueError('P10-A REST project differs')
     call = {'slot': slot, 'secret': secret, 'resource': resource, **({'project': project} if project != PROJECT else {})}
+    if slot == 's5b-key-metadata':
+        if not isinstance(project_number, str) or not re.fullmatch(r'[1-9][0-9]{5,19}', project_number):
+            raise ValueError('S5b numeric project number required')
+        call['projectNumber'] = project_number
     payload = json.dumps(call, separators=(',', ':')).encode()
     if len(payload) > 24576: raise ValueError('P10-A REST IPC request capacity exceeded')
     command = [sys.executable, '-I', '-S', '-B', str(SELF), '--worker']

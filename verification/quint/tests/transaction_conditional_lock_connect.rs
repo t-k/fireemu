@@ -27,6 +27,8 @@ fn initial_state() -> TransactionConditionalLockState {
             ("c1".to_owned(), "Ready".to_owned()),
             ("c2".to_owned(), "Ready".to_owned()),
         ]),
+        age: BTreeMap::from([("c1".to_owned(), 0), ("c2".to_owned(), 0)]),
+        started_at: BTreeMap::from([("c1".to_owned(), -1), ("c2".to_owned(), -1)]),
         locked: false,
         observations: BTreeMap::from([
             ("c1".to_owned(), Vec::new()),
@@ -202,7 +204,8 @@ fn protected_action_and_release_wait_for_the_losing_retry() {
 fn either_client_can_be_the_single_winner() {
     for (winner, loser) in [("c1", "c2"), ("c2", "c1")] {
         let mut driver = TransactionConditionalLockDriver::new();
-        read_both(&mut driver);
+        driver.read_unlocked(winner).unwrap();
+        driver.read_unlocked(loser).unwrap();
         driver.commit(winner).expect("winner commits lock");
         reject_loser(&mut driver, loser);
         driver
@@ -245,8 +248,10 @@ fn modeled_action_inventory_is_exact() {
     );
 }
 
-const PROJECTION_FAULTS: [ProjectionFault; 4] = [
+const PROJECTION_FAULTS: [ProjectionFault; 6] = [
     ProjectionFault::Phase,
+    ProjectionFault::Age,
+    ProjectionFault::StartedAt,
     ProjectionFault::Locked,
     ProjectionFault::Observations,
     ProjectionFault::Acted,
@@ -261,6 +266,8 @@ fn projection_fault_changes_exactly_one_field() {
         let perturbed = driver.project().expect("faulted projection");
         let changed = [
             ("phase", baseline.phase != perturbed.phase),
+            ("age", baseline.age != perturbed.age),
+            ("startedAt", baseline.started_at != perturbed.started_at),
             ("locked", baseline.locked != perturbed.locked),
             (
                 "observations",
@@ -275,9 +282,10 @@ fn projection_fault_changes_exactly_one_field() {
     }
 }
 
-const SCENARIOS: [&str; 3] = [
+const SCENARIOS: [&str; 4] = [
     "firstClientWins",
     "secondClientWins",
+    "youngerWaitsThenLoses",
     "retrySeesCommittedLock",
 ];
 
@@ -351,4 +359,20 @@ fn generated_traces_match_the_real_firestore_state() {
     for seed in GENERATED_TRACE_SEEDS {
         run_generated(seed).unwrap_or_else(|error| panic!("generated campaign failed: {error}"));
     }
+}
+
+#[test]
+fn older_requester_wins_after_a_younger_commit_waits() {
+    let mut driver = TransactionConditionalLockDriver::new();
+    read_both(&mut driver);
+    driver.commit("c2").expect("younger client waits");
+    assert_eq!(driver.project().unwrap().phase["c2"], "Held");
+    driver
+        .abort_stale("c1")
+        .expect("older requester resolves deadlock");
+    let projected = driver.project().unwrap();
+    assert_eq!(projected.phase["c1"], "Committed");
+    assert_eq!(projected.phase["c2"], "Aborted");
+    driver.retry("c2").unwrap();
+    driver.reject_locked("c2").unwrap();
 }

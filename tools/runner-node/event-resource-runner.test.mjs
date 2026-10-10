@@ -7,6 +7,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
 const runner = fileURLToPath(new URL('./index.mjs', import.meta.url));
@@ -31,7 +33,7 @@ const frame = value => {
   return Buffer.concat([Buffer.from(`${data.length}\n`), data]);
 };
 
-async function start(t, definitions, sdkSource) {
+async function start(t, definitions, sdkSource, profile) {
   const dir = await mkdtemp(join(tmpdir(), 'fireemu-event-resource-'));
   await writeFile(join(dir, 'package.json'), JSON.stringify({ private: true, main: 'index.cjs' }));
   await writeFile(join(dir, 'index.cjs'), sdkSource ?? `
@@ -49,7 +51,7 @@ for (const {name, ...metadata} of ${JSON.stringify(definitions)}) {
     ? JSON.parse(process.env.FE_SOURCE_RUNNER_PREFIX) : [process.execPath];
   const child = spawn(prefix[0], [...prefix.slice(1), runner, '--source', dir], {
     detached: process.platform !== 'win32',
-    env: { PATH: process.env.PATH, GCLOUD_PROJECT: 'demo-app', ...(sdkSource ? { NODE_PATH: join(sdkRoot, '..'), FE_SOURCE_RECEIPTS: process.env.FE_SOURCE_RECEIPTS } : {}) },
+    env: { PATH: process.env.PATH, GCLOUD_PROJECT: 'demo-app', ...(profile ? { FIREEMU_HTTP_PROFILE: profile } : {}), ...(sdkSource ? { NODE_PATH: join(sdkRoot, '..'), FE_SOURCE_RECEIPTS: process.env.FE_SOURCE_RECEIPTS } : {}) },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   const frames = [];
@@ -120,6 +122,80 @@ for (const {name, ...metadata} of ${JSON.stringify(definitions)}) {
 
 const sdkRoot = process.env.FE_SOURCE_SDK_ROOT
   ?? fileURLToPath(new URL('../../conformance/node_modules/firebase-functions', import.meta.url));
+
+async function nativeJsonBody(type, body) {
+  const require = createRequire(join(sdkRoot, 'package.json'));
+  const req = new PassThrough();
+  req.headers = { 'content-type': type, 'content-length': String(Buffer.byteLength(body)) };
+  req.method = 'POST';
+  const error = await new Promise(resolve => { require('body-parser').json({ type })(req, {}, resolve); req.end(body); });
+  return { error, body: req.body };
+}
+
+for (const profile of ['strict', 'emulator']) {
+  test(`Eventarc binary JSON ${profile}: recorded scalar/null admission and object/array controls`, { timeout: 20000 }, async t => {
+    assert.equal(JSON.parse(await readFile(join(sdkRoot, 'package.json'), 'utf8')).version, '7.3.2');
+    const f = await start(t, [], `
+const {appendFileSync}=require('node:fs');
+const sdk=require(${JSON.stringify(join(sdkRoot, 'lib/v2/providers/eventarc.js'))});
+const report=event=>appendFileSync(__dirname+'/calls.jsonl',JSON.stringify(event)+'\\n');
+exports.custom=sdk.onCustomEventPublished('fireemu.transport',report);
+// A direct Pub/Sub callback isolates runner dispatch from the SDK's own payload conversion.
+exports.topic=Object.assign(report,{__endpoint:{platform:'gcfv2',eventTrigger:{eventType:'google.cloud.pubsub.topic.v1.messagePublished',eventFilters:{topic:'projects/demo-app/topics/t'}}}});
+`, profile);
+    const base = { id: 'transport', source: '//fireemu/transport', specversion: '1.0', type: 'fireemu.transport' };
+    // H2-A run9efd8c05644f records publish200 and bounded handler absence for textData1/null.
+    // These IPC assertions cover the destination boundary, not a new production observation.
+    let seed = 0x6d2b79f5;
+    const next = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return seed >>> 0; };
+    // Additional JSON partitions use the native parser as a local model, not production evidence.
+    const corpus = [1, null, true, false, 0, -1.5, 'scalar', '', { a: 1, b: [true, null] }, [1, null], {}, []];
+    for (let i = 0; i < 8; i++) corpus.push({ key: next(), nested: [null, i, { key: next() }] }, [next(), null, { index: i }]);
+    for (const data of corpus) {
+      const native = await nativeJsonBody('application/json', JSON.stringify(data));
+      for (const datacontenttype of [undefined, 'application/json', 'application/json; charset=utf-8', 'Application/JSON']) {
+        const event = { ...base, ...(datacontenttype === undefined ? {} : { datacontenttype }), data };
+        const before = (await f.calls()).length;
+        const accepted = profile === 'emulator' || !native.error;
+        assert.equal((await f.invoke('custom', 'eventarc', event)).ok, accepted, `Eventarc ${profile} ${datacontenttype} ${JSON.stringify(data)}`);
+        assert.equal((await f.calls()).length, before + Number(accepted), 'admission must precede every callback side effect');
+        if (accepted) assert.deepEqual((await f.calls()).at(-1), event);
+      }
+    }
+    for (const data of [1, null]) {
+      const event = { ...base, type: 'google.cloud.pubsub.topic.v1.messagePublished', data };
+      assert.equal((await f.invoke('topic', 'pubsub', event)).ok, true, 'Eventarc parsing must not change Pub/Sub dispatch');
+      assert.deepEqual((await f.calls()).at(-1), event);
+    }
+    for (const datacontenttype of ['text/plain', 'application/cloudevents+json']) {
+      for (const data of [1, null]) {
+        const event = { ...base, datacontenttype, data };
+        assert.equal((await f.invoke('custom', 'eventarc', event)).ok, true, 'only the binary application/json transport is in scope');
+        assert.deepEqual((await f.calls()).at(-1), event);
+      }
+    }
+    assert.equal((await f.invoke('custom', 'eventarc', base)).ok, true, 'an absent data member is not a scalar JSON body');
+    assert.deepEqual((await f.calls()).at(-1), base);
+  });
+}
+
+test('Eventarc native JSON transport distinguishes binary data from structured envelopes', { timeout: 10000 }, async () => {
+  // The native parser is a local source oracle; these controls are not production observations.
+  const cases = [
+    ['application/json', '1', false], ['application/json', 'null', false],
+    ['application/json', '{"probe":true}', true], ['application/json', '[1,null]', true],
+    ['application/cloudevents+json', '{"id":"i","source":"s","specversion":"1.0","type":"t","data":1}', true],
+    ['application/cloudevents+json', '{"id":"i","source":"s","specversion":"1.0","type":"t","data":null}', true],
+    ['application/json', '', true],
+  ];
+  for (const [type, body, accepted] of cases) {
+    const parsed = await nativeJsonBody(type, body);
+    const error = parsed.error;
+    assert.equal(!error, accepted, `native ${type} ${body}`);
+    if (accepted) assert.deepEqual(parsed.body, body ? JSON.parse(body) : {});
+    else { assert.equal(error.status, 400); assert.equal(error.type, 'entity.parse.failed'); }
+  }
+});
 
 test('real SDK Firestore generations preserve canonical Written source and missing snapshots', { timeout: 20000 }, async t => {
   const pkg = JSON.parse(await readFile(join(sdkRoot, 'package.json'), 'utf8'));

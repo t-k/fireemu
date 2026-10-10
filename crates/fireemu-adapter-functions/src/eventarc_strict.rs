@@ -19,7 +19,7 @@
 //!   deletion and its operation, the answers for a channel being created or deleted, for a channel that is
 //!   gone and for an operation that was never issued, and every check `PublishEvents` makes (the parse, the
 //!   count of 100, the size, the channel lookup, the required attributes, the content type, the data, the
-//!   attribute quotas and the order of those checks).
+//!   attribute quotas and the order of those checks). Configured numeric project aliases are supported only for GET/LIST, preserving canonical channel state and Pub/Sub topic identity.
 //! - inferred (marked `INFERRED`): the locations beyond the seven probed (the documented regions), the page
 //!   size when none is given and the cap above which a page is clamped, the order of a list (production's is
 //!   stable but follows no rule the recordings reveal: fireemu lists in the order of creation), the method
@@ -29,7 +29,7 @@
 //!   size that is not a number, the deletion of a channel a function declares. These answer
 //!   `501 UNIMPLEMENTED` and say so, rather than invent a shape.
 //! - not reproduced, because they are Google's state or not deterministic: whether a `ya29.` token is valid,
-//!   what its scopes are, the project number (a path that names the project by number), and the seconds
+//!   what its scopes are without an explicit local OAuth catalog, the resolution of unconfigured project numbers, and the seconds
 //!   after a creation during which a publication to the channel answers `404 Associated channel does not
 //!   exist.` although the channel reads as ACTIVE.
 //!
@@ -86,7 +86,7 @@ impl Answer {
 /// Where a request points: the project and the location of its path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Place {
-    /// The project of the path (an ID).
+    /// The project of the path: an ID, or the explicitly configured numeric alias for GET/LIST.
     pub project: String,
     /// The location of the path (`-` for every location in a list).
     pub location: String,
@@ -351,6 +351,68 @@ fn echo(text: &str) -> String {
     format!("{}...", &text[..end])
 }
 
+/// Explicit locally recognized OAuth credentials, indexed by SHA-256 of the bearer bytes.
+pub type OAuthCredentialCatalog =
+    std::collections::BTreeMap<[u8; 32], std::collections::BTreeSet<String>>;
+
+/// Immutable listener facts, separate from canonical Eventarc resource state.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EventarcContext {
+    /// Configured alias of the canonical project, for GET/LIST only.
+    pub project_number: Option<u64>,
+    /// Local OAuth authority; absence retains legacy shape-only authentication.
+    pub oauth_credentials: Option<std::sync::Arc<OAuthCredentialCatalog>>,
+}
+
+/// Evaluates a request using explicitly configured listener facts.
+#[must_use]
+pub fn evaluate_with_context(
+    input: &Input<'_>,
+    world: &World<'_>,
+    context: &EventarcContext,
+) -> Outcome {
+    let route = input.route;
+    let credential = classify_token(input.bearer);
+    if credential != Credential::WellFormed {
+        return credential_refusal(route, credential);
+    }
+    if let Some(catalog) = &context.oauth_credentials {
+        let digest = fireemu_core_types::hash::sha256(input.bearer.unwrap_or_default().as_bytes());
+        let Some(scopes) = catalog.get(&digest) else {
+            return oauth_refusal(route, false);
+        };
+        if !scopes.contains("https://www.googleapis.com/auth/cloud-platform") {
+            return oauth_refusal(route, true);
+        }
+    }
+    evaluate_admitted(input, world, context.project_number)
+}
+
+fn oauth_refusal(route: &Route, insufficient_scope: bool) -> Outcome {
+    let (code, status, message, reason) = if insufficient_scope {
+        (
+            403,
+            "PERMISSION_DENIED",
+            "Request had insufficient authentication scopes.",
+            "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+        )
+    } else {
+        (401, "UNAUTHENTICATED", "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.", "ACCESS_TOKEN_TYPE_UNSUPPORTED")
+    };
+    let info = Ordered::object([
+        ("@type", text("type.googleapis.com/google.rpc.ErrorInfo")),
+        ("reason", text(reason)),
+        (
+            "metadata",
+            Ordered::object([
+                ("method", text(route.method())),
+                ("service", text(route.service())),
+            ]),
+        ),
+    ]);
+    error(code, status, message, vec![info])
+}
+
 /// The credential of a request.
 ///
 /// An OAuth access token that Google issues starts with `ya29.`. Production refused, with "invalid
@@ -360,7 +422,7 @@ fn echo(text: &str) -> String {
 /// `ya29.`-prefixed garbage token (row 172, `ACCESS_TOKEN_TYPE_UNSUPPORTED`) and a real token of
 /// another scope (row 179, `ACCESS_TOKEN_SCOPE_INSUFFICIENT`): whether a well-formed token is valid, and
 /// what it may do, is Google's state, which a local listener does not have, so a `ya29.` token is
-/// accepted here and those two answers are not reproduced.
+/// accepted when no local catalog is configured. An explicit catalog supplies local recognition and scope facts; it does not verify Google credentials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Credential {
     /// No `Authorization: Bearer` header, or an empty token.
@@ -624,12 +686,31 @@ fn adopt(world: &World<'_>, name: &str) {
 /// Answers one request.
 #[must_use]
 pub fn evaluate(input: &Input<'_>, world: &World<'_>) -> Outcome {
+    evaluate_with_project_number(input, world, None)
+}
+
+/// Resolves only configured numeric GET/LIST aliases, keeping canonical state and topic identity.
+#[must_use]
+pub fn evaluate_with_project_number(
+    input: &Input<'_>,
+    world: &World<'_>,
+    project_number: Option<u64>,
+) -> Outcome {
+    evaluate_with_context(
+        input,
+        world,
+        &EventarcContext {
+            project_number,
+            oauth_credentials: None,
+        },
+    )
+}
+
+fn evaluate_admitted(input: &Input<'_>, world: &World<'_>, project_number: Option<u64>) -> Outcome {
     let route = input.route;
-    let credential = classify_token(input.bearer);
-    if credential != Credential::WellFormed {
-        return credential_refusal(route, credential);
-    }
-    if route.project() != world.project {
+    let read_alias = matches!(route, Route::GetChannel { .. } | Route::ListChannels(_))
+        && project_number.is_some_and(|number| number > 0 && route.project() == number.to_string());
+    if route.project() != world.project && !read_alias {
         return consumer_invalid(route);
     }
     match route {
@@ -639,11 +720,18 @@ pub fn evaluate(input: &Input<'_>, world: &World<'_>) -> Outcome {
                 return location_not_found(route);
             }
             let name = channel_name(place, channel);
-            adopt(world, &name);
-            match world.channels.lookup(&name, world.now) {
+            let canonical = format!(
+                "projects/{}/locations/{}/channels/{channel}",
+                world.project, place.location
+            );
+            adopt(world, &canonical);
+            match world.channels.lookup(&canonical, world.now) {
                 Lookup::Absent => resource_not_found(&name),
                 // A channel being created or deleted reads too (stage C): see `eventarc_channels`.
-                Lookup::Ready(view) | Lookup::Creating(view) | Lookup::Deleting(view) => {
+                Lookup::Ready(mut view)
+                | Lookup::Creating(mut view)
+                | Lookup::Deleting(mut view) => {
+                    view.name = name;
                     answer(200, view.to_json(false))
                 }
             }
@@ -742,7 +830,8 @@ fn internal_error(world: &World<'_>) -> Outcome {
 }
 
 fn list_channels(route: &Route, place: &Place, query: Option<&str>, world: &World<'_>) -> Outcome {
-    let Place { project, location } = place;
+    let location = &place.location;
+    let project = world.project;
     if location != "-" && !plausible_location(location) {
         return location_not_found(route);
     }
@@ -802,7 +891,15 @@ fn list_channels(route: &Route, place: &Place, query: Option<&str>, world: &Worl
             listing
                 .items
                 .iter()
-                .map(|view| view.to_json(false))
+                .map(|view| {
+                    let mut view = view.clone();
+                    view.name = view.name.replacen(
+                        &format!("projects/{project}/"),
+                        &format!("projects/{}/", place.project),
+                        1,
+                    );
+                    view.to_json(false)
+                })
                 .collect(),
         ),
     )];
@@ -936,6 +1033,8 @@ enum Attribute {
     Timestamp {
         seconds: i64,
         nanos: u32,
+        /// Only the observed canonical whole-second spelling has a known mapped representation.
+        mapped_text: Option<String>,
     },
 }
 
@@ -952,7 +1051,7 @@ impl Attribute {
             }
             Self::Text(length) | Self::Bytes(length) => field_len(*length),
             Self::String(value) => field_len(value.len()),
-            Self::Timestamp { seconds, nanos } => {
+            Self::Timestamp { seconds, nanos, .. } => {
                 // A negative int64 is ten bytes on the wire; zero is not written at all.
                 let seconds_len = match seconds.cmp(&0) {
                     std::cmp::Ordering::Less => 1 + 10,
@@ -1019,6 +1118,64 @@ pub fn request_size(channel: &str, events: &[ParsedEvent]) -> usize {
             .sum::<usize>()
 }
 
+/// The mapped Pub/Sub request size for a ready channel, separate from CloudEvent/Any size.
+///
+/// String values, canonical whole-second timestamps and integer zero cover the observed representation
+/// families. Other types, spellings, empty strings or colliding map keys remain unknown. This helper
+/// supplies publish admission only for these supported representations; `None` leaves that size facet unknown.
+#[must_use]
+pub fn mapped_publish_request_size(channel: &Lookup, events: &[ParsedEvent]) -> Option<usize> {
+    let Lookup::Ready(view) = channel else {
+        return None;
+    };
+    if view.pubsub_topic.is_empty() {
+        return None;
+    }
+    let mut request = field_len(view.pubsub_topic.len());
+    for event in events {
+        let fields = &event.fields;
+        let Data::Text(data) = &fields.data else {
+            return None;
+        };
+        if data.is_empty() {
+            return None;
+        }
+        let mut message = field_len(data.len());
+        for (key, value) in [
+            ("ce-id", &fields.id),
+            ("ce-source", &fields.source),
+            ("ce-specversion", &fields.spec_version),
+            ("ce-type", &fields.event_type),
+        ] {
+            if value.is_empty() {
+                return None;
+            }
+            message += field_len(field_len(key.len()) + field_len(value.len()));
+        }
+        for (index, (key, value)) in fields.attributes.iter().enumerate() {
+            if matches!(key.as_str(), "id" | "source" | "specversion" | "type")
+                || fields.attributes[..index]
+                    .iter()
+                    .any(|(previous, _)| previous == key)
+            {
+                return None;
+            }
+            let text = match value {
+                Attribute::String(text) if !text.is_empty() => text.as_str(),
+                Attribute::Timestamp {
+                    mapped_text: Some(text),
+                    ..
+                } => text.as_str(),
+                Attribute::Integer(0) => "0",
+                _ => return None,
+            };
+            message += field_len(field_len("ce-".len() + key.len()) + field_len(text.len()));
+        }
+        request += field_len(message);
+    }
+    Some(request)
+}
+
 fn publish(place: &Place, channel: &str, body: &[u8], world: &World<'_>) -> Outcome {
     let name = channel_name(place, channel);
     let mut events = match parse_publish(body) {
@@ -1078,7 +1235,8 @@ fn publish(place: &Place, channel: &str, body: &[u8], world: &World<'_>) -> Outc
         );
     }
     adopt(world, &name);
-    match world.channels.lookup(&name, world.now) {
+    let channel = world.channels.lookup(&name, world.now);
+    match &channel {
         // A channel being created or deleted is not publishable yet or any more (stage C, rows 131 and 145).
         Lookup::Absent | Lookup::Creating(_) | Lookup::Deleting(_) => {
             return error(
@@ -1092,6 +1250,27 @@ fn publish(place: &Place, channel: &str, body: &[u8], world: &World<'_>) -> Outc
     }
     if let Some(refusal) = validate_events(&events) {
         return refusal;
+    }
+    // INFERRED fitted policy for the helper's supported representations: strict upper edge and
+    // payload-before-numeric precedence. Native numeric/payload/LF cases fit it; no exact upper pair
+    // or universal priority was measured. None preserves existing behavior, not a size MATCH.
+    if let Some(size) = mapped_publish_request_size(&channel, &events) {
+        if size > 10_485_760 {
+            return error(
+                400,
+                "INVALID_ARGUMENT",
+                "Request payload size exceeds the limit: 10485760 bytes.",
+                Vec::new(),
+            );
+        }
+        if size > 10_000_000 {
+            return error(
+                400,
+                "INVALID_ARGUMENT",
+                &format!("The value for request_size is too large. You passed {size} in the request, but the maximum value is 10000000."),
+                Vec::new(),
+            );
+        }
     }
     if (world.declared_channel)(&name) {
         return Outcome::Deliver {
@@ -1469,7 +1648,12 @@ fn parse_attribute(path: &str, value: &Ordered) -> Result<Attribute, Outcome> {
             },
             ("ce_bytes", other) => return Err(wrong_type(&at, "TYPE_BYTES", other)),
             ("ce_timestamp", Ordered::String(text)) => match timestamp(text) {
-                Some((seconds, nanos)) => Attribute::Timestamp { seconds, nanos },
+                Some((seconds, nanos)) => Attribute::Timestamp {
+                    seconds,
+                    nanos,
+                    mapped_text: (nanos == 0 && text.len() == 20 && text.ends_with('Z'))
+                        .then(|| text.clone()),
+                },
                 None => {
                     return Err(invalid_value(
                         &at,
@@ -1537,6 +1721,77 @@ pub fn timestamp(text: &str) -> Option<(i64, u32)> {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    #[test]
+    fn local_catalog_denies_unknown_and_insufficient_credentials_before_project() {
+        let channels = ChannelStore::default();
+        let state = world(&|_| false, &|_, _| Vec::new(), &channels);
+        let route = route("GET", "/v1/projects/other/locations/invalid/channels").unwrap();
+        let input = Input {
+            route: &route,
+            query: None,
+            bearer: Some("ya29.rotated-credential"),
+            body: b"",
+        };
+        let mut catalog = OAuthCredentialCatalog::new();
+        let mut context = EventarcContext {
+            project_number: None,
+            oauth_credentials: Some(std::sync::Arc::new(catalog.clone())),
+        };
+        assert_eq!(
+            status_and_message(&evaluate_with_context(&input, &state, &context)).0,
+            401
+        );
+        catalog.insert(
+            fireemu_core_types::hash::sha256(input.bearer.unwrap().as_bytes()),
+            std::collections::BTreeSet::new(),
+        );
+        context.oauth_credentials = Some(std::sync::Arc::new(catalog.clone()));
+        assert_eq!(
+            status_and_message(&evaluate_with_context(&input, &state, &context)),
+            (
+                403,
+                "Request had insufficient authentication scopes.".to_owned()
+            )
+        );
+        catalog
+            .values_mut()
+            .next()
+            .unwrap()
+            .insert("https://www.googleapis.com/auth/cloud-platform".to_owned());
+        context.oauth_credentials = Some(std::sync::Arc::new(catalog));
+        assert_eq!(
+            status_and_message(&evaluate_with_context(&input, &state, &context)),
+            (
+                403,
+                "Permission denied on resource project other.".to_owned()
+            )
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn local_catalog_grants_follow_digest_not_opaque_spelling(suffix in "[a-zA-Z0-9]{1,32}", grant_first in any::<bool>()) {
+            let first = format!("ya29.{suffix}");
+            let second = format!("{first}-different");
+            let channels = ChannelStore::default();
+            let state = world(&|_| false, &|_, _| Vec::new(), &channels);
+            let route = route("GET", "/v1/projects/demo/locations/us-central1/channels").unwrap();
+            let mut catalog = OAuthCredentialCatalog::new();
+            for (token, grant) in [(&first, grant_first), (&second, !grant_first)] {
+                let scopes = if grant { ["https://www.googleapis.com/auth/cloud-platform".to_owned()].into_iter().collect() } else { std::collections::BTreeSet::new() };
+                catalog.insert(fireemu_core_types::hash::sha256(token.as_bytes()), scopes);
+            }
+            let context = EventarcContext { project_number: None, oauth_credentials: Some(std::sync::Arc::new(catalog)) };
+            for (token, expected) in [(&first, if grant_first { 200 } else { 403 }), (&second, if grant_first { 403 } else { 200 })] {
+                let input = Input { route: &route, query: None, bearer: Some(token), body: b"" };
+                prop_assert_eq!(status_and_message(&evaluate_with_context(&input, &state, &context)).0, expected);
+            }
+            let near = format!("{first}-unissued");
+            let input = Input { route: &route, query: None, bearer: Some(&near), body: b"" };
+            prop_assert_eq!(status_and_message(&evaluate_with_context(&input, &state, &context)).0, 401);
+        }
+    }
 
     const PROJECT: &str = "demo";
 
@@ -2652,7 +2907,483 @@ mod tests {
             })
     }
 
+    fn mapped_channel() -> Lookup {
+        let channels = ChannelStore::default();
+        let name = "projects/demo-eventarc-shapes1/locations/us-central1/channels/feabcdefabcdef-w";
+        channels.declare(name, 0);
+        channels.lookup(name, 0)
+    }
+
+    fn mapped_publication(samples: &[Sample], exterior_whitespace: bool) -> Outcome {
+        let channels = ChannelStore::default();
+        channels.declare(
+            "projects/demo-eventarc-shapes1/locations/us-central1/channels/feabcdefabcdef-w",
+            0,
+        );
+        let body = format!(
+            "{{\"events\":[{}]}}{}",
+            samples
+                .iter()
+                .map(sample_json)
+                .collect::<Vec<_>>()
+                .join(","),
+            if exterior_whitespace { " " } else { "" }
+        );
+        super::publish(
+            &Place {
+                project: "demo-eventarc-shapes1".to_owned(),
+                location: "us-central1".to_owned(),
+            },
+            "feabcdefabcdef-w",
+            body.as_bytes(),
+            &world(&|_| true, &|_, _| Vec::new(), &channels),
+        )
+    }
+
+    fn assert_aggregate_answer(outcome: Outcome, mapped_size: usize) {
+        if mapped_size <= 10_000_000 {
+            assert!(matches!(outcome, Outcome::Deliver { .. }));
+            return;
+        }
+        let message = if mapped_size > 10_485_760 {
+            "Request payload size exceeds the limit: 10485760 bytes.".to_owned()
+        } else {
+            format!("The value for request_size is too large. You passed {mapped_size} in the request, but the maximum value is 10000000.")
+        };
+        let Outcome::Answer(answer) = outcome else {
+            panic!("aggregate refusal must precede delivery");
+        };
+        assert_eq!(answer.status, 400);
+        assert_eq!(
+            answer.text(),
+            format!("{{\n  \"error\": {{\n    \"code\": 400,\n    \"message\": \"{message}\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }}\n}}\n")
+        );
+    }
+
+    fn parsed_samples(samples: &[Sample]) -> Vec<ParsedEvent> {
+        samples
+            .iter()
+            .enumerate()
+            .map(|(index, sample)| {
+                parse_event(index, &parse(sample_json(sample).as_bytes()).unwrap()).unwrap()
+            })
+            .collect()
+    }
+
+    // Evidence-derived, same-width public-safe metadata; the target is CE wire size, not HTTP size.
+    fn mapped_family(count: usize, epoch: bool, probe: bool, target: usize) -> Vec<Sample> {
+        let mut samples: Vec<_> = (0..count)
+            .map(|index| {
+                let mut attributes = vec![
+                    (
+                        "datacontenttype".to_owned(),
+                        Value2::Text("application/json".to_owned()),
+                    ),
+                    (
+                        "time".to_owned(),
+                        Value2::Timestamp(if epoch { 0 } else { 1_791_331_200 }, 0),
+                    ),
+                ];
+                if probe {
+                    attributes.push(("probe".to_owned(), Value2::Integer(0)));
+                }
+                Sample {
+                    id: format!("abcdefabcdef-02-{index:03}"),
+                    source: "//example/w/abcdefabcdef".to_owned(),
+                    spec: "1.0".to_owned(),
+                    kind: "example.w.abcdefabcdef".to_owned(),
+                    attributes,
+                    data: Some(Ok("\"\"".to_owned())),
+                }
+            })
+            .collect();
+        let Lookup::Ready(view) = mapped_channel() else {
+            panic!("ready channel");
+        };
+        let mut padding = 0_isize;
+        for _ in 0..3 {
+            padding += isize::try_from(target).unwrap()
+                - isize::try_from(request_size(&view.name, &parsed_samples(&samples))).unwrap();
+            let padding = usize::try_from(padding).unwrap();
+            for (index, sample) in samples.iter_mut().enumerate() {
+                sample.data = Some(Ok(serde_json::to_string(
+                    &"x".repeat(padding / count + usize::from(index < padding % count)),
+                )
+                .unwrap()));
+            }
+        }
+        assert_eq!(request_size(&view.name, &parsed_samples(&samples)), target);
+        samples
+    }
+
+    // Explicit protobuf field tags provide an encoder independent of field_len and the metric helper.
+    fn mapped_wire(topic: &str, samples: &[Sample]) -> Vec<u8> {
+        let mut request = Vec::new();
+        put_bytes(&mut request, 1, topic.as_bytes());
+        for sample in samples {
+            let mut message = Vec::new();
+            let Some(Ok(data)) = &sample.data else {
+                panic!("text data");
+            };
+            put_bytes(&mut message, 1, data.as_bytes());
+            let mut attributes = vec![
+                ("ce-id".to_owned(), sample.id.clone()),
+                ("ce-source".to_owned(), sample.source.clone()),
+                ("ce-specversion".to_owned(), sample.spec.clone()),
+                ("ce-type".to_owned(), sample.kind.clone()),
+            ];
+            for (key, value) in &sample.attributes {
+                let value = match value {
+                    Value2::Text(text) => text.clone(),
+                    Value2::Timestamp(seconds, 0) => rfc3339(*seconds, 0),
+                    Value2::Integer(0) => "0".to_owned(),
+                    _ => panic!("unsupported mapped test value"),
+                };
+                attributes.push((format!("ce-{key}"), value));
+            }
+            for (key, value) in attributes {
+                let mut entry = Vec::new();
+                put_bytes(&mut entry, 1, key.as_bytes());
+                put_bytes(&mut entry, 2, value.as_bytes());
+                put_bytes(&mut message, 2, &entry);
+            }
+            put_bytes(&mut request, 2, &message);
+        }
+        request
+    }
+
+    #[test]
+    fn mapped_publish_size_reconstructs_the_three_observed_shapes() {
+        let channel = mapped_channel();
+        let Lookup::Ready(view) = &channel else {
+            panic!("ready channel");
+        };
+        assert_eq!(view.pubsub_topic.len(), 87);
+        for (count, epoch, probe, expected) in [
+            (99, false, false, 10_083_108),
+            (100, true, false, 10_083_721),
+            (100, false, true, 10_083_321),
+        ] {
+            let samples = mapped_family(count, epoch, probe, 10_081_812);
+            let parsed = parsed_samples(&samples);
+            assert_eq!(
+                mapped_publish_request_size(&channel, &parsed),
+                Some(expected)
+            );
+            assert_eq!(mapped_wire(&view.pubsub_topic, &samples).len(), expected);
+            assert_aggregate_answer(mapped_publication(&samples, false), expected);
+        }
+    }
+
+    #[test]
+    fn mapped_publish_size_reconstructs_numeric_refusals_and_the_boundary_prediction() {
+        let channel = mapped_channel();
+        for (ce, expected) in [
+            (10_475_028, 10_476_337),
+            (10_212_884, 10_214_193),
+            (10_081_812, 10_083_121),
+            (10_016_276, 10_017_585),
+            (9_999_892, 10_001_201),
+            (9_998_868, 10_000_177),
+            (9_998_740, 10_000_049),
+            (9_998_708, 10_000_017),
+            (9_998_692, 10_000_001),
+            // Accepted native answers report no internal size; this is the supported model's prediction.
+            (9_998_691, 10_000_000),
+        ] {
+            let samples = mapped_family(100, false, false, ce);
+            assert_eq!(
+                mapped_publish_request_size(&channel, &parsed_samples(&samples)),
+                Some(expected)
+            );
+            assert_aggregate_answer(mapped_publication(&samples, false), expected);
+        }
+    }
+
+    #[test]
+    fn aggregate_publish_reconstructs_upper_payload_and_lf_numeric_families() {
+        for (ce, prediction) in [
+            (10_485_200, 10_486_509),
+            (16_766_484, 16_767_793),
+            (12_572_180, 12_573_489),
+        ] {
+            // Payload responses report a limit, not a measured passed size: these are model predictions.
+            let samples = mapped_family(100, false, false, ce);
+            let Lookup::Ready(view) = mapped_channel() else {
+                panic!("ready channel");
+            };
+            assert_eq!(mapped_wire(&view.pubsub_topic, &samples).len(), prediction);
+            assert_aggregate_answer(mapped_publication(&samples, false), prediction);
+        }
+        let mut samples = mapped_family(100, false, false, 10_475_028);
+        let compact_bytes = |samples: &[Sample]| {
+            format!(
+                "{{\"events\":[{}]}}",
+                samples
+                    .iter()
+                    .map(sample_json)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+            .len()
+        };
+        assert_eq!(compact_bytes(&samples), 10_485_760);
+        // Hplus1 changes only the exterior HTTP bytes, preserving the numeric native family.
+        assert_aggregate_answer(mapped_publication(&samples, true), 10_476_337);
+        // Replace one ASCII data byte with leading JSON whitespace: same parsed byte sizes, one extra escape byte.
+        let Some(Ok(text)) = &mut samples[0].data else {
+            panic!("text data");
+        };
+        text.remove(1);
+        text.insert(0, '\n');
+        assert_eq!(compact_bytes(&samples), 10_485_761);
+        let Lookup::Ready(view) = mapped_channel() else {
+            panic!("ready channel");
+        };
+        assert_eq!(
+            request_size(&view.name, &parsed_samples(&samples)),
+            10_475_028
+        );
+        assert_eq!(mapped_wire(&view.pubsub_topic, &samples).len(), 10_476_337);
+        for whitespace in [false, true] {
+            assert_aggregate_answer(mapped_publication(&samples, whitespace), 10_476_337);
+        }
+    }
+
+    #[test]
+    fn aggregate_publish_threshold_edges_are_representation_scoped_local_policy() {
+        // Native lower success/refusal supports the first pair. No native exact-upper-edge pair was measured.
+        // Strict greater-than and upper-first precedence are a fitted policy for the supported representations.
+        let Lookup::Ready(view) = mapped_channel() else {
+            panic!("ready channel");
+        };
+        for target in [10_000_000, 10_000_001, 10_485_760, 10_485_761] {
+            let mut samples = mapped_family(100, false, false, target);
+            for _ in 0..3 {
+                let current = mapped_wire(&view.pubsub_topic, &samples).len();
+                let padding: usize = samples
+                    .iter()
+                    .map(|sample| match &sample.data {
+                        Some(Ok(text)) => text.len() - 2,
+                        _ => panic!("text data"),
+                    })
+                    .sum();
+                let padding = usize::try_from(
+                    isize::try_from(padding).unwrap() + isize::try_from(target).unwrap()
+                        - isize::try_from(current).unwrap(),
+                )
+                .unwrap();
+                for (index, sample) in samples.iter_mut().enumerate() {
+                    sample.data = Some(Ok(serde_json::to_string(
+                        &"x".repeat(padding / 100 + usize::from(index < padding % 100)),
+                    )
+                    .unwrap()));
+                }
+            }
+            assert_eq!(mapped_wire(&view.pubsub_topic, &samples).len(), target);
+            assert_aggregate_answer(mapped_publication(&samples, false), target);
+        }
+    }
+
+    #[test]
+    fn aggregate_unknown_retains_delivery_and_existing_validation_priority() {
+        let mut samples = mapped_family(100, false, false, 10_475_028);
+        samples[0]
+            .attributes
+            .push(("unknown".to_owned(), Value2::Integer(1)));
+        assert_eq!(
+            mapped_publish_request_size(&mapped_channel(), &parsed_samples(&samples)),
+            None
+        );
+        // Existing delivery is preserved; this supplies no aggregate-size MATCH for the unknown representation.
+        assert!(matches!(
+            mapped_publication(&samples, false),
+            Outcome::Deliver { .. }
+        ));
+        samples[0].attributes.pop();
+        samples[0].id.clear();
+        let (status, message) = status_and_message(&mapped_publication(&samples, false));
+        // Mixed-invalid priority is inferred local policy preserving the previous validation order.
+        assert_eq!(status, 400);
+        assert_eq!(message, "Attribute 'id' cannot be empty.");
+    }
+
+    #[test]
+    fn mapped_publish_size_keeps_unobserved_representations_unknown() {
+        let channel = mapped_channel();
+        let mut sample = mapped_family(1, false, false, 1024).pop().unwrap();
+        for value in [
+            Value2::Boolean(false),
+            Value2::Boolean(true),
+            Value2::Integer(1),
+            Value2::Uri("urn:example:test".to_owned()),
+            Value2::UriRef("test".to_owned()),
+            Value2::Bytes(vec![0]),
+            Value2::Timestamp(0, 1),
+            Value2::Text(String::new()),
+        ] {
+            let mut unsupported = sample.clone();
+            unsupported.attributes.push(("extension".to_owned(), value));
+            assert_eq!(
+                mapped_publish_request_size(&channel, &parsed_samples(&[unsupported])),
+                None
+            );
+        }
+        let original = sample_json(&sample);
+        for spelling in ["1970-01-01T00:00:00.000Z", "1970-01-01T00:00:00+00:00"] {
+            let value = original.replace("2026-10-07T00:00:00Z", spelling);
+            let parsed = parse_event(0, &parse(value.as_bytes()).unwrap()).unwrap();
+            assert_eq!(mapped_publish_request_size(&channel, &[parsed]), None);
+        }
+        for key in ["id", "source", "specversion", "type"] {
+            let mut colliding = sample.clone();
+            colliding
+                .attributes
+                .push((key.to_owned(), Value2::Text("extension".to_owned())));
+            assert_eq!(
+                mapped_publish_request_size(&channel, &parsed_samples(&[colliding])),
+                None
+            );
+        }
+        let mut duplicate = sample.clone();
+        duplicate.attributes.push(duplicate.attributes[0].clone());
+        assert_eq!(
+            mapped_publish_request_size(&channel, &parsed_samples(&[duplicate])),
+            None
+        );
+        for field in 0..4 {
+            let mut missing = sample.clone();
+            match field {
+                0 => missing.id.clear(),
+                1 => missing.source.clear(),
+                2 => missing.spec.clear(),
+                _ => missing.kind.clear(),
+            }
+            assert_eq!(
+                mapped_publish_request_size(&channel, &parsed_samples(&[missing])),
+                None
+            );
+        }
+        sample.data = Some(Ok(String::new()));
+        assert_eq!(
+            mapped_publish_request_size(&channel, &parsed_samples(&[sample.clone()])),
+            None
+        );
+        sample.data = None;
+        assert_eq!(
+            mapped_publish_request_size(&channel, &parsed_samples(&[sample.clone()])),
+            None
+        );
+        sample.data = Some(Err(vec![0]));
+        assert_eq!(
+            mapped_publish_request_size(&channel, &parsed_samples(&[sample])),
+            None
+        );
+        let Lookup::Ready(view) = channel else {
+            panic!("ready channel");
+        };
+        for state in [
+            Lookup::Absent,
+            Lookup::Creating(view.clone()),
+            Lookup::Deleting(view),
+        ] {
+            assert_eq!(mapped_publish_request_size(&state, &[]), None);
+        }
+        let Lookup::Ready(mut view) = mapped_channel() else {
+            panic!("ready channel");
+        };
+        view.pubsub_topic.clear();
+        assert_eq!(mapped_publish_request_size(&Lookup::Ready(view), &[]), None);
+    }
+
+    #[test]
+    fn mapped_publish_size_counts_utf8_and_length_prefix_boundaries() {
+        let channel = mapped_channel();
+        let Lookup::Ready(view) = &channel else {
+            panic!("ready channel");
+        };
+        let mut sample = mapped_family(1, false, false, 1024).pop().unwrap();
+        sample.id = "é".repeat(64);
+        sample
+            .attributes
+            .push(("é".repeat(64), Value2::Text("🙂".repeat(32))));
+        for bytes in [2, 126, 127, 128, 16_383, 16_384] {
+            sample.data = Some(Ok(serde_json::to_string(&"x".repeat(bytes - 2)).unwrap()));
+            let samples = [sample.clone()];
+            assert_eq!(
+                mapped_publish_request_size(&channel, &parsed_samples(&samples)),
+                Some(mapped_wire(&view.pubsub_topic, &samples).len())
+            );
+        }
+    }
+
+    fn mapped_sample() -> impl Strategy<Value = Sample> {
+        (
+            ".{1,40}",
+            ".{1,40}",
+            ".{1,40}",
+            ".{1,40}",
+            ".{0,2000}",
+            any::<bool>(),
+            any::<bool>(),
+        )
+            .prop_map(|(id, source, spec, kind, data, epoch, probe)| {
+                let mut attributes = vec![
+                    (
+                        "datacontenttype".to_owned(),
+                        Value2::Text("application/json".to_owned()),
+                    ),
+                    (
+                        "time".to_owned(),
+                        Value2::Timestamp(if epoch { 0 } else { 1_791_331_200 }, 0),
+                    ),
+                ];
+                if probe {
+                    attributes.push(("probe".to_owned(), Value2::Integer(0)));
+                }
+                Sample {
+                    id,
+                    source,
+                    spec,
+                    kind,
+                    attributes,
+                    data: Some(Ok(serde_json::to_string(&data).unwrap())),
+                }
+            })
+    }
+
     proptest! {
+        #[test]
+        fn numeric_read_alias_requires_exact_explicit_mapping(number in 1u64..u64::MAX, list in any::<bool>()) {
+            let channels = ChannelStore::default();
+            let declared = |_: &str| false;
+            let declared_in = |_: &str, _: &str| Vec::new();
+            let world = world(&declared, &declared_in, &channels);
+            let suffix = if list { "" } else { "/missing" };
+            let path = format!("/v1/projects/{number}/locations/us-central1/channels{suffix}");
+            let route = route("GET", &path).unwrap();
+            let input = Input { route: &route, query: None, bearer: Some("ya29.a-token"), body: b"" };
+            let expected = if list { 200 } else { 404 };
+            prop_assert_eq!(status_and_message(&evaluate_with_project_number(&input, &world, Some(number))).0, expected);
+            prop_assert_eq!(status_and_message(&evaluate_with_project_number(&input, &world, None)).0, 403);
+            prop_assert_eq!(status_and_message(&evaluate_with_project_number(&input, &world, Some(number - 1))).0, 403);
+            let unauthorized = Input { bearer: None, ..input };
+            prop_assert_eq!(status_and_message(&evaluate_with_project_number(&unauthorized, &world, Some(number))).0, 401);
+        }
+
+        #[test]
+        fn mapped_publish_size_matches_independent_wire_encoding(
+            samples in proptest::collection::vec(mapped_sample(), 0..4),
+            topic in "projects/demo/topics/[a-z]{1,200}",
+        ) {
+            let Lookup::Ready(mut view) = mapped_channel() else { panic!("ready channel"); };
+            view.pubsub_topic = topic.clone();
+            prop_assert_eq!(
+                mapped_publish_request_size(&Lookup::Ready(view), &parsed_samples(&samples)),
+                Some(mapped_wire(&topic, &samples).len())
+            );
+        }
+
         #[test]
         fn a_varint_is_as_long_as_its_encoding(value in any::<u64>()) {
             let mut out = Vec::new();
@@ -2780,7 +3511,8 @@ mod tests {
         assert_eq!(
             Attribute::Timestamp {
                 seconds: 0,
-                nanos: 0
+                nanos: 0,
+                mapped_text: None,
             }
             .size(),
             2
@@ -2788,7 +3520,8 @@ mod tests {
         assert_eq!(
             Attribute::Timestamp {
                 seconds: -1,
-                nanos: 0
+                nanos: 0,
+                mapped_text: None,
             }
             .size(),
             2 + 1 + 10

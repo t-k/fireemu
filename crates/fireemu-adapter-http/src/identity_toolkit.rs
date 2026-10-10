@@ -825,6 +825,8 @@ pub enum IdpAssertionPolicy {
 }
 
 /// Shared Auth state behind the REST surface.
+// These switches configure independent features, rather than mutually exclusive states.
+#[allow(clippy::struct_excessive_bools)]
 pub struct AuthState {
     /// User store (shared with the gRPC adapter, which verifies ID tokens against it).
     pub store: Arc<Mutex<AuthStore>>,
@@ -863,8 +865,10 @@ pub struct AuthState {
     /// Expiry policy for unsigned fake custom tokens.
     pub fake_custom_token_expiry: FakeCustomTokenExpiry,
     /// Service-account keys signed custom tokens verify against (`auth.customTokenSigners`).
-    /// With none, the unsigned tokens the Admin SDK mints in emulator mode are accepted.
+    /// Unsigned emulator custom tokens use `allow_unsigned_custom_tokens` separately.
     pub custom_token_trust: Option<Arc<CustomTokenTrust>>,
+    /// Accept well-formed unsigned emulator custom tokens independently of the profile.
+    pub allow_unsigned_custom_tokens: bool,
     /// How `signInWithIdp` assertions are verified when no embedder trust is given.
     pub idp_assertions: IdpAssertionPolicy,
     /// Profile-specific Admin query behavior.
@@ -5266,11 +5270,14 @@ fn privilege_check(
 
 /// Runs the handler of a resolved route.
 #[derive(Clone)]
+// These switches configure independent features, rather than mutually exclusive states.
+#[allow(clippy::struct_excessive_bools)]
 struct DispatchOptions {
     totp_extension_enabled: bool,
     stateless_refresh_tokens: bool,
     fake_custom_token_expiry: FakeCustomTokenExpiry,
     custom_token_trust: Option<Arc<CustomTokenTrust>>,
+    allow_unsigned_custom_tokens: bool,
     /// Whether sign-in without `returnSecureToken` answers with the legacy token, as
     /// production does. The emulator profile (stateless refresh tokens) keeps the official
     /// emulator's secure tokens. A request whose blocking trigger is selected keeps secure tokens
@@ -5298,6 +5305,7 @@ impl From<&AuthState> for DispatchOptions {
             stateless_refresh_tokens: state.stateless_refresh_tokens,
             fake_custom_token_expiry: state.fake_custom_token_expiry,
             custom_token_trust: state.custom_token_trust.clone(),
+            allow_unsigned_custom_tokens: state.allow_unsigned_custom_tokens,
             legacy_tokens: !state.stateless_refresh_tokens,
             query_limits: state.query_limits,
             idp_signers: match &state.idp_assertions {
@@ -5361,6 +5369,7 @@ fn dispatch(
             at,
             options.fake_custom_token_expiry == FakeCustomTokenExpiry::Reject,
             options.custom_token_trust.as_deref(),
+            options.allow_unsigned_custom_tokens,
             options.legacy_tokens,
         ),
         // The emulator profile serves an end-user lookup, update or delete that carries the owner
@@ -9962,18 +9971,12 @@ fn sign_in_with_custom_token(
     at: LogicalInstant,
     reject_expired: bool,
     trust: Option<&CustomTokenTrust>,
+    allow_unsigned: bool,
     legacy_tokens: bool,
 ) -> JsonResponse {
     // Production's rules apply with configured signers and in the strict profile; the
     // emulator profile keeps the official emulator's leniency (sandbox recording 2026-09-24).
     let production_rules = trust.is_some() || reject_expired;
-    // Production accepts only a signed token. The strict profile therefore needs the signers
-    // (`auth.customTokenSigners`) to verify one, and without them refuses every custom token as
-    // production refuses an unsigned one; the daemon says so at startup.
-    if reject_expired && trust.is_none() && str_field(body, "token").is_some_and(|t| !t.is_empty())
-    {
-        return error(400, "INVALID_CUSTOM_TOKEN");
-    }
     // An empty token is a malformed one to production and a missing one to the emulator.
     let token = match str_field(body, "token") {
         Some("") if production_rules => {
@@ -9982,15 +9985,25 @@ fn sign_in_with_custom_token(
         None | Some("") => return error(400, "MISSING_CUSTOM_TOKEN"),
         Some(token) => token,
     };
-    // With configured signers only a token they signed is accepted, as in production; without
-    // them, like the official emulator, a strict JSON object is accepted as a fake custom token
-    // beside the unsigned JWT the Admin SDK mints.
-    let (payload, jwt) = if let Some(trust) = trust {
+    // Unsigned JWTs are an explicit development exception in both profiles. A signed token
+    // never falls back to decoding its claims when signature verification fails.
+    let unsigned = fireemu_core_auth::jwt::decode_unsigned(token).ok();
+    let (payload, jwt) = if let Some(decoded) = unsigned {
+        if !allow_unsigned {
+            return error(400, "INVALID_CUSTOM_TOKEN");
+        }
+        if !production_rules
+            && decoded.payload.get("aud").and_then(JsonValue::as_str) != Some(CUSTOM_TOKEN_AUDIENCE)
+        {
+            return error(400, "INVALID_CUSTOM_TOKEN : wrong audience");
+        }
+        (decoded.payload, true)
+    } else if let Some(trust) = trust {
         match trust.verify(token, store.project_id()) {
             Ok(claims) => (claims, true),
             Err(refusal) => return error(400, refusal.message()),
         }
-    } else if token.trim_start().starts_with('{') {
+    } else if !production_rules && allow_unsigned && token.trim_start().starts_with('{') {
         match fireemu_core_types::json::parse(token) {
             Ok(v) => (v, false),
             Err(_) => {
@@ -10001,22 +10014,14 @@ fn sign_in_with_custom_token(
             }
         }
     } else {
-        let Ok(decoded) = fireemu_core_auth::jwt::decode_unsigned(token) else {
-            return error(
-                400,
-                if production_rules {
-                    custom_token::INVALID_ASSERTION_FORMAT
-                } else {
-                    "INVALID_CUSTOM_TOKEN : Invalid assertion format"
-                },
-            );
-        };
-        if !production_rules
-            && decoded.payload.get("aud").and_then(JsonValue::as_str) != Some(CUSTOM_TOKEN_AUDIENCE)
-        {
-            return error(400, "INVALID_CUSTOM_TOKEN : wrong audience");
-        }
-        (decoded.payload, true)
+        return error(
+            400,
+            if production_rules || !allow_unsigned {
+                "INVALID_CUSTOM_TOKEN"
+            } else {
+                "INVALID_CUSTOM_TOKEN : Invalid assertion format"
+            },
+        );
     };
     let now_secs = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
     if production_rules && jwt && !custom_token_claims_hold(&payload, now_secs) {

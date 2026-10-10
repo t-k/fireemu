@@ -1,0 +1,167 @@
+[
+  {
+    "at": "2026-10-05T11:16:18.946Z",
+    "note": "sdk-outcome",
+    "case": "admin-sdk-publish",
+    "name": "full-channel",
+    "threw": false,
+    "requests": 1,
+    "suppressed": 0
+  },
+  {
+    "at": "2026-10-05T11:16:20.098Z",
+    "note": "sdk-outcome",
+    "case": "admin-sdk-publish",
+    "name": "relative-channel",
+    "threw": false,
+    "requests": 1,
+    "suppressed": 0
+  },
+  {
+    "at": "2026-10-05T11:16:21.136Z",
+    "note": "sdk-outcome",
+    "case": "admin-sdk-publish",
+    "name": "multiple-events",
+    "threw": true,
+    "error": {
+      "name": "Error",
+      "code": "eventarc/unknown-error",
+      "message": "Unexpected response with status: 400.",
+      "status": 400
+    },
+    "requests": 1,
+    "suppressed": 0
+  },
+  {
+    "at": "2026-10-05T11:16:22.285Z",
+    "note": "sdk-outcome",
+    "case": "admin-sdk-publish",
+    "name": "generated-metadata",
+    "threw": false,
+    "requests": 1,
+    "suppressed": 0
+  },
+  {
+    "at": "2026-10-05T11:16:23.393Z",
+    "note": "sdk-outcome",
+    "case": "admin-sdk-publish",
+    "name": "caller-metadata",
+    "threw": false,
+    "requests": 1,
+    "suppressed": 0
+  },
+  {
+    "at": "2026-10-05T11:16:25.590Z",
+    "note": "sdk-outcome",
+    "case": "admin-sdk-publish",
+    "name": "default-channel",
+    "threw": true,
+    "error": {
+      "name": "Error",
+      "code": "eventarc/unknown-error",
+      "message": "Unexpected response with status: 404.",
+      "status": 404
+    },
+    "requests": 1,
+    "suppressed": 0
+  },
+  {
+    "at": "2026-10-05T11:16:25.593Z",
+    "note": "sdk-outcome",
+    "case": "admin-sdk-publish",
+    "name": "allowed-event-types",
+    "threw": false,
+    "requests": 0,
+    "suppressed": 0
+  },
+  {
+    "at": "2026-10-05T11:16:25.599Z",
+    "note": "sdk-outcome",
+    "case": "admin-sdk-publish",
+    "name": "missing-source",
+    "threw": true,
+    "error": {
+      "name": "Error",
+      "code": "eventarc/invalid-argument",
+      "message": "CloudEvent 'source' is required.",
+      "status": null
+    },
+    "requests": 0,
+    "suppressed": 0
+  },
+  {
+    "at": "2026-10-05T11:16:25.603Z",
+    "note": "sdk-outcome",
+    "case": "admin-sdk-publish",
+    "name": "missing-data",
+    "threw": true,
+    "error": {
+      "name": "Error",
+      "code": "eventarc/invalid-argument",
+      "message": "CloudEvent 'data' is required.",
+      "status": null
+    },
+    "requests": 0,
+    "suppressed": 0
+  },
+  {
+    "at": "2026-10-05T11:16:25.606Z",
+    "note": "sdk-outcome",
+    "case": "admin-sdk-publish",
+    "name": "bad-time",
+    "threw": true,
+    "error": {
+      "name": "Error",
+      "code": "eventarc/invalid-argument",
+      "message": "CloudEvent 'tyme' must be in ISO date format.",
+      "status": null
+    },
+    "requests": 0,
+    "suppressed": 0
+  },
+  {
+    "at": "2026-10-05T11:16:25.610Z",
+    "note": "sdk-outcome",
+    "case": "admin-sdk-publish",
+    "name": "non-string-extension",
+    "threw": true,
+    "error": {
+      "name": "Error",
+      "code": "eventarc/invalid-argument",
+      "message": "CloudEvent extension attributes ('custom') must be string.",
+      "status": null
+    },
+    "requests": 0,
+    "suppressed": 0
+  },
+  {
+    "at": "2026-10-05T11:16:25.613Z",
+    "note": "sdk-outcome",
+    "case": "admin-sdk-publish",
+    "name": "number-data",
+    "threw": true,
+    "error": {
+      "name": "Error",
+      "code": "eventarc/invalid-argument",
+      "message": "CloudEvent 'data' must be string or an object (which are converted to JSON), got 'number'.",
+      "status": null
+    },
+    "requests": 0,
+    "suppressed": 0
+  },
+  {
+    "at": "2026-10-05T11:16:25.616Z",
+    "note": "sdk-outcome",
+    "case": "admin-sdk-publish",
+    "name": "bad-channel-name",
+    "threw": true,
+    "error": {
+      "name": "Error",
+      "code": "eventarc/invalid-argument",
+      "message": "Invalid channel name format.",
+      "status": null
+    },
+    "requests": 0,
+    "suppressed": 0
+  }
+]

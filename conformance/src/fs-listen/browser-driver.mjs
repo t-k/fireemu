@@ -32,6 +32,9 @@ import { MODE_SETTINGS, modeRun, L3_IDS, L3_PHASES, l3Problems } from "./browser
 import { bandOf } from "./sdk-deps.mjs";
 import { sdkCases } from "./sdk-cases.mjs";
 import { DEADLINE_MS, CLEANUP_MS, STEP_TIMEOUT_MS } from "./sdk-run.mjs";
+import { captureFrames, WIRE_BYTES, WIRE_FRAMES } from "./frames.mjs";
+
+export { captureFrames, WIRE_BYTES, WIRE_FRAMES } from "./frames.mjs";
 
 const require = createRequire(import.meta.url);
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -95,8 +98,6 @@ export function listenChannelCi(url) {
   return parsed.searchParams.get("CI") ?? "none";
 }
 
-export const WIRE_BYTES = 2 * 1024 * 1024;
-export const WIRE_FRAMES = 4096;
 const valueMask = (value) =>
   value.replace(/[A-Z]/g, "X").replace(/[a-z]/g, "x").replace(/[0-9]/g, "0");
 /** Value-only masks retain the JSON layout and the token's alphabet and length. */
@@ -126,45 +127,6 @@ export function outgoingTargets(body) {
       });
   }
   return targets;
-}
-
-/** Parse byte-counted WebChannel frames incrementally; no truncated boundary is accepted. */
-export function captureFrames(text, byteCap = WIRE_BYTES) {
-  const bytes = Buffer.from(text);
-  const frames = [];
-  let offset = 0;
-  if (bytes.length > byteCap) return { frames, complete: false, overflow: true };
-  try {
-    while (offset < bytes.length) {
-      const newline = bytes.indexOf(10, offset);
-      if (newline < 0) return { frames, complete: false };
-      const prefix = bytes.subarray(offset, newline).toString();
-      if (!/^\d+$/.test(prefix)) throw new Error("invalid frame length");
-      const length = Number(prefix);
-      if (length > byteCap) return { frames, complete: false, overflow: true };
-      const end = newline + 1 + length;
-      if (end > bytes.length) return { frames, complete: false };
-      const entries = JSON.parse(bytes.subarray(newline + 1, end).toString());
-      if (!Array.isArray(entries)) throw new Error("invalid WebChannel envelope");
-      for (const entry of entries) {
-        if (!Array.isArray(entry) || !Number.isInteger(entry[0]) || !Array.isArray(entry[1]))
-          throw new Error("invalid WebChannel entry");
-        if (typeof entry[1][0] === "string") {
-          if (frames.length >= WIRE_FRAMES) return { frames, complete: false, overflow: true };
-          frames.push({ sequence: entry[0], message: entry[1], endByte: end });
-          continue;
-        }
-        for (const message of entry[1]) {
-          if (frames.length >= WIRE_FRAMES) return { frames, complete: false, overflow: true };
-          frames.push({ sequence: entry[0], message, endByte: end });
-        }
-      }
-      offset = end;
-    }
-    return { frames, complete: true };
-  } catch {
-    return { frames, complete: false, decodeError: true };
-  }
 }
 
 async function runMode({ browser, config, run, mode, accounts, cases }) {

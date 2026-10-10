@@ -57,6 +57,7 @@ fn state(users: usize) -> AuthState {
         client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry: FakeCustomTokenExpiry::Ignore,
         custom_token_trust: None,
+        allow_unsigned_custom_tokens: true,
         idp_assertions: fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy::Fixture,
         idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
         query_limits: AuthQueryLimits::EmulatorUnbounded,

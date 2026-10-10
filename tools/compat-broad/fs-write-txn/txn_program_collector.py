@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import json
 import math
 import re
 import threading
@@ -832,6 +833,20 @@ def projection(receipt, table):
     """Replay every row of a complete recording; only what the rows derive can freeze."""
     if not isinstance(receipt, dict) or receipt.get("kind") != RECORDING_KIND or receipt.get("complete") is not True or receipt.get("graphComplete") is not True or receipt.get("journalFailure") is not False or receipt.get("unrecovered") is not False or receipt.get("failureType") is not None or any(receipt.get(key) for key in ["openTokens", "unknownStarts", "unknownRollbacks", "unknownCommits"]) or receipt.get("cleanup") != {"absent": True}:
         raise ValueError("only complete acquisitions can freeze")
+    if table['name'] == 'p17-admin-sdk-retry':
+        import subprocess
+        from txn_program_cli import source_manifest
+        from txn_program_wire import verify_runtime
+        import hashlib
+        if receipt.get('receiptDigest') != hashlib.sha256(json.dumps({key: value for key, value in receipt.items() if key != 'receiptDigest'}, sort_keys=True, separators=(',', ':'), allow_nan=False, ensure_ascii=False).encode()).hexdigest(): raise ValueError('SDK receipt digest differs')
+        runtime = receipt.get('runtimeManifest')
+        verify_runtime(runtime)
+        if receipt.get('sourceManifest') != source_manifest(table['name']): raise ValueError('SDK source manifest differs')
+        plan = compile_plan(table, receipt.get('nonce'), receipt.get('ownerId'))
+        if receipt.get('sourceDigest') != plan['sourceDigest'] or receipt.get('corpusDigest') != plan['corpusDigest']: raise ValueError('SDK source binding differs')
+        result = subprocess.run([runtime['nodeExecutable'], table['sourceFile'], 'project'], input=json.dumps(receipt).encode(), capture_output=True, env={'LANG': 'C', 'LC_ALL': 'C', 'TZ': 'UTC'}, timeout=30)
+        if result.returncode or len(result.stdout) > 65536: raise ValueError('SDK projection refused native evidence')
+        return json.loads(result.stdout)
     plan = compile_plan(table, receipt.get("nonce"), receipt.get("ownerId"))
     if any(receipt.get(key) != plan[key] for key in ["program", "packetName", "sourceDigest", "corpusDigest"]):
         raise ValueError("acquisition source binding differs")

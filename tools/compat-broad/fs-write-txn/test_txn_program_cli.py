@@ -241,8 +241,8 @@ def test_the_prior_families_manifests_are_unchanged_by_the_shared_graph():
     boundary = importlib.import_module("txn_boundary_grpc_cli")
     prior_idle = importlib.import_module("txn_idle_grpc_cli")
     prior_retry = importlib.import_module("txn_retry_grpc_cli")
-    assert prior_idle.runner_sha256() == "0c5befa05db71835c1ed2236b9caeeee8c954ca77f13f68f59f6ac2e312d49d3"
-    assert prior_retry.runner_sha256() == "23c95d428a0e0f5cc7edfcb3a582811dbb30315ea4158638025175c3970cd4a9"
+    assert prior_idle.runner_sha256() == "24dabc8b04779c1538290be2d3ba107942952252a8483108ce75b2830abba749"
+    assert prior_retry.runner_sha256() == "d50c95fac8f3a034f5b7919114d22abecb2cecad7ce9f8791320ebc9b80c0a14"
     assert not any("txn_program" in path for path in boundary.source_manifest())
 
 
@@ -334,6 +334,68 @@ def test_a_wrong_branch_or_a_dirty_tree_is_refused_with_the_branch_it_needs(monk
     monkeypatch.setattr(cli, "_git", git({("status", "--porcelain"): "", ("branch", "--show-current"): ""}))
     with pytest.raises(ValueError, match="a detached head"):
         cli.signed_source_commit()
+
+
+def test_sdk_packet_scope_pins_its_own_branch_runtime_and_attempt_budget(monkeypatch):
+    table = cli.table_for('p17-admin-sdk-retry')
+    monkeypatch.setattr(cli, 'runner_sha256', lambda _name: 'c' * 64)
+    monkeypatch.setattr(cli, 'refuse_virtualenv', lambda _runtime: None)
+    value = cli.packet_value(table=table, source_commit='a' * 40, runtime={}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-p17-admin-sdk-retry-test', envelope_relative='docs.local/reviews/sdk-envelope.md')
+    assert value['sourceBranch'] == 'work/fs-txn-s5a-admin'
+    assert value['project'] == 'fireemu-oracle-txn'
+    assert value['caps'] == {'observation': 88, 'tokenCleanup': 0, 'documentCleanup': 36, 'management': 6, 'credential': 1}
+    assert value['requestsPerRecording'] == 131
+    assert value['scope']['writes'] == 'owned-12-documents'
+    assert value['scope']['retries'] == 'sdk-aborted-callback-only-max-two'
+    assert value['scope']['timingSource'] == 'grpc-js-client-interceptor'
+    assert value['retries'] == value['scope']['retries']
+    assert value['timingSource'] == value['scope']['timingSource']
+    assert value['observationSeconds'] == 180
+    assert value['recoverySeconds'] == 120
+
+
+def test_sdk_source_manifest_binds_the_reused_adapter_transitively():
+    manifest = cli.source_manifest('p17-admin-sdk-retry')
+    assert 'tools/compat-broad/fs-write-txn/admin_sdk_retry.mjs' in manifest
+    assert 'tools/compat-broad/fs-listen-resume/listen_sdk_adapter.mjs' in manifest
+    assert 'tools/compat-broad/fs-listen-resume/listen_journal.mjs' in manifest
+    assert 'tools/compat-broad/fs-listen-resume/listen_collector.mjs' in manifest
+    assert 'conformance/package.json' in manifest
+
+
+def test_sdk_recovery_packet_binds_action_snapshot_wait_and_distinct_envelope(monkeypatch):
+    table = cli.table_for('p17-admin-sdk-retry')
+    monkeypatch.setattr(cli, 'runner_sha256', lambda _name: 'c' * 64)
+    monkeypatch.setattr(cli, 'refuse_virtualenv', lambda _runtime: None)
+    recovery = {'action': 'a2', 'snapshotPath': 'docs.local/runs/sdk-stopped/sdk-final-receipt.json', 'snapshotSha256': 'e' * 64, 'notBefore': '2026-10-07T00:10:00Z', 'originalPacketId': 'fs-transaction-p17-admin-sdk-retry-original', 'lockSha256': 'f' * 64}
+    value = cli.packet_value(table=table, source_commit='a' * 40, runtime={}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-p17-admin-sdk-retry-recovery', envelope_relative='docs.local/reviews/sdk-recovery-envelope.md', sdk_recovery=recovery)
+    assert value['sdkRecovery'] == recovery
+    assert value['envelopeId'] == 'FS-TRANSACTION-p17-admin-sdk-retry-a2-001'
+    assert value['scope']['retries'] == 'none'
+    assert value['scope']['writes'] == 'none'
+    assert value['recordings'] == 2
+    for key, changed in [('action', 'unexpected'), ('snapshotPath', 'tools/file.json'), ('snapshotSha256', 'bad'), ('notBefore', 'bad')]:
+        with pytest.raises(ValueError): cli.packet_value(table=table, source_commit='a' * 40, runtime={}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-p17-admin-sdk-retry-recovery', envelope_relative='docs.local/reviews/sdk-recovery-envelope.md', sdk_recovery={**recovery, key: changed})
+
+
+def test_sdk_recovery_snapshot_size_is_bounded_and_digest_checked(tmp_path):
+    path = tmp_path / 'receipt.json'
+    raw = json.dumps({'packetName': 'p17-admin-sdk-retry', 'padding': 'x' * 70000}).encode()
+    path.write_bytes(raw)
+    assert cli._read_packet(path, cli.sha(raw), label='SDK snapshot')['packetName'] == 'p17-admin-sdk-retry'
+    with pytest.raises(ValueError): cli._read_packet(path, 'a' * 64, label='SDK snapshot')
+    path.write_bytes(b' ' * 4194305)
+    with pytest.raises(ValueError): cli._read_packet(path, cli.sha(path.read_bytes()), label='SDK snapshot')
+
+
+def test_sdk_packet_size_widening_remains_closed_and_bounded(tmp_path):
+    path = tmp_path / 'packet.json'
+    raw = json.dumps({'packetName': 'p17-admin-sdk-retry', 'padding': 'x' * 70000}).encode()
+    path.write_bytes(raw)
+    assert cli._read_packet(path, cli.sha(raw))['packetName'] == 'p17-admin-sdk-retry'
+    with pytest.raises(ValueError): cli._read_packet(path, cli.sha(raw), label='envelope')
+    path.write_bytes(b' ' * 262145)
+    with pytest.raises(ValueError): cli._read_packet(path, cli.sha(path.read_bytes()))
 
 
 def test_p16_admission_accepts_only_the_packet_source_branch(monkeypatch):
@@ -488,6 +550,26 @@ def test_main_refuses_a_database_action_without_its_own_packet(packet, tmp_path,
     with pytest.raises(ValueError, match="own packet"): cli.main(argv)
 
 
+@pytest.mark.parametrize("command", ["readback-a2", "recover-database"])
+def test_main_rejects_sdk_packets_for_database_actions_before_any_guard(tmp_path, monkeypatch, command):
+    import txn_sandbox_admission as shared
+    table = cli.table_for("p17-admin-sdk-retry")
+    private = tmp_path / "docs.local/reviews"; private.mkdir(parents=True)
+    baseline = private / "baseline.json"; baseline.write_text("{}\n")
+    envelope = private / "sdk-envelope.md"; envelope.write_text("SDK scope\n")
+    monkeypatch.setattr(cli, "verify_runtime", lambda _runtime: None)
+    value = cli.packet_value(table=table, source_commit="b" * 40, runtime={}, baseline_sha256=cli.sha(baseline.read_bytes()), envelope_sha256=cli.sha(envelope.read_bytes()), packet_id="fs-transaction-p17-admin-sdk-retry-unit", envelope_relative="docs.local/reviews/sdk-envelope.md")
+    packet = private / "packet.json"; packet.write_text(json.dumps(value))
+    digest = cli.sha(packet.read_bytes())
+    _isolate_admission(monkeypatch, tmp_path, value)
+    monkeypatch.setattr(shared, "acquire_shared_lock", lambda *args: pytest.fail("SDK database action acquired a launch guard"))
+    monkeypatch.setattr(cli, "database_action", lambda *args: pytest.fail("SDK packet reached the p16 action gate"))
+    monkeypatch.setattr(cli, "record_twice", lambda **kwargs: pytest.fail("SDK database action resumed acquisition"))
+    argv = _argv(packet, digest, baseline, tmp_path); argv[0] = command
+    with pytest.raises(ValueError, match="p16 database action"):
+        cli.main(argv + ["--action-packet", str(private / "action.json"), "--action-packet-sha256", "d" * 64])
+
+
 
 def test_presend_generator_describes_the_finalized_query_baseline():
     import ast
@@ -498,3 +580,89 @@ def test_presend_generator_describes_the_finalized_query_baseline():
     strings = [node.value for node in ast.walk(ast.parse(path.read_text())) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
     descriptions = [value for value in strings if "query/(default) expectations" in value]
     assert descriptions == ["Finalized recorded query/(default) expectations with field sources and a validated runtime schema; preflight checks every pinned identity and database setting"]
+
+
+def test_the_s5b_successor_uses_a_fresh_fixed_envelope_without_changing_p17():
+    assert cli.table_for("s5b-web-sdk-retry")["envelopeId"] == "FS-TRANSACTION-s5b-web-sdk-retry-006"
+    assert cli.table_for("p17-admin-sdk-retry")["envelopeId"] == "FS-TRANSACTION-p17-admin-sdk-retry-003"
+
+
+def test_s5b_recovery_packet_has_fixed_single_action_reserve_and_scope(monkeypatch):
+    table = cli.table_for('s5b-web-sdk-retry')
+    monkeypatch.setattr(cli, 'runner_sha256', lambda _: 'c' * 64)
+    monkeypatch.setattr(cli, 'refuse_virtualenv', lambda _: None)
+    recovery = {'action': 'cleanup', 'snapshotPath': 'docs.local/runs/s5b/recording-1.json', 'snapshotSha256': 'e' * 64, 'notBefore': '2026-10-08T00:10:00Z', 'originalPacketId': 'fs-transaction-s5b-web-sdk-retry-original', 'lockSha256': 'f' * 64}
+    value = cli.packet_value(table=table, source_commit='a' * 40, runtime={'webSdk': True}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-s5b-web-sdk-retry-recovery', envelope_relative='docs.local/reviews/s5b-recovery.md', sdk_recovery=recovery)
+    assert value['envelopeId'] == 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-001'
+    assert value['recordings'] == 1 and value['requestsPerRecording'] == 20 and value['reserveUsd'] == 0.01
+    assert value['observationSeconds'] == value['recoverySeconds'] == 120
+    assert value['caps'] == {'credential': 1, 'management': 10, 'documentCleanup': 9, 'observation': 0, 'tokenCleanup': 0}
+    assert value['scope']['writes'] == 'owned-version-delete-only'
+
+
+@pytest.mark.parametrize('envelope', ['001', '002', '003'])
+@pytest.mark.parametrize('outcome', ['reserved', 'stopped-needs-review', 'sdk-recovery-observed'])
+def test_s5b_recovery_envelope_cannot_be_reused_under_a_fresh_packet(outcome, envelope):
+    pins = {'packetId': 'fs-transaction-s5b-web-sdk-retry-fresh', 'envelopeId': 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-' + envelope}
+    rows = [{'packetId': 'fs-transaction-s5b-web-sdk-retry-consumed', 'envelopeId': pins['envelopeId'], 'outcome': outcome}]
+    with pytest.raises(ValueError, match='envelope already used'):
+        cli.verify_sdk_recovery_history(rows, pins, cli.table_for('s5b-web-sdk-retry'))
+    assert rows[0]['outcome'] == outcome
+
+
+def test_sdk_recovery_history_keeps_p17_defaults_and_rejects_packet_replay():
+    pins = {'packetId': 'fs-transaction-p17-admin-sdk-retry-fresh', 'envelopeId': 'FS-TRANSACTION-p17-admin-sdk-retry-cleanup-001'}
+    rows = [{'packetId': 'old', 'envelopeId': pins['envelopeId'], 'outcome': 'stopped-needs-review'}]
+    cli.verify_sdk_recovery_history(rows, pins, cli.table_for('p17-admin-sdk-retry'))
+    cli.verify_sdk_recovery_history([], pins, cli.table_for('s5b-web-sdk-retry'))
+    with pytest.raises(ValueError, match='packet already used'): cli.verify_sdk_recovery_history([{'packetId': pins['packetId']}], pins, cli.table_for('p17-admin-sdk-retry'))
+
+
+def test_s5b_six_recovery_packet_binds_roles_twenty_nine_and_fresh_envelope(monkeypatch):
+    from test_txn_program_runner import s5b_six_recovery_fixture
+    monkeypatch.setattr(cli, 'runner_sha256', lambda _: 'c' * 64)
+    recovery = {'action': 'cleanup', 'snapshotPath': 'docs.local/runs/s5b/recording-1.json', 'snapshotSha256': 'e' * 64, 'notBefore': '2026-10-08T00:10:00Z', 'originalPacketId': 'fs-transaction-s5b-web-sdk-retry-original', 'lockSha256': 'f' * 64, 'documentRoles': sorted(s5b_six_recovery_fixture()['documents'])}
+    def packet(binding):
+        return cli.packet_value(table=cli.table_for('s5b-web-sdk-retry'), source_commit='a' * 40, runtime={'webSdk': True}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-s5b-web-sdk-retry-recovery', envelope_relative='docs.local/reviews/s5b-recovery.md', sdk_recovery=binding)
+    value = packet(recovery)
+    assert value['envelopeId'] == 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-003'
+    assert value['requestsPerRecording'] == 29 and value['caps']['documentCleanup'] == 18
+    assert value['recordings'] == 1 and value['reserveUsd'] == 0.01
+    for roles in (recovery['documentRoles'][:3], recovery['documentRoles'][:-1], recovery['documentRoles'] + ['browser_probe'], list(reversed(recovery['documentRoles']))):
+        with pytest.raises(ValueError): packet({**recovery, 'documentRoles': roles})
+    with pytest.raises(ValueError): cli.verify_sdk_recovery_history([{'packetId': 'used', 'envelopeId': value['envelopeId']}], {'packetId': 'fresh', 'envelopeId': value['envelopeId']}, cli.table_for('s5b-web-sdk-retry'))
+
+
+@pytest.mark.parametrize('six_roles', [False, True])
+def test_s5b_recovery_snapshot_must_match_packet_shape_before_credentials(six_roles):
+    from test_txn_program_runner import s5b_recovery_fixture, s5b_six_recovery_fixture
+    snapshot = s5b_six_recovery_fixture() if six_roles else s5b_recovery_fixture()
+    recovery = {'action': 'cleanup'}
+    if six_roles: recovery['documentRoles'] = sorted(snapshot['documents'])
+    cli.verify_s5b_recovery_snapshot(snapshot, recovery)
+    mismatched = {} if six_roles else {'documentRoles': sorted(s5b_six_recovery_fixture()['documents'])}
+    with pytest.raises(ValueError, match='packet and snapshot'): cli.verify_s5b_recovery_snapshot(snapshot, {'action': 'cleanup', **mismatched})
+
+
+@pytest.mark.parametrize('field', ['requestsPerRecording', 'caps', 'envelopeId', 'historicalEnvelopeId', 'documentRoles'])
+def test_s5b_six_packet_tamper_cannot_change_correlated_bounds(tmp_path, monkeypatch, field):
+    from test_txn_program_runner import s5b_six_recovery_fixture
+    monkeypatch.setattr(cli, 'verify_runtime', lambda _: None)
+    baseline = tmp_path/'baseline.json'; baseline.write_text('{}')
+    envelope = tmp_path/'envelope.md'; envelope.write_text('offline')
+    recovery = {'action': 'cleanup', 'snapshotPath': 'docs.local/runs/s5b/recording-1.json', 'snapshotSha256': 'e' * 64, 'notBefore': '2026-10-08T00:10:00Z', 'originalPacketId': 'fs-transaction-s5b-web-sdk-retry-original', 'lockSha256': 'f' * 64, 'documentRoles': sorted(s5b_six_recovery_fixture()['documents'])}
+    table = cli.table_for('s5b-web-sdk-retry')
+    value = cli.packet_value(table=table, source_commit='a' * 40, runtime={'webSdk': True}, baseline_sha256=cli.sha(baseline.read_bytes()), envelope_sha256=cli.sha(envelope.read_bytes()), packet_id='fs-transaction-s5b-web-sdk-retry-recovery', envelope_relative='docs.local/reviews/s5b-recovery.md', sdk_recovery=recovery)
+    if field == 'requestsPerRecording': value[field] = 20
+    if field == 'caps': value[field]['documentCleanup'] = 9
+    if field == 'envelopeId': value[field] = 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-001'
+    if field == 'historicalEnvelopeId': value['envelopeId'] = 'FS-TRANSACTION-s5b-web-sdk-retry-recovery-002'
+    if field == 'documentRoles': value['sdkRecovery'][field] = value['sdkRecovery'][field][:-1]
+    packet = tmp_path/'packet.json'; packet.write_text(json.dumps(value))
+    with pytest.raises(ValueError): cli.load_packet(packet, cli.sha(packet.read_bytes()), baseline, envelope, table=table, source_commit='a' * 40, packet_relative='docs.local/reviews/s5b-recovery.json', envelope_relative=value['envelopePath'])
+
+
+def test_p17_empty_recovery_binding_keeps_closed_schema_refusal(monkeypatch):
+    monkeypatch.setattr(cli, 'runner_sha256', lambda _: 'c' * 64)
+    with pytest.raises(ValueError, match='closed SDK recovery packet scope'):
+        cli.packet_value(table=cli.table_for('p17-admin-sdk-retry'), source_commit='a' * 40, runtime={}, baseline_sha256='b' * 64, envelope_sha256='d' * 64, packet_id='fs-transaction-p17-admin-sdk-retry-recovery', envelope_relative='docs.local/reviews/p17-recovery.md', sdk_recovery={})

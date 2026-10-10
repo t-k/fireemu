@@ -3,6 +3,7 @@
 // checks (no recording mode, no production credential, no route out) are tested here on inputs
 // built from the committed evidence, each broken in one place.
 import assert from "node:assert/strict";
+import { gzipSync } from "node:zlib";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -43,6 +44,7 @@ import {
   parseArguments,
   planComparisons,
   planRelease,
+  readReleaseJson,
 } from "./release-strict-regression.mjs";
 import { PROGRAMS } from "./firestore-probe/programs.mjs";
 import { historicalProductionSummary } from "./firestore-probe/run.mjs";
@@ -63,7 +65,7 @@ const judgeFsDataWriteHistorical = (expected, observed, binary) =>
   );
 
 const repo = (path) => fileURLToPath(new URL(`../../${path}`, import.meta.url));
-const readJson = (path) => JSON.parse(readFileSync(repo(path), "utf8"));
+const readJson = (path) => readReleaseJson(repo(""), path);
 const clone = (value) => structuredClone(value);
 const sha256 = (path) =>
   createHash("sha256")
@@ -198,8 +200,17 @@ test("every comparison a verified closure names is run or excluded with a reason
     assert.ok(comparison.runIds.length > 0, comparison.path);
     for (const id of comparison.runIds) assert.ok(runIds.has(id), `${comparison.path}: ${id}`);
   }
-  // Each run serves a comparison: no run is kept for nothing.
-  const used = new Set(plan.comparisons.flatMap((c) => c.runIds));
+  // Every executed run serves a committed comparison, including parents awaiting formal closure.
+  const executionPlan = planComparisons(
+    committedClosures().map((entry) => {
+      const copy = clone(entry);
+      copy.closure.parentStatus = "COMPAT_VERIFIED";
+      return copy;
+    }),
+    readJson,
+    { excludedKinds: [] },
+  );
+  const used = new Set(executionPlan.comparisons.flatMap((c) => c.runIds));
   for (const run of RUNS) assert.ok(used.has(run.id), run.id);
 });
 
@@ -1803,4 +1814,512 @@ test("FS-LISTEN-SDK uses its disclosed exclusion as a verified closure", () => {
   const reviewed = planComparisons(closures, readJson);
   assert.deepEqual(reviewed.errors, []);
   assert.ok(reviewed.excluded.some((entry) => entry.kind === "fs-listen-sdk-comparison-v1"));
+});
+
+test("every release command binds its declared mode to the actual CLI action", () => {
+  for (const run of RUNS) {
+    for (const command of run.commands) {
+      assert.ok(ALLOWED_MODES.has(command.mode), `${run.id}: ${command.mode}`);
+      assert.ok(command.argv.includes(command.mode), `${run.id}: ${command.mode}`);
+    }
+  }
+});
+
+test("R19 executes with the reviewed interpreter and owns both expanded output paths", async () => {
+  const { chmodSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "fireemu R19 setup-"));
+  try {
+    mkdirSync(join(dir, "logs"));
+    const fakeUv = `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const output = args[args.indexOf("--out") + 1];
+if (JSON.stringify(args.slice(0, 4)) !== JSON.stringify(["run", "--python", "3.12.13", "python"])) process.exit(3);
+if (!output.startsWith(process.env.R19_OWNED_OUT + "/")) process.exit(4);
+fs.writeFileSync(output + ".receipt", JSON.stringify(args));
+console.log(JSON.stringify({ args }));
+`;
+    for (const executable of ["uv", "python3"]) {
+      const path = join(dir, executable);
+      writeFileSync(path, fakeUv);
+      chmodSync(path, 0o700);
+    }
+    const run = clone(RUNS.find(({ id }) => id === "R19"));
+    run.clear = [];
+    const entry = await runEntry(run, {
+      binary: join(dir, "installed binary"),
+      functionsNode: process.execPath,
+      out: dir,
+      env: { PATH: dir, R19_OWNED_OUT: dir },
+    });
+    assert.deepEqual(entry.record.errors, []);
+    assert.equal(entry.record.commands.length, 2);
+    for (const [index, command] of entry.record.commands.entries()) {
+      assert.deepEqual(command.argv.slice(0, 5), ["uv", "run", "--python", "3.12.13", "python"]);
+      const output = command.argv[command.argv.indexOf("--out") + 1];
+      assert.equal(output, join(dir, index === 0 ? "R19-export.json.check" : "R19-export.json"));
+      assert.ok(existsSync(output + ".receipt"));
+      assert.deepEqual(
+        JSON.parse(readFileSync(output + ".receipt", "utf8")),
+        command.argv.slice(1),
+      );
+      assert.equal(command.exitCode, 0);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the strict-production job prepares pinned Python and Chromium before offline replay", () => {
+  const job = strictProductionJob();
+  const isolated = job.indexOf("unshare --net");
+  const installUv = job.indexOf("pipx install uv==0.11.28");
+  const installPython = job.indexOf("uv python install 3.12.13");
+  const checkPython = job.indexOf("assert sys.version_info[:3] == (3, 12, 13)");
+  const installNode = job.indexOf("pnpm -C conformance install --frozen-lockfile");
+  const installChromium = job.indexOf(
+    "pnpm -C conformance exec playwright install --with-deps chromium",
+  );
+  assert.ok(
+    installUv >= 0 &&
+      installPython > installUv &&
+      checkPython > installPython &&
+      checkPython < isolated,
+  );
+  assert.ok(installNode >= 0 && installChromium > installNode && installChromium < isolated);
+  assert.match(job, /UV_OFFLINE: "1"/);
+  assert.match(job, /UV_PYTHON_DOWNLOADS: never/);
+  const launch = job.slice(isolated);
+  assert.match(launch, /PATH="\$PATH" HOME="\$HOME"/);
+  assert.match(launch, /UV_OFFLINE="\$UV_OFFLINE" UV_PYTHON_DOWNLOADS="\$UV_PYTHON_DOWNLOADS"/);
+});
+
+const eventarcComparisonPath = "spec/compatibility/closure/evidence/EVENTARC-comparison.json";
+const pendingEventarcFixture = () => ({
+  kind: "eventarc-production-comparison-v1",
+  parent: "EVENTARC",
+  fixtureSha256: "b".repeat(64),
+  artifactSha256: BINARY,
+  inputPins: { "B.jsonl": "c".repeat(64) },
+  fixturePins: { "neutral-functions/index.js": "d".repeat(64) },
+  sourcePins: { "conformance/src/eventarc-production/run.mjs": "e".repeat(64) },
+  rows: [{ row: "eventarc/channel-lifecycle#list-channels", transport: "rest", status: "PENDING" }],
+  summary: { PENDING: 1 },
+});
+const pendingEventarcClosure = () => ({
+  name: "EVENTARC.json",
+  closure: {
+    parent: "EVENTARC",
+    parentStatus: "IMPLEMENTING",
+    integratedRegression: { comparisons: [{ path: eventarcComparisonPath }] },
+  },
+});
+
+test("R20 declares the real check and evidence-reusing export CLI with scoped deadlines", () => {
+  const run = RUNS.find(({ id }) => id === "R20");
+  assert.ok(run);
+  assert.equal(run.kind, "eventarc-production-comparison-v1");
+  assert.equal(run.rowPrefix, "eventarc/");
+  assert.deepEqual(run.clear, ["eventarc-production"]);
+  assert.deepEqual(
+    run.commands.map(({ mode }) => mode),
+    ["check", "export-comparison"],
+  );
+  assert.deepEqual(run.commands[0].argv, [
+    "{functionsNode}",
+    "conformance/src/eventarc-production/run.mjs",
+    "check",
+    "--binary",
+    "{bin}",
+    "--out",
+    "{export}.check",
+  ]);
+  assert.deepEqual(run.commands[1].argv, [
+    "{functionsNode}",
+    "conformance/src/eventarc-production/run.mjs",
+    "export-comparison",
+    "--binary",
+    "{bin}",
+    "--out",
+    "{export}.check",
+    "--evidence",
+    "{export}.check/check-evidence.json",
+    "--comparison",
+    "{export}",
+  ]);
+  assert.equal(run.commands[0].timeoutMs, 7420000);
+  assert.equal(run.commands[1].timeoutMs, undefined);
+  for (const command of run.commands) {
+    assert.deepEqual(command.expectedExitCodes, [0]);
+    assert.deepEqual(command.env, {});
+  }
+  for (const other of RUNS.filter(({ id }) => id !== "R20"))
+    for (const command of other.commands) assert.equal(command.timeoutMs, undefined, other.id);
+  assert.match(strictProductionJob(), /timeout-minutes: 180\n/);
+});
+
+test("R20 pending EVENTARC plans exports but refuses missing semantic evidence", () => {
+  const document = pendingEventarcFixture();
+  const entries = [
+    pendingEventarcClosure(),
+    {
+      name: "OTHER.json",
+      closure: {
+        parent: "OTHER",
+        parentStatus: "IMPLEMENTING",
+        integratedRegression: { comparisons: [{ path: "never-read.json" }] },
+      },
+    },
+  ];
+  const plan = planComparisons(
+    entries,
+    (path) => {
+      assert.equal(path, eventarcComparisonPath);
+      return document;
+    },
+    { excludedKinds: [] },
+  );
+  assert.deepEqual(plan.errors, []);
+  assert.deepEqual(plan.comparisons, [
+    { path: eventarcComparisonPath, kind: document.kind, parents: ["EVENTARC"], runIds: ["R20"] },
+  ]);
+  assert.deepEqual(exportCopies(plan.comparisons, RUNS), [
+    { from: "R20-export.json", to: "EVENTARC-comparison.json" },
+  ]);
+  assert.match(
+    judge(
+      plan.comparisons[0],
+      { R20: clone(document) },
+      { binarySha256: BINARY, readJson: () => document },
+    ).join("\n"),
+    /missing bound semantic comparands/,
+  );
+  assert.equal(entries[0].closure.parentStatus, "IMPLEMENTING");
+  const changed = clone(document);
+  changed.rows[0].status = "MATCH";
+  assert.notDeepEqual(
+    judge(
+      plan.comparisons[0],
+      { R20: changed },
+      { binarySha256: BINARY, readJson: () => document },
+    ),
+    [],
+  );
+});
+
+test("R20 refuses absent registration and malformed pending EVENTARC rows", () => {
+  const absent = pendingEventarcClosure();
+  delete absent.closure.integratedRegression;
+  assert.ok(
+    planComparisons([absent], () => assert.fail("no authentic reference"), {
+      excludedKinds: [],
+    }).errors.some((x) => /R20.*comparison/.test(x)),
+  );
+  const breakers = {
+    "foreign kind": (x) => {
+      x.kind = "foreign-v1";
+    },
+    "empty rows": (x) => {
+      x.rows = [];
+    },
+    "foreign prefix": (x) => {
+      x.rows[0].row = "foreign/case";
+    },
+    "duplicate row": (x) => {
+      x.rows.push(clone(x.rows[0]));
+    },
+    "foreign transport": (x) => {
+      x.rows[0].transport = "grpc";
+    },
+  };
+  for (const [name, change] of Object.entries(breakers)) {
+    const document = pendingEventarcFixture();
+    change(document);
+    assert.ok(
+      planComparisons([pendingEventarcClosure()], () => document, { excludedKinds: [] }).errors
+        .length,
+      name,
+    );
+  }
+});
+
+test("R20 actual command expansion owns both outputs and passes the same evidence to export", async () => {
+  const { chmodSync } = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "fireemu R20 argv-"));
+  try {
+    mkdirSync(join(dir, "logs"));
+    const executable = join(dir, "fixture-node");
+    writeFileSync(
+      executable,
+      `#!${process.execPath}
+const fs=require('node:fs');const args=process.argv.slice(2);const flag=k=>args[args.indexOf(k)+1];
+if(args[0]!=='conformance/src/eventarc-production/run.mjs'||flag('--binary')!==process.env.R20_TEST_BINARY)process.exit(3);
+const out=flag('--out');if(out!==process.env.R20_TEST_OUT+'/R20-export.json.check')process.exit(4);
+if(args[1]==='check'){fs.mkdirSync(out);fs.writeFileSync(out+'/check-evidence.json',JSON.stringify({testOnly:true}));}
+else{if(flag('--evidence')!==out+'/check-evidence.json'||!JSON.parse(fs.readFileSync(flag('--evidence'))).testOnly)process.exit(5);if(flag('--comparison')!==process.env.R20_TEST_OUT+'/R20-export.json')process.exit(6);fs.writeFileSync(flag('--comparison'),JSON.stringify({testOnly:true}));}
+console.log(JSON.stringify({args}));
+`,
+    );
+    chmodSync(executable, 0o700);
+    const run = clone(RUNS.find(({ id }) => id === "R20"));
+    run.clear = [];
+    const binary = join(dir, "installed binary");
+    const entry = await runEntry(run, {
+      binary,
+      functionsNode: executable,
+      out: dir,
+      env: { PATH: process.env.PATH, R20_TEST_BINARY: binary, R20_TEST_OUT: dir },
+    });
+    assert.deepEqual(entry.record.errors, []);
+    assert.equal(entry.record.commands.length, 2);
+    assert.equal(entry.record.commands[0].timeoutMs, 7420000);
+    assert.equal(entry.record.commands[1].timeoutMs, 600000);
+    assert.ok(existsSync(join(dir, "R20-export.json")));
+    for (const output of entry.outputs) assert.ok(JSON.parse(output).args.includes(binary));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("R20 invalid explicit deadlines refuse before spawning", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "fireemu R20 deadline-"));
+  try {
+    mkdirSync(join(dir, "logs"));
+    const marker = join(dir, "spawned");
+    for (const timeoutMs of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, null, "50"]) {
+      const run = {
+        id: "R20",
+        clear: [],
+        commands: [
+          {
+            mode: "check",
+            argv: [
+              process.execPath,
+              "-e",
+              `require('node:fs').writeFileSync(${JSON.stringify(marker)},'unexpected')`,
+              "check",
+            ],
+            env: {},
+            expectedExitCodes: [0],
+            timeoutMs,
+          },
+        ],
+      };
+      await assert.rejects(
+        runEntry(run, {
+          binary: marker,
+          functionsNode: process.execPath,
+          out: dir,
+          env: process.env,
+        }),
+        /positive safe.*timeout/,
+      );
+      assert.ok(!existsSync(marker));
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("R20 bounded timeout is a failure and removes its owned process group", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "fireemu R20 timeout-"));
+  try {
+    mkdirSync(join(dir, "logs"));
+    const run = {
+      id: "R20",
+      clear: [],
+      commands: [
+        {
+          mode: "check",
+          argv: [
+            process.execPath,
+            "-e",
+            "console.log(JSON.stringify({pid:process.pid}));setInterval(()=>{},1000)",
+            "check",
+          ],
+          env: {},
+          expectedExitCodes: [0],
+          timeoutMs: 200,
+        },
+      ],
+    };
+    const entry = await runEntry(run, {
+      binary: join(dir, "unused binary"),
+      functionsNode: process.execPath,
+      out: dir,
+      env: process.env,
+    });
+    assert.equal(entry.record.commands[0].exitCode, "timeout");
+    assert.ok(entry.record.errors.some((x) => /exited timeout/.test(x)));
+    const { pid } = JSON.parse(entry.outputs[0].trim());
+    assert.throws(
+      () => process.kill(-pid, 0),
+      (error) => error.code === "ESRCH",
+    );
+    assert.ok(readFileSync(join(dir, "logs/R20-1-check.log"), "utf8").includes(String(pid)));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("R20 rejects changed stable native input fixture and source pins", () => {
+  const expected = pendingEventarcFixture();
+  assert.deepEqual(compareLaneExport(expected, clone(expected), BINARY), [
+    "EVENTARC semantic evidence: missing bound semantic comparands",
+  ]);
+  for (const field of ["inputPins", "fixturePins", "sourcePins"]) {
+    for (const change of ["missing", "digest", "foreign path"]) {
+      const actual = clone(expected);
+      const [path] = Object.keys(actual[field]);
+      if (change === "missing") delete actual[field];
+      if (change === "digest") actual[field][path] = "f".repeat(64);
+      if (change === "foreign path") {
+        delete actual[field][path];
+        actual[field]["foreign/" + path] = expected[field][path];
+      }
+      assert.ok(
+        compareLaneExport(expected, actual, BINARY).some((difference) =>
+          difference.startsWith(field + ":"),
+        ),
+        field + "/" + change,
+      );
+    }
+  }
+  const unrelated = { ...expected, kind: "unrelated-comparison-v1" };
+  const unrelatedActual = clone(unrelated);
+  unrelatedActual.inputPins = { different: "f".repeat(64) };
+  assert.deepEqual(compareLaneExport(unrelated, unrelatedActual, BINARY), []);
+});
+
+test("R20 registration cannot substitute another implemented comparison kind", () => {
+  const document = pendingEventarcFixture();
+  document.kind = "other-implemented-comparison-v1";
+  const plan = planComparisons([pendingEventarcClosure()], () => document, {
+    excludedKinds: [],
+    runs: [{ id: "Other", kind: document.kind }],
+  });
+  assert.ok(plan.errors.some((error) => /R20.*kind/.test(error)));
+  assert.deepEqual(plan.comparisons, []);
+});
+
+test("R20 export preserves its parent and schema identity", () => {
+  const expected = { ...pendingEventarcFixture(), schemaVersion: 1 };
+  assert.deepEqual(compareLaneExport(expected, clone(expected), BINARY), [
+    "EVENTARC semantic evidence: missing bound semantic comparands",
+  ]);
+  for (const field of ["parent", "schemaVersion"]) {
+    for (const change of ["missing", "foreign"]) {
+      const actual = clone(expected);
+      if (change === "missing") delete actual[field];
+      else actual[field] = field === "parent" ? "FOREIGN" : 2;
+      assert.ok(
+        compareLaneExport(expected, actual, BINARY).some((difference) =>
+          difference.startsWith(field + ":"),
+        ),
+        field + "/" + change,
+      );
+    }
+  }
+});
+
+test("R20 plans all seventy producer inventory rows with their declared transports", () => {
+  const inventory = readJson("spec/compatibility/closure/EVENTARC.json");
+  const document = pendingEventarcFixture();
+  document.rows = inventory.conditions.flatMap((condition) =>
+    condition.cases.flatMap((caseId) =>
+      condition.transports.map((transport) => ({
+        row: `${condition.recipeIds[0]}#${caseId}`,
+        conditionId: condition.conditionId,
+        caseId,
+        transport,
+        status: "PENDING",
+        reason: "Collection does not grant criterion closure",
+      })),
+    ),
+  );
+  document.summary = { PENDING: document.rows.length };
+  assert.equal(document.rows.length, 70);
+  assert.equal(document.rows.filter(({ transport }) => transport === "rest").length, 63);
+  assert.equal(document.rows.filter(({ transport }) => transport === "artifact").length, 7);
+  assert.deepEqual(
+    planComparisons([pendingEventarcClosure()], () => document, { excludedKinds: [] }).errors,
+    [],
+  );
+  for (const [index, original] of document.rows.entries()) {
+    const changed = clone(document);
+    changed.rows[index].transport = original.transport === "rest" ? "artifact" : "rest";
+    assert.ok(
+      planComparisons([pendingEventarcClosure()], () => changed, { excludedKinds: [] }).errors
+        .length,
+      original.row,
+    );
+  }
+  for (let offset = 0; offset < document.rows.length; offset++) {
+    const reordered = clone(document);
+    reordered.rows = [...reordered.rows.slice(offset), ...reordered.rows.slice(0, offset)];
+    assert.deepEqual(
+      planComparisons([pendingEventarcClosure()], () => reordered, { excludedKinds: [] }).errors,
+      [],
+    );
+    assert.deepEqual(compareLaneExport(document, reordered, BINARY), [
+      "EVENTARC semantic evidence: missing bound semantic comparands",
+    ]);
+  }
+});
+
+test("the exact EVENTARC gzip canonical preserves decoded bytes and plain artifact aliases", () => {
+  const root = mkdtempSync(join(tmpdir(), "eventarc-gzip-"));
+  const path = "spec/compatibility/closure/evidence/EVENTARC-comparison.json.gz";
+  const raw = Buffer.from('{"rows":[{"row":"eventarc/test#case"}],"summary":{"PENDING":1}}\n');
+  const zipped = gzipSync(raw, { mtime: 0 });
+  const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  const entry = {
+    path,
+    sha256: digest(zipped),
+    decodedSha256: digest(raw),
+    decodedBytes: raw.length,
+  };
+  const target = join(root, path);
+  mkdirSync(join(root, "spec/compatibility/closure/evidence"), { recursive: true });
+  const save = () => {
+    writeFileSync(target, zipped);
+    writeFileSync(
+      join(root, "spec/compatibility/closure/EVENTARC.json"),
+      JSON.stringify({ integratedRegression: { comparisons: [entry] } }),
+    );
+  };
+  try {
+    save();
+    assert.deepEqual(readReleaseJson(root, path), JSON.parse(raw));
+    const plain = "plain.json";
+    writeFileSync(join(root, plain), raw);
+    assert.deepEqual(readReleaseJson(root, plain), JSON.parse(raw));
+    assert.deepEqual(exportCopies([{ path, runIds: ["R20"] }], RUNS), [
+      { from: "R20-export.json", to: "EVENTARC-comparison.json" },
+    ]);
+    entry.sha256 = "0".repeat(64);
+    save();
+    assert.throws(() => readReleaseJson(root, path));
+    entry.sha256 = digest(zipped);
+    save();
+    entry.decodedSha256 = "0".repeat(64);
+    save();
+    assert.throws(() => readReleaseJson(root, path));
+    entry.decodedSha256 = digest(raw);
+    entry.decodedBytes = raw.length - 1;
+    save();
+    assert.throws(() => readReleaseJson(root, path));
+    entry.decodedBytes = raw.length;
+    save();
+    writeFileSync(target, zipped.subarray(0, zipped.length - 1));
+    assert.throws(() => readReleaseJson(root, path));
+    entry.sha256 = digest(zipped.subarray(0, zipped.length - 1));
+    writeFileSync(
+      join(root, "spec/compatibility/closure/EVENTARC.json"),
+      JSON.stringify({ integratedRegression: { comparisons: [entry] } }),
+    );
+    assert.throws(() => readReleaseJson(root, path));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

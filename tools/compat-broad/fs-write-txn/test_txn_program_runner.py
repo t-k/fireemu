@@ -316,6 +316,375 @@ def test_the_whole_task_budget_is_rechecked_before_each_recording(tmp_path):
     assert calls == [0]
 
 
+@pytest.mark.parametrize('fault', ['complete', 'unknown-commit', 'unknown-rollback', 'foreign-document', 'forged-status', 'journal-failure', 'event-journal-failure', 'final-journal-failure', 'quota-missing', 'quota-wrong', 'loopback-quota-present', 'loopback-quota-missing', 'two-writes', 'foreign-owner', 'foreign-nonce', 'delete-no-witness', 'delete-wrong-version', 'delete-no-version', 'frame-cap', 'request-count'])
+def test_sdk_broker_preserves_responsibility_and_denies_failure_paths(tmp_path, monkeypatch, fault):
+    import shutil
+    from txn_program_cli import table_for
+    from txn_program_wire import discover_runtime
+    import txn_program_cli
+    import txn_program_collector
+    table = table_for('p17-admin-sdk-retry')
+    local_path = runner.Path(__file__).resolve().parents[3] / 'target/codex-out/s5a-step2/local.receipt.json'
+    if not local_path.is_file(): pytest.skip('requires the local strict SDK receipt')
+    runtime = discover_runtime(runner.Path(shutil.which('node')))
+    original = runner.subprocess.Popen
+    script = r"""
+const fs = require('fs');
+const local = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const fault = process.argv[2];
+function exchange(event) {
+  fs.writeSync(1, JSON.stringify(event) + '\n');
+  const b = Buffer.alloc(1), bytes = [];
+  while (fs.readSync(0, b, 0, 1, null)) { if (b[0] === 10) break; bytes.push(b[0]); }
+  return JSON.parse(Buffer.from(bytes).toString());
+}
+if (fault.startsWith('loopback-')) {
+  (async () => {
+    const url = require('url').pathToFileURL(process.argv[3]);
+    const sdkRequire = require('module').createRequire(new URL('../../../conformance/package.json', url));
+    const grpc = sdkRequire('@grpc/grpc-js');
+    const { Firestore, v1: { FirestoreClient } } = sdkRequire('@google-cloud/firestore');
+    const descriptor = new FirestoreClient({ projectId: 'demo-descriptors' });
+    const protos = descriptor._protos.google.firestore.v1;
+    const server = new grpc.Server();
+    server.addService({ BatchGetDocuments: { path: '/google.firestore.v1.Firestore/BatchGetDocuments', requestStream: false, responseStream: true,
+      requestSerialize: protos.BatchGetDocumentsRequest.serialize, requestDeserialize: protos.BatchGetDocumentsRequest.deserialize,
+      responseSerialize: protos.BatchGetDocumentsResponse.serialize, responseDeserialize: protos.BatchGetDocumentsResponse.deserialize } }, {
+      BatchGetDocuments(call) {
+        fs.writeFileSync(process.argv[4], JSON.stringify([call.metadata.get('x-goog-user-project')]));
+        call.sendMetadata(new grpc.Metadata());
+        call.emit('error', { code: 9, details: 'offline stop after metadata' });
+      },
+    });
+    const port = await new Promise((resolve, reject) => server.bindAsync('127.0.0.1:0', grpc.ServerCredentials.createInsecure(), (error, value) => error ? reject(error) : resolve(value)));
+    const settings = Firestore.prototype.settings;
+    Firestore.prototype.settings = function (value) {
+      return settings.call(this, { ...value, host: `127.0.0.1:${port}`, ssl: false, ...(fault === 'loopback-quota-missing' ? { customHeaders: {} } : {}) });
+    };
+    try {
+      const spec = exchange({ event: 'ready' });
+      const { recordAdminRetries } = await import(url.href);
+      const receipt = await recordAdminRetries({ project: 'fireemu-oracle-txn', admission: { ...spec, check: () => {}, journal: event => exchange(event) } });
+      fs.writeSync(1, JSON.stringify({ event: 'receipt', receipt }) + '\n');
+    } finally { Firestore.prototype.settings = settings; server.forceShutdown(); await descriptor.close(); }
+  })().catch(() => { process.exitCode = 1; });
+} else {
+const spec = exchange({ event: 'ready' });
+const raw = JSON.stringify(local).split(local.nonce).join(spec.nonce).split(local.ownerId).join(spec.ownerId).split('demo-admin-retry').join('fireemu-oracle-txn');
+const receipt = JSON.parse(raw);
+receipt.runtime.target = 'production';
+for (const row of [...receipt.steps, ...receipt.cleanupSteps]) { row.metadataKeys = ['x-goog-user-project']; row.quotaProject = 'fireemu-oracle-txn'; }
+const rows = [...receipt.steps, ...receipt.cleanupSteps].sort((a,b) => a.sequence-b.sequence);
+for (const row of rows) {
+  const dispatch = JSON.parse(JSON.stringify(row));
+  delete dispatch.frames; delete dispatch.result; delete dispatch.outcomeClass;
+  delete dispatch.timing.responseUtc; delete dispatch.timing.responseMonotonic;
+  if (fault === 'foreign-document') { dispatch.request.database = 'projects/foreign-project/databases/(default)'; }
+  if (fault === 'quota-missing') dispatch.metadataKeys = [];
+  if (fault === 'quota-wrong') dispatch.quotaProject = 'foreign-project';
+  if (dispatch.rpc === 'Commit' && dispatch.request.writes[0].update) {
+    if (fault === 'two-writes') dispatch.request.writes.push(dispatch.request.writes[0]);
+    if (fault === 'foreign-owner') dispatch.request.writes[0].update.fields.owner.stringValue = 'foreign-owner';
+    if (fault === 'foreign-nonce') dispatch.request.writes[0].update.fields.nonce.stringValue = 'foreign-nonce';
+  }
+  if (dispatch.rpc === 'Commit' && dispatch.request.writes[0].delete) {
+    if (fault === 'delete-no-witness') dispatch.site += '/foreign';
+    if (fault === 'delete-wrong-version') dispatch.request.writes[0].currentDocument.updateTime.nanos += 1;
+    if (fault === 'delete-no-version') delete dispatch.request.writes[0].currentDocument.updateTime;
+  }
+  exchange({event: 'dispatch', row: dispatch});
+  if (fault === 'frame-cap' && row.rpc === 'BatchGetDocuments') for (let i=0;i<4;i++) exchange({event:'frame',sequence:row.sequence,frame:{missing:'owned'}});
+  for (const frame of row.frames ?? []) exchange({event: 'frame', sequence: row.sequence, frame});
+  if (fault === 'forged-status') row.request.database = 'projects/foreign-project/databases/(default)';
+    if (fault === 'unknown-commit' && row.rpc === 'Commit' && row.client === 'transaction' || fault === 'unknown-rollback' && row.rpc === 'Rollback') { row.result.code = 14; row.result.details = 'offline unavailable'; row.result.response = null; row.outcomeClass = 'UNKNOWN'; }
+  row.result.childReaped = false; row.result.workerExitCode = null;
+  exchange({event: 'status', row});
+  row.result.childReaped = true; row.result.workerExitCode = 0;
+}
+const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+if (fault === 'request-count') receipt.sandboxRequests += 1;
+const bound = {...receipt}; delete bound.receiptDigest;
+receipt.receiptDigest = require('crypto').createHash('sha256').update(JSON.stringify(canonical(bound))).digest('hex');
+fs.writeSync(1, JSON.stringify({event: 'receipt', receipt}) + '\n');
+}
+"""
+    loopback_metadata = tmp_path / 'loopback-metadata.json'
+    if fault.startswith('loopback-'): loopback_metadata.write_text('[]')
+    children = []
+    def popen(args, **kwargs):
+        if len(args) == 3 and args[1:] == [table['sourceFile'], 'production']:
+            child = original([args[0], '-e', script, str(local_path), fault, table['sourceFile'], str(loopback_metadata)], **kwargs)
+            children.append(child)
+            return child
+        return original(args, **kwargs)
+    monkeypatch.setattr(runner.subprocess, 'Popen', popen)
+    run = runner.subprocess.run
+    def process_proof(args, **kwargs):
+        if args[:2] == ['ps', '-p']:
+            # The restricted offline test cannot query ps; verify only its own retained child handle.
+            assert any(child.pid == int(args[2]) and table['sourceFile'] in child.args for child in children)
+            return __import__('types').SimpleNamespace(stdout='node ' + table['sourceFile'])
+        return run(args, **kwargs)
+    monkeypatch.setattr(runner.subprocess, 'run', process_proof)
+    def refresh(_baseline, budget, **kwargs):
+        budget.charge('credential')
+        return 'offline-parent'
+    class Metadata:
+        def __init__(self, _bearer, _baseline, budget, **kwargs): self.budget = budget
+        def preflight(self):
+            for _ in range(4): self.budget.charge('management')
+            return {'rules-absent': 'absent'}
+        def postflight(self):
+            for _ in range(2): self.budget.charge('management')
+            return {'unchanged': True}
+    monkeypatch.setattr(runner, 'refresh', refresh)
+    monkeypatch.setattr(runner, 'MetadataSession', Metadata)
+    if fault == 'journal-failure': monkeypatch.setattr(runner.shared, 'append_ledger', lambda *_args: (_ for _ in ()).throw(OSError('offline journal failure')))
+    if fault in ('event-journal-failure', 'final-journal-failure'):
+        append = runner.shared.append_ledger
+        def final_failure(path, event):
+            if event['event'] == ('dispatch' if fault == 'event-journal-failure' else 'final'): raise OSError('offline journal failure')
+            return append(path, event)
+        monkeypatch.setattr(runner.shared, 'append_ledger', final_failure)
+    if fault in ('journal-failure', 'final-journal-failure'):
+        with pytest.raises(OSError): runner.run_once(0, table, 'a' * 32, 'b' * 32, tmp_path, baseline={}, runtime=runtime, check=lambda: None)
+        final = json.loads((tmp_path / 'journal-1/sdk-final-receipt.json').read_text())
+        assert final['complete'] is False
+        assert final['unrecovered'] is True
+        assert final['journalFailure'] is True
+        bound = {key: value for key, value in final.items() if key != 'receiptDigest'}
+        assert final['receiptDigest'] == __import__('hashlib').sha256(json.dumps(bound, sort_keys=True, separators=(',', ':'), allow_nan=False, ensure_ascii=False).encode()).hexdigest()
+        return
+    receipt = runner.run_once(0, table, 'a' * 32, 'b' * 32, tmp_path, baseline={}, runtime=runtime, check=lambda: None)
+    if fault == 'complete':
+        assert receipt['complete'] is True
+        assert receipt['phaseRequests']['management'] == 6
+        assert receipt['phaseRequests']['credential'] == 1
+        local = json.loads(local_path.read_text())
+        assert receipt['sandboxRequests'] == local['sandboxRequests'] + 7
+        assert txn_program_collector.projection(receipt, table)['kind'] == 'txn-admin-sdk-projection-v1'
+        tampered = copy.deepcopy(receipt)
+        tampered['runtimeManifest']['lockSha256'] = 'changed'
+        with pytest.raises(ValueError, match='digest'): txn_program_collector.projection(tampered, table)
+    else:
+        assert receipt['complete'] is False
+        assert receipt['unrecovered'] is True
+        if fault == 'unknown-commit':
+            assert receipt['unknownCommits']
+            assert receipt['unknownWrites']
+            assert receipt['openTokens']
+        if fault == 'unknown-rollback':
+            assert receipt['unknownRollbacks']
+            assert receipt['openTokens']
+        if fault == 'event-journal-failure': assert receipt['journalFailure'] is True
+    assert json.loads((tmp_path / 'journal-1/sdk-final-receipt.json').read_text()) == receipt
+    events = [json.loads(line) for line in (tmp_path / 'journal-1/sdk-journal.jsonl').read_text().splitlines()]
+    if fault == 'foreign-document': assert not any(event['event'] == 'dispatch' for event in events)
+    if fault == 'forged-status': assert not any(event['event'] == 'status' for event in events)
+    if fault in ('quota-missing', 'quota-wrong', 'loopback-quota-missing', 'two-writes', 'foreign-owner', 'foreign-nonce'):
+        assert not any(event['event'] == 'dispatch' and (event['row']['rpc'] == 'Commit' or 'quota' in fault) for event in events)
+    if fault.startswith('loopback-'):
+        expected = [['fireemu-oracle-txn']] if fault == 'loopback-quota-present' else []
+        assert json.loads(loopback_metadata.read_text()) == expected
+        if expected:
+            assert receipt['steps'][0]['quotaProject'] == 'fireemu-oracle-txn'
+            assert receipt['steps'][0]['metadataKeys'].count('x-goog-user-project') == 1
+    if fault in ('delete-no-witness', 'delete-wrong-version', 'delete-no-version'):
+        assert not any(event['event'] == 'dispatch' and event['row']['rpc'] == 'Commit' and 'delete' in event['row']['request']['writes'][0] for event in events)
+    if fault == 'frame-cap': assert len([event for event in events if event['event'] == 'frame']) == 3
+
+    assert events[-1]['event'] == 'final'
+    assert events[-1]['receiptDigest'] == receipt['receiptDigest']
+
+
+def test_sdk_campaign_wall_cap_forbids_second_recording_and_keeps_lock(tmp_path, monkeypatch):
+    from txn_program_cli import table_for
+    from txn_program_authority import envelope_scope
+    table = table_for('p17-admin-sdk-retry')
+    ledger, kwargs = fixture(tmp_path)
+    pins = {**PINS, 'packetName': table['name'], 'project': table['project'], 'scope': envelope_scope(table), 'envelopeId': table['envelopeId'], 'requestsPerRecording': 131, 'estimatedUsdPerRecording': 0}
+    times = iter([0, 0, 0, 301])
+    monkeypatch.setattr(runner.time, 'monotonic', lambda: next(times))
+    monkeypatch.setattr(runner, 'verify_initial_gates', lambda *_args: None)
+    monkeypatch.setattr(runner, 'authorize', lambda *_args: None)
+    monkeypatch.setattr(runner, 'projection', lambda *_args: {'kind': 'txn-admin-sdk-projection-v1'})
+    calls = []
+    def once(index, *_args):
+        calls.append(index)
+        return {'complete': True, 'sandboxRequests': 74, 'timingMode': 'wall-clock', 'timingSource': 'grpc-js-client-interceptor', 'metadata': {'rules-absent': 'absent'}}
+    kwargs.update(table=table, pins=pins, record_once=once)
+    with pytest.raises(TimeoutError, match='wall cap'): runner.record_twice(**kwargs)
+    assert calls == [0]
+    assert (tmp_path / 'sandbox-locks/fireemu-oracle-txn.lock').exists()
+    assert not list(tmp_path.glob('fs-transaction-*/freeze.json'))
+
+@pytest.mark.parametrize('action', ['cleanup', 'a2'])
+@pytest.mark.parametrize('unknown', ['create', 'update', 'delete', 'none'])
+@pytest.mark.parametrize('present', [True, False])
+def test_sdk_document_action_settles_only_owned_version_evidence(action, unknown, present):
+    from txn_program_cli import table_for
+    plan = compile_plan(table_for('p17-admin-sdk-retry'), 'a' * 32, 'b' * 32)
+    name = plan['documents']['conflict-a']
+    fields = {key: {'stringValue': value} for key, value in {'owner': 'b' * 32, 'nonce': 'a' * 32, 'role': 'a', 'state': 'baseline'}.items()}
+    write = {'delete': name} if unknown == 'delete' else {'update': {'name': name, 'fields': fields}, 'currentDocument': {'exists': False} if unknown == 'create' else {}}
+    snapshot = {'kind': 'txn-program-recording-v1', 'packetName': 'p17-admin-sdk-retry', 'nonce': 'a' * 32, 'ownerId': 'b' * 32, 'documents': {'conflict-a': {'name': name, 'status': 'possibly-owned'}}, 'tokens': {}, 'steps': [] if unknown == 'none' else [{'sequence': 0, 'rpc': 'Commit', 'request': {'writes': [write]}, 'outcomeClass': 'UNKNOWN', 'timing': {'dispatchUtc': '2026-10-07T00:00:00Z'}}], 'cleanupSteps': [], 'unknownStarts': []}
+    initially_present = present
+    calls = []
+    def send(rpc, request):
+        nonlocal present
+        calls.append((rpc, request))
+        if rpc == 'GetDocument': return {'complete': True, 'code': 0 if present else 5, 'response': {'name': name, 'fields': fields, 'updateTime': {'seconds': '1', 'nanos': 2}} if present else None}
+        assert rpc == 'DeleteDocument'
+        assert request == {'name': name, 'currentDocument': {'updateTime': {'seconds': '1', 'nanos': 2}}}
+        present = False
+        return {'complete': True, 'code': 0, 'response': {}}
+    result = runner.sdk_document_action(snapshot, action, send, now=__import__('datetime').datetime.fromisoformat('2026-10-07T00:10:00+00:00'))
+    assert result['unknownWrites'] == ([0] if unknown in ('create', 'update') and not initially_present or unknown == 'delete' and initially_present else [])
+    if action == 'a2': assert all(rpc == 'GetDocument' for rpc, _ in calls)
+    if action == 'cleanup' and len(calls) == 3: assert result['documents']['conflict-a']['status'] == 'confirmed-absent'
+
+
+def test_sdk_a2_wait_and_unknown_recovery_never_resend_writes():
+    from txn_program_cli import table_for
+    name = compile_plan(table_for('p17-admin-sdk-retry'), 'a' * 32, 'b' * 32)['documents']['conflict-a']
+    snapshot = {'kind': 'txn-program-recording-v1', 'packetName': 'p17-admin-sdk-retry', 'nonce': 'a' * 32, 'ownerId': 'b' * 32, 'documents': {'conflict-a': {'name': name}}, 'tokens': {}, 'steps': [{'sequence': 0, 'rpc': 'Commit', 'request': {'writes': [{'update': {'name': name, 'fields': {}}}]}, 'outcomeClass': 'UNKNOWN', 'timing': {'dispatchUtc': '2026-10-07T00:00:00Z'}}], 'cleanupSteps': [], 'unknownStarts': []}
+    instant = __import__('datetime').datetime.fromisoformat
+    with pytest.raises(ValueError, match='10-minute'): runner.sdk_document_action(snapshot, 'a2', lambda *_: pytest.fail('must not dispatch'), now=instant('2026-10-07T00:09:59+00:00'))
+    calls = []
+    result = runner.sdk_document_action(snapshot, 'cleanup', lambda rpc, request: calls.append(rpc) or {'complete': False, 'code': 14}, now=instant('2026-10-07T00:10:00+00:00'))
+    assert calls == ['GetDocument']
+    assert result['complete'] is False
+    assert result['unknownWrites'] == [0]
+
+
+@pytest.mark.parametrize('field', ['owner', 'nonce'])
+def test_sdk_cleanup_refuses_foreign_markers(field):
+    from txn_program_cli import table_for
+    name = compile_plan(table_for('p17-admin-sdk-retry'), 'a' * 32, 'b' * 32)['documents']['conflict-a']
+    snapshot = {'kind': 'txn-program-recording-v1', 'packetName': 'p17-admin-sdk-retry', 'nonce': 'a' * 32, 'ownerId': 'b' * 32, 'documents': {'conflict-a': {'name': name}}, 'tokens': {}, 'steps': [], 'cleanupSteps': [], 'unknownStarts': []}
+    fields = {'owner': {'stringValue': 'b' * 32}, 'nonce': {'stringValue': 'a' * 32}, 'role': {'stringValue': 'a'}}
+    fields[field] = {'stringValue': 'foreign'}
+    calls = []
+    result = runner.sdk_document_action(snapshot, 'cleanup', lambda rpc, request: calls.append(rpc) or {'complete': True, 'code': 0, 'response': {'name': name, 'fields': fields, 'updateTime': {'seconds': '1', 'nanos': 2}}}, now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+    assert calls == ['GetDocument']
+    assert result['complete'] is False
+
+
+def test_sdk_cleanup_keeps_unmatched_unknown_create_evidence_for_a2():
+    from txn_program_cli import table_for
+    name = compile_plan(table_for('p17-admin-sdk-retry'), 'a' * 32, 'b' * 32)['documents']['conflict-a']
+    fields = {key: {'stringValue': value} for key, value in {'owner': 'b' * 32, 'nonce': 'a' * 32, 'role': 'a', 'state': 'writer'}.items()}
+    snapshot = {'kind': 'txn-program-recording-v1', 'packetName': 'p17-admin-sdk-retry', 'nonce': 'a' * 32, 'ownerId': 'b' * 32, 'documents': {'conflict-a': {'name': name}}, 'tokens': {}, 'steps': [{'sequence': 0, 'rpc': 'Commit', 'request': {'writes': [{'update': {'name': name, 'fields': {**fields, 'state': {'stringValue': 'baseline'}}}, 'currentDocument': {'exists': False}}]}, 'outcomeClass': 'UNKNOWN', 'timing': {'dispatchUtc': '2026-10-07T00:00:00Z'}}], 'cleanupSteps': [], 'unknownStarts': []}
+    calls = []
+    result = runner.sdk_document_action(snapshot, 'cleanup', lambda rpc, request: calls.append(rpc) or {'complete': True, 'code': 0, 'response': {'name': name, 'fields': fields, 'updateTime': {'seconds': '1', 'nanos': 2}}}, now=__import__('datetime').datetime.fromisoformat('2026-10-07T00:10:00+00:00'))
+    assert calls == ['GetDocument']
+    assert result['unknownWrites'] == [0]
+    assert result['complete'] is False
+
+
+def test_sdk_recovery_unknown_delete_can_be_read_back_by_later_a2():
+    from txn_program_cli import table_for
+    name = compile_plan(table_for('p17-admin-sdk-retry'), 'a' * 32, 'b' * 32)['documents']['conflict-a']
+    fields = {key: {'stringValue': value} for key, value in {'owner': 'b' * 32, 'nonce': 'a' * 32, 'role': 'a', 'state': 'baseline'}.items()}
+    snapshot = {'kind': 'txn-program-recording-v1', 'packetName': 'p17-admin-sdk-retry', 'nonce': 'a' * 32, 'ownerId': 'b' * 32, 'documents': {'conflict-a': {'name': name}}, 'tokens': {}, 'steps': [], 'cleanupSteps': [], 'unknownStarts': []}
+    instant = __import__('datetime').datetime.fromisoformat
+    result = runner.sdk_document_action(snapshot, 'cleanup', lambda rpc, request: {'complete': True, 'code': 0, 'response': {'name': name, 'fields': fields, 'updateTime': {'seconds': '1', 'nanos': 2}}} if rpc == 'GetDocument' else {'complete': False, 'code': 14}, now=instant('2026-10-07T00:00:00+00:00'))
+    assert result['complete'] is False
+    assert result['unknownWrites'] == [1]
+    calls = []
+    final = runner.sdk_document_action(result, 'a2', lambda rpc, request: calls.append(rpc) or {'complete': True, 'code': 5}, now=instant('2026-10-07T00:10:00+00:00'))
+    assert calls == ['GetDocument']
+    assert final['complete'] is True
+    assert final['unknownWrites'] == []
+
+
+@pytest.mark.parametrize('action', ['cleanup', 'a2'])
+@pytest.mark.parametrize('postflight_failure', [False, True])
+def test_sdk_action_reuses_bounded_wire_journals_and_per_case_scope(tmp_path, monkeypatch, action, postflight_failure):
+    from txn_program_cli import table_for
+    table = table_for('p17-admin-sdk-retry')
+    plan = compile_plan(table, 'a' * 32, 'b' * 32)
+    name = plan['documents']['retry-older-a']
+    snapshot = {'kind': 'txn-program-recording-v1', 'packetName': 'p17-admin-sdk-retry', 'nonce': 'a' * 32, 'ownerId': 'b' * 32, 'documents': {'retry-older-a': {'name': name}}, 'tokens': {}, 'steps': [], 'cleanupSteps': [], 'unknownStarts': []}
+    present = True
+    calls = []
+    checks = []
+    def refresh(_baseline, budget, **kwargs):
+        budget.charge('credential')
+        return 'offline-parent'
+    class Metadata:
+        def __init__(self, _bearer, _baseline, budget, **kwargs): self.budget = budget
+        def preflight(self):
+            for _ in range(4): self.budget.charge('management')
+            return {'project': 'fixed-project', 'database': 'fixed-database'}
+        def postflight(self):
+            if postflight_failure: raise ValueError('offline postflight unavailable')
+            for _ in range(2): self.budget.charge('management')
+            return {'project': 'fixed-project', 'database': 'fixed-database'}
+    class Wire:
+        def __init__(self, _runtime, scope, **kwargs):
+            assert scope['slug'] == 'txn-p17-retry-older'
+            assert scope['documents'] == ['a', 'b', 'c']
+            assert kwargs['project'] == 'fireemu-oracle-txn'
+        def send(self, transport, rpc, request, **kwargs):
+            nonlocal present
+            assert transport == 'grpc'
+            calls.append(rpc)
+            if rpc == 'DeleteDocument':
+                assert request == {'name': name, 'currentDocument': {'updateTime': {'seconds': '1', 'nanos': 2}}}
+                present = False
+                return {'complete': True, 'code': 0, 'response': {}}
+            assert rpc == 'GetDocument'
+            fields = {key: {'stringValue': value} for key, value in {'owner': 'b' * 32, 'nonce': 'a' * 32, 'role': 'a', 'state': 'baseline'}.items()}
+            return {'complete': True, 'code': 0 if present else 5, 'response': {'name': name, 'fields': fields, 'updateTime': {'seconds': '1', 'nanos': 2}} if present else None}
+    monkeypatch.setattr(runner, 'refresh', refresh)
+    monkeypatch.setattr(runner, 'MetadataSession', Metadata)
+    monkeypatch.setattr(runner, 'NodeWire', Wire)
+    if postflight_failure:
+        with pytest.raises(ValueError, match='postflight'):
+            runner.record_sdk_action(table=table, snapshot=snapshot, action=action, directory=tmp_path / 'action', baseline={}, runtime={}, check=lambda: None, now=lambda: __import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+        assert json.loads((tmp_path / 'action/sdk-recovery-receipt.json').read_text())['complete'] is False
+        return
+    result = runner.record_sdk_action(table=table, snapshot=snapshot, action=action, directory=tmp_path / 'action', baseline={}, runtime={}, check=lambda: checks.append(True), now=lambda: __import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+    assert result['complete'] is (action == 'cleanup')
+    assert calls == (['GetDocument', 'DeleteDocument', 'GetDocument'] if action == 'cleanup' else ['GetDocument'])
+    final = json.loads((tmp_path / 'action/sdk-recovery-receipt.json').read_text())
+    assert final['sandboxRequests'] == len(calls) + 7
+    events = [json.loads(line)['event'] for line in (tmp_path / 'action/sdk-recovery-journal.jsonl').read_text().splitlines()]
+    assert events == ['dispatch', 'status'] * len(calls)
+    assert checks
+
+
+def test_sdk_document_cleanup_passes_the_actual_native_validator():
+    import shutil
+    node = shutil.which('node')
+    if not node or runner.subprocess.run([node, '--version'], capture_output=True, text=True).stdout.strip() != 'v24.14.0':
+        pytest.skip('requires the reviewed Node v24.14.0 executable')
+    if not (runner.Path(__file__).resolve().parents[3] / 'conformance' / 'node_modules').is_dir():
+        pytest.skip('requires the conformance install the native validator loads')
+    from txn_program_cli import table_for
+    table = table_for('p17-admin-sdk-retry')
+    plan = compile_plan(table, 'a' * 32, 'b' * 32)
+    name = plan['documents']['retry-older-a']
+    fields = {key: {'stringValue': value} for key, value in {'owner': 'b' * 32, 'nonce': 'a' * 32, 'role': 'a', 'state': 'baseline'}.items()}
+    snapshot = {'kind': 'txn-program-recording-v1', 'packetName': 'p17-admin-sdk-retry', 'nonce': 'a' * 32, 'ownerId': 'b' * 32, 'documents': {'retry-older-a': {'name': name}}, 'tokens': {}, 'steps': [], 'cleanupSteps': [], 'unknownStarts': []}
+    calls = []
+    present = True
+    def send(rpc, request):
+        nonlocal present
+        spec = {'kind': 'txn-program-call-v1', 'transport': 'grpc', 'target': {'kind': 'production'}, 'projectId': 'fireemu-oracle-txn', 'nonce': snapshot['nonce'], 'ownerId': snapshot['ownerId'], 'slug': 'txn-p17-retry-older', 'documents': ['a', 'b', 'c'], 'states': table['states'], 'method': rpc, 'request': request, 'bearer': 'offline-parent', 'deadlineMs': 10000}
+        command = [shutil.which('node'), '--input-type=module', '-e', "import { readFileSync } from 'node:fs'; import { validateCall } from './tools/compat-broad/fs-write-txn/txn_program_transport.mjs'; validateCall(JSON.parse(readFileSync(0, 'utf8')));"]
+        validated = runner.subprocess.run(command, input=json.dumps(spec), capture_output=True, text=True, env={'LANG': 'C', 'LC_ALL': 'C', 'TZ': 'UTC'})
+        assert validated.returncode == 0, validated.stderr
+        calls.append(rpc)
+        if rpc == 'GetDocument': return {'complete': True, 'code': 0 if present else 5, 'response': {'name': name, 'fields': fields, 'updateTime': {'seconds': '1', 'nanos': 2}} if present else None}
+        present = False
+        return {'complete': True, 'code': 0, 'response': {}}
+    result = runner.sdk_document_action(snapshot, 'cleanup', send, now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+    assert result['complete'] is True
+    assert calls == ['GetDocument', 'DeleteDocument', 'GetDocument']
+
+
 def test_run_once_passes_resolved_declarations_to_the_real_wire(tmp_path, monkeypatch):
     import txn_program_wire as wire_module
     table = {**TABLE, "databases": {"named": "projects/fireemu-oracle-sbx/databases/txn-{nonce}"}, "placements": {}}
@@ -626,3 +995,497 @@ def test_two_database_recovery_reserves_each_delete_readback_and_postflight(tmp_
     assert result["complete"] and result["requests"] == 10
     assert calls == ["oauth-tokeninfo", "project", "database", "delete-database", "named-database", "delete-database", "named-database", "project", "database"]
     assert all(state["unknownDelete"] and not state["closureReady"] for state in result["runs"])
+
+
+@pytest.mark.parametrize('fault', ['handoff', 'terminate', 'delete-app', 'receipt-build', 'redaction', 'write-cap', 'zero-write', 'write-error'])
+def test_sdk_production_handoff_and_stopped_child_diagnostics(tmp_path, monkeypatch, fault):
+    import shutil
+    import time
+    from txn_program_cli import table_for
+    table = table_for('p17-admin-sdk-retry')
+    runtime = {'nodeExecutable': shutil.which('node'), 'dependencies': {}, 'nodeSha256': 'offline-node', 'lockSha256': 'offline-lock'}
+    original = runner.subprocess.Popen
+    script = r"""
+const fs = require('node:fs');
+const source = fs.readFileSync(process.argv[1], 'utf8');
+const fault = process.argv[2];
+const body = source.slice(source.indexOf('if (process.argv[1] &&')).replace(/^if .*\{/, 'if (true) {').replaceAll('import.meta.url', '"offline"');
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+process.argv = [process.execPath, process.argv[1], 'production'];
+process.stdout._handle.setBlocking(false);
+const recordAdminRetries = async ({ admission }) => {
+  // Simulate completed cleanup before the shutdown or receipt-construction failure.
+  if (!['handoff', 'write-cap', 'zero-write', 'write-error'].includes(fault)) {
+    if (fault === 'redaction') {
+      fs.writeSync(2, 'noise\n'.repeat(4000));
+      const secrets = ['AI' + 'za' + 'x'.repeat(35), 'ya' + '29.' + 'y'.repeat(40), 'Bearer ' + 'z'.repeat(48),
+        '-----BEGIN ' + 'PRIVATE KEY-----\n' + 'sensitive-body\n-----END ' + 'PRIVATE KEY-----'];
+      throw new Error('after cleanup: ' + secrets.join('\n') + '\nlast safe diagnostic');
+    }
+    throw new Error('after cleanup: ' + fault + '\nshutdown failed');
+  }
+  const receipt = { complete: true, nonce: admission.nonce, ownerId: admission.ownerId, sandboxRequests: 0,
+    runtime: { target: 'production', manifest: { dependencies: {} }, nodeSha256: 'offline-node', lockSha256: 'offline-lock' },
+    steps: [], cleanupSteps: [], padding: 'p'.repeat(1024 * 1024) };
+  const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  receipt.receiptDigest = require('node:crypto').createHash('sha256').update(JSON.stringify(canonical(receipt))).digest('hex');
+  return receipt;
+};
+const write = (fd, ...args) => {
+  if (fd === 1 && Buffer.isBuffer(args[0])) {
+    if (fault === 'zero-write') return 0;
+    if (fault === 'write-cap' || fault === 'write-error') throw Object.assign(new Error('offline write error'), { code: fault === 'write-cap' ? 'EAGAIN' : 'EIO' });
+  }
+  return fs.writeSync(fd, ...args);
+};
+let clock = 0;
+new AsyncFunction('writeSync', 'readSync', 'recordAdminRetries', 'performance', body)(write, fs.readSync, recordAdminRetries, fault === 'write-cap' ? { now: () => clock += 5000 } : require('node:perf_hooks').performance)
+  .catch(() => { process.exitCode = 2; });
+"""
+    def popen(args, **kwargs):
+        if args[1:] == [table['sourceFile'], 'production']:
+            return original([args[0], '-e', script, table['sourceFile'], fault], **kwargs)
+        return original(args, **kwargs)
+    monkeypatch.setattr(runner.subprocess, 'Popen', popen)
+    if fault == 'handoff':
+        read = runner.os.read
+        def slow_read(fd, size):
+            time.sleep(0.001)
+            return read(fd, min(size, 1024))
+        monkeypatch.setattr(runner.os, 'read', slow_read)
+    monkeypatch.setattr(runner, 'refresh', lambda *_args, **_kwargs: 'offline-parent')
+    class Metadata:
+        def __init__(self, *_args, **_kwargs): pass
+        def preflight(self): return {'rules-absent': 'absent'}
+        def postflight(self): return {'unchanged': True}
+    monkeypatch.setattr(runner, 'MetadataSession', Metadata)
+    receipt = runner.run_once(0, table, 'a' * 32, 'b' * 32, tmp_path, baseline={}, runtime=runtime, check=lambda: None)
+    if fault == 'handoff':
+        assert receipt['complete'] is True
+        assert receipt['padding'] == 'p' * (1024 * 1024)
+    else:
+        assert receipt['complete'] is False
+        assert receipt['failureMessage'] == 'SDK worker receipt incomplete'
+        assert receipt['childExitCode'] == 1
+        tail = receipt['childStderrTail']
+        assert len(tail.encode()) <= 8192
+        if fault == 'write-cap':
+            assert tail == 'SDK receipt write timed out\n'
+        elif fault == 'zero-write':
+            assert tail == 'SDK receipt write made no progress\n'
+        elif fault == 'write-error':
+            assert tail == 'offline write error\n'
+        elif fault == 'redaction':
+            assert tail.endswith('last safe diagnostic\n')
+            for sensitive in ['AI' + 'za', 'ya' + '29.', 'z' * 48, 'sensitive-body', 'PRIVATE KEY']:
+                assert sensitive not in tail
+        else:
+            assert tail == 'after cleanup: ' + fault + ' shutdown failed\n'
+        final = json.loads((tmp_path / 'journal-1/sdk-final-receipt.json').read_text())
+        assert final == receipt
+
+
+@pytest.mark.parametrize('kind', ['api-key', 'access-token', 'bearer', 'private-key'])
+def test_sdk_failure_message_redaction_unit(tmp_path, monkeypatch, kind):
+    from txn_program_cli import table_for
+    samples = {'api-key': 'AI' + 'za' + 'x' * 35, 'access-token': 'ya' + '29.' + 'y' * 40,
+               'bearer': 'Bearer ' + 'z' * 48, 'private-key': '-----BEGIN ' + 'RSA PRIVATE KEY-----\nbody\n-----END ' + 'RSA PRIVATE KEY-----'}
+    def fail(*_args, **_kwargs): raise ValueError('safe prefix ' + samples[kind] + ' safe suffix')
+    monkeypatch.setattr(runner, 'refresh', fail)
+    receipt = runner.run_once(0, table_for('p17-admin-sdk-retry'), 'a' * 32, 'b' * 32, tmp_path, baseline={}, runtime={}, check=lambda: None)
+    assert receipt['failureMessage'] == 'safe prefix [credential-redacted] safe suffix'
+    assert receipt['childExitCode'] is None
+    assert receipt['childStderrTail'] == ''
+
+
+def test_s5b_parent_charge_and_journal_precede_payload_and_ack():
+    import unittest
+    from txn_program_cli import table_for
+    from broad_contract import digest
+    table = table_for('s5b-web-sdk-retry')
+    plan = compile_plan(table, 'a' * 32, 'b' * 32)
+    web = {'apiKey': 'fixture-key', 'authDomain': 'fixture.invalid', 'projectId': plan['project']}
+    baseline = {'webConfigSha256': digest(web), 'origin': 'http://127.0.0.1:4567'}
+    order, state = [], {}
+    class Budget:
+        observation_deadline = runner.time.monotonic() + 180
+        def charge(self, phase): order.append('charge')
+        def begin_recovery(self): order.append('recovery')
+    class Wire:
+        def send(self, *args, **kwargs): order.append('payload'); return {'complete': True, 'code': 5, 'response': None}
+    kwargs = {'state': state, 'plan': plan, 'budget': Budget(), 'wire': Wire(), 'bearer': 'fixture-bearer', 'journal': lambda row: order.append('journal'), 'check': lambda: None, 'web_config': web, 'web_baseline': baseline, 'bindings': {}}
+    runner.web_event({'event': 'ready', 'id': 'web-1'}, **kwargs)
+    reply = runner.web_event({'event': 'parent-call', 'id': 'web-2', 'method': 'GetDocument', 'phase': 'observation', 'request': {'name': plan['documents']['node-probe']}}, **kwargs)
+    assert order[:3] == ['charge', 'journal', 'payload']
+    assert reply['authorized'] is True and reply['id'] == 'web-2'
+    assert reply['answer']['code'] == 5
+    order.clear()
+    with unittest.TestCase().assertRaisesRegex(ValueError, 'exact parent'):
+        runner.web_event({'event': 'parent-call', 'id': 'web-3', 'method': 'GetDocument', 'phase': 'observation', 'request': {'name': plan['documents']['node-probe'] + '_foreign'}}, **kwargs)
+    assert order == []
+    def refused(_row): raise OSError('fixture journal failure')
+    kwargs['journal'] = refused
+    with unittest.TestCase().assertRaises(OSError): runner.web_event({'event': 'parent-call', 'id': 'web-4', 'method': 'GetDocument', 'phase': 'observation', 'request': {'name': plan['documents']['browser-probe']}}, **kwargs)
+    assert 'payload' not in order
+    assert state['parent'][-1]['pending'] is True
+
+
+def test_s5b_unknown_sdk_status_blocks_observation_and_ownerless_delete():
+    import unittest
+    from txn_program_cli import table_for
+    from broad_contract import digest
+    plan = compile_plan(table_for('s5b-web-sdk-retry'), 'a' * 32, 'b' * 32)
+    web = {'apiKey': 'fixture-key', 'authDomain': 'fixture.invalid', 'projectId': plan['project']}
+    state = {}
+    class Budget:
+        observation_deadline = runner.time.monotonic() + 180
+        failed = False
+        def charge(self, _phase): pass
+        def begin_recovery(self): pass
+    kwargs = {'state': state, 'plan': plan, 'budget': Budget(), 'wire': None, 'bearer': 'fixture', 'journal': lambda _: None, 'check': lambda: None, 'web_config': web, 'web_baseline': {'webConfigSha256': digest(web), 'origin': 'http://127.0.0.1:4567'}, 'bindings': {}}
+    runner.web_event({'event': 'ready', 'id': 'web-1'}, **kwargs)
+    name = plan['documents']['node-control']
+    row = {'client': 'node-main', 'method': 'BatchGetDocuments', 'request': {'documents': [name]}, 'record': {'host': 'firestore.googleapis.com', 'path': '/google.firestore.v1.Firestore/BatchGetDocuments', 'bearer': None, 'n': 1}}
+    runner.web_event({'event': 'dispatch', 'id': 'web-2', 'row': row}, **kwargs)
+    reply = runner.web_event({'event': 'status', 'id': 'web-3', 'row': {'client': 'node-main', 'evidence': {'n': 1, 'method': 'BatchGetDocuments', 'complete': False, 'status': 503, 'request': {'documents': [name]}, 'response': {}}}}, **kwargs)
+    assert reply['authorized'] is False and len(state['unknown']) == 1
+    reply = runner.web_event({'event': 'dispatch', 'id': 'web-4', 'row': row}, **kwargs)
+    assert reply['authorized'] is False
+    payloads = []
+    class Wire:
+        def send(self, *args, **kwargs):
+            payloads.append(args)
+            return {'complete': True, 'code': 5, 'response': None}
+    kwargs['wire'] = Wire()
+    reply = runner.web_event({'event': 'parent-call', 'id': 'web-5', 'method': 'GetDocument', 'phase': 'observation', 'request': {'name': name}}, **kwargs)
+    assert reply['authorized'] is False and payloads == []
+    with unittest.TestCase().assertRaisesRegex(ValueError, 'owned version'):
+        runner.web_event({'event': 'parent-call', 'id': 'web-6', 'method': 'DeleteDocument', 'phase': 'documentCleanup', 'request': {'name': name, 'currentDocument': {'updateTime': {'seconds': '1', 'nanos': 0}}}}, **kwargs)
+
+
+def s5b_recovery_fixture():
+    from txn_program_cli import table_for
+    plan = compile_plan(table_for('s5b-web-sdk-retry'), 'a' * 32, 'b' * 32)
+    version = {'seconds': '1791447752', 'nanos': 814528000}
+    roles = ('node_control', 'node_control_other', 'node_conflict')
+    return {'kind': 'txn-program-recording-v1', 'packetName': 's5b-web-sdk-retry', 'nonce': 'a' * 32, 'ownerId': 'b' * 32, 'documents': {role: {'name': plan['documents'][role.replace('_', '-')], 'createConfirmed': True, 'deleted': False, 'absent': False, 'updateTime': version} for role in roles}, 'openTokens': [], 'unknownStarts': [], 'unknownAnswers': [{'id': 's5b-5', 'method': 'BatchGetDocuments'}], 'parentJournal': [], 'sdkJournal': [], 'cleanup': {'absent': None}}
+
+
+def s5b_owned_body(snapshot, name):
+    role = next(role for role, doc in snapshot['documents'].items() if doc['name'] == name)
+    return {'name': name, 'fields': {key: {'stringValue': value, 'valueType': 'stringValue'} for key, value in {'owner': snapshot['ownerId'], 'nonce': snapshot['nonce'], 'case': role.split('_', 1)[1]}.items()}, 'updateTime': snapshot['documents'][role]['updateTime']}
+
+
+@pytest.mark.parametrize('action', ['cleanup', 'a2'])
+def test_s5b_recovery_actual_shape_preserves_unknown_read_and_exact_versions(action):
+    snapshot = s5b_recovery_fixture(); original = copy.deepcopy(snapshot); calls = []; deleted = set()
+    def send(rpc, request):
+        calls.append((rpc, copy.deepcopy(request))); name = request['name']
+        if rpc == 'DeleteDocument':
+            assert request['currentDocument']['updateTime'] == s5b_owned_body(snapshot, name)['updateTime']
+            deleted.add(name); return {'complete': True, 'code': 0}
+        return {'complete': True, 'code': 5 if name in deleted else 0, 'response': None if name in deleted else s5b_owned_body(snapshot, name)}
+    result = runner.sdk_document_action(snapshot, action, send, now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+    assert result['complete'] is (action == 'cleanup')
+    assert result['unknownAnswers'] == original['unknownAnswers']
+    assert snapshot == original
+    assert [rpc for rpc, _ in calls] == (['GetDocument', 'DeleteDocument', 'GetDocument'] * 3 if action == 'cleanup' else ['GetDocument'] * 3)
+
+
+@pytest.mark.parametrize('change', ['name', 'unconfirmed', 'start', 'write', 'roles'])
+def test_s5b_recovery_refuses_expanded_or_uncertain_scope_before_send(change):
+    snapshot = s5b_recovery_fixture()
+    if change == 'name': snapshot['documents']['node_control']['name'] += '_other'
+    if change == 'unconfirmed': snapshot['documents']['node_control']['createConfirmed'] = False
+    if change == 'start': snapshot['unknownStarts'] = ['unknown']
+    if change == 'write': snapshot['unknownAnswers'][0]['method'] = 'Commit'
+    if change == 'roles': snapshot['documents']['browser_control'] = snapshot['documents'].pop('node_control')
+    with pytest.raises(ValueError): runner.sdk_document_action(snapshot, 'cleanup', lambda *_: pytest.fail('must not send'), now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+
+
+@pytest.mark.parametrize('change', ['owner', 'nonce', 'case', 'extra', 'discriminator', 'version'])
+def test_s5b_recovery_readback_mismatch_never_deletes(change):
+    snapshot = s5b_recovery_fixture(); calls = []
+    def send(rpc, request):
+        calls.append(rpc); assert rpc == 'GetDocument'
+        body = copy.deepcopy(s5b_owned_body(snapshot, request['name']))
+        if change in ('owner', 'nonce', 'case'): body['fields'][change]['stringValue'] = 'foreign'
+        if change == 'extra': body['fields']['owner']['extra'] = True
+        if change == 'discriminator': body['fields']['owner']['valueType'] = 'integerValue'
+        if change == 'version': body['updateTime']['nanos'] += 1
+        return {'complete': True, 'code': 0, 'response': body}
+    result = runner.sdk_document_action(snapshot, 'cleanup', send, now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+    assert not result['complete'] and calls == ['GetDocument']
+
+
+@pytest.mark.parametrize('unknown_at', [1, 2, 3])
+def test_s5b_recovery_unknown_blocks_all_later_dispatch_without_delete_retry(unknown_at):
+    snapshot = s5b_recovery_fixture(); calls = []
+    def send(rpc, request):
+        calls.append(rpc)
+        if len(calls) == unknown_at: return {'complete': False, 'code': 14}
+        return {'complete': True, 'code': 0, 'response': s5b_owned_body(snapshot, request['name'])}
+    result = runner.sdk_document_action(snapshot, 'cleanup', send, now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+    assert not result['complete'] and len(calls) == unknown_at
+    assert calls.count('DeleteDocument') <= 1
+
+
+@pytest.mark.parametrize('value', [{'stringValue': 'owned'}, {'stringValue': 'owned', 'valueType': 'stringValue'}])
+def test_s5b_string_value_accepts_recorded_discriminator_only(value):
+    assert runner.web_string_value(value, 'owned')
+    for invalid in ({**value, 'unexpected': True}, {**value, 'valueType': 'integerValue'}, {**value, 'stringValue': 'foreign'}):
+        assert not runner.web_string_value(invalid, 'owned')
+
+
+@pytest.mark.parametrize("six_roles", [False, True])
+def test_s5b_recovery_session_counts_twenty_and_preserves_metadata_scope(tmp_path, monkeypatch, six_roles):
+    from txn_program_cli import table_for
+    snapshot = s5b_six_recovery_fixture() if six_roles else s5b_lineage_fixture(); deleted = set(); calls = []; budgets = []
+    total = 29 if six_roles else 20
+    import txn_program_cli as cli
+    import txn_program_authority as authority
+    from test_txn_program_authority import s5b_recovery_authority
+    baseline_path = tmp_path/'baseline.json'; baseline_path.write_text('{}')
+    envelope_path = tmp_path/'envelope.md'; envelope_path.write_text('offline envelope')
+    recovery = {'action': 'cleanup', 'snapshotPath': 'docs.local/runs/offline/recording-1.json', 'snapshotSha256': 'e'*64, 'notBefore': '2026-10-08T00:10:00Z', 'originalPacketId': 'fs-transaction-s5b-web-sdk-retry-original', 'lockSha256': 'f'*64}
+    if six_roles: recovery['documentRoles'] = sorted(snapshot['documents'])
+    monkeypatch.setattr(cli, 'verify_runtime', lambda _: None)  # Synthetic runtime; no native child is allowed in this no-wire route.
+    value = cli.packet_value(table=table_for('s5b-web-sdk-retry'), source_commit='a'*40, runtime={'webSdk': True}, baseline_sha256=cli.sha(baseline_path.read_bytes()), envelope_sha256=cli.sha(envelope_path.read_bytes()), packet_id='fs-transaction-s5b-web-sdk-retry-offline', envelope_relative='docs.local/reviews/offline.md', sdk_recovery=recovery)
+    packet_path = tmp_path/'packet.json'; packet_path.write_text(json.dumps(value))
+    pins = cli.load_packet(packet_path, cli.sha(packet_path.read_bytes()), baseline_path, envelope_path, table=table_for('s5b-web-sdk-retry'), source_commit='a'*40, packet_relative='docs.local/reviews/offline.json', envelope_relative=value['envelopePath'])
+    decisions = s5b_recovery_authority(pins)
+    def admission(): assert authority.authorize(decisions, pins) == (total, 0.01)
+    admission()
+    def refresh(baseline, budget, **kwargs):
+        budgets.append(budget); budget.charge('credential'); return 'offline'
+    class Metadata:
+        def __init__(self, bearer, baseline, budget, **kwargs):
+            assert baseline == {'projectNumber': 'fixture'}
+            assert kwargs['s5b'] == {'fixture': True} and kwargs['project'] == 'fireemu-oracle-query'
+            assert kwargs['request_fn'].keywords['project_number'] == 'fixture'
+            self.budget = budget
+        def preflight(self):
+            for _ in range(6): self.budget.charge('management')
+            return {'project': 'query', 'database': 'default'}
+        def postflight(self):
+            for _ in range(4): self.budget.charge('management')
+            return {'project': 'query', 'database': 'default'}
+    class Wire:
+        def __init__(self, runtime, scope, **kwargs):
+            assert scope == runner.wire_scope(table_for('s5b-web-sdk-retry'))
+        def send(self, transport, rpc, request, **kwargs):
+            calls.append(rpc); name = request['name']
+            if rpc == 'DeleteDocument': deleted.add(name); return {'complete': True, 'code': 0}
+            return {'complete': True, 'code': 5 if name in deleted else 0, 'response': None if name in deleted else s5b_current_body(snapshot, name)}
+    monkeypatch.setattr(runner, 'refresh', refresh); monkeypatch.setattr(runner, 'MetadataSession', Metadata); monkeypatch.setattr(runner, 'NodeWire', Wire)
+    result = runner.record_sdk_action(table=table_for('s5b-web-sdk-retry'), snapshot=snapshot, action='cleanup', directory=tmp_path/'recovery', baseline={'projectNumber': 'fixture', 's5b': {'fixture': True}}, runtime=value['runtime'], check=admission, now=lambda: __import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+    assert result['complete'] and budgets[0].total == total and calls == ['GetDocument', 'DeleteDocument', 'GetDocument'] * len(snapshot['documents'])
+    assert budgets[0]._max == total and budgets[0].recovery_deadline == budgets[0].started + 120
+    with pytest.raises(ValueError): budgets[0].charge('documentCleanup')
+
+
+def test_s5b_web_event_records_owned_get_with_actual_value_type():
+    from txn_program_cli import table_for
+    plan = compile_plan(table_for('s5b-web-sdk-retry'), 'a'*32, 'b'*32)
+    snapshot = s5b_recovery_fixture(); name = snapshot['documents']['node_control']['name']; state = {'ready': True}
+    class Budget:
+        observation_deadline = runner.time.monotonic() + 180
+        def charge(self, phase): pass
+        def begin_recovery(self): pass
+    class Wire:
+        def send(self, *args, **kwargs): return {'complete': True, 'code': 0, 'response': s5b_owned_body(snapshot, name)}
+    runner.web_event({'event': 'parent-call', 'id': 'web-1', 'method': 'GetDocument', 'phase': 'documentCleanup', 'request': {'name': name}}, state=state, plan=plan, budget=Budget(), wire=Wire(), bearer='offline', journal=lambda _: None, check=lambda: None, web_config=None, web_baseline={}, bindings={})
+    assert state['ownedReads'][name]['name'] == name
+
+
+def test_s5b_recovery_absence_does_not_delete():
+    snapshot = s5b_recovery_fixture(); calls = []
+    result = runner.sdk_document_action(snapshot, 'a2', lambda rpc, request: calls.append(rpc) or {'complete': True, 'code': 5}, now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+    assert result['complete'] and calls == ['GetDocument'] * 3
+
+
+@pytest.mark.parametrize('grpc_code', [-1, 1, 2, 4, 13, 14, 17, None, True, False, '0'])
+def test_s5b_recovery_unknown_sdk_write_cannot_be_inferred_from_http_200(grpc_code):
+    snapshot = s5b_recovery_fixture()
+    doc = snapshot['documents']['node_control']; body = s5b_owned_body(snapshot, doc['name'])
+    snapshot['sdkJournal'] = [{'method': 'Commit', 'request': {'writes': [{'update': body}]}, 'evidence': {'complete': True, 'status': 200, 'grpcCode': grpc_code, 'response': {'writeResults': [{'updateTime': doc['updateTime']}]}}}]
+    with pytest.raises(ValueError): runner.sdk_document_action(snapshot, 'cleanup', lambda *_: pytest.fail('must not send'), now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+
+
+def test_s5b_recovery_prior_delete_cannot_be_retried():
+    snapshot = s5b_recovery_fixture(); snapshot['recoverySteps'] = [{'rpc': 'DeleteDocument', 'result': {'complete': False}}]
+    with pytest.raises(ValueError): runner.sdk_document_action(snapshot, 'cleanup', lambda *_: pytest.fail('no retry'), now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+
+
+def test_s5b_recovery_charge_journal_failure_prevents_wire(tmp_path, monkeypatch):
+    from txn_program_cli import table_for
+    def refresh(baseline, budget, **kwargs): budget.charge('credential')
+    monkeypatch.setattr(runner, 'refresh', refresh)
+    monkeypatch.setattr(runner, 'save_private', lambda *_: (_ for _ in ()).throw(OSError('offline journal')))
+    monkeypatch.setattr(runner, 'NodeWire', lambda *_args, **_kwargs: pytest.fail('must not dispatch'))
+    with pytest.raises(OSError): runner.record_sdk_action(table=table_for('s5b-web-sdk-retry'), snapshot=s5b_recovery_fixture(), action='cleanup', directory=tmp_path/'recovery', baseline={}, runtime={}, check=lambda: None, now=lambda: None)
+
+
+@pytest.mark.parametrize('grpc_code', [0, 9, 16])
+def test_s5b_recovery_known_sdk_status_preserves_recorded_success_and_refusal(grpc_code):
+    snapshot = s5b_recovery_fixture()
+    doc = snapshot['documents']['node_control']; body = s5b_owned_body(snapshot, doc['name'])
+    snapshot['sdkJournal'] = [{'method': 'Commit', 'request': {'writes': [{'update': body}]}, 'evidence': {'complete': True, 'status': 200, 'grpcCode': grpc_code, 'response': {'writeResults': [{'updateTime': doc['updateTime']}]}}}]
+    calls = []
+    result = runner.sdk_document_action(snapshot, 'a2', lambda rpc, request: calls.append(rpc) or {'complete': True, 'code': 5}, now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+    assert result['complete'] and calls == ['GetDocument'] * 3
+    assert result['sdkJournal'] == snapshot['sdkJournal']
+
+
+def s5b_lineage_fixture():
+    snapshot = s5b_recovery_fixture()
+    document = snapshot['documents']['node_control']; name = document['name']
+    document['updateTime'] = {'seconds': '1791447720', 'nanos': 454445000}
+    seed = copy.deepcopy(document['updateTime']); updated = {'seconds': '1791447734', 'nanos': 19995000}
+    body = s5b_owned_body(snapshot, name); body['updateTime'] = updated
+    write = {'update': {'name': name, 'fields': copy.deepcopy(body['fields'])}, 'currentDocument': {'updateTime': seed}}
+    snapshot['sdkJournal'] = [{'id': 's5b-2', 'method': 'Commit', 'request': {'writes': [write]}, 'evidence': {'complete': True, 'status': 200, 'grpcCode': 0, 'response': {'writeResults': [{'updateTime': updated}]}}}]
+    snapshot['parentJournal'] = [{'id': 'web-48', 'method': 'GetDocument', 'request': {'name': name}, 'pending': False, 'answer': {'complete': True, 'code': 0, 'response': body}}]
+    return snapshot
+
+
+@pytest.mark.parametrize('read_evidence', [True, False])
+def test_s5b_recovery_uses_latest_confirmed_sdk_write_lineage_without_altering_seed(read_evidence):
+    snapshot = s5b_lineage_fixture(); original = copy.deepcopy(snapshot)
+    current = copy.deepcopy(snapshot['parentJournal'][0]['answer']['response'])
+    if not read_evidence: snapshot['parentJournal'] = []
+    deleted = set(); calls = []
+    def send(rpc, request):
+        name = request['name']; calls.append((rpc, copy.deepcopy(request)))
+        if rpc == 'DeleteDocument':
+            expected = current['updateTime'] if name == current['name'] else s5b_owned_body(snapshot, name)['updateTime']
+            assert request['currentDocument']['updateTime'] == expected
+            deleted.add(name); return {'complete': True, 'code': 0}
+        return {'complete': True, 'code': 5 if name in deleted else 0, 'response': None if name in deleted else current if name == current['name'] else s5b_owned_body(snapshot, name)}
+    result = runner.sdk_document_action(snapshot, 'cleanup', send, now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+    assert result['complete'] and len(calls) == 9
+    assert result['documents']['node_control']['updateTime'] == original['documents']['node_control']['updateTime']
+    assert result['documents']['node_control']['confirmedUpdateTime'] == current['updateTime']
+    assert snapshot['documents'] == original['documents'] and result['unknownAnswers'] == original['unknownAnswers']
+
+
+@pytest.mark.parametrize('change', ['foreign-marker', 'foreign-name', 'missing-version', 'unknown-write'])
+def test_s5b_recovery_rejects_unowned_or_incomplete_successful_write_lineage(change):
+    snapshot = s5b_lineage_fixture(); row = snapshot['sdkJournal'][0]
+    if change == 'foreign-marker': row['request']['writes'][0]['update']['fields']['owner']['stringValue'] = 'foreign'
+    if change == 'foreign-name': row['request']['writes'][0]['update']['name'] += '_foreign'
+    if change == 'missing-version': row['evidence']['response']['writeResults'] = []
+    if change == 'unknown-write': row['evidence']['complete'] = False
+    with pytest.raises(ValueError): runner.sdk_document_action(snapshot, 'cleanup', lambda *_: pytest.fail('must not dispatch'), now=__import__('datetime').datetime.now(__import__('datetime').timezone.utc))
+
+
+def test_s5b_ready_returns_the_original_remaining_observation_after_preflight(monkeypatch):
+    from txn_program_cli import table_for
+    from broad_contract import digest
+    plan = compile_plan(table_for('s5b-web-sdk-retry'), 'a' * 32, 'b' * 32)
+    clock = [100.0]
+    monkeypatch.setattr(runner.time, 'monotonic', lambda: clock[0])
+    counts = []
+    budget = runner.SessionBudget(plan, table_for('s5b-web-sdk-retry'), lambda: None, counts.append)
+    clock[0] = 137.0
+    web = {'apiKey': 'fixture-key', 'authDomain': 'fixture.invalid', 'projectId': plan['project']}
+    reply = runner.web_event({'event': 'ready', 'id': 'web-1'}, state={}, plan=plan, budget=budget, wire=None, bearer='fixture', journal=lambda _: pytest.fail('ready has no new journal event'), check=lambda: None, web_config=web, web_baseline={'webConfigSha256': digest(web), 'origin': 'http://127.0.0.1:4567'}, bindings={})
+    assert reply['observationRemaining'] == 143.0
+    assert budget.observation_deadline == 280.0
+    assert budget.total == 0 and counts == []
+
+
+@pytest.mark.parametrize('recovery_start', [280.0, 293.0])
+def test_s5b_deadline_preserves_recovery_reservation_and_global_cap(monkeypatch, recovery_start):
+    from txn_program_cli import table_for
+    table = table_for('s5b-web-sdk-retry')
+    plan = compile_plan(table, 'a' * 32, 'b' * 32)
+    clock = [100.0]
+    monkeypatch.setattr(runner.time, 'monotonic', lambda: clock[0])
+    counts = []
+    budget = runner.SessionBudget(plan, table, lambda: None, counts.append)
+    clock[0] = 251.0
+    with pytest.raises(TimeoutError, match='deadline'):
+        budget.charge('observation')
+    assert budget.total == 0 and not counts
+    clock[0] = recovery_start
+    budget.begin_recovery()
+    assert budget.recovery_deadline == 400.0
+    with pytest.raises(ValueError, match='observation'):
+        budget.charge('observation')
+    budget.charge('documentCleanup')
+    clock[0] = 371.0
+    with pytest.raises(TimeoutError, match='deadline'):
+        budget.charge('documentCleanup')
+    assert budget.used['documentCleanup'] == 1
+
+
+def s5b_six_recovery_fixture():
+    from txn_program_cli import table_for
+    snapshot = s5b_lineage_fixture()
+    plan = compile_plan(table_for('s5b-web-sdk-retry'), snapshot['nonce'], snapshot['ownerId'])
+    seed = {'seconds': '1791447720', 'nanos': 454445000}
+    for role in ('browser_control', 'browser_control_other', 'browser_conflict'):
+        snapshot['documents'][role] = {'name': plan['documents'][role.replace('_', '-')], 'createConfirmed': True, 'deleted': False, 'absent': False, 'updateTime': copy.deepcopy(seed)}
+    body = s5b_owned_body(snapshot, snapshot['documents']['browser_control']['name'])
+    body.pop('updateTime')
+    snapshot['sdkJournal'].append({'client': 'browser-main', 'method': 'Commit', 'record': {'host': 'firestore.googleapis.com', 'path': '/v1/projects/fireemu-oracle-query/databases/(default)/documents:commit', 'n': 2}, 'request': {'writes': [{'update': body, 'currentDocument': {'updateTime': '2026-10-08T08:22:00.454445000Z'}}]}, 'evidence': {'complete': True, 'status': 200, 'response': {'commitTime': '2026-10-08T08:22:14.019995Z', 'writeResults': [{'updateTime': '2026-10-08T08:22:14.019995Z'}]}}})
+    return snapshot
+
+
+def s5b_current_body(snapshot, name):
+    body = copy.deepcopy(s5b_owned_body(snapshot, name))
+    for row in snapshot['parentJournal']:
+        if row.get('method') == 'GetDocument' and row['request']['name'] == name:
+            return copy.deepcopy(row['answer']['response'])
+    for row in snapshot['sdkJournal']:
+        if row['request']['writes'][0]['update']['name'] == name:
+            body['updateTime'] = row['evidence']['response']['writeResults'][0]['updateTime']
+    return body
+
+
+def test_s5b_recovery_six_native_documents_use_latest_versions_before_delete():
+    snapshot = s5b_six_recovery_fixture(); original = copy.deepcopy(snapshot); deleted = set(); calls = []
+    def send(rpc, request):
+        calls.append(rpc); name = request['name']
+        if rpc == 'DeleteDocument':
+            assert runner.web_version(request['currentDocument']['updateTime']) == runner.web_version(s5b_current_body(snapshot, name)['updateTime'])
+            deleted.add(name); return {'complete': True, 'code': 0}
+        return {'complete': True, 'code': 5 if name in deleted else 0, 'response': None if name in deleted else s5b_current_body(snapshot, name)}
+    result = runner.s5b_document_action(snapshot, 'cleanup', send)
+    assert result['complete'] and result['requests'] == 18 and calls == ['GetDocument', 'DeleteDocument', 'GetDocument'] * 6
+    assert snapshot == original
+    assert runner.web_version(result['documents']['browser_control']['confirmedUpdateTime']) > runner.web_version(snapshot['documents']['browser_control']['updateTime'])
+
+
+@pytest.mark.parametrize('change', ['client', 'host', 'path', 'method', 'complete', 'status-string', 'status-bool', 'status-201', 'error', 'multi', 'missing-result', 'version', 'owner', 'name', 'precondition', 'precondition-version', 'result-not-newer', 'grpc-code', 'grpc-bool', 'body-type', 'result-type'])
+def test_s5b_recovery_native_browser_near_misses_refuse_before_send(change):
+    snapshot = s5b_six_recovery_fixture(); row = snapshot['sdkJournal'][-1]; evidence = row['evidence']
+    if change == 'client': row['client'] = 'browser-probe'
+    if change == 'host': row['record']['host'] = 'other.googleapis.com'
+    if change == 'path': row['record']['path'] += '/other'
+    if change == 'method': row['method'] = 'DeleteDocument'
+    if change == 'complete': evidence['complete'] = False
+    if change.startswith('status-'): evidence['status'] = {'status-string': '200', 'status-bool': True, 'status-201': 201}[change]
+    if change == 'error': evidence['response']['error'] = {'code': 9}
+    if change == 'multi': evidence['response']['writeResults'] *= 2
+    if change == 'missing-result': evidence['response'].pop('writeResults')
+    if change == 'version': evidence['response']['writeResults'][0]['updateTime'] = True
+    if change == 'owner': row['request']['writes'][0]['update']['fields']['owner']['stringValue'] = 'foreign'
+    if change == 'name': row['request']['writes'][0]['update']['name'] += '_foreign'
+    if change == 'precondition': row['request']['writes'][0]['currentDocument']['updateTime'] = 'not-a-version'
+    if change == 'precondition-version': row['request']['writes'][0]['currentDocument']['updateTime'] = '2026-10-08T08:21:59Z'
+    if change == 'result-not-newer': evidence['response']['writeResults'][0]['updateTime'] = row['request']['writes'][0]['currentDocument']['updateTime']
+    if change == 'grpc-code': evidence['grpcCode'] = '0'
+    if change == 'grpc-bool': evidence['grpcCode'] = True
+    if change == 'body-type': row['request']['writes'][0]['update'] = []
+    if change == 'result-type': evidence['response']['writeResults'][0] = []
+    with pytest.raises(ValueError): runner.s5b_document_action(snapshot, 'cleanup', lambda *_: pytest.fail('must not send'))
+
+
+@pytest.mark.parametrize('count', [2, 4, 5, 7])
+def test_s5b_recovery_rejects_any_intermediate_or_expanded_role_set(count):
+    snapshot = s5b_six_recovery_fixture()
+    if count < 6: snapshot['documents'] = dict(list(snapshot['documents'].items())[:count])
+    else: snapshot['documents']['browser_probe'] = copy.deepcopy(snapshot['documents']['browser_control'])
+    with pytest.raises(ValueError): runner.s5b_document_action(snapshot, 'cleanup', lambda *_: pytest.fail('must not send'))

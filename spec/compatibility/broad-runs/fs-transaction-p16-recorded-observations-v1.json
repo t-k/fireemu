@@ -1,0 +1,433 @@
+{
+  "schemaVersion": 1,
+  "kind": "fs-transaction-recorded-observations-v1",
+  "parent": "FS-TRANSACTION",
+  "condition": [
+    "FS-TRANSACTION/token-validation-and-ownership"
+  ],
+  "coverage": "PARTIAL",
+  "authorizesProduction": false,
+  "decodedSemanticsValidated": true,
+  "rawRestWireLayoutValidated": false,
+  "normalization": "Only the declared run identities (nonce, owner marker, issued token values, project number) are replaced by roles; codes, diagnostics, read states, token ends and cleanup are the program's own projection.",
+  "remainingBoundaries": [
+    "Raw REST bodyBytes, content-length and member-order layout were not retained; the record proves decoded response semantics, not wire layout.",
+    "The closure review and the final-artifact regression are separate conditions and stay open."
+  ],
+  "corpora": [
+    {
+      "program": "FS-TRANSACTION-P16-FOREIGN-TOKENS",
+      "packetName": "p16-foreign-tokens",
+      "corpusDigest": "ccbe958fdbe0792c28b030ee87168ba0ee6a3bbe553c51d7c7dc9bf409c2d14e",
+      "recordings": 2,
+      "agree": true,
+      "productionFileSha256": [
+        "d4bd18e670b784fb48d26f5d18c59598eb789539ccc28b9d049e8a608e0a1a97",
+        "31f10c6b24892674449931aeea40aee363b8bc1d8075960fb301ff492c30f733"
+      ],
+      "projection": {
+        "program": "FS-TRANSACTION-P16-FOREIGN-TOKENS",
+        "packetName": "p16-foreign-tokens",
+        "corpusDigest": "ccbe958fdbe0792c28b030ee87168ba0ee6a3bbe553c51d7c7dc9bf409c2d14e",
+        "cases": [
+          {
+            "caseId": "rest/named/GetDocument",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/named/GetDocument/release",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/named/BatchGetDocuments",
+            "transport": "rest",
+            "rpc": "BatchGetDocuments",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/named/BatchGetDocuments/release",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/named/Commit",
+            "transport": "rest",
+            "rpc": "Commit",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/named/Commit/release",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/named/Rollback",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "rest/named/Rollback/release",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/foreign/GetDocument",
+            "transport": "rest",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "rest/foreign/GetDocument/release",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/foreign/BatchGetDocuments",
+            "transport": "rest",
+            "rpc": "BatchGetDocuments",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "rest/foreign/BatchGetDocuments/release",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "rest/foreign/Rollback",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "rest/foreign/Rollback/release",
+            "transport": "rest",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/named/GetDocument",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/named/GetDocument/release",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/named/Commit",
+            "transport": "grpc",
+            "rpc": "Commit",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/named/Commit/release",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/named/Rollback",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 10,
+            "outcomeClass": "REFUSED",
+            "details": "The referenced transaction has expired or is no longer valid."
+          },
+          {
+            "caseId": "grpc/named/Rollback/release",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/foreign/GetDocument",
+            "transport": "grpc",
+            "rpc": "GetDocument",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "grpc/foreign/GetDocument/release",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          },
+          {
+            "caseId": "grpc/foreign/Rollback",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 3,
+            "outcomeClass": "REFUSED",
+            "details": "Invalid transaction."
+          },
+          {
+            "caseId": "grpc/foreign/Rollback/release",
+            "transport": "grpc",
+            "rpc": "Rollback",
+            "code": 0,
+            "outcomeClass": "OK",
+            "details": ""
+          }
+        ],
+        "reads": [
+          {
+            "site": "setup/absence-a",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "setup/absence-b",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "setup/absence-m",
+            "code": 5,
+            "state": null
+          },
+          {
+            "site": "rest/valid/get",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/valid/batch",
+            "code": 0,
+            "documents": {
+              "b": "created"
+            }
+          },
+          {
+            "site": "rest/named/GetDocument/control",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/named/GetDocument",
+            "code": 10,
+            "state": null
+          },
+          {
+            "site": "rest/named/BatchGetDocuments/control",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/named/BatchGetDocuments",
+            "code": 10,
+            "documents": null
+          },
+          {
+            "site": "rest/named/Commit/control",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/named/Rollback/control",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/foreign/GetDocument/control",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/foreign/GetDocument",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "rest/foreign/BatchGetDocuments/control",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "rest/foreign/BatchGetDocuments",
+            "code": 3,
+            "documents": null
+          },
+          {
+            "site": "rest/foreign/Rollback/control",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "grpc/valid/get",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "grpc/valid/batch",
+            "code": 0,
+            "documents": {
+              "b": "created"
+            }
+          },
+          {
+            "site": "grpc/named/GetDocument/control",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "grpc/named/GetDocument",
+            "code": 10,
+            "state": null
+          },
+          {
+            "site": "grpc/named/Commit/control",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "grpc/named/Rollback/control",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "grpc/foreign/GetDocument/control",
+            "code": 0,
+            "state": "created"
+          },
+          {
+            "site": "grpc/foreign/GetDocument",
+            "code": 3,
+            "state": null
+          },
+          {
+            "site": "grpc/foreign/Rollback/control",
+            "code": 0,
+            "state": "created"
+          }
+        ],
+        "tokens": {
+          "rest-valid": {
+            "transport": "rest",
+            "state": "committed"
+          },
+          "rest-valid-rollback": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-named-GetDocument": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-named-BatchGetDocuments": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-named-Commit": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-named-Rollback": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-foreign-GetDocument": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-foreign-BatchGetDocuments": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "rest-foreign-Rollback": {
+            "transport": "rest",
+            "state": "rolled-back"
+          },
+          "grpc-valid": {
+            "transport": "grpc",
+            "state": "committed"
+          },
+          "grpc-valid-rollback": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-named-GetDocument": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-named-Commit": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-named-Rollback": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-foreign-GetDocument": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          },
+          "grpc-foreign-Rollback": {
+            "transport": "grpc",
+            "state": "rolled-back"
+          }
+        },
+        "expectedStates": {
+          "a": "created",
+          "b": "created"
+        },
+        "cleanup": {
+          "absent": true
+        }
+      }
+    }
+  ]
+}

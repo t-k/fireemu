@@ -106,8 +106,10 @@ def build_record(*, commit, binary_sha256, recording_digests, rows_by_recording,
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, required=True)
-    parser.add_argument("--commit", required=True)
-    parser.add_argument("--recordings", type=Path, required=True, help="the E04 run directory holding recording-1.json and recording-2.json")
+    parser.add_argument("--commit", help="the supplied binary source commit, when known")
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--expectations", type=Path, help="explicit published projection and post-state expectations")
+    inputs.add_argument("--recordings", type=Path, help="the E04 run directory holding recording-1.json and recording-2.json")
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--keep", type=Path, help="where the replay's receipt directory goes (it must not exist)")
     args = parser.parse_args(argv)
@@ -124,13 +126,21 @@ def main(argv=None):
     if not receipt or receipt["complete"] is not True or acquired["publication"]["failures"] or acquired["child"] != {"exitCode": 0, "signal": None, "stopped": True}:
         raise SystemExit("the replay did not complete")
     local = {"projection": comparison._projection(receipt), "postStates": comparison._post_states(receipt)}
-    recordings = [args.recordings / f"recording-{n}.json" for n in (1, 2)]
-    rows = []
-    for path in recordings:
-        value = json.loads(path.read_text())
-        rows.append(compare_rows({"projection": comparison._projection(value), "postStates": comparison._post_states(value)}, local))
+    if args.expectations:
+        expected = json.loads(args.expectations.read_text())
+        if expected.get("kind") != "txn-expiry-release-expectation-v1" or len(expected.get("recordings", [])) != 2:
+            raise ValueError("expiry recording inventory differs")
+        rows = [compare_rows(entry["projection"], local) for entry in expected["recordings"]]
+        recording_digests = [entry["originSha256"] for entry in expected["recordings"]]
+    else:
+        recordings = [args.recordings / f"recording-{n}.json" for n in (1, 2)]
+        rows = []
+        for path in recordings:
+            value = json.loads(path.read_text())
+            rows.append(compare_rows({"projection": comparison._projection(value), "postStates": comparison._post_states(value)}, local))
+        recording_digests = [hashlib.sha256(path.read_bytes()).hexdigest() for path in recordings]
     blob = subprocess.check_output(["git", "-C", str(HERE), "rev-parse", "HEAD:tools/compat-broad/fs-write-txn/txn_expiry_cases.py"], text=True).strip()
-    record = build_record(commit=args.commit, binary_sha256=hashlib.sha256(args.binary.read_bytes()).hexdigest(), recording_digests=[hashlib.sha256(path.read_bytes()).hexdigest() for path in recordings],
+    record = build_record(commit=args.commit, binary_sha256=hashlib.sha256(args.binary.read_bytes()).hexdigest(), recording_digests=recording_digests,
                           rows_by_recording=rows, idles=local_idles(receipt), cases_blob=blob, file_digests=replayed_file_digests(overlay))
     args.out.write_text(json.dumps(record, indent=2, ensure_ascii=False) + "\n")
     print(json.dumps(record["summary"]), json.dumps(record["replay"]["localIdleSeconds"]))

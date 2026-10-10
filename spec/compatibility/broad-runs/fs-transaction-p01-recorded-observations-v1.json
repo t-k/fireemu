@@ -3,7 +3,8 @@
   "kind": "fs-transaction-recorded-observations-v1",
   "parent": "FS-TRANSACTION",
   "condition": [
-    "FS-TRANSACTION/read-write-lifecycle"
+    "FS-TRANSACTION/read-write-lifecycle",
+    "FS-TRANSACTION/token-validation-and-ownership"
   ],
   "coverage": "PARTIAL",
   "authorizesProduction": false,

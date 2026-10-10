@@ -8,6 +8,7 @@ assumed; after a run it reads the project and the database again. That is six ma
 from __future__ import annotations
 
 import copy
+import hashlib
 import re
 import time
 
@@ -27,8 +28,12 @@ EXPECTED_DATABASE = {
 
 
 class MetadataSession(management.MetadataSession):
-    def __init__(self, token, baseline, budget, *, request_fn=None, project=PROJECT):
+    def __init__(self, token, baseline, budget, *, request_fn=None, project=PROJECT, s5b=None):
         self.project = project
+        self.s5b = copy.deepcopy(s5b)
+        if s5b is not None:
+            if project != QUERY_PROJECT or not isinstance(s5b, dict) or set(s5b) != {'rulesetName', 'rulesSourceSha256', 'keyName', 'keyRestrictionsSha256', 'webConfigSha256', 'origin'} or not isinstance(baseline, dict) or s5b['keyName'] != f"projects/{preflight.validate_project_number(baseline.get('projectNumber'))}/locations/global/keys/644789b7-ac0a-47ff-a740-8836448a0633" or not re.fullmatch(r'projects/fireemu-oracle-query/rulesets/[A-Za-z0-9_-]+', s5b['rulesetName']) or any(not re.fullmatch(r'[a-f0-9]{64}', s5b[key]) for key in ('rulesSourceSha256', 'keyRestrictionsSha256', 'webConfigSha256')) or not re.fullmatch(r'http://127\.0\.0\.1:[1-9][0-9]{0,4}', s5b['origin']):
+                raise ValueError('S5b fixed Rules/key/config baseline required')
         if project == PROJECT:
             super().__init__(token, baseline, budget, request_fn=request_fn)
             return
@@ -98,11 +103,34 @@ class MetadataSession(management.MetadataSession):
             raise ValueError("project identity differs")
         return body_digest(body)
 
+    def _s5b_read(self, slot):
+        resource = self.s5b['rulesetName'] if slot == 'ruleset-source' else self.s5b['keyName'] if slot == 's5b-key-metadata' else None
+        if slot not in ('rules-release', 'ruleset-source', 's5b-key-metadata'): raise ValueError('S5b management slot differs')
+        self.budget.charge('management')
+        result = self.request(slot, self._token, resource)
+        if not isinstance(result, dict) or result.get('complete') is not True or result.get('workerReaped') is not True or result.get('status') != 200 or not isinstance(result.get('body'), dict): raise ValueError('S5b metadata readback incomplete')
+        body = result['body']
+        if slot == 'rules-release':
+            if body.get('name') != 'projects/fireemu-oracle-query/releases/cloud.firestore' or body.get('rulesetName') != self.s5b['rulesetName']: raise ValueError('S5b Rules release differs')
+            return body['rulesetName']
+        if slot == 'ruleset-source':
+            files = body.get('source', {}).get('files')
+            if body.get('name') != resource or not isinstance(files, list) or len(files) != 1 or not isinstance(files[0].get('content'), str): raise ValueError('S5b Rules source differs')
+            digest = hashlib.sha256(files[0]['content'].encode()).hexdigest()
+            if digest != self.s5b['rulesSourceSha256']: raise ValueError('S5b Rules source bytes differ')
+            return digest
+        restrictions = body.get('restrictions')
+        if body.get('name') != resource or body.get('deleteTime') or not isinstance(restrictions, dict) or body_digest(restrictions) != self.s5b['keyRestrictionsSha256'] or not any(target.get('service') == 'firestore.googleapis.com' for target in restrictions.get('apiTargets', [])) or restrictions.get('browserKeyRestrictions') != {}:
+            raise ValueError('S5b selected key restrictions differ')
+        return body_digest(restrictions)
+
     def preflight(self):
         if self.project == PROJECT:
             return super().preflight()
         observed = {slot: self._read(slot) for slot in (TXN_PRE_SLOTS if self.project == TXN_PROJECT else TXN_PRE_SLOTS[:-1])}
         observed["databaseSettings"] = dict(self._database_settings)
+        if self.s5b is not None:
+            observed.update(rulesetName=self._s5b_read('rules-release'), rulesSourceSha256=self._s5b_read('ruleset-source'), keyRestrictionsSha256=self._s5b_read('s5b-key-metadata'))
         self._ready = True
         return observed
 
@@ -110,6 +138,8 @@ class MetadataSession(management.MetadataSession):
         observed = super().postflight()
         if self.project != PROJECT:
             observed["databaseSettings"] = dict(self._database_settings)
+        if self.s5b is not None:
+            observed.update(rulesetName=self._s5b_read("rules-release"), rulesSourceSha256=self._s5b_read("ruleset-source"))
         return observed
 
 

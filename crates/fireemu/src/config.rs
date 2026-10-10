@@ -959,6 +959,9 @@ fn parse_auth_quota_simulation(
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)] // independent switches, each read on its own
 pub struct RuntimeConfig {
+    /// Optional local OAuth authority for the strict Eventarc listener. An empty catalog denies every OAuth-shaped bearer.
+    pub eventarc_oauth_credentials:
+        Option<fireemu_adapter_functions::eventarc_strict::OAuthCredentialCatalog>,
     /// Compatibility profile (`profile`). It sets the defaults of [`Self::index_policy`],
     /// [`Self::enforce_limits`], [`Self::token_acceptance`] and
     /// [`Self::implicit_database_creation`]; an explicit key wins.
@@ -1221,9 +1224,10 @@ pub struct RuntimeConfig {
     /// ID token signing (`auth.idTokenSigning`): `unsigned-emulator` or `session-rsa`.
     pub id_token_signing: fireemu_core_auth::jwt::SigningMode,
     /// Service accounts whose signed custom tokens are accepted, each with its public JWK set
-    /// (`auth.customTokenSigners`). When set, only tokens they signed are accepted, as in
-    /// production; when absent, the unsigned tokens of the Admin SDK's emulator mode are.
+    /// (`auth.customTokenSigners`). Signed tokens must verify against these public keys.
     pub auth_custom_token_signers: Option<serde_json::Map<String, Value>>,
+    /// Allow unsigned emulator custom tokens in either profile (default true).
+    pub auth_allow_unsigned_custom_tokens: bool,
     /// OIDC issuers whose signed ID tokens the strict profile verifies, each with its public
     /// JWK set (`auth.idpSigners`, AUTH-FEDERATION owner decision O4). No key is fetched from
     /// an issuer; without an entry, strict refuses the issuer's sign-ins.
@@ -1365,6 +1369,7 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         let profile = CompatibilityProfile::default();
         Self {
+            eventarc_oauth_credentials: None,
             profile,
             firestore_addr: "127.0.0.1:8080".to_owned(),
             http_addr: "127.0.0.1:9099".to_owned(),
@@ -1463,6 +1468,7 @@ impl Default for RuntimeConfig {
             scheduler_overlap: None,
             scheduler_catch_up: "all".to_owned(),
             id_token_signing: fireemu_core_auth::jwt::SigningMode::UnsignedEmulator,
+            auth_allow_unsigned_custom_tokens: true,
             auth_custom_token_signers: None,
             auth_idp_signers: None,
             auth_api_keys: Vec::new(),
@@ -1472,12 +1478,13 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 24] = [
+pub(crate) const AUTH_KEYS: [&str; 25] = [
     "enabled",
     "apiKeys",
     "projectIssuer",
     "idTokenSigning",
     "customTokenSigners",
+    "allowUnsignedCustomTokens",
     "idpSigners",
     "providers",
     "totp",
@@ -2865,6 +2872,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "storage",
     "events",
     "pubsub",
+    "eventarc",
     "scheduler",
     "functions",
     "trace",
@@ -3132,6 +3140,62 @@ impl RuntimeConfig {
         if let Some(n) = e.get("maxAttempts").and_then(Value::as_u64) {
             cfg.events_max_attempts = u32::try_from(n).unwrap_or(u32::MAX).max(1);
         }
+        Ok(())
+    }
+
+    fn parse_eventarc(value: &Value, cfg: &mut Self) -> Result<(), ConfigError> {
+        let invalid = || {
+            ConfigError("eventarc.oauthCredentials must map lowercase SHA-256 digests to objects containing unique nonempty string scopes".to_owned())
+        };
+        let section = value.as_object().ok_or_else(invalid)?;
+        if section.keys().any(|key| key != "oauthCredentials") {
+            return Err(invalid());
+        }
+        let Some(credentials) = section.get("oauthCredentials") else {
+            return Ok(());
+        };
+        let credentials = credentials.as_object().ok_or_else(invalid)?;
+        let mut catalog = fireemu_adapter_functions::eventarc_strict::OAuthCredentialCatalog::new();
+        for (digest, entry) in credentials {
+            if digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return Err(invalid());
+            }
+            let mut key = [0; 32];
+            for (index, pair) in digest.as_bytes().chunks_exact(2).enumerate() {
+                let nibble = |b: u8| {
+                    if b.is_ascii_digit() {
+                        b - b'0'
+                    } else {
+                        b - b'a' + 10
+                    }
+                };
+                key[index] = nibble(pair[0]) * 16 + nibble(pair[1]);
+            }
+            let entry = entry.as_object().ok_or_else(invalid)?;
+            if entry.len() != 1 {
+                return Err(invalid());
+            }
+            let scopes = entry
+                .get("scopes")
+                .and_then(Value::as_array)
+                .ok_or_else(invalid)?;
+            let mut grants = BTreeSet::new();
+            for scope in scopes {
+                let scope = scope
+                    .as_str()
+                    .filter(|scope| !scope.is_empty())
+                    .ok_or_else(invalid)?;
+                if !grants.insert(scope.to_owned()) {
+                    return Err(invalid());
+                }
+            }
+            catalog.insert(key, grants);
+        }
+        cfg.eventarc_oauth_credentials = Some(catalog);
         Ok(())
     }
 
@@ -3692,6 +3756,9 @@ impl RuntimeConfig {
         if let Some(events) = obj.get("events").and_then(Value::as_object) {
             Self::parse_events(events, &mut cfg)?;
         }
+        if let Some(eventarc) = obj.get("eventarc") {
+            Self::parse_eventarc(eventarc, &mut cfg)?;
+        }
         if let Some(pubsub) = obj.get("pubsub").and_then(Value::as_object) {
             Self::parse_pubsub(pubsub, &mut cfg)?;
         }
@@ -3747,6 +3814,11 @@ impl RuntimeConfig {
                             })
                     })
                     .collect::<Result<_, _>>()?;
+            }
+            if let Some(value) = auth.get("allowUnsignedCustomTokens") {
+                cfg.auth_allow_unsigned_custom_tokens = value.as_bool().ok_or_else(|| {
+                    ConfigError("auth.allowUnsignedCustomTokens must be a boolean".to_owned())
+                })?;
             }
             if let Some(signers) = auth.get("customTokenSigners") {
                 let signers = signers.as_object().ok_or_else(|| {
@@ -6076,6 +6148,40 @@ mod tests {
     }
 
     #[test]
+    fn unsigned_custom_token_policy_defaults_and_explicit_overrides() {
+        for profile in ["strict", "emulator"] {
+            for allowed in [None, Some(true), Some(false)] {
+                let mut auth = json!({});
+                if let Some(value) = allowed {
+                    auth["allowUnsignedCustomTokens"] = json!(value);
+                }
+                let cfg = RuntimeConfig::from_json(&json!({
+                    "schemaVersion": 1, "profile": profile,
+                    "firestore": {"edition": "standard", "apiMode": "native"},
+                    "auth": auth,
+                }))
+                .unwrap();
+                assert_eq!(
+                    cfg.auth_allow_unsigned_custom_tokens,
+                    allowed.unwrap_or(true)
+                );
+                assert_eq!(
+                    crate::daemon::custom_token_signer_note(&cfg).is_some(),
+                    allowed == Some(false)
+                );
+            }
+        }
+        for invalid in [json!(null), json!("true"), json!(1), json!([]), json!({})] {
+            assert_eq!(
+                parse(&json!({"allowUnsignedCustomTokens": invalid})),
+                Err(ConfigError(
+                    "auth.allowUnsignedCustomTokens must be a boolean".to_owned()
+                ))
+            );
+        }
+    }
+
+    #[test]
     fn custom_token_signers_are_validated_when_the_configuration_is_read() {
         // A public 2048-bit modulus; the key it belongs to was discarded.
         let modulus = "0lwNtQWMVy0QqgEvrBmoFqwky_dcMx8CgS-o2rTesEV7QbG4cvNigTcDV7b_u0twRkJdonkMPjbUs0b8NKe_0_UOZ5vE_kILFG4TtPdeZWub8xnqhETc7WifXhEfqcB8xFbRyIxU9V0d_epsuNnQ-Nd7NlnFsH-aaq6f1HKp55_BVNxudwmHwT49P6JhNDDh7FWyoYBBBFtQ0St8dky4MFQTd2swZP4pEA8xGp-q-1mxbn0g9gfbq5voYWtOaDW9a2lsC_S_d6DecsrNWn4YYJ7Qc5xcx4pI70a23zftkVBj_I-Eip2hcvNUEsZJA4LlR4BgDLsNWu3ZWQxe08fOew";
@@ -6948,6 +7054,93 @@ mod provider_seed_tests {
                     "{}",
                     path.display()
                 );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod eventarc_oauth_catalog_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn eventarc_oauth_catalog_accepts_explicit_local_credentials() {
+        let absent = RuntimeConfig::from_json(&json!({"schemaVersion": 1})).unwrap();
+        assert!(absent.eventarc_oauth_credentials.is_none());
+        let empty = RuntimeConfig::from_json(
+            &json!({"schemaVersion": 1, "eventarc": {"oauthCredentials": {}}}),
+        )
+        .unwrap();
+        assert!(empty.eventarc_oauth_credentials.is_some());
+        assert!(empty.eventarc_oauth_credentials.unwrap().is_empty());
+        let digest = "ab".repeat(32);
+        for catalog in [
+            json!({}),
+            json!({digest.clone(): {"scopes": []}}),
+            json!({digest.clone(): {"scopes": ["https://www.googleapis.com/auth/cloud-platform"]}}),
+        ] {
+            assert!(RuntimeConfig::from_json(
+                &json!({"schemaVersion": 1, "eventarc": {"oauthCredentials": catalog}})
+            )
+            .is_ok());
+        }
+    }
+
+    #[test]
+    fn eventarc_oauth_catalog_rejects_malformed_contracts() {
+        let digest = "ab".repeat(32);
+        for section in [
+            json!(null),
+            json!([]),
+            json!({"extra": {}}),
+            json!({"oauthCredentials": null}),
+            json!({"oauthCredentials": {"not-a-digest": {"scopes": []}}}),
+            json!({"oauthCredentials": {digest.clone(): {"scopes": [""]}}}),
+            json!({"oauthCredentials": {digest.clone(): {"scopes": ["scope", "scope"]}}}),
+            json!({"oauthCredentials": {digest.clone(): {"scopes": [1]}}}),
+            json!({"oauthCredentials": {digest.clone(): {"scopes": [], "extra": true}}}),
+        ] {
+            assert!(
+                RuntimeConfig::from_json(&json!({"schemaVersion": 1, "eventarc": section}))
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod eventarc_oauth_catalog_properties {
+    use super::*;
+    use proptest::prelude::*;
+    use serde_json::json;
+
+    proptest! {
+        #[test]
+        fn catalog_parser_preserves_absence_empty_validation_and_grants(mode in 0_u8..4, digest in any::<[u8; 32]>(), granted in any::<bool>()) {
+            let key = digest.iter().fold(String::new(), |mut out, byte| { use std::fmt::Write as _; write!(out, "{byte:02x}").unwrap(); out });
+            let scope = if granted { "https://www.googleapis.com/auth/cloud-platform" } else { "https://example.test/other-scope" };
+            let section = match mode {
+                0 => json!({}),
+                1 => json!({"oauthCredentials": {}}),
+                2 => json!(null),
+                _ => json!({"oauthCredentials": {key: {"scopes": [scope]}}}),
+            };
+            let parsed = RuntimeConfig::from_json(&json!({"schemaVersion": 1, "eventarc": section}));
+            match mode {
+                0 => prop_assert!(parsed.unwrap().eventarc_oauth_credentials.is_none()),
+                1 => {
+                    let catalog = parsed.unwrap().eventarc_oauth_credentials;
+                    prop_assert!(catalog.is_some());
+                    prop_assert!(catalog.unwrap().is_empty());
+                },
+                2 => prop_assert!(parsed.is_err()),
+                _ => {
+                    let catalog = parsed.unwrap().eventarc_oauth_credentials.unwrap();
+                    prop_assert_eq!(catalog.len(), 1);
+                    prop_assert_eq!(catalog.get(&digest).unwrap().contains("https://www.googleapis.com/auth/cloud-platform"), granted);
+                    prop_assert!(catalog.get(&digest).unwrap().contains(scope));
+                }
             }
         }
     }

@@ -1508,11 +1508,22 @@ async function invoke(functions, manifest, msg) {
           await fn({ ...msg.event, data: storageObjectInRecordedOrder(msg.event.data) });
           return;
         case "pubsub":
-        // A custom event reaches the handler as the CloudEvent itself, exactly as the official
-        // Eventarc emulator POSTs it to the functions emulator.
-        case "eventarc":
           await fn(msg.event);
           return;
+        case "eventarc": {
+          // Eventarc Standard delivers binary CloudEvents. The production JSON body parser
+          // admits objects and arrays before invoking the function; the emulator sends a
+          // structured envelope instead. Strict conversion omits datacontenttype for JSON.
+          const contentType = msg.event.datacontenttype;
+          const jsonBody = contentType === undefined ||
+            (typeof contentType === "string" && /^application\/json(?:\s*;|$)/i.test(contentType.trim()));
+          if (strictProfile() && jsonBody && Object.hasOwn(msg.event, "data") &&
+              (msg.event.data === null || typeof msg.event.data !== "object")) {
+            throw new SyntaxError("Eventarc binary JSON body must be an object or array");
+          }
+          await fn(msg.event);
+          return;
+        }
         case "auth":
           throw new Error("Auth user events are delivered to v1 auth.user() handlers only");
         default:

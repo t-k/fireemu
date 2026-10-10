@@ -375,3 +375,52 @@ def test_plain_database_readback_does_not_reread_without_an_accepted_delete():
     session.named_database = {"database": NAMED, "createConfirmed": True, "unknownCreate": False, "deleteAttempted": False, "closureReady": False, "lastRequestEpoch": 1000}
     assert not session.readback_named_database(None, saved.append)["closureReady"]
     assert len(calls) == 1
+
+
+def test_s5b_uses_exact_existing_rules_and_selected_key_slots():
+    import hashlib
+    from broad_contract import digest
+    content = 'fixture Rules source'
+    restrictions = {'apiTargets': [{'service': 'firestore.googleapis.com'}], 'browserKeyRestrictions': {}}
+    selected = {'rulesetName': 'projects/fireemu-oracle-query/rulesets/fixed', 'rulesSourceSha256': hashlib.sha256(content.encode()).hexdigest(), 'keyName': 'projects/123456789012/locations/global/keys/644789b7-ac0a-47ff-a740-8836448a0633', 'keyRestrictionsSha256': digest(restrictions), 'webConfigSha256': 'a' * 64, 'origin': 'http://127.0.0.1:4567'}
+    baseline = {**copy.deepcopy(BASELINE), 'projectNumber': '123456789012'}
+    calls = []
+    class Budget:
+        total = 0
+        def charge(self, phase): assert phase == 'management'; self.total += 1
+    budget = Budget()
+    def request(slot, token, resource):
+        calls.append((slot, resource))
+        body = {'oauth-tokeninfo': {'issued_to': 'test-client', 'user_id': 'test-subject', 'scope': BASELINE['credentialPrincipal']['requiredScopes'][0], 'expires_in': 3600}, 'project': {'projectId': PROJECT, 'projectNumber': baseline['projectNumber']}, 'database': {**BASELINE['databaseExpected'], 'uid': 'synthetic-query-uid'}, 'rules-release': {'name': 'projects/fireemu-oracle-query/releases/cloud.firestore', 'rulesetName': selected['rulesetName']}, 'ruleset-source': {'name': selected['rulesetName'], 'source': {'files': [{'content': content}]}}, 's5b-key-metadata': {'name': selected['keyName'], 'restrictions': restrictions}}[slot]
+        return {'complete': True, 'workerReaped': True, 'status': 200, 'body': body}
+    session = MetadataSession('fixture-bearer', baseline, budget, project=PROJECT, request_fn=request, s5b=selected)
+    before, after = session.preflight(), session.postflight()
+    assert budget.total == 10
+    assert before['rulesSourceSha256'] == after['rulesSourceSha256']
+    assert before['rulesetName'] == after['rulesetName']
+    assert [slot for slot, _ in calls].count('s5b-key-metadata') == 1
+    assert calls[5] == ('s5b-key-metadata', selected['keyName'])
+
+
+@pytest.mark.parametrize('key_number', ['123456789013', '0123456789012', 'fireemu-oracle-query'])
+def test_s5b_selected_key_must_belong_to_validated_baseline_project_number(key_number):
+    selected = {'rulesetName': 'projects/fireemu-oracle-query/rulesets/fixed', 'rulesSourceSha256': 'a' * 64, 'keyName': f'projects/{key_number}/locations/global/keys/644789b7-ac0a-47ff-a740-8836448a0633', 'keyRestrictionsSha256': 'b' * 64, 'webConfigSha256': 'c' * 64, 'origin': 'http://127.0.0.1:4567'}
+    with pytest.raises(ValueError):
+        MetadataSession('fixture-bearer', {**copy.deepcopy(BASELINE), 'projectNumber': '123456789012'}, None, project=PROJECT, s5b=selected)
+
+
+def test_s5b_runner_binds_existing_baseline_number_to_the_metadata_worker(tmp_path, monkeypatch):
+    import txn_program_runner as runner
+    from txn_program_cli import table_for
+    from broad_contract import digest
+    web = {'projectId': PROJECT, 'authDomain': 'localhost', 'apiKey': 'fixture-key'}
+    selected = {'rulesetName': f'projects/{PROJECT}/rulesets/fixed', 'rulesSourceSha256': 'a' * 64, 'keyName': 'projects/123456789012/locations/global/keys/644789b7-ac0a-47ff-a740-8836448a0633', 'keyRestrictionsSha256': 'b' * 64, 'webConfigSha256': digest(web), 'origin': 'http://127.0.0.1:4567'}
+    seen = []
+    class Metadata:
+        def __init__(self, _token, baseline, _budget, *, request_fn, **_kwargs):
+            seen.append((baseline['projectNumber'], request_fn.keywords))
+            raise ValueError('fixture stops before metadata or SDK dispatch')
+    monkeypatch.setattr(runner, 'refresh', lambda *_args, **_kwargs: 'fixture-bearer')
+    monkeypatch.setattr(runner, 'MetadataSession', Metadata)
+    runner.run_once(0, table_for('s5b-web-sdk-retry'), 'a' * 32, 'b' * 32, tmp_path, baseline={**copy.deepcopy(BASELINE), 'projectNumber': '123456789012', 's5b': selected}, runtime={'webSdk': True}, check=lambda: None, web_config=web)
+    assert seen == [('123456789012', {'project': PROJECT, 'project_number': '123456789012'})]

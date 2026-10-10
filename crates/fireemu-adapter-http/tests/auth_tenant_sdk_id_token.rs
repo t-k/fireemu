@@ -58,6 +58,7 @@ fn emulator_state() -> AuthState {
         client_api_key: ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry: FakeCustomTokenExpiry::Ignore,
         custom_token_trust: None,
+        allow_unsigned_custom_tokens: true,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -72,6 +73,7 @@ fn strict_state() -> AuthState {
         client_api_key: ClientApiKeyPolicy::Required,
         fake_custom_token_expiry: FakeCustomTokenExpiry::Reject,
         custom_token_trust: None,
+        allow_unsigned_custom_tokens: true,
         ..emulator_state()
     }
 }

@@ -5,8 +5,8 @@
 //! whose Google-held key verifies the signature, and refuses a correctly signed token of a
 //! service account that belongs to another project with `CREDENTIAL_MISMATCH`. fireemu cannot
 //! hold Google's keys, so the public keys a deployment trusts are supplied in configuration.
-//! With no signer configured this module is not consulted and the unsigned tokens the Admin SDK
-//! mints in emulator mode keep working.
+//! Signed tokens always require configured keys. Unsigned emulator custom tokens are handled
+//! separately by the caller according to `auth.allowUnsignedCustomTokens` (default true).
 
 use std::collections::BTreeMap;
 

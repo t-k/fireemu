@@ -11,6 +11,25 @@
       "type": "string",
       "const": "https://fireemu.dev/spec/config/fireemu.schema.json"
     },
+    "eventarc": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "oauthCredentials": {
+          "description": "Optional local OAuth credential authority for strict Eventarc. Keys are SHA-256 digests of synthetic bearer bytes; absence preserves legacy shape-only admission. An empty catalog admits no OAuth-shaped credential. This does not verify Google credentials or IAM permissions.",
+          "type": "object",
+          "propertyNames": { "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["scopes"],
+            "properties": {
+              "scopes": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+            }
+          }
+        }
+      }
+    },
     "schemaVersion": { "const": 1 },
     "firebaseJson": {
       "type": "string",
@@ -210,9 +229,14 @@
           "description": "The default project's Web API keys. When present, a client request with any other key is refused with production's 400 API_KEY_INVALID before the service reads it; when absent, any key is accepted, as by the official emulator.",
           "items": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" }
         },
+        "allowUnsignedCustomTokens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Accept well-formed unsigned custom JWTs from the Admin SDK in emulator mode, in both strict and emulator profiles, even when customTokenSigners is configured. Set false to require signed custom tokens verified by customTokenSigners. Strict claim validation still applies. In the emulator profile, false also disables JSON fake custom tokens. This setting does not affect ID tokens or other credentials."
+        },
         "customTokenSigners": {
           "type": "object",
-          "description": "Service accounts whose signed custom tokens are accepted, each mapped to its public JWK set (the document Google publishes at https://www.googleapis.com/service_accounts/v1/jwk/<service account>). When present, signInWithCustomToken accepts only RS256 tokens these keys verify and refuses a verifying token of another project's service account with CREDENTIAL_MISMATCH, as production does. When absent, the unsigned tokens the Admin SDK mints in emulator mode are accepted.",
+          "description": "Service accounts whose signed custom tokens are accepted, each mapped to its public JWK set (the document Google publishes at https://www.googleapis.com/service_accounts/v1/jwk/<service account>). Signed custom tokens are accepted only when these keys verify an RS256 signature; a verifying token of another project's service account is refused with CREDENTIAL_MISMATCH, as production does. Unsigned emulator custom tokens are accepted by default in both profiles independently of these keys; set allowUnsignedCustomTokens to false to refuse them. Without configured keys, signed custom tokens are refused.",
           "propertyNames": { "pattern": "^[^@\\s]+@([a-z0-9-]+\\.iam|appspot)\\.gserviceaccount\\.com$" },
           "additionalProperties": {
             "type": "object",

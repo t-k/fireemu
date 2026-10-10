@@ -2046,3 +2046,310 @@ test("D forwarded message-count property preserves empty polling and scoped clai
       );
   }
 });
+
+const restartAttemptProposal = "e2e8865fb9569def971cd9acc7bfdee4a8e2e75e5749c5921c7a757d46ba1c38";
+const restartAttemptApproval = "17c64221706deef2f6ba3dce37a4c4d326568ed81821dc3a3d94de73b9ff49ad";
+function restartAttemptFixture({ cellId = "R5", sourceBase = 1, localBase = 10, count = 3 } = {}) {
+  const topic = "projects/demo-restart/topics/source",
+    subscription = "projects/demo-restart/subscriptions/source";
+  const payload = { data: "eA==", attributes: { test: "synthetic" } };
+  const policy = { deadLetterTopic: "projects/demo-restart/topics/dead", maxDeliveryAttempts: 5 };
+  const rows = [],
+    actual = [];
+  let n = 1;
+  const add = (method, request, body, category, local = body, milliseconds = 0) => {
+    const row = {
+      ...source(method, request, body, category),
+      cellId,
+      transport: cellId.startsWith("N") ? "grpc" : "rest",
+      n: n++,
+      requestId: rows.length + 1,
+      at: new Date(Date.UTC(2026, 0, 1) + milliseconds).toISOString(),
+    };
+    rows.push(row);
+    actual.push(reply(structuredClone(local)));
+    return row;
+  };
+  add(
+    "CreateSubscription",
+    { name: subscription, topic, deadLetterPolicy: policy },
+    { name: subscription, topic, deadLetterPolicy: policy },
+    "create",
+  );
+  add("Publish", { topic, messages: [payload] }, { messageIds: ["source-id"] }, "publish", {
+    messageIds: ["local-idx"],
+  });
+  const delivery = (sourceAttempt, localAttempt, milliseconds) => {
+    const ordinal = rows.length,
+      sourceAck = `source-ack-${ordinal}`,
+      localAck = `local-ack-${ordinal}`;
+    const row = add(
+      "Pull",
+      { subscription },
+      {
+        receivedMessages: [
+          {
+            ackId: sourceAck,
+            deliveryAttempt: sourceAttempt,
+            message: { ...payload, messageId: "source-id" },
+          },
+        ],
+      },
+      "sourcePull",
+      {
+        receivedMessages: [
+          {
+            ackId: localAck,
+            deliveryAttempt: localAttempt,
+            message: { ...payload, messageId: "local-idx" },
+          },
+        ],
+      },
+      milliseconds,
+    );
+    add(
+      "ModifyAckDeadline",
+      { subscription, ackIds: [sourceAck], ackDeadlineSeconds: 0 },
+      {},
+      "nack",
+      {},
+      milliseconds,
+    );
+    return row;
+  };
+  let before;
+  for (let i = 1; i <= 9; i++) before = delivery(i, i, i * 1000);
+  const start = {
+    event: "dlq-observation",
+    stage: "inactivity-start",
+    n: n++,
+    at: new Date(Date.UTC(2026, 0, 1) + 10000).toISOString(),
+    sourceAttempts: 9,
+    clockMs: 10000,
+    resumeAt: 730000,
+  };
+  const end = {
+    event: "dlq-observation",
+    stage: "inactivity-completed",
+    n: n++,
+    at: new Date(Date.UTC(2026, 0, 1) + 730000).toISOString(),
+    clockMs: 730000,
+    elapsedMs: 720000,
+    noSourcePullDuringWindow: true,
+    resetInferred: false,
+  };
+  let resumed;
+  for (let j = 0; j < count; j++) {
+    const row = delivery(sourceBase + j, localBase + j, 730000 + j * 1000);
+    resumed ??= row;
+  }
+  const input = executionInput(rows);
+  input.metadata = {
+    ...input.metadata,
+    sourceHead: "b".repeat(40),
+    packetSha256: digest,
+    descriptorSha256: digest,
+  };
+  input.runtimeInputs = { binarySha256: digest, inputsSha256: digest };
+  input.cells[0] = {
+    ...input.cells[0],
+    id: cellId,
+    mode: "720-second-source-inactivity",
+    arm: "no-new-grant",
+    observations: [start, end],
+  };
+  const binding = {
+    cellId,
+    beforeSourceN: before.n,
+    resumedSourceN: resumed.n,
+    inactivityStartSourceN: start.n,
+    inactivityCompletedSourceN: end.n,
+  };
+  const options = {
+    clockReceiptFor: receipt,
+    restartAttemptDisposition: {
+      owner1199: {
+        proposalSha256: restartAttemptProposal,
+        rowSha256WithLf: restartAttemptApproval,
+      },
+      source: { ...input.metadata },
+      runtimeInputs: { ...input.runtimeInputs },
+      cells: [binding],
+    },
+  };
+  return { input, actual, options, before, resumed };
+}
+async function replayRestartAttempt(f) {
+  const { replayRecording } = await core();
+  const input = structuredClone(f.input),
+    actual = structuredClone(f.actual);
+  if (input.cells[0].id.startsWith("N")) {
+    const { protos } = await import("@google-cloud/pubsub"),
+      { requestToWire } = await import("./pubsub-production/grpc.mjs"),
+      { createHash } = await import("node:crypto");
+    for (const row of input.cells[0].exchanges)
+      if (row.method === "Pull")
+        for (const body of [row.reply, actual[row.requestId - 1]]) {
+          const bytes = Buffer.from(
+            protos.google.pubsub.v1.PullResponse.encode(
+              protos.google.pubsub.v1.PullResponse.fromObject(requestToWire(body.body)),
+            ).finish(),
+          );
+          body.bodyBytes = bytes.length;
+          body.bodySha256 = createHash("sha256").update(bytes).digest("hex");
+        }
+  }
+  return replayRecording(input, async (_call, row) => actual[row.requestId - 1], f.options);
+}
+test("D restart attempt relation preserves raw and original divergence independently of forwarding", async () => {
+  const f = restartAttemptFixture(),
+    before = structuredClone({ ...f, options: { ...f.options, clockReceiptFor: undefined } });
+  before.options.clockReceiptFor = f.options.clockReceiptFor;
+  const r = await replayRestartAttempt(f),
+    cell = r.results[0];
+  assert.equal(cell.restartAttemptRelation.verdict, "MATCH");
+  assert.equal(cell.semanticVerdict, "DIVERGES");
+  assert.equal(cell.restartAttemptRelation.postDeliveries, 3);
+  assert.equal(cell.restartAttemptRelation.forwardingSettled, false);
+  const row = cell.exchanges.find((e) => e.sourceN === f.resumed.n);
+  assert.equal(row.sourceReply.body.receivedMessages[0].deliveryAttempt, 1);
+  assert.equal(row.localReply.body.receivedMessages[0].deliveryAttempt, 10);
+  assert.equal(row.semanticVerdict, "DIVERGES");
+  assert.deepEqual(f, before);
+  assert.equal(r.parentClosureReady, false);
+});
+test("D restart attempt relation retains native message ID width differences", async () => {
+  const f = restartAttemptFixture({ cellId: "N5" });
+  f.actual[1].body.messageIds = ["local-id"];
+  for (const reply of f.actual)
+    for (const item of reply.body.receivedMessages ?? []) item.message.messageId = "local-id";
+  const report = await replayRestartAttempt(f);
+  assert.equal(report.results[0].restartAttemptRelation.verdict, "DIVERGES");
+});
+test("D restart attempt relation rejects invalid bases, jumps, later resets, identity and missing evidence", async (t) => {
+  const cases = [
+    [
+      "invalid base",
+      (f) => (f.actual[f.resumed.requestId - 1].body.receivedMessages[0].deliveryAttempt = 54),
+      "DIVERGES",
+    ],
+    [
+      "unapproved consistent base",
+      (f) => {
+        for (let j = 0; j < 3; j++)
+          f.actual[f.resumed.requestId - 1 + j * 2].body.receivedMessages[0].deliveryAttempt =
+            54 + j;
+      },
+      "DIVERGES",
+    ],
+    [
+      "jump",
+      (f) => (f.actual[f.resumed.requestId + 1].body.receivedMessages[0].deliveryAttempt = 12),
+      "DIVERGES",
+    ],
+    [
+      "later reset",
+      (f) => (f.actual[f.resumed.requestId + 1].body.receivedMessages[0].deliveryAttempt = 1),
+      "DIVERGES",
+    ],
+    [
+      "wrong publication",
+      (f) =>
+        (f.actual[f.resumed.requestId - 1].body.receivedMessages[0].message.messageId = "other-id"),
+      "DIVERGES",
+    ],
+    [
+      "wrong payload",
+      (f) => (f.actual[f.resumed.requestId - 1].body.receivedMessages[0].message.data = "eQ=="),
+      "DIVERGES",
+    ],
+    ["unknown", (f) => (f.actual[f.resumed.requestId - 1].unknown = true), "NOT_COMPARABLE"],
+    [
+      "missing attempt",
+      (f) => delete f.actual[f.resumed.requestId - 1].body.receivedMessages[0].deliveryAttempt,
+      "NOT_COMPARABLE",
+    ],
+    [
+      "missing nack",
+      (f) => (f.input.cells[0].exchanges[f.resumed.requestId].category = "inspect"),
+      "NOT_COMPARABLE",
+    ],
+    [
+      "wrong own ACK",
+      (f) => (f.input.cells[0].exchanges[f.resumed.requestId].request.ackIds = ["unobserved"]),
+      "NOT_COMPARABLE",
+    ],
+    [
+      "before count",
+      (f) => (f.actual[f.before.requestId - 1].body.receivedMessages[0].deliveryAttempt = 10),
+      "DIVERGES",
+    ],
+    ["unknown boundary", (f) => f.input.cells[0].observations.pop(), "NOT_COMPARABLE"],
+    [
+      "wrong clock",
+      (f) =>
+        (f.options.clockReceiptFor = (row) => ({
+          ...receipt(row),
+          body: { clock: "2026-01-02T00:00:00.000Z" },
+        })),
+      "NOT_COMPARABLE",
+    ],
+  ];
+  for (const [name, change, verdict] of cases)
+    await t.test(name, async () => {
+      const f = restartAttemptFixture();
+      change(f);
+      assert.equal(
+        (await replayRestartAttempt(f)).results[0].restartAttemptRelation.verdict,
+        verdict,
+      );
+    });
+});
+test("D restart attempt relation never applies to managed or no-policy cells or unbound approval", async (t) => {
+  for (const cellId of ["R6", "N6", "R1"])
+    await t.test(cellId, async () => {
+      const f = restartAttemptFixture({ cellId });
+      assert.notEqual(
+        (await replayRestartAttempt(f)).results[0].restartAttemptRelation.verdict,
+        "MATCH",
+      );
+    });
+  for (const name of ["policy", "approval", "recording", "runtime", "selector"])
+    await t.test(name, async () => {
+      const f = restartAttemptFixture();
+      if (name === "policy") {
+        delete f.input.cells[0].exchanges[0].request.deadLetterPolicy;
+        delete f.input.cells[0].exchanges[0].reply.body.deadLetterPolicy;
+        delete f.actual[0].body.deadLetterPolicy;
+      } else if (name === "approval")
+        f.options.restartAttemptDisposition.owner1199.rowSha256WithLf = digest;
+      else if (name === "recording")
+        f.options.restartAttemptDisposition.source.sourceHead = "c".repeat(40);
+      else if (name === "runtime")
+        f.options.restartAttemptDisposition.runtimeInputs.binarySha256 = "c".repeat(64);
+      else f.options.restartAttemptDisposition.cells[0].resumedSourceN++;
+      assert.notEqual(
+        (await replayRestartAttempt(f)).results[0].restartAttemptRelation.verdict,
+        "MATCH",
+      );
+    });
+});
+test("D generated restart bases and delivery ordinals admit only the bounded relation", async () => {
+  for (const cellId of ["R5", "N5"])
+    for (const sourceBase of [1, 10])
+      for (const localBase of [1, 10])
+        for (const count of [1, 2, 3, 7, 19]) {
+          const f = restartAttemptFixture({ cellId, sourceBase, localBase, count });
+          assert.equal(
+            (await replayRestartAttempt(f)).results[0].restartAttemptRelation.verdict,
+            "MATCH",
+          );
+          if (count > 1) {
+            f.actual[f.resumed.requestId + 1].body.receivedMessages[0].deliveryAttempt++;
+            assert.equal(
+              (await replayRestartAttempt(f)).results[0].restartAttemptRelation.verdict,
+              "DIVERGES",
+            );
+          }
+        }
+});

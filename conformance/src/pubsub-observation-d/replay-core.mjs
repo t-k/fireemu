@@ -293,7 +293,12 @@ function recoverNativePull(reply) {
   }
   return null;
 }
-function nativePullWire(sourceReply, localReply, originDisposition = false) {
+function nativePullWire(
+  sourceReply,
+  localReply,
+  originDisposition = false,
+  restartAttempt = false,
+) {
   const source = recoverNativePull(sourceReply),
     local = recoverNativePull(localReply);
   const proof = {
@@ -323,6 +328,8 @@ function nativePullWire(sourceReply, localReply, originDisposition = false) {
       ["local", local],
     ]) {
       const wire = structuredClone(recovered.wire);
+      if (restartAttempt)
+        for (const item of wire.receivedMessages ?? []) delete item.deliveryAttempt;
       if (originDisposition && side === "source")
         for (const [index, item] of (wire.receivedMessages ?? []).entries())
           if (item.message?.attributes)
@@ -851,6 +858,182 @@ function validateCell(cell, metadata, iam, issued, recovery) {
   }
 }
 
+// Owner1199 evaluates a separate relation: pre(i)=i+1 for i<9, base in {1,10}, post(j)=base+j.
+// It preserves every original verdict and supplies no forwarding settlement.
+function restartAttemptRelation(input, cell, exchanges, evidence, disposition) {
+  const result = {
+    owner: 1199,
+    verdict: "NOT_COMPARABLE",
+    selector: "body.receivedMessages[0].deliveryAttempt",
+    forwardingSettled: false,
+  };
+  const finish = (verdict, reason) => ({ ...result, verdict, reason });
+  if (
+    !["R5", "N5"].includes(cell.id) ||
+    cell.mode !== "720-second-source-inactivity" ||
+    cell.arm !== "no-new-grant"
+  )
+    return finish("NOT_COMPARABLE", "Outside the approved restart variant");
+  const bindings = disposition.cells?.filter((b) => b.cellId === cell.id),
+    binding = bindings?.length === 1 && bindings[0];
+  if (
+    disposition.owner1199?.proposalSha256 !==
+      "e2e8865fb9569def971cd9acc7bfdee4a8e2e75e5749c5921c7a757d46ba1c38" ||
+    disposition.owner1199?.rowSha256WithLf !==
+      "17c64221706deef2f6ba3dce37a4c4d326568ed81821dc3a3d94de73b9ff49ad" ||
+    !["runId", "sourceHead", "packetSha256", "descriptorSha256"].every(
+      (k) => input.metadata[k] !== undefined && disposition.source?.[k] === input.metadata[k],
+    ) ||
+    !["binarySha256", "inputsSha256"].every(
+      (k) =>
+        /^[a-f0-9]{64}$/.test(input.runtimeInputs?.[k] ?? "") &&
+        disposition.runtimeInputs?.[k] === input.runtimeInputs[k],
+    ) ||
+    !binding
+  )
+    return finish("NOT_COMPARABLE", "Owner, recording, runtime or selector binding unavailable");
+  result.binding = structuredClone(binding);
+  const starts = cell.observations?.filter((r) => r.stage === "inactivity-start"),
+    ends = cell.observations?.filter((r) => r.stage === "inactivity-completed");
+  const start = starts?.length === 1 && starts[0],
+    end = ends?.length === 1 && ends[0];
+  if (
+    !start ||
+    !end ||
+    start.n !== binding.inactivityStartSourceN ||
+    end.n !== binding.inactivityCompletedSourceN ||
+    start.n >= end.n ||
+    start.sourceAttempts !== 9 ||
+    !Number.isFinite(start.resumeAt) ||
+    start.resumeAt - 720000 > start.clockMs ||
+    start.clockMs >= start.resumeAt ||
+    end.clockMs < start.resumeAt ||
+    end.elapsedMs < 720000 ||
+    end.elapsedMs < end.clockMs - start.clockMs ||
+    end.elapsedMs > end.clockMs - (start.resumeAt - 720000) ||
+    end.noSourcePullDuringWindow !== true ||
+    end.resetInferred !== false
+  )
+    return finish("NOT_COMPARABLE", "Exact recorded source inactivity boundary unavailable");
+  const pulls = cell.exchanges.filter((r) => r.category === "sourcePull" && r.method === "Pull"),
+    before = pulls.filter((r) => r.n < start.n),
+    after = pulls.filter((r) => r.n > end.n);
+  if (
+    before.length !== 9 ||
+    pulls.some((r) => r.n >= start.n && r.n <= end.n) ||
+    !after.length ||
+    before.at(-1).n !== binding.beforeSourceN ||
+    after[0].n !== binding.resumedSourceN ||
+    instant(after[0].at) - instant(start.at) < 720000
+  )
+    return finish("NOT_COMPARABLE", "Pre-rest and resumed delivery correspondence unavailable");
+  const policy = cell.exchanges.find(
+    (r) =>
+      r.method === "CreateSubscription" &&
+      r.request.name === before[0].request.subscription &&
+      r.request.deadLetterPolicy?.maxDeliveryAttempts > 0,
+  );
+  const localPolicy = policy && exchanges.find((r) => r.sourceN === policy.n);
+  if (
+    !policy ||
+    !good(policy.reply) ||
+    localPolicy?.semanticVerdict !== "MATCH" ||
+    !good(localPolicy.localReply)
+  )
+    return finish("NOT_COMPARABLE", "Observed policy-bearing subscription unavailable");
+  const paired = [...before, ...after].map((source) => ({
+    source,
+    local: exchanges.find((r) => r.sourceN === source.n),
+    proof: evidence.get(source.n),
+  }));
+  if (
+    paired.some(
+      ({ local, proof }) =>
+        !proof?.known ||
+        !proof.cardinality ||
+        local?.physicalVerdict === "NOT_COMPARABLE" ||
+        proof.otherVerdict === "NOT_COMPARABLE" ||
+        !Number.isSafeInteger(proof.sourceAttempt) ||
+        !Number.isSafeInteger(proof.localAttempt) ||
+        proof.sourceAttempt < 1 ||
+        proof.localAttempt < 1,
+    )
+  )
+    return finish(
+      "NOT_COMPARABLE",
+      "Complete known paired delivery and clock evidence unavailable",
+    );
+  const first = paired[0].proof;
+  if (
+    paired.some(
+      ({ proof }) =>
+        proof.identityVerdict !== "MATCH" ||
+        proof.otherVerdict !== "MATCH" ||
+        proof.sourceId !== first.sourceId ||
+        proof.localId !== first.localId,
+    )
+  )
+    return finish(
+      "DIVERGES",
+      "Publication identity, payload or retained non-attempt evidence differs",
+    );
+  for (const [index, { source, proof }] of paired.entries()) {
+    const next = paired[index + 1]?.source.n ?? Infinity;
+    const nack = cell.exchanges.find(
+      (r) =>
+        r.n > source.n &&
+        r.n < next &&
+        r.category === "nack" &&
+        r.method === "ModifyAckDeadline" &&
+        r.request.subscription === source.request.subscription &&
+        same(r.request.ackIds, [proof.sourceAck]) &&
+        r.request.ackDeadlineSeconds === 0,
+    );
+    const localNack = nack && exchanges.find((r) => r.sourceN === nack.n);
+    if (
+      !nack ||
+      !good(nack.reply) ||
+      !good(localNack?.localReply) ||
+      localNack.semanticVerdict !== "MATCH" ||
+      localNack.physicalVerdict === "NOT_COMPARABLE"
+    )
+      return finish("NOT_COMPARABLE", "Own ACK/deadline path correspondence unavailable");
+  }
+  result.deliveries = paired.map(({ source, proof }, i) => ({
+    sourceN: source.n,
+    phase: i < 9 ? "before" : "resumed",
+    ordinal: i < 9 ? i : i - 9,
+    sourceAttempt: proof.sourceAttempt,
+    localAttempt: proof.localAttempt,
+  }));
+  if (
+    paired
+      .slice(0, 9)
+      .some(({ proof }, i) => proof.sourceAttempt !== i + 1 || proof.localAttempt !== i + 1)
+  )
+    return finish("DIVERGES", "Original nine pre-rest attempts differ");
+  const sourceBase = paired[9].proof.sourceAttempt,
+    localBase = paired[9].proof.localAttempt;
+  result.sourceBase = sourceBase;
+  result.localBase = localBase;
+  result.postDeliveries = after.length;
+  if (![1, 10].includes(sourceBase) || ![1, 10].includes(localBase))
+    return finish("DIVERGES", "Resumed base is neither reset nor continuation");
+  if (
+    paired
+      .slice(9)
+      .some(
+        ({ proof }, j) =>
+          proof.sourceAttempt !== sourceBase + j || proof.localAttempt !== localBase + j,
+      )
+  )
+    return finish("DIVERGES", "Resumed attempts reset, skip or leave their own delivery ordinal");
+  return finish(
+    "MATCH",
+    "Owner-approved bounded reset-or-continuation relation holds independently",
+  );
+}
+
 export async function replayRecording(
   input,
   execute,
@@ -859,6 +1042,7 @@ export async function replayRecording(
     observe = () => {},
     clockReceiptFor = () => undefined,
     timestampDisposition,
+    restartAttemptDisposition,
   } = {},
 ) {
   const results = [];
@@ -870,7 +1054,8 @@ export async function replayRecording(
       tokens = new Map(),
       exchanges = [],
       localOwnership = new Map(),
-      localPolicies = new Map();
+      localPolicies = new Map(),
+      restartEvidence = new Map();
     let stopped = false;
     for (const source of cell.exchanges) {
       const call = {
@@ -1259,6 +1444,53 @@ export async function replayRecording(
                 if (b.message.attributes) delete b.message.attributes[key];
               }
           }
+          if (restartAttemptDisposition && source.category === "sourcePull") {
+            const sourceItem = source.reply.body?.receivedMessages?.[0],
+              localItem = actual?.body?.receivedMessages?.[0];
+            const withoutAttempt = (body) => {
+              const value = structuredClone(body);
+              for (const item of value?.receivedMessages ?? []) delete item.deliveryAttempt;
+              return value;
+            };
+            const native =
+              source.transport === "grpc"
+                ? nativePullWire(source.reply, actual, false, true)
+                : undefined;
+            restartEvidence.set(source.n, {
+              sourceAttempt: sourceItem?.deliveryAttempt,
+              localAttempt: localItem?.deliveryAttempt,
+              sourceId: sourceItem?.message?.messageId,
+              localId: localItem?.message?.messageId,
+              sourceAck: sourceItem?.ackId,
+              cardinality:
+                source.reply.body?.receivedMessages?.length === 1 &&
+                actual?.body?.receivedMessages?.length === 1,
+              known:
+                good(source.reply) &&
+                good(actual) &&
+                bodyBound(source.reply) &&
+                bodyBound(actual) &&
+                (!native || native.verdict !== "NOT_COMPARABLE"),
+              identityVerdict: publications.has(sourceItem?.message?.messageId)
+                ? publications.get(sourceItem.message.messageId) ===
+                    localItem?.message?.messageId &&
+                  same(withoutAttempt(expected), withoutAttempt(local))
+                  ? "MATCH"
+                  : "DIVERGES"
+                : "NOT_COMPARABLE",
+              otherVerdict:
+                debts.length ||
+                timestampProofs.some(
+                  (p) => (p.publicationVerdict ?? p.verdict) === "NOT_COMPARABLE",
+                )
+                  ? "NOT_COMPARABLE"
+                  : timestampProofs.some(
+                        (p) => (p.publicationVerdict ?? p.verdict) === "DIVERGES",
+                      ) || native?.verdict === "DIVERGES"
+                    ? "DIVERGES"
+                    : "MATCH",
+            });
+          }
           if (!same(expected, local)) semantic = "DIVERGES";
           const clockBound =
             clock?.sourceRequestId === source.requestId &&
@@ -1357,6 +1589,17 @@ export async function replayRecording(
     results.push({
       cellId: cell.id,
       exchanges,
+      ...(restartAttemptDisposition
+        ? {
+            restartAttemptRelation: restartAttemptRelation(
+              input,
+              cell,
+              exchanges,
+              restartEvidence,
+              restartAttemptDisposition,
+            ),
+          }
+        : {}),
       ownershipDebts,
       physicalVerdict,
       semanticVerdict,

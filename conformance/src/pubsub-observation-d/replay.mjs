@@ -144,6 +144,7 @@ export async function replayLocal(
     persist = () => {},
     now = () => performance.now(),
     timestampDisposition,
+    restartAttemptDisposition,
   } = {},
 ) {
   validateRuntime(pin, environment);
@@ -337,6 +338,7 @@ export async function replayLocal(
         enter: (cell) => meter.enter(input.packet.plan.cells.find((c) => c.id === cell.id)),
         observe: (entry) => persist("comparison", entry),
         timestampDisposition,
+        restartAttemptDisposition,
         clockReceiptFor: (source) =>
           clockReceipts.find(
             (receipt) =>
@@ -437,6 +439,7 @@ export async function main(argv = process.argv.slice(2), environment = process.e
   const report = await replayLocal(input, environment, pin, {
     persist,
     timestampDisposition: binding.timestampDisposition,
+    restartAttemptDisposition: binding.restartAttemptDisposition,
   });
   report.inputPins = binding;
   report.retainedTerminal = input.retainedTerminal;

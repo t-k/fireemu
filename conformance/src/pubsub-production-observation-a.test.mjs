@@ -3688,6 +3688,7 @@ test("closure mandatory gap fixes original predicates and selected-only caps", (
 async function closureWorld(
   id,
   {
+    split = false,
     partial = false,
     substitute = false,
     attributeSubstitute = false,
@@ -3757,6 +3758,7 @@ async function closureWorld(
       return {
         receivedMessages: [...published]
           .filter(([id]) => !partial || id !== "id-7")
+          .slice(0, split ? 4 : 8)
           .map(([messageId, m], i) => ({
             ackId: `token-${calls.length}-${messageId.slice(3)}`,
             message: {
@@ -4050,5 +4052,32 @@ test("closure mandatory gap atomic refusal retains complete immutable postimage"
     assert.deepEqual(reads[0].reply.body, reads[1].reply.body);
     assert.notDeepEqual(reads[1].reply.body, reads[2].reply.body);
     assert.equal(f.result.cleanupClosed, true);
+  }
+});
+
+test("closure mandatory gap split eight publications use two distinct current ACK sets", async () => {
+  for (const id of ["R11", "N13"]) {
+    const f = await closureWorld(id, { split: true });
+    assert.equal(f.result.complete, true);
+    const pulls = f.calls.filter((c) => c.method === "Pull");
+    const acks = f.calls.filter((c) => c.method === "Acknowledge");
+    assert.equal(pulls.length, 2);
+    assert.equal(acks.length, 2);
+    const delivered = f.rows.filter((r) => r.event === "publication-delivery-binding");
+    assert.equal(delivered.length, 8);
+    assert.equal(new Set(delivered.map((r) => r.messageId)).size, 8);
+    assert.equal(new Set(delivered.map((r) => r.ackId)).size, 8);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const current = delivered.filter((r) => r.attempt === attempt);
+      assert.equal(current.length, 4);
+      assert.deepEqual(
+        acks[attempt].request.ackIds,
+        current.map((r) => r.ackId),
+      );
+    }
+    assert.equal(
+      f.calls.filter((c) => c.method === "Pull" || c.method === "Acknowledge").length,
+      4,
+    );
   }
 });

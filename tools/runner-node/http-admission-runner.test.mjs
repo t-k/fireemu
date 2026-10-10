@@ -13,6 +13,30 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {HARD_BACKSTOP_MS, childCpuTime, sampled, waitUntil} from './load-independent-wait.mjs';
 import test from 'node:test';
 
+
+function parseCompletedEvents(text){return text.slice(0,text.lastIndexOf('\n')+1).split('\n').filter(Boolean).map(JSON.parse);}
+async function readCompletedEvents(path){try{return parseCompletedEvents(await readFile(path,'utf8'));}catch(e){if(e.code==='ENOENT')return [];throw e;}}
+test('completed JSONL reader waits for every partial record prefix',()=>{
+ const record=JSON.stringify({event:'parser',message:'日本語🦀',count:1});
+ for(let offset=0;offset<=record.length;offset++){
+  assert.deepEqual(parseCompletedEvents(record.slice(0,offset)),[],`offset ${offset}`);
+  assert.deepEqual(parseCompletedEvents('{"event":"ready"}\n'+record.slice(0,offset)),[{event:'ready'}],`completed prefix ${offset}`);
+ }
+ assert.deepEqual(parseCompletedEvents(record+'\n'),[JSON.parse(record)]);
+ assert.deepEqual(parseCompletedEvents(record+'\n'+record+'\n'),[JSON.parse(record),JSON.parse(record)]);
+});
+test('completed JSONL reader rejects malformed completed lines',()=>{
+ assert.throws(()=>parseCompletedEvents('{"event":\n'),SyntaxError);
+ assert.throws(()=>parseCompletedEvents('{"event":"ready"}\ninvalid\npartial'),SyntaxError);
+});
+test('completed JSONL reader preserves missing-file behavior',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'runner-jsonl-reader-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const path=join(dir,'events.jsonl');assert.deepEqual(await readCompletedEvents(path),[]);
+ await writeFile(path,'{"event":');assert.deepEqual(await readCompletedEvents(path),[]);
+ await writeFile(path,'{"event":"ready"}\n');assert.deepEqual(await readCompletedEvents(path),[{event:'ready'}]);
+ await writeFile(path,'invalid\n');await assert.rejects(readCompletedEvents(path),SyntaxError);
+});
+
 const runner=process.env.FIREEMU_TEST_RUNNER || fileURLToPath(new URL('./index.mjs',import.meta.url));
 const project='demo-http-admission',secret='local-proxy-secret';
 const expressSource=`
@@ -68,7 +92,7 @@ async function start(t,{serialize=false,configured=true,profile='emulator'}={}) 
  const exited=new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',(code,signal)=>{exit={code,signal};resolve(exit);});});
  child.stdin.on('error',()=>{});child.stderr.on('data',b=>{if(stderr.length<65536)stderr+=b;});
  child.stdout.on('data',b=>{buffer=Buffer.concat([buffer,b]);for(;;){const n=buffer.indexOf(10);if(n<0)return;const len=Number(buffer.subarray(0,n));if(buffer.length<n+1+len)return;messages.push(JSON.parse(buffer.subarray(n+1,n+1+len).toString()));buffer=buffer.subarray(n+1+len);}});
- async function events(){try{return (await readFile(join(dir,'events.jsonl'),'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);}catch(e){if(e.code==='ENOENT')return [];throw e;}}
+ async function events(){return readCompletedEvents(join(dir,'events.jsonl'));}
  // Waits for a condition; gives up only when the runner shows no progress for a whole stall window
  // (events written, frames received, output, CPU used), never because a fixed bound ran out.
  const cpu=sampled(()=>childCpuTime(child.pid));

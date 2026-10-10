@@ -5,7 +5,11 @@ import { spawn, execFileSync } from "node:child_process";
 import { join, resolve, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
-import { readPinnedJsonl, validateRuntime } from "../pubsub-production/stream-dlq-compare.mjs";
+import {
+  readPinnedJsonl,
+  validateRuntime,
+  verifyStrictWorker,
+} from "../pubsub-production/stream-dlq-compare.mjs";
 import { createRest } from "../pubsub-production/rest.mjs";
 import { createGrpc } from "../pubsub-production/grpc.mjs";
 import { createCapture, createBudget } from "../pubsub-production/capture.mjs";
@@ -150,7 +154,13 @@ function options(argv) {
     throw new Error("all B replay pins and output required");
   return result;
 }
-export function validateLaunch(launch, pin, input, ancestry, ppid) {
+export function validateLaunch(launch, pin, input, ancestry, ppid, verification = {}) {
+  if (launch.mode === "standalone") {
+    if (launch.clockStart !== input.metadata.at)
+      throw new Error("B standalone source clock refused");
+    verifyStrictWorker({ ...verification, pin, project: input.metadata.project, launch });
+    return;
+  }
   if (
     ppid !== launch.serverPid ||
     !ancestry.trim().startsWith(`${launch.parentPid} `) ||
@@ -301,11 +311,15 @@ export async function main(argv = process.argv.slice(2), environment = process.e
   });
   pinnedBytes(pin.path, pin.sha256, 100_000_000);
   if (launch !== null) {
-    const ancestry = execFileSync(
-      "ps",
-      ["-ww", "-p", String(launch.serverPid), "-o", "ppid=,args="],
-      { encoding: "utf8", timeout: 1000, killSignal: "SIGKILL", maxBuffer: 16384 },
-    );
+    const ancestry =
+      launch.mode === "standalone"
+        ? null
+        : execFileSync("ps", ["-ww", "-p", String(launch.serverPid), "-o", "ppid=,args="], {
+            encoding: "utf8",
+            timeout: 1000,
+            killSignal: "SIGKILL",
+            maxBuffer: 16384,
+          });
     validateLaunch(launch, pin, input, ancestry, process.ppid);
     writeFileSync(
       join(opts.out, "runtime-start.json"),
@@ -323,7 +337,10 @@ export async function main(argv = process.argv.slice(2), environment = process.e
       buildPin: opts["build-pin-sha256"],
     };
     report.build = pin;
-    report.runtime = { pinnedExecParent: true, strictConfigSha256: launch.configSha256 };
+    report.runtime = {
+      ...(launch.mode === "standalone" ? { pinnedStandalone: true } : { pinnedExecParent: true }),
+      strictConfigSha256: launch.configSha256,
+    };
     writeFileSync(join(opts.out, "comparison.json"), JSON.stringify(report, null, 2) + "\n", {
       flag: "wx",
       mode: 0o600,

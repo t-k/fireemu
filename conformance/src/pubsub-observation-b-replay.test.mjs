@@ -1800,3 +1800,154 @@ test("B supplemental owned Snapshot deletion preserves a stable pair through red
     else assert.notEqual(report.generatedWitnesses[1].verdict, "MATCH", mode);
   }
 });
+
+async function standaloneBFixture(t) {
+  const fs = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const directory = fs.mkdtempSync(join(tmpdir(), "b-standalone-admission-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const put = (name, value) => {
+    const path = join(directory, name);
+    const bytes = Buffer.from(typeof value === "string" ? value : JSON.stringify(value));
+    fs.writeFileSync(path, bytes, { mode: 0o600 });
+    return { path, sha256: hash(bytes) };
+  };
+  const binary = put("fireemu", "pinned binary");
+  const adapter = put("adapter.mjs", "pinned adapter");
+  const supervisor = put("caller.py", "pinned supervisor");
+  const clockStart = "2026-10-01T00:00:00Z";
+  const configBody = {
+    schemaVersion: 1,
+    profile: "strict",
+    bind: "127.0.0.1",
+    daemon: {
+      pubsubPort: 0,
+      httpPort: 0,
+      hubPort: 0,
+      loggingPort: 0,
+      authProject: "demo-b",
+      clockStart,
+    },
+  };
+  const config = put("config.json", configBody);
+  const environment = {
+    GOOGLE_CLOUD_PROJECT: "demo-b",
+    GCLOUD_PROJECT: "demo-b",
+    PUBSUB_EMULATOR_HOST: "127.0.0.1:12345",
+    FIREEMU_CONTROL_URL: "http://127.0.0.1:12346/v1/",
+    FIREEMU_CONTROL_TOKEN: "local-test",
+  };
+  const readyBody = {
+    schemaVersion: 1,
+    pid: 102,
+    projectId: "demo-b",
+    controlUrl: "http://127.0.0.1:12346",
+    controlToken: "local-test",
+    environment,
+  };
+  const ready = put("ready.json", readyBody);
+  const identity = (pid, ppid, comm, args) => ({
+    pid,
+    ppid,
+    birth: "Thu Oct 1 00:00:00 2026",
+    comm,
+    args,
+  });
+  const ownerIdentity = identity(101, 100, "node", `/node ${adapter.path}`);
+  const supervisorIdentity = identity(100, 99, "python3", `/python3 ${supervisor.path}`);
+  const serverIdentity = identity(
+    102,
+    101,
+    binary.path,
+    `${binary.path} up --config ${config.path} --only pubsub --ready-file ${ready.path} --owner-stdin`,
+  );
+  const observed = new Map(
+    [ownerIdentity, supervisorIdentity, serverIdentity].map((value) => [
+      value.pid,
+      structuredClone(value),
+    ]),
+  );
+  return {
+    pin: { path: binary.path, sha256: binary.sha256 },
+    input: { metadata: { project: "demo-b", at: clockStart } },
+    context: { environment, worker: { pid: 103, ppid: 101 }, observe: (pid) => observed.get(pid) },
+    observed,
+    put,
+    configBody,
+    readyBody,
+    launch: {
+      mode: "standalone",
+      parentPid: 101,
+      serverPid: 102,
+      config: config.path,
+      configSha256: config.sha256,
+      clockStart,
+      ready: ready.path,
+      readySha256: ready.sha256,
+      adapter,
+      supervisor,
+      nodePath: "/node",
+      pythonPath: "/python3",
+      ownerIdentity,
+      supervisorIdentity,
+      serverIdentity,
+    },
+  };
+}
+
+test("B standalone admission accepts the original source project and clock through shared provenance", async (t) => {
+  const { validateLaunch } = await import("./pubsub-observation-b/replay.mjs");
+  const f = await standaloneBFixture(t);
+  assert.doesNotThrow(() => validateLaunch(f.launch, f.pin, f.input, null, 101, f.context));
+});
+
+test("B standalone admission rejects changed source clock and rehashed process/config/readiness near misses", async (t) => {
+  const { validateLaunch } = await import("./pubsub-observation-b/replay.mjs");
+  for (const change of [
+    (f) => {
+      f.context.worker.ppid = 999;
+    },
+    (f) => {
+      f.observed.get(101).birth += " changed";
+    },
+    (f) => {
+      f.observed.get(102).args += " changed";
+    },
+    (f) => {
+      f.observed.get(100).birth += " changed";
+    },
+    (f) => {
+      f.input.metadata.project = "demo-other";
+    },
+    (f) => {
+      f.input.metadata.at = "2026-10-02T00:00:00Z";
+    },
+    (f) => {
+      f.configBody.daemon.clockStart = "2026-10-02T00:00:00Z";
+      const config = f.put("changed-clock.json", f.configBody);
+      f.launch.config = config.path;
+      f.launch.configSha256 = config.sha256;
+      f.launch.clockStart = f.configBody.daemon.clockStart;
+      const args = `${f.pin.path} up --config ${config.path} --only pubsub --ready-file ${f.launch.ready} --owner-stdin`;
+      f.launch.serverIdentity.args = args;
+      f.observed.get(102).args = args;
+    },
+    (f) => {
+      f.readyBody.pid = 999;
+      const ready = f.put("changed-ready.json", f.readyBody);
+      f.launch.ready = ready.path;
+      f.launch.readySha256 = ready.sha256;
+      const args = `${f.pin.path} up --config ${f.launch.config} --only pubsub --ready-file ${ready.path} --owner-stdin`;
+      f.launch.serverIdentity.args = args;
+      f.observed.get(102).args = args;
+    },
+  ]) {
+    const f = await standaloneBFixture(t);
+    change(f);
+    assert.throws(
+      () => validateLaunch(f.launch, f.pin, f.input, null, 101, f.context),
+      /standalone|source clock/,
+    );
+  }
+});

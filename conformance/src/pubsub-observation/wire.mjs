@@ -58,9 +58,22 @@ function route(method, request, routeName) {
   const name =
     routeName ??
     request.name ??
+    request.topic?.name ??
     request.topic ??
     request.subscription?.name ??
     request.subscription;
+  if (method === "ListTopics") {
+    if (
+      request.project !== `projects/${PROJECT}` ||
+      request.pageSize !== 100 ||
+      Object.keys(request).some((k) => !["project", "pageSize"].includes(k))
+    )
+      throw new Error("unlisted project LIST scope");
+    return {
+      url: `https://pubsub.googleapis.com/v1/${request.project}/topics?pageSize=100`,
+      verb: "GET",
+    };
+  }
   if (typeof name !== "string" || !/^projects\/[^/]+\/(topics|subscriptions)\/[^/]+$/.test(name))
     throw new Error("invalid REST resource route");
   const url = `https://pubsub.googleapis.com/v1/${name}`;
@@ -69,6 +82,12 @@ function route(method, request, routeName) {
   if (method.startsWith("Delete")) return { url, verb: "DELETE" };
   if (method === "Publish")
     return { url: `${url}:publish`, verb: "POST", body: { messages: request.messages } };
+  if (method === "UpdateTopic")
+    return {
+      url: `https://pubsub.googleapis.com/v1/${request.topic.name}`,
+      verb: "PATCH",
+      body: request,
+    };
   if (method === "UpdateSubscription")
     return {
       url: `https://pubsub.googleapis.com/v1/${request.subscription.name}`,
@@ -170,13 +189,52 @@ export function createWire({
       activeStream?.cancel("source-signal");
     },
     async call(call) {
-      const { category, transport, service, method, request, routeName, cellId } = call;
+      const { category, transport, service, method, request, routeName, cellId, ownedListNames } =
+        call;
       const maintenance =
         category.startsWith("cleanup") || ["resourceRead", "unknownDeleteRead"].includes(category);
       if (sourceStopped && !maintenance) throw new Error("source stopped");
+      if (
+        method === "ListTopics" &&
+        (request.project !== `projects/${PROJECT}` ||
+          request.pageSize !== 100 ||
+          Object.keys(request).some((k) => !["project", "pageSize"].includes(k)) ||
+          !Array.isArray(ownedListNames) ||
+          ownedListNames.length !== 2 ||
+          new Set(ownedListNames).size !== 2 ||
+          ownedListNames.some(
+            (n) =>
+              typeof n !== "string" ||
+              !new RegExp(
+                `^projects/${PROJECT}/topics/fe[a-f0-9]{12}-${cellId.toLowerCase()}-topic(?:-second)?$`,
+              ).test(n),
+          ))
+      )
+        throw new Error("unlisted project LIST scope");
       meter.start(category, transport);
       if (meter.remaining(maintenance) < minimumCallMs(method))
         throw new Error("recorded latency margin unavailable");
+      let routing;
+      if (transport === "grpc" && routeName) {
+        const bodyName = request.name;
+        const own = (n) =>
+          typeof n === "string" &&
+          new RegExp(`^projects/${PROJECT}/(topics|subscriptions)/fe[a-f0-9]{12}-[a-z0-9-]+$`).test(
+            n,
+          );
+        if (
+          !["CreateTopic", "CreateSubscription"].includes(method) ||
+          routeName === bodyName ||
+          !own(routeName) ||
+          !own(bodyName) ||
+          routeName.match(/\/fe([a-f0-9]{12})-/)?.[1] !==
+            bodyName.match(/\/fe([a-f0-9]{12})-/)?.[1] ||
+          routeName.split("/")[2] !== bodyName.split("/")[2] ||
+          bodyName.split("/")[2] !== (method === "CreateTopic" ? "topics" : "subscriptions")
+        )
+          throw new Error("foreign native routing candidate refused");
+        routing = `name=${encodeURIComponent(routeName)}`;
+      }
       let raw, address;
       if (transport === "rest") {
         address = route(method, request, routeName);
@@ -189,7 +247,11 @@ export function createWire({
       const token = await credential(maintenance);
       if (meter.remaining(maintenance) < minimumCallMs(method))
         throw new Error("recorded latency margin unavailable after credentials");
-      const metadataBytesOut = Buffer.byteLength(token) + 256 + FRAMING_RESERVE;
+      const metadataBytesOut =
+        Buffer.byteLength(token) +
+        256 +
+        FRAMING_RESERVE +
+        (routing ? Buffer.byteLength("x-goog-request-params") + Buffer.byteLength(routing) + 4 : 0);
       const payloadBytes =
         method === "Publish" ? encodedSizes(request.topic, request.messages).payload : 0;
       if (
@@ -213,6 +275,8 @@ export function createWire({
         method,
         request,
         ...(routeName ? { routeName } : {}),
+        ...(routing ? { requestParams: routing } : {}),
+        ...(ownedListNames ? { ownedListNames } : {}),
         requestBodyBytes: raw.length,
         metadataBytesOut,
         requestSha256: sha256(raw),
@@ -270,6 +334,7 @@ export function createWire({
           const metadata = new grpc.Metadata();
           metadata.add("authorization", `Bearer ${token}`);
           metadata.add("x-goog-user-project", PROJECT);
+          if (routing) metadata.add("x-goog-request-params", routing);
           let metadataBytesIn = FRAMING_RESERVE;
           let candidate = {
             ok: false,

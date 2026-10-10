@@ -72,6 +72,17 @@ export function restoreRequest(row, cell) {
   body.messages = matching[0];
   return body;
 }
+export function projectOwnedTopics(body, names, runId) {
+  if (
+    !Array.isArray(names) ||
+    names.length !== 2 ||
+    new Set(names).size !== 2 ||
+    names.some((n) => !owned(n, runId) || !n.includes("/topics/"))
+  )
+    throw new Error("foreign LIST comparison scope");
+  if (!body || !Array.isArray(body.topics)) throw new Error("LIST response topics required");
+  return { topics: body.topics.filter((t) => names.includes(t?.name)) };
+}
 export async function replayA(
   input,
   environment,
@@ -89,7 +100,7 @@ export async function replayA(
   const source = validateReplaySource(input),
     cells = input.packet.plan.cells;
   const bindings = createBindings(),
-    meter = createMeter(),
+    meter = createMeter({ plan: input.packet.plan }),
     raw = [],
     localFrameBytes = new Map(),
     publications = [],
@@ -285,7 +296,7 @@ export async function replayA(
         const request = restoreRequest(row, cell);
         for (const value of [
           request.name,
-          request.topic,
+          typeof request.topic === "string" ? request.topic : request.topic?.name,
           typeof request.subscription === "string"
             ? request.subscription
             : request.subscription?.name,
@@ -305,8 +316,16 @@ export async function replayA(
           request: rewritten.body,
           ...(rewritten.routeName ? { routeName: rewritten.routeName } : {}),
           cellId: row.cellId,
+          ...(row.ownedListNames ? { ownedListNames: row.ownedListNames } : {}),
         });
         const reply = observationOutcome(observed, row.method, rewritten.body);
+        if (row.method === "ListTopics" && expected.response.ok && reply.ok) {
+          expected.response = {
+            ...expected.response,
+            body: projectOwnedTopics(expected.response.body, row.ownedListNames, source.runId),
+          };
+          reply.body = projectOwnedTopics(reply.body, row.ownedListNames, source.runId);
+        }
         if (
           row.method === "Publish" &&
           expected.response.ok &&

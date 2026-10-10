@@ -37,13 +37,26 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
     reason = null,
     budgetOverrun = false,
     stream;
-  const send = async (category, method, request, { routeName, candidates } = {}) => {
+  const send = async (
+    category,
+    method,
+    request,
+    { routeName, candidates, ownedListNames } = {},
+  ) => {
     const maintenance = category.startsWith("cleanup");
     meter.remaining(maintenance);
     const name =
-      request.name ?? request.topic ?? request.subscription?.name ?? request.subscription;
+      request.name ??
+      request.topic?.name ??
+      request.topic ??
+      request.subscription?.name ??
+      request.subscription;
     if (
-      !owned(name, runId) ||
+      (method === "ListTopics"
+        ? request.project !== `projects/${PROJECT}` ||
+          request.pageSize !== 100 ||
+          Object.keys(request).some((k) => !["project", "pageSize"].includes(k))
+        : !owned(name, runId)) ||
       (routeName && !owned(routeName, runId)) ||
       (method === "CreateSubscription" && !owned(request.topic, runId))
     )
@@ -53,7 +66,7 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
       : method.startsWith("Delete")
         ? "delete"
         : null;
-    const names = candidates ?? [name];
+    const names = candidates ?? (method === "ListTopics" ? [] : [name]);
     if (names.some((candidate) => !owned(candidate, runId)))
       throw new Error("foreign candidate refused");
     if (action === "delete" && ledger.deleting(name))
@@ -87,6 +100,7 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
         request,
         cellId: cell.id,
         ...(routeName ? { routeName } : {}),
+        ...(ownedListNames ? { ownedListNames } : {}),
       });
     } catch (error) {
       for (const intent of intents) ledger.answered({ ...intent, kind: "unknown" });
@@ -121,8 +135,8 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
     }
     return reply;
   };
-  const setup = async (twoTopics = false) => {
-    const a = await send("create", "CreateTopic", { name: topic });
+  const setup = async (twoTopics = false, topicFields = {}, subscriptionFields = {}) => {
+    const a = await send("create", "CreateTopic", { name: topic, ...topicFields });
     if (!a.ok) throw new Error("topic setup refused");
     const second = twoTopics ? `${topic}-second` : subscription;
     const b = await send(
@@ -130,7 +144,13 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
       twoTopics ? "CreateTopic" : "CreateSubscription",
       twoTopics
         ? { name: second }
-        : { name: subscription, topic, ackDeadlineSeconds: 10, labels: { env: "test", ttl: "7" } },
+        : {
+            name: subscription,
+            topic,
+            ackDeadlineSeconds: 10,
+            labels: { env: "test", ttl: "7" },
+            ...subscriptionFields,
+          },
     );
     if (!b.ok) throw new Error("second setup refused");
     for (const name of [topic, second])
@@ -159,7 +179,7 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
           event: "path-body-candidates",
           cellId: cell.id,
           candidates: [routeName, bodyName],
-          actualNativeAnalogue: false,
+          actualNativeAnalogue: cell.transport === "grpc",
         });
         await send(
           "target",
@@ -169,6 +189,129 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
         );
         for (const name of [routeName, bodyName])
           await send("target", resourceMethod(name, "Get"), { name });
+        complete = true;
+      } else if (cell.variant === "topic-labels-empty") {
+        await setup(true, { labels: { env: "test", ttl: "7" } });
+        const list = async () => {
+          const names = [topic, `${topic}-second`];
+          const reply = await send(
+            "target",
+            "ListTopics",
+            { project: `projects/${PROJECT}`, pageSize: 100 },
+            { ownedListNames: names },
+          );
+          if (
+            !reply.ok ||
+            !Array.isArray(reply.body?.topics) ||
+            names.some((n) => reply.body.topics.filter((t) => t?.name === n).length !== 1)
+          )
+            throw new Error("bounded LIST owned membership incomplete");
+          journal.write({
+            event: "owned-topic-list",
+            cellId: cell.id,
+            names,
+            topics: reply.body.topics.filter((t) => names.includes(t.name)),
+            unfollowedCursor: reply.body.nextPageToken ?? null,
+          });
+        };
+        await list();
+        await send("target", "UpdateTopic", {
+          topic: { name: topic, labels: {} },
+          updateMask: "labels",
+        });
+        await send("target", "GetTopic", { name: topic });
+        await list();
+        complete = true;
+      } else if (cell.variant === "retention-ordering") {
+        await setup(false, {}, { enableMessageOrdering: false });
+        for (const duration of ["600s", "599s"]) {
+          await send("target", "UpdateSubscription", {
+            subscription: { name: subscription, messageRetentionDuration: duration },
+            updateMask: "messageRetentionDuration",
+          });
+          await send("target", "GetSubscription", { name: subscription });
+        }
+        complete = true;
+      } else if (cell.variant === "publish-wire-eight") {
+        await setup(false, {}, { enableMessageOrdering: true });
+        const data = (s) => Buffer.from(s).toString("base64");
+        const messages = [
+          { data: data("one") },
+          { data: data("two"), attributes: { color: "red", n: "1" } },
+          { attributes: { only: "attributes" } },
+          { data: "", attributes: { k: "empty data" } },
+          { data: data("keyed"), orderingKey: "k1" },
+          { data: Buffer.from([0, 255, 128]).toString("base64") },
+          { data: data("ünïcödé ✓") },
+          { data: data("x"), attributes: {} },
+        ];
+        const publication = await send("publish", "Publish", { topic, messages });
+        const ids = publication.body?.messageIds;
+        if (
+          !publication.ok ||
+          !Array.isArray(ids) ||
+          ids.length !== 8 ||
+          new Set(ids).size !== 8 ||
+          ids.some((id) => typeof id !== "string" || !id)
+        )
+          throw new Error("publication batch is not bijective");
+        const expected = new Map(ids.map((id, index) => [id, { message: messages[index], index }])),
+          received = new Set();
+        for (const [messageId, { message, index }] of expected)
+          journal.write({
+            event: "publication-binding",
+            cellId: cell.id,
+            messageId,
+            ...message,
+            batchIndex: index,
+            batchCount: 8,
+          });
+        for (let attempt = 0; attempt < 2 && received.size < 8; attempt++) {
+          const reply = await send("target", "Pull", {
+            subscription,
+            maxMessages: 16,
+            returnImmediately: true,
+          });
+          if (!reply.ok) throw new Error("publication Pull refused");
+          const tokens = [];
+          for (const item of reply.body?.receivedMessages ?? []) {
+            const id = item.message?.messageId,
+              binding = expected.get(id);
+            if (!binding) continue;
+            const m = item.message,
+              e = binding.message;
+            const attrs = (x) =>
+              JSON.stringify(Object.entries(x ?? {}).toSorted(([a], [b]) => a.localeCompare(b)));
+            if (
+              received.has(id) ||
+              tokens.includes(item.ackId) ||
+              typeof item.ackId !== "string" ||
+              !item.ackId ||
+              Buffer.from(m.data ?? "", "base64").compare(Buffer.from(e.data ?? "", "base64")) !==
+                0 ||
+              attrs(m.attributes) !== attrs(e.attributes) ||
+              (m.orderingKey ?? "") !== (e.orderingKey ?? "")
+            )
+              throw new Error("publication delivery correlation mismatch");
+            received.add(id);
+            tokens.push(item.ackId);
+            journal.write({
+              event: "publication-delivery-binding",
+              cellId: cell.id,
+              messageId: id,
+              ackId: item.ackId,
+              batchIndex: binding.index,
+              batchCount: 8,
+              attempt,
+            });
+          }
+          if (
+            tokens.length &&
+            !(await send("target", "Acknowledge", { subscription, ackIds: tokens })).ok
+          )
+            throw new Error("publication ACK refused");
+        }
+        if (received.size !== 8) throw new Error("publication delivery incomplete");
         complete = true;
       } else if (cell.group === "G1") {
         const boundary = cell.variant.startsWith("request-") || cell.variant.startsWith("message-");

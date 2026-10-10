@@ -25,21 +25,32 @@ export function createSdk111ParentBound({
   journal = NULL_JOURNAL,
 } = {}) {
   let phase = "work";
-  let deadline = now() + 22 * 60_000;
+  const startedAtMs = now();
+  let phaseStartedAtMs = startedAtMs;
+  let deadline = phaseStartedAtMs + 22 * 60_000;
   let controller = new AbortController();
   const workSignal = controller.signal;
   let workSent = 0;
   let cleanupSent = 0;
   let refused = 0;
   let timer;
-  const snapshot = () => ({
-    phase,
-    workSent,
-    cleanupSent,
-    sent: workSent + cleanupSent,
-    refused,
-    hardWholeParentBound: false,
-  });
+  const snapshot = () => {
+    const observedAtMs = now();
+    return {
+      phase,
+      workSent,
+      cleanupSent,
+      sent: workSent + cleanupSent,
+      refused,
+      startedAtMs,
+      phaseStartedAtMs,
+      phaseDeadlineAtMs: deadline,
+      observedAtMs,
+      phaseElapsedMs: observedAtMs - phaseStartedAtMs,
+      elapsedMs: observedAtMs - startedAtMs,
+      hardWholeParentBound: false,
+    };
+  };
   const note = (reason) =>
     journal.append({ type: "sdk111-parent-bound", ...snapshot(), ...(reason ? { reason } : {}) });
   const expire = () => {
@@ -54,6 +65,13 @@ export function createSdk111ParentBound({
   return {
     workSignal,
     snapshot,
+    checkWork() {
+      if (now() >= deadline && !controller.signal.aborted) expire();
+      if (phase !== "work" || controller.signal.aborted) {
+        note("work launch refused");
+        throw controller.signal.reason ?? new Error("parent work phase closed");
+      }
+    },
     admit() {
       if (now() >= deadline && !controller.signal.aborted) expire();
       const count = phase === "work" ? workSent : cleanupSent;
@@ -80,10 +98,12 @@ export function createSdk111ParentBound({
     beginCleanup() {
       if (phase === "cleanup") return;
       clearTimeout(timer);
+      note("work phase drained");
       controller.abort(new Error("parent work phase closed"));
       phase = "cleanup";
       controller = new AbortController();
-      deadline = now() + 7 * 60_000;
+      phaseStartedAtMs = now();
+      deadline = phaseStartedAtMs + 7 * 60_000;
       note();
       arm();
     },
@@ -281,6 +301,23 @@ export function runDriver({
   ownedLifecycle = false,
   identityOfImpl = childIdentity,
 }) {
+  if (ownedLifecycle && signal?.aborted) {
+    const reason = String(signal.reason?.message ?? signal.reason ?? "parent work canceled");
+    return Promise.reject(
+      Object.assign(new Error(reason), {
+        wire: 0,
+        connections: 0,
+        sdkRefusedAttempts: 0,
+        childExit: {
+          closed: true,
+          stopped: true,
+          ownershipVerified: true,
+          reason,
+          notSpawned: true,
+        },
+      }),
+    );
+  }
   return new Promise((resolve, reject) => {
     const child = spawnImpl(process.execPath, [script], {
       env: { ...process.env, AFC_SDK_CONFIG: JSON.stringify(config) },
@@ -329,6 +366,9 @@ export function runDriver({
             wire,
             connections,
             diagnostics,
+            receipt,
+            refused,
+            sdkRefusedAttempts: refused ? 1 : 0,
             childExit: childExit(),
           }),
         );
@@ -559,6 +599,9 @@ async function recordSdkWithParentBound(
   let outcome;
   let childExit;
   let sdkRefusedAttempts = 0;
+  let retainedReceipt;
+  let sdkRefusal;
+  let sdkConnections = 0;
   let confListenBefore;
   let journaledNames;
   const root = `projects/${target.project}/databases/(default)/documents`;
@@ -594,6 +637,7 @@ async function recordSdkWithParentBound(
         : { apiKey: "fake-api-key", projectId: target.project, authDomain: "localhost" },
       ...(production ? {} : { authEmulator: target.auth, firestoreEmulator: target.firestore }),
     };
+    parentBound?.checkWork();
     outcome = await runDriverImpl({
       ...(parentBound ? { signal: parentBound.workSignal, ownedLifecycle: true } : {}),
       config,
@@ -606,19 +650,26 @@ async function recordSdkWithParentBound(
     wire = outcome.wire ?? 0;
     childExit = outcome.childExit;
     sdkRefusedAttempts = outcome.refused ? 1 : 0;
+    sdkRefusal = outcome.refused;
+    sdkConnections = outcome.connections ?? 0;
     if (childExit?.stopped) errors["sdk/run"] = childExit.reason;
   } catch (error) {
     errors["sdk/run"] = String(error?.message ?? error);
     wire = error?.wire ?? 0;
     childExit = error?.childExit;
     sdkRefusedAttempts = error?.sdkRefusedAttempts ?? 0;
+    if (parentBound) {
+      retainedReceipt = error?.receipt;
+      sdkRefusal = error?.refused;
+      sdkConnections = error?.connections ?? 0;
+    }
   }
   // A write that threw has an unknown outcome, which a read that finds nothing cannot settle; so
   // has any write of a driver that left no receipt, threw, or lost a case record. The names the
   // cases may have written are closed with `known` when no write is of unknown outcome and with
   // `unknown` otherwise; a journal that ends without either leaves them unconfirmed at A2.
   if (childExit?.closed !== false) parentBound?.beginCleanup();
-  const receipt = outcome?.receipt;
+  const receipt = outcome?.receipt ?? retainedReceipt;
   const writesKnown = writesAreKnown(receipt, selectedCaseIds) && !childExit?.stopped;
   if (journaledNames)
     journal.append({
@@ -667,7 +718,12 @@ async function recordSdkWithParentBound(
     type: "end",
     productionRequests: total,
     ...(parentBound
-      ? { parentBound: parentBound.snapshot(), childExit: childExit ?? null, sdkRefusedAttempts }
+      ? {
+          parentBound: parentBound.snapshot(),
+          childExit: childExit ?? null,
+          sdkRefusedAttempts,
+          sdkRefusal: sdkRefusal ?? null,
+        }
       : {}),
   });
   return {
@@ -679,13 +735,18 @@ async function recordSdkWithParentBound(
     node: process.version,
     sdk: "firebase 12.18.0",
     ...(caseSelection === undefined ? {} : { caseSelection, selectedCaseIds }),
-    requests: outcome ? outcome.wire : 0,
+    requests: parentBound ? wire : outcome ? outcome.wire : 0,
     productionRequests: total,
     ...(parentBound
-      ? { parentBound: parentBound.snapshot(), childExit: childExit ?? null, sdkRefusedAttempts }
+      ? {
+          parentBound: parentBound.snapshot(),
+          childExit: childExit ?? null,
+          sdkRefusedAttempts,
+          sdkRefusal: sdkRefusal ?? null,
+        }
       : {}),
     issued: issuedSdkNames({ project: target.project, run, accounts }),
-    connections: outcome ? outcome.connections : 0,
+    connections: parentBound ? sdkConnections : outcome ? outcome.connections : 0,
     errors,
     cleanup: {
       complete:

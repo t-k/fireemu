@@ -1999,3 +1999,180 @@ test("selected child launch failure is retained until its close without a fabric
     (error) => /EAGAIN/.test(error.message) && error.childExit.closed && error.wire === 0,
   );
 });
+
+test("selected pre-aborted driver refuses before spawn and preserves the cancellation reason", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("parent work deadline before launch"));
+  let spawned = 0;
+  await assert.rejects(
+    runDriver({
+      config: {},
+      input: {},
+      ownedLifecycle: true,
+      signal: controller.signal,
+      spawnImpl: () => {
+        spawned++;
+        return fakeChild();
+      },
+      identityOfImpl: async () => null,
+    }),
+    (error) => /parent work deadline before launch/.test(error.message),
+  );
+  assert.equal(spawned, 0);
+});
+
+test("ownership refusal carries captured callback receipt and refusal into an incomplete recorder report", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => ({
+    status: 200,
+    json: async () => (url.endsWith("/accounts") ? { localId: "u1" } : {}),
+  });
+  let cleanupCalls = 0;
+  let closed = false;
+  const rawEvents = [{ docs: ["alpha"], fromCache: false, hasPendingWrites: false, changes: [] }];
+  const receipt = {
+    cleanup: { complete: true },
+    teardown: [],
+    cases: [
+      {
+        caseId: "FS-LISTEN-SDK-111",
+        failures: [],
+        observed: [{ docs: ["alpha"] }],
+        rawEvents,
+        rawEventCount: 1,
+        baselineAt: 0,
+      },
+    ],
+  };
+  try {
+    const result = await recordSdk({
+      caseSelection: "sdk111",
+      run: "r1",
+      target: { kind: "local", project: "p", auth: "http://localhost:9099", firestore: {} },
+      makeNative: () => ({
+        close() {
+          closed = true;
+        },
+        missing: async () => {
+          cleanupCalls++;
+          return [];
+        },
+        listIds: async () => {
+          cleanupCalls++;
+          return [];
+        },
+      }),
+      runDriverImpl: async () => {
+        const child = fakeChild();
+        child.pid = 123;
+        let reads = 0;
+        const controller = new AbortController();
+        const pending = runDriver({
+          config: {},
+          input: {},
+          script: "/synthetic/sdk-driver.mjs",
+          spawnImpl: () => child,
+          ownedLifecycle: true,
+          signal: controller.signal,
+          identityOfImpl: async () =>
+            ++reads === 1 ? "123 birth node /synthetic/sdk-driver.mjs" : null,
+        });
+        child.say({ event: "wire" });
+        child.say({ event: "connection" });
+        child.say({ event: "receipt", receipt });
+        child.say({ event: "wire-refused", reason: "request cap 200 reached" });
+        controller.abort();
+        try {
+          return await pending;
+        } finally {
+          assert.deepEqual(child.killed, []);
+        }
+      },
+    });
+    assert.deepEqual(result.rows["sdk/111"].rawEvents, rawEvents);
+    assert.equal(result.requests, 1);
+    assert.equal(result.connections, 1);
+    assert.equal(result.sdkRefusedAttempts, 1);
+    assert.equal(result.sdkRefusal.reason, "request cap 200 reached");
+    assert.equal(result.cleanup.writesKnown, false);
+    assert.equal(result.cleanup.complete, false);
+    assert.equal(result.childExit.closed, false);
+    assert.equal(cleanupCalls, 0);
+    assert.equal(closed, true);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("SDK111 phase snapshots persist one monotonic clock and each phase deadline", () => {
+  let clock = 100;
+  const rows = [];
+  const bound = createSdk111ParentBound({
+    now: () => clock,
+    journal: { append: (row) => rows.push(row) },
+  });
+  try {
+    clock = 150;
+    bound.admit();
+    assert.equal(rows.at(-1).phaseStartedAtMs, 100);
+    assert.equal(rows.at(-1).phaseDeadlineAtMs, 100 + 22 * 60_000);
+    assert.equal(rows.at(-1).observedAtMs, 150);
+    assert.equal(rows.at(-1).phaseElapsedMs, 50);
+    clock = 200;
+    bound.beginCleanup();
+    clock = 250;
+    bound.admit();
+    assert.equal(rows.at(-1).phaseStartedAtMs, 200);
+    assert.equal(rows.at(-1).phaseDeadlineAtMs, 200 + 7 * 60_000);
+    assert.equal(rows.at(-1).observedAtMs, 250);
+    assert.equal(rows.at(-1).phaseElapsedMs, 50);
+    assert.equal(rows.at(-1).elapsedMs, 150);
+    assert.equal(bound.snapshot().startedAtMs, 100);
+  } finally {
+    bound.close();
+  }
+});
+
+test("SDK111 checks monotonic phase expiry at launch without charging an API send", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => ({
+    status: 200,
+    json: async () => (url.endsWith("/accounts") ? { localId: "u1" } : {}),
+  });
+  let clock = 0;
+  let launched = 0;
+  const rows = [];
+  try {
+    const result = await recordSdk({
+      caseSelection: "sdk111",
+      run: "r1",
+      target: { kind: "local", project: "p", auth: "http://localhost:9099", firestore: {} },
+      parentNow: () => clock,
+      journal: {
+        append: (row) => {
+          rows.push(row);
+          if (row.type === "names" && row.phase === "before") clock = 22 * 60_000;
+        },
+      },
+      makeNative: () => ({
+        close() {},
+        missing: async (names) => names.map((name) => ({ name, exists: false })),
+        listIds: async () => [],
+      }),
+      runDriverImpl: async () => {
+        launched++;
+        throw new Error("must not launch");
+      },
+    });
+    assert.equal(launched, 0);
+    assert.match(result.errors["sdk/run"], /parent work deadline/);
+    assert.equal(result.cleanup.complete, false);
+    assert.equal(result.parentBound.workSent, 2);
+    assert.equal(result.parentBound.cleanupSent, 4);
+    const refusal = rows.find((row) => row.reason === "work launch refused");
+    assert.equal(refusal.workSent, 2);
+    assert.equal(refusal.phaseElapsedMs, 22 * 60_000);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

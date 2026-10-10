@@ -2045,3 +2045,253 @@ for (const cellId of ["S03", "S01"])
       assert.equal(report.parentClosureReady, false);
     }
   });
+
+test("S07 replay carries exact ordinary Pull and clock identities without inventing ACK use", async () => {
+  const { replayA } = await import("./pubsub-observation/replay.mjs");
+  const input = fixture(),
+    proof = generatedTimeProof();
+  const topic = "projects/fireemu-oracle-idp/topics/fe012345abcdef-s07-topic";
+  const subscription = "projects/fireemu-oracle-idp/subscriptions/fe012345abcdef-s07-sub";
+  const sourceId = "1234567890123456",
+    localId = "9876543210987654";
+  const sourceReceive = message(sourceId, "stream-source-ack"),
+    localReceive = message(localId, "stream-local-ack!");
+  sourceReceive.receivedMessages[0].message.publishTime = {
+    seconds: "1791508662",
+    nanos: 21000000,
+  };
+  localReceive.receivedMessages[0].message.publishTime = {
+    seconds: "1791508661",
+    nanos: 899000000,
+  };
+  const success = (body) => ({
+    ok: true,
+    unknown: false,
+    status: 200,
+    code: "OK",
+    bodyBytes: 429,
+    bodySha256: createHash("sha256").update(JSON.stringify(body)).digest("hex"),
+    body,
+  });
+  const rows = [input.rows[0]],
+    bytesByN = new Map();
+  const dispatch = (method, request, body, at) => {
+    const requestId = rows.length;
+    rows.push({
+      event: "request-dispatch",
+      cellId: "S07",
+      requestId,
+      method,
+      transport: "rest",
+      category:
+        method === "Publish" ? "publish" : method.startsWith("Create") ? "create" : "target",
+      request,
+      at,
+    });
+    rows.push({
+      event: "response",
+      cellId: "S07",
+      requestId,
+      method,
+      transport: "rest",
+      durationMs: 0,
+      reply: success(body),
+      at,
+    });
+  };
+  const publicationAt = "2026-10-09T01:17:41.899Z";
+  dispatch("CreateTopic", { name: topic }, { name: topic }, publicationAt);
+  dispatch(
+    "CreateSubscription",
+    { name: subscription, topic },
+    { name: subscription, topic },
+    publicationAt,
+  );
+  dispatch(
+    "Publish",
+    { topic, messages: [{ data: "bWFya2Vy" }] },
+    { messageIds: [sourceId] },
+    publicationAt,
+  );
+  const encode = (body, direction) => {
+    const Type =
+      protos.google.pubsub.v1[
+        direction === "out" ? "StreamingPullRequest" : "StreamingPullResponse"
+      ];
+    return Buffer.from(Type.encode(Type.fromObject(body)).finish());
+  };
+  for (const [direction, body, elapsedMs] of [
+    ["out", { subscription, streamAckDeadlineSeconds: 10 }, 0],
+    ["in", sourceReceive, 1],
+  ]) {
+    const bytes = encode(body, direction);
+    rows.push({
+      event: "stream-frame",
+      cellId: "S07",
+      direction,
+      body,
+      elapsedMs,
+      at: publicationAt,
+      blob: { bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") },
+    });
+  }
+  rows.push({
+    event: "stream-cancel",
+    cellId: "S07",
+    reason: "unacked-owned-delivery",
+    elapsedMs: 2000,
+    at: "2026-10-09T01:17:43.899Z",
+  });
+  rows.push({
+    event: "stream-status",
+    cellId: "S07",
+    code: 1,
+    details: "Cancelled on client",
+    elapsedMs: 2001,
+    at: "2026-10-09T01:17:43.900Z",
+  });
+  const sourcePull = {
+    receivedMessages: [
+      {
+        ackId: "fresh-source-ack",
+        message: { data: "bWFya2Vy", messageId: sourceId, publishTime: "2026-10-09T01:17:42.021Z" },
+      },
+    ],
+  };
+  const localPull = {
+    receivedMessages: [
+      {
+        ackId: "fresh-local-ack!",
+        message: { data: "bWFya2Vy", messageId: localId, publishTime: publicationAt },
+      },
+    ],
+  };
+  dispatch(
+    "Pull",
+    { subscription, maxMessages: 1, returnImmediately: true },
+    sourcePull,
+    "2026-10-09T01:17:55.000Z",
+  );
+  rows.push({
+    event: "stream-case-observation",
+    cellId: "S07",
+    state: { incomplete: false, terminal: { code: 1 }, inboundEnded: true },
+    elapsedMs: 13101,
+    at: "2026-10-09T01:17:55.001Z",
+  });
+  rows.push({
+    event: "case-result",
+    cellId: "S07",
+    complete: true,
+    cleanupClosed: true,
+    budgetOverrun: false,
+    at: "2026-10-09T01:17:55.002Z",
+  });
+  input.rows = rows.map((row, i) => ({ ...row, n: i + 1, at: row.at ?? publicationAt }));
+  input.verifiedFrames = new Set(
+    input.rows.filter((r) => r.event === "stream-frame").map((r) => r.n),
+  );
+  for (const r of input.rows.filter((r) => r.event === "stream-frame"))
+    bytesByN.set(r.n, encode(r.body, r.direction));
+  input.summary.results = [
+    { cellId: "S07", complete: true, cleanupClosed: true, budgetOverrun: false },
+  ];
+  const source = validateReplaySource(input);
+  proof.source = {
+    runId: source.runId,
+    packetSha256: source.packetSha256,
+    descriptorSha256: source.descriptorSha256,
+  };
+  let now = 0;
+  const report = await replayA(
+    input,
+    {
+      PUBSUB_EMULATOR_HOST: "127.0.0.1:1234",
+      FIREEMU_CONTROL_URL: "http://127.0.0.1:4321/v1/",
+      FIREEMU_CONTROL_TOKEN: "synthetic",
+    },
+    {
+      profile: "release",
+      rustcWrapper: "",
+      command: ["cargo", "build", "--release"],
+      path: "/fixture/release/fireemu",
+      sha256: "a".repeat(64),
+      head: "a".repeat(40),
+      tree: "b".repeat(40),
+    },
+    {
+      now: () => now,
+      wait: async (ms) => {
+        now += ms;
+      },
+      publishTimeDisposition: {
+        authority: proof.authority,
+        source: proof.source,
+        publishTime: proof,
+        sourceFrameBytes: bytesByN,
+      },
+      advance: async ({ instant }) => {
+        const body = { clock: instant, backwardsSets: 0 };
+        return { status: 200, body, bytes: Buffer.from(JSON.stringify(body)) };
+      },
+      wireFactory: ({ journal }) => ({
+        close() {},
+        call: async ({ method, request }) => {
+          journal.write({ event: "request-dispatch", cellId: "S07", method, request });
+          const reply = success(
+            method === "Publish"
+              ? { messageIds: [localId] }
+              : method === "Pull"
+                ? localPull
+                : method === "CreateTopic"
+                  ? { name: topic }
+                  : { name: subscription, topic },
+          );
+          journal.write({ event: "response", cellId: "S07", method, reply });
+          return reply;
+        },
+        open: async ({ opener }) => {
+          const frame = (body, direction) =>
+            journal.frame(encode(body, direction), {
+              event: "stream-frame",
+              cellId: "S07",
+              direction,
+              body,
+              elapsedMs: now,
+            });
+          frame(opener, "out");
+          return {
+            next: async () => {
+              frame(localReceive, "in");
+              return localReceive;
+            },
+            cancel: (reason) => {
+              journal.write({ event: "stream-cancel", cellId: "S07", reason, elapsedMs: now });
+              journal.write({
+                event: "stream-status",
+                cellId: "S07",
+                code: 1,
+                details: "Cancelled on client",
+                elapsedMs: now,
+              });
+            },
+            state: () => ({ incomplete: false, terminal: { code: 1 }, inboundEnded: true }),
+            dispose() {},
+          };
+        },
+      }),
+    },
+  );
+  const witness = report.nativeWitnesses.S07.ordinaryPulls;
+  assert.ok(Array.isArray(witness), "ordinary Pull witness must be recorded");
+  assert.equal(witness.length, 1);
+  const expected = input.rows.find((r) => r.method === "Pull" && r.event === "request-dispatch");
+  assert.equal(witness[0].sourceDispatchN, expected.n);
+  assert.equal(witness[0].sourceResponseN, expected.n + 1);
+  assert.equal(witness[0].tokenUse, "notObserved");
+  assert.equal(witness[0].clock.instant, expected.at);
+  assert.equal(
+    report.cells.find((c) => c.id === "S07").rows.find((r) => r.method === "Pull").verdict,
+    "MATCH",
+  );
+});

@@ -4886,7 +4886,7 @@ async fn actual_rest_iam_requires_both_grants_before_native_dead_letter_transfer
     assert_eq!(attributes["CloudPubSubDeadLetterSourceDeliveryCount"], "7");
     assert_eq!(
         attributes["CloudPubSubDeadLetterSourceTopicPublishTime"],
-        "2023-11-14T22:13:20Z"
+        "2023-11-14T22:13:20+00:00"
     );
     for (resource, after) in baselines {
         let (status, restored) = rest_request(

@@ -3,7 +3,7 @@
 // and remove the two accounts and to sweep documents by the run's prefix with a read-back; the SDK
 // process never sees it. Whether a row is right is decided offline (compare.mjs).
 
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,81 @@ const DRIVER = fileURLToPath(new URL("./sdk-driver.mjs", import.meta.url));
 const WIRE_CAP = 1500;
 const CONNECTION_CAP = 200;
 const DRIVER_TIMEOUT_MS = 20 * 60_000;
+
+/** The selected recorder's shared admission budget; it never claims a hard process bound. */
+export function createSdk111ParentBound({
+  now = () => performance.now(),
+  journal = NULL_JOURNAL,
+} = {}) {
+  let phase = "work";
+  let deadline = now() + 22 * 60_000;
+  let controller = new AbortController();
+  const workSignal = controller.signal;
+  let workSent = 0;
+  let cleanupSent = 0;
+  let refused = 0;
+  let timer;
+  const snapshot = () => ({
+    phase,
+    workSent,
+    cleanupSent,
+    sent: workSent + cleanupSent,
+    refused,
+    hardWholeParentBound: false,
+  });
+  const note = (reason) =>
+    journal.append({ type: "sdk111-parent-bound", ...snapshot(), ...(reason ? { reason } : {}) });
+  const expire = () => {
+    if (!controller.signal.aborted) controller.abort(new Error(`parent ${phase} deadline`));
+    note("deadline");
+  };
+  const arm = () => {
+    timer = setTimeout(expire, Math.max(1, deadline - now()));
+    timer.unref?.();
+  };
+  arm();
+  return {
+    workSignal,
+    snapshot,
+    admit() {
+      if (now() >= deadline && !controller.signal.aborted) expire();
+      const count = phase === "work" ? workSent : cleanupSent;
+      if (
+        controller.signal.aborted ||
+        count >= (phase === "work" ? 40 : 20) ||
+        workSent + cleanupSent >= 60
+      ) {
+        refused += 1;
+        const error = controller.signal.aborted
+          ? controller.signal.reason
+          : new Error(`parent ${phase} request cap`);
+        note(error.message);
+        throw error;
+      }
+      if (phase === "work") workSent += 1;
+      else cleanupSent += 1;
+      note();
+      return {
+        signal: controller.signal,
+        timeoutMs: Math.max(1, Math.min(30_000, deadline - now())),
+      };
+    },
+    beginCleanup() {
+      if (phase === "cleanup") return;
+      clearTimeout(timer);
+      controller.abort(new Error("parent work phase closed"));
+      phase = "cleanup";
+      controller = new AbortController();
+      deadline = now() + 7 * 60_000;
+      note();
+      arm();
+    },
+    close() {
+      clearTimeout(timer);
+      controller.abort(new Error("parent recorder closed"));
+    },
+  };
+}
 
 /** The closure conditions each SDK case serves. */
 export function conditionsOf(caseId) {
@@ -72,21 +147,41 @@ export async function preflightKey({
   origin,
 }) {
   const read = async (url, headers, what) => {
-    onRequest();
+    const control = onRequest() ?? {};
+    const wait = async (promise) => {
+      if (!control.signal) return promise;
+      control.signal.throwIfAborted();
+      let abort;
+      try {
+        return await Promise.race([
+          promise,
+          new Promise((_, reject) => {
+            abort = () => reject(control.signal.reason);
+            control.signal.addEventListener("abort", abort, { once: true });
+          }),
+        ]);
+      } finally {
+        control.signal.removeEventListener("abort", abort);
+      }
+    };
     let response;
     try {
-      response = await fetchImpl(url, {
-        method: "GET",
-        headers,
-        redirect: "manual",
-        signal: AbortSignal.timeout(30_000),
-      });
+      response = await wait(
+        fetchImpl(url, {
+          method: "GET",
+          headers,
+          redirect: "manual",
+          signal: control.signal
+            ? AbortSignal.any([control.signal, AbortSignal.timeout(control.timeoutMs ?? 30_000)])
+            : AbortSignal.timeout(30_000),
+        }),
+      );
     } catch {
       throw new Error(`${what} failed (transport)`);
     }
     if (response.status !== 200) throw new Error(`${what} failed (status ${response.status})`);
     try {
-      return await response.json();
+      return await wait(response.json());
     } catch {
       throw new Error(`${what} answer was unreadable`);
     }
@@ -163,6 +258,18 @@ export function rowsFromReceipt(receipt) {
   return rows;
 }
 
+/** Reads only the direct child's PID, birth, executable and arguments for owned termination. */
+const childIdentity = (pid) =>
+  new Promise((resolve) => {
+    if (!Number.isSafeInteger(pid) || pid <= 0) return resolve(null);
+    execFile(
+      "ps",
+      ["-ww", "-p", String(pid), "-o", "pid=,lstart=,comm=,args="],
+      { timeout: 1000 },
+      (error, stdout) => resolve(error ? null : stdout.trim() || null),
+    );
+  });
+
 /** Runs the driver; resolves with its receipt and the counts of its wire records. */
 export function runDriver({
   config,
@@ -170,6 +277,9 @@ export function runDriver({
   timeoutMs = DRIVER_TIMEOUT_MS,
   spawnImpl = spawn,
   script = DRIVER,
+  signal,
+  ownedLifecycle = false,
+  identityOfImpl = childIdentity,
 }) {
   return new Promise((resolve, reject) => {
     const child = spawnImpl(process.execPath, [script], {
@@ -177,7 +287,79 @@ export function runDriver({
       stdio: ["pipe", "pipe", "inherit"],
     });
     let receipt;
+    let closed = false;
+    let exited = false;
+    if (ownedLifecycle)
+      child.once("exit", () => {
+        exited = true;
+      });
+    let stopped = false;
+    let stopReason;
+    let hardTimer;
+    let ownershipVerified = true;
+    const identity = ownedLifecycle
+      ? Promise.resolve(identityOfImpl(child.pid)).catch(() => null)
+      : null;
+    const childExit = () => ({
+      closed,
+      stopped,
+      ownershipVerified,
+      ...(stopReason ? { reason: stopReason } : {}),
+    });
+    const terminate = async (reason) => {
+      if (closed || exited || stopped) return;
+      stopped = true;
+      stopReason = reason;
+      const verify = async () => {
+        const original = await identity;
+        const current = await Promise.resolve(identityOfImpl(child.pid)).catch(() => null);
+        return (
+          typeof original === "string" &&
+          original.length > 0 &&
+          original === current &&
+          original.includes(script)
+        );
+      };
+      const refuse = () => {
+        ownershipVerified = false;
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        reject(
+          Object.assign(new Error("sdk child ownership could not be verified"), {
+            wire,
+            connections,
+            diagnostics,
+            childExit: childExit(),
+          }),
+        );
+      };
+      if (!(await verify())) {
+        if (!closed) refuse();
+        return;
+      }
+      if (closed || exited) return;
+      child.kill("SIGTERM");
+      hardTimer = setTimeout(async () => {
+        if (closed || exited) return;
+        if (!(await verify())) {
+          if (!closed) refuse();
+          return;
+        }
+        if (!closed && !exited) child.kill("SIGKILL");
+      }, 2000);
+    };
+    const onAbort = () => {
+      void terminate("parent work deadline");
+    };
     let driverError;
+    if (ownedLifecycle) {
+      child.once("error", (error) => {
+        driverError = String(error.code ?? "spawn-error");
+      });
+      child.stdin.on("error", () => {
+        driverError = "driver-input-error";
+      });
+    }
     let wire = 0;
     let connections = 0;
     let refused;
@@ -201,20 +383,43 @@ export function runDriver({
       )
         diagnostics.push(event);
     });
-    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+    const timer = setTimeout(
+      () => (ownedLifecycle ? void terminate("driver deadline") : child.kill("SIGKILL")),
+      timeoutMs,
+    );
+    if (ownedLifecycle) signal?.addEventListener("abort", onAbort, { once: true });
     child.once("close", (code) => {
+      closed = true;
       clearTimeout(timer);
-      if (receipt) resolve({ receipt, wire, connections, refused, diagnostics });
+      clearTimeout(hardTimer);
+      signal?.removeEventListener("abort", onAbort);
+      if (receipt)
+        resolve({
+          receipt,
+          wire,
+          connections,
+          refused,
+          diagnostics,
+          ...(ownedLifecycle ? { childExit: childExit() } : {}),
+        });
       else
         reject(
           Object.assign(
             new Error(
               `sdk driver ended (${code}) without a receipt: ${driverError ?? refused?.reason ?? "no reason"}`,
             ),
-            { wire, connections, diagnostics },
+            {
+              wire,
+              connections,
+              diagnostics,
+              ...(ownedLifecycle
+                ? { childExit: childExit(), sdkRefusedAttempts: refused ? 1 : 0 }
+                : {}),
+            },
           ),
         );
     });
+    if (ownedLifecycle && signal?.aborted) onAbort();
     child.stdin.write(`${JSON.stringify(input)}\n`);
   });
 }
@@ -278,17 +483,33 @@ export const unknownWrites = (receipt) =>
  * One SDK recording. `target` is { kind: "production", project, token, web } or
  * { kind: "local", project, firestore: { host, port }, auth: "http://host:port" }.
  */
-export async function recordSdk({
-  target,
-  caseSelection,
-  run,
-  log = () => {},
-  runDriverImpl = runDriver,
-  makeNative = createNativeClient,
-  preflightImpl = preflightKey,
-  journal = NULL_JOURNAL,
-}) {
-  const selectedCaseIds = selectedSdkCases(caseSelection).map((c) => c.caseId);
+export async function recordSdk(options) {
+  const selectedCaseIds = selectedSdkCases(options.caseSelection).map((c) => c.caseId);
+  const parentBound =
+    options.caseSelection === "sdk111"
+      ? createSdk111ParentBound({ now: options.parentNow, journal: options.journal })
+      : null;
+  try {
+    return await recordSdkWithParentBound(options, parentBound, selectedCaseIds);
+  } finally {
+    parentBound?.close();
+  }
+}
+
+async function recordSdkWithParentBound(
+  {
+    target,
+    caseSelection,
+    run,
+    log = () => {},
+    runDriverImpl = runDriver,
+    makeNative = createNativeClient,
+    preflightImpl = preflightKey,
+    journal = NULL_JOURNAL,
+  },
+  parentBound,
+  selectedCaseIds,
+) {
   const startedAt = new Date().toISOString();
   const production = target.kind === "production";
   // Every production request but the token commands: the preflight reads, the accounts' calls, the
@@ -301,21 +522,27 @@ export async function recordSdk({
     production
       ? preflightRequests + accountClient.requestCount() + (native?.requestCount?.() ?? 0) + wire
       : null;
-  // The key must belong to this project before an account is made or a request is signed in.
-  if (production)
-    await preflightImpl({
-      apiKey: target.web.apiKey,
-      project: target.project,
-      token: target.token,
-      onRequest: () => {
-        preflightRequests += 1;
-      },
-    });
+  const preflight = async () => {
+    // The key must belong to this project before an account is made or a request is signed in.
+    if (production)
+      await preflightImpl({
+        apiKey: target.web.apiKey,
+        project: target.project,
+        token: target.token,
+        onRequest: () => {
+          const control = parentBound?.admit();
+          preflightRequests += 1;
+          return control;
+        },
+      });
+  };
+  if (!parentBound) await preflight();
   accountClient = createAccountClient({
     base: production
       ? "https://identitytoolkit.googleapis.com"
       : `${target.auth}/identitytoolkit.googleapis.com`,
     project: target.project,
+    ...(parentBound ? { beforeSend: () => parentBound.admit() } : {}),
     headers: production
       ? { authorization: `Bearer ${target.token}`, "x-goog-user-project": target.project }
       : { authorization: "Bearer owner" },
@@ -325,14 +552,18 @@ export async function recordSdk({
     project: target.project,
     target: production ? { kind: "production" } : { kind: "local", ...target.firestore },
     token: target.token,
+    ...(parentBound ? { beforeSend: () => parentBound.admit(), maxPages: 1 } : {}),
   });
   const errors = {};
   let accounts = {};
   let outcome;
+  let childExit;
+  let sdkRefusedAttempts = 0;
   let confListenBefore;
   let journaledNames;
   const root = `projects/${target.project}/databases/(default)/documents`;
   try {
+    if (parentBound) await preflight();
     // Ledger 330: the query cases read conf_listen as empty before the run; if it is not, stop
     // without deleting anything (nothing has been made yet).
     if (production) {
@@ -364,6 +595,7 @@ export async function recordSdk({
       ...(production ? {} : { authEmulator: target.auth, firestoreEmulator: target.firestore }),
     };
     outcome = await runDriverImpl({
+      ...(parentBound ? { signal: parentBound.workSignal, ownedLifecycle: true } : {}),
       config,
       input: {
         run,
@@ -372,16 +604,22 @@ export async function recordSdk({
       },
     });
     wire = outcome.wire ?? 0;
+    childExit = outcome.childExit;
+    sdkRefusedAttempts = outcome.refused ? 1 : 0;
+    if (childExit?.stopped) errors["sdk/run"] = childExit.reason;
   } catch (error) {
     errors["sdk/run"] = String(error?.message ?? error);
     wire = error?.wire ?? 0;
+    childExit = error?.childExit;
+    sdkRefusedAttempts = error?.sdkRefusedAttempts ?? 0;
   }
   // A write that threw has an unknown outcome, which a read that finds nothing cannot settle; so
   // has any write of a driver that left no receipt, threw, or lost a case record. The names the
   // cases may have written are closed with `known` when no write is of unknown outcome and with
   // `unknown` otherwise; a journal that ends without either leaves them unconfirmed at A2.
+  if (childExit?.closed !== false) parentBound?.beginCleanup();
   const receipt = outcome?.receipt;
-  const writesKnown = writesAreKnown(receipt, selectedCaseIds);
+  const writesKnown = writesAreKnown(receipt, selectedCaseIds) && !childExit?.stopped;
   if (journaledNames)
     journal.append({
       type: "names",
@@ -391,6 +629,8 @@ export async function recordSdk({
     });
   let documents;
   try {
+    if (parentBound && childExit?.closed === false)
+      throw new Error("owned SDK child has not exited; cleanup withheld");
     documents = await sweepDocuments({ client: native, project: target.project, run, accounts });
     // Ledger 330 again at the end: conf_listen must be empty; anything left is reported, not deleted.
     if (production) {
@@ -408,14 +648,28 @@ export async function recordSdk({
   }
   let accountReport;
   try {
+    if (parentBound && childExit?.closed === false)
+      throw new Error("owned SDK child has not exited; cleanup withheld");
     accountReport = await session.cleanup();
   } catch (error) {
-    accountReport = { complete: false, error: String(error?.message ?? error) };
+    accountReport = {
+      complete: false,
+      error: String(error?.message ?? error),
+      ...(parentBound
+        ? { rows: session.entries().map((entry) => Object.assign({}, entry, { settled: false })) }
+        : {}),
+    };
   }
   if (receipt?.thrown != null) errors["sdk/driver"] = String(receipt.thrown);
   const clientsClosed = Array.isArray(receipt?.teardown) && receipt.teardown.every((t) => t.closed);
   const total = productionRequests();
-  journal.append({ type: "end", productionRequests: total });
+  journal.append({
+    type: "end",
+    productionRequests: total,
+    ...(parentBound
+      ? { parentBound: parentBound.snapshot(), childExit: childExit ?? null, sdkRefusedAttempts }
+      : {}),
+  });
   return {
     version: 1,
     kind: "sdk",
@@ -427,6 +681,9 @@ export async function recordSdk({
     ...(caseSelection === undefined ? {} : { caseSelection, selectedCaseIds }),
     requests: outcome ? outcome.wire : 0,
     productionRequests: total,
+    ...(parentBound
+      ? { parentBound: parentBound.snapshot(), childExit: childExit ?? null, sdkRefusedAttempts }
+      : {}),
     issued: issuedSdkNames({ project: target.project, run, accounts }),
     connections: outcome ? outcome.connections : 0,
     errors,

@@ -5,10 +5,12 @@ import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { tempDir } from "./test-tmpdir.mjs";
 
+import { createNativeClient } from "./fs-listen/native-client.mjs";
 import { sdkCases } from "./fs-listen/sdk-cases.mjs";
 
 import {
   conditionsOf,
+  createSdk111ParentBound,
   issuedSdkNames,
   loadApiKey,
   preflightKey,
@@ -1738,4 +1740,262 @@ test("the real SDK child rejects unknown, missing or mismatched selection before
       /unsupported SDK case selection|selected SDK case IDs do not match/,
     );
   }
+});
+
+test("SDK111 parent partitions forty work and twenty cleanup sends and seals expired phases", () => {
+  let clock = 0;
+  const journal = [];
+  const bound = createSdk111ParentBound({
+    now: () => clock,
+    journal: { append: (row) => journal.push(row) },
+  });
+  try {
+    for (let i = 0; i < 40; i++) bound.admit();
+    assert.throws(() => bound.admit(), /work request cap/);
+    assert.equal(bound.snapshot().workSent, 40);
+    bound.beginCleanup();
+    for (let i = 0; i < 20; i++) bound.admit();
+    assert.throws(() => bound.admit(), /cleanup request cap/);
+    assert.equal(bound.snapshot().sent, 60);
+    assert.equal(bound.snapshot().refused, 2);
+    assert.equal(journal.at(-1).sent, 60);
+  } finally {
+    bound.close();
+  }
+  const expired = createSdk111ParentBound({ now: () => clock });
+  try {
+    clock = 22 * 60_000;
+    assert.throws(() => expired.admit(), /work deadline/);
+    assert.equal(expired.workSignal.aborted, true);
+    expired.beginCleanup();
+    expired.admit();
+    clock += 7 * 60_000;
+    assert.throws(() => expired.admit(), /cleanup deadline/);
+    assert.equal(expired.snapshot().sent, 1);
+  } finally {
+    expired.close();
+  }
+});
+
+test("selected driver drains its owned child with TERM then KILL without inventing a receipt", async () => {
+  const child = fakeChild();
+  child.pid = 123;
+  child.kill = (signal) => {
+    child.killed.push(signal);
+    if (signal === "SIGKILL") child.emit("close", null);
+  };
+  const controller = new AbortController();
+  const pending = runDriver({
+    config: {},
+    input: {},
+    script: "/synthetic/sdk-driver.mjs",
+    spawnImpl: () => child,
+    ownedLifecycle: true,
+    signal: controller.signal,
+    identityOfImpl: async () => "123 birth node /synthetic/sdk-driver.mjs",
+  });
+  controller.abort(new Error("deadline"));
+  await assert.rejects(pending, (error) => {
+    assert.deepEqual(child.killed, ["SIGTERM", "SIGKILL"]);
+    assert.deepEqual(error.childExit, {
+      closed: true,
+      stopped: true,
+      ownershipVerified: true,
+      reason: "parent work deadline",
+    });
+    return /without a receipt/.test(error.message);
+  });
+});
+
+test("selected driver refuses signals when the direct-child identity changed", async () => {
+  const child = fakeChild();
+  child.pid = 123;
+  let reads = 0;
+  const controller = new AbortController();
+  const pending = runDriver({
+    config: {},
+    input: {},
+    script: "/synthetic/sdk-driver.mjs",
+    spawnImpl: () => child,
+    ownedLifecycle: true,
+    signal: controller.signal,
+    identityOfImpl: async () => (++reads === 1 ? "123 birth node /synthetic/sdk-driver.mjs" : null),
+  });
+  controller.abort();
+  await assert.rejects(pending, (error) => {
+    assert.deepEqual(child.killed, []);
+    assert.equal(error.childExit.closed, false);
+    assert.equal(error.childExit.ownershipVerified, false);
+    return /ownership/.test(error.message);
+  });
+});
+
+test("selected recorder shares actual preflight, account and native admission and closes the bounded phases", async () => {
+  const realFetch = globalThis.fetch;
+  let created = 0;
+  let nativeClosed = false;
+  globalThis.fetch = async (url, init) => ({
+    status: 200,
+    json: async () =>
+      init.method === "GET"
+        ? url.includes("cloudresourcemanager")
+          ? { projectId: "p", projectNumber: "123", lifecycleState: "ACTIVE" }
+          : { projectId: "123" }
+        : url.endsWith("/accounts")
+          ? { localId: `u${++created}` }
+          : {},
+  });
+  const g = {
+    close() {
+      nativeClosed = true;
+    },
+    makeUnaryRequest(_path, _serialize, _deserialize, _request, _metadata, _options, callback) {
+      setImmediate(() => callback(null, {}));
+      return { cancel() {} };
+    },
+    makeServerStreamRequest(_path, _serialize, _deserialize, request) {
+      const stream = new EventEmitter();
+      stream.cancel = () => {};
+      setImmediate(() => {
+        for (const name of request.documents) stream.emit("data", { missing: name });
+        stream.emit("end");
+      });
+      return stream;
+    },
+  };
+  try {
+    const result = await recordSdk({
+      caseSelection: "sdk111",
+      run: "r1",
+      target: { kind: "production", project: "p", token: "TOK", web: { apiKey: "key" } },
+      makeNative: (options) => createNativeClient({ ...options, grpcClient: g }),
+      runDriverImpl: async ({ signal, ownedLifecycle }) => {
+        assert.equal(signal.aborted, false);
+        assert.equal(ownedLifecycle, true);
+        return {
+          wire: 200,
+          connections: 1,
+          childExit: { closed: true, stopped: false, ownershipVerified: true },
+          receipt: {
+            cleanup: { complete: true },
+            teardown: [],
+            cases: [{ caseId: "FS-LISTEN-SDK-111", failures: [], observed: [] }],
+          },
+        };
+      },
+    });
+    assert.equal(result.cleanup.complete, true);
+    assert.equal(result.parentBound.workSent, 5);
+    assert.equal(result.parentBound.cleanupSent, 9);
+    assert.equal(result.parentBound.sent, 14);
+    assert.equal(result.productionRequests, 214);
+    assert.equal(result.parentBound.hardWholeParentBound, false);
+    assert.equal(nativeClosed, true);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("selected failed preflight still closes native and reports incomplete without account creation", async () => {
+  const realFetch = globalThis.fetch;
+  let sent = 0;
+  let closed = false;
+  globalThis.fetch = async () => {
+    sent++;
+    throw new Error("unexpected account send");
+  };
+  try {
+    const result = await recordSdk({
+      caseSelection: "sdk111",
+      run: "r1",
+      target: { kind: "production", project: "p", web: {} },
+      preflightImpl: async () => {
+        throw new Error("key read refused");
+      },
+      makeNative: () => ({
+        close() {
+          closed = true;
+        },
+        missing: async (names) => names.map((name) => ({ name, exists: false })),
+        listIds: async () => [],
+      }),
+    });
+    assert.equal(sent, 0);
+    assert.equal(closed, true);
+    assert.match(result.errors["sdk/run"], /key read refused/);
+    assert.equal(result.cleanup.complete, false);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("selected refusal preserves two hundred sent SDK requests and one unsent refused attempt", async () => {
+  const child = fakeChild();
+  child.pid = 123;
+  const pending = runDriver({
+    config: {},
+    input: {},
+    ownedLifecycle: true,
+    script: "/synthetic/sdk-driver.mjs",
+    spawnImpl: () => child,
+    identityOfImpl: async () => "123 birth node /synthetic/sdk-driver.mjs",
+  });
+  for (let i = 0; i < 200; i++) child.say({ event: "wire" });
+  child.say({ event: "wire-refused", reason: "request cap 200 reached" });
+  child.end(3);
+  await assert.rejects(
+    pending,
+    (error) => error.wire === 200 && error.sdkRefusedAttempts === 1 && error.childExit.closed,
+  );
+});
+
+test("unused SDK111 work allowance never enlarges the cleanup reserve", () => {
+  for (const work of [0, 1, 39, 40]) {
+    const bound = createSdk111ParentBound();
+    try {
+      for (let i = 0; i < work; i++) bound.admit();
+      bound.beginCleanup();
+      for (let i = 0; i < 20; i++) bound.admit();
+      assert.throws(() => bound.admit(), /cleanup request cap/);
+      assert.equal(bound.snapshot().sent, work + 20);
+    } finally {
+      bound.close();
+    }
+  }
+});
+
+test("SDK111 phase timers actively abort their phase without another admission", (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let clock = 0;
+  const bound = createSdk111ParentBound({ now: () => clock });
+  try {
+    clock = 22 * 60_000;
+    t.mock.timers.tick(clock);
+    assert.equal(bound.workSignal.aborted, true);
+    bound.beginCleanup();
+    const { signal } = bound.admit();
+    clock += 7 * 60_000;
+    t.mock.timers.tick(7 * 60_000);
+    assert.equal(signal.aborted, true);
+    assert.throws(() => bound.admit(), /cleanup deadline/);
+  } finally {
+    bound.close();
+  }
+});
+
+test("selected child launch failure is retained until its close without a fabricated receipt", async () => {
+  const child = fakeChild();
+  const pending = runDriver({
+    config: {},
+    input: {},
+    spawnImpl: () => child,
+    ownedLifecycle: true,
+    identityOfImpl: async () => null,
+  });
+  child.emit("error", Object.assign(new Error("launch"), { code: "EAGAIN" }));
+  child.end(-1);
+  await assert.rejects(
+    pending,
+    (error) => /EAGAIN/.test(error.message) && error.childExit.closed && error.wire === 0,
+  );
 });

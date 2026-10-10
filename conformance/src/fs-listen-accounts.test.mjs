@@ -702,3 +702,56 @@ test("a refused create is journaled without a uid", async () => {
   assert.equal(after.state, "refused");
   assert.equal("uid" in after, false);
 });
+
+test("account admission refuses before fetch and sent count increment", async () => {
+  let sent = 0;
+  const c = createAccountClient({
+    base: "https://x",
+    project: "p",
+    headers: {},
+    beforeSend: () => {
+      throw new Error("parent work cap");
+    },
+    fetchImpl: async () => {
+      sent++;
+      return { status: 200, json: async () => ({ localId: "u" }) };
+    },
+  });
+  await assert.rejects(c.create({ email: "a@example.com", password: "p" }), /parent work cap/);
+  assert.equal(sent, 0);
+  assert.equal(c.requestCount(), 0);
+});
+
+test("selected account cancellation bounds a hung response body and retains deadline reason", async () => {
+  const controller = new AbortController();
+  const c = createAccountClient({
+    base: "https://x",
+    project: "p",
+    headers: {},
+    beforeSend: () => ({ signal: controller.signal, timeoutMs: 30_000 }),
+    fetchImpl: async () => ({ status: 200, json: () => new Promise(() => {}) }),
+  });
+  const pending = c.create({ email: "a@example.com", password: "p" });
+  await Promise.resolve();
+  controller.abort(new Error("parent work deadline"));
+  assert.deepEqual(await pending, { kind: "unknown", why: "parent work deadline" });
+  assert.equal(c.requestCount(), 1);
+});
+
+test("account session retains exact uncertain email and UID without credentials for incomplete cleanup", async () => {
+  const s = createAccountSession({
+    run: "r1",
+    client: {
+      create: async () => ({ kind: "created", uid: "u1" }),
+      remove: async () => {
+        throw new Error("parent cleanup deadline");
+      },
+    },
+  });
+  await s.create(["a"]);
+  await assert.rejects(s.cleanup(), /parent cleanup deadline/);
+  assert.deepEqual(s.entries(), [
+    { name: "a", email: "fsl-r1-a@example.com", uid: "u1", state: "created" },
+  ]);
+  assert.equal(Object.hasOwn(s.entries()[0], "password"), false);
+});

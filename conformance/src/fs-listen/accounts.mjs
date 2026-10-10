@@ -9,27 +9,69 @@ import { NULL_JOURNAL } from "./journal.mjs";
 const TIMEOUT_MS = 30_000;
 
 /** `base` is the Identity Toolkit root of the target: production or the local Auth emulator. */
-export function createAccountClient({ base, project, headers, fetchImpl = globalThis.fetch }) {
+export function createAccountClient({
+  base,
+  project,
+  headers,
+  fetchImpl = globalThis.fetch,
+  beforeSend,
+}) {
   const root = `${base}/v1/projects/${project}`;
   let requests = 0;
   async function call(route, body) {
+    const control = beforeSend?.() ?? {};
+    const signal = control.signal
+      ? AbortSignal.any([
+          control.signal,
+          AbortSignal.timeout(Math.min(TIMEOUT_MS, control.timeoutMs ?? TIMEOUT_MS)),
+        ])
+      : AbortSignal.timeout(TIMEOUT_MS);
+    const wait = async (promise) => {
+      if (!control.signal) return promise;
+      signal.throwIfAborted();
+      let abort;
+      try {
+        return await Promise.race([
+          promise,
+          new Promise((_, reject) => {
+            abort = () => reject(signal.reason);
+            signal.addEventListener("abort", abort, { once: true });
+          }),
+        ]);
+      } finally {
+        signal.removeEventListener("abort", abort);
+      }
+    };
+    signal.throwIfAborted();
     requests += 1;
     let response;
     try {
-      response = await fetchImpl(`${root}${route}`, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...headers },
-        body: JSON.stringify(body),
-        redirect: "manual",
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
+      response = await wait(
+        fetchImpl(`${root}${route}`, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...headers },
+          body: JSON.stringify(body),
+          redirect: "manual",
+          signal,
+        }),
+      );
     } catch {
-      return { kind: "unknown", why: "transport" };
+      return {
+        kind: "unknown",
+        why: control.signal?.aborted
+          ? String(control.signal.reason?.message ?? control.signal.reason)
+          : "transport",
+      };
     }
     let json;
     try {
-      json = await response.json();
+      json = await wait(response.json());
     } catch {
+      if (control.signal?.aborted)
+        return {
+          kind: "unknown",
+          why: String(control.signal.reason?.message ?? control.signal.reason),
+        };
       return response.status >= 200 && response.status < 300
         ? { kind: "unknown", why: "unreadable-body" }
         : response.status >= 400 && response.status < 500
@@ -90,6 +132,13 @@ export function createAccountSession({ client, run, journal = NULL_JOURNAL }) {
   const made = [];
   const email = (name) => `fsl-${run}-${name}@example.com`;
   return {
+    entries: () =>
+      made.map(({ name, email: address, uid, state }) => ({
+        name,
+        email: address,
+        state,
+        ...(uid ? { uid } : {}),
+      })),
     async create(names) {
       const out = {};
       for (const name of names) {

@@ -37,6 +37,8 @@ export function createNativeClient({
   refreshToken,
   now = () => Date.now(),
   grpcClient: injected,
+  beforeSend,
+  maxPages = Infinity,
 }) {
   let bearer = token;
   // Every RPC sent to the target, counted when it starts (the close rows need the exact number).
@@ -53,35 +55,49 @@ export function createNativeClient({
     if (target.kind === "production") meta.set("x-goog-user-project", project);
     return meta;
   };
-  const unary = (method, request, responseType = `${method}Response`) =>
+  const dispatch = (method, request, responseType, streaming) =>
     new Promise((resolve, reject) => {
+      const control = beforeSend?.() ?? {};
+      control.signal?.throwIfAborted();
       requests += 1;
-      grpcClient.makeUnaryRequest(
+      let call;
+      let settled = false;
+      const finish = (error, response) => {
+        if (settled) return;
+        settled = true;
+        control.signal?.removeEventListener("abort", abort);
+        if (error) reject(error);
+        else resolve(response);
+      };
+      const abort = () => {
+        finish(control.signal.reason);
+        call?.cancel?.();
+      };
+      const args = [
         `${SERVICE}/${method}`,
         (message) => protos[`${method}Request`].serialize(message),
         (bytes) => protos[responseType].deserialize(bytes),
         request,
         metadata(),
-        { deadline: new Date(Date.now() + 30_000) },
-        (error, response) => (error ? reject(error) : resolve(response)),
-      );
+        { deadline: new Date(Date.now() + Math.min(30_000, control.timeoutMs ?? 30_000)) },
+      ];
+      control.signal?.addEventListener("abort", abort, { once: true });
+      try {
+        if (streaming) {
+          const messages = [];
+          call = grpcClient.makeServerStreamRequest(...args);
+          call.on("data", (message) => messages.push(message));
+          call.on("error", (error) => finish(error));
+          call.on("end", () => finish(null, messages));
+        } else call = grpcClient.makeUnaryRequest(...args, finish);
+        if (control.signal?.aborted) abort();
+      } catch (error) {
+        finish(error);
+      }
     });
-  const serverStream = (method, request) =>
-    new Promise((resolve, reject) => {
-      requests += 1;
-      const messages = [];
-      const stream = grpcClient.makeServerStreamRequest(
-        `${SERVICE}/${method}`,
-        (message) => protos[`${method}Request`].serialize(message),
-        (bytes) => protos[`${method}Response`].deserialize(bytes),
-        request,
-        metadata(),
-        { deadline: new Date(Date.now() + 30_000) },
-      );
-      stream.on("data", (message) => messages.push(message));
-      stream.on("error", reject);
-      stream.on("end", () => resolve(messages));
-    });
+  const unary = (method, request, responseType = `${method}Response`) =>
+    dispatch(method, request, responseType, false);
+  const serverStream = (method, request) => dispatch(method, request, `${method}Response`, true);
 
   return {
     close: () => grpcClient.close(),
@@ -171,6 +187,7 @@ export function createNativeClient({
     async listIds({ parent, collectionId, prefix }) {
       const names = [];
       let pageToken = "";
+      let pages = 0;
       do {
         const page = await unary("ListDocuments", {
           parent,
@@ -181,6 +198,9 @@ export function createNativeClient({
         });
         names.push(...listedNames(page, prefix));
         pageToken = page.nextPageToken ?? "";
+        pages += 1;
+        if (pageToken && pages >= maxPages)
+          throw new Error("native inventory pagination limit reached");
       } while (pageToken);
       return names;
     },

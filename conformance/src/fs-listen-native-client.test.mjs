@@ -411,3 +411,65 @@ test("production gets TLS channel credentials and a loopback target gets none", 
   assert.equal(credentialsFor({ kind: "production" })._isSecure(), true);
   assert.equal(credentialsFor({ kind: "local", host: "127.0.0.1", port: 1 })._isSecure(), false);
 });
+
+test("native admission refuses before dispatch and count increment", async () => {
+  const g = fakeGrpc({ unary: { Commit: () => ({}) } });
+  const c = client(g, {
+    beforeSend: () => {
+      throw new Error("parent cleanup cap");
+    },
+  });
+  await assert.rejects(c.commit({ writes: [] }), /parent cleanup cap/);
+  assert.equal(g.calls.length, 0);
+  assert.equal(c.requestCount(), 0);
+});
+
+test("selected one-page inventory refuses a remaining token without sending page two", async () => {
+  let pages = 0;
+  const g = fakeGrpc({
+    unary: {
+      ListDocuments: () =>
+        ++pages === 1
+          ? { documents: [{ name: name("a") }], nextPageToken: "next" }
+          : { documents: [] },
+    },
+  });
+  const c = client(g, { maxPages: 1 });
+  await assert.rejects(
+    c.listIds({ parent: ROOT, collectionId: "lsn_native", prefix: "r1-" }),
+    /pagination limit/,
+  );
+  assert.equal(g.calls.length, 1);
+  assert.equal(c.requestCount(), 1);
+});
+
+for (const streaming of [false, true]) {
+  test(`selected native ${streaming ? "stream" : "unary"} cancels its owned call on phase expiry`, async () => {
+    const controller = new AbortController();
+    let canceled = 0;
+    let options;
+    const call = new EventEmitter();
+    call.cancel = () => {
+      canceled++;
+    };
+    const g = {
+      close() {},
+      makeUnaryRequest(...args) {
+        options = args[5];
+        return call;
+      },
+      makeServerStreamRequest(...args) {
+        options = args[5];
+        return call;
+      },
+    };
+    const c = client(g, { beforeSend: () => ({ signal: controller.signal, timeoutMs: 5 }) });
+    const before = Date.now();
+    const pending = streaming ? c.missing([name("a")]) : c.commit({ writes: [] });
+    controller.abort(new Error("parent cleanup deadline"));
+    await assert.rejects(pending, /parent cleanup deadline/);
+    assert.equal(canceled, 1);
+    assert.equal(c.requestCount(), 1);
+    assert.ok(options.deadline.getTime() <= before + 100);
+  });
+}

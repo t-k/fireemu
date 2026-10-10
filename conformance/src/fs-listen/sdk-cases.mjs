@@ -141,3 +141,20 @@ export function sdkCases(catalog = JSON.parse(readFileSync(CATALOG, "utf8"))) {
   const late = kept.filter((c) => !early.includes(c));
   return [...early, ...EXTRA_CASES, ...late];
 }
+
+/** The closed selection supported by the Node SDK recorder. */
+export function selectedSdkCases(selection, expectedIds) {
+  if (selection !== undefined && selection !== "sdk111")
+    throw new Error("unsupported SDK case selection");
+  const cases = sdkCases().filter(
+    (c) => selection === undefined || c.caseId === "FS-LISTEN-SDK-111",
+  );
+  const ids = cases.map((c) => c.caseId);
+  if (
+    cases.length === 0 ||
+    (expectedIds !== undefined &&
+      (!Array.isArray(expectedIds) || JSON.stringify(expectedIds) !== JSON.stringify(ids)))
+  )
+    throw new Error("selected SDK case IDs do not match");
+  return cases;
+}

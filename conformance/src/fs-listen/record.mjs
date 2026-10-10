@@ -16,7 +16,8 @@
 //                                         before anything is made)
 //   node src/fs-listen/record.mjs readback --journal J --project P --out F
 //        (the coordinator's A2 read-back: reads every name and account the journal lists, read-only)
-//   node src/fs-listen/record.mjs sdk --target local [--profile strict|emulator] --out F
+//   node src/fs-listen/record.mjs sdk --target local [--profile strict|emulator] [--cases sdk111] --out F
+//   --cases sdk111 selects only the Node SDK reconnect/query-exit case; omit it for the full catalog.
 //   node src/fs-listen/record.mjs browser --target production --project fireemu-oracle-query \
 //        --envelope E --ledger L --api-key-file KEY --origin-port N --out F   (the SDK cases in headless
 //        Chromium at http://localhost:N, once in forced long polling and once in streaming; KEY is a
@@ -46,6 +47,7 @@ import {
 } from "./native-resume-variants.mjs";
 import { runNative } from "./native-run.mjs";
 import { recordBrowser } from "./browser-record.mjs";
+import { selectedSdkCases } from "./sdk-cases.mjs";
 import { loadApiKey, recordSdk } from "./sdk-record.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -69,6 +71,12 @@ export function parseArgs(argv) {
   for (let i = 0; i < rest.length; i += 2) {
     if (!rest[i].startsWith("--")) throw new Error(`unexpected argument ${rest[i]}`);
     options[rest[i].slice(2)] = rest[i + 1];
+  }
+  if (Object.hasOwn(options, "cases")) {
+    if (!["sdk", "sdk-in-fireemu"].includes(command))
+      throw new Error("--cases is supported only for sdk");
+    if (options.cases === undefined) throw new Error("--cases requires sdk111");
+    selectedSdkCases(options.cases);
   }
   return options;
 }
@@ -311,6 +319,7 @@ export async function withFireemu({ profile, script, args, env, rules }) {
 }
 
 export async function sdkProduction(options, deps = {}) {
+  selectedSdkCases(options.cases);
   const d = { ...PRODUCTION_DEPS, ...deps };
   d.checkProject("sdk", options.project);
   await d.admit(options);
@@ -332,6 +341,7 @@ export async function sdkProduction(options, deps = {}) {
         },
       },
       run,
+      ...(options.cases === undefined ? {} : { caseSelection: options.cases }),
       log: (line) => console.error(line),
       journal,
     });
@@ -415,7 +425,7 @@ export async function readbackProduction(options, deps = {}) {
 }
 
 /** Inside `fireemu exec`: the emulator's Firestore and Auth addresses come from the environment. */
-async function sdkInsideFireemu() {
+async function sdkInsideFireemu(options) {
   const [host, port] = process.env.FIRESTORE_EMULATOR_HOST.split(":");
   return recordSdk({
     target: {
@@ -425,6 +435,7 @@ async function sdkInsideFireemu() {
       auth: `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`,
     },
     run: newRunId(),
+    ...(options.cases === undefined ? {} : { caseSelection: options.cases }),
   });
 }
 
@@ -594,6 +605,7 @@ async function inFireemu(options, command, { rules } = {}) {
     tmp,
     ...(options["include-long"] ? ["--include-long", options["include-long"]] : []),
     ...(options.programs ? ["--programs", options.programs] : []),
+    ...(options.cases === undefined ? [] : ["--cases", options.cases]),
   ];
   const code =
     options.target === "official"
@@ -643,7 +655,7 @@ async function main(argv) {
       rules: join(dirname(HERE), "../../firestore.rules"),
     });
   } else if (options.command === "sdk-in-fireemu") {
-    recording = await sdkInsideFireemu();
+    recording = await sdkInsideFireemu(options);
   } else if (options.command === "browser" && options.target === "production") {
     recording = await browserProduction(options);
   } else if (options.command === "browser" && ["local", "official"].includes(options.target)) {

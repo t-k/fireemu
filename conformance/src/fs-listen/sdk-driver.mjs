@@ -22,7 +22,7 @@ import {
   createRecoveryBudget,
   runCatalog,
 } from "../../../tools/compat-broad/fs-listen-resume/listen_collector.mjs";
-import { sdkCases } from "./sdk-cases.mjs";
+import { selectedSdkCases } from "./sdk-cases.mjs";
 import { bandOf, makeDeps } from "./sdk-deps.mjs";
 import { runSdkCatalog } from "./sdk-run.mjs";
 
@@ -49,7 +49,10 @@ function buildClient(name, account) {
 }
 
 async function main() {
-  const { run, accounts } = await readLine();
+  const { run, accounts, caseSelection, caseIds } = await readLine();
+  if (caseSelection !== undefined && caseIds === undefined)
+    throw new Error("selected SDK case IDs do not match");
+  const cases = selectedSdkCases(caseSelection, caseIds);
   const clients = {
     primary: buildClient("primary", { name: "throwaway", ...accounts.a }),
     witness: buildClient("witness", { name: "throwaway", ...accounts.a }),
@@ -62,7 +65,7 @@ async function main() {
     deps: makeDeps({ sdk, clients, base: bandOf(run) }),
     run,
     accounts,
-    cases: sdkCases(),
+    cases,
     now: () => performance.now(),
   });
   emit({ event: "receipt", receipt });

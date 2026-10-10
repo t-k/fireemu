@@ -8,6 +8,7 @@ import {
   OWNER_COLLECTION,
   PUBLIC_COLLECTION,
   sdkCases,
+  selectedSdkCases,
 } from "./fs-listen/sdk-cases.mjs";
 import { conditionsOf } from "./fs-listen/sdk-record.mjs";
 
@@ -190,4 +191,20 @@ test("the extra cases' listeners are exactly the catalog's query listener with t
       "error",
     ]);
   }
+});
+
+test("SDK selection is closed and parent-child identities must agree", () => {
+  assert.deepEqual(
+    selectedSdkCases().map((c) => c.caseId),
+    sdkCases().map((c) => c.caseId),
+  );
+  assert.deepEqual(
+    selectedSdkCases("sdk111").map((c) => c.caseId),
+    ["FS-LISTEN-SDK-111"],
+  );
+  assert.equal(selectedSdkCases("sdk111", ["FS-LISTEN-SDK-111"]).length, 1);
+  for (const selector of ["all", "", "sdk101", "SDK111", ["sdk111"]])
+    assert.throws(() => selectedSdkCases(selector), /unsupported SDK case selection/);
+  for (const ids of [[], ["FS-LISTEN-SDK-101"], ["FS-LISTEN-SDK-111", "FS-LISTEN-SDK-111"], null])
+    assert.throws(() => selectedSdkCases("sdk111", ids), /selected SDK case IDs do not match/);
 });

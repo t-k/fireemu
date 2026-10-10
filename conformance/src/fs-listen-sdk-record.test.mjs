@@ -19,6 +19,7 @@ import {
   runDriver,
   sweepDocuments,
   unknownWrites,
+  writesAreKnown,
 } from "./fs-listen/sdk-record.mjs";
 
 test("every SDK case maps to exactly one closure condition", () => {
@@ -429,7 +430,7 @@ test("recordSdk: a clean run keeps the receipt's rows and counts, and the cleanu
 });
 
 /** Runs recordSdk against a stub driver and records everything it was asked. */
-async function recordWith(target, { driver, native, status = 200 } = {}) {
+async function recordWith(target, { driver, native, status = 200, caseSelection } = {}) {
   const fetched = [];
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
@@ -445,6 +446,7 @@ async function recordWith(target, { driver, native, status = 200 } = {}) {
   try {
     const recording = await recordSdk({
       target,
+      caseSelection,
       run: "r1",
       log: (line) => drove.push(line),
       preflightImpl: async () => {},
@@ -1676,4 +1678,64 @@ test("runDriver starts the script it is given", async () => {
   child.end(0);
   await pending;
   assert.deepEqual(started, ["/some/other-driver.mjs"]);
+});
+
+test("recordSdk rejects unknown selection before preflight, accounts and native creation", async () => {
+  let calls = 0;
+  await assert.rejects(
+    recordSdk({
+      caseSelection: "sdk101",
+      target: { kind: "production" },
+      preflightImpl: async () => calls++,
+      makeNative: () => calls++,
+    }),
+    /unsupported SDK case selection/,
+  );
+  assert.equal(calls, 0);
+});
+
+test("recordSdk forwards selected IDs and binds known writes to that exact case set", async () => {
+  const target = {
+    kind: "production",
+    project: "fireemu-oracle-query",
+    token: "TOK",
+    web: { apiKey: "k", projectId: "fireemu-oracle-query" },
+  };
+  const cases = [{ caseId: "FS-LISTEN-SDK-111", observed: [], failures: [] }];
+  const receipt = { thrown: null, cleanup: { complete: true }, teardown: [], cases };
+  const { recording, drove } = await recordWith(target, {
+    caseSelection: "sdk111",
+    driver: { receipt, wire: 1, connections: 1 },
+  });
+  const request = drove.find((entry) => entry.config);
+  assert.equal(request.input.caseSelection, "sdk111");
+  assert.deepEqual(request.input.caseIds, ["FS-LISTEN-SDK-111"]);
+  assert.equal(request.config.wireCap, 200);
+  assert.equal(request.config.connectionCap, 20);
+  assert.deepEqual(recording.selectedCaseIds, ["FS-LISTEN-SDK-111"]);
+  assert.equal(recording.cleanup.writesKnown, true);
+  assert.equal(recording.cleanup.complete, true);
+  assert.equal(writesAreKnown(receipt), false);
+  const broader = await recordWith(target, {
+    caseSelection: "sdk111",
+    driver: {
+      receipt: { ...receipt, cases: [...cases, { caseId: "FS-LISTEN-SDK-101", failures: [] }] },
+      wire: 1,
+    },
+  });
+  assert.equal(broader.recording.cleanup.writesKnown, false);
+});
+
+test("the real SDK child rejects unknown, missing or mismatched selection before client creation", async () => {
+  for (const input of [
+    { caseSelection: "sdk101", caseIds: ["FS-LISTEN-SDK-101"] },
+    { caseSelection: "sdk111" },
+    { caseSelection: "sdk111", caseIds: [] },
+    { caseSelection: "sdk111", caseIds: ["FS-LISTEN-SDK-101"] },
+  ]) {
+    await assert.rejects(
+      runDriver({ config: { mode: "local", web: {} }, input, timeoutMs: 5000 }),
+      /unsupported SDK case selection|selected SDK case IDs do not match/,
+    );
+  }
 });

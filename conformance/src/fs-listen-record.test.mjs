@@ -1405,3 +1405,24 @@ test("browser production checks the project as a browser recording and reads the
   assert.equal(seen.keyPath, "K");
   assert.deepEqual(seen.journal, ["o.json", "browser", "rid"]);
 });
+
+test("SDK111 CLI selection is accepted only for SDK and rejected before production admission", async () => {
+  assert.equal(parseArgs(["sdk", "--cases", "sdk111"]).cases, "sdk111");
+  for (const command of ["native", "browser", "readback"])
+    assert.throws(
+      () => parseArgs([command, "--cases", "sdk111"]),
+      /--cases is supported only for sdk/,
+    );
+  for (const value of ["sdk101", "all", ""])
+    assert.throws(() => parseArgs(["sdk", "--cases", value]), /unsupported SDK case selection/);
+  assert.throws(() => parseArgs(["sdk", "--cases"]), /--cases requires sdk111/);
+  const order = [];
+  await assert.rejects(
+    sdkProduction({ ...SDK_OPTIONS, cases: "sdk101" }, deps(order)),
+    /unsupported SDK case selection/,
+  );
+  assert.deepEqual(order, []);
+  const { d, seen } = argDeps([]);
+  await sdkProduction({ ...SDK_OPTIONS, cases: "sdk111" }, d);
+  assert.equal(seen.sdk.caseSelection, "sdk111");
+});

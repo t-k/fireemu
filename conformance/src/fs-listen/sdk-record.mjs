@@ -12,7 +12,7 @@ import { createAccountClient, createAccountSession } from "./accounts.mjs";
 import { NULL_JOURNAL } from "./journal.mjs";
 import { createNativeClient } from "./native-client.mjs";
 import { createLedger, settleNames } from "./native-ledger.mjs";
-import { OWNER_COLLECTION, PUBLIC_COLLECTION, sdkCases } from "./sdk-cases.mjs";
+import { OWNER_COLLECTION, PUBLIC_COLLECTION, sdkCases, selectedSdkCases } from "./sdk-cases.mjs";
 
 const DRIVER = fileURLToPath(new URL("./sdk-driver.mjs", import.meta.url));
 const WIRE_CAP = 1500;
@@ -280,6 +280,7 @@ export const unknownWrites = (receipt) =>
  */
 export async function recordSdk({
   target,
+  caseSelection,
   run,
   log = () => {},
   runDriverImpl = runDriver,
@@ -287,6 +288,7 @@ export async function recordSdk({
   preflightImpl = preflightKey,
   journal = NULL_JOURNAL,
 }) {
+  const selectedCaseIds = selectedSdkCases(caseSelection).map((c) => c.caseId);
   const startedAt = new Date().toISOString();
   const production = target.kind === "production";
   // Every production request but the token commands: the preflight reads, the accounts' calls, the
@@ -354,14 +356,21 @@ export async function recordSdk({
     journal.append({ type: "names", phase: "before", maybe: true, names: journaledNames });
     const config = {
       mode: production ? "production" : "local",
-      wireCap: WIRE_CAP,
-      connectionCap: CONNECTION_CAP,
+      wireCap: caseSelection === "sdk111" ? 200 : WIRE_CAP,
+      connectionCap: caseSelection === "sdk111" ? 20 : CONNECTION_CAP,
       web: production
         ? target.web
         : { apiKey: "fake-api-key", projectId: target.project, authDomain: "localhost" },
       ...(production ? {} : { authEmulator: target.auth, firestoreEmulator: target.firestore }),
     };
-    outcome = await runDriverImpl({ config, input: { run, accounts } });
+    outcome = await runDriverImpl({
+      config,
+      input: {
+        run,
+        accounts,
+        ...(caseSelection === undefined ? {} : { caseSelection, caseIds: selectedCaseIds }),
+      },
+    });
     wire = outcome.wire ?? 0;
   } catch (error) {
     errors["sdk/run"] = String(error?.message ?? error);
@@ -372,7 +381,7 @@ export async function recordSdk({
   // cases may have written are closed with `known` when no write is of unknown outcome and with
   // `unknown` otherwise; a journal that ends without either leaves them unconfirmed at A2.
   const receipt = outcome?.receipt;
-  const writesKnown = writesAreKnown(receipt);
+  const writesKnown = writesAreKnown(receipt, selectedCaseIds);
   if (journaledNames)
     journal.append({
       type: "names",
@@ -415,6 +424,7 @@ export async function recordSdk({
     endedAt: new Date().toISOString(),
     node: process.version,
     sdk: "firebase 12.18.0",
+    ...(caseSelection === undefined ? {} : { caseSelection, selectedCaseIds }),
     requests: outcome ? outcome.wire : 0,
     productionRequests: total,
     issued: issuedSdkNames({ project: target.project, run, accounts }),

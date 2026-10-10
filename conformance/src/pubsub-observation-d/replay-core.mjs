@@ -36,6 +36,228 @@ const bodyBound = (reply) =>
   reply.bodyBytes >= 0 &&
   reply.bodyBytes <= CAPS.metadataBytesEachDirection &&
   /^[a-f0-9]{64}$/.test(reply.bodySha256 ?? "");
+const forwardedProposal = "3b30ea2ff65d1ddd8d905fa26defa997793b9311ca595c67642ef1f41861420b";
+const originTimeKey = "CloudPubSubDeadLetterSourceTopicPublishTime";
+function sourceTime(value) {
+  const m =
+    typeof value === "string" &&
+    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{3}|\d{6}|\d{9}))?Z$/.exec(value);
+  const ms = m && Date.parse(`${m[1]}Z`);
+  return m &&
+    Number(m[1].slice(0, 4)) > 0 &&
+    Number.isFinite(ms) &&
+    new Date(ms).toISOString().slice(0, 19) === m[1]
+    ? {
+        instant: BigInt(ms) * 1000000n + BigInt((m[2] ?? "").padEnd(9, "0")),
+        precision: m[2]?.length ?? 0,
+        origin: `${m[1]}${(m[2] ?? "").replace(/0+$/, "") ? "." + m[2].replace(/0+$/, "") : ""}+00:00`,
+      }
+    : null;
+}
+function attributeTime(value) {
+  const m =
+    typeof value === "string" &&
+    /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(?:Z|\+00:00)$/.exec(value);
+  return m
+    ? sourceTime(
+        `${m[1]}${m[2] ? "." + m[2].padEnd(m[2].length <= 3 ? 3 : m[2].length <= 6 ? 6 : 9, "0") : ""}Z`,
+      )
+    : null;
+}
+function forwardedProofs(
+  cell,
+  source,
+  actual,
+  publications,
+  exchanges,
+  clockReceiptFor,
+  disposition,
+) {
+  const a = source.reply.body?.receivedMessages?.[0],
+    b = actual.body?.receivedMessages?.[0];
+  const base = {
+    sourceBodySha256: source.reply.bodySha256,
+    localBodySha256: actual.bodySha256,
+    requiresOwnAck: true,
+    verdict: "NOT_COMPARABLE",
+  };
+  const sink = {
+    ...base,
+    selector: "body.receivedMessages[0].message.publishTime",
+    sourceValue: a?.message?.publishTime,
+    localValue: b?.message?.publishTime,
+  };
+  const origin = {
+    ...base,
+    selector: `body.receivedMessages[0].message.attributes.${originTimeKey}`,
+    sourceValue: a?.message?.attributes?.[originTimeKey],
+    localValue: b?.message?.attributes?.[originTimeKey],
+  };
+  if (!["R2", "R4", "R6", "N2", "N4", "N6"].includes(cell.id) || !a || !b) return [sink, origin];
+  const deliveries = exchanges.filter(
+    (e) => e.category === "sourcePull" && e.sourceReply?.body?.receivedMessages?.length,
+  );
+  const candidates = [...publications.entries()].filter(
+    ([id, p]) =>
+      deliveries.some((e) =>
+        e.sourceReply.body.receivedMessages.some((item) => item.message?.messageId === id),
+      ) && p.payload.data === a.message.data,
+  );
+  if (candidates.length !== 1) return [sink, origin];
+  const [id, p] = candidates[0],
+    last = deliveries.at(-1);
+  const sourceSubscription =
+    last && cell.exchanges.find((e) => e.n === last.sourceN)?.request.subscription;
+  const firstSink = cell.exchanges.find(
+    (e) =>
+      e.category === "sinkPull" &&
+      e.request.subscription === source.request.subscription &&
+      e.reply.body?.receivedMessages?.some(
+        (item) => item.message?.messageId === a.message.messageId,
+      ),
+  );
+  const triggerCandidates = exchanges.filter((e) => {
+    const original = cell.exchanges.find((call) => call.n === e.sourceN);
+    return (
+      e.category === "sourcePull" &&
+      e.sourceN > last.sourceN &&
+      e.sourceN < firstSink?.n &&
+      original?.request.subscription === sourceSubscription &&
+      good(e.sourceReply) &&
+      good(e.localReply) &&
+      !e.sourceReply.body?.receivedMessages?.length &&
+      !e.localReply.body?.receivedMessages?.length
+    );
+  });
+  const trigger = triggerCandidates.length === 1 ? triggerCandidates[0] : undefined;
+  sink.forwardCandidateSourceNs = origin.forwardCandidateSourceNs = triggerCandidates.map(
+    (e) => e.sourceN,
+  );
+  const triggerSource = trigger && cell.exchanges.find((e) => e.n === trigger.sourceN),
+    clock = triggerSource && clockReceiptFor(triggerSource);
+  const times = [sourceTime(a.message.publishTime), sourceTime(b.message.publishTime)],
+    saved = sourceTime(clock?.body?.clock),
+    requested = sourceTime(clock?.requestedInstant),
+    dispatch = sourceTime(triggerSource?.at);
+  const sourceStored = sourceTime(p.sourceTime),
+    localStored = sourceTime(p.localTime);
+  const correlated =
+    trigger &&
+    last &&
+    trigger.sourceN > last.sourceN &&
+    exchanges.some((e) => iamCategory(e.category) && e.semanticVerdict === "MATCH") &&
+    deliveries.every((e) =>
+      e.timestampProofs?.every((proof) => (proof.publicationVerdict ?? proof.verdict) === "MATCH"),
+    ) &&
+    bodyBound(source.reply) &&
+    bodyBound(actual) &&
+    bodyBound(clock) &&
+    clock.sourceN === triggerSource.n &&
+    clock.sourceRequestId === triggerSource.requestId &&
+    clock.status === 200 &&
+    requested &&
+    dispatch &&
+    saved;
+  const payload = (message) => ({
+    data: message.data,
+    attributes: Object.fromEntries(
+      Object.entries(message.attributes ?? {}).filter(
+        ([key]) =>
+          ![
+            originTimeKey,
+            "CloudPubSubDeadLetterSourceSubscription",
+            "CloudPubSubDeadLetterSourceSubscriptionProject",
+            "CloudPubSubDeadLetterSourceDeliveryCount",
+          ].includes(key),
+      ),
+    ),
+    orderingKey: message.orderingKey ?? "",
+  });
+  const original = {
+    data: p.payload.data,
+    attributes: p.payload.attributes ?? {},
+    orderingKey: p.payload.orderingKey ?? "",
+  };
+  const relation =
+    same(payload(a.message), original) &&
+    same(payload(b.message), original) &&
+    [a, b].every(
+      (item) =>
+        item.message.attributes?.CloudPubSubDeadLetterSourceSubscription ===
+          sourceSubscription?.split("/").at(-1) &&
+        item.message.attributes?.CloudPubSubDeadLetterSourceSubscriptionProject === PROJECT &&
+        /^\d+$/.test(item.message.attributes?.CloudPubSubDeadLetterSourceDeliveryCount ?? ""),
+    ) &&
+    a.message.messageId !== id &&
+    b.message.messageId !== p.localId;
+  for (const proof of [sink, origin]) {
+    proof.publicationSourceN = p.source.n;
+    proof.forwardSourceN = trigger?.sourceN;
+    proof.sourcePublicationId = id;
+    proof.localPublicationId = p.localId;
+  }
+  if (
+    !relation ||
+    times.some((t) => !t) ||
+    (times[0] && times[1] && times[0].precision !== times[1].precision)
+  )
+    sink.verdict = "DIVERGES";
+  else if (correlated) {
+    if (
+      requested.instant !== dispatch.instant ||
+      saved.instant !== requested.instant ||
+      times[1].instant !== saved.instant
+    )
+      sink.verdict = "DIVERGES";
+    else if (disposition?.owner1193?.proposalSha256 === forwardedProposal) sink.verdict = "MATCH";
+  }
+  if (sourceStored && localStored) {
+    const sourceAttribute = attributeTime(origin.sourceValue),
+      localAttribute = attributeTime(origin.localValue);
+    origin.derivedInstantVerdict =
+      sourceAttribute?.instant === sourceStored.instant &&
+      localAttribute?.instant === localStored.instant
+        ? "MATCH"
+        : "DIVERGES";
+    origin.sourceExpected = sourceStored.origin;
+    origin.localExpected = localStored.origin;
+    origin.representationVerdict =
+      origin.sourceValue === origin.sourceExpected && origin.localValue === origin.localExpected
+        ? "MATCH"
+        : "DIVERGES";
+    if (
+      !relation ||
+      origin.derivedInstantVerdict === "DIVERGES" ||
+      origin.representationVerdict === "DIVERGES"
+    )
+      origin.verdict = "DIVERGES";
+    else if (correlated && disposition?.owner1194?.proposalSha256 === forwardedProposal)
+      origin.verdict = "MATCH";
+  }
+  const prior = exchanges
+    .filter((e) => e.category === "sinkPull")
+    .flatMap(
+      (e) =>
+        e.sourceReply?.body?.receivedMessages?.map((item, index) => ({
+          source: item,
+          local: e.localReply?.body?.receivedMessages?.[index],
+        })) ?? [],
+    )
+    .find((item) => item.source.message?.messageId === a.message.messageId);
+  if (
+    prior &&
+    (prior.source.message.publishTime !== a.message.publishTime ||
+      prior.local?.message?.publishTime !== b.message.publishTime ||
+      prior.local?.message?.messageId !== b.message.messageId)
+  )
+    sink.verdict = "DIVERGES";
+  sink.publicationVerdict = sink.verdict;
+  if (source.transport === "grpc") {
+    sink.nativeWire = nativePullWire(source.reply, actual, origin.verdict === "MATCH");
+    sink.verdict = aggregate([sink.verdict, sink.nativeWire.verdict]);
+  }
+  return [sink, origin];
+}
 function recoverNativePull(reply) {
   if (!good(reply) || !bodyBound(reply)) return null;
   const Type = protos.google.pubsub.v1.PullResponse;
@@ -71,7 +293,7 @@ function recoverNativePull(reply) {
   }
   return null;
 }
-function nativePullWire(sourceReply, localReply) {
+function nativePullWire(sourceReply, localReply, originDisposition = false) {
   const source = recoverNativePull(sourceReply),
     local = recoverNativePull(localReply);
   const proof = {
@@ -86,6 +308,7 @@ function nativePullWire(sourceReply, localReply) {
     verdict: "NOT_COMPARABLE",
   };
   if (!source || !local) return proof;
+  proof.originAttributeDisposition = originDisposition;
   proof.sourceBodyBase64 = source.bytes.toString("base64");
   proof.localBodyBase64 = local.bytes.toString("base64");
   proof.physicalVerdict = source.bytes.equals(local.bytes) ? "MATCH" : "DIVERGES";
@@ -100,6 +323,11 @@ function nativePullWire(sourceReply, localReply) {
       ["local", local],
     ]) {
       const wire = structuredClone(recovered.wire);
+      if (originDisposition && side === "source")
+        for (const [index, item] of (wire.receivedMessages ?? []).entries())
+          if (item.message?.attributes)
+            item.message.attributes[originTimeKey] =
+              local.wire.receivedMessages[index]?.message?.attributes?.[originTimeKey];
       for (const [index, item] of (wire.receivedMessages ?? []).entries()) {
         if (!item.message?.attributes) continue;
         const entries = Object.entries(item.message.attributes);
@@ -840,6 +1068,16 @@ export async function replayRecording(
           } else if (source.method === "Pull" && source.reply.ok && actual?.ok) {
             const sourceItems = expected?.receivedMessages ?? [],
               localItems = local?.receivedMessages ?? [];
+            const forwardedSingle = sourceItems.length === 1 && localItems.length === 1;
+            if (
+              source.category === "sinkPull" &&
+              (timestampDisposition?.owner1193 || timestampDisposition?.owner1194) &&
+              !forwardedSingle &&
+              (sourceItems.length > 0 || localItems.length > 0)
+            )
+              debts.push(
+                "Forwarded timestamp disposition requires exactly one source/local sink message",
+              );
             if (!Array.isArray(localItems) || sourceItems.length !== localItems.length)
               semantic = "DIVERGES";
             else
@@ -974,11 +1212,29 @@ export async function replayRecording(
                     semantic = "DIVERGES";
                   a.message.messageId = b.message.messageId;
                 }
+                if (
+                  source.category === "sinkPull" &&
+                  forwardedSingle &&
+                  (timestampDisposition?.owner1193 || timestampDisposition?.owner1194)
+                ) {
+                  const proofs = forwardedProofs(
+                    cell,
+                    source,
+                    actual,
+                    publicationEvidence,
+                    exchanges,
+                    clockReceiptFor,
+                    timestampDisposition,
+                  );
+                  timestampProofs.push(...proofs);
+                  semantic = aggregate([semantic, ...proofs.map((p) => p.verdict)]);
+                }
                 // Publication instants are retained separately; a source response timestamp is not a local clock receipt.
                 if (
                   a.message.publishTime !== b.message.publishTime &&
                   !(
-                    source.category === "sourcePull" &&
+                    (source.category === "sourcePull" ||
+                      (source.category === "sinkPull" && timestampProofs.length)) &&
                     ["rest", "grpc"].includes(source.transport) &&
                     timestampDisposition
                   )
@@ -992,7 +1248,10 @@ export async function replayRecording(
                   !Number.isFinite(instant(b.message.attributes?.[key]))
                 )
                   semantic = "DIVERGES";
-                else if (a.message.attributes?.[key] !== b.message.attributes?.[key])
+                else if (
+                  a.message.attributes?.[key] !== b.message.attributes?.[key] &&
+                  !timestampProofs.some((p) => p.selector.endsWith(key))
+                )
                   debts.push(
                     "Forwarded publication timestamp requires source/local clock evidence",
                   );
@@ -1054,8 +1313,41 @@ export async function replayRecording(
       }
       if (resource && localOwnership.has(resource))
         entry.localOwnership = { resource, ...localOwnership.get(resource) };
+      if (entry.timestampProofs?.some((p) => p.requiresOwnAck)) {
+        entry.pendingOwnAckVerdict = entry.semanticVerdict;
+        if (entry.semanticVerdict === "MATCH") entry.semanticVerdict = "NOT_COMPARABLE";
+      }
       exchanges.push(entry);
       observe(entry);
+    }
+    for (const entry of exchanges.filter((e) => e.timestampProofs?.some((p) => p.requiresOwnAck))) {
+      const original = cell.exchanges.find((e) => e.n === entry.sourceN),
+        token = original.reply.body.receivedMessages[0].ackId;
+      const ack = cell.exchanges.find(
+        (e) =>
+          e.n > original.n &&
+          e.method === "Acknowledge" &&
+          e.request.subscription === original.request.subscription &&
+          e.request.ackIds?.includes(token),
+      );
+      const localAck = ack && exchanges.find((e) => e.sourceN === ack.n);
+      const acknowledged =
+        ack &&
+        good(ack.reply) &&
+        good(localAck?.localReply) &&
+        localAck.semanticVerdict === "MATCH";
+      for (const proof of entry.timestampProofs.filter((p) => p.requiresOwnAck)) {
+        proof.ownAckSourceN = acknowledged ? ack?.n : undefined;
+        if (!acknowledged && proof.verdict === "MATCH") proof.verdict = "NOT_COMPARABLE";
+        if (!acknowledged && proof.publicationVerdict === "MATCH")
+          proof.publicationVerdict = "NOT_COMPARABLE";
+      }
+      entry.semanticVerdict = aggregate([
+        entry.pendingOwnAckVerdict,
+        ...entry.timestampProofs.map((p) => p.verdict),
+      ]);
+      delete entry.pendingOwnAckVerdict;
+      entry.ownAckFinalized = true;
     }
     const physicalVerdict = aggregate(exchanges.map((e) => e.physicalVerdict)),
       semanticVerdict = aggregate(exchanges.map((e) => e.semanticVerdict));

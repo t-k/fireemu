@@ -1651,3 +1651,398 @@ test("D native timestamp disposition leaves forwarded sink and origin evidence u
     e.debts.includes("Observed publication timestamp requires source/local clock evidence"),
   );
 });
+
+const forwardedProposal = "3b30ea2ff65d1ddd8d905fa26defa997793b9311ca595c67642ef1f41861420b";
+function forwardedFixture() {
+  const f = publicationFixture();
+  f.input.cells[0].id = "R2";
+  f.options.timestampDisposition.cellIds = ["R2"];
+  f.options.timestampDisposition.owner1193 = { proposalSha256: forwardedProposal };
+  f.options.timestampDisposition.owner1194 = { proposalSha256: forwardedProposal };
+  const rows = f.input.cells[0].exchanges;
+  rows[1].at = "2026-01-01T00:00:00.001Z";
+  f.actual[2].body.receivedMessages[0].message.publishTime = rows[1].at;
+  const sub = rows[0].request.subscription;
+  rows[0].method = "CreateSubscription";
+  rows[0].request = { name: sub, topic: rows[0].reply.body.topic };
+  const iam = source(
+    "GetIamPolicy",
+    { resource: sub },
+    { etag: "policy", bindings: [] },
+    "iamCompare",
+  );
+  const trigger = source("Pull", { subscription: sub }, {}, "sourcePull");
+  trigger.at = "2026-01-01T00:00:02.001Z";
+  const attributes = {
+    CloudPubSubDeadLetterSourceSubscription: sub.split("/").at(-1),
+    CloudPubSubDeadLetterSourceSubscriptionProject: "fireemu-oracle-idp",
+    CloudPubSubDeadLetterSourceDeliveryCount: "5",
+    CloudPubSubDeadLetterSourceTopicPublishTime: "2026-01-01T00:00:00.097+00:00",
+  };
+  const sink = source(
+    "Pull",
+    { subscription: sub + "-sink" },
+    {
+      receivedMessages: [
+        {
+          ackId: "sink-ack",
+          message: {
+            messageId: "sink-id",
+            data: "eA==",
+            publishTime: "2026-01-01T00:00:03.097Z",
+            attributes,
+          },
+        },
+      ],
+    },
+    "sinkPull",
+  );
+  const ack = source(
+    "Acknowledge",
+    { subscription: sub + "-sink", ackIds: ["sink-ack"] },
+    {},
+    "sinkAck",
+  );
+  const actuals = [
+    ...f.actual,
+    reply(iam.reply.body),
+    reply({}),
+    reply(structuredClone(sink.reply.body)),
+    reply({}),
+  ];
+  actuals[5].body.receivedMessages[0].ackId = "local-sink-ack";
+  actuals[5].body.receivedMessages[0].message.messageId = "local-sink-id";
+  actuals[5].body.receivedMessages[0].message.publishTime = trigger.at;
+  actuals[5].body.receivedMessages[0].message.attributes.CloudPubSubDeadLetterSourceTopicPublishTime =
+    "2026-01-01T00:00:00.001+00:00";
+  rows.push(iam, trigger, sink, ack);
+  rows.forEach((r, i) => {
+    r.n = i + 1;
+    r.requestId = i + 1;
+  });
+  return { ...f, actual: actuals };
+}
+test("D forwarded time binds independent owner relations and own ACK", async () => {
+  const { replayRecording } = await core(),
+    f = forwardedFixture();
+  const report = await replayRecording(
+    f.input,
+    async (_call, row) => f.actual[row.requestId - 1],
+    f.options,
+  );
+  const sink = report.results[0].exchanges[5];
+  assert.equal(sink.semanticVerdict, "MATCH");
+  assert.equal(sink.physicalVerdict, "DIVERGES");
+  assert.equal(sink.timestampProofs.length, 2);
+});
+
+test("D forwarded time keeps missing evidence and contradictions distinct", async (t) => {
+  const { replayRecording } = await core();
+  for (const [name, alter, expected] of [
+    ["missing1193", (f) => delete f.options.timestampDisposition.owner1193, "NOT_COMPARABLE"],
+    ["missing1194", (f) => delete f.options.timestampDisposition.owner1194, "NOT_COMPARABLE"],
+    ["missing own ACK", (f) => f.input.cells[0].exchanges.pop(), "NOT_COMPARABLE"],
+    [
+      "missing forward clock",
+      (f) => {
+        const old = f.options.clockReceiptFor;
+        f.options.clockReceiptFor = (r) => (r.requestId === 5 ? undefined : old(r));
+      },
+      "NOT_COMPARABLE",
+    ],
+    [
+      "wrong stored clock",
+      (f) => {
+        f.actual[5].body.receivedMessages[0].message.publishTime = "2026-01-01T00:00:02.002Z";
+      },
+      "DIVERGES",
+    ],
+    [
+      "reused source identity",
+      (f) => {
+        f.actual[5].body.receivedMessages[0].message.messageId = "local-id";
+      },
+      "DIVERGES",
+    ],
+    [
+      "origin instant contradiction",
+      (f) => {
+        f.actual[5].body.receivedMessages[0].message.attributes.CloudPubSubDeadLetterSourceTopicPublishTime =
+          "2026-01-01T00:00:00.002+00:00";
+      },
+      "DIVERGES",
+    ],
+    [
+      "origin representation Z",
+      (f) => {
+        f.actual[5].body.receivedMessages[0].message.attributes.CloudPubSubDeadLetterSourceTopicPublishTime =
+          "2026-01-01T00:00:00.001Z";
+      },
+      "DIVERGES",
+    ],
+    [
+      "origin representation fixed fraction",
+      (f) => {
+        f.actual[5].body.receivedMessages[0].message.attributes.CloudPubSubDeadLetterSourceTopicPublishTime =
+          "2026-01-01T00:00:00.001000000+00:00";
+      },
+      "DIVERGES",
+    ],
+    [
+      "other attribute",
+      (f) => {
+        f.actual[5].body.receivedMessages[0].message.attributes.CloudPubSubDeadLetterUnapproved =
+          "x";
+      },
+      "DIVERGES",
+    ],
+    [
+      "other payload",
+      (f) => {
+        f.actual[5].body.receivedMessages[0].message.data = "eQ==";
+      },
+      "DIVERGES",
+    ],
+  ])
+    await t.test(name, async () => {
+      const f = forwardedFixture();
+      alter(f);
+      const r = await replayRecording(
+        f.input,
+        async (_call, row) => f.actual[row.requestId - 1],
+        f.options,
+      );
+      assert.equal(r.results[0].exchanges[5].semanticVerdict, expected);
+    });
+});
+test("D forwarded origin formatting follows each observed generated fraction", async () => {
+  const { replayRecording } = await core();
+  for (const fraction of ["460", "097", "100", "010", "001", "000"]) {
+    const f = forwardedFixture();
+    f.input.cells[0].exchanges[2].reply.body.receivedMessages[0].message.publishTime = `2026-01-01T00:00:00.${fraction}Z`;
+    const trimmed = fraction.replace(/0+$/, "");
+    f.input.cells[0].exchanges[5].reply.body.receivedMessages[0].message.attributes.CloudPubSubDeadLetterSourceTopicPublishTime = `2026-01-01T00:00:00${trimmed ? "." + trimmed : ""}+00:00`;
+    const r = await replayRecording(
+      f.input,
+      async (_call, row) => f.actual[row.requestId - 1],
+      f.options,
+    );
+    assert.equal(r.results[0].exchanges[5].semanticVerdict, "MATCH");
+  }
+});
+
+test("D forwarded native time reuses exact wire proof and preserves physical raw", async () => {
+  const { replayRecording } = await core(),
+    f = forwardedFixture(),
+    wire = await nativePublicationFixture();
+  f.input.cells[0].id = "N2";
+  f.options.timestampDisposition.cellIds = ["N2"];
+  f.input.cells[0].exchanges[1].reply.body.messageIds = ["11111111111111111"];
+  f.actual[1].body.messageIds = ["22222222222222222"];
+  f.input.cells[0].exchanges[2].reply.body.receivedMessages[0].message.messageId =
+    "11111111111111111";
+  f.actual[2].body.receivedMessages[0].message.messageId = "22222222222222222";
+  f.input.cells[0].exchanges[5].reply.body.receivedMessages[0].message.messageId =
+    "33333333333333333";
+  f.actual[5].body.receivedMessages[0].message.messageId = "44444444444444444";
+  for (const [index, row] of f.input.cells[0].exchanges.entries()) {
+    row.transport = row.category === "iamCompare" ? "rest" : "grpc";
+    if (row.method === "Pull") {
+      wire.bind(row.reply);
+      wire.bind(f.actual[index]);
+    }
+  }
+  const r = await replayRecording(
+      f.input,
+      async (_call, row) => f.actual[row.requestId - 1],
+      f.options,
+    ),
+    sink = r.results[0].exchanges[5];
+  assert.equal(sink.semanticVerdict, "MATCH");
+  assert.equal(sink.physicalVerdict, "DIVERGES");
+  assert.equal(sink.timestampProofs[0].nativeWire.physicalVerdict, "DIVERGES");
+  assert.equal(sink.timestampProofs[0].nativeWire.originalProjectionVerdict, "DIVERGES");
+  assert.equal(sink.timestampProofs[0].nativeWire.verdict, "MATCH");
+});
+
+test("D forwarded trigger requires one evidenced source call in the bounded interval", async (t) => {
+  const { replayRecording } = await core();
+  for (const [name, alter, expected] of [
+    ["one candidate", () => {}, "MATCH"],
+    [
+      "no candidate",
+      (f) => {
+        f.input.cells[0].exchanges[4].category = "inspect";
+      },
+      "NOT_COMPARABLE",
+    ],
+    [
+      "other subscription",
+      (f) => {
+        f.input.cells[0].exchanges[4].request.subscription = "different-subscription";
+      },
+      "NOT_COMPARABLE",
+    ],
+    [
+      "two candidates",
+      (f) => {
+        const copy = structuredClone(f.input.cells[0].exchanges[4]);
+        f.input.cells[0].exchanges.splice(4, 0, copy);
+        f.actual.splice(4, 0, reply({}));
+      },
+      "NOT_COMPARABLE",
+    ],
+    [
+      "only after first sink",
+      (f) => {
+        const [call] = f.input.cells[0].exchanges.splice(4, 1),
+          [actual] = f.actual.splice(4, 1);
+        f.input.cells[0].exchanges.push(call);
+        f.actual.push(actual);
+      },
+      "NOT_COMPARABLE",
+    ],
+    [
+      "extra after first sink",
+      (f) => {
+        f.input.cells[0].exchanges.push(structuredClone(f.input.cells[0].exchanges[4]));
+        f.actual.push(reply({}));
+      },
+      "MATCH",
+    ],
+  ])
+    await t.test(name, async () => {
+      const f = forwardedFixture();
+      alter(f);
+      f.input.cells[0].exchanges.forEach((r, i) => {
+        r.n = i + 1;
+        r.requestId = i + 1;
+      });
+      const r = await replayRecording(
+        f.input,
+        async (_call, row) => f.actual[row.requestId - 1],
+        f.options,
+      );
+      assert.equal(
+        r.results[0].exchanges.find((e) => e.category === "sinkPull").semanticVerdict,
+        expected,
+      );
+    });
+});
+
+test("D forwarded candidate cardinality property preserves the exact interval", async () => {
+  const { replayRecording } = await core();
+  for (let count = 0; count <= 4; count++) {
+    const f = forwardedFixture();
+    if (count === 0) f.input.cells[0].exchanges[4].category = "inspect";
+    for (let i = 1; i < count; i++) {
+      f.input.cells[0].exchanges.splice(4, 0, structuredClone(f.input.cells[0].exchanges[4]));
+      f.actual.splice(4, 0, reply({}));
+    }
+    const before = structuredClone(f.input.cells[0].exchanges.find((r) => r.requestId === 5));
+    before.category = "sourcePull";
+    before.at = "2026-01-01T00:00:00.001Z";
+    f.input.cells[0].exchanges.splice(2, 0, before);
+    f.actual.splice(2, 0, reply({}));
+    f.input.cells[0].exchanges.forEach((r, i) => {
+      r.n = i + 1;
+      r.requestId = i + 1;
+    });
+    const r = await replayRecording(
+      f.input,
+      async (_call, row) => f.actual[row.requestId - 1],
+      f.options,
+    );
+    const sink = r.results[0].exchanges.find((e) => e.category === "sinkPull");
+    assert.equal(sink.semanticVerdict, count === 1 ? "MATCH" : "NOT_COMPARABLE");
+    assert.equal(sink.timestampProofs[0].forwardCandidateSourceNs.length, count);
+  }
+});
+
+test("D forwarded exemption is limited to one source and local sink message", async (t) => {
+  const { replayRecording } = await core();
+  for (const [name, sourceExtra, localExtra, unbound, expected] of [
+    ["source-only extra", true, false, false, "DIVERGES"],
+    ["local-only extra", false, true, false, "DIVERGES"],
+    ["both two", true, true, false, "NOT_COMPARABLE"],
+    ["second unbound times without own ACK", true, true, true, "NOT_COMPARABLE"],
+  ])
+    await t.test(name, async () => {
+      const f = forwardedFixture(),
+        original = f.input.cells[0].exchanges[5].reply,
+        actual = f.actual[5];
+      if (sourceExtra) {
+        const second = structuredClone(original.body.receivedMessages[0]);
+        second.ackId = "second-source-ack";
+        second.message.messageId = "second-source-id";
+        original.body.receivedMessages.push(second);
+      }
+      if (localExtra) {
+        const second = structuredClone(actual.body.receivedMessages[0]);
+        second.ackId = "second-local-ack";
+        second.message.messageId = "second-local-id";
+        if (unbound) {
+          second.message.publishTime = "2026-01-01T00:00:59.999Z";
+          second.message.attributes.CloudPubSubDeadLetterSourceTopicPublishTime =
+            "2026-01-01T00:00:58.999+00:00";
+        }
+        actual.body.receivedMessages.push(second);
+      }
+      const r = await replayRecording(
+          f.input,
+          async (_call, row) => f.actual[row.requestId - 1],
+          f.options,
+        ),
+        sink = r.results[0].exchanges[5];
+      assert.equal(sink.semanticVerdict, expected);
+      assert.deepEqual(sink.timestampProofs, []);
+      if (sourceExtra && localExtra) {
+        assert.ok(
+          sink.debts.includes(
+            "Observed publication timestamp requires source/local clock evidence",
+          ),
+        );
+        assert.ok(
+          sink.debts.includes(
+            "Forwarded publication timestamp requires source/local clock evidence",
+          ),
+        );
+      }
+    });
+});
+
+test("D forwarded message-count property preserves empty polling and scoped claims", async () => {
+  const { replayRecording } = await core();
+  for (let count = 0; count <= 3; count++) {
+    const f = forwardedFixture(),
+      original = f.input.cells[0].exchanges[5].reply,
+      actual = f.actual[5];
+    original.body.receivedMessages = Array.from({ length: count }, () =>
+      structuredClone(original.body.receivedMessages[0]),
+    );
+    actual.body.receivedMessages = Array.from({ length: count }, () =>
+      structuredClone(actual.body.receivedMessages[0]),
+    );
+    if (count > 1)
+      for (const item of actual.body.receivedMessages) {
+        item.message.publishTime = original.body.receivedMessages[0].message.publishTime;
+        item.message.attributes.CloudPubSubDeadLetterSourceTopicPublishTime =
+          original.body.receivedMessages[0].message.attributes.CloudPubSubDeadLetterSourceTopicPublishTime;
+      }
+    if (count === 0) f.input.cells[0].exchanges.pop();
+    const r = await replayRecording(
+        f.input,
+        async (_call, row) => f.actual[row.requestId - 1],
+        f.options,
+      ),
+      sink = r.results[0].exchanges[5];
+    assert.equal(sink.semanticVerdict, count <= 1 ? "MATCH" : "NOT_COMPARABLE");
+    assert.equal(sink.timestampProofs.length, count === 1 ? 2 : 0);
+    if (count > 1)
+      assert.ok(
+        sink.debts.includes(
+          "Forwarded timestamp disposition requires exactly one source/local sink message",
+        ),
+      );
+  }
+});

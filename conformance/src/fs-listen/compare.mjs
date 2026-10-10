@@ -527,8 +527,7 @@ function withProgramErrors(recording) {
 }
 
 /**
- * A divergence entry is a reason, or `{ reason, coversLocalTimeout: true }`. Only the second form
- * may cover a local wait that ran out (see `isKnownDivergence`).
+ * Keep the historical registration metadata; a timeout flag cannot complete an unfinished row.
  */
 function divergenceOf(entry) {
   return typeof entry === "string"
@@ -536,6 +535,7 @@ function divergenceOf(entry) {
     : {
         reason: entry.reason,
         fireemu: entry.fireemu,
+        production: entry.production,
         coversLocalTimeout: entry.coversLocalTimeout === true,
       };
 }
@@ -560,20 +560,61 @@ export function classifyLocal(first, second, local) {
 }
 
 /**
- * Whether the local row equals the registration's quoted sequence and the rows differ, or (only for an entry that
- * says `coversLocalTimeout`) the local wait ran out for an answer that production gave: the
- * production rows are finished, the local stream is a loopback port, and the rows differ.
+ * Remove only token-bearing snapshot boundaries within a reconnect replay. The ADD acknowledgement
+ * and the final CURRENT boundary remain; all document content and target membership remain.
  */
+function reconnectContent(row) {
+  const canonical = canonicalRow(row);
+  const frames = row.rows ?? [];
+  const [add, acknowledgement] = frames;
+  const current = frames.at(-2),
+    finalBoundary = frames.at(-1);
+  const plainBoundary = (item) =>
+    item?.kind === "boundary" &&
+    item.resumeToken === true &&
+    Object.keys(item).every((key) => ["kind", "resumeToken"].includes(key));
+  if (
+    add?.kind !== "targetChange" ||
+    add.type !== "ADD" ||
+    !plainBoundary(acknowledgement) ||
+    current?.kind !== "targetChange" ||
+    current.type !== "CURRENT" ||
+    !plainBoundary(finalBoundary)
+  )
+    return undefined;
+  const replay = frames.slice(2, -2);
+  if (
+    !replay.every(
+      (item, index) =>
+        DOCUMENT_ROWS.has(item.kind) ||
+        (plainBoundary(item) &&
+          DOCUMENT_ROWS.has(replay[index - 1]?.kind) &&
+          (DOCUMENT_ROWS.has(replay[index + 1]?.kind) || index === replay.length - 1)),
+    )
+  )
+    return undefined;
+  // Only this approved replay segment is unordered. Compare complete document objects, including
+  // fields and both target lists; object property insertion order is not a wire difference.
+  const documents = replay
+    .filter((item) => DOCUMENT_ROWS.has(item.kind))
+    .toSorted((a, b) => a.kind.localeCompare(b.kind) || String(a.doc).localeCompare(String(b.doc)));
+  return { ...canonical, rows: [add, acknowledgement, ...documents, current, finalBoundary] };
+}
+
+/** A quote bounds the declared frame sequence; full retained content must also agree. */
 function isKnownDivergence(verdict, production, local, entry) {
   const quoted = entry.fireemu ?? entry.reason.match(/fireemu strict sends: ([^.]+)\./)?.[1];
   if (quoted == null || describeRow(local) !== quoted) return false;
-  if (verdict === "DIFFER") return true;
-  return (
-    verdict === "INDETERMINATE" &&
-    entry.coversLocalTimeout &&
-    local.timedOut === true &&
-    !isDeepStrictEqual(canonicalRow(production), canonicalRow(local))
-  );
+  if (entry.production != null && describeRow(production) !== entry.production) return false;
+  const productionContent = reconnectContent(production),
+    localContent = reconnectContent(local);
+  if (
+    productionContent === undefined ||
+    localContent === undefined ||
+    !isDeepStrictEqual(productionContent, localContent)
+  )
+    return false;
+  return verdict === "DIFFER";
 }
 
 const GOOD = new Set(["MATCH", "KNOWN_DIVERGENCE"]);
@@ -581,7 +622,9 @@ const GOOD = new Set(["MATCH", "KNOWN_DIVERGENCE"]);
 /**
  * `productions` are the two recordings of production, `local` the one of fireemu. A production
  * pair that disagrees is NONDETERMINISTIC (the row proves nothing about local); a divergence is
- * accepted only for a row that differs, with a reason and the quoted local sequence.
+ * accepted only for a row that differs, with a reason, the quoted local sequence and equal full
+ * retained content after the limited reconnect boundary normalization. Legacy non-boundary
+ * registrations without a structural proof fail closed.
  */
 export function compareRecordings({ productions, local, divergences = {}, settlements = [] }) {
   if (productions.length !== 2) throw new Error("two production recordings are required");

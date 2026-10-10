@@ -199,14 +199,14 @@ test("compareRecordings: local differs from agreeing productions is MISMATCH; a 
   assert.deepEqual(out.summary, { MISMATCH: 1, MISSING: 1 });
 });
 
-test("compareRecordings: a row only in local is EXTRA, a divergence listed with a reason is KNOWN_DIVERGENCE", () => {
+test("compareRecordings: a row only in local is EXTRA; an unbound non-boundary quote fails closed", () => {
   const out = compareRecordings({
     productions: [recording({ r: row(1) }), recording({ r: row(1) })],
     local: recording({ r: row(0), x: row(1) }),
     divergences: { r: { reason: "owner decision D1: reason", fireemu: describeRow(row(0)) } },
   });
-  assert.equal(out.rows.r.status, "KNOWN_DIVERGENCE");
-  assert.equal(out.rows.r.reason, "owner decision D1: reason");
+  assert.equal(out.rows.r.status, "MISMATCH");
+  assert.equal(out.rows.r.reason, undefined);
   assert.equal(out.rows.x.status, "EXTRA");
   assert.equal(out.ok, false);
 });
@@ -434,11 +434,7 @@ test("compareRecordings: every status, one row at a time", () => {
 });
 
 test("compareRecordings: known divergences count as good, an unfit local recording does not", () => {
-  const ok = compareRecordings({
-    productions: [recording({ r: row(1) }), recording({ r: row(1) })],
-    local: recording({ r: row(0) }),
-    divergences: { r: { reason: "owner decision D1", fireemu: describeRow(row(0)) } },
-  });
+  const ok = compareRecordings(boundaryDivergenceInput());
   assert.equal(ok.ok, true);
   assert.deepEqual(ok.localProblems, []);
   const dirty = compareRecordings({
@@ -561,8 +557,15 @@ test("the command line prints one line per row and a summary, and exits 0 only w
     f.div,
   ]);
   assert.equal(known.code, 1, "the divergence names r, not s");
+  const boundary = boundaryDivergenceInput();
+  const id = boundaryDivergenceId;
   const named = runCli(
-    { ...files, div: { s: { reason: "owner decision D9", fireemu: describeRow(row(0)) } } },
+    {
+      p1: recording({ s: boundary.productions[0].rows[id] }),
+      p2: recording({ s: boundary.productions[1].rows[id] }),
+      bad: recording({ s: boundary.local.rows[id] }),
+      div: { s: { ...boundary.divergences[id], reason: "owner decision D9" } },
+    },
     (f) => ["--production", f.p1, f.p2, "--local", f.bad, "--divergences", f.div],
   );
   assert.equal(named.code, 0);
@@ -1022,15 +1025,19 @@ test("only an entry that opts in covers a local wait that ran out for an answer 
       "INDETERMINATE",
       JSON.stringify(entry),
     );
-  // An entry that opts in makes it a known divergence, and the reason is carried.
+  // A legacy timeout opt-in cannot approve unknown structure without a bound structural template.
   const declared = compareRecordings({
     ...recordings(stuck),
     divergences: {
       r: { reason: "no index needed", fireemu: describeRow(stuck), coversLocalTimeout: true },
     },
   });
-  assert.equal(declared.rows.r.status, "KNOWN_DIVERGENCE");
-  assert.equal(declared.rows.r.reason, "no index needed");
+  assert.equal(
+    declared.rows.r.status,
+    "INDETERMINATE",
+    "a timeout quote does not bind omitted target-error content",
+  );
+  assert.equal(declared.rows.r.reason, undefined);
   // A local wait that ran out on rows equal to production's is slow, not different.
   const slow = compareRecordings({
     ...recordings(production),
@@ -1885,12 +1892,12 @@ test("two rows that both have a filter in the same place must say the same; one 
   assert.equal(classifyRow(a, structuredClone(a)), "MATCH");
 });
 
-test("a registered divergence rejects a mutant of its quoted strict sequence", () => {
+test("an unbound non-boundary registration and its mutants fail closed", () => {
   const productions = [recording({ r: row(1) }), recording({ r: row(1) })];
   const divergences = { r: { reason: "declared sequence", fireemu: describeRow(row(0)) } };
   assert.equal(
     compareRecordings({ productions, local: recording({ r: row(0) }), divergences }).rows.r.status,
-    "KNOWN_DIVERGENCE",
+    "MISMATCH",
   );
   const mutant = row(0);
   mutant.rows.push({ kind: "boundary", resumeToken: true });
@@ -1906,4 +1913,335 @@ test("a registered divergence rejects a mutant of its quoted strict sequence", (
     }).rows.r.status,
     "MISMATCH",
   );
+});
+
+// A summary quote cannot approve unquoted data.
+const boundaryDivergenceId = "native/existence-filter/with-expected-count";
+function boundaryDivergenceInput() {
+  const [first, second] = prodRows(boundaryDivergenceId).map((entryRow) =>
+    structuredClone(entryRow),
+  );
+  const local = structuredClone(first);
+  local.rows = [
+    local.rows[0],
+    local.rows[1],
+    local.rows[4],
+    local.rows[2],
+    local.rows[6],
+    local.rows[7],
+  ].map((item) => Object.assign({ kind: item.kind }, item));
+  const entry = JSON.parse(
+    readFileSync(new URL("./fs-listen/data/divergences-strict.json", import.meta.url), "utf8"),
+  )[boundaryDivergenceId];
+  return {
+    productions: [
+      recording({ [boundaryDivergenceId]: first }),
+      recording({ [boundaryDivergenceId]: second }),
+    ],
+    local: recording({ [boundaryDivergenceId]: local }),
+    divergences: { [boundaryDivergenceId]: entry },
+  };
+}
+test("registered reconnect boundary and document-run order differences remain approved", () => {
+  const report = compareRecordings(boundaryDivergenceInput());
+  assert.equal(report.rows[boundaryDivergenceId].status, "KNOWN_DIVERGENCE");
+  assert.equal(report.ok, true);
+});
+for (const [name, mutate] of [
+  [
+    "document fields",
+    (entryRow) => {
+      entryRow.rows.find((r) => r.kind === "documentChange").fields.n = 9999;
+    },
+  ],
+  [
+    "document target membership",
+    (entryRow) => {
+      entryRow.rows.find((r) => r.kind === "documentChange").targetIds = [999];
+    },
+  ],
+  [
+    "change removed target ids",
+    (entryRow) => {
+      entryRow.rows.find((r) => r.kind === "documentChange").removedTargetIds = [999];
+    },
+  ],
+  [
+    "delete removed target ids",
+    (entryRow) => {
+      entryRow.rows.find((r) => r.kind === "documentDelete").removedTargetIds = [999];
+    },
+  ],
+  [
+    "invariant violation",
+    (entryRow) => {
+      entryRow.invariantViolations = ["unexpected target state"];
+    },
+  ],
+  [
+    "stream termination error",
+    (entryRow) => {
+      entryRow.end = { reason: "error", code: 13 };
+    },
+  ],
+  [
+    "recorded failure",
+    (entryRow) => {
+      entryRow.failures = ["unexpected failure"];
+    },
+  ],
+  [
+    "target error details",
+    (entryRow) => {
+      entryRow.rows.find((r) => r.kind === "targetChange").cause = { message: "unexpected error" };
+    },
+  ],
+  [
+    "document name control",
+    (entryRow) => {
+      entryRow.rows.find((r) => r.kind === "documentChange").doc = "other";
+    },
+  ],
+])
+  test(`registered boundary divergence rejects ${name}`, () => {
+    const input = boundaryDivergenceInput();
+    mutate(input.local.rows[boundaryDivergenceId]);
+    if (!["document name control", "target error details"].includes(name))
+      assert.equal(
+        describeRow(input.local.rows[boundaryDivergenceId]),
+        input.divergences[boundaryDivergenceId].fireemu,
+      );
+    const report = compareRecordings(input);
+    assert.equal(report.rows[boundaryDivergenceId].status, "MISMATCH");
+    assert.equal(report.ok, false);
+  });
+
+test("registered boundary divergence preserves arbitrary document values and target ids", () => {
+  const random = prng(0x51b0);
+  for (let sample = 0; sample < 64; sample += 1) {
+    const input = boundaryDivergenceInput();
+    const value = Math.floor(random() * 1000000);
+    const target = 1 + Math.floor(random() * 1000000);
+    const change = (entryRow) => entryRow.rows.find((item) => item.kind === "documentChange");
+    const deletion = (entryRow) => entryRow.rows.find((item) => item.kind === "documentDelete");
+    for (const capture of [...input.productions, input.local]) {
+      const entryRow = capture.rows[boundaryDivergenceId];
+      change(entryRow).fields.n = value;
+      change(entryRow).targetIds = [target];
+      change(entryRow).removedTargetIds = [target];
+      deletion(entryRow).removedTargetIds = [target];
+    }
+    assert.equal(compareRecordings(input).rows[boundaryDivergenceId].status, "KNOWN_DIVERGENCE");
+    for (const alter of [
+      (entryRow) => {
+        change(entryRow).fields.n += 1;
+      },
+      (entryRow) => {
+        change(entryRow).targetIds = [target + 1];
+      },
+      (entryRow) => {
+        change(entryRow).removedTargetIds = [target + 1];
+      },
+      (entryRow) => {
+        deletion(entryRow).removedTargetIds = [target + 1];
+      },
+    ]) {
+      const mutant = structuredClone(input);
+      alter(mutant.local.rows[boundaryDivergenceId]);
+      assert.equal(
+        compareRecordings(mutant).rows[boundaryDivergenceId].status,
+        "MISMATCH",
+        `sample ${sample}`,
+      );
+    }
+  }
+});
+
+test("registered boundary divergence preserves acknowledgement, final boundary, and unknown boundary content", () => {
+  for (const mutate of [
+    (entryRow) => {
+      entryRow.rows[1].resumeToken = false;
+    },
+    (entryRow) => {
+      entryRow.rows.at(-1).resumeToken = false;
+    },
+    (entryRow) => {
+      entryRow.rows[1].unexpected = "retained";
+    },
+    (entryRow) => {
+      entryRow.rows.at(-1).unexpected = "retained";
+    },
+    (entryRow) => {
+      entryRow.rows.find((r) => r.kind === "targetChange").targetIds = [999];
+    },
+  ]) {
+    const input = boundaryDivergenceInput();
+    mutate(input.local.rows[boundaryDivergenceId]);
+    const report = compareRecordings(input);
+    assert.equal(report.rows[boundaryDivergenceId].status, "MISMATCH");
+    assert.equal(report.ok, false);
+  }
+});
+test("registered boundary divergence cannot excuse a program error with a timeout opt-in", () => {
+  const input = boundaryDivergenceInput();
+  Object.assign(input.local.rows[boundaryDivergenceId], { timedOut: true, programError: true });
+  input.divergences[boundaryDivergenceId].coversLocalTimeout = true;
+  assert.equal(compareRecordings(input).rows[boundaryDivergenceId].status, "INDETERMINATE");
+});
+test("registered boundary divergence remains bound to the quoted production sequence", () => {
+  const input = boundaryDivergenceInput();
+  input.divergences[boundaryDivergenceId].production = "another production sequence";
+  assert.equal(compareRecordings(input).rows[boundaryDivergenceId].status, "MISMATCH");
+});
+
+test("existing non-boundary filter registration fails closed without bound structural evidence", () => {
+  const id = "native/resume-token/other-query";
+  const [first, second] = prodRows(id);
+  const local = withoutFilterRows(structuredClone(first));
+  const entry = JSON.parse(
+    readFileSync(new URL("./fs-listen/data/divergences-emulator.json", import.meta.url), "utf8"),
+  )[id];
+  assert.equal(describeRow(local), entry.fireemu);
+  const report = compareRecordings({
+    productions: [recording({ [id]: first }), recording({ [id]: second })],
+    local: recording({ [id]: local }),
+    divergences: { [id]: entry },
+  });
+  assert.equal(report.rows[id].status, "MISMATCH");
+  assert.equal(report.ok, false);
+});
+
+test("registered boundary divergence does not discard unapproved replay boundary metadata", () => {
+  const input = boundaryDivergenceInput();
+  for (const production of input.productions)
+    production.rows[boundaryDivergenceId].rows[3].unexpected = "retained";
+  assert.equal(compareRecordings(input).rows[boundaryDivergenceId].status, "MISMATCH");
+});
+
+test("a registered quote cannot approve informative filter relocation", () => {
+  const input = boundaryDivergenceInput();
+  const filter = {
+    kind: "filter",
+    targetId: 1,
+    count: 999,
+    unchangedNames: { hashCount: 0, bitmapBytes: 0, padding: 0 },
+  };
+  for (const production of input.productions)
+    production.rows[boundaryDivergenceId].rows.splice(2, 0, structuredClone(filter));
+  input.local.rows[boundaryDivergenceId].rows.push(structuredClone(filter));
+  const entry = input.divergences[boundaryDivergenceId];
+  entry.production = describeRow(input.productions[0].rows[boundaryDivergenceId]);
+  entry.fireemu = describeRow(input.local.rows[boundaryDivergenceId]);
+  assert.equal(compareRecordings(input).rows[boundaryDivergenceId].status, "MISMATCH");
+});
+
+test("existing emulator filter-removal registrations retain their quotes but cannot hide structural differences", () => {
+  const entries = JSON.parse(
+    readFileSync(new URL("./fs-listen/data/divergences-emulator.json", import.meta.url), "utf8"),
+  );
+  for (const id of [
+    "native/resume-token/older",
+    "native/resume-token/other-query",
+    "native/resume-token-expired/expired",
+  ]) {
+    const [first, second] = prodRows(id);
+    const local = withoutFilterRows(structuredClone(first));
+    assert.equal(describeRow(local), entries[id].fireemu, id);
+    const report = compareRecordings({
+      productions: [recording({ [id]: first }), recording({ [id]: second })],
+      local: recording({ [id]: local }),
+      divergences: { [id]: entries[id] },
+    });
+    assert.equal(report.rows[id].status, "MISMATCH", id);
+    assert.equal(report.ok, false, id);
+  }
+});
+test("existing strict and L1b filter/replay registrations do not provide a structural template", () => {
+  const registers = ["divergences-strict.json", "l1b-divergences-strict.json"].map((name) =>
+    JSON.parse(readFileSync(new URL(`./fs-listen/data/${name}`, import.meta.url), "utf8")),
+  );
+  for (const [id, entry] of [
+    Object.entries(registers[0]).find(([rowId]) => rowId === "native/resume-token/current"),
+    ...Object.entries(registers[1]),
+  ]) {
+    const doc = id === "native/resume-token/current" ? "b" : "a";
+    const local = {
+      rows: [
+        { kind: "targetChange", type: "ADD", targetIds: [1], cause: null, resumeToken: false },
+        { kind: "boundary", resumeToken: true },
+        ...(id.endsWith("/k0")
+          ? []
+          : [
+              {
+                kind: "documentChange",
+                doc,
+                fields: { n: 9999 },
+                targetIds: [1],
+                removedTargetIds: [],
+              },
+            ]),
+        { kind: "targetChange", type: "CURRENT", targetIds: [1], cause: null, resumeToken: true },
+        { kind: "boundary", resumeToken: true },
+        {
+          kind: "filter",
+          targetId: 1,
+          count: id === "native/resume-token/current" ? 2 : 3,
+          unchangedNames: id.endsWith("/k1-expected")
+            ? { hashCount: 14, bitmapBytes: 12, padding: 5 }
+            : { hashCount: 0, bitmapBytes: 0, padding: 0 },
+        },
+      ],
+      end: null,
+      timedOut: false,
+    };
+    assert.equal(describeRow(local), entry.fireemu, id);
+    const production = structuredClone(local);
+    production.rows.pop();
+    if (id === "native/resume-token/current")
+      production.rows.splice(3, 0, { kind: "boundary", resumeToken: true });
+    const report = compareRecordings({
+      productions: [recording({ [id]: production }), recording({ [id]: production })],
+      local: recording({ [id]: local }),
+      divergences: { [id]: entry },
+    });
+    assert.equal(report.rows[id].status, "MISMATCH", id);
+    assert.equal(report.ok, false, id);
+  }
+});
+
+test("registered boundary divergence remains bound to the quoted local sequence", () => {
+  const input = boundaryDivergenceInput();
+  input.divergences[boundaryDivergenceId].fireemu = "another local sequence";
+  assert.equal(compareRecordings(input).rows[boundaryDivergenceId].status, "MISMATCH");
+});
+test("a boundary-only local timeout remains unfinished even with its historical timeout opt-in", () => {
+  const input = boundaryDivergenceInput();
+  input.local.rows[boundaryDivergenceId].timedOut = true;
+  assert.equal(compareRecordings(input).rows[boundaryDivergenceId].status, "INDETERMINATE");
+  input.divergences[boundaryDivergenceId].coversLocalTimeout = true;
+  assert.equal(compareRecordings(input).rows[boundaryDivergenceId].status, "INDETERMINATE");
+});
+
+test("an unsupported frame shape cannot use ordinary canonical equality to approve filter relocation", () => {
+  const input = boundaryDivergenceInput();
+  const local = input.local.rows[boundaryDivergenceId];
+  for (const production of input.productions)
+    production.rows[boundaryDivergenceId] = structuredClone(local);
+  const filter = {
+    kind: "filter",
+    targetId: 1,
+    count: 999,
+    unchangedNames: { hashCount: 0, bitmapBytes: 0, padding: 0 },
+  };
+  for (const production of input.productions)
+    production.rows[boundaryDivergenceId].rows.splice(-2, 0, structuredClone(filter));
+  local.rows.push(structuredClone(filter));
+  const entry = input.divergences[boundaryDivergenceId];
+  entry.production = describeRow(input.productions[0].rows[boundaryDivergenceId]);
+  entry.fireemu = describeRow(local);
+  assert.deepEqual(
+    canonicalRow(input.productions[0].rows[boundaryDivergenceId]),
+    canonicalRow(local),
+  );
+  assert.equal(compareRecordings(input).rows[boundaryDivergenceId].status, "MISMATCH");
 });

@@ -85,6 +85,7 @@ export async function replayLocal(
     persist = () => {},
     now = () => performance.now(),
     timestampDisposition,
+    schedulingDisposition,
   } = {},
 ) {
   validateRuntime(pin, environment);
@@ -183,6 +184,7 @@ export async function replayLocal(
         enter: (cell) => meter.enter(input.packet.plan.cells.find((c) => c.id === cell.id)),
         observe: (entry) => persist("comparison", entry),
         timestampDisposition,
+        schedulingDisposition,
         clockReceiptFor: (source) =>
           clockReceipts.find(
             (receipt) =>
@@ -275,6 +277,7 @@ export async function main(argv = process.argv.slice(2), environment = process.e
   const report = await replayLocal(input, environment, pin, {
     persist,
     timestampDisposition: binding.timestampDisposition,
+    schedulingDisposition: binding.schedulingDisposition,
   });
   report.inputPins = binding;
   report.buildPinSha256 = opts["build-pin-sha256"];

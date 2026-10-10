@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { PROJECT, SUITE, validatePlan } from "./plan.mjs";
+import { createSchedulingDisposition } from "./scheduling-disposition.mjs";
 
 const same = isDeepStrictEqual;
 const verdict = (values) =>
@@ -305,6 +306,7 @@ export async function replayRecording(
     enter = () => {},
     observe = () => {},
     timestampDisposition,
+    schedulingDisposition,
     clockReceiptFor = () => undefined,
   } = {},
 ) {
@@ -320,6 +322,8 @@ export async function replayRecording(
       tokens = new Map(),
       acked = new Set(),
       exchanges = [];
+    const scheduling = createSchedulingDisposition(input, cell, schedulingDisposition);
+    const schedulingInvariants = [];
     let stopped = false;
     for (const source of cell.exchanges) {
       if (stopped && !source.category.startsWith("cleanup")) continue;
@@ -332,8 +336,14 @@ export async function replayRecording(
         request: structuredClone(source.request),
         at: source.at,
       };
+      let schedulingAck = false,
+        schedulingPull = null;
       try {
-        if (call.request.ackIds)
+        if (call.method === "Acknowledge" && scheduling?.owns(call.request.subscription)) {
+          schedulingAck = true;
+          call.request.ackIds = scheduling.ackIds(call.request.subscription, source);
+        }
+        if (call.request.ackIds && !schedulingAck)
           call.request.ackIds = call.request.ackIds.map((id) => {
             const item = tokens.get(`${call.request.subscription}\0${id}`);
             if (!item) throw new Error("ACK selector unresolved");
@@ -445,6 +455,8 @@ export async function replayRecording(
             topic: source.request.topic,
             createdN: source.n,
             tainted: Boolean(source.request.filter || source.reply.body.filter),
+            filter: source.reply.body.filter ?? source.request.filter ?? "",
+            enableMessageOrdering: source.reply.body.enableMessageOrdering === true,
             ackDeadlineSeconds: source.reply.body.ackDeadlineSeconds,
             currentDeliveries: new Map(),
             localAcknowledged: new Set(),
@@ -458,7 +470,76 @@ export async function replayRecording(
           const state = subscriptions.get(source.request.subscription ?? source.request.name);
           if (state) state.tainted = true;
         }
-        if (source.method === "Pull" && source.reply.ok && actual.ok) {
+        if (source.method === "Pull" && source.reply.ok && actual.ok && scheduling) {
+          schedulingPull = scheduling.pull(
+            source,
+            actual,
+            messages,
+            subscriptions.get(source.request.subscription),
+          );
+          if (schedulingPull) {
+            schedulingInvariants.push(
+              publicationClock(source, clockReceipt) ? "MATCH" : "NOT_COMPARABLE",
+            );
+            const received = expected?.receivedMessages ?? [],
+              local = actual.body?.receivedMessages ?? [];
+            for (const item of received) {
+              const publication = [...messages.values()].find(
+                (p) =>
+                  p.sourceMessageId === item.message?.messageId &&
+                  p.topic === subscriptionTopics.get(source.request.subscription),
+              );
+              const delivered = schedulingPull.bindings.find(
+                (b) => b.publication === publication,
+              )?.delivered;
+              if (!publication || !delivered) {
+                semantic = "NOT_COMPARABLE";
+                continue;
+              }
+              tokens.set(`${source.request.subscription}\0${item.ackId}`, {
+                sourceMessageId: publication.sourceMessageId,
+                messageId: publication.messageId,
+                ackId: delivered.ackId,
+                deliveredAt: Date.parse(source.at) - Date.parse(input.metadata.at),
+              });
+              item.ackId = delivered.ackId;
+              item.message.messageId = publication.messageId;
+              if (timestampDisposition) item.message.publishTime = delivered.message.publishTime;
+            }
+            for (const { publication, delivered, witnesses } of schedulingPull.bindings) {
+              const normalized = witnesses.map((item) => {
+                const value = structuredClone(item);
+                value.ackId = delivered.ackId;
+                value.message.messageId = delivered.message.messageId;
+                if (timestampDisposition) value.message.publishTime = delivered.message.publishTime;
+                return value;
+              });
+              schedulingInvariants.push(
+                !witnesses.length
+                  ? "NOT_COMPARABLE"
+                  : normalized.some((item) => same(item, delivered))
+                    ? "MATCH"
+                    : "DIVERGES",
+              );
+              if (timestampDisposition) {
+                const witness = cell.exchanges
+                  .flatMap((e) => e.reply.body?.receivedMessages ?? [])
+                  .find((i) => i.message?.messageId === publication.sourceMessageId);
+                timestampProofs.push(
+                  publicationTime(
+                    publication,
+                    witness?.message.publishTime,
+                    delivered.message.publishTime,
+                    authorityBound(timestampDisposition, input, cell, 1135, publicationProposal),
+                    subscriptionTopics.get(source.request.subscription),
+                  ),
+                );
+              }
+            }
+            if (!Array.isArray(local)) throw new Error("delivery envelope unresolved");
+          }
+        }
+        if (source.method === "Pull" && source.reply.ok && actual.ok && !schedulingPull) {
           const received = expected?.receivedMessages ?? [],
             local = actual.body?.receivedMessages ?? [];
           if (!Array.isArray(received) || !Array.isArray(local))
@@ -615,14 +696,33 @@ export async function replayRecording(
           source.reply.status !== actual.status ||
           !same(expected, actual.body)
         )
-          semantic = "DIVERGES";
+          semantic = semantic === "NOT_COMPARABLE" ? "NOT_COMPARABLE" : "DIVERGES";
         semantic = verdict([semantic, ...timestampProofs.map((p) => p.verdict)]);
         if (pairedSnapshot?.entry) {
           pairedSnapshot.entry.semanticVerdict = verdict([pairedSnapshot.baseVerdict, semantic]);
           observe(pairedSnapshot.entry);
           pairedSnapshot.entry = null;
         }
-        if (source.method === "Acknowledge") {
+        if (source.method === "Acknowledge" && schedulingAck) {
+          scheduling.ack(source.request.subscription, call.request.ackIds, actual, source.at);
+          schedulingInvariants.push(
+            publicationClock(source, clockReceipt) ? "MATCH" : "NOT_COMPARABLE",
+          );
+          schedulingInvariants.push(
+            source.reply.ok === actual.ok &&
+              source.reply.code === actual.code &&
+              source.reply.status === actual.status &&
+              same(source.reply.body, actual.body)
+              ? "MATCH"
+              : "DIVERGES",
+          );
+          if (
+            semantic === "MATCH" &&
+            source.request.ackIds.some((id) => !tokens.has(`${source.request.subscription}\0${id}`))
+          )
+            semantic = "NOT_COMPARABLE";
+        }
+        if (source.method === "Acknowledge" && !schedulingAck) {
           const subscription = subscriptions.get(source.request.subscription);
           const ackClock = publicationClock(source, clockReceipt);
           for (const [index, sourceAckId] of source.request.ackIds.entries()) {
@@ -677,6 +777,13 @@ export async function replayRecording(
           method: source.method,
           semanticVerdict: semantic,
           physicalVerdict: physical,
+          ...(schedulingPull || schedulingAck
+            ? {
+                schedulingCandidate: true,
+                exactSemanticVerdict: semantic,
+                localRequest: structuredClone(call.request),
+              }
+            : {}),
           actual,
           ...(timestampProofs.length
             ? {
@@ -718,7 +825,22 @@ export async function replayRecording(
       }
     }
     for (const pending of snapshots.values()) if (pending.entry) observe(pending.entry);
+    const schedulingProof = scheduling?.finish();
+    const retainedVerdicts = exchanges
+      .filter((e) => !e.schedulingCandidate)
+      .map((e) => e.semanticVerdict);
     results.push({
+      ...(schedulingProof?.windows.length
+        ? {
+            schedulingDisposition: schedulingProof,
+            dispositionVerdict: verdict([
+              ...retainedVerdicts,
+              ...schedulingInvariants,
+              schedulingProof.verdict,
+              ...exchanges.flatMap((e) => (e.timestampProofs ?? []).map((p) => p.verdict)),
+            ]),
+          }
+        : {}),
       id: cell.id,
       coordinates: cell.coordinates,
       semanticVerdict: exchanges.length
@@ -739,6 +861,12 @@ export async function replayRecording(
       ["MATCH", "DIVERGES", "NOT_COMPARABLE"].map((v) => [
         v,
         results.filter((c) => c.semanticVerdict === v).length,
+      ]),
+    ),
+    dispositionCounts: Object.fromEntries(
+      ["MATCH", "DIVERGES", "NOT_COMPARABLE"].map((v) => [
+        v,
+        results.filter((c) => (c.dispositionVerdict ?? c.semanticVerdict) === v).length,
       ]),
     ),
     parentClosureReady: false,

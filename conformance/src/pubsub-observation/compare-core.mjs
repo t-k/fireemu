@@ -453,7 +453,7 @@ function compareZeroOutcome(source, local, original, actual, proof) {
 
 // Preserve field order and non-ACK values and widths, except bound message identities.
 // Generated timestamp scalar placeholders retain presence and derive each ancestor length exactly.
-function ackWireProjection(raw, kind, generatedTime = false) {
+export function ackWireProjection(raw, kind, generatedTime = false) {
   let normalizedBytes = raw.length;
   const timestamp =
     generatedTime && kind === "timestamp"

@@ -1319,3 +1319,335 @@ test("D REST publication time preserves all legal Z precisions across generated 
       assert.equal(r.results[0].exchanges[2].semanticVerdict, "MATCH");
     }
 });
+
+async function nativePublicationFixture({ omitTimestampZero = false } = {}) {
+  const { protos } = await import("@google-cloud/pubsub"),
+    { requestToWire } = await import("./pubsub-production/grpc.mjs"),
+    { createHash } = await import("node:crypto");
+  const f = publicationFixture();
+  f.input.cells[0].id = "N1";
+  f.options.timestampDisposition.cellIds = ["N1"];
+  for (const row of f.input.cells[0].exchanges) row.transport = "grpc";
+  f.input.cells[0].exchanges[1].reply.body.messageIds = ["11111111111111111"];
+  f.input.cells[0].exchanges[2].reply.body.receivedMessages[0].message.messageId =
+    "11111111111111111";
+  f.actual[1].body.messageIds = ["22222222222222222"];
+  f.actual[2].body.receivedMessages[0].message.messageId = "22222222222222222";
+  if (omitTimestampZero) {
+    f.input.cells[0].exchanges[2].reply.body.receivedMessages[0].message.publishTime =
+      "2026-01-01T00:00:01Z";
+    f.actual[2].body.receivedMessages[0].message.publishTime = "2026-01-01T00:00:00Z";
+  } else {
+    f.input.cells[0].exchanges[1].at = "2026-01-01T00:00:00.001Z";
+    f.actual[2].body.receivedMessages[0].message.publishTime = "2026-01-01T00:00:00.001Z";
+  }
+  const bind = (r, { omitZero = omitTimestampZero } = {}) => {
+    const body = requestToWire(structuredClone(r.body));
+    if (omitZero)
+      for (const item of body.receivedMessages ?? []) {
+        if (item.message?.publishTime?.nanos === 0) delete item.message.publishTime.nanos;
+        if (item.message?.publishTime?.seconds === "0") delete item.message.publishTime.seconds;
+      }
+    const bytes = Buffer.from(
+      protos.google.pubsub.v1.PullResponse.encode(
+        protos.google.pubsub.v1.PullResponse.fromObject(body),
+      ).finish(),
+    );
+    r.bodyBytes = bytes.length;
+    r.bodySha256 = createHash("sha256").update(bytes).digest("hex");
+    return bytes;
+  };
+  bind(f.input.cells[0].exchanges[2].reply);
+  bind(f.actual[2]);
+  const duplicateMap = (r) => {
+    const item = requestToWire(structuredClone(r.body)).receivedMessages[0];
+    const message = Buffer.concat([
+      Buffer.from(
+        protos.google.pubsub.v1.PubsubMessage.encode(
+          protos.google.pubsub.v1.PubsubMessage.fromObject(item.message),
+        ).finish(),
+      ),
+      Buffer.from(
+        protos.google.pubsub.v1.PubsubMessage.encode({
+          attributes: item.message.attributes,
+        }).finish(),
+      ),
+    ]);
+    const received = protos.google.pubsub.v1.ReceivedMessage.encode({ ackId: item.ackId })
+      .uint32(18)
+      .bytes(message)
+      .finish();
+    const bytes = Buffer.from(
+      protos.google.pubsub.v1.PullResponse.encode({}).uint32(10).bytes(received).finish(),
+    );
+    r.bodyBytes = bytes.length;
+    r.bodySha256 = createHash("sha256").update(bytes).digest("hex");
+  };
+  return {
+    ...f,
+    bind,
+    duplicateMap,
+    hash: (bytes) => createHash("sha256").update(bytes).digest("hex"),
+  };
+}
+test("D native source Pull recovers exact captured wire before publication disposition", async (t) => {
+  const { replayRecording } = await core();
+  for (const [name, alter, expected] of [
+    ["captured unary publication", () => {}, "MATCH"],
+    [
+      "unencoded field cannot be invented",
+      (f) => {
+        f.input.cells[0].exchanges[2].reply.body.receivedMessages[0].message.unrecorded = "x";
+        f.actual[2].body.receivedMessages[0].message.unrecorded = "x";
+      },
+      "NOT_COMPARABLE",
+    ],
+
+    [
+      "equal timestamp retains physical raw difference",
+      (f) => {
+        f.input.cells[0].exchanges[2].reply.body.receivedMessages[0].message.publishTime =
+          "2026-01-01T00:00:00.001Z";
+        f.bind(f.input.cells[0].exchanges[2].reply);
+      },
+      "MATCH",
+    ],
+
+    [
+      "attribute wire order",
+      (f) => {
+        f.input.cells[0].exchanges[1].request.messages[0].attributes = { first: "x", second: "y" };
+        f.input.cells[0].exchanges[2].reply.body.receivedMessages[0].message.attributes = {
+          first: "x",
+          second: "y",
+        };
+        f.actual[2].body.receivedMessages[0].message.attributes = { second: "y", first: "x" };
+        f.bind(f.input.cells[0].exchanges[2].reply);
+        f.bind(f.actual[2]);
+      },
+      "MATCH",
+    ],
+    [
+      "stored publication time mismatch",
+      (f) => {
+        f.actual[2].body.receivedMessages[0].message.publishTime = "2026-01-01T00:00:00.002Z";
+        f.bind(f.actual[2]);
+      },
+      "DIVERGES",
+    ],
+
+    ["Timestamp zero omission", () => {}, "MATCH"],
+    ...["key", "value"].map((field) => [
+      `attribute changed ${field}`,
+      (f) => {
+        f.actual[2].body.receivedMessages[0].message.attributes =
+          field === "key" ? { changed: "x" } : { first: "changed" };
+        f.bind(f.actual[2]);
+      },
+      "DIVERGES",
+    ]),
+    [
+      "unknown original wire field",
+      (f) => {
+        const reply = f.input.cells[0].exchanges[2].reply;
+        const raw = f.bind(reply);
+        const changed = Buffer.concat([raw, Buffer.from([160, 6, 1])]);
+        reply.bodyBytes = changed.length;
+        reply.bodySha256 = f.hash(changed);
+      },
+      "NOT_COMPARABLE",
+    ],
+    [
+      "ordinary repeated message multiplicity",
+      (f) => {
+        f.actual[2].body.receivedMessages.push(
+          structuredClone(f.actual[2].body.receivedMessages[0]),
+        );
+        f.bind(f.actual[2]);
+      },
+      "DIVERGES",
+    ],
+    [
+      "duplicate original map entry",
+      (f) => {
+        const r = f.input.cells[0].exchanges[2].reply;
+        r.body.receivedMessages[0].message.attributes = { duplicate: "x" };
+        f.input.cells[0].exchanges[1].request.messages[0].attributes = { duplicate: "x" };
+        f.actual[2].body.receivedMessages[0].message.attributes = { duplicate: "x" };
+        f.bind(f.actual[2]);
+        f.duplicateMap(r);
+      },
+      "NOT_COMPARABLE",
+    ],
+    [
+      "ordinary repeated message order",
+      (f) => {
+        const r = f.actual[2];
+        const second = structuredClone(r.body.receivedMessages[0]);
+        second.message.data = "eQ==";
+        r.body.receivedMessages.unshift(second);
+        f.input.cells[0].exchanges[2].reply.body.receivedMessages.push(structuredClone(second));
+        f.bind(r);
+        f.bind(f.input.cells[0].exchanges[2].reply);
+      },
+      "DIVERGES",
+    ],
+    [
+      "Timestamp zero presence remains strict",
+      (f) => {
+        f.input.cells[0].exchanges[2].reply.body.receivedMessages[0].message.publishTime =
+          "2026-01-01T00:00:01Z";
+        f.actual[2].body.receivedMessages[0].message.publishTime = "2026-01-01T00:00:00Z";
+        f.input.cells[0].exchanges[1].at = "2026-01-01T00:00:00Z";
+        f.options.clockReceiptFor = (r) => ({
+          ...receipt(r),
+          bodyBytes: 40,
+          bodySha256: digest,
+          body: { clock: "2026-01-01T00:00:00.000000000Z" },
+        });
+        f.bind(f.input.cells[0].exchanges[2].reply);
+        f.bind(f.actual[2], { omitZero: true });
+      },
+      "DIVERGES",
+    ],
+    [
+      "source hash mismatch",
+      (f) => (f.input.cells[0].exchanges[2].reply.bodySha256 = digest),
+      "NOT_COMPARABLE",
+    ],
+    [
+      "source byte count mismatch",
+      (f) => f.input.cells[0].exchanges[2].reply.bodyBytes++,
+      "NOT_COMPARABLE",
+    ],
+    ["local raw binding missing", (f) => delete f.actual[2].bodySha256, "NOT_COMPARABLE"],
+    [
+      "same-length other publication",
+      (f) => {
+        f.actual[2].body.receivedMessages[0].message.messageId = "33333333333333333";
+        f.bind(f.actual[2]);
+      },
+      "DIVERGES",
+    ],
+    [
+      "other payload",
+      (f) => {
+        f.actual[2].body.receivedMessages[0].message.data = "eQ==";
+        f.bind(f.actual[2]);
+      },
+      "DIVERGES",
+    ],
+    [
+      "clock mismatch",
+      (f) =>
+        (f.options.clockReceiptFor = (r) => ({
+          ...receipt(r),
+          bodyBytes: 40,
+          bodySha256: digest,
+          body: { clock: "2026-01-01T00:00:02.000Z" },
+        })),
+      "DIVERGES",
+    ],
+    ["missing authority", (f) => delete f.options.timestampDisposition, "NOT_COMPARABLE"],
+    [
+      "counter difference",
+      (f) => {
+        f.actual[2].body.receivedMessages[0].deliveryAttempt = 2;
+        f.bind(f.actual[2]);
+      },
+      "DIVERGES",
+    ],
+  ])
+    await t.test(name, async () => {
+      const f = await nativePublicationFixture({
+        omitTimestampZero: name === "Timestamp zero omission",
+      });
+      alter(f);
+      const r = await replayRecording(
+        f.input,
+        async (_call, row) => f.actual[row.requestId - 1],
+        f.options,
+      );
+      const e = r.results[0].exchanges[2];
+      assert.equal(e.semanticVerdict, expected);
+      if (name === "Timestamp zero presence remains strict") {
+        assert.equal(e.timestampProofs[0].publicationVerdict, "MATCH");
+        assert.equal(e.timestampProofs[0].nativeWire.verdict, "DIVERGES");
+      }
+      if (name === "attribute wire order") {
+        assert.equal(e.timestampProofs[0].nativeWire.originalProjectionVerdict, "DIVERGES");
+        assert.notDeepEqual(
+          e.timestampProofs[0].nativeWire.attributesOrder[0].keys,
+          e.timestampProofs[0].nativeWire.attributesOrder[1].keys,
+        );
+      }
+      if (expected === "MATCH") {
+        assert.equal(e.physicalVerdict, "DIVERGES");
+        assert.equal(e.timestampProofs[0].nativeWire.verdict, "MATCH");
+        assert.equal(e.timestampProofs[0].nativeWire.sourceRecovered, true);
+        assert.equal(e.timestampProofs[0].nativeWire.localRecovered, true);
+        assert.equal(
+          f.hash(Buffer.from(e.timestampProofs[0].nativeWire.sourceBodyBase64, "base64")),
+          e.timestampProofs[0].nativeWire.sourceSha256,
+        );
+        assert.equal(
+          f.hash(Buffer.from(e.timestampProofs[0].nativeWire.localBodyBase64, "base64")),
+          e.timestampProofs[0].nativeWire.localSha256,
+        );
+        assert.equal(
+          e.timestampProofs[0].nativeWire.sourceCandidate,
+          name === "Timestamp zero omission" ? 2 : 1,
+        );
+      }
+    });
+});
+
+test("D native source Pull retains legal precision and induced scalar widths", async () => {
+  const { replayRecording } = await core();
+  for (const precision of [0, 3, 6, 9])
+    for (let second = 0; second < 8; second++) {
+      const f = await nativePublicationFixture(),
+        stamp = (sec, fraction) =>
+          `2026-01-01T00:00:${String(sec).padStart(2, "0")}${precision ? `.${fraction.slice(0, precision)}` : ""}Z`;
+      f.input.cells[0].exchanges[1].at = stamp(second, "899654321");
+      f.input.cells[0].exchanges[2].reply.body.receivedMessages[0].message.publishTime = stamp(
+        second + 1,
+        "021123456",
+      );
+      f.actual[2].body.receivedMessages[0].message.publishTime = f.input.cells[0].exchanges[1].at;
+      f.bind(f.input.cells[0].exchanges[2].reply);
+      f.bind(f.actual[2]);
+      const r = await replayRecording(
+          f.input,
+          async (_call, row) => f.actual[row.requestId - 1],
+          f.options,
+        ),
+        e = r.results[0].exchanges[2];
+      assert.equal(e.semanticVerdict, "MATCH");
+      assert.equal(e.timestampProofs[0].nativeWire.verdict, "MATCH");
+      assert.equal(e.physicalVerdict, "DIVERGES");
+    }
+});
+
+test("D native timestamp disposition leaves forwarded sink and origin evidence unresolved", async () => {
+  const { replayRecording } = await core(),
+    f = await nativePublicationFixture();
+  f.input.cells[0].exchanges[2].category = "sinkPull";
+  for (const r of [f.input.cells[0].exchanges[2].reply, f.actual[2]]) {
+    r.body.receivedMessages[0].message.attributes = {
+      CloudPubSubDeadLetterSourceTopicPublishTime: "2026-01-01T00:00:00.001Z",
+    };
+    f.bind(r);
+  }
+  const r = await replayRecording(
+      f.input,
+      async (_call, row) => f.actual[row.requestId - 1],
+      f.options,
+    ),
+    e = r.results[0].exchanges[2];
+  assert.equal(e.semanticVerdict, "NOT_COMPARABLE");
+  assert.deepEqual(e.timestampProofs, []);
+  assert.ok(
+    e.debts.includes("Observed publication timestamp requires source/local clock evidence"),
+  );
+});

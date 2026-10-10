@@ -1,4 +1,8 @@
 import { isDeepStrictEqual as same } from "node:util";
+import { createHash } from "node:crypto";
+import { protos } from "@google-cloud/pubsub";
+import { requestToWire, responseFromWire } from "../pubsub-production/grpc.mjs";
+import { ackWireProjection } from "../pubsub-observation/compare-core.mjs";
 import { PROJECT, SUITE, validatePlan, categoryCaps, iamCategory, CAPS } from "./plan.mjs";
 import { createLedger, kindOf } from "../pubsub-observation/ledger.mjs";
 import { createIamOwnership, readPolicy } from "../pubsub-production/iam.mjs";
@@ -32,6 +36,93 @@ const bodyBound = (reply) =>
   reply.bodyBytes >= 0 &&
   reply.bodyBytes <= CAPS.metadataBytesEachDirection &&
   /^[a-f0-9]{64}$/.test(reply.bodySha256 ?? "");
+function recoverNativePull(reply) {
+  if (!good(reply) || !bodyBound(reply)) return null;
+  const Type = protos.google.pubsub.v1.PullResponse;
+  try {
+    const wire = requestToWire(structuredClone(reply.body));
+    for (const candidate of [1, 2]) {
+      if (candidate === 2)
+        for (const item of wire.receivedMessages ?? []) {
+          const timestamp = item.message?.publishTime;
+          if (timestamp?.seconds === "0" || timestamp?.seconds === 0) delete timestamp.seconds;
+          if (timestamp?.nanos === 0) delete timestamp.nanos;
+        }
+      const bytes = Buffer.from(Type.encode(Type.fromObject(wire)).finish());
+      if (
+        bytes.length === reply.bodyBytes &&
+        createHash("sha256").update(bytes).digest("hex") === reply.bodySha256 &&
+        same(
+          responseFromWire(
+            Type.toObject(Type.decode(bytes), {
+              longs: String,
+              enums: String,
+              bytes: String,
+              defaults: false,
+            }),
+          ),
+          reply.body,
+        )
+      )
+        return { bytes, candidate, wire: structuredClone(wire) };
+    }
+  } catch {
+    /* Missing exact captured-wire evidence remains not comparable. */
+  }
+  return null;
+}
+function nativePullWire(sourceReply, localReply) {
+  const source = recoverNativePull(sourceReply),
+    local = recoverNativePull(localReply);
+  const proof = {
+    sourceRecovered: Boolean(source),
+    localRecovered: Boolean(local),
+    sourceCandidate: source?.candidate,
+    localCandidate: local?.candidate,
+    sourceBytes: sourceReply.bodyBytes,
+    localBytes: localReply.bodyBytes,
+    sourceSha256: sourceReply.bodySha256,
+    localSha256: localReply.bodySha256,
+    verdict: "NOT_COMPARABLE",
+  };
+  if (!source || !local) return proof;
+  proof.sourceBodyBase64 = source.bytes.toString("base64");
+  proof.localBodyBase64 = local.bytes.toString("base64");
+  proof.physicalVerdict = source.bytes.equals(local.bytes) ? "MATCH" : "DIVERGES";
+  try {
+    const originalSource = ackWireProjection(source.bytes, "response", true).fields;
+    const originalLocal = ackWireProjection(local.bytes, "response", true).fields;
+    proof.originalProjectionVerdict = same(originalSource, originalLocal) ? "MATCH" : "DIVERGES";
+    const normalized = [];
+    proof.attributesOrder = [];
+    for (const [side, recovered] of [
+      ["source", source],
+      ["local", local],
+    ]) {
+      const wire = structuredClone(recovered.wire);
+      for (const [index, item] of (wire.receivedMessages ?? []).entries()) {
+        if (!item.message?.attributes) continue;
+        const entries = Object.entries(item.message.attributes);
+        proof.attributesOrder.push({ side, index, keys: entries.map(([key]) => key) });
+        item.message.attributes = Object.fromEntries(
+          entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+        );
+      }
+      const bytes = Buffer.from(
+        protos.google.pubsub.v1.PullResponse.encode(
+          protos.google.pubsub.v1.PullResponse.fromObject(wire),
+        ).finish(),
+      );
+      proof[`${side}MapOrderComparisonSha256`] = createHash("sha256").update(bytes).digest("hex");
+      proof[`${side}MapOrderComparisonBytes`] = bytes.length;
+      normalized.push(ackWireProjection(bytes, "response", true).fields);
+    }
+    proof.verdict = same(normalized[0], normalized[1]) ? "MATCH" : "DIVERGES";
+  } catch {
+    proof.verdict = "DIVERGES";
+  }
+  return proof;
+}
 const nativeAbsence = (reply, transport, method) =>
   transport === "grpc" &&
   ["GetTopic", "GetSubscription"].includes(method) &&
@@ -768,7 +859,7 @@ export async function replayRecording(
                         ? "NOT_COMPARABLE"
                         : "DIVERGES";
                   const publication = publicationEvidence.get(a.message.messageId);
-                  if (timestampDisposition && source.transport === "rest") {
+                  if (timestampDisposition && ["rest", "grpc"].includes(source.transport)) {
                     const proof = {
                       publicationSourceN: publication?.source.n,
                       sourceValue: a.message.publishTime,
@@ -854,7 +945,7 @@ export async function replayRecording(
                           bodyBound(p.actual) &&
                           bodyBound(source.reply) &&
                           bodyBound(actual) &&
-                          source.transport === "rest" &&
+                          ["rest", "grpc"].includes(source.transport) &&
                           subscriptionTopics.get(call.request.subscription) ===
                             p.source.request.topic
                         )
@@ -867,6 +958,13 @@ export async function replayRecording(
                       proof.verdict === "NOT_COMPARABLE"
                         ? `sourceN=${source.n}: successful Publish/clock/subscription/authority binding unavailable`
                         : undefined;
+                    if (source.transport === "grpc") {
+                      proof.publicationVerdict = proof.verdict;
+                      proof.nativeWire = nativePullWire(source.reply, actual);
+                      proof.verdict = aggregate([proof.verdict, proof.nativeWire.verdict]);
+                      if (proof.nativeWire.verdict === "NOT_COMPARABLE")
+                        proof.gap = `sourceN=${source.n}: exact native Pull response raw recovery unavailable`;
+                    }
                     timestampProofs.push(proof);
                     semantic = aggregate([semantic, proof.verdict]);
                   }
@@ -881,7 +979,7 @@ export async function replayRecording(
                   a.message.publishTime !== b.message.publishTime &&
                   !(
                     source.category === "sourcePull" &&
-                    source.transport === "rest" &&
+                    ["rest", "grpc"].includes(source.transport) &&
                     timestampDisposition
                   )
                 )
@@ -928,7 +1026,11 @@ export async function replayRecording(
             sourceReply: source.reply,
             localReply: actual,
             physicalVerdict:
-              physical === "MATCH" && timestampProofs.some((p) => p.sourceValue !== p.localValue)
+              physical === "MATCH" &&
+              timestampProofs.some(
+                (p) =>
+                  p.sourceValue !== p.localValue || p.nativeWire?.physicalVerdict === "DIVERGES",
+              )
                 ? "DIVERGES"
                 : physical,
             timestampProofs,

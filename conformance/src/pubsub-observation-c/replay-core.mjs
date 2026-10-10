@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { PROJECT, SUITE, validatePlan } from "./plan.mjs";
 import { createSchedulingDisposition } from "./scheduling-disposition.mjs";
+import { compareEmptyAttributeValueDisposition } from "./empty-attribute-value-disposition.mjs";
 
 const same = isDeepStrictEqual;
 const verdict = (values) =>
@@ -307,10 +308,16 @@ export async function replayRecording(
     observe = () => {},
     timestampDisposition,
     schedulingDisposition,
+    emptyAttributeValueDisposition,
+    emptyAttributeValueComparator,
+    emptyAttributeValueRawBodyFor = () => undefined,
     clockReceiptFor = () => undefined,
   } = {},
 ) {
   const results = [];
+  const wireComparator = emptyAttributeValueDisposition
+    ? (emptyAttributeValueComparator ?? compareEmptyAttributeValueDisposition)
+    : null;
   for (const cell of input.cells) {
     enter(cell);
     const messages = new Map(),
@@ -770,7 +777,29 @@ export async function replayRecording(
                 source.reply.bodySha256 === actual.bodySha256
               ? "MATCH"
               : "DIVERGES";
+        let wireDisposition;
+        if (wireComparator) {
+          try {
+            wireDisposition = wireComparator({
+              input,
+              cell,
+              source,
+              actual,
+              sourceBody: input.emptyAttributeValueSourceBodies?.get(
+                `${source.n}:${source.requestId}:${source.transport}`,
+              ),
+              localBody: emptyAttributeValueRawBodyFor(source),
+              disposition: emptyAttributeValueDisposition,
+            });
+          } catch {
+            wireDisposition = {
+              verdict: "NOT_COMPARABLE",
+              reason: "wire disposition evaluation unavailable",
+            };
+          }
+        }
         const entry = {
+          ...(wireDisposition ? { wireDisposition } : {}),
           cellId: cell.id,
           requestId: source.requestId,
           sourceN: source.n,

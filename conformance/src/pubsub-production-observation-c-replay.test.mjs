@@ -1224,3 +1224,100 @@ test("C entrypoint binds the 338 compiled inputs including resource IAM before w
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("optional N7 wire proof retains original comparison and receives missing raw as uncertainty", async () => {
+  const source = {
+    n: 971,
+    responseN: 972,
+    requestId: 386,
+    method: "Pull",
+    transport: "grpc",
+    category: "pull",
+    at: time,
+    request: { subscription: "target", maxMessages: 3 },
+    reply: { ok: true, code: "OK", body: {} },
+  };
+  const input = {
+    metadata: { runId, sourceHead: head, packetSha256, descriptorSha256 },
+    runtimeInputs: { binarySha256: "d".repeat(64), inputsSha256: "e".repeat(64) },
+    cells: [{ id: "N7", coordinates: {}, exchanges: [source], observations: [] }],
+  };
+  const original = structuredClone(input),
+    authority = { owner1209: { proposalSha256: "fixture" } },
+    calls = [];
+  const report = await replayRecording(input, async () => structuredClone(source.reply), {
+    emptyAttributeValueDisposition: authority,
+    emptyAttributeValueComparator: (args) => {
+      calls.push(args);
+      return { verdict: "NOT_COMPARABLE", reason: "raw unavailable" };
+    },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].input, input);
+  assert.equal(calls[0].source, source);
+  assert.equal(calls[0].sourceBody, undefined);
+  assert.equal(calls[0].localBody, undefined);
+  assert.equal(calls[0].disposition, authority);
+  assert.equal(report.cells[0].exchanges[0].wireDisposition.verdict, "NOT_COMPARABLE");
+  assert.equal(report.cells[0].semanticVerdict, "MATCH");
+  assert.equal(report.cells[0].physicalVerdict, "NOT_COMPARABLE");
+  assert.equal(report.counts.MATCH, 1);
+  assert.deepEqual(input, original);
+  assert.equal(report.parentClosureReady, false);
+});
+
+test("N7 wire hook is inert without explicit disposition", async () => {
+  const source = {
+    n: 971,
+    responseN: 972,
+    requestId: 386,
+    method: "Pull",
+    transport: "grpc",
+    category: "pull",
+    at: time,
+    request: { subscription: "target", maxMessages: 3 },
+    reply: { ok: true, code: "OK", body: {} },
+  };
+  const input = {
+    metadata: { runId, sourceHead: head, packetSha256, descriptorSha256 },
+    cells: [{ id: "N7", coordinates: {}, exchanges: [source], observations: [] }],
+  };
+  let calls = 0;
+  const report = await replayRecording(input, async () => structuredClone(source.reply), {
+    emptyAttributeValueComparator: () => {
+      calls++;
+      return { verdict: "MATCH" };
+    },
+  });
+  assert.equal(calls, 0);
+  assert.equal(report.cells[0].exchanges[0].wireDisposition, undefined);
+});
+
+test("N7 auxiliary failure preserves original comparison", async () => {
+  const source = {
+    n: 971,
+    responseN: 972,
+    requestId: 386,
+    method: "Pull",
+    transport: "grpc",
+    category: "pull",
+    at: time,
+    request: { subscription: "target", maxMessages: 3 },
+    reply: { ok: true, code: "OK", body: {} },
+  };
+  const input = {
+    metadata: { runId, sourceHead: head, packetSha256, descriptorSha256 },
+    cells: [{ id: "N7", coordinates: {}, exchanges: [source], observations: [] }],
+  };
+  const report = await replayRecording(input, async () => structuredClone(source.reply), {
+    emptyAttributeValueDisposition: {},
+    emptyAttributeValueComparator: () => {
+      throw new Error("unavailable proof");
+    },
+  });
+  assert.equal(report.cells[0].semanticVerdict, "MATCH");
+  assert.equal(report.cells[0].physicalVerdict, "NOT_COMPARABLE");
+  assert.equal(report.counts.MATCH, 1);
+  assert.equal(report.cells[0].exchanges[0].wireDisposition.verdict, "NOT_COMPARABLE");
+  assert.equal(report.parentClosureReady, false);
+});

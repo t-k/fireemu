@@ -48,7 +48,7 @@ export function readSource(binding) {
     if (bytes > 20_000_000 || digest(data) !== item.sha256)
       throw new Error("recording source digest refused");
   }
-  return importRecording({
+  const input = importRecording({
     packet,
     descriptor,
     summary,
@@ -57,6 +57,41 @@ export function readSource(binding) {
     packetSha256: binding.packet.sha256,
     descriptorSha256: binding.descriptor.sha256,
   });
+  if (binding.emptyAttributeValueSourceBodies !== undefined) {
+    const pins = binding.emptyAttributeValueSourceBodies;
+    if (!Array.isArray(pins) || pins.length > 2)
+      throw new Error("bounded N7 source raw pins required");
+    const bodies = new Map();
+    for (const pin of pins) {
+      const key = `${pin.sourceN}:${pin.sourceRequestId}:${pin.transport}`;
+      const sources = input.cells
+        .filter((cell) => cell.id === "N7")
+        .flatMap((cell) => cell.exchanges)
+        .filter(
+          (source) =>
+            source.n === pin.sourceN &&
+            source.requestId === pin.sourceRequestId &&
+            source.transport === pin.transport &&
+            source.method === "Pull",
+        );
+      if (
+        pin.transport !== "grpc" ||
+        bodies.has(key) ||
+        sources.length !== 1 ||
+        !Number.isSafeInteger(pin.bytes) ||
+        pin.bytes < 1 ||
+        pin.bytes > 1000000 ||
+        pin.sha256 !== sources[0].reply.bodySha256 ||
+        pin.bytes !== sources[0].reply.bodyBytes
+      )
+        throw new Error("N7 source raw coordinate/hash/size binding refused");
+      const rawBody = pinned(pin.path, pin.sha256, 1000000);
+      if (rawBody.length !== pin.bytes) throw new Error("N7 source raw length refused");
+      bodies.set(key, rawBody);
+    }
+    input.emptyAttributeValueSourceBodies = bodies;
+  }
+  return input;
 }
 function compiledInputs(pin) {
   const manifest = JSON.parse(pinned(pin.binaryInputsPath, pin.binaryInputsSha256));
@@ -86,13 +121,17 @@ export async function replayLocal(
     now = () => performance.now(),
     timestampDisposition,
     schedulingDisposition,
+    emptyAttributeValueDisposition,
+    emptyAttributeValueComparator,
   } = {},
 ) {
   validateRuntime(pin, environment);
   const runtimeInputs = { binarySha256: pin.sha256, inputsSha256: pin.binaryInputsSha256 };
   const meter = createMeter({ plan: input.packet.plan, now }),
     localRows = [],
-    clockReceipts = [];
+    clockReceipts = [],
+    localRequestSources = new Map(),
+    rawBodies = new Map();
   let logicalTime = Date.parse(input.metadata.at),
     activeSource = null;
   const journal = {
@@ -102,6 +141,19 @@ export async function replayLocal(
         sourceRequestId: activeSource?.requestId,
         sourceN: activeSource?.n,
       };
+      if (row.event === "request-dispatch")
+        localRequestSources.set(`${row.transport}:${row.requestId}`, {
+          key: `${boundRow.sourceN}:${boundRow.sourceRequestId}:${row.transport}`,
+          capture:
+            row.cellId === "N7" &&
+            row.transport === "grpc" &&
+            ((input.metadata.runId === "567e1cd860a1" &&
+              ((boundRow.sourceN === 971 && boundRow.sourceRequestId === 386) ||
+                (boundRow.sourceN === 977 && boundRow.sourceRequestId === 388))) ||
+              (input.metadata.runId === "45298b949da0" &&
+                ((boundRow.sourceN === 968 && boundRow.sourceRequestId === 385) ||
+                  (boundRow.sourceN === 974 && boundRow.sourceRequestId === 387)))),
+        });
       localRows.push(boundRow);
       persist("row", boundRow);
     },
@@ -113,8 +165,15 @@ export async function replayLocal(
       pin,
       environment,
       clock: () => logicalTime - Date.parse(input.metadata.at),
-      captureBody: (transport, requestId, bytes) =>
-        persist("body", { transport, requestId, bytes }),
+      captureBody: (transport, requestId, bytes) => {
+        const source = localRequestSources.get(`${transport}:${requestId}`);
+        if (source?.capture && emptyAttributeValueDisposition) {
+          const captures = rawBodies.get(source.key) ?? [];
+          captures.push(Buffer.from(bytes));
+          rawBodies.set(source.key, captures);
+        }
+        persist("body", { transport, requestId, bytes });
+      },
     },
   });
   const bound = async (operation, ms) => {
@@ -185,6 +244,12 @@ export async function replayLocal(
         observe: (entry) => persist("comparison", entry),
         timestampDisposition,
         schedulingDisposition,
+        emptyAttributeValueDisposition,
+        emptyAttributeValueComparator,
+        emptyAttributeValueRawBodyFor: (source) => {
+          const captures = rawBodies.get(`${source.n}:${source.requestId}:${source.transport}`);
+          return captures?.length === 1 ? captures[0] : undefined;
+        },
         clockReceiptFor: (source) =>
           clockReceipts.find(
             (receipt) =>
@@ -278,6 +343,7 @@ export async function main(argv = process.argv.slice(2), environment = process.e
     persist,
     timestampDisposition: binding.timestampDisposition,
     schedulingDisposition: binding.schedulingDisposition,
+    emptyAttributeValueDisposition: binding.emptyAttributeValueDisposition,
   });
   report.inputPins = binding;
   report.buildPinSha256 = opts["build-pin-sha256"];

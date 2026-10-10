@@ -31,3 +31,7 @@ Owner1213 separately authorizes only the original R8/N8 post-NACK finite windows
 ## Successful Seek invalidates current ACK candidates
 
 Successful known Seek invalidates only the same subscription’s pending ACK bindings. Invalidated deliveries remain historical unacknowledged evidence and cannot become acknowledged from a later successful API response. Failed, unknown and foreign-subscription Seek preserve current candidates. Direct regressions and a two-Seek replay regression retain NOT_COMPARABLE for incomplete historical windows; no requests or comparison criteria are added.
+
+## Owner1215 single N9 response
+
+Only run45298b949da0 N9 source1065/request423 accepts cross-key placement permutations within the same three-item Pull. Exact owner/source/runtime bindings, per-key order, complete content, counts, bounds, current ACK and expiry remain strict. Original semantic/physical differences remain. The next Pull belongs to a separate unordered control subscription and supplies no ordered post-ACK release claim.

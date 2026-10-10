@@ -66,6 +66,28 @@ export function createSchedulingDisposition(input, cell, authority) {
       subscription?.enableMessageOrdering !== true
     )
       return { kind: "control", key: source.request.subscription };
+    if (cell.id === "N9") {
+      const approved = authority.owner1215;
+      if (
+        approved?.proposalSha256 !==
+          "10462775738fa3a1de9fae803e285bb385fd379ff6cf0ddadb856b5c93457b05" ||
+        approved.rowSha256WithLf !==
+          "60d325e05acea467d78513e2ebcc474f62e8f9bde8971e8118d644bb33225606" ||
+        input.metadata.runId !== "45298b949da0" ||
+        input.metadata.sourceHead !== "3235e54940ff1ece6004d3e78e70548ca6eba85c" ||
+        input.metadata.packetSha256 !==
+          "285a6220ed6c7e7efdafbe8618a52e3f87aac1be57a0ea7a684ae80b75126c80" ||
+        input.metadata.descriptorSha256 !==
+          "3b455b9613b20aa89d2ea277962652f110f45847c9b80668a66605517aba5707" ||
+        source.n !== 1065 ||
+        source.requestId !== 423 ||
+        source.request.maxMessages !== 3 ||
+        o.stage !== "first-Pull-exact-order" ||
+        subscription?.enableMessageOrdering !== true
+      )
+        return null;
+      return { kind: "cross-key", key: source.request.subscription };
+    }
     if (
       cell.id === "R9" &&
       ["first-Pull-exact-order", "subsequent-Pull-exact-order"].includes(o.stage)
@@ -333,7 +355,10 @@ export function createSchedulingDisposition(input, cell, authority) {
         ]),
       }));
       return {
-        approval: structuredClone(SCHEDULING_APPROVAL),
+        approval: {
+          ...structuredClone(SCHEDULING_APPROVAL),
+          ...(cell.id === "N9" ? { owner1215: structuredClone(authority.owner1215) } : {}),
+        },
         source: structuredClone(input.metadata),
         runtimeInputs: structuredClone(input.runtimeInputs),
         cellId: cell.id,

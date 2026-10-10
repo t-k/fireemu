@@ -960,3 +960,90 @@ test("replay successful second Seek excludes first-window ACKs from the existing
   assert.deepEqual(proof.windows[0].acknowledged, []);
   assert.equal(proof.verdict, "NOT_COMPARABLE");
 });
+
+function n9SingleFixture() {
+  const f = setup("N9", "first-Pull-exact-order");
+  const sourceMetadata = {
+    ...metadata,
+    runId: "45298b949da0",
+    sourceHead: "3235e54940ff1ece6004d3e78e70548ca6eba85c",
+    packetSha256: "285a6220ed6c7e7efdafbe8618a52e3f87aac1be57a0ea7a684ae80b75126c80",
+    descriptorSha256: "3b455b9613b20aa89d2ea277962652f110f45847c9b80668a66605517aba5707",
+  };
+  f.source.n = 1065;
+  f.source.responseN = 1066;
+  f.source.requestId = 423;
+  f.cell.observations[0].n = 1067;
+  f.subscription.enableMessageOrdering = true;
+  for (const [i, p] of f.publications) p.payload.orderingKey = i === "2" ? "key-B" : "key-A";
+  f.input = { metadata: sourceMetadata, runtimeInputs };
+  f.authority = {
+    ...authority("N9"),
+    source: sourceMetadata,
+    owner1215: {
+      proposalSha256: "10462775738fa3a1de9fae803e285bb385fd379ff6cf0ddadb856b5c93457b05",
+      rowSha256WithLf: "60d325e05acea467d78513e2ebcc474f62e8f9bde8971e8118d644bb33225606",
+    },
+  };
+  f.session = createSchedulingDisposition(f.input, f.cell, f.authority);
+  f.items = (order) =>
+    order.map((i) => ({
+      ...delivery(i),
+      message: { ...delivery(i).message, orderingKey: i === 2 ? "key-B" : "key-A" },
+    }));
+  return f;
+}
+test("owner1215 permits only the approved N9 single-Pull cross-key placement", () => {
+  for (const order of [
+    [2, 0, 1],
+    [0, 1, 2],
+  ]) {
+    const f = n9SingleFixture();
+    assert.equal(
+      f.session.pull(f.source, reply(f.items(order)), f.publications, f.subscription)?.kind,
+      "cross-key",
+    );
+    f.session.ack(
+      "control",
+      f.session.ackIds("control"),
+      { ok: true, code: "OK", status: 200, body: {} },
+      f.source.at,
+    );
+    assert.equal(f.session.finish().verdict, "MATCH");
+  }
+});
+test("N9 owner1215 retains exact scope, same-key order, contents, count and current ACK obligations", () => {
+  for (const mutate of [
+    (f) => (f.authority.owner1215.rowSha256WithLf = "f".repeat(64)),
+    (f) => (f.input.metadata.runId = "567e1cd860a1"),
+    (f) => f.source.n++,
+    (f) => f.source.requestId++,
+    (f) => (f.source.request.maxMessages = 4),
+  ]) {
+    const f = n9SingleFixture();
+    mutate(f);
+    const session = createSchedulingDisposition(f.input, f.cell, f.authority);
+    assert.equal(
+      session?.pull(f.source, reply(f.items([0, 1, 2])), f.publications, f.subscription) ?? null,
+      null,
+    );
+  }
+  for (const order of [
+    [1, 0, 2],
+    [0, 0, 2],
+    [0, 1],
+  ]) {
+    const f = n9SingleFixture();
+    f.session.pull(f.source, reply(f.items(order)), f.publications, f.subscription);
+    f.session.ack(
+      "control",
+      f.session.ackIds("control"),
+      { ok: true, code: "OK", status: 200, body: {} },
+      f.source.at,
+    );
+    assert.notEqual(f.session.finish().verdict, "MATCH");
+  }
+  const f = n9SingleFixture();
+  f.session.pull(f.source, reply(f.items([0, 1, 2])), f.publications, f.subscription);
+  assert.equal(f.session.finish().verdict, "NOT_COMPARABLE");
+});

@@ -115,6 +115,72 @@ test("rowsFromReceipt projects each event to its case's compared fields", () => 
   assert.deepEqual(rows["sdk/101"].observed, [{ docs: ["alpha"] }]);
 });
 
+test("rowsFromReceipt preserves callback boundaries, order, metadata and change indexes", () => {
+  for (const baselineAt of [0, 1, 2]) {
+    const rawEvents = [
+      {
+        listener: "primary",
+        docs: ["alpha"],
+        fromCache: true,
+        hasPendingWrites: false,
+        changes: [{ type: "added", doc: "alpha", oldIndex: -1, newIndex: 0 }],
+      },
+      {
+        listener: "primary",
+        docs: ["alpha"],
+        fromCache: false,
+        hasPendingWrites: false,
+        changes: [],
+      },
+      {
+        listener: "primary",
+        docs: ["beta", "alpha"],
+        fromCache: false,
+        hasPendingWrites: true,
+        changes: [
+          { type: "added", doc: "beta", oldIndex: -1, newIndex: 0 },
+          { type: "modified", doc: "alpha", oldIndex: 0, newIndex: 1 },
+        ],
+      },
+    ];
+    const row = rowsFromReceipt({
+      cases: [
+        {
+          caseId: "FS-LISTEN-SDK-111",
+          comparedFields: ["docs"],
+          observed: [{ docs: ["beta", "alpha"] }],
+          rawEvents,
+          rawEventCount: 3,
+          baselineAt,
+        },
+      ],
+    })["sdk/111"];
+    assert.deepEqual(row.rawEvents, rawEvents);
+    assert.equal(row.rawEventCount, 3);
+    assert.equal(row.baselineAt, baselineAt);
+    assert.deepEqual(row.observed, [{ docs: ["beta", "alpha"] }]);
+  }
+});
+
+test("rowsFromReceipt distinguishes missing callback evidence from an observed empty stream", () => {
+  for (const extra of [
+    {},
+    { rawEvents: null, rawEventCount: null, baselineAt: null },
+    { rawEvents: {}, rawEventCount: -1, baselineAt: -1 },
+    { rawEvents: "missing", rawEventCount: 1.5, baselineAt: "0" },
+  ]) {
+    const row = rowsFromReceipt({ cases: [{ caseId: "FS-LISTEN-SDK-111", ...extra }] })["sdk/111"];
+    for (const field of ["rawEvents", "rawEventCount", "baselineAt"])
+      assert.equal(Object.hasOwn(row, field), false, field);
+  }
+  const row = rowsFromReceipt({
+    cases: [{ caseId: "FS-LISTEN-SDK-111", rawEvents: [], rawEventCount: 0, baselineAt: 0 }],
+  })["sdk/111"];
+  assert.deepEqual(row.rawEvents, []);
+  assert.equal(row.rawEventCount, 0);
+  assert.equal(row.baselineAt, 0);
+});
+
 test("sweepDocuments reads each issued name, deletes what is there and reads back", async () => {
   const root = "projects/p/databases/(default)/documents";
   const present = new Set([`${root}/conf_listen/r1-alpha`, `${root}/conf_rules_owner/uB`]);

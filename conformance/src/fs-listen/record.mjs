@@ -425,9 +425,9 @@ export async function readbackProduction(options, deps = {}) {
 }
 
 /** Inside `fireemu exec`: the emulator's Firestore and Auth addresses come from the environment. */
-async function sdkInsideFireemu(options) {
+export async function sdkInsideFireemu(options, { recordSdkImpl = recordSdk } = {}) {
   const [host, port] = process.env.FIRESTORE_EMULATOR_HOST.split(":");
-  return recordSdk({
+  return recordSdkImpl({
     target: {
       kind: "local",
       project: "demo-fs-listen",
@@ -597,7 +597,16 @@ export async function localProvenance({
   };
 }
 
-async function inFireemu(options, command, { rules } = {}) {
+export async function inFireemu(
+  options,
+  command,
+  {
+    rules,
+    withFireemuImpl = withFireemu,
+    withOfficialEmulatorImpl = withOfficialEmulator,
+    localProvenanceImpl = localProvenance,
+  } = {},
+) {
   const tmp = join(await mkdtemp(join(tmpdir(), "fs-listen-out-")), "recording.json");
   const args = [
     command,
@@ -609,13 +618,13 @@ async function inFireemu(options, command, { rules } = {}) {
   ];
   const code =
     options.target === "official"
-      ? await withOfficialEmulator({
+      ? await withOfficialEmulatorImpl({
           script: HERE,
           args,
           rules,
           auth: !command.startsWith("native"),
         })
-      : await withFireemu({ profile: options.profile ?? "strict", script: HERE, args, rules });
+      : await withFireemuImpl({ profile: options.profile ?? "strict", script: HERE, args, rules });
   let text;
   try {
     text = await readFile(tmp, "utf8");
@@ -623,7 +632,7 @@ async function inFireemu(options, command, { rules } = {}) {
     throw new Error(`fireemu session exited ${code} without a recording`);
   }
   const recording = JSON.parse(text);
-  const provenance = await localProvenance({
+  const provenance = await localProvenanceImpl({
     target: options.target,
     binaryPath: options.target === "official" ? null : resolveFireemuBinary(),
   });

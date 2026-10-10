@@ -22,6 +22,8 @@ import {
   readbackProduction,
   recordNative,
   sdkProduction,
+  inFireemu,
+  sdkInsideFireemu,
   validToken,
 } from "./fs-listen/record.mjs";
 
@@ -1426,3 +1428,66 @@ test("SDK111 CLI selection is accepted only for SDK and rejected before producti
   await sdkProduction({ ...SDK_OPTIONS, cases: "sdk111" }, d);
   assert.equal(seen.sdk.caseSelection, "sdk111");
 });
+
+for (const target of ["local", "official"]) {
+  test(`SDK111 ${target} forwards selection through nested CLI to the SDK recorder`, async () => {
+    const { dirname } = await import("node:path");
+    const { rm } = await import("node:fs/promises");
+    const keys = ["FIREEMU_BIN", "FIRESTORE_EMULATOR_HOST", "FIREBASE_AUTH_EMULATOR_HOST"];
+    const prior = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    process.env.FIREEMU_BIN = process.execPath;
+    process.env.FIRESTORE_EMULATOR_HOST = "127.0.0.1:8080";
+    process.env.FIREBASE_AUTH_EMULATOR_HOST = "127.0.0.1:9099";
+    let output;
+    let seen;
+    const runner = async ({ args, auth }) => {
+      output = args[args.indexOf("--out") + 1];
+      assert.equal(args[0], "sdk-in-fireemu");
+      assert.deepEqual(args.slice(-2), ["--cases", "sdk111"]);
+      if (target === "official") assert.equal(auth, true);
+      const nested = parseArgs(args);
+      const recording = await sdkInsideFireemu(nested, {
+        recordSdkImpl: async (request) => {
+          seen = request;
+          return {
+            caseSelection: request.caseSelection,
+            rows: {},
+            errors: {},
+            cleanup: { complete: true },
+          };
+        },
+      });
+      writeFileSync(output, JSON.stringify(recording));
+      return 0;
+    };
+    const unexpected = async () => {
+      throw new Error("wrong runner selected");
+    };
+    try {
+      const recording = await inFireemu(
+        { target, cases: "sdk111", profile: "strict" },
+        "sdk-in-fireemu",
+        {
+          withFireemuImpl: target === "local" ? runner : unexpected,
+          withOfficialEmulatorImpl: target === "official" ? runner : unexpected,
+          localProvenanceImpl: async () => ({ target, sourceCommit: "test-source" }),
+        },
+      );
+      assert.equal(seen.caseSelection, "sdk111");
+      assert.deepEqual(seen.target, {
+        kind: "local",
+        project: "demo-fs-listen",
+        firestore: { host: "127.0.0.1", port: 8080 },
+        auth: "http://127.0.0.1:9099",
+      });
+      assert.equal(recording.caseSelection, "sdk111");
+      assert.equal(recording.provenance.target, target);
+    } finally {
+      if (output) await rm(dirname(output), { recursive: true, force: true });
+      for (const key of keys) {
+        if (prior[key] === undefined) delete process.env[key];
+        else process.env[key] = prior[key];
+      }
+    }
+  });
+}

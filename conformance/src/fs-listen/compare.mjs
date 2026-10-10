@@ -456,6 +456,65 @@ export function classifyRow(a, b) {
   return "MATCH";
 }
 
+/** The collector's post-baseline callback window, without aggregation or timestamp comparison. */
+function callbackSequence(row) {
+  if (
+    !Array.isArray(row?.rawEvents) ||
+    !Number.isSafeInteger(row.baselineAt) ||
+    row.baselineAt < 0 ||
+    row.baselineAt > row.rawEvents.length ||
+    (row.rawEventCount != null && row.rawEventCount !== row.rawEvents.length)
+  )
+    return undefined;
+  const fields = [
+    "listener",
+    "snapshotKind",
+    "docs",
+    "changes",
+    "exists",
+    "error",
+    "fromCache",
+    "hasPendingWrites",
+  ];
+  const events = row.rawEvents.slice(row.baselineAt);
+  if (
+    events.some(
+      (event) =>
+        event == null ||
+        typeof event !== "object" ||
+        typeof event.listener !== "string" ||
+        typeof event.snapshotKind !== "string" ||
+        typeof event.fromCache !== "boolean" ||
+        typeof event.hasPendingWrites !== "boolean" ||
+        (event.exists !== null && typeof event.exists !== "boolean") ||
+        (event.error !== null && typeof event.error !== "string") ||
+        !Array.isArray(event.docs) ||
+        !event.docs.every((doc) => typeof doc === "string") ||
+        !Array.isArray(event.changes) ||
+        event.changes.some(
+          (change) =>
+            change == null ||
+            typeof change.type !== "string" ||
+            typeof change.doc !== "string" ||
+            !Number.isSafeInteger(change.oldIndex) ||
+            !Number.isSafeInteger(change.newIndex),
+        ),
+    )
+  )
+    return undefined;
+  return events.map((event) => Object.fromEntries(fields.map((field) => [field, event[field]])));
+}
+
+function classifyCallbacks(first, second) {
+  const a = callbackSequence(first),
+    b = callbackSequence(second);
+  if (a === undefined || b === undefined) return "UNOBSERVED";
+  if (isUnfinished(first) || isUnfinished(second)) return "INDETERMINATE";
+  return isDeepStrictEqual(a, b) ? "MATCH" : "MISMATCH";
+}
+
+const isCallbackCase = (id) => id === "sdk/111" || id.endsWith("/sdk/111");
+
 const SETTLEMENT_MIN_AGE_MS = 10 * 60_000;
 
 /**
@@ -527,8 +586,7 @@ function withProgramErrors(recording) {
 }
 
 /**
- * A divergence entry is a reason, or `{ reason, coversLocalTimeout: true }`. Only the second form
- * may cover a local wait that ran out (see `isKnownDivergence`).
+ * Keep the historical registration metadata; a timeout flag cannot complete an unfinished row.
  */
 function divergenceOf(entry) {
   return typeof entry === "string"
@@ -536,6 +594,7 @@ function divergenceOf(entry) {
     : {
         reason: entry.reason,
         fireemu: entry.fireemu,
+        production: entry.production,
         coversLocalTimeout: entry.coversLocalTimeout === true,
       };
 }
@@ -560,20 +619,61 @@ export function classifyLocal(first, second, local) {
 }
 
 /**
- * Whether the local row equals the registration's quoted sequence and the rows differ, or (only for an entry that
- * says `coversLocalTimeout`) the local wait ran out for an answer that production gave: the
- * production rows are finished, the local stream is a loopback port, and the rows differ.
+ * Remove only token-bearing snapshot boundaries within a reconnect replay. The ADD acknowledgement
+ * and the final CURRENT boundary remain; all document content and target membership remain.
  */
+function reconnectContent(row) {
+  const canonical = canonicalRow(row);
+  const frames = row.rows ?? [];
+  const [add, acknowledgement] = frames;
+  const current = frames.at(-2),
+    finalBoundary = frames.at(-1);
+  const plainBoundary = (item) =>
+    item?.kind === "boundary" &&
+    item.resumeToken === true &&
+    Object.keys(item).every((key) => ["kind", "resumeToken"].includes(key));
+  if (
+    add?.kind !== "targetChange" ||
+    add.type !== "ADD" ||
+    !plainBoundary(acknowledgement) ||
+    current?.kind !== "targetChange" ||
+    current.type !== "CURRENT" ||
+    !plainBoundary(finalBoundary)
+  )
+    return undefined;
+  const replay = frames.slice(2, -2);
+  if (
+    !replay.every(
+      (item, index) =>
+        DOCUMENT_ROWS.has(item.kind) ||
+        (plainBoundary(item) &&
+          DOCUMENT_ROWS.has(replay[index - 1]?.kind) &&
+          (DOCUMENT_ROWS.has(replay[index + 1]?.kind) || index === replay.length - 1)),
+    )
+  )
+    return undefined;
+  // Only this approved replay segment is unordered. Compare complete document objects, including
+  // fields and both target lists; object property insertion order is not a wire difference.
+  const documents = replay
+    .filter((item) => DOCUMENT_ROWS.has(item.kind))
+    .toSorted((a, b) => a.kind.localeCompare(b.kind) || String(a.doc).localeCompare(String(b.doc)));
+  return { ...canonical, rows: [add, acknowledgement, ...documents, current, finalBoundary] };
+}
+
+/** A quote bounds the declared frame sequence; full retained content must also agree. */
 function isKnownDivergence(verdict, production, local, entry) {
   const quoted = entry.fireemu ?? entry.reason.match(/fireemu strict sends: ([^.]+)\./)?.[1];
   if (quoted == null || describeRow(local) !== quoted) return false;
-  if (verdict === "DIFFER") return true;
-  return (
-    verdict === "INDETERMINATE" &&
-    entry.coversLocalTimeout &&
-    local.timedOut === true &&
-    !isDeepStrictEqual(canonicalRow(production), canonicalRow(local))
-  );
+  if (entry.production != null && describeRow(production) !== entry.production) return false;
+  const productionContent = reconnectContent(production),
+    localContent = reconnectContent(local);
+  if (
+    productionContent === undefined ||
+    localContent === undefined ||
+    !isDeepStrictEqual(productionContent, localContent)
+  )
+    return false;
+  return verdict === "DIFFER";
 }
 
 const GOOD = new Set(["MATCH", "KNOWN_DIVERGENCE"]);
@@ -581,7 +681,9 @@ const GOOD = new Set(["MATCH", "KNOWN_DIVERGENCE"]);
 /**
  * `productions` are the two recordings of production, `local` the one of fireemu. A production
  * pair that disagrees is NONDETERMINISTIC (the row proves nothing about local); a divergence is
- * accepted only for a row that differs, with a reason and the quoted local sequence.
+ * accepted only for a row that differs, with a reason, the quoted local sequence and equal full
+ * retained content after the limited reconnect boundary normalization. Legacy non-boundary
+ * registrations without a structural proof fail closed.
  */
 export function compareRecordings({ productions, local, divergences = {}, settlements = [] }) {
   if (productions.length !== 2) throw new Error("two production recordings are required");
@@ -623,14 +725,31 @@ export function compareRecordings({ productions, local, divergences = {}, settle
       else rows[id] = { status: verdict === "DIFFER" ? "MISMATCH" : verdict };
     }
   }
+  const callbackSummary = {};
+  for (const id of ids)
+    if (isCallbackCase(id)) {
+      const productionPair = classifyCallbacks(firstRows[id], secondRows[id]);
+      const status =
+        productionPair === "MISMATCH"
+          ? "NONDETERMINISTIC"
+          : productionPair === "MATCH"
+            ? classifyCallbacks(firstRows[id], localRows[id])
+            : productionPair;
+      rows[id].callbackStatus = status;
+      callbackSummary[status] = (callbackSummary[status] ?? 0) + 1;
+    }
   const summary = {};
   for (const { status } of Object.values(rows)) summary[status] = (summary[status] ?? 0) + 1;
   const localProblems = recordingProblems(local);
+  const aggregateOk =
+    Object.values(rows).every(({ status }) => GOOD.has(status)) && localProblems.length === 0;
+  const callbackOk = Object.keys(callbackSummary).every((status) => status === "MATCH");
   return {
     rows,
     summary,
     localProblems,
-    ok: Object.values(rows).every(({ status }) => GOOD.has(status)) && localProblems.length === 0,
+    ...(Object.keys(callbackSummary).length ? { callbackSummary, aggregateOk, callbackOk } : {}),
+    ok: aggregateOk && callbackOk,
   };
 }
 
@@ -662,6 +781,7 @@ function main(argv) {
     const problems = [...productionProblems, ...localProblems];
     const rows = {};
     const summary = { MATCH: 0, DIVERGES: 0, NOT_COMPARABLE: 0 };
+    const callbackSummary = {};
     for (const id of [
       ...new Set([...Object.keys(production.rows), ...Object.keys(local.rows)]),
     ].toSorted()) {
@@ -682,6 +802,11 @@ function main(argv) {
             ? "Recorded observations are unfinished under classifyRow."
             : `Canonical recorded observations ${status === "MATCH" ? "match" : "differ"} under classifyRow.`;
       rows[id] = { status, comparatorResult, reason };
+      if (isCallbackCase(id)) {
+        const callbackStatus = problems.length ? "INDETERMINATE" : classifyCallbacks(p, l);
+        rows[id].callbackStatus = callbackStatus;
+        callbackSummary[callbackStatus] = (callbackSummary[callbackStatus] ?? 0) + 1;
+      }
       if (p?.l3 || l?.l3) {
         rows[id].bodyBytes = Object.fromEntries(
           [
@@ -730,7 +855,10 @@ function main(argv) {
       }
       summary[status] += 1;
     }
-    const ok = problems.length === 0 && Object.values(rows).every((r) => r.status === "MATCH");
+    const aggregateOk =
+      problems.length === 0 && Object.values(rows).every((r) => r.status === "MATCH");
+    const callbackOk = Object.keys(callbackSummary).every((status) => status === "MATCH");
+    const ok = aggregateOk && callbackOk;
     const report = {
       production: { run: production.run },
       local: { run: local.run },
@@ -740,6 +868,7 @@ function main(argv) {
         "Request byte counts are RECORDED_NOT_JUDGED under docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1): normalized retained content is identical; the remaining 27 bytes are unretained client fields. Compare decoded messages from the handshake through the complete boundary batch, masking configured project/database names, run/document IDs, owner/rank values, timestamps and token bytes while retaining types, token lengths and recorded token relationships. Resume request tokens remain judged directly.",
       rows,
       summary,
+      ...(Object.keys(callbackSummary).length ? { callbackSummary, aggregateOk, callbackOk } : {}),
       productionProblems,
       localProblems,
       ok,
@@ -752,7 +881,10 @@ function main(argv) {
           "| Row | Result | Reason |",
           "| --- | --- | --- |",
           ...Object.entries(rows).map(([id, r]) =>
-            `| ${id} | ${r.status} | ${r.reason} |`.replace(/\n/g, " "),
+            `| ${id} | ${r.status}${r.callbackStatus ? `; callbacks: ${r.callbackStatus}` : ""} | ${r.reason} |`.replace(
+              /\n/g,
+              " ",
+            ),
           ),
           "",
           JSON.stringify(summary),
@@ -761,7 +893,13 @@ function main(argv) {
           "",
         ].join("\n"),
       );
-    console.log(JSON.stringify(summary), ok ? "OK" : "NOT OK");
+    console.log(
+      JSON.stringify(summary),
+      ...(Object.keys(callbackSummary).length
+        ? [`callbacks ${JSON.stringify(callbackSummary)}`]
+        : []),
+      ok ? "OK" : "NOT OK",
+    );
     process.exitCode = ok ? 0 : 1;
     return;
   }
@@ -771,9 +909,15 @@ function main(argv) {
     divergences: args.divergences ? read(args.divergences) : {},
     settlements: args.settlements ? read(args.settlements) : [],
   });
-  for (const [id, { status, reason }] of Object.entries(report.rows))
-    console.log(`${status.padEnd(18)} ${id}${reason ? `  (${reason})` : ""}`);
-  console.log(JSON.stringify(report.summary), report.ok ? "OK" : "NOT OK");
+  for (const [id, { status, reason, callbackStatus }] of Object.entries(report.rows))
+    console.log(
+      `${status.padEnd(18)} ${id}${reason ? `  (${reason})` : ""}${callbackStatus ? `  (callbacks: ${callbackStatus})` : ""}`,
+    );
+  console.log(
+    JSON.stringify(report.summary),
+    ...(report.callbackSummary ? [`callbacks ${JSON.stringify(report.callbackSummary)}`] : []),
+    report.ok ? "OK" : "NOT OK",
+  );
   for (const problem of report.localProblems) console.log(`local: ${problem}`);
   process.exitCode = report.ok ? 0 : 1;
 }

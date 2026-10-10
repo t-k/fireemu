@@ -922,3 +922,23 @@ test("only acknowledged alpha and beta seeds become confirmed writes", async () 
     assert.deepEqual(recording.cleanup.documents.modes.streaming.unsettled, []);
   }
 });
+
+test("browserRows carries callback evidence separately for each transport", () => {
+  const rawEvents = [
+    { docs: ["alpha"], fromCache: true, hasPendingWrites: false, changes: [] },
+    { docs: ["alpha"], fromCache: false, hasPendingWrites: false, changes: [] },
+  ];
+  const rows = browserRows({
+    "long-polling": {
+      receipt: {
+        cases: [caseRecord("FS-LISTEN-SDK-111", { rawEvents, rawEventCount: 2, baselineAt: 1 })],
+      },
+    },
+    streaming: { receipt: { cases: [caseRecord("FS-LISTEN-SDK-111")] } },
+  });
+  assert.deepEqual(rows["browser-long-polling/sdk/111"].rawEvents, rawEvents);
+  assert.equal(rows["browser-long-polling/sdk/111"].baselineAt, 1);
+  assert.equal(rows["browser-long-polling/sdk/111"].rawEventCount, 2);
+  assert.equal(Object.hasOwn(rows["browser-streaming/sdk/111"], "rawEvents"), false);
+  assert.equal(Object.hasOwn(rows["browser-streaming/sdk/111"], "baselineAt"), false);
+});

@@ -144,6 +144,14 @@ export function rowsFromReceipt(receipt) {
       observed: (Array.isArray(record.observed) ? record.observed : []).map((event) =>
         projectEvent(event, record.comparedFields),
       ),
+      // The collector already redacts callback records; keep their boundaries and metadata.
+      ...(Array.isArray(record.rawEvents) ? { rawEvents: record.rawEvents } : {}),
+      ...(Number.isSafeInteger(record.rawEventCount) && record.rawEventCount >= 0
+        ? { rawEventCount: record.rawEventCount }
+        : {}),
+      ...(Number.isSafeInteger(record.baselineAt) && record.baselineAt >= 0
+        ? { baselineAt: record.baselineAt }
+        : {}),
       failures,
       invariantViolations: Array.isArray(record.invariantViolations)
         ? record.invariantViolations

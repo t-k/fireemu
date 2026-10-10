@@ -55,6 +55,10 @@ export function buildReceipt({ thrown, outcome, budget, teardown }) {
       invariantViolations: record.invariantViolations,
       listenersClosed: record.listenersClosed,
       rawEventCount: record.rawEventCount,
+      ...(Array.isArray(record.rawEvents) ? { rawEvents: record.rawEvents } : {}),
+      ...(Number.isSafeInteger(record.baselineAt) && record.baselineAt >= 0
+        ? { baselineAt: record.baselineAt }
+        : {}),
     })),
     teardown,
   };

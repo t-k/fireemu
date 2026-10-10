@@ -13,6 +13,13 @@ import {
   teardownClients,
 } from "./fs-listen/sdk-run.mjs";
 
+import {
+  createBudget,
+  runCase,
+} from "../../tools/compat-broad/fs-listen-resume/listen_collector.mjs";
+import { rowsFromReceipt } from "./fs-listen/sdk-record.mjs";
+import { browserRows } from "./fs-listen/browser-record.mjs";
+
 const accounts = {
   a: { email: "a@example.com", password: "pa", uid: "ua" },
   b: { email: "b@example.com", password: "pb", uid: "ub" },
@@ -289,4 +296,125 @@ test("teardownClients waits for deleteApp too: a client whose app cannot be dele
     { client: "primary", closed: false },
     { client: "witness", closed: true },
   ]);
+});
+
+test("collector callbacks survive receipt and Node/browser row adapters", async () => {
+  const paths = { run: "conf_listen", alpha: "conf_listen/r-alpha", beta: "conf_listen/r-beta" };
+  let deliver;
+  const snapshot = (fromCache, docs, changes, hasPendingWrites = false) => ({
+    fromCache,
+    docs,
+    changes,
+    hasPendingWrites,
+  });
+  const deps = {
+    now: () => 0,
+    sleep: async () => {},
+    firestore: {
+      onQuerySnapshot(_client, _spec, _options, onNext) {
+        deliver = onNext;
+        onNext(
+          snapshot(
+            false,
+            [paths.alpha],
+            [{ type: "added", path: paths.alpha, oldIndex: -1, newIndex: 0 }],
+          ),
+        );
+        return () => {};
+      },
+      async disableNetwork() {
+        deliver(snapshot(true, [paths.alpha], []));
+      },
+      async enableNetwork() {
+        deliver(snapshot(false, [paths.alpha], []));
+        deliver(
+          snapshot(
+            false,
+            [paths.beta, paths.alpha],
+            [
+              { type: "added", path: paths.beta, oldIndex: -1, newIndex: 0 },
+              { type: "modified", path: paths.alpha, oldIndex: 0, newIndex: 1 },
+            ],
+            true,
+          ),
+        );
+      },
+    },
+  };
+  const budget = createBudget({ now: deps.now, deadlineMs: 1000, limits: LIMITS });
+  const collected = await runCase(
+    deps,
+    {
+      caseId: "FS-LISTEN-SDK-111",
+      role: "case",
+      comparison: "aggregate-changes",
+      listeners: [{ name: "primary", kind: "query", target: "run", includeMetadataChanges: true }],
+      steps: [
+        { kind: "listen", listener: "primary" },
+        { kind: "baseline" },
+        { kind: "break" },
+        { kind: "resume" },
+      ],
+      comparedFields: ["docs"],
+      expectedLocal: [{ docs: ["beta", "alpha"] }],
+      invariants: [],
+    },
+    {
+      budget,
+      nonce: "r",
+      paths,
+      nameOf: (path) => (path === paths.alpha ? "alpha" : "beta"),
+      clients: { primary: "primary" },
+      client: "primary",
+    },
+  );
+  assert.deepEqual(collected.failures, []);
+  assert.equal(collected.rawEvents.length, 4);
+  assert.equal(collected.baselineAt, 1);
+  assert.deepEqual(
+    collected.rawEvents.map((event) => event.fromCache),
+    [false, true, false, false],
+  );
+  assert.equal(collected.rawEvents.at(-1).hasPendingWrites, true);
+  assert.deepEqual(
+    collected.rawEvents.at(-1).changes.map(({ oldIndex, newIndex }) => [oldIndex, newIndex]),
+    [
+      [-1, 0],
+      [0, 1],
+    ],
+  );
+  const receipt = buildReceipt({ outcome: { caseRecords: [collected] }, budget, teardown: [] });
+  for (const row of [
+    rowsFromReceipt(receipt)["sdk/111"],
+    browserRows({ streaming: { receipt } })["browser-streaming/sdk/111"],
+  ]) {
+    assert.deepEqual(row.rawEvents, collected.rawEvents);
+    assert.equal(row.baselineAt, collected.baselineAt);
+    assert.equal(row.rawEventCount, 4);
+    assert.deepEqual(
+      row.observed,
+      collected.observed.map(({ docs }) => ({ docs, fromCacheTransitions: [true, false] })),
+    );
+  }
+});
+
+test("buildReceipt preserves empty callback evidence without inventing missing evidence", () => {
+  const relay = (extra) =>
+    buildReceipt({
+      outcome: { caseRecords: [record("FS-LISTEN-SDK-111", extra)] },
+      budget: { snapshot: () => ({}) },
+      teardown: [],
+    }).cases[0];
+  for (const extra of [
+    {},
+    { rawEvents: null, baselineAt: null },
+    { rawEvents: {}, baselineAt: -1 },
+    { rawEvents: "missing", baselineAt: 1.5 },
+    { baselineAt: "0" },
+  ]) {
+    for (const field of ["rawEvents", "baselineAt"])
+      assert.equal(Object.hasOwn(relay(extra), field), false, field);
+  }
+  assert.deepEqual(relay({ rawEvents: [], baselineAt: 0 }).rawEvents, []);
+  assert.equal(relay({ rawEvents: [], baselineAt: 0 }).baselineAt, 0);
 });

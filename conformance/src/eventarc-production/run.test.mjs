@@ -8,6 +8,7 @@ import {
   mkdirSync,
   chmodSync,
   realpathSync,
+  cpSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +20,7 @@ import {
   runExecSession,
   comparisonFromEvidence,
   loadInputs,
+  check,
   exportComparison,
   deriveLocalBudget,
   selectSessionProject,
@@ -1861,3 +1863,60 @@ test(
     }
   },
 );
+
+test("default public inputs bind all genuine SDK outcomes and native forwards", async () => {
+  const inputs = loadInputs();
+  const outcomesPath = join(inputs.directory, "sdk-outcomes.json");
+  const outcomesSha256 = "0935d35ede0220f76c870b2d32a6f52a12a16082f3afc55f56c629a558dee37f";
+  assert.equal(inputs.pins["sdk-outcomes.json"], outcomesSha256);
+  const { loadSdkInput } = await import("./probe-sdk.mjs");
+  const input = loadSdkInput({
+    path: inputs.corpora.B.path,
+    sha256: inputs.corpora.B.sha256,
+    sdkDir: "unused",
+    outcomesPath,
+    outcomesSha256,
+  });
+  assert.deepEqual(
+    input.originalOutcomes.map(({ name }) => name),
+    [
+      "full-channel",
+      "relative-channel",
+      "multiple-events",
+      "generated-metadata",
+      "caller-metadata",
+      "default-channel",
+      "allowed-event-types",
+      "missing-source",
+      "missing-data",
+      "bad-time",
+      "non-string-extension",
+      "number-data",
+      "bad-channel-name",
+    ],
+  );
+  assert.deepEqual(
+    input.originalOutcomes.map(({ name }) => name),
+    input.specs.map(([name]) => name),
+  );
+  assert.deepEqual(
+    input.expected.map(({ n }) => n),
+    [156, 157, 158, 159, 160, 162],
+  );
+  assert.equal(readFileSync(outcomesPath).length, 3941);
+});
+
+test("missing public SDK sidecar refuses before binary or session access", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "eventarc-sdk-missing-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  cpSync(new URL("./fixtures/ad", import.meta.url), directory, { recursive: true });
+  rmSync(join(directory, "sdk-outcomes.json"), { force: true });
+  await assert.rejects(
+    check({
+      binary: join(directory, "never-existing-binary"),
+      out: join(directory, "never-started"),
+      inputDirectory: directory,
+    }),
+    /missing genuine original SDK outcome comparand/,
+  );
+});

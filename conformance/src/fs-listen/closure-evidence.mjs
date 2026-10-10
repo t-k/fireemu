@@ -263,14 +263,22 @@ export async function closureEvidence(options) {
         const problems =
           recordingProblems(local.recording).length ||
           productions.some((p) => recordingProblems(p.recording).length);
-        const status = problems
+        const aggregateStatus = problems
           ? "NOT_COMPARABLE"
           : ["MATCH", "DIVERGES", "NOT_COMPARABLE"].includes(result?.status)
             ? result.status
             : ["MISMATCH", "KNOWN_DIVERGENCE"].includes(result?.status)
               ? "DIVERGES"
               : "NOT_COMPARABLE";
-        const reason = problems
+        const callbackStatus = result?.callbackStatus;
+        const status = problems
+          ? "NOT_COMPARABLE"
+          : callbackStatus == null || callbackStatus === "MATCH"
+            ? aggregateStatus
+            : callbackStatus === "MISMATCH"
+              ? "DIVERGES"
+              : "NOT_COMPARABLE";
+        const aggregateReason = problems
           ? "Recording cleanup or program errors prevent comparison; see the private recording log."
           : (result?.reason ??
             {
@@ -285,6 +293,10 @@ export async function closureEvidence(options) {
               PRODUCTION_MISSING: "At least one production recording lacks this case.",
             }[result?.status] ??
             "Comparison row missing.");
+        const reason =
+          callbackStatus == null
+            ? aggregateReason
+            : `${aggregateReason} Callback sequence: ${callbackStatus}; aggregate result retained independently.`;
         for (const conditionId of observed?.conditions ?? []) {
           if (!conditionIds.has(conditionId)) continue;
           const row = {
@@ -294,6 +306,7 @@ export async function closureEvidence(options) {
             status,
             reason,
             comparatorResult: result?.comparatorResult ?? result?.status ?? null,
+            ...(callbackStatus == null ? {} : { aggregateStatus, callbackStatus }),
             production: production.reference,
             productionRowPresent: Object.hasOwn(production.recording.rows, id),
             productionRecordings: productions.length,

@@ -2245,3 +2245,21 @@ test("an unsupported frame shape cannot use ordinary canonical equality to appro
   );
   assert.equal(compareRecordings(input).rows[boundaryDivergenceId].status, "MISMATCH");
 });
+
+test("registered boundary normalization retains repeated document event order", () => {
+  const input = boundaryDivergenceInput();
+  for (const production of input.productions) {
+    const replay = production.rows[boundaryDivergenceId].rows;
+    const later = structuredClone(replay[4]);
+    later.fields.n += 1;
+    replay.splice(6, 0, later, { kind: "boundary", resumeToken: true });
+  }
+  const local = input.local.rows[boundaryDivergenceId];
+  const later = structuredClone(local.rows[2]);
+  later.fields.n += 1;
+  local.rows.splice(2, 0, later);
+  const entry = input.divergences[boundaryDivergenceId];
+  entry.production = describeRow(input.productions[0].rows[boundaryDivergenceId]);
+  entry.fireemu = describeRow(local);
+  assert.equal(compareRecordings(input).rows[boundaryDivergenceId].status, "MISMATCH");
+});

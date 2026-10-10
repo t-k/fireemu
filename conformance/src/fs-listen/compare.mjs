@@ -456,6 +456,65 @@ export function classifyRow(a, b) {
   return "MATCH";
 }
 
+/** The collector's post-baseline callback window, without aggregation or timestamp comparison. */
+function callbackSequence(row) {
+  if (
+    !Array.isArray(row?.rawEvents) ||
+    !Number.isSafeInteger(row.baselineAt) ||
+    row.baselineAt < 0 ||
+    row.baselineAt > row.rawEvents.length ||
+    (row.rawEventCount != null && row.rawEventCount !== row.rawEvents.length)
+  )
+    return undefined;
+  const fields = [
+    "listener",
+    "snapshotKind",
+    "docs",
+    "changes",
+    "exists",
+    "error",
+    "fromCache",
+    "hasPendingWrites",
+  ];
+  const events = row.rawEvents.slice(row.baselineAt);
+  if (
+    events.some(
+      (event) =>
+        event == null ||
+        typeof event !== "object" ||
+        typeof event.listener !== "string" ||
+        typeof event.snapshotKind !== "string" ||
+        typeof event.fromCache !== "boolean" ||
+        typeof event.hasPendingWrites !== "boolean" ||
+        (event.exists !== null && typeof event.exists !== "boolean") ||
+        (event.error !== null && typeof event.error !== "string") ||
+        !Array.isArray(event.docs) ||
+        !event.docs.every((doc) => typeof doc === "string") ||
+        !Array.isArray(event.changes) ||
+        event.changes.some(
+          (change) =>
+            change == null ||
+            typeof change.type !== "string" ||
+            typeof change.doc !== "string" ||
+            !Number.isSafeInteger(change.oldIndex) ||
+            !Number.isSafeInteger(change.newIndex),
+        ),
+    )
+  )
+    return undefined;
+  return events.map((event) => Object.fromEntries(fields.map((field) => [field, event[field]])));
+}
+
+function classifyCallbacks(first, second) {
+  const a = callbackSequence(first),
+    b = callbackSequence(second);
+  if (a === undefined || b === undefined) return "UNOBSERVED";
+  if (isUnfinished(first) || isUnfinished(second)) return "INDETERMINATE";
+  return isDeepStrictEqual(a, b) ? "MATCH" : "MISMATCH";
+}
+
+const isCallbackCase = (id) => id === "sdk/111" || id.endsWith("/sdk/111");
+
 const SETTLEMENT_MIN_AGE_MS = 10 * 60_000;
 
 /**
@@ -666,14 +725,31 @@ export function compareRecordings({ productions, local, divergences = {}, settle
       else rows[id] = { status: verdict === "DIFFER" ? "MISMATCH" : verdict };
     }
   }
+  const callbackSummary = {};
+  for (const id of ids)
+    if (isCallbackCase(id)) {
+      const productionPair = classifyCallbacks(firstRows[id], secondRows[id]);
+      const status =
+        productionPair === "MISMATCH"
+          ? "NONDETERMINISTIC"
+          : productionPair === "MATCH"
+            ? classifyCallbacks(firstRows[id], localRows[id])
+            : productionPair;
+      rows[id].callbackStatus = status;
+      callbackSummary[status] = (callbackSummary[status] ?? 0) + 1;
+    }
   const summary = {};
   for (const { status } of Object.values(rows)) summary[status] = (summary[status] ?? 0) + 1;
   const localProblems = recordingProblems(local);
+  const aggregateOk =
+    Object.values(rows).every(({ status }) => GOOD.has(status)) && localProblems.length === 0;
+  const callbackOk = Object.keys(callbackSummary).every((status) => status === "MATCH");
   return {
     rows,
     summary,
     localProblems,
-    ok: Object.values(rows).every(({ status }) => GOOD.has(status)) && localProblems.length === 0,
+    ...(Object.keys(callbackSummary).length ? { callbackSummary, aggregateOk, callbackOk } : {}),
+    ok: aggregateOk && callbackOk,
   };
 }
 
@@ -705,6 +781,7 @@ function main(argv) {
     const problems = [...productionProblems, ...localProblems];
     const rows = {};
     const summary = { MATCH: 0, DIVERGES: 0, NOT_COMPARABLE: 0 };
+    const callbackSummary = {};
     for (const id of [
       ...new Set([...Object.keys(production.rows), ...Object.keys(local.rows)]),
     ].toSorted()) {
@@ -725,6 +802,11 @@ function main(argv) {
             ? "Recorded observations are unfinished under classifyRow."
             : `Canonical recorded observations ${status === "MATCH" ? "match" : "differ"} under classifyRow.`;
       rows[id] = { status, comparatorResult, reason };
+      if (isCallbackCase(id)) {
+        const callbackStatus = problems.length ? "INDETERMINATE" : classifyCallbacks(p, l);
+        rows[id].callbackStatus = callbackStatus;
+        callbackSummary[callbackStatus] = (callbackSummary[callbackStatus] ?? 0) + 1;
+      }
       if (p?.l3 || l?.l3) {
         rows[id].bodyBytes = Object.fromEntries(
           [
@@ -773,7 +855,10 @@ function main(argv) {
       }
       summary[status] += 1;
     }
-    const ok = problems.length === 0 && Object.values(rows).every((r) => r.status === "MATCH");
+    const aggregateOk =
+      problems.length === 0 && Object.values(rows).every((r) => r.status === "MATCH");
+    const callbackOk = Object.keys(callbackSummary).every((status) => status === "MATCH");
+    const ok = aggregateOk && callbackOk;
     const report = {
       production: { run: production.run },
       local: { run: local.run },
@@ -783,6 +868,7 @@ function main(argv) {
         "Request byte counts are RECORDED_NOT_JUDGED under docs.local/runs/fs-listen-l3/coordinator-rulings.md, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1): normalized retained content is identical; the remaining 27 bytes are unretained client fields. Compare decoded messages from the handshake through the complete boundary batch, masking configured project/database names, run/document IDs, owner/rank values, timestamps and token bytes while retaining types, token lengths and recorded token relationships. Resume request tokens remain judged directly.",
       rows,
       summary,
+      ...(Object.keys(callbackSummary).length ? { callbackSummary, aggregateOk, callbackOk } : {}),
       productionProblems,
       localProblems,
       ok,
@@ -795,7 +881,10 @@ function main(argv) {
           "| Row | Result | Reason |",
           "| --- | --- | --- |",
           ...Object.entries(rows).map(([id, r]) =>
-            `| ${id} | ${r.status} | ${r.reason} |`.replace(/\n/g, " "),
+            `| ${id} | ${r.status}${r.callbackStatus ? `; callbacks: ${r.callbackStatus}` : ""} | ${r.reason} |`.replace(
+              /\n/g,
+              " ",
+            ),
           ),
           "",
           JSON.stringify(summary),
@@ -804,7 +893,13 @@ function main(argv) {
           "",
         ].join("\n"),
       );
-    console.log(JSON.stringify(summary), ok ? "OK" : "NOT OK");
+    console.log(
+      JSON.stringify(summary),
+      ...(Object.keys(callbackSummary).length
+        ? [`callbacks ${JSON.stringify(callbackSummary)}`]
+        : []),
+      ok ? "OK" : "NOT OK",
+    );
     process.exitCode = ok ? 0 : 1;
     return;
   }
@@ -814,9 +909,15 @@ function main(argv) {
     divergences: args.divergences ? read(args.divergences) : {},
     settlements: args.settlements ? read(args.settlements) : [],
   });
-  for (const [id, { status, reason }] of Object.entries(report.rows))
-    console.log(`${status.padEnd(18)} ${id}${reason ? `  (${reason})` : ""}`);
-  console.log(JSON.stringify(report.summary), report.ok ? "OK" : "NOT OK");
+  for (const [id, { status, reason, callbackStatus }] of Object.entries(report.rows))
+    console.log(
+      `${status.padEnd(18)} ${id}${reason ? `  (${reason})` : ""}${callbackStatus ? `  (callbacks: ${callbackStatus})` : ""}`,
+    );
+  console.log(
+    JSON.stringify(report.summary),
+    ...(report.callbackSummary ? [`callbacks ${JSON.stringify(report.callbackSummary)}`] : []),
+    report.ok ? "OK" : "NOT OK",
+  );
   for (const problem of report.localProblems) console.log(`local: ${problem}`);
   process.exitCode = report.ok ? 0 : 1;
 }

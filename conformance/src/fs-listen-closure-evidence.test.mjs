@@ -396,7 +396,7 @@ test("variable production retains informative existence-filter contents without 
   );
 });
 
-test("an unlisted registered native row stays unapproved even when its strict sequence matches", async (t) => {
+test("a summary-only native registration stays unapproved even for historically approved run names", async (t) => {
   const { options, recordings, write } = fixture(t);
   const local = JSON.parse(readFileSync(options["local-native"]));
   local.rows["native/resume-token/current"] = {
@@ -418,7 +418,7 @@ test("an unlisted registered native row stays unapproved even when its strict se
   write(options["local-native"], local);
   let evidence = await closureEvidence(options);
   let compared = evidence.rows.find((r) => r.packet === "native");
-  assert.equal(compared.comparatorResult, "KNOWN_DIVERGENCE");
+  assert.equal(compared.comparatorResult, "MISMATCH");
   assert.equal(compared.declaredDifference.approved, false);
   for (const [i, run] of ["nmuuicyas", "nmuukwo6n"].entries()) {
     recordings[i].value.run = run;
@@ -426,5 +426,86 @@ test("an unlisted registered native row stays unapproved even when its strict se
   }
   evidence = await closureEvidence(options);
   compared = evidence.rows.find((r) => r.packet === "native");
-  assert.equal(compared.declaredDifference.approved, true);
+  assert.equal(compared.comparatorResult, "MISMATCH");
+  assert.equal(compared.declaredDifference.approved, false);
+});
+
+test("closure evidence cannot label missing SDK111 callback observations as a current MATCH", async (t) => {
+  const { options, recordings, write } = fixture(t);
+  const sdkRow = {
+    conditions: ["FS-LISTEN-SDK/existence-filter-reconnect"],
+    observed: [{ docs: ["b"], changes: [] }],
+    failures: [],
+    invariantViolations: [],
+    end: null,
+    timedOut: false,
+  };
+  for (const index of [2, 3]) {
+    recordings[index].value.rows["sdk/111"] = structuredClone(sdkRow);
+    write(recordings[index].path, recordings[index].value);
+  }
+  const local = JSON.parse(readFileSync(options["local-sdk"]));
+  local.rows["sdk/111"] = structuredClone(sdkRow);
+  write(options["local-sdk"], local);
+  const evidence = await closureEvidence(options);
+  const rows = evidence.rows.filter((entry) => entry.packet === "sdk" && entry.row === "sdk/111");
+  assert.equal(rows.length, 2);
+  for (const entry of rows) {
+    assert.equal(entry.aggregateStatus, "MATCH");
+    assert.equal(entry.callbackStatus, "UNOBSERVED");
+    assert.equal(entry.status, "NOT_COMPARABLE");
+  }
+});
+
+test("closure evidence preserves SDK111 callback mismatch independently of aggregate MATCH", async (t) => {
+  const { options, recordings, write } = fixture(t);
+  const callback = {
+    listener: "primary",
+    snapshotKind: "delta",
+    docs: ["b"],
+    changes: [],
+    exists: null,
+    error: null,
+    fromCache: false,
+    hasPendingWrites: false,
+  };
+  const sdkRow = {
+    conditions: ["FS-LISTEN-SDK/existence-filter-reconnect"],
+    observed: [{ docs: ["b"], changes: [] }],
+    rawEvents: [callback],
+    baselineAt: 0,
+    failures: [],
+    invariantViolations: [],
+    end: null,
+    timedOut: false,
+  };
+  for (const index of [2, 3]) {
+    recordings[index].value.rows["sdk/111"] = structuredClone(sdkRow);
+    write(recordings[index].path, recordings[index].value);
+  }
+  const local = JSON.parse(readFileSync(options["local-sdk"]));
+  local.rows["sdk/111"] = structuredClone(sdkRow);
+  local.rows["sdk/111"].rawEvents[0].fromCache = true;
+  write(options["local-sdk"], local);
+  const evidence = await closureEvidence(options);
+  for (const entry of evidence.rows.filter(
+    (entry) => entry.packet === "sdk" && entry.row === "sdk/111",
+  )) {
+    assert.equal(entry.aggregateStatus, "MATCH");
+    assert.equal(entry.callbackStatus, "MISMATCH");
+    assert.equal(entry.status, "DIVERGES");
+  }
+  local.cleanup.complete = false;
+  write(options["local-sdk"], local);
+  const unfit = await closureEvidence(options);
+  for (const entry of unfit.rows.filter(
+    (entry) => entry.packet === "sdk" && entry.row === "sdk/111",
+  )) {
+    assert.equal(entry.aggregateStatus, "NOT_COMPARABLE");
+    assert.equal(
+      entry.status,
+      "NOT_COMPARABLE",
+      "callback mismatch does not excuse recording problems",
+    );
+  }
 });

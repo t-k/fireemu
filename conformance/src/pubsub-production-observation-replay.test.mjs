@@ -2796,3 +2796,50 @@ test("S10 replay forwards only the exact source-bound runId to real stream lifec
     });
   }
 });
+
+test("actual replay caller forwards S10 source identity into the native opening", async () => {
+  const { replayA } = await import("./pubsub-observation/replay.mjs");
+  const { zeroOutcomeFixture } = await import("./pubsub-production-observation-compare.test.mjs");
+  const input = zeroOutcomeFixture();
+  input.summary.results[0].complete = true;
+  input.rows.find((row) => row.event === "case-result").complete = true;
+  input.rows.find((row) => row.event === "stream-case-observation").state.incomplete = false;
+  const pin = {
+    profile: "release",
+    rustcWrapper: "",
+    path: "/fixture/release/fireemu",
+    head: "a".repeat(40),
+    sha256: "b".repeat(64),
+    command: ["cargo", "build", "--release"],
+  };
+  const env = {
+    PUBSUB_EMULATOR_HOST: "127.0.0.1:1234",
+    FIREEMU_CONTROL_URL: "http://127.0.0.1:4321/v1/",
+    FIREEMU_CONTROL_TOKEN: "synthetic-control",
+  };
+  const openings = [];
+  await replayA(input, env, pin, {
+    advance: async () => {},
+    wait: async () => {},
+    wireFactory: () => ({
+      close() {},
+      open: async (options) => {
+        openings.push(options);
+        return {
+          dispose() {},
+          state: () => ({
+            terminal: { code: 13 },
+            incomplete: false,
+            inboundEnded: true,
+            received: 0,
+            windowExpired: false,
+            windowMs: 90000,
+          }),
+        };
+      },
+    }),
+  });
+  assert.equal(openings.length, 1);
+  assert.equal(openings[0].runId, input.summary.runId);
+  assert.match(openings[0].runId, /^[0-9a-f]{12}$/);
+});

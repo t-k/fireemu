@@ -593,6 +593,25 @@ impl PubSubHandle {
         messages: Vec<PubsubMessage>,
     ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
         let _publication = self.lock_publication();
+        if self.paging_policy == PagingPolicy::Strict
+            && messages.len() <= fireemu_core_pubsub::state::MAX_MESSAGES_PER_PUBLISH
+            && self.state().topic_exists(topic)
+        {
+            // Preserve topic, count, and individual-message error precedence before batch validation.
+            for message in &messages {
+                message.validate()?;
+            }
+            if let Some(first) = messages.first() {
+                if messages
+                    .iter()
+                    .any(|message| message.ordering_key != first.ordering_key)
+                {
+                    return Err(PubSubError::failed_precondition(
+                        "In a single publish request, all messages must have no ordering key or they must all have the same ordering key. [code=539b]",
+                    ));
+                }
+            }
+        }
         self.publish_locked(topic, messages)
     }
 

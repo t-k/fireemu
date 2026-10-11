@@ -4941,3 +4941,230 @@ async fn strict_rest_oversize_http1_delivers_complete_error() {
         "Request payload size exceeds the limit: 10485760 bytes."
     );
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn recorded_mixed_ordering_keys_are_atomic_across_rest_and_native_publish() {
+    use fireemu_adapter_pubsub::{
+        BridgeMessage, PagingPolicy, TopicDelivery, TopicDeliveryError, TopicDeliveryReservation,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct CountingBridge(Arc<AtomicUsize>);
+    impl TopicDelivery for CountingBridge {
+        fn reserve(
+            &self,
+            _: &str,
+            _: &[BridgeMessage],
+        ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(TopicDeliveryError::Capacity)
+        }
+    }
+    const MESSAGE: &str = "In a single publish request, all messages must have no ordering key or they must all have the same ordering key. [code=539b]";
+    let captured = json!([
+        {"data":"b25l"}, {"data":"dHdv","attributes":{"color":"red","n":"1"}},
+        {"attributes":{"only":"attributes"}}, {"data":"","attributes":{"k":"empty data"}},
+        {"data":"a2V5ZWQ=","orderingKey":"k1"}, {"data":"AP+A"},
+        {"data":"w7xuw69jw7Zkw6kg4pyT"}, {"data":"eA==","attributes":{}}
+    ]);
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        let state = Arc::new(Mutex::new(PubSubState::new(99)));
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_700_000_000),
+        )));
+        let reservations = Arc::new(AtomicUsize::new(0));
+        let handle = PubSubHandle::new(
+            state.clone(),
+            clock.clone(),
+            Some(Arc::new(CountingBridge(reservations.clone()))),
+        )
+        .with_paging_policy(policy);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_handle = handle.clone();
+        let server = tokio::spawn(async move {
+            let _ = serve_pubsub(listener, server_handle).await;
+        });
+        let topic = "projects/demo-app/topics/mixed-keys";
+        let subscription = "projects/demo-app/subscriptions/mixed-keys";
+        assert_eq!(
+            rest_request(address, "PUT", &format!("/v1/{topic}"), json!({}))
+                .await
+                .0,
+            200
+        );
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/{subscription}"),
+                json!({"topic":topic})
+            )
+            .await
+            .0,
+            200
+        );
+        let mut publisher = PublisherClient::new(grpc_channel(address).await);
+        for batch in [
+            captured.clone(),
+            json!([{"data":"eA==","orderingKey":"k1"},{"data":"eA==","orderingKey":"k2"}]),
+        ] {
+            let (status, body) = rest_request(
+                address,
+                "POST",
+                &format!("/v1/{topic}:publish"),
+                json!({"messages":batch}),
+            )
+            .await;
+            let messages = batch
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|message| pb::PubsubMessage {
+                    data: BASE64
+                        .decode(message["data"].as_str().unwrap_or(""))
+                        .unwrap(),
+                    attributes: message["attributes"]
+                        .as_object()
+                        .map(|attributes| {
+                            attributes
+                                .iter()
+                                .map(|(key, value)| {
+                                    (key.clone(), value.as_str().unwrap().to_owned())
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    ordering_key: message["orderingKey"].as_str().unwrap_or("").to_owned(),
+                    ..Default::default()
+                })
+                .collect();
+            let error = publisher
+                .publish(pb::PublishRequest {
+                    topic: topic.to_owned(),
+                    messages,
+                })
+                .await
+                .unwrap_err();
+            if policy == PagingPolicy::Strict {
+                assert_eq!(status, 400);
+                assert_eq!(
+                    body,
+                    json!({"error":{"code":400,"message":MESSAGE,"status":"FAILED_PRECONDITION"}})
+                );
+                assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+                assert_eq!(error.message(), MESSAGE);
+                assert_eq!(reservations.load(Ordering::SeqCst), 0);
+            } else {
+                assert_eq!(status, 429);
+                assert_eq!(error.code(), tonic::Code::ResourceExhausted);
+            }
+        }
+        assert!(rest_request(
+            address,
+            "POST",
+            &format!("/v1/{subscription}:pull"),
+            json!({"maxMessages":10,"returnImmediately":true})
+        )
+        .await
+        .1["receivedMessages"]
+            .as_array()
+            .is_none_or(Vec::is_empty));
+        handle.shutdown_push_dispatcher().await;
+        server.abort();
+        let _ = server.await;
+        // A bridge-free handle shares the rejected publication's broker and counter.
+        let handle = PubSubHandle::new(state, clock, None).with_paging_policy(policy);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_handle = handle.clone();
+        let server = tokio::spawn(async move {
+            let _ = serve_pubsub(listener, server_handle).await;
+        });
+        let mut publisher = PublisherClient::new(grpc_channel(address).await);
+        let mut next_counter = 1;
+        for key in ["", "k1"] {
+            let batch =
+                json!([{"data":"eA==","orderingKey":key},{"data":"eA==","orderingKey":key}]);
+            let (status, body) = rest_request(
+                address,
+                "POST",
+                &format!("/v1/{topic}:publish"),
+                json!({"messages":batch}),
+            )
+            .await;
+            assert_eq!(status, 200);
+            assert_eq!(
+                body["messageIds"][0],
+                fireemu_core_pubsub::pubsub_message_id(next_counter)
+            );
+            next_counter += 2;
+            let response = publisher
+                .publish(pb::PublishRequest {
+                    topic: topic.to_owned(),
+                    messages: vec![
+                        pb::PubsubMessage {
+                            data: vec![b'x'],
+                            ordering_key: key.to_owned(),
+                            ..Default::default()
+                        };
+                        2
+                    ],
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(
+                response.message_ids[0],
+                fireemu_core_pubsub::pubsub_message_id(next_counter)
+            );
+            next_counter += 2;
+        }
+        if policy == PagingPolicy::Emulator {
+            assert_eq!(
+                rest_request(
+                    address,
+                    "POST",
+                    &format!("/v1/{topic}:publish"),
+                    json!({"messages":captured})
+                )
+                .await
+                .0,
+                200
+            );
+        }
+        handle.shutdown_push_dispatcher().await;
+        server.abort();
+        let _ = server.await;
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(32))]
+    #[test]
+    fn strict_publish_ordering_key_partition_matches_batch_equality(
+        keys in proptest::collection::vec("[a-z]{0,4}", 1..12),
+        strict in proptest::bool::ANY,
+    ) {
+        use fireemu_core_pubsub::{Code, PubsubMessage, TopicName};
+        use fireemu_adapter_pubsub::PagingPolicy;
+        let topic = TopicName::parse("projects/demo-app/topics/key-property").unwrap();
+        let mut state = PubSubState::new(99);
+        state.create_topic(topic.clone(), std::collections::BTreeMap::default()).unwrap();
+        let state = Arc::new(Mutex::new(state));
+        let handle = PubSubHandle::new(state, Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_unix_seconds(1_700_000_000)))), None)
+            .with_paging_policy(if strict { PagingPolicy::Strict } else { PagingPolicy::Emulator });
+        let messages: Vec<_> = keys.iter().map(|key| PubsubMessage { data:vec![b'x'], ordering_key:key.clone(), ..Default::default() }).collect();
+        let result = handle.publish(&topic, messages.clone());
+        let mixed = keys.iter().any(|key| key != &keys[0]);
+        proptest::prop_assert_eq!(result.is_err(), strict && mixed);
+        if strict && mixed {
+            proptest::prop_assert_eq!(result.unwrap_err().code(), Code::FailedPrecondition);
+        }
+        let missing = TopicName::parse("projects/demo-app/topics/missing").unwrap();
+        proptest::prop_assert_eq!(handle.publish(&missing, messages.clone()).unwrap_err().code(), Code::NotFound);
+        let mut invalid = messages;
+        invalid[0].data.clear();
+        proptest::prop_assert_eq!(handle.publish(&topic, invalid).unwrap_err().code(), Code::InvalidArgument);
+    }
+}

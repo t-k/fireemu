@@ -28,3 +28,24 @@ MATCH, NONDETERMINISTIC, and missing-row handling retain their existing contract
 | Reject unsupported filter removal, addition, and relocation | Actual L1 fixture-backed filter-removal tests plus synthetic registration near misses. |
 | Reject unsupported non-boundary quotes and program errors; bind any recorded production quote | Dedicated negative regressions; original timeout and missing-row tests remain. |
 | Demonstrate semantic sensitivity of the changed functions | Scoped hand mutations of the structural proof and each retained-content guard, with baseline and unchanged control. |
+
+## Node SDK111 reconnect observation (2026-10-11)
+
+Two independent production recordings of `FS-LISTEN-SDK-111` (deletion and query-membership loss while offline, followed by reconnect) completed with Firebase 12.18.0 on Node 24.14.0. In both recordings, the complete retained `sdk/111` row equals the recorded strict and emulator rows. The comparison preserves all four ordered callbacks, the baseline marker, aggregate observations, snapshot cache/pending-write metadata, ordered document changes and their indexes, errors, failures, invariants, timeout status and the recorded stream end marker.
+
+Using the case's logical document names, the callbacks retain `alpha,beta,gamma` from cache, the same documents from the server, the same documents from cache after the offline boundary, then server-backed `alpha`. The final callback removes `beta` and then `gamma`, each at old index 1 and new index −1. All four callbacks have `hasPendingWrites=false`; errors, failures and invariant violations are empty, and the row is not timed out. This is an observation of the retained Node SDK callback and aggregate axes.
+
+| Evidence identity | Commit or SHA-256 |
+| --- | --- |
+| Capture source commit | `7ffcae7cdfdf4cafe2c026e29727c51006f59925` |
+| Case implementation (`conformance/src/fs-listen/sdk-cases.mjs`) SHA-256 | `7bb673d61871e1ec577d13b524ec80357bcbf4c5b46525368ab60312285ebb4c` |
+| Comparison source commit | `35673873bad106edf6d905071f3f16ed5f7ccefc` |
+| Comparator (`conformance/src/fs-listen/compare.mjs`) SHA-256 | `16397beb41eba78e9d0375526d71a5829f07a8eaebc250837a6811bcdd78f0f9` |
+| Local binary build source commit | `b592f27c18f7383bd40d564435aa7823963896c9` |
+| Local `fireemu` binary SHA-256 | `0faa25cf7b259ec1488da7b92f72d70f6435aa1a5edaa276bbe23b95af74afe5` |
+| Production recording R1 SHA-256 | `59ba6d778bab363b26a1bc80c11121eac555b06809a7214ad152217672af385e` |
+| Production recording R2 SHA-256 | `084a983df13281f3f3e3c32c8949c7bdd838fa1f5ee9d132a06876de4964516e` |
+| Strict local recording SHA-256 | `5d87ad215ce92cb71054935f3a7be1e57ad9ccb8e57ba9bff7351e4a15ce1a56` |
+| Emulator local recording SHA-256 | `05ac849379184b56af97169953035d5b6ec72a5f073a2fb385421c134e76a074` |
+
+The recordings do not establish document field values, per-document metadata, a separate per-step transcript, browser transport or application UI behavior, other SDK versions, online-reconnect variants, tenant behavior, Android/Apple behavior or raw-token behavior. They do not qualify another native registration, including `native/resume-token/current`, or replace historical artifact/build mappings. The historical native reasons and production/local quotes remain unchanged: this scoped SDK observation accompanies `native/existence-filter/with-expected-count` and does not convert its native wire differences to MATCH. The other 11 registrations and the existing timeout, filter, document-field and target-content guards retain the treatment above.

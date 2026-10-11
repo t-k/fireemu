@@ -747,14 +747,27 @@ test("S1: the ordering flag is read for the subscription the Pull names", () => 
   };
   const cell = compareCells(make("src", [a0, a1]), make("loc", [a1, a0]));
   assert.equal(pullRows(cell)[0].verdict, "NOT_COMPARABLE");
-  // A failed CreateSubscription is no configuration either.
-  const failed = (tag, first) => {
+  // A failed or unknown CreateSubscription is no configuration either.
+  for (const update of [{ ok: false, status: 409, code: "ALREADY_EXISTS" }, { unknown: true }]) {
+    const failed = (tag, first) => {
+      const rows = side(tag, { first, second: [], subscription: "ordered" }).rows;
+      Object.assign(rows.at(-1).response, update);
+      return rows;
+    };
+    assert.equal(
+      pullRows(compareCells(failed("src", [a0, a1]), failed("loc", [a1, a0])))[0].verdict,
+      "NOT_COMPARABLE",
+      JSON.stringify(update),
+    );
+  }
+  // Only a CreateSubscription request records the flag.
+  const other = (tag, first) => {
     const rows = side(tag, { first, second: [], subscription: "ordered" }).rows;
-    Object.assign(rows.at(-1).response, { ok: false, status: 409, code: "ALREADY_EXISTS" });
+    rows.at(-1).method = "UpdateSubscription";
     return rows;
   };
   assert.equal(
-    pullRows(compareCells(failed("src", [a0, a1]), failed("loc", [a1, a0])))[0].verdict,
+    pullRows(compareCells(other("src", [a0, a1]), other("loc", [a1, a0])))[0].verdict,
     "NOT_COMPARABLE",
   );
 });
@@ -853,6 +866,19 @@ test("S4: a duplicate message id inside one Pull has its own reason", () => {
     assert.equal(row.verdict, "DIVERGES");
     assert.equal(row.reason, REASON_DUPLICATE);
   }
+  // A duplicate keeps its reason even when the overall delivery of the cell is equal.
+  const twice = [...dup("src"), pull([])];
+  const spread = [pull(deliveries("loc", [ONE])), pull(deliveries("loc", [ONE], 1))];
+  const [split] = pullRows(compareCells(twice, spread));
+  assert.equal(split.reason, REASON_DUPLICATE);
+  // Deliveries without any messageId are not duplicates of each other.
+  const bare = (tag, messages) => {
+    const row = pull(deliveries(tag, messages));
+    for (const d of row.response.body.receivedMessages) delete d.message.messageId;
+    return [row];
+  };
+  const [plain] = pullRows(compareCells(bare("src", [ONE, TWO]), bare("loc", [ONE])));
+  assert.equal(plain.reason, REASON_SET);
   // Two publications with equal content are two messages, not a duplicate.
   const twin = (tag) => [pull(deliveries(tag, [ONE, ONE]))];
   const [row] = pullRows(compareCells(twin("src"), single("loc")));

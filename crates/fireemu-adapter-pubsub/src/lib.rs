@@ -35,8 +35,8 @@ use std::sync::{Arc, Mutex};
 pub use fireemu_core_pubsub::pagination::PagingPolicy;
 
 use fireemu_core_pubsub::{
-    DeadLetterForward, PubSubError, PubSubState, PubsubMessage, ReceivedMessage, StoredMessage,
-    SubscriptionName, TopicName,
+    DeadLetterForward, OrderedPullBatching, PubSubError, PubSubState, PubsubMessage,
+    ReceivedMessage, StoredMessage, SubscriptionName, TopicName,
 };
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::Clock;
@@ -649,11 +649,20 @@ impl PubSubHandle {
         subscription: &SubscriptionName,
         max: usize,
     ) -> Result<Vec<ReceivedMessage>, PubSubError> {
+        self.pull_batched(subscription, max, OrderedPullBatching::Mixed)
+    }
+
+    fn pull_batched(
+        &self,
+        subscription: &SubscriptionName,
+        max: usize,
+        batching: OrderedPullBatching,
+    ) -> Result<Vec<ReceivedMessage>, PubSubError> {
         let _dead_letter = self.lock_dead_letter();
         let now = self.now();
         let outcome = {
             let mut state = self.state();
-            state.pull_with_dead_letters(subscription, max, now)?
+            state.pull_with_dead_letters_batching(subscription, max, now, batching)?
         };
         self.commit_dead_letters_locked(&outcome.dead_lettered);
         Ok(outcome.received)
@@ -667,15 +676,22 @@ impl PubSubHandle {
         max: usize,
         return_immediately: bool,
     ) -> Result<Vec<ReceivedMessage>, PubSubError> {
+        // Recorded production unary Pull separates unkeyed and keyed messages on ordered
+        // subscriptions (H1 R11/N13). StreamingPull and push have no such evidence and stay mixed.
+        let batching = if self.paging_policy == PagingPolicy::Strict {
+            OrderedPullBatching::SeparateUnkeyed
+        } else {
+            OrderedPullBatching::Mixed
+        };
         if return_immediately || self.paging_policy == PagingPolicy::Emulator {
-            return self.pull(subscription, max);
+            return self.pull_batched(subscription, max, batching);
         }
         let started = tokio::time::Instant::now();
         let deadline = started + std::time::Duration::from_secs(20);
         let cadence = std::time::Duration::from_millis(25);
         let mut ticks = tokio::time::interval_at(started + cadence, cadence);
         loop {
-            let received = self.pull(subscription, max)?;
+            let received = self.pull_batched(subscription, max, batching)?;
             if !received.is_empty() {
                 return Ok(received);
             }

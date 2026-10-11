@@ -19,7 +19,7 @@ use crate::name::{
     validate_project, validate_resource_id, SubscriptionName, TopicName, DELETED_TOPIC,
 };
 use crate::subscription::{
-    PushConfig, ReceivedMessage, SubscriptionConfig, SubscriptionState,
+    OrderedPullBatching, PushConfig, ReceivedMessage, SubscriptionConfig, SubscriptionState,
     DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
 };
 
@@ -1643,6 +1643,18 @@ impl PubSubState {
         max: usize,
         now: LogicalInstant,
     ) -> Result<PullResult> {
+        self.pull_with_dead_letters_batching(name, max, now, OrderedPullBatching::Mixed)
+    }
+
+    /// [`Self::pull_with_dead_letters`] with an explicit batching mode for ordering-enabled
+    /// subscriptions. Strict unary Pull passes [`OrderedPullBatching::SeparateUnkeyed`].
+    pub fn pull_with_dead_letters_batching(
+        &mut self,
+        name: &SubscriptionName,
+        max: usize,
+        now: LogicalInstant,
+        batching: OrderedPullBatching,
+    ) -> Result<PullResult> {
         let key = name.to_full();
         if !self.subscriptions.contains_key(&key) {
             return Err(PubSubError::not_found(format!(
@@ -1664,7 +1676,7 @@ impl PubSubState {
                 .subscriptions
                 .get_mut(&key)
                 .expect("subscription present");
-            sub.pull_with_forwarding(max, now, authorized, || {
+            sub.pull_with_forwarding(max, now, authorized, batching, || {
                 format!("ack-{:016x}", seed_bump.next_u64())
             })
         };

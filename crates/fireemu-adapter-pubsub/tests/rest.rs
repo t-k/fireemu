@@ -5640,3 +5640,120 @@ async fn recorded_unicode_labels_rejections_preserve_both_wires_and_emulator_adm
         let _ = server.await;
     }
 }
+
+/// The H1 R11 publish shape: seven unkeyed messages in one request (the keyed eighth message is
+/// published separately because production refuses a mixed-key batch).
+fn r11_unkeyed_messages() -> Value {
+    json!({"messages": [
+        {"data": BASE64.encode("one")},
+        {"data": BASE64.encode("two"), "attributes": {"color": "red", "n": "1"}},
+        {"attributes": {"only": "attributes"}},
+        {"data": "", "attributes": {"k": "empty data"}},
+        {"data": "AP+A"},
+        {"data": BASE64.encode("ünïcödé ✓")},
+        {"data": BASE64.encode("x"), "attributes": {}},
+    ]})
+}
+
+/// Runs the recorded R11 sequence (ordered subscription, seven unkeyed then one keyed message,
+/// Pull, Acknowledge, Pull) and returns both Pull bodies.
+async fn r11_ordered_pulls(
+    policy: fireemu_adapter_pubsub::PagingPolicy,
+    return_immediately: bool,
+) -> (Vec<Value>, Vec<Value>) {
+    let address = start_policy(policy).await;
+    let topic = "/v1/projects/demo-app/topics/r11-topic";
+    let sub = "/v1/projects/demo-app/subscriptions/r11-sub";
+    assert_eq!(rest_request(address, "PUT", topic, json!({})).await.0, 200);
+    let (status, created) = rest_request(
+        address,
+        "PUT",
+        sub,
+        json!({
+            "topic": "projects/demo-app/topics/r11-topic",
+            "ackDeadlineSeconds": 10,
+            "labels": {"env": "test", "ttl": "7"},
+            "enableMessageOrdering": true,
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{created}");
+    let (status, published) = rest_request(
+        address,
+        "POST",
+        &format!("{topic}:publish"),
+        r11_unkeyed_messages(),
+    )
+    .await;
+    assert_eq!(status, 200, "{published}");
+    let (status, published) = rest_request(
+        address,
+        "POST",
+        &format!("{topic}:publish"),
+        json!({"messages": [{"data": BASE64.encode("keyed"), "orderingKey": "k1"}]}),
+    )
+    .await;
+    assert_eq!(status, 200, "{published}");
+    let pull_body = json!({"maxMessages": 16, "returnImmediately": return_immediately});
+    let (status, first) =
+        rest_request(address, "POST", &format!("{sub}:pull"), pull_body.clone()).await;
+    assert_eq!(status, 200, "{first}");
+    let first = first["receivedMessages"].as_array().unwrap().clone();
+    let ack_ids: Vec<Value> = first.iter().map(|m| m["ackId"].clone()).collect();
+    let (status, acked) = rest_request(
+        address,
+        "POST",
+        &format!("{sub}:acknowledge"),
+        json!({"ackIds": ack_ids}),
+    )
+    .await;
+    assert_eq!(status, 200, "{acked}");
+    let (status, second) = rest_request(
+        address,
+        "POST",
+        &format!("{sub}:pull"),
+        json!({"maxMessages": 16, "returnImmediately": true}),
+    )
+    .await;
+    assert_eq!(status, 200, "{second}");
+    let second = second["receivedMessages"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    (first, second)
+}
+
+#[tokio::test]
+async fn strict_ordered_pull_returns_unkeyed_before_keyed_recorded_r11() {
+    for return_immediately in [true, false] {
+        let (first, second) = r11_ordered_pulls(
+            fireemu_adapter_pubsub::PagingPolicy::Strict,
+            return_immediately,
+        )
+        .await;
+        assert_eq!(first.len(), 7, "returnImmediately={return_immediately}");
+        assert!(
+            first
+                .iter()
+                .all(|m| m["message"].get("orderingKey").is_none()),
+            "{first:?}"
+        );
+        assert_eq!(second.len(), 1, "returnImmediately={return_immediately}");
+        assert_eq!(second[0]["message"]["orderingKey"], "k1");
+        assert_eq!(second[0]["message"]["data"], BASE64.encode("keyed"));
+    }
+}
+
+#[tokio::test]
+async fn emulator_ordered_pull_keeps_mixed_r11_response() {
+    for return_immediately in [true, false] {
+        let (first, second) = r11_ordered_pulls(
+            fireemu_adapter_pubsub::PagingPolicy::Emulator,
+            return_immediately,
+        )
+        .await;
+        assert_eq!(first.len(), 8, "returnImmediately={return_immediately}");
+        assert_eq!(first[7]["message"]["orderingKey"], "k1");
+        assert!(second.is_empty(), "{second:?}");
+    }
+}

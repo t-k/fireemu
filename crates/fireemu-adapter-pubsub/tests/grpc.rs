@@ -4924,3 +4924,134 @@ async fn strict_unary_pull_earlier_grpc_deadline_drops_waiter() {
     );
     h.shutdown().await;
 }
+
+/// Runs the recorded N13 sequence over native gRPC (ordered subscription, seven unkeyed then one
+/// keyed message, Pull, Acknowledge, Pull) and returns both Pull responses.
+#[allow(deprecated)] // `return_immediately` is the recorded N13 request field.
+async fn n13_ordered_pulls(
+    policy: fireemu_adapter_pubsub::PagingPolicy,
+    return_immediately: bool,
+) -> (Vec<pb::ReceivedMessage>, Vec<pb::ReceivedMessage>) {
+    let h = start_with_bridge_and_policy(None, policy).await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let topic = "projects/demo-app/topics/n13-topic";
+    let sub = "projects/demo-app/subscriptions/n13-sub";
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: sub.to_owned(),
+        topic: topic.to_owned(),
+        ack_deadline_seconds: 10,
+        enable_message_ordering: true,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let attrs = |pairs: &[(&str, &str)]| {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect::<HashMap<_, _>>()
+    };
+    let unkeyed = vec![
+        msg(b"one"),
+        pb::PubsubMessage {
+            data: b"two".to_vec(),
+            attributes: attrs(&[("color", "red"), ("n", "1")]),
+            ..Default::default()
+        },
+        pb::PubsubMessage {
+            attributes: attrs(&[("only", "attributes")]),
+            ..Default::default()
+        },
+        pb::PubsubMessage {
+            attributes: attrs(&[("k", "empty data")]),
+            ..Default::default()
+        },
+        msg(&[0x00, 0xff, 0x80]),
+        msg("ünïcödé ✓".as_bytes()),
+        msg(b"x"),
+    ];
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: unkeyed,
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![pb::PubsubMessage {
+            data: b"keyed".to_vec(),
+            ordering_key: "k1".to_owned(),
+            ..Default::default()
+        }],
+    })
+    .await
+    .unwrap();
+    let first = subc
+        .pull(pb::PullRequest {
+            subscription: sub.to_owned(),
+            max_messages: 16,
+            return_immediately,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    subc.acknowledge(pb::AcknowledgeRequest {
+        subscription: sub.to_owned(),
+        ack_ids: first.iter().map(|m| m.ack_id.clone()).collect(),
+    })
+    .await
+    .unwrap();
+    let second = subc
+        .pull(pb::PullRequest {
+            subscription: sub.to_owned(),
+            max_messages: 16,
+            return_immediately: true,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    h.shutdown().await;
+    (first, second)
+}
+
+#[tokio::test]
+async fn strict_ordered_pull_returns_unkeyed_before_keyed_recorded_n13() {
+    for return_immediately in [true, false] {
+        let (first, second) = n13_ordered_pulls(
+            fireemu_adapter_pubsub::PagingPolicy::Strict,
+            return_immediately,
+        )
+        .await;
+        assert_eq!(first.len(), 7, "return_immediately={return_immediately}");
+        assert!(first
+            .iter()
+            .all(|m| m.message.as_ref().unwrap().ordering_key.is_empty()));
+        assert_eq!(second.len(), 1, "return_immediately={return_immediately}");
+        let keyed = second[0].message.as_ref().unwrap();
+        assert_eq!(keyed.ordering_key, "k1");
+        assert_eq!(keyed.data, b"keyed");
+    }
+}
+
+#[tokio::test]
+async fn emulator_ordered_pull_keeps_mixed_n13_response() {
+    for return_immediately in [true, false] {
+        let (first, second) = n13_ordered_pulls(
+            fireemu_adapter_pubsub::PagingPolicy::Emulator,
+            return_immediately,
+        )
+        .await;
+        assert_eq!(first.len(), 8, "return_immediately={return_immediately}");
+        assert_eq!(first[7].message.as_ref().unwrap().ordering_key, "k1");
+        assert!(second.is_empty());
+    }
+}

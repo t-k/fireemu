@@ -881,7 +881,8 @@ test("S4: an unjudgeable or malformed Pull of the cell hides no partition claim"
   // The third source Pull is malformed: it cannot be skipped either.
   const malformed = [pull(deliveries("src", [ONE])), pull([]), pull([])];
   malformed[2].response.body = { receivedMessages: "junk" };
-  const cell = compareCells(malformed, local);
+  const balanced = [pull([]), pull(deliveries("loc", [ONE])), pull([])];
+  const cell = compareCells(malformed, balanced);
   assert.equal(pullRows(cell)[0].verdict, "DIVERGES");
   assert.equal(pullRows(cell)[0].reason, REASON_SET);
 });

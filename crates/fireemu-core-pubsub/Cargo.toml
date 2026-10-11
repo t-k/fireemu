@@ -6,10 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "std-only Cloud Pub/Sub emulator state machine: topics, subscriptions, ack deadlines, redelivery, filters"
+description = "Cloud Pub/Sub emulator state machine: topics, subscriptions, ack deadlines, redelivery, filters"
 
 [dependencies]
 fireemu-core-types = { path = "../fireemu-core-types" }
+regex = "1.13.1"
 
 [dev-dependencies]
 proptest.workspace = true

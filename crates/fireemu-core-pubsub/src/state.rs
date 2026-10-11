@@ -1,7 +1,7 @@
 //! The Pub/Sub registry: topics, subscriptions, publish routing, dead-letter forwarding and
 //! deterministic identifier generation.
 //!
-//! [`PubSubState`] is a pure, std-only state machine. It owns no clock and no sockets: every
+//! [`PubSubState`] is a pure state machine. It owns no clock and no sockets: every
 //! operation that depends on time takes an explicit [`LogicalInstant`], and identifiers are
 //! derived from the daemon seed so a run reproduces byte for byte. The protocol adapter drives
 //! it, forwarding the virtual clock and holding the lock.
@@ -2235,6 +2235,51 @@ mod tests {
                 }
                 proptest::prop_assert_eq!(state.dead_letter_authorized(&source,&dead),subscriber&&publisher&&identity_matches);
             }
+        }
+    }
+
+    #[test]
+    fn unicode_subscription_labels_preserve_strict_configuration_and_emulator_admission() {
+        for strict in [true, false] {
+            let mut state = PubSubState::new(42);
+            state
+                .create_topic(topic("demo-model", "events"), BTreeMap::new())
+                .unwrap();
+            let mut prior = sub_cfg("demo-model", "labels", "events", Filter::always());
+            prior.labels = BTreeMap::from([
+                ("env".to_owned(), "é".to_owned()),
+                ("ttl".to_owned(), "7".to_owned()),
+            ]);
+            prior.message_retention_duration = Some(LogicalDuration::from_seconds(604_800));
+            let name = prior.name.clone();
+            state.create_subscription(prior.clone()).unwrap();
+            let labels = BTreeMap::from([
+                ("env".to_owned(), "e\u{0301}".to_owned()),
+                ("ttl".to_owned(), "7".to_owned()),
+            ]);
+            let updated = crate::SubscriptionUpdate {
+                labels: Some(labels.clone()),
+                message_retention_duration: Some(Some(LogicalDuration::from_seconds(3600))),
+                ..Default::default()
+            };
+            let result = state.update_subscription_configuration(&name, updated, strict);
+            if strict {
+                let error = result.unwrap_err();
+                assert_eq!(error.code(), crate::Code::InvalidArgument);
+                assert_eq!(
+                    error.message(),
+                    concat!(
+                        r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels.env"; value ""#,
+                        "e\u{0301}",
+                        r#"" does not conform to regular expression "[\p{Ll}\p{Lo}\p{N}_-]{0,63}"; character "́" at position 1 is not a non-uppercased letter (Unicode character class Ll or Lo), digit, hyphen, or underscore)."#
+                    )
+                );
+            } else {
+                result.unwrap();
+                prior.labels = labels;
+                prior.message_retention_duration = Some(LogicalDuration::from_seconds(3600));
+            }
+            assert_eq!(state.subscription_config(&name).unwrap(), &prior);
         }
     }
 

@@ -5415,3 +5415,228 @@ async fn topic_labels_updates_replace_and_clear_get_list_views_on_both_transport
     server.abort();
     let _ = server.await;
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn recorded_unicode_labels_rejections_preserve_both_wires_and_emulator_admission() {
+    use fireemu_adapter_pubsub::PagingPolicy;
+    let value_message = concat!(
+        r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels.env"; value ""#,
+        "e\u{0301}",
+        r#"" does not conform to regular expression "[\p{Ll}\p{Lo}\p{N}_-]{0,63}"; character "́" at position 1 is not a non-uppercased letter (Unicode character class Ll or Lo), digit, hyphen, or underscore)."#
+    );
+    let key = "k".repeat(64);
+    let key_message = format!(
+        r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels"; key "{key}" exceeds maximum character length 63 with a length of 64)."#
+    );
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_700_000_000),
+        )));
+        let handle = PubSubHandle::new(Arc::new(Mutex::new(PubSubState::new(99))), clock, None)
+            .with_paging_policy(policy);
+        let port = std::env::var("PORT")
+            .ok()
+            .map_or(0, |value| value.parse::<u16>().unwrap());
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_handle = handle.clone();
+        let server = tokio::spawn(async move {
+            let _ = serve_pubsub(listener, server_handle).await;
+        });
+        let topic = "projects/demo-app/topics/unicode-labels";
+        let subscription = "projects/demo-app/subscriptions/unicode-labels";
+        let prior = std::collections::HashMap::from([
+            ("env".to_owned(), "é".to_owned()),
+            ("ttl".to_owned(), "7".to_owned()),
+        ]);
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/{topic}"),
+                json!({"labels":prior})
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/{subscription}"),
+                json!({"topic":topic,"labels":prior,"messageRetentionDuration":"3600s"})
+            )
+            .await
+            .0,
+            200
+        );
+        let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
+        let mut publisher = PublisherClient::new(grpc_channel(address).await);
+        let bad_value = std::collections::HashMap::from([
+            ("env".to_owned(), "e\u{0301}".to_owned()),
+            ("ttl".to_owned(), "7".to_owned()),
+        ]);
+        for (labels, message) in [
+            (bad_value.clone(), value_message.to_owned()),
+            (
+                std::collections::HashMap::from([(key.clone(), "value".to_owned())]),
+                key_message.clone(),
+            ),
+        ] {
+            subscriber
+                .update_subscription(pb::UpdateSubscriptionRequest {
+                    subscription: Some(pb::Subscription {
+                        name: subscription.to_owned(),
+                        labels: prior.clone(),
+                        ..Default::default()
+                    }),
+                    update_mask: Some(prost_types::FieldMask {
+                        paths: vec!["labels".to_owned()],
+                    }),
+                })
+                .await
+                .unwrap();
+            let before_rest =
+                rest_request(address, "GET", &format!("/v1/{subscription}"), json!({}))
+                    .await
+                    .1;
+            let before_native = subscriber
+                .get_subscription(pb::GetSubscriptionRequest {
+                    subscription: subscription.to_owned(),
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            let (code, body) = rest_request(
+                address,
+                "PATCH",
+                &format!("/v1/{subscription}"),
+                json!({"subscription":{"name":subscription,"labels":labels},"updateMask":"labels"}),
+            )
+            .await;
+            if policy == PagingPolicy::Strict {
+                assert_eq!(code, 400);
+                assert_eq!(
+                    body,
+                    json!({"error":{"code":400,"status":"INVALID_ARGUMENT","message":message}})
+                );
+            } else {
+                assert_eq!(code, 200);
+                assert_eq!(body["labels"], json!(labels));
+            }
+            let result = subscriber
+                .update_subscription(pb::UpdateSubscriptionRequest {
+                    subscription: Some(pb::Subscription {
+                        name: subscription.to_owned(),
+                        labels: labels.clone(),
+                        ..Default::default()
+                    }),
+                    update_mask: Some(prost_types::FieldMask {
+                        paths: vec!["labels".to_owned()],
+                    }),
+                })
+                .await;
+            if policy == PagingPolicy::Strict {
+                let error = result.unwrap_err();
+                assert_eq!(error.code(), tonic::Code::InvalidArgument);
+                assert_eq!(error.message(), message);
+            } else {
+                assert_eq!(result.unwrap().into_inner().labels, labels);
+            }
+            let after_rest =
+                rest_request(address, "GET", &format!("/v1/{subscription}"), json!({})).await;
+            let after_native = subscriber
+                .get_subscription(pb::GetSubscriptionRequest {
+                    subscription: subscription.to_owned(),
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(after_rest.0, 200);
+            if policy == PagingPolicy::Strict {
+                assert_eq!(after_rest.1, before_rest);
+                assert_eq!(after_native, before_native);
+            } else {
+                assert_eq!(after_rest.1["labels"], json!(labels));
+                assert_eq!(after_native.labels, labels);
+            }
+        }
+        let created = subscriber
+            .create_subscription(pb::Subscription {
+                name: "projects/demo-app/subscriptions/invalid-unicode-labels".to_owned(),
+                topic: topic.to_owned(),
+                labels: bad_value.clone(),
+                ..Default::default()
+            })
+            .await;
+        let topic_create = rest_request(
+            address,
+            "PUT",
+            "/v1/projects/demo-app/topics/invalid-unicode-labels",
+            json!({"labels":bad_value}),
+        )
+        .await;
+        let topic_update = publisher
+            .update_topic(pb::UpdateTopicRequest {
+                topic: Some(pb::Topic {
+                    name: topic.to_owned(),
+                    labels: bad_value.clone(),
+                    ..Default::default()
+                }),
+                update_mask: Some(prost_types::FieldMask {
+                    paths: vec!["labels".to_owned()],
+                }),
+            })
+            .await;
+        if policy == PagingPolicy::Strict {
+            let error = created.unwrap_err();
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+            assert_eq!(error.message(), value_message);
+            assert_eq!(
+                topic_create,
+                (
+                    400,
+                    json!({"error":{"code":400,"status":"INVALID_ARGUMENT","message":value_message}})
+                )
+            );
+            let error = topic_update.unwrap_err();
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+            assert_eq!(error.message(), value_message);
+            assert_eq!(
+                publisher
+                    .get_topic(pb::GetTopicRequest {
+                        topic: topic.to_owned()
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .labels,
+                prior
+            );
+            assert_eq!(
+                rest_request(
+                    address,
+                    "GET",
+                    "/v1/projects/demo-app/topics/invalid-unicode-labels",
+                    json!({})
+                )
+                .await
+                .0,
+                404
+            );
+        } else {
+            assert_eq!(created.unwrap().into_inner().labels, bad_value);
+            assert_eq!(topic_create.0, 200);
+            assert_eq!(topic_update.unwrap().into_inner().labels, bad_value);
+        }
+        drop(subscriber);
+        drop(publisher);
+        handle.shutdown_push_dispatcher().await;
+        server.abort();
+        let _ = server.await;
+    }
+}

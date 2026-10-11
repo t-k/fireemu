@@ -847,6 +847,7 @@ version = "0.17.0"
 dependencies = [
  "fireemu-core-types",
  "proptest",
+ "regex",
 ]
 
 [[package]]

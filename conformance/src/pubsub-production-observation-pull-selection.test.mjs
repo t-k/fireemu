@@ -10,7 +10,9 @@ const TOPIC = "projects/p/topics/t";
 const RUN = "012345abcdef";
 const REASON_NC_PULL = "ACK selector unresolved; no shape selection inferred";
 const REASON_NC_ACK = "missing or conflicting ack binding";
-const REASON_SELECTION = "delivered message selection differs";
+const REASON_SET = "delivered message set differs";
+const REASON_PARTITION = "Pull partition differs";
+const REASON_DUPLICATE = "Pull duplicate delivery differs";
 const REASON_ORIGIN = "ACK originates from a different Pull";
 
 const b64 = (text) => Buffer.from(text).toString("base64");
@@ -90,13 +92,28 @@ function observation(tag, exchanges) {
     cells: [{ id: "R11", group: "G1", coordinate: "/conditions/6/cases/0", debts: [], exchanges }],
   };
 }
+// The recorded subscription configuration of a cell. `subscription` is "ordered" or "plain" for a
+// CreateSubscription row with enableMessageOrdering true or absent, and "none" for no such row.
+const createSubscription = (ordered) =>
+  exchange(
+    "CreateSubscription",
+    {
+      name: SUB,
+      topic: TOPIC,
+      ackDeadlineSeconds: 10,
+      ...(ordered ? { enableMessageOrdering: true } : {}),
+    },
+    ok({ name: SUB, topic: TOPIC, ...(ordered ? { enableMessageOrdering: true } : {}) }),
+  );
 // One side of an R11-shaped cell. `first` and `second` are the messages delivered by the two
 // Pulls; `ackFirst` and `ackSecond` choose which delivered ack ids the Acknowledges send.
-function side(tag, { first, second, ackFirst, ackSecond, publishIds = true }) {
+function side(tag, { first, second, ackFirst, ackSecond, subscription = "none" }) {
   const one = deliveries(tag, first);
   const two = deliveries(tag, second, first.length);
   const unkeyed = UNKEYED.map(wireMessage);
   const ids = (n, offset) => Array.from({ length: n }, (_, i) => pubId(tag, offset + i));
+  // The configuration row sits last so that the row positions below stay stable; the comparator
+  // reads it from anywhere in the cell.
   const rows = [
     publish(unkeyed, ids(7, 0)),
     publish([wireMessage(KEYED)], ids(1, 7)),
@@ -104,8 +121,8 @@ function side(tag, { first, second, ackFirst, ackSecond, publishIds = true }) {
     ack((ackFirst ?? one).map((d) => d.ackId)),
     pull(two),
     ack((ackSecond ?? two).map((d) => d.ackId)),
+    ...(subscription === "none" ? [] : [createSubscription(subscription === "ordered")]),
   ];
-  void publishIds;
   return { rows, one, two };
 }
 const compareCells = (source, local) =>
@@ -140,13 +157,13 @@ test("R11/N13 shape: a different delivered set in each Pull is DIVERGES, not NOT
   const cell = compareCells(source, local);
   const [pull1, pull2] = pullRows(cell);
   assert.equal(pull1.verdict, "DIVERGES");
-  assert.equal(pull1.reason, REASON_SELECTION);
+  assert.equal(pull1.reason, REASON_PARTITION);
   assert.deepEqual(pull1.selection, {
     source: { unkeyed: 7, keyed: 0 },
     local: { unkeyed: 7, keyed: 1 },
   });
   assert.equal(pull2.verdict, "DIVERGES");
-  assert.equal(pull2.reason, REASON_SELECTION);
+  assert.equal(pull2.reason, REASON_PARTITION);
   assert.deepEqual(pull2.selection, {
     source: { unkeyed: 0, keyed: 1 },
     local: { unkeyed: 0, keyed: 0 },
@@ -212,7 +229,7 @@ test("a missing delivered message, an extra one and a changed payload are DIVERG
     const local = side("loc", { first, second: [KEYED] });
     const [pull1] = pullRows(compareCells(source.rows, local.rows));
     assert.equal(pull1.verdict, "DIVERGES", name);
-    assert.equal(pull1.reason, REASON_SELECTION, name);
+    assert.equal(pull1.reason, REASON_SET, name);
   }
 });
 
@@ -254,13 +271,14 @@ test("keyed messages keep their per-key order, while different keys may interlea
   const a0 = k("A", "a0"),
     a1 = k("A", "a1"),
     b0 = k("B", "b0");
-  const source = side("src", { first: [a0, a1, b0], second: [] });
-  const interleaved = side("loc", { first: [b0, a0, a1], second: [] });
+  const ordered = { subscription: "ordered" };
+  const source = side("src", { first: [a0, a1, b0], second: [], ...ordered });
+  const interleaved = side("loc", { first: [b0, a0, a1], second: [], ...ordered });
   assert.equal(pullRows(compareCells(source.rows, interleaved.rows))[0].verdict, "NOT_COMPARABLE");
-  const swapped = side("loc", { first: [a1, a0, b0], second: [] });
+  const swapped = side("loc", { first: [a1, a0, b0], second: [], ...ordered });
   const [row] = pullRows(compareCells(source.rows, swapped.rows));
   assert.equal(row.verdict, "DIVERGES");
-  assert.equal(row.reason, REASON_SELECTION);
+  assert.equal(row.reason, REASON_SET);
 });
 
 test("the unkeyed set and keyed set are separate: one keyed message is not an unkeyed one", () => {
@@ -289,7 +307,7 @@ test("a bound message id must be the one the local run delivered", () => {
   assert.equal(compareCells(source, make("loc", 0)).rows[1].verdict, "NOT_COMPARABLE");
   const other = compareCells(source, make("loc", 1)).rows[1];
   assert.equal(other.verdict, "DIVERGES");
-  assert.equal(other.reason, REASON_SELECTION);
+  assert.equal(other.reason, REASON_SET);
 });
 
 test("an unbound message id falls back to content and never diverges on its own", () => {
@@ -452,7 +470,7 @@ test("an empty source Pull against a delivering local Pull is DIVERGES", () => {
   const local = side("loc", { first: [sevenUnkeyed[0]], second: [] });
   const [pull1] = pullRows(compareCells(source.rows, local.rows));
   assert.equal(pull1.verdict, "DIVERGES");
-  assert.equal(pull1.reason, REASON_SELECTION);
+  assert.equal(pull1.reason, REASON_SET);
 });
 
 test("the Acknowledge of the corresponding Pull keeps its existing NOT_COMPARABLE", () => {
@@ -618,14 +636,16 @@ test("source and local ack origins are tracked separately even for equal ack id 
 });
 
 // Reference model for the Pull selection rule, independent of the production code path: the
-// unkeyed messages compare as a multiset, and the keyed ones as one ordered list per key.
-function modelSelection(messages) {
+// unkeyed messages compare as a multiset, and the keyed ones as one ordered list per key when the
+// subscription orders messages, as a multiset otherwise.
+function modelSelection(messages, ordered) {
   const unkeyed = [];
   const keyed = new Map();
   for (const m of messages) {
     const identity = `${m.data ?? ""}|${JSON.stringify(Object.entries(m.attributes ?? {}).toSorted())}`;
     if (!m.orderingKey) unkeyed.push(identity);
-    else keyed.set(m.orderingKey, [...(keyed.get(m.orderingKey) ?? []), identity]);
+    else if (ordered) keyed.set(m.orderingKey, [...(keyed.get(m.orderingKey) ?? []), identity]);
+    else unkeyed.push(`${m.orderingKey}|${identity}`);
   }
   return { unkeyed: unkeyed.toSorted(), keyed: [...keyed.entries()].toSorted() };
 }
@@ -638,48 +658,238 @@ function generator(seed) {
   };
 }
 
-test("generated Pull pairs follow the selection model, and never MATCH", () => {
-  const next = generator(20261011);
-  const keys = ["", "", "", "A", "B"];
-  const shuffle = (list) => {
-    const out = [...list];
-    for (let i = out.length - 1; i > 0; i--) {
-      const j = next(i + 1);
-      [out[i], out[j]] = [out[j], out[i]];
+for (const subscription of ["ordered", "plain", "none"]) {
+  test(`generated Pull pairs follow the selection model (${subscription}), and never MATCH`, () => {
+    const next = generator(20261011);
+    const keys = ["", "", "", "A", "B"];
+    const shuffle = (list) => {
+      const out = [...list];
+      for (let i = out.length - 1; i > 0; i--) {
+        const j = next(i + 1);
+        [out[i], out[j]] = [out[j], out[i]];
+      }
+      return out;
+    };
+    const randomMessages = () =>
+      Array.from({ length: next(6) }, () => {
+        const key = keys[next(keys.length)];
+        return {
+          data: b64(`m${next(4)}`),
+          ...(next(3) === 0 ? { attributes: { a: String(next(2)) } } : {}),
+          ...(key ? { orderingKey: key } : {}),
+        };
+      });
+    let diverged = 0,
+      undecided = 0;
+    for (let trial = 0; trial < 400; trial++) {
+      const messages = randomMessages();
+      const peer = next(3) === 0 ? randomMessages() : shuffle(messages);
+      const source = side("src", { first: messages, second: [], subscription });
+      const local = side("loc", { first: peer, second: [], subscription });
+      const [row] = pullRows(compareCells(source.rows, local.rows));
+      const a = modelSelection(messages, subscription === "ordered"),
+        b = modelSelection(peer, subscription === "ordered");
+      const equal = JSON.stringify(a) === JSON.stringify(b);
+      const bothEmpty = messages.length === 0 && peer.length === 0;
+      if (bothEmpty) {
+        assert.equal(row.verdict, "MATCH");
+      } else if (equal) {
+        assert.equal(row.verdict, "NOT_COMPARABLE", JSON.stringify({ messages, peer }));
+        assert.equal(row.reason, REASON_NC_PULL);
+        undecided += 1;
+      } else {
+        assert.equal(row.verdict, "DIVERGES", JSON.stringify({ messages, peer }));
+        // One Pull per side, so the cell totals equal the Pull: the difference is a content one.
+        assert.equal(row.reason, REASON_SET);
+        diverged += 1;
+      }
     }
-    return out;
+    assert.ok(diverged > 40 && undecided > 40, `diverged ${diverged}, undecided ${undecided}`);
+  });
+}
+
+// Review S1: per-key order is only a guarantee of a subscription with message ordering.
+test("S1: keyed order differences count only on an ordering-enabled subscription", () => {
+  const k = (key, name) => ({ data: b64(name), orderingKey: key });
+  const a0 = k("A", "a0"),
+    a1 = k("A", "a1");
+  const pair = (subscription, localSubscription = subscription) => {
+    const source = side("src", { first: [a0, a1], second: [], subscription });
+    const local = side("loc", { first: [a1, a0], second: [], subscription: localSubscription });
+    return pullRows(compareCells(source.rows, local.rows))[0];
   };
-  const randomMessages = () =>
-    Array.from({ length: next(6) }, () => {
-      const key = keys[next(keys.length)];
-      return {
-        data: b64(`m${next(4)}`),
-        ...(next(3) === 0 ? { attributes: { a: String(next(2)) } } : {}),
-        ...(key ? { orderingKey: key } : {}),
-      };
-    });
-  let diverged = 0,
-    undecided = 0;
-  for (let trial = 0; trial < 400; trial++) {
-    const messages = randomMessages();
-    const peer = next(3) === 0 ? randomMessages() : shuffle(messages);
-    const source = side("src", { first: messages, second: [] });
-    const local = side("loc", { first: peer, second: [] });
-    const [row] = pullRows(compareCells(source.rows, local.rows));
-    const a = modelSelection(messages),
-      b = modelSelection(peer);
-    const equal = JSON.stringify(a) === JSON.stringify(b);
-    const bothEmpty = messages.length === 0 && peer.length === 0;
-    if (bothEmpty) {
-      assert.equal(row.verdict, "MATCH");
-    } else if (equal) {
-      assert.equal(row.verdict, "NOT_COMPARABLE", JSON.stringify({ messages, peer }));
-      assert.equal(row.reason, REASON_NC_PULL);
-      undecided += 1;
-    } else {
-      assert.equal(row.verdict, "DIVERGES", JSON.stringify({ messages, peer }));
-      diverged += 1;
-    }
+  assert.equal(pair("ordered").verdict, "DIVERGES");
+  assert.equal(pair("ordered").reason, REASON_SET);
+  for (const unproven of [
+    pair("plain"),
+    pair("none"),
+    pair("ordered", "plain"),
+    pair("plain", "ordered"),
+  ]) {
+    assert.equal(unproven.verdict, "NOT_COMPARABLE");
+    assert.equal(unproven.reason, REASON_NC_PULL);
   }
-  assert.ok(diverged > 40 && undecided > 40, `diverged ${diverged}, undecided ${undecided}`);
+  // Without ordering a keyed message still has its key: a different key is a different message.
+  const source = side("src", { first: [a0], second: [], subscription: "plain" });
+  const other = side("loc", { first: [k("B", "a0")], second: [], subscription: "plain" });
+  assert.equal(pullRows(compareCells(source.rows, other.rows))[0].verdict, "DIVERGES");
+});
+
+test("S1: the ordering flag is read for the subscription the Pull names", () => {
+  const k = (key, name) => ({ data: b64(name), orderingKey: key });
+  const a0 = k("A", "a0"),
+    a1 = k("A", "a1");
+  const make = (tag, first) => {
+    const rows = side(tag, { first, second: [], subscription: "ordered" }).rows;
+    // An ordering-enabled subscription other than the one pulled from does not enable order.
+    rows[rows.length - 1].request.body.name = "projects/p/subscriptions/other";
+    return rows;
+  };
+  const cell = compareCells(make("src", [a0, a1]), make("loc", [a1, a0]));
+  assert.equal(pullRows(cell)[0].verdict, "NOT_COMPARABLE");
+  // A failed CreateSubscription is no configuration either.
+  const failed = (tag, first) => {
+    const rows = side(tag, { first, second: [], subscription: "ordered" }).rows;
+    Object.assign(rows.at(-1).response, { ok: false, status: 409, code: "ALREADY_EXISTS" });
+    return rows;
+  };
+  assert.equal(
+    pullRows(compareCells(failed("src", [a0, a1]), failed("loc", [a1, a0])))[0].verdict,
+    "NOT_COMPARABLE",
+  );
+});
+
+// Review S2: misaligned cells keep their previous behavior.
+test("S2: a cell with different exchange counts produces no new DIVERGES", () => {
+  const one = deliveries("src", [ONE]);
+  const source = [pull([]), pull(one), ack([one[0].ackId])];
+  const lone = deliveries("loc", [ONE]);
+  const local = [pull(lone), ack([lone[0].ackId])];
+  const cell = compareCells(source, local);
+  assert.ok(cell.debts.includes("different exchange cardinality"));
+  assert.ok(cell.rows.every((r) => r.verdict !== "DIVERGES"));
+  assert.equal(cell.verdict, "NOT_COMPARABLE");
+  // The same holds for the ack origin rule: positions 1 and 0 would otherwise look crossed.
+  const reversed = compareCells(local, source);
+  assert.ok(reversed.rows.every((r) => r.verdict !== "DIVERGES"));
+});
+
+test("S2: the same shape with equal exchange counts still diverges", () => {
+  const one = deliveries("src", [ONE]);
+  const lone = deliveries("loc", [ONE]);
+  const source = [pull([]), pull(one), ack([one[0].ackId])];
+  const local = [pull(lone), pull([]), ack([lone[0].ackId])];
+  const cell = compareCells(source, local);
+  assert.equal(cell.debts.length, 0);
+  assert.equal(cell.verdict, "DIVERGES");
+  assert.equal(cell.rows[2].reason, REASON_ORIGIN);
+});
+
+// Review S4: the reason says whether content or only the split across Pulls differs.
+test("S4: an empty production Pull against a delivering local Pull is a partition difference", () => {
+  const rows = (tag, firstMessages, secondMessages) => [
+    pull(deliveries(tag, firstMessages)),
+    pull(deliveries(tag, secondMessages, firstMessages.length)),
+  ];
+  const cell = compareCells(rows("src", [], [ONE, TWO]), rows("loc", [ONE, TWO], []));
+  const [pull1, pull2] = pullRows(cell);
+  assert.equal(pull1.verdict, "DIVERGES");
+  assert.equal(pull1.reason, REASON_PARTITION);
+  assert.equal(pull2.reason, REASON_PARTITION);
+  // A partial production Pull against a fuller local Pull, rest delivered later.
+  const partial = compareCells(rows("src", [ONE], [TWO]), rows("loc", [ONE, TWO], []));
+  assert.deepEqual(
+    pullRows(partial).map((r) => [r.verdict, r.reason]),
+    [
+      ["DIVERGES", REASON_PARTITION],
+      ["DIVERGES", REASON_PARTITION],
+    ],
+  );
+});
+
+test("S4: a different overall set is a set difference, not a partition", () => {
+  const rows = (tag, firstMessages, secondMessages) => [
+    pull(deliveries(tag, firstMessages)),
+    pull(deliveries(tag, secondMessages, firstMessages.length)),
+  ];
+  const cell = compareCells(rows("src", [ONE], [TWO]), rows("loc", [ONE, TWO], [TWO]));
+  assert.deepEqual(
+    pullRows(cell).map((r) => r.reason),
+    [REASON_SET, REASON_NC_PULL],
+  );
+  const changed = compareCells(rows("src", [ONE], [TWO]), rows("loc", [ONE], [sevenUnkeyed[2]]));
+  assert.deepEqual(
+    pullRows(changed).map((r) => [r.verdict, r.reason]),
+    [
+      ["NOT_COMPARABLE", REASON_NC_PULL],
+      ["DIVERGES", REASON_SET],
+    ],
+  );
+});
+
+test("S4: an unjudgeable Pull in the cell keeps a split difference a set difference", () => {
+  const rows = (tag, bad) => {
+    const third = pull(deliveries(tag, [], 9));
+    if (bad) Object.assign(third.response, { unknown: true });
+    return [pull(deliveries(tag, bad ? [] : [ONE, TWO])), pull(deliveries(tag, [], 2)), third];
+  };
+  const cell = compareCells(rows("src", false), rows("loc", true));
+  assert.equal(pullRows(cell)[0].verdict, "DIVERGES");
+  assert.equal(pullRows(cell)[0].reason, REASON_SET);
+});
+
+test("S4: a duplicate message id inside one Pull has its own reason", () => {
+  const dup = (tag) => {
+    const first = delivered(tag, ONE, 0);
+    const second = { ...delivered(tag, ONE, 1), message: { ...first.message } };
+    return [pull([first, second])];
+  };
+  const single = (tag) => [pull(deliveries(tag, [ONE]))];
+  for (const [source, local] of [
+    [dup("src"), single("loc")],
+    [single("src"), dup("loc")],
+  ]) {
+    const [row] = pullRows(compareCells(source, local));
+    assert.equal(row.verdict, "DIVERGES");
+    assert.equal(row.reason, REASON_DUPLICATE);
+  }
+  // Two publications with equal content are two messages, not a duplicate.
+  const twin = (tag) => [pull(deliveries(tag, [ONE, ONE]))];
+  const [row] = pullRows(compareCells(twin("src"), single("loc")));
+  assert.equal(row.reason, REASON_SET);
+});
+
+test("a gRPC-shaped Pull pair compares equal selections as unresolved and changed payloads as DIVERGES", () => {
+  const grpcPull = (tag, messages) => {
+    const received = deliveries(tag, messages);
+    for (const d of received) {
+      d.message.attributes ??= {};
+      d.message.orderingKey = "";
+    }
+    const row = pull(received);
+    return Object.assign(row, { transport: "grpc", case: "R11/grpc" });
+  };
+  const grpc = (row) => {
+    delete row.response.status;
+    row.response.code = "OK";
+    return row;
+  };
+  const same = compareCells([grpc(grpcPull("src", [ONE]))], [grpc(grpcPull("loc", [ONE]))]);
+  assert.equal(same.rows[0].verdict, "NOT_COMPARABLE");
+  assert.equal(same.rows[0].reason, REASON_NC_PULL);
+  const changed = compareCells([grpc(grpcPull("src", [ONE]))], [grpc(grpcPull("loc", [TWO]))]);
+  assert.equal(changed.rows[0].verdict, "DIVERGES");
+});
+
+test("an omitted Acknowledge with crossed origins stays NOT_COMPARABLE", () => {
+  const rows = (tag, crossing) => {
+    const one = deliveries(tag, [ONE]);
+    const two = deliveries(tag, [TWO], 1);
+    const row = ack([(crossing ? one : two)[0].ackId]);
+    row.request.body.omitted = { length: 5000, sha256: "d".repeat(64) };
+    return [pull(one), pull(two), row];
+  };
+  const cell = compareCells(rows("src", false), rows("loc", true));
+  assert.equal(cell.rows[2].verdict, "NOT_COMPARABLE");
+  assert.equal(cell.rows[2].reason, "omitted request payload requires exact reconstruction proof");
 });

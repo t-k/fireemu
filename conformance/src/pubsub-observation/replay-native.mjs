@@ -336,6 +336,92 @@ export function createActionClock({
   };
 }
 
+// Separate only a recorded full-window S16 cancellation from its LOCAL RPC expiry.
+function windowCancellationClient(wire, cell, source, opening, journal) {
+  if (
+    cell.id !== "S16" ||
+    cell.group !== "G4" ||
+    cell.variant !== "invalid-ack-silence" ||
+    source?.id !== cell.id ||
+    source.variant !== cell.variant ||
+    source.result?.complete !== true ||
+    source.result?.cleanupClosed !== true
+  )
+    return null;
+  const ends = source.events.filter((row) => row.event === "stream-observation-window-end");
+  const cancels = source.events.filter((row) => row.event === "stream-cancel");
+  const observations = source.events.filter((row) => row.event === "stream-case-observation");
+  const end = ends[0],
+    cancel = cancels[0],
+    observation = observations[0];
+  if (
+    ends.length !== 1 ||
+    cancels.length !== 1 ||
+    observations.length !== 1 ||
+    cancel.reason !== "window-end" ||
+    observation.state?.windowMs !== 90000 ||
+    observation.state.windowExpired !== true ||
+    observation.state.incomplete !== false ||
+    observation.state.inboundEnded !== true ||
+    observation.state.terminal?.code !== 1 ||
+    ![opening.n, end.n, cancel.n, observation.n].every(Number.isSafeInteger) ||
+    !(opening.n < end.n && end.n < cancel.n && cancel.n < observation.n) ||
+    !Number.isFinite(end.elapsedMs) ||
+    end.elapsedMs < 90000 ||
+    !Number.isFinite(cancel.elapsedMs) ||
+    cancel.elapsedMs < end.elapsedMs ||
+    cancel.elapsedMs > 90000 + CAPS.cleanupReserveMs - 1000 ||
+    ![end.at, cancel.at, observation.at].every((at) => Number.isFinite(Date.parse(at))) ||
+    Date.parse(end.at) > Date.parse(cancel.at) ||
+    Date.parse(cancel.at) > Date.parse(observation.at) ||
+    !source.frames.some(
+      (row) =>
+        row.n === opening.n && row.direction === "out" && isDeepStrictEqual(row.body, opening.body),
+    )
+  )
+    return null;
+  if (
+    typeof wire.client?.makeBidiStreamRequest !== "function" ||
+    typeof wire.meter?.remaining !== "function" ||
+    typeof wire.now !== "function"
+  )
+    throw new Error("LOCAL cancellation deadline context missing");
+  return {
+    makeBidiStreamRequest(...args) {
+      const originalDeadline = args[4]?.deadline?.getTime(),
+        now = wire.now();
+      const remaining = wire.meter.remaining();
+      const deadline = Math.min(
+        originalDeadline + CAPS.cleanupReserveMs - 1000,
+        now + remaining - 1000,
+      );
+      if (
+        !Number.isFinite(now) ||
+        !Number.isFinite(remaining) ||
+        !Number.isFinite(originalDeadline) ||
+        originalDeadline <= now ||
+        originalDeadline - now > 90000 ||
+        !Number.isFinite(deadline) ||
+        deadline <= originalDeadline + 1000
+      )
+        throw new Error("LOCAL cancellation deadline reserve exhausted");
+      journal?.write({
+        event: "local-stream-rpc-deadline",
+        cellId: cell.id,
+        sourceOpeningN: opening.n,
+        sourceWindowEndN: end.n,
+        sourceCancelN: cancel.n,
+        observationWindowMs: 90000,
+        originalDeadlineAt: new Date(originalDeadline).toISOString(),
+        administrativeDeadlineAt: new Date(deadline).toISOString(),
+        cleanupReserveMs: CAPS.cleanupReserveMs,
+      });
+      args[4] = { ...args[4], deadline: new Date(deadline) };
+      return wire.client.makeBidiStreamRequest(...args);
+    },
+  };
+}
+
 // A finite action connector; all token substitutions come from an actual owned receive.
 export function createNativeReplay({
   wire,
@@ -422,7 +508,19 @@ export function createNativeReplay({
           sourceOpenedAt: Date.parse(row.at),
           subscription: row.body.subscription,
         };
-        active.stream = await wire.open({ cellId: cell.id, opener: row.body });
+        const cancellationClient = windowCancellationClient(
+          wire,
+          cell,
+          sourceCells.find((c) => c.id === cell.id),
+          row,
+          journal,
+        );
+        active.windowCancellationDeadlineSeparated = cancellationClient !== null;
+        active.stream = await wire.open({
+          cellId: cell.id,
+          opener: row.body,
+          ...(cancellationClient ? { client: cancellationClient } : {}),
+        });
         witnesses.set(cell.id, {
           sourceFrames: [],
           actions: [],
@@ -552,6 +650,12 @@ export function createNativeReplay({
       };
       await quietProbe(timed);
       await clock.native(timed, sourceCells.find((cell) => cell.id === row.cellId)?.events);
+      if (
+        active.windowCancellationDeadlineSeparated &&
+        (!Number.isFinite(clock.elapsed(row.cellId)) ||
+          clock.elapsed(row.cellId) > 90000 + CAPS.cleanupReserveMs)
+      )
+        throw new Error("LOCAL cancellation observation reserve exhausted");
       checkActualReceives();
       if (row.event === "stream-write-end") active.stream.end();
       else if (row.event === "stream-cancel") {
@@ -656,11 +760,11 @@ export function createNativeReplay({
     },
     closeCell(cellId) {
       if (active && active.cellId !== cellId) throw new Error("native close cell mismatch");
-      active?.stream.dispose();
+      active?.stream?.dispose();
       active = null;
     },
     close() {
-      active?.stream.dispose();
+      active?.stream?.dispose();
       active = null;
     },
     witnesses,

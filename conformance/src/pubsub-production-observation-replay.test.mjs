@@ -2412,3 +2412,281 @@ test("S16 silence and uncertain timeout, cancellation or unknown terminal do not
     assert.equal(proof.invalidAckOutcome.state.terminal.code, code);
   }
 });
+
+async function windowCancellationReplay(
+  t,
+  {
+    order = "deadline-first",
+    remoteCode = null,
+    cellId = "S16",
+    remainingLimit = 140000,
+    sourceMutation = () => {},
+    noCancelDelivery = false,
+    missingEnd = false,
+  } = {},
+) {
+  const { createNativeReplay } = await import("./pubsub-observation/replay-native.mjs");
+  const { openStream } = await import("./pubsub-observation/stream.mjs");
+  const { EventEmitter } = await import("node:events");
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1000 });
+  const cell = {
+    id: cellId,
+    group: "G4",
+    variant: "invalid-ack-silence",
+    invalidAck: "invalid-ack-for-stream-observation",
+  };
+  const opening = {
+    n: 1,
+    cellId,
+    event: "stream-frame",
+    direction: "out",
+    elapsedMs: 0,
+    at: new Date(1000).toISOString(),
+    body: { subscription: "owned", streamAckDeadlineSeconds: 10 },
+  };
+  const events = [
+    {
+      n: 3,
+      cellId,
+      event: "stream-observation-window-end",
+      elapsedMs: 90000,
+      at: new Date(91000).toISOString(),
+    },
+    {
+      n: 4,
+      cellId,
+      event: "stream-cancel",
+      reason: "window-end",
+      elapsedMs: 90006,
+      at: new Date(91006).toISOString(),
+    },
+    {
+      n: 5,
+      cellId,
+      event: "stream-case-observation",
+      at: new Date(91020).toISOString(),
+      invalidAckObservedMs: 90000,
+      state: {
+        windowMs: 90000,
+        windowExpired: true,
+        terminal: { code: 1 },
+        inboundEnded: true,
+        incomplete: false,
+      },
+    },
+  ];
+  const rpc = new EventEmitter(),
+    rows = [];
+  let deadline,
+    cancelCount = 0,
+    deadlineTimer,
+    replay;
+  const terminal = (code) => {
+    clearTimeout(deadlineTimer);
+    rpc.emit("error", { code, details: "fixture" });
+    rpc.emit("status", { code, details: "fixture" });
+    if (!missingEnd) rpc.emit("end");
+  };
+  rpc.write = () => true;
+  rpc.cancel = () => {
+    cancelCount++;
+    if (!noCancelDelivery) terminal(1);
+  };
+  const client = {
+    makeBidiStreamRequest: (...args) => {
+      deadline = args[4].deadline.getTime();
+      const schedule = () => {
+        deadlineTimer = setTimeout(
+          () => terminal(remoteCode ?? 4),
+          remoteCode === null ? deadline - Date.now() : 5000,
+        );
+      };
+      if (order === "deadline-first") schedule();
+      else queueMicrotask(schedule);
+      return rpc;
+    },
+  };
+  const meter = {
+    start() {},
+    frame() {},
+    remaining: () => remainingLimit - (Date.now() - 1000),
+    clock: () => Date.now() - 1000,
+  };
+  const journal = {
+    write: (row) => {
+      const value = { ...row, n: rows.length + 1 };
+      rows.push(value);
+      return value;
+    },
+    frame: (_bytes, row) => replay.recordFrame(row),
+  };
+  const sourceCell = {
+    ...cell,
+    result: { complete: true, cleanupClosed: true },
+    frames: [{ ...opening, verified: true }],
+    events,
+  };
+  sourceMutation(sourceCell);
+  replay = createNativeReplay({
+    cells: [cell],
+    sourceCells: [sourceCell],
+    bindings: createBindings(),
+    journal,
+    clock: createActionClock({
+      now: () => Date.now() - 1000,
+      wait: async (ms) => t.mock.timers.tick(ms),
+      advance: async () => {},
+    }),
+    wire: {
+      client,
+      meter,
+      now: Date.now,
+      open: (options) =>
+        openStream({
+          ...options,
+          client: options.client ?? client,
+          meter,
+          journal,
+          now: Date.now,
+          credential: async () => "synthetic",
+        }),
+    },
+  });
+  t.after(() => {
+    replay.close();
+    clearTimeout(deadlineTimer);
+    t.mock.timers.reset();
+  });
+  await replay.frame(opening);
+  await replay.frame({
+    ...opening,
+    n: 2,
+    elapsedMs: 1,
+    at: new Date(1001).toISOString(),
+    body: { ackIds: [cell.invalidAck] },
+  });
+  await Promise.resolve();
+  return { replay, rows, events, deadline, rpc, cancelled: () => cancelCount };
+}
+
+test("S16 source-bound LOCAL cancellation outlives the full window despite deadline-first callback order", async (t) => {
+  const f = await windowCancellationReplay(t);
+  assert.ok(f.deadline > 91000, "administrative deadline must follow the unchanged 90s window");
+  assert.ok(f.deadline <= 131000, "deadline must stay within the original cleanup reserve");
+  t.mock.timers.tick(90000 - (Date.now() - 1000));
+  await f.replay.action(f.events[1]);
+  await f.replay.action(f.events[2]);
+  assert.equal(f.cancelled(), 1);
+  assert.equal(f.replay.witnesses.get("S16").invalidAckOutcome.state.terminal.code, 1);
+  assert.equal(f.rows.find((r) => r.event === "stream-observation-window-end").elapsedMs, 90000);
+});
+
+test("S16 source-bound LOCAL cancellation is independent of window-first callback registration", async (t) => {
+  const f = await windowCancellationReplay(t, { order: "window-first" });
+  assert.ok(f.deadline > 91000 && f.deadline <= 131000);
+  t.mock.timers.tick(90000 - (Date.now() - 1000));
+  await f.replay.action(f.events[1]);
+  await f.replay.action(f.events[2]);
+  assert.equal(f.cancelled(), 1);
+  assert.equal(f.replay.witnesses.get("S16").invalidAckOutcome.state.terminal.code, 1);
+});
+
+for (const code of [3, 4])
+  test(`S16 separated deadline preserves genuine remote terminal mismatch ${code}`, async (t) => {
+    const f = await windowCancellationReplay(t, { remoteCode: code });
+    t.mock.timers.tick(90000 - (Date.now() - 1000));
+    await f.replay.action(f.events[1]);
+    await assert.rejects(f.replay.action(f.events[2]), /native terminal witness mismatch/);
+    assert.equal(f.cancelled(), 0);
+  });
+
+test("S16 cancellation cannot invent a missing terminal or half-close", async (t) => {
+  await t.test("missing terminal", async (t) => {
+    const f = await windowCancellationReplay(t, { noCancelDelivery: true });
+    t.mock.timers.tick(90000 - (Date.now() - 1000));
+    await f.replay.action(f.events[1]);
+    await assert.rejects(f.replay.action(f.events[2]), /native terminal witness mismatch/);
+  });
+  await t.test("missing inbound end", async (t) => {
+    const f = await windowCancellationReplay(t, { missingEnd: true });
+    t.mock.timers.tick(90000 - (Date.now() - 1000));
+    await f.replay.action(f.events[1]);
+    await assert.rejects(f.replay.action(f.events[2]), /native half-close witness missing/);
+  });
+});
+
+test("S16 LOCAL deadline reserve rejects insufficient admission and late observation", async (t) => {
+  await t.test("insufficient reserve", async (t) => {
+    await assert.rejects(
+      windowCancellationReplay(t, { remainingLimit: 91001 }),
+      /deadline reserve exhausted/,
+    );
+  });
+  await t.test("late observation", async (t) => {
+    const f = await windowCancellationReplay(t);
+    t.mock.timers.tick(131000);
+    await assert.rejects(f.replay.action(f.events[1]), /observation reserve exhausted/);
+  });
+});
+
+test("LOCAL deadline separation never pads unrelated or unbound source cases", async (t) => {
+  await t.test("other native cell", async (t) => {
+    const f = await windowCancellationReplay(t, { cellId: "S15" });
+    assert.equal(f.deadline, 91000);
+    assert.equal(
+      f.rows.some((r) => r.event === "local-stream-rpc-deadline"),
+      false,
+    );
+  });
+  for (const [name, sourceMutation] of [
+    [
+      "unclosed source",
+      (source) => {
+        source.result.cleanupClosed = false;
+      },
+    ],
+    [
+      "unbound opening",
+      (source) => {
+        source.frames[0].body = { subscription: "foreign" };
+      },
+    ],
+    [
+      "missing cancellation",
+      (source) => {
+        source.events = source.events.filter((r) => r.event !== "stream-cancel");
+      },
+    ],
+    [
+      "different source terminal",
+      (source) => {
+        source.events[2].state.terminal.code = 4;
+      },
+    ],
+    [
+      "cancel before window",
+      (source) => {
+        source.events[1].n = source.events[0].n;
+      },
+    ],
+  ])
+    await t.test(name, async (t) => {
+      const f = await windowCancellationReplay(t, { sourceMutation });
+      assert.equal(f.deadline, 91000);
+      assert.equal(
+        f.rows.some((r) => r.event === "local-stream-rpc-deadline"),
+        false,
+      );
+    });
+});
+
+test("S16 LOCAL separation disposes timers and does not persist callbacks after closure", async (t) => {
+  const f = await windowCancellationReplay(t);
+  f.replay.close();
+  const count = f.rows.length,
+    cancellations = f.cancelled();
+  t.mock.timers.tick(200000);
+  f.rpc.emit("status", { code: 4, details: "late" });
+  assert.equal(f.rows.length, count);
+  assert.equal(f.cancelled(), cancellations);
+});

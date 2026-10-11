@@ -14,6 +14,7 @@ export async function openStream({
   beforeDispatch = () => {},
   now = Date.now,
   cellId,
+  runId,
   opener,
 }) {
   meter.start("stream", "streams");
@@ -46,6 +47,22 @@ export async function openStream({
     metadata,
     { deadline: new Date(startedAt + windowMs) },
   );
+  // This exact observed terminal is a capture witness, not inferred validation success.
+  const knownZeroDetails =
+    "A service error has occurred. Please retry your request. If the error persists, please report it. [code=e8c0]";
+  const exactZeroOpening =
+    cellId === "S10" &&
+    Object.keys(opener).length === 4 &&
+    typeof runId === "string" &&
+    /^[0-9a-f]{12}$/.test(runId) &&
+    opener.subscription === `projects/${PROJECT}/subscriptions/fe${runId}-s10-sub` &&
+    opener.streamAckDeadlineSeconds === 0 &&
+    opener.maxOutstandingMessages === "1" &&
+    opener.maxOutstandingBytes === "1024";
+  let openingWrites = 0,
+    zeroPhase = 0,
+    initialMetadataSeen = false,
+    captureFault = windowMs < 90000;
   const queue = [];
   let waiter,
     cancelled = false,
@@ -128,6 +145,7 @@ export async function openStream({
       wake();
     } catch {
       state.incomplete = true;
+      captureFault = true;
       event("stream-frame-refused", { bytes: raw.length });
       cancel("frame-overflow-or-decode");
     }
@@ -150,6 +168,7 @@ export async function openStream({
     event("stream-metadata", { metadataBytesIn: state.metadataBytesIn });
     if (state.metadataBytesIn > CAPS.metadataBytesEachDirection) {
       state.incomplete = true;
+      captureFault = true;
       cancel("metadata-overflow");
     }
   };
@@ -158,6 +177,8 @@ export async function openStream({
     try {
       callback(value);
     } catch (error) {
+      captureFault = true;
+      state.incomplete = true;
       if (!draining) throw error;
       drainFailure ??= error;
       finishDrain?.();
@@ -166,7 +187,10 @@ export async function openStream({
   rpc.on(
     "metadata",
     lifecycle((value) => {
-      if (!disposed) acceptMetadata(value);
+      if (!disposed) {
+        acceptMetadata(value);
+        initialMetadataSeen = true;
+      }
     }),
   );
   rpc.on(
@@ -179,7 +203,17 @@ export async function openStream({
         cancelled &&
         ((status.code === 1 && ["window-end", "unacked-owned-delivery"].includes(cancelReason)) ||
           (status.code === 4 && state.windowExpired));
-      if ([1, 2, 4, 8, 13, 14, 15].includes(status.code) && !localEnd) state.incomplete = true;
+      if ([1, 2, 4, 8, 13, 14, 15].includes(status.code) && !localEnd) {
+        state.incomplete = true;
+        if (status.code !== 13) captureFault = true;
+      }
+      zeroPhase =
+        zeroPhase === 1 &&
+        status.code === 13 &&
+        status.details === knownZeroDetails &&
+        details.details === knownZeroDetails
+          ? 2
+          : -1;
       event("stream-status", { ...state.terminal, ...details });
       wake();
       finishDrain?.();
@@ -188,6 +222,15 @@ export async function openStream({
   rpc.on(
     "error",
     lifecycle((error) => {
+      const details = diagnostic(error.details);
+      zeroPhase =
+        zeroPhase === 0 &&
+        initialMetadataSeen &&
+        error.code === 13 &&
+        error.details === knownZeroDetails &&
+        details.details === knownZeroDetails
+          ? 1
+          : -1;
       if (
         [1, 2, 4, 8, 13, 14, 15].includes(error.code) &&
         !(
@@ -195,15 +238,18 @@ export async function openStream({
           ((error.code === 1 && ["window-end", "unacked-owned-delivery"].includes(cancelReason)) ||
             (error.code === 4 && state.windowExpired))
         )
-      )
+      ) {
         state.incomplete = true;
-      event("stream-error", { code: error.code ?? null, ...diagnostic(error.details) });
+        if (error.code !== 13) captureFault = true;
+      }
+      event("stream-error", { code: error.code ?? null, ...details });
       wake();
     }),
   );
   rpc.on(
     "end",
     lifecycle(() => {
+      zeroPhase = zeroPhase === 2 ? 3 : -1;
       state.inboundEnded = true;
       event("stream-inbound-end");
       wake();
@@ -213,10 +259,22 @@ export async function openStream({
     "close",
     lifecycle(() => {
       event("stream-close");
+      if (!state.inboundEnded) captureFault = true;
       if (!state.terminal && !state.windowExpired) state.incomplete = true;
       wake();
     }),
   );
+  const awaitingZeroEnd = () =>
+    exactZeroOpening &&
+    zeroPhase > 0 &&
+    zeroPhase < 3 &&
+    !captureFault &&
+    !cancelled &&
+    !ended &&
+    !disposed &&
+    !state.windowExpired &&
+    openingWrites === 1 &&
+    state.received === 0;
   const api = {
     write(body) {
       if (cancelled || draining || ended || disposed || state.terminal)
@@ -233,6 +291,7 @@ export async function openStream({
       beforeDispatch();
       meter.remaining();
       if (elapsed() >= windowMs) throw new Error("stream observation window exhausted");
+      openingWrites++;
       const writable = rpc.write(raw);
       event("stream-local-write", { writable });
     },
@@ -249,22 +308,45 @@ export async function openStream({
     cancel,
     async next(timeoutMs = windowMs) {
       if (queue.length) return queue.shift();
-      if (cancelled || state.terminal || state.inboundEnded || disposed) return null;
-      const delay = Math.min(timeoutMs, meter.remaining(), Math.max(0, windowMs - elapsed()));
-      if (delay <= 0) return null;
-      let nextTimer;
-      try {
-        await new Promise((resolve) => {
-          waiter = resolve;
-          nextTimer = setTimeout(resolve, delay);
-        });
-      } finally {
-        clearTimeout(nextTimer);
-        waiter = null;
-      }
+      if (cancelled || (state.terminal && !awaitingZeroEnd()) || state.inboundEnded || disposed)
+        return null;
+      const nextDeadline = Math.min(meter.clock() + timeoutMs, monotonicStarted + windowMs);
+      let timedOut;
+      do {
+        const delay = Math.min(nextDeadline - meter.clock(), meter.remaining());
+        if (delay <= 0) return null;
+        let nextTimer;
+        try {
+          timedOut = await new Promise((resolve) => {
+            waiter = () => resolve(false);
+            nextTimer = setTimeout(() => resolve(true), delay);
+          });
+        } finally {
+          clearTimeout(nextTimer);
+          waiter = null;
+        }
+      } while (awaitingZeroEnd() && !timedOut);
       return queue.shift() ?? null;
     },
-    state: () => structuredClone(state),
+    state: () => ({
+      ...structuredClone(state),
+      incomplete:
+        (exactZeroOpening && (captureFault || cancelled || ended || state.windowExpired)) ||
+        (state.incomplete &&
+          !(
+            exactZeroOpening &&
+            zeroPhase === 3 &&
+            !captureFault &&
+            !cancelled &&
+            !ended &&
+            !draining &&
+            openingWrites === 1 &&
+            state.received === 0 &&
+            state.inboundEnded &&
+            !state.windowExpired &&
+            elapsed() < windowMs
+          )),
+    }),
     disposeWithDiagnostics() {
       if (drainPromise) return drainPromise;
       let resolveDrain, rejectDrain;
@@ -319,6 +401,7 @@ export async function openStream({
       requestDeadlineAt: new Date(startedAt + windowMs).toISOString(),
     });
   } catch (error) {
+    captureFault = true;
     state.incomplete = true;
     api.dispose();
     throw error;

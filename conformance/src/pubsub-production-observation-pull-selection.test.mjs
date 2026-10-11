@@ -787,6 +787,24 @@ test("S2: a cell with different exchange counts produces no new DIVERGES", () =>
   assert.ok(reversed.rows.every((r) => r.verdict !== "DIVERGES"));
 });
 
+test("S2: a misaligned cell does not pair same-method rows by position either", () => {
+  const rows = (tag, extra) => {
+    const first = deliveries(tag, [ONE]);
+    const second = deliveries(tag, [TWO], 1);
+    return [
+      pull(first),
+      pull(second),
+      ack([(extra ? first : second)[0].ackId]),
+      ...(extra ? [pull([])] : []),
+    ];
+  };
+  // Row 2 pairs an Acknowledge of Pull 1 with one of Pull 0: crossed if the rows were aligned.
+  const cell = compareCells(rows("src", false), rows("loc", true));
+  assert.ok(cell.debts.includes("different exchange cardinality"));
+  assert.equal(cell.rows[2].verdict, "NOT_COMPARABLE");
+  assert.equal(cell.rows[2].reason, REASON_NC_ACK);
+});
+
 test("S2: the same shape with equal exchange counts still diverges", () => {
   const one = deliveries("src", [ONE]);
   const lone = deliveries("loc", [ONE]);
@@ -847,6 +865,23 @@ test("S4: an unjudgeable Pull in the cell keeps a split difference a set differe
     return [pull(deliveries(tag, bad ? [] : [ONE, TWO])), pull(deliveries(tag, [], 2)), third];
   };
   const cell = compareCells(rows("src", false), rows("loc", true));
+  assert.equal(pullRows(cell)[0].verdict, "DIVERGES");
+  assert.equal(pullRows(cell)[0].reason, REASON_SET);
+});
+
+test("S4: an unjudgeable or malformed Pull of the cell hides no partition claim", () => {
+  const source = [pull(deliveries("src", [ONE])), pull([]), pull([])];
+  const local = [pull([]), pull([]), pull(deliveries("loc", [ONE]))];
+  // Control: all three Pulls are judgeable and the overall delivery is equal.
+  assert.equal(pullRows(compareCells(source, local))[0].reason, REASON_PARTITION);
+  // The third local Pull is unknown: its messages cannot balance the totals.
+  const unknown = [pull([]), pull([]), pull(deliveries("loc", [ONE]))];
+  Object.assign(unknown[2].response, { unknown: true });
+  assert.equal(pullRows(compareCells(source, unknown))[0].reason, REASON_SET);
+  // The third source Pull is malformed: it cannot be skipped either.
+  const malformed = [pull(deliveries("src", [ONE])), pull([]), pull([])];
+  malformed[2].response.body = { receivedMessages: "junk" };
+  const cell = compareCells(malformed, local);
   assert.equal(pullRows(cell)[0].verdict, "DIVERGES");
   assert.equal(pullRows(cell)[0].reason, REASON_SET);
 });

@@ -338,7 +338,7 @@ export async function closureEvidence(options) {
               judgement: "RECORDED_NOT_JUDGED",
               source: `${RULINGS}, 2026-10-06 13:26Z M4 (supersedes 06:12Z item 1)`,
             };
-            if (status === "DIVERGES" && /\/203C?$/.test(id)) {
+            if (aggregateStatus === "DIVERGES" && /\/203C?$/.test(id)) {
               row.differences = ["D4", "D5"]
                 .filter((code) => row.reason.includes(`${code}:`))
                 .map((code) => ({

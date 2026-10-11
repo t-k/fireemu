@@ -285,3 +285,138 @@ test("SDK111 incomplete metadata or change indexes cannot establish an observed 
     assert.equal(compare(incomplete, incomplete).ok, false);
   }
 });
+
+const phaseSnapshot = (fromCache) => ({
+  docs: ["a", "b"],
+  fromCache,
+  hasPendingWrites: false,
+  changes: [{ type: "added", doc: "a", oldIndex: -1, newIndex: 0 }],
+});
+const phaseRow = () => ({
+  l3: true,
+  observed: [
+    {
+      phases: [
+        { phase: "offline", snapshots: [phaseSnapshot(true)], errors: [], enableCalls: 0 },
+        {
+          phase: "online",
+          snapshots: [phaseSnapshot(true), phaseSnapshot(false)],
+          errors: [],
+          enableCalls: 1,
+        },
+      ],
+    },
+  ],
+  failures: [],
+  invariantViolations: [],
+  end: null,
+  timedOut: false,
+});
+const phaseCompare = (id, production, local, second = production) => {
+  const rec = (value) => ({
+    version: 1,
+    cleanup: { complete: true },
+    errors: {},
+    rows: { [id]: value },
+  });
+  return compareRecordings({ productions: [rec(production), rec(second)], local: rec(local) });
+};
+for (const id of ["browser-long-polling/sdk/203", "browser-streaming/sdk/203C"]) {
+  test(`${id} compares complete phase callbacks independently`, () => {
+    const p = phaseRow();
+    assert.equal(phaseCompare(id, p, structuredClone(p)).rows[id].callbackStatus, "MATCH");
+    const l = structuredClone(p);
+    l.observed[0].phases[1].snapshots.push(
+      structuredClone(l.observed[0].phases[1].snapshots.at(-1)),
+    );
+    const result = phaseCompare(id, p, l);
+    assert.equal(result.rows[id].status, "MATCH");
+    assert.equal(result.rows[id].callbackStatus, "MISMATCH");
+    assert.equal(result.ok, false);
+  });
+  for (const [name, mutate] of [
+    ["omission", (r) => r.observed[0].phases[1].snapshots.pop()],
+    ["order", (r) => r.observed[0].phases[1].snapshots.reverse()],
+    [
+      "fromCache",
+      (r) => {
+        r.observed[0].phases[1].snapshots[1].fromCache = true;
+      },
+    ],
+    [
+      "content",
+      (r) => {
+        r.observed[0].phases[1].snapshots[1].docs[0] = "changed";
+      },
+    ],
+    [
+      "changes",
+      (r) => {
+        r.observed[0].phases[1].snapshots[1].changes[0].type = "removed";
+      },
+    ],
+    [
+      "index",
+      (r) => {
+        r.observed[0].phases[1].snapshots[1].changes[0].newIndex = 8;
+      },
+    ],
+    [
+      "pending writes",
+      (r) => {
+        r.observed[0].phases[1].snapshots[1].hasPendingWrites = true;
+      },
+    ],
+  ])
+    test(`${id} rejects phase callback ${name}`, () => {
+      const p = phaseRow(),
+        l = structuredClone(p);
+      mutate(l);
+      assert.equal(phaseCompare(id, p, l).rows[id].callbackStatus, "MISMATCH");
+    });
+  test(`${id} preserves missing and unfinished phase evidence`, () => {
+    const p = phaseRow(),
+      l = structuredClone(p);
+    delete l.observed[0].phases[1].snapshots;
+    assert.equal(phaseCompare(id, p, l).rows[id].callbackStatus, "UNOBSERVED");
+    for (const field of ["end", "invariantViolations"]) {
+      const unfinished = structuredClone(p);
+      unfinished[field] = field === "end" ? { reason: "frame-cap" } : ["invariant failed"];
+      assert.equal(phaseCompare(id, p, unfinished).rows[id].callbackStatus, "INDETERMINATE");
+    }
+  });
+}
+
+test("phase invariant failures remain indeterminate on either side and production repeats", () => {
+  const id = "browser-streaming/sdk/203",
+    p = phaseRow(),
+    failed = structuredClone(p);
+  failed.invariantViolations = ["invariant failed"];
+  for (const [first, local, second] of [
+    [failed, p, failed],
+    [p, failed, p],
+    [failed, failed, failed],
+  ])
+    assert.equal(phaseCompare(id, first, local, second).rows[id].callbackStatus, "INDETERMINATE");
+  for (const patch of [
+    { timedOut: true },
+    { programError: true },
+    { end: { reason: "ended-without-status" } },
+  ])
+    assert.equal(
+      phaseCompare(id, p, { ...phaseRow(), ...patch }).rows[id].callbackStatus,
+      "INDETERMINATE",
+    );
+});
+test("phase callback comparison excludes generated clocks but retains errors and phase order", () => {
+  const id = "browser-streaming/sdk/203",
+    p = phaseRow(),
+    l = structuredClone(p);
+  l.observed[0].phases[1].snapshots[1].elapsedMs = 1234;
+  assert.equal(phaseCompare(id, p, l).rows[id].callbackStatus, "MATCH");
+  l.observed[0].phases[1].errors.push("permission-denied");
+  assert.equal(phaseCompare(id, p, l).rows[id].callbackStatus, "MISMATCH");
+  const reordered = phaseRow();
+  reordered.observed[0].phases.reverse();
+  assert.equal(phaseCompare(id, p, reordered).rows[id].callbackStatus, "MISMATCH");
+});

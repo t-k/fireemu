@@ -505,15 +505,75 @@ function callbackSequence(row) {
   return events.map((event) => Object.fromEntries(fields.map((field) => [field, event[field]])));
 }
 
-function classifyCallbacks(first, second) {
-  const a = callbackSequence(first),
-    b = callbackSequence(second);
+// L3 phase arrays are cumulative within a phase and remain distinct across phases.
+// Keep every recorded snapshot; equal adjacent callbacks are still two callbacks.
+function phaseCallbackSequence(row) {
+  if (row?.l3 !== true || !Array.isArray(row.observed) || row.observed.length === 0)
+    return undefined;
+  const observations = [];
+  for (const observation of row.observed) {
+    if (!Array.isArray(observation?.phases) || observation.phases.length === 0) return undefined;
+    const phases = [];
+    for (const phase of observation.phases) {
+      if (
+        typeof phase?.phase !== "string" ||
+        !Array.isArray(phase.snapshots) ||
+        !Array.isArray(phase.errors)
+      )
+        return undefined;
+      const snapshots = [];
+      for (const snapshot of phase.snapshots) {
+        if (
+          !snapshot ||
+          !Array.isArray(snapshot.docs) ||
+          !snapshot.docs.every((doc) => typeof doc === "string") ||
+          typeof snapshot.fromCache !== "boolean" ||
+          typeof snapshot.hasPendingWrites !== "boolean" ||
+          !Array.isArray(snapshot.changes) ||
+          snapshot.changes.some(
+            (change) =>
+              !change ||
+              typeof change.type !== "string" ||
+              typeof change.doc !== "string" ||
+              !Number.isSafeInteger(change.oldIndex) ||
+              !Number.isSafeInteger(change.newIndex),
+          )
+        )
+          return undefined;
+        snapshots.push({
+          docs: snapshot.docs,
+          changes: snapshot.changes,
+          fromCache: snapshot.fromCache,
+          hasPendingWrites: snapshot.hasPendingWrites,
+        });
+      }
+      phases.push({ phase: phase.phase, snapshots, errors: phase.errors });
+    }
+    observations.push(phases);
+  }
+  return observations;
+}
+
+function classifyCallbacks(first, second, id) {
+  const sequence = /^(?:.*\/)?sdk\/(?:203|203C)$/.test(id)
+    ? phaseCallbackSequence
+    : callbackSequence;
+  const a = sequence(first),
+    b = sequence(second);
   if (a === undefined || b === undefined) return "UNOBSERVED";
-  if (isUnfinished(first) || isUnfinished(second)) return "INDETERMINATE";
+  if (
+    isUnfinished(first) ||
+    isUnfinished(second) ||
+    (sequence === phaseCallbackSequence &&
+      [first, second].some(
+        (row) => Array.isArray(row.invariantViolations) && row.invariantViolations.length > 0,
+      ))
+  )
+    return "INDETERMINATE";
   return isDeepStrictEqual(a, b) ? "MATCH" : "MISMATCH";
 }
 
-const isCallbackCase = (id) => id === "sdk/111" || id.endsWith("/sdk/111");
+const isCallbackCase = (id) => /^(?:.*\/)?sdk\/(?:111|203|203C)$/.test(id);
 
 const SETTLEMENT_MIN_AGE_MS = 10 * 60_000;
 
@@ -728,12 +788,12 @@ export function compareRecordings({ productions, local, divergences = {}, settle
   const callbackSummary = {};
   for (const id of ids)
     if (isCallbackCase(id)) {
-      const productionPair = classifyCallbacks(firstRows[id], secondRows[id]);
+      const productionPair = classifyCallbacks(firstRows[id], secondRows[id], id);
       const status =
         productionPair === "MISMATCH"
           ? "NONDETERMINISTIC"
           : productionPair === "MATCH"
-            ? classifyCallbacks(firstRows[id], localRows[id])
+            ? classifyCallbacks(firstRows[id], localRows[id], id)
             : productionPair;
       rows[id].callbackStatus = status;
       callbackSummary[status] = (callbackSummary[status] ?? 0) + 1;
@@ -803,7 +863,7 @@ function main(argv) {
             : `Canonical recorded observations ${status === "MATCH" ? "match" : "differ"} under classifyRow.`;
       rows[id] = { status, comparatorResult, reason };
       if (isCallbackCase(id)) {
-        const callbackStatus = problems.length ? "INDETERMINATE" : classifyCallbacks(p, l);
+        const callbackStatus = problems.length ? "INDETERMINATE" : classifyCallbacks(p, l, id);
         rows[id].callbackStatus = callbackStatus;
         callbackSummary[callbackStatus] = (callbackSummary[callbackStatus] ?? 0) + 1;
       }

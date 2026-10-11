@@ -556,7 +556,7 @@ fn dispatch_topic(
     };
     match (method, operation) {
         (&Method::PUT, None) => create_topic(&topic, body, handle),
-        (&Method::PATCH, None) => update_topic(&topic, body),
+        (&Method::PATCH, None) => update_topic(&topic, body, handle),
         (&Method::GET, None) => {
             let state = handle.state();
             let labels = state
@@ -699,7 +699,11 @@ pub(crate) fn decode_query(value: &str) -> Result<String, RestError> {
         .map_err(|_| RestError::invalid("query must be UTF-8"))
 }
 
-fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), RestError> {
+fn update_topic(
+    topic: &TopicName,
+    body: &Value,
+    handle: &PubSubHandle,
+) -> Result<(StatusCode, Value), RestError> {
     let topic_body = field(body, "topic").unwrap_or(body);
     let topic_options = topic_from_json(topic, topic_body, false)?;
     let update_mask = field(body, "updateMask")
@@ -714,8 +718,35 @@ fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), 
         update_mask: Some(prost_types::FieldMask { paths }),
     };
     crate::convert::validate_topic_update_options(&request).map_err(RestError::from_core)?;
-    Err(RestError::unimplemented(
-        "UpdateTopic is not supported by the Pub/Sub emulator",
+    if request
+        .update_mask
+        .as_ref()
+        .is_none_or(|mask| mask.paths != ["labels"])
+    {
+        return Err(RestError::unimplemented(
+            "UpdateTopic is not supported by the Pub/Sub emulator",
+        ));
+    }
+    let mut state = handle.state();
+    state
+        .update_topic_labels(
+            topic,
+            request
+                .topic
+                .expect("the topic was constructed above")
+                .labels
+                .into_iter()
+                .collect(),
+            handle.paging_policy == crate::PagingPolicy::Strict,
+        )
+        .map_err(RestError::from_core)?;
+    Ok((
+        StatusCode::OK,
+        topic_json(
+            topic,
+            state.topic_labels(topic).map_err(RestError::from_core)?,
+            state.topic_retention(topic).map_err(RestError::from_core)?,
+        ),
     ))
 }
 

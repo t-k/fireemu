@@ -2104,9 +2104,8 @@ async fn rest_rejects_an_undeclared_topic_field_as_an_invalid_argument() {
     .await;
     assert_eq!(status, 200, "declared and output-only fields stay accepted");
 
-    // The same split applies to an update mask: an unknown path is invalid, a declared but
-    // unsupported path is an emulator limitation.
-    for (mask, expected) in [("notAField", 400), ("kmsKeyName", 501), ("labels", 501)] {
+    // Unknown update paths remain invalid; unsupported declared paths remain unimplemented.
+    for (mask, expected) in [("notAField", 400), ("kmsKeyName", 501), ("labels", 200)] {
         let (status, error) = rest_request(
             address,
             "PATCH",
@@ -5167,4 +5166,252 @@ proptest::proptest! {
         invalid[0].data.clear();
         proptest::prop_assert_eq!(handle.publish(&topic, invalid).unwrap_err().code(), Code::InvalidArgument);
     }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn topic_labels_updates_replace_and_clear_get_list_views_on_both_transports() {
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_700_000_000),
+    )));
+    let handle = PubSubHandle::new(Arc::new(Mutex::new(PubSubState::new(99))), clock, None)
+        .with_paging_policy(fireemu_adapter_pubsub::PagingPolicy::Strict);
+    let port = std::env::var("PORT")
+        .ok()
+        .map_or(0, |value| value.parse::<u16>().unwrap());
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    let server_handle = handle.clone();
+    let server = tokio::spawn(async move {
+        let _ = serve_pubsub(listener, server_handle).await;
+    });
+    let topic = "projects/demo-app/topics/update-labels";
+    let other = "projects/demo-app/topics/untouched-labels";
+    for name in [topic, other] {
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/{name}"),
+                json!({"labels":{"old":"value"},"messageRetentionDuration":"3600s"})
+            )
+            .await
+            .0,
+            200
+        );
+    }
+    let mut publisher = PublisherClient::new(grpc_channel(address).await);
+    for native in [false, true] {
+        for labels in [
+            json!({}),
+            json!({"replacement":"new"}),
+            json!({"second":"next"}),
+            json!({}),
+        ] {
+            if native {
+                let result = publisher
+                    .update_topic(pb::UpdateTopicRequest {
+                        topic: Some(pb::Topic {
+                            name: topic.to_owned(),
+                            labels: serde_json::from_value(labels.clone()).unwrap(),
+                            ..Default::default()
+                        }),
+                        update_mask: Some(prost_types::FieldMask {
+                            paths: vec!["labels".to_owned()],
+                        }),
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner();
+                assert_eq!(serde_json::to_value(result.labels).unwrap(), labels);
+                assert_eq!(result.message_retention_duration.unwrap().seconds, 3600);
+            } else {
+                let (status, result) = rest_request(
+                    address,
+                    "PATCH",
+                    &format!("/v1/{topic}"),
+                    json!({"topic":{"name":topic,"labels":labels},"updateMask":"labels"}),
+                )
+                .await;
+                assert_eq!(status, 200, "{result}");
+                assert_eq!(
+                    result.get("labels").cloned().unwrap_or_else(|| json!({})),
+                    labels
+                );
+                assert_eq!(result["messageRetentionDuration"], "3600s");
+            }
+            let (status, from_get) =
+                rest_request(address, "GET", &format!("/v1/{topic}"), json!({})).await;
+            assert_eq!(status, 200);
+            let (_, from_list) =
+                rest_request(address, "GET", "/v1/projects/demo-app/topics", json!({})).await;
+            assert_eq!(
+                from_get,
+                *from_list["topics"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| item["name"] == topic)
+                    .unwrap()
+            );
+            assert_eq!(
+                from_get.get("labels").cloned().unwrap_or_else(|| json!({})),
+                labels
+            );
+            if labels == json!({}) {
+                assert!(from_get.get("labels").is_none());
+            }
+            assert_eq!(from_get["messageRetentionDuration"], "3600s");
+            let from_get = publisher
+                .get_topic(pb::GetTopicRequest {
+                    topic: topic.to_owned(),
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            let from_list = publisher
+                .list_topics(pb::ListTopicsRequest {
+                    project: "projects/demo-app".to_owned(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .topics
+                .into_iter()
+                .find(|item| item.name == topic)
+                .unwrap();
+            assert_eq!(from_get, from_list);
+            assert_eq!(serde_json::to_value(from_get.labels).unwrap(), labels);
+        }
+    }
+    let old = publisher
+        .get_topic(pb::GetTopicRequest {
+            topic: other.to_owned(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(old.labels.get("old").map(String::as_str), Some("value"));
+    assert_eq!(old.message_retention_duration.unwrap().seconds, 3600);
+    assert_eq!(
+        rest_request(
+            address,
+            "PATCH",
+            &format!("/v1/{topic}"),
+            json!({"topic":{"name":topic,"labels":{"prior":"value"}},"updateMask":"labels"})
+        )
+        .await
+        .0,
+        200
+    );
+    let (_, before) = rest_request(address, "GET", &format!("/v1/{topic}"), json!({})).await;
+    for (mask, labels, expected) in [
+        ("labels", json!({"Bad":"value"}), 400),
+        ("kmsKeyName", json!({"change":"no"}), 501),
+        ("notAField", json!({"change":"no"}), 400),
+        ("labels.key", json!({"change":"no"}), 501),
+        (
+            "labels,messageRetentionDuration",
+            json!({"change":"no"}),
+            501,
+        ),
+    ] {
+        let (status, _) = rest_request(
+            address,
+            "PATCH",
+            &format!("/v1/{topic}"),
+            json!({"topic":{"name":topic,"labels":labels},"updateMask":mask}),
+        )
+        .await;
+        assert_eq!(status, expected, "{mask}");
+        let (_, after) = rest_request(address, "GET", &format!("/v1/{topic}"), json!({})).await;
+        assert_eq!(after, before);
+        let error = publisher
+            .update_topic(pb::UpdateTopicRequest {
+                topic: Some(pb::Topic {
+                    name: topic.to_owned(),
+                    labels: serde_json::from_value(labels).unwrap(),
+                    ..Default::default()
+                }),
+                update_mask: Some(prost_types::FieldMask {
+                    paths: mask
+                        .split(',')
+                        .map(|path| {
+                            if path == "messageRetentionDuration" {
+                                "message_retention_duration".to_owned()
+                            } else if path == "kmsKeyName" {
+                                "kms_key_name".to_owned()
+                            } else {
+                                path.to_owned()
+                            }
+                        })
+                        .collect(),
+                }),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.code(),
+            if expected == 400 {
+                tonic::Code::InvalidArgument
+            } else {
+                tonic::Code::Unimplemented
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(
+                publisher
+                    .get_topic(pb::GetTopicRequest {
+                        topic: topic.to_owned()
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .labels
+            )
+            .unwrap(),
+            before["labels"]
+        );
+    }
+    let missing = "projects/demo-app/topics/missing-update";
+    assert_eq!(
+        rest_request(
+            address,
+            "PATCH",
+            &format!("/v1/{missing}"),
+            json!({"topic":{"name":missing,"labels":{}},"updateMask":"labels"})
+        )
+        .await
+        .0,
+        404
+    );
+    assert_eq!(
+        publisher
+            .update_topic(pb::UpdateTopicRequest {
+                topic: Some(pb::Topic {
+                    name: missing.to_owned(),
+                    ..Default::default()
+                }),
+                update_mask: Some(prost_types::FieldMask {
+                    paths: vec!["labels".to_owned()]
+                })
+            })
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+    assert_eq!(
+        rest_request(address, "GET", &format!("/v1/{missing}"), json!({}))
+            .await
+            .0,
+        404
+    );
+    drop(publisher);
+    handle.shutdown_push_dispatcher().await;
+    server.abort();
+    let _ = server.await;
 }

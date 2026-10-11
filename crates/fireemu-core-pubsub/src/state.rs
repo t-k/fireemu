@@ -639,6 +639,24 @@ impl PubSubState {
             .ok_or_else(|| PubSubError::not_found(format!("topic {} not found", name.to_full())))
     }
 
+    /// Replaces the complete labels map without changing the topic's identity or delivery state.
+    pub fn update_topic_labels(
+        &mut self,
+        name: &TopicName,
+        labels: BTreeMap<String, String>,
+        strict: bool,
+    ) -> Result<()> {
+        if strict {
+            crate::configuration::validate_labels(&labels)?;
+        }
+        let topic = self
+            .topics
+            .get_mut(&name.to_full())
+            .ok_or_else(|| PubSubError::not_found(format!("topic {} not found", name.to_full())))?;
+        topic.labels = labels;
+        Ok(())
+    }
+
     /// The explicitly requested topic retention configuration, or `NOT_FOUND`.
     pub fn topic_retention(&self, name: &TopicName) -> Result<Option<LogicalDuration>> {
         self.topics
@@ -1798,6 +1816,53 @@ mod tests {
     use super::*;
     use crate::filter::Filter;
     use crate::subscription::{PushConfig, DEFAULT_ACK_DEADLINE_SECONDS};
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(32))]
+        #[test]
+        fn topic_labels_replacement_matches_map_reference_and_preserves_identity(
+            initial in proptest::collection::btree_map("[a-z]{1,8}", "[a-z0-9]{0,8}", 0..5),
+            replacement in proptest::collection::btree_map("[a-z]{1,8}", "[a-z0-9]{0,8}", 0..5),
+            strict in proptest::bool::ANY,
+        ) {
+            let mut state = PubSubState::new(5);
+            let name = topic("demo-app", "labels");
+            let other = topic("demo-app", "other");
+            let retained = Some(LogicalDuration::from_seconds(3600));
+            state.create_topic_with_retention(name.clone(), initial, retained).unwrap();
+            let other_labels = BTreeMap::from([("other".to_owned(), "value".to_owned())]);
+            state.create_topic(other.clone(), other_labels.clone()).unwrap();
+            state.create_subscription(sub_cfg("demo-app", "watch", "labels", Filter::always())).unwrap();
+            let incarnation = state.topics[&name.to_full()].incarnation;
+            let counter = state.topic_counter;
+            let policy = state.get_resource_policy(&name.to_full()).unwrap();
+            for labels in [replacement, BTreeMap::new()] {
+                for _ in 0..2 {
+                    state.update_topic_labels(&name, labels.clone(), strict).unwrap();
+                    proptest::prop_assert_eq!(state.topic_labels(&name).unwrap(), &labels);
+                    proptest::prop_assert_eq!(state.topic_labels(&other).unwrap(), &other_labels);
+                    proptest::prop_assert_eq!(state.topic_retention(&name).unwrap(), retained);
+                    proptest::prop_assert_eq!(state.topics[&name.to_full()].incarnation, incarnation);
+                    proptest::prop_assert_eq!(state.topic_counter, counter);
+                    proptest::prop_assert_eq!(state.topic_subscriptions(&name), vec!["projects/demo-app/subscriptions/watch".to_owned()]);
+                    proptest::prop_assert_eq!(state.get_resource_policy(&name.to_full()).unwrap(), policy.clone());
+                }
+            }
+            let prior = BTreeMap::from([("prior".to_owned(), "value".to_owned())]);
+            state.update_topic_labels(&name, prior.clone(), strict).unwrap();
+            let invalid = BTreeMap::from([("Bad".to_owned(), "value".to_owned())]);
+            if strict {
+                proptest::prop_assert!(state.update_topic_labels(&name, invalid, strict).is_err());
+                proptest::prop_assert_eq!(state.topic_labels(&name).unwrap(), &prior);
+            } else {
+                state.update_topic_labels(&name, invalid.clone(), strict).unwrap();
+                proptest::prop_assert_eq!(state.topic_labels(&name).unwrap(), &invalid);
+            }
+            let missing = topic("demo-app", "missing");
+            proptest::prop_assert_eq!(state.update_topic_labels(&missing, BTreeMap::new(), strict).unwrap_err().code(), crate::Code::NotFound);
+            proptest::prop_assert!(!state.topic_exists(&missing));
+        }
+    }
 
     fn topic(p: &str, t: &str) -> TopicName {
         TopicName::new(p, t).unwrap()

@@ -85,9 +85,35 @@ impl Publisher for PublisherService {
     ) -> Result<Response<pb::Topic>, Status> {
         let request = request.into_inner();
         validate_topic_update_options(&request).map_err(|e| status(&e))?;
-        Err(Status::unimplemented(
-            "UpdateTopic is not supported by the Pub/Sub emulator",
-        ))
+        if request
+            .update_mask
+            .as_ref()
+            .is_none_or(|mask| mask.paths != ["labels"])
+            || request.topic.is_none()
+        {
+            return Err(Status::unimplemented(
+                "UpdateTopic is not supported by the Pub/Sub emulator",
+            ));
+        }
+        let topic = request.topic.expect("the topic was checked above");
+        let name = TopicName::parse(&topic.name).map_err(|error| status(&error))?;
+        let mut state = self.handle.state();
+        state
+            .update_topic_labels(
+                &name,
+                topic.labels.into_iter().collect(),
+                self.handle.paging_policy == crate::PagingPolicy::Strict,
+            )
+            .map_err(|error| status(&error))?;
+        let mut updated = topic_to_proto(
+            &name,
+            state.topic_labels(&name).map_err(|error| status(&error))?,
+        );
+        updated.message_retention_duration = state
+            .topic_retention(&name)
+            .map_err(|error| status(&error))?
+            .map(crate::convert::duration_to_proto);
+        Ok(Response::new(updated))
     }
 
     async fn publish(

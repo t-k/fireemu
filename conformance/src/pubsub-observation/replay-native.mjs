@@ -1,7 +1,7 @@
 import grpc from "@grpc/grpc-js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { CAPS } from "./plan.mjs";
+import { CAPS, PROJECT } from "./plan.mjs";
 
 export function rewriteNativeFrame(frame, bindings, invalidAck, ackSlots = null) {
   const result = structuredClone(frame);
@@ -429,6 +429,7 @@ export function createNativeReplay({
   clock,
   cells,
   sourceCells = [],
+  sourceRunId,
   journal = null,
   publishTime = null,
 }) {
@@ -516,9 +517,30 @@ export function createNativeReplay({
           journal,
         );
         active.windowCancellationDeadlineSeparated = cancellationClient !== null;
+        const openingSource = sourceCells.find((c) => c.id === cell.id);
+        const sourceBoundZero =
+          cell.id === "S10" &&
+          cell.variant === "invalid-opening-frame" &&
+          openingSource?.id === cell.id &&
+          openingSource.group === cell.group &&
+          openingSource.variant === cell.variant &&
+          openingSource.result?.complete === true &&
+          openingSource.result.cleanupClosed === true &&
+          typeof sourceRunId === "string" &&
+          /^[0-9a-f]{12}$/.test(sourceRunId) &&
+          isDeepStrictEqual(row.body, {
+            subscription: `projects/${PROJECT}/subscriptions/fe${sourceRunId}-s10-sub`,
+            streamAckDeadlineSeconds: 0,
+            maxOutstandingMessages: "1",
+            maxOutstandingBytes: "1024",
+          }) &&
+          openingSource.frames.some(
+            (f) => f.n === row.n && f.direction === "out" && isDeepStrictEqual(f.body, row.body),
+          );
         active.stream = await wire.open({
           cellId: cell.id,
           opener: row.body,
+          ...(sourceBoundZero ? { runId: sourceRunId } : {}),
           ...(cancellationClient ? { client: cancellationClient } : {}),
         });
         witnesses.set(cell.id, {

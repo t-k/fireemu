@@ -232,6 +232,7 @@ export async function replayA(
       clock,
       cells,
       sourceCells: source.cells,
+      sourceRunId: source.runId,
       journal,
       publishTime: publishTimeDisposition
         ? (cellId, opener) => {

@@ -2690,3 +2690,109 @@ test("S16 LOCAL separation disposes timers and does not persist callbacks after 
   assert.equal(f.rows.length, count);
   assert.equal(f.cancelled(), cancellations);
 });
+
+test("S10 replay forwards only the exact source-bound runId to real stream lifecycle", async (t) => {
+  const { EventEmitter } = await import("node:events");
+  const grpc = (await import("@grpc/grpc-js")).default;
+  const { openStream } = await import("./pubsub-observation/stream.mjs");
+  const { createNativeReplay } = await import("./pubsub-observation/replay-native.mjs");
+  const details =
+    "A service error has occurred. Please retry your request. If the error persists, please report it. [code=e8c0]";
+  for (const mode of [
+    "positive",
+    "missing-runId",
+    "wrong-runId",
+    "wrong-source",
+    "unbound-opening",
+    "unclosed-source",
+    "other-cell",
+  ]) {
+    await t.test(mode, async () => {
+      const cell = {
+        id: mode === "other-cell" ? "S11" : "S10",
+        group: "G4",
+        variant: "invalid-opening-frame",
+      };
+      const opener = {
+        subscription: "projects/fireemu-oracle-idp/subscriptions/feabcdef123456-s10-sub",
+        streamAckDeadlineSeconds: 0,
+        maxOutstandingMessages: "1",
+        maxOutstandingBytes: "1024",
+      };
+      const row = {
+        n: 1,
+        cellId: cell.id,
+        event: "stream-frame",
+        direction: "out",
+        elapsedMs: 0,
+        at: new Date().toISOString(),
+        body: opener,
+      };
+      const source = {
+        ...cell,
+        frames: [structuredClone(row)],
+        result: { complete: true, cleanupClosed: true },
+        events: [],
+      };
+      if (mode === "wrong-source") source.variant = "unrelated";
+      if (mode === "unbound-opening") source.frames[0].body.streamAckDeadlineSeconds = 10;
+      if (mode === "unclosed-source") source.result.cleanupClosed = false;
+      const rpc = new EventEmitter();
+      rpc.write = () => true;
+      rpc.end = () => {};
+      rpc.cancel = () => {};
+      let stream, forwarded;
+      const wire = {
+        open: async (options) => {
+          forwarded = options.runId;
+          stream = await openStream({
+            ...options,
+            client: { makeBidiStreamRequest: () => rpc },
+            credential: async () => "offline-dummy",
+            meter: {
+              start() {},
+              frame() {},
+              clock: () => performance.now(),
+              remaining: () => 140000,
+            },
+            journal: { write() {}, frame() {} },
+          });
+          return stream;
+        },
+      };
+      const replay = createNativeReplay({
+        wire,
+        sourceRunId:
+          mode === "missing-runId"
+            ? undefined
+            : mode === "wrong-runId"
+              ? "fedcba654321"
+              : "abcdef123456",
+        cells: [cell],
+        sourceCells: [source],
+        bindings: createBindings(),
+        clock: createActionClock({ now: Date.now, wait: async () => {}, advance: async () => {} }),
+      });
+      try {
+        await replay.frame(row);
+        rpc.emit("metadata", new grpc.Metadata());
+        rpc.emit("error", { code: 13, details });
+        rpc.emit("status", { code: 13, details, metadata: new grpc.Metadata() });
+        rpc.emit("end");
+        await replay.action({
+          n: 2,
+          cellId: cell.id,
+          event: "stream-case-observation",
+          at: new Date().toISOString(),
+          elapsedMs: 0,
+          state: { terminal: { code: 13 }, incomplete: false },
+        });
+        assert.equal(forwarded, mode === "positive" ? "abcdef123456" : undefined);
+        assert.equal(stream.state().incomplete, mode !== "positive");
+        assert.equal(replay.witnesses.get(cell.id).completed, mode === "positive");
+      } finally {
+        replay.close();
+      }
+    });
+  }
+});

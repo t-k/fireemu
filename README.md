@@ -39,6 +39,8 @@ npx fireemu exec -- <command>
 npx fireemu exec -- npm test
 ```
 
+Every command documents its options: run `npx fireemu --help` for the commands and `npx fireemu <command> --help` (or `npx fireemu help <command>`) for the options of one, for example `npx fireemu exec --help`. After `--`, `exec` passes `--help` to your command.
+
 ### Supported platforms
 
 | OS | Architecture |

@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- `fireemu --help`, `fireemu help` and `fireemu <command> --help` (also `-h` and `fireemu help <command>`) print the commands and, for each command, its synopsis and every option with its default. `emulators:start` and `emulators:exec` print the help of `up` and `exec`. `--help` after `--` in `exec` still belongs to the command, and an unknown argument now points to `fireemu <command> --help`.
+
 ## [0.16.0] - 2026-10-10
 
 ### Added

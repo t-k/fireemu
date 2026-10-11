@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { makePlan, validatePlan, categoryCaps } from "./pubsub-observation/plan.mjs";
 
-const firstIds = ["R11", "N13", "N11", "N12", "R12", "N14", "R13", "N15", "R2"];
+const firstIds = ["R13", "N15", "R2"];
 const secondIds = [
   "S10",
   "S11",
@@ -67,7 +67,7 @@ test("targeted caps include every selected category, stream and independent reco
       first.caps.G4.requests,
       first.caps.G4.streams,
     ],
-    [118, 53, 65, 0, 0],
+    [40, 26, 14, 0, 0],
   );
   assert.deepEqual(
     [
@@ -88,7 +88,7 @@ test("targeted caps include every selected category, stream and independent reco
       first.caps.framesOut,
       first.caps.framesIn,
     ],
-    [118, 132, 2040000, 0, 0],
+    [40, 54, 840000, 0, 0],
   );
   assert.deepEqual(
     [
@@ -100,7 +100,7 @@ test("targeted caps include every selected category, stream and independent reco
     ],
     [310, 324, 3960000, 12, 12],
   );
-  const aggregate = 240 + first.caps.totalRequests + second.caps.totalRequests;
+  const aggregate = 318 + first.caps.totalRequests + second.caps.totalRequests;
   assert.equal(aggregate, 696);
   assert.ok(aggregate <= 824);
   for (const plan of [first, second]) {
@@ -113,7 +113,8 @@ test("targeted caps include every selected category, stream and independent reco
     assert.equal(plan.caps.totalRequests - starts, 14);
     assert.deepEqual(plan.caps.G7, makePlan().caps.G7);
     assert.equal(plan.caps.cleanupReserveMs, 40000);
-    assert.equal(plan.caps.largePublishes, 6);
+    assert.equal(plan.caps.largePublishes, plan.selection.endsWith("second") ? 8 : 2);
+    assert.equal(plan.caps.smallPublishes, plan.selection.endsWith("second") ? 2 : 0);
     assert.equal(plan.caps.largeEncodedPayloadBytes, 1024);
     assert.equal(plan.caps.smallEncodedPayloadBytes, 1024);
     assert.equal(plan.caps.frameBytes, 65536);
@@ -201,5 +202,53 @@ test("each targeted phase admits exactly one source namespace without weakening 
       () => verifyPacket(changedPacket, scope, descriptor, digest),
       /packet identity mismatch/,
     );
+  }
+});
+
+test("real meter admits every fixed cross-cell Publish then rejects one excess without changing classification", async () => {
+  const { createMeter } = await import("./pubsub-observation/meter.mjs");
+  const { encodedSizes } = await import("./pubsub-observation/payload.mjs");
+  for (const selection of selections) {
+    const plan = makePlan(selection),
+      meter = createMeter({ plan, now: () => 0 });
+    let large = 0,
+      small = 0;
+    for (const cell of plan.cells) {
+      meter.enter(cell);
+      const calls =
+        cell.variant === "publish-wire-eight"
+          ? 2
+          : [
+                "filter-negation",
+                "positive-deadline-extension",
+                "terminal-details",
+                "presend-details",
+              ].includes(cell.variant)
+            ? 1
+            : 0;
+      const marker = cell.group === "G4";
+      const count = marker ? 1 : calls;
+      for (let i = 0; i < count; i++) {
+        meter.start("publish", cell.transport);
+        const request = {
+          topic: "projects/unit/topics/owned",
+          messages: [
+            { data: Buffer.from(marker ? `${cell.id}:marker0` : cell.variant).toString("base64") },
+          ],
+        };
+        const bytes = encodedSizes(request.topic, request.messages).payload;
+        assert.doesNotThrow(() => meter.payload(bytes), `${selection}/${cell.id}`);
+        if (marker) small++;
+        else large++;
+      }
+    }
+    assert.equal(large, selection.endsWith("second") ? 8 : 2);
+    assert.equal(small, selection.endsWith("second") ? 2 : 0);
+    assert.equal(meter.snapshot().largePublishes, large);
+    assert.equal(meter.snapshot().smallPublishes, small);
+    assert.throws(() => meter.payload(1), /publish payload cap exhausted/);
+    assert.equal(plan.caps.largeEncodedPayloadBytes, 1024);
+    assert.equal(plan.caps.smallEncodedPayloadBytes, 1024);
+    assert.ok((large + small) * 1024 <= 27 * 1024);
   }
 });

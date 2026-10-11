@@ -100,10 +100,7 @@ export function makePlan(selection = "full") {
       ? ["S10", "S11", "S12", "S13", "S14", "S15", "S16", "R1"]
       : ["S12", "S13", "S14", "S15", "S16"];
     plan.cells = plan.cells.filter((cell) => !excluded.includes(cell.id));
-    if (first)
-      plan.cells = plan.cells.filter((cell) =>
-        ["R11", "N13", "N11", "N12", "R12", "N14", "R13", "N15", "R2"].includes(cell.id),
-      );
+    if (first) plan.cells = plan.cells.filter((cell) => ["R13", "N15", "R2"].includes(cell.id));
     if (first)
       plan.cells = [
         ...plan.cells.filter((cell) => cell.id !== "R2"),
@@ -131,6 +128,10 @@ export function makePlan(selection = "full") {
     plan.caps.sourceRequests = plan.caps.G1.requests + plan.caps.G4.requests;
     plan.caps.totalRequests = plan.caps.sourceRequests + plan.caps.G7.requests;
     plan.caps.framesOut = plan.caps.framesIn = plan.caps.G4.streams * 6;
+    plan.caps.largePublishes = plan.cells
+      .filter((cell) => cell.group === "G1")
+      .reduce((count, cell) => count + (categoryCaps(cell.group, cell.variant).publish ?? 0), 0);
+    plan.caps.smallPublishes = plan.cells.filter((cell) => cell.group === "G4").length;
     return plan;
   }
   const cells = [...streamCases, ...supplements].map((variant, index) => ({

@@ -536,6 +536,87 @@ test("ack origins are per cell", () => {
   assert.equal(ack2.reason, REASON_NC_ACK);
 });
 
+const ONE = sevenUnkeyed[0];
+const TWO = sevenUnkeyed[1];
+const withAck = (ackId, message) => ({
+  ackId,
+  message: { ...message, messageId: "1", publishTime: "t" },
+});
+const pullOf = (...received) => pull(received);
+
+test("absent data and empty data are the same message", () => {
+  const source = side("src", { first: [{ attributes: { k: "v" } }], second: [] });
+  const local = side("loc", { first: [{ data: "", attributes: { k: "v" } }], second: [] });
+  assert.equal(pullRows(compareCells(source.rows, local.rows))[0].verdict, "NOT_COMPARABLE");
+});
+
+test("an Acknowledge against a ModifyAckDeadline is not judged on its ack origin", () => {
+  const rows = (tag, kind) => {
+    const one = deliveries(tag, [ONE]);
+    const two = deliveries(tag, [TWO], 1);
+    return [pull(one), pull(two), kind === "ack" ? ack([two[0].ackId]) : modack([one[0].ackId])];
+  };
+  const cell = compareCells(rows("src", "ack"), rows("loc", "modack"));
+  assert.notEqual(cell.rows[2].verdict, "DIVERGES");
+});
+
+test("an ack id no earlier Pull delivered on the production side is not an origin", () => {
+  const rows = (tag, ackId) => {
+    const one = deliveries(tag, [ONE]);
+    return [pull(one), pull(deliveries(tag, [TWO], 1)), ack([ackId ?? one[0].ackId])];
+  };
+  const cell = compareCells(rows("src", "never-delivered"), rows("loc"));
+  assert.equal(cell.rows[2].verdict, "NOT_COMPARABLE");
+  assert.equal(cell.rows[2].reason, REASON_NC_ACK);
+});
+
+test("one crossed ack id among correct ones makes the Acknowledge DIVERGES", () => {
+  const rows = (tag, crossing) => {
+    const one = deliveries(tag, [ONE]);
+    const two = deliveries(tag, [TWO], 1);
+    const second = crossing ? [one[0].ackId] : [two[0].ackId];
+    return [pull(one), pull(two), ack([two[0].ackId, ...second])];
+  };
+  const mixed = compareCells(rows("src", false), rows("loc", true));
+  assert.equal(mixed.rows[2].verdict, "DIVERGES");
+  assert.equal(mixed.rows[2].reason, REASON_ORIGIN);
+  const fine = compareCells(rows("src", false), rows("loc", false));
+  assert.equal(fine.rows[2].verdict, "NOT_COMPARABLE");
+});
+
+test("an unknown or failed Pull is no origin for an ack id, on either side", () => {
+  for (const update of [{ unknown: true }, { ok: false, status: 500, code: "INTERNAL" }]) {
+    for (const badSide of ["source", "local"]) {
+      const rows = (tag, bad) => {
+        const first = pull(deliveries(tag, [ONE]));
+        if (bad) Object.assign(first.response, update);
+        const second = deliveries(tag, [TWO], 1);
+        const acked = bad ? first.response.body.receivedMessages[0].ackId : second[0].ackId;
+        return [first, pull(second), ack([acked])];
+      };
+      const peer = (tag) => {
+        // The other side acks the ack id of its own second Pull.
+        const first = pull(deliveries(tag, [ONE]));
+        const second = deliveries(tag, [TWO], 1);
+        return [first, pull(second), ack([second[0].ackId])];
+      };
+      const cell =
+        badSide === "source"
+          ? compareCells(rows("src", true), peer("loc"))
+          : compareCells(peer("src"), rows("loc", true));
+      assert.notEqual(cell.rows[2].verdict, "DIVERGES", `${badSide} ${JSON.stringify(update)}`);
+    }
+  }
+});
+
+test("source and local ack origins are tracked separately even for equal ack id strings", () => {
+  const source = [pullOf(withAck("same", ONE)), pullOf(), ack(["same"])];
+  const local = [pullOf(), pullOf(withAck("same", ONE)), ack(["same"])];
+  const cell = compareCells(source, local);
+  assert.equal(cell.rows[2].verdict, "DIVERGES");
+  assert.equal(cell.rows[2].reason, REASON_ORIGIN);
+});
+
 // Reference model for the Pull selection rule, independent of the production code path: the
 // unkeyed messages compare as a multiset, and the keyed ones as one ordered list per key.
 function modelSelection(messages) {

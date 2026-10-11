@@ -95,11 +95,16 @@ export function makePlan(selection = "full") {
   ) {
     const plan = makePlan("closure-mandatory-gap");
     const first = selection === "closure-targeted-first-complement";
-    // Fixed complements preserve the original H1 cell definitions and relative order.
+    // Fixed complements preserve H1 cell definitions; first runs the independent R2 cell last.
     const excluded = first
       ? ["S10", "S11", "S12", "S13", "S14", "S15", "S16", "R1"]
       : ["S12", "S13", "S14", "S15", "S16"];
     plan.cells = plan.cells.filter((cell) => !excluded.includes(cell.id));
+    if (first)
+      plan.cells = [
+        ...plan.cells.filter((cell) => cell.id !== "R2"),
+        ...plan.cells.filter((cell) => cell.id === "R2"),
+      ];
     plan.selection = selection;
     plan.recordings = 1;
     plan.groups = first ? ["G1", "G7"] : ["G4", "G1", "G7"];

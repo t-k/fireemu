@@ -3,7 +3,6 @@ import test from "node:test";
 import { makePlan, validatePlan, categoryCaps } from "./pubsub-observation/plan.mjs";
 
 const firstIds = [
-  "R2",
   "R3",
   "R4",
   "R5",
@@ -24,8 +23,9 @@ const firstIds = [
   "N14",
   "R13",
   "N15",
+  "R2",
 ];
-const secondIds = ["S10", "S11", "R1", ...firstIds];
+const secondIds = ["S10", "S11", "R1", "R2", ...firstIds.filter((id) => id !== "R2")];
 const selections = ["closure-targeted-first-complement", "closure-targeted-independent-second"];
 
 test("fixed targeted selections preserve exact original cells and omit supplements", () => {

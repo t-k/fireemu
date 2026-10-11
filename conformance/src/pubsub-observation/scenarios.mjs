@@ -646,7 +646,11 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
           if (reply.code !== "NOT_FOUND") throw new Error("missing subscription not known absent");
           opener.subscription = missing;
         }
-        stream = await wire.open({ opener, cellId: cell.id });
+        stream = await wire.open({
+          opener,
+          cellId: cell.id,
+          ...(cell.variant === "invalid-opening-frame" ? { runId } : {}),
+        });
         if (cell.variant === "future-publications") await publish(0);
         if (cell.variant === "invalid-ack-silence") stream.write({ ackIds: [cell.invalidAck] });
         const invalidAckIssuedClock = meter.clock();

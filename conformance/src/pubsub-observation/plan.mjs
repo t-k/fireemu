@@ -247,14 +247,14 @@ export function makePlan(selection = "full") {
       ),
       ...extra,
     ];
-    plan.caps.G1 = { ...plan.caps.G1, requests: 272, rest: 124, grpc: 148 };
+    plan.caps.G1 = { ...plan.caps.G1, requests: 274, rest: 125, grpc: 149 };
     plan.caps.G4 = { ...plan.caps.G4, requests: 126, rest: 119, streams: 7 };
     Object.assign(plan.caps, {
-      sourceRequests: 398,
-      totalRequests: 412,
+      sourceRequests: 400,
+      totalRequests: 414,
       framesOut: 42,
       framesIn: 42,
-      largePublishes: 6,
+      largePublishes: 8,
       largeEncodedPayloadBytes: 1024,
       smallPublishes: 21,
       sourceWallMs: 4860000,

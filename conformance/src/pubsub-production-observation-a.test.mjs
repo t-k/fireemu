@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { makePlan, CAPS } from "./pubsub-observation/plan.mjs";
+import { makePlan, CAPS, categoryCaps } from "./pubsub-observation/plan.mjs";
 
 test("observation A fixes the adjudicated per-set category and frame ceilings", () => {
   const plan = makePlan();
@@ -3664,11 +3664,11 @@ test("closure mandatory gap fixes original predicates and selected-only caps", (
   );
   assert.deepEqual(
     [plan.caps.G1.rest, plan.caps.G1.grpc, plan.caps.G4.rest, plan.caps.G4.streams],
-    [124, 148, 119, 7],
+    [125, 149, 119, 7],
   );
   assert.deepEqual(
     [plan.caps.sourceRequests, plan.caps.totalRequests, plan.caps.sourceWallMs],
-    [398, 412, 4860000],
+    [400, 414, 4860000],
   );
   assert.deepEqual(
     [
@@ -3677,16 +3677,44 @@ test("closure mandatory gap fixes original predicates and selected-only caps", (
       plan.caps.largePublishes,
       plan.caps.largeEncodedPayloadBytes,
     ],
-    [42, 42, 6, 1024],
+    [42, 42, 8, 1024],
   );
   assert.equal(makePlan().caps.G1.grpc, 120);
   const meter = createMeter({ now: () => 0, plan });
   meter.enter(plan.cells.find((c) => c.id === "N13"));
   assert.equal(meter.remaining(), 200000);
+  // publish-wire-eight is published as two homogeneous batches (7 unkeyed + 1 keyed).
+  meter.start("publish", "grpc");
   meter.start("publish", "grpc");
   assert.throws(() => meter.start("publish", "grpc"), /category/);
   for (let i = 0; i < 4; i++) meter.start("target", "grpc");
   assert.throws(() => meter.start("target", "grpc"), /category/);
+});
+
+test("closure mandatory gap fixed caps equal the sum of every selected cell's category caps", () => {
+  const plan = makePlan("closure-mandatory-gap");
+  const total = { G1: { requests: 0, rest: 0, grpc: 0, publish: 0 }, G4: { requests: 0, rest: 0 } };
+  for (const cell of plan.cells) {
+    const caps = categoryCaps(cell.group, cell.variant);
+    const requests = Object.values(caps).reduce((sum, count) => sum + count, 0);
+    total[cell.group].requests += requests;
+    if (cell.group === "G4") total.G4.rest += requests - 1;
+    else {
+      total.G1[cell.transport] += requests;
+      total.G1.publish += caps.publish ?? 0;
+    }
+  }
+  assert.deepEqual(
+    [plan.caps.G1.requests, plan.caps.G1.rest, plan.caps.G1.grpc, plan.caps.largePublishes],
+    [total.G1.requests, total.G1.rest, total.G1.grpc, total.G1.publish],
+  );
+  assert.deepEqual([plan.caps.G4.requests, plan.caps.G4.rest], [total.G4.requests, total.G4.rest]);
+  assert.equal(
+    plan.caps.smallPublishes,
+    plan.cells.filter((cell) => cell.group === "G4").length * categoryCaps("G4").publish,
+  );
+  assert.equal(plan.caps.sourceRequests, total.G1.requests + total.G4.requests);
+  assert.equal(plan.caps.totalRequests, plan.caps.sourceRequests + plan.caps.G7.requests);
 });
 
 async function closureWorld(
@@ -3709,6 +3737,7 @@ async function closureWorld(
     rows = [],
     published = new Map(),
     pendingTokens = new Map();
+  let nextMessageId = 0;
   const runId = "123456abcdef";
   const answer = (method, request, metadata) => {
     calls.push({ method, request: structuredClone(request), metadata });
@@ -3753,7 +3782,8 @@ async function closureWorld(
       return structuredClone(merged);
     }
     if (method === "Publish") {
-      const ids = request.messages.map((m, i) => `id-${i}`);
+      // Server-assigned ids are unique across Publish calls, as in production.
+      const ids = request.messages.map(() => `id-${nextMessageId++}`);
       request.messages.forEach((m, i) => published.set(ids[i], structuredClone(m)));
       return { messageIds: ids };
     }
@@ -3906,9 +3936,15 @@ test("closure mandatory gap traverses real REST and native shapes for configurat
       );
     }
     if (["R11", "N13"].includes(id)) {
-      const p = f.calls.find((c) => c.method === "Publish");
-      assert.ok(p, "fixed batch Publish required");
-      assert.equal(p.request.messages.length, 8);
+      // The eight witness messages are published as two homogeneous legal batches:
+      // seven unkeyed messages, then the single ordering-keyed message (cc95c1bbd).
+      const publishes = f.calls.filter((c) => c.method === "Publish");
+      assert.deepEqual(
+        publishes.map((c) => c.request.messages.length),
+        [7, 1],
+      );
+      assert.ok(publishes[0].request.messages.every((m) => !m.orderingKey));
+      assert.equal(publishes[1].request.messages[0].orderingKey, "k1");
       assert.equal(f.rows.filter((r) => r.event === "publication-binding").length, 8);
       assert.ok(f.calls.some((c) => c.method === "Acknowledge" && c.request.ackIds.length === 8));
       assert.equal(

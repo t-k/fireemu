@@ -30,6 +30,209 @@ const successful = (row) =>
     ? canonicalStatus(row.response.code) === "OK"
     : row.response.status >= 200 && row.response.status < 300;
 
+// Pull delivery selection. Which messages a Pull delivered does not depend on the ACK selector, so
+// it is judged before the ACK-selector short-circuit: a different delivered set is DIVERGES. A
+// message is identified by its data, attributes and ordering key; ackId, publishTime and an
+// unbound messageId stay opaque. Unkeyed messages compare as a multiset (production does not
+// promise their order), keyed messages keep their order within each key when the recorded
+// subscription enables message ordering (without that proof they compare as a multiset too). Only
+// a difference can be decided here: an equal selection leaves the row as unresolved as before.
+// The reason separates a content difference from one that only splits the same overall delivery
+// differently across the Pulls of the cell, and from a duplicate delivery inside one Pull.
+const SELECTION_REASON = "delivered message set differs";
+const PARTITION_REASON = "Pull partition differs";
+const DUPLICATE_REASON = "Pull duplicate delivery differs";
+const ORIGIN_REASON = "ACK originates from a different Pull";
+const compareText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+function deliveredMessages(response) {
+  const body = response.body;
+  if (!body || typeof body !== "object" || Array.isArray(body) || body.raw !== undefined)
+    return null;
+  const list = body.receivedMessages ?? [];
+  if (!Array.isArray(list)) return null;
+  const messages = [];
+  for (const item of list) {
+    const message = item?.message;
+    if (!message || typeof message !== "object") return null;
+    const attributes = message.attributes ?? {};
+    if (!attributes || typeof attributes !== "object" || Array.isArray(attributes)) return null;
+    messages.push(message);
+  }
+  return messages;
+}
+const contentOf = (message) => [
+  message.data ?? "",
+  Object.entries(message.attributes ?? {}).toSorted(([a], [b]) => compareText(a, b)),
+];
+function selectionOf(messages, ids, ordered) {
+  const unkeyed = [];
+  const keyed = new Map();
+  for (const [i, message] of messages.entries()) {
+    const key = message.orderingKey ?? "";
+    const identity = JSON.stringify([...contentOf(message), ids ? ids[i] : null]);
+    if (key === "") unkeyed.push(identity);
+    else if (ordered) keyed.set(key, [...(keyed.get(key) ?? []), identity]);
+    else unkeyed.push(JSON.stringify([key, identity]));
+  }
+  return { unkeyed: unkeyed.toSorted(compareText), keyed };
+}
+// Messages by content and key alone, as a sorted multiset.
+const contentMultiset = (messages) =>
+  messages.map((m) => JSON.stringify([...contentOf(m), m.orderingKey ?? ""])).toSorted(compareText);
+// The same messageId twice in one response.
+function hasDuplicateDelivery(response) {
+  const ids = (response.body.receivedMessages ?? [])
+    .map((item) => item.message.messageId)
+    .filter((id) => typeof id === "string" && id);
+  return new Set(ids).size !== ids.length;
+}
+// Subscriptions the cell recorded as created with message ordering enabled.
+function orderedSubscriptions(exchanges) {
+  const names = new Set();
+  for (const e of exchanges ?? [])
+    if (
+      e.method === "CreateSubscription" &&
+      successful(e) &&
+      !e.response.unknown &&
+      e.request.body?.enableMessageOrdering === true &&
+      typeof e.request.body.name === "string"
+    )
+      names.add(e.request.body.name);
+  return names;
+}
+function sameSelection(a, b) {
+  return (
+    isDeepStrictEqual(a.unkeyed, b.unkeyed) &&
+    a.keyed.size === b.keyed.size &&
+    [...a.keyed].every(([key, sequence]) => isDeepStrictEqual(sequence, b.keyed.get(key)))
+  );
+}
+function selectionCounts(messages) {
+  const keyed = messages.filter((m) => (m.orderingKey ?? "") !== "").length;
+  return { unkeyed: messages.length - keyed, keyed };
+}
+function pullSelectionDivergence(bindings, expected, actual, orderedNames) {
+  if (
+    expected.method !== "Pull" ||
+    actual.method !== "Pull" ||
+    !successful(expected) ||
+    !successful(actual) ||
+    expected.response.unknown ||
+    actual.response.unknown
+  )
+    return null;
+  try {
+    // The same request is a precondition: a different maxMessages explains a different set.
+    if (
+      ["method", "transport", "category"].some((k) => expected[k] !== actual[k]) ||
+      !isDeepStrictEqual(bindings.request(expected), actual.request)
+    )
+      return null;
+  } catch {
+    return null;
+  }
+  const sourceMessages = deliveredMessages(expected.response),
+    localMessages = deliveredMessages(actual.response);
+  if (!sourceMessages || !localMessages) return null;
+  // Publication identity counts as well when every delivered source message is bound to a local
+  // publication; otherwise content alone identifies a message.
+  let sourceIds = null,
+    localIds = null;
+  try {
+    sourceIds = expected.response.body.receivedMessages?.map((item) =>
+      bindings.get("message", item.message.messageId),
+    );
+    localIds = actual.response.body.receivedMessages?.map((item) => item.message.messageId);
+    if (![...(sourceIds ?? []), ...(localIds ?? [])].every((id) => typeof id === "string" && id))
+      sourceIds = localIds = null;
+  } catch {
+    sourceIds = localIds = null;
+  }
+  // Order within a key is only a guarantee where both sides recorded an ordering subscription.
+  const subscription = expected.request.body?.subscription;
+  const ordered = orderedNames.source.has(subscription) && orderedNames.local.has(subscription);
+  const same = sameSelection(
+    selectionOf(sourceMessages, sourceIds, ordered),
+    selectionOf(localMessages, localIds, ordered),
+  );
+  if (same) return null;
+  return {
+    judgment: {
+      ...decision(
+        "DIVERGES",
+        hasDuplicateDelivery(expected.response) || hasDuplicateDelivery(actual.response)
+          ? DUPLICATE_REASON
+          : SELECTION_REASON,
+      ),
+      selection: { source: selectionCounts(sourceMessages), local: selectionCounts(localMessages) },
+    },
+    sourceMessages,
+    localMessages,
+  };
+}
+// A set difference that leaves the overall delivery of the cell equal is only a partition across
+// Pulls. This needs every Pull of the cell to be judgeable on both sides.
+function partitionRows(pending, exchanges, peerExchanges) {
+  const totals = { source: [], local: [] };
+  for (const [i, expected] of exchanges.entries()) {
+    const actual = peerExchanges[i];
+    if (expected.method !== "Pull" && actual?.method !== "Pull") continue;
+    if (
+      expected.method !== "Pull" ||
+      actual?.method !== "Pull" ||
+      ![expected, actual].every((row) => successful(row) && !row.response.unknown)
+    )
+      return new Set();
+    const source = deliveredMessages(expected.response),
+      local = deliveredMessages(actual.response);
+    if (!source || !local) return new Set();
+    totals.source.push(...source);
+    totals.local.push(...local);
+  }
+  if (!isDeepStrictEqual(contentMultiset(totals.source), contentMultiset(totals.local)))
+    return new Set();
+  return new Set(
+    pending
+      .filter(
+        (p) =>
+          !isDeepStrictEqual(contentMultiset(p.sourceMessages), contentMultiset(p.localMessages)),
+      )
+      .map((p) => p.index),
+  );
+}
+// An Acknowledge or ModifyAckDeadline names ack ids from the Pull at its own position: the ack id
+// the production request used came from production Pull i, so the local one has to come from
+// local Pull i. An ack id delivered by an earlier local Pull does not stand in for it.
+function ackOriginDivergence(expected, actual, sourceOrigin, localOrigin) {
+  if (
+    !["Acknowledge", "ModifyAckDeadline"].includes(expected.method) ||
+    actual.method !== expected.method ||
+    actual.transport !== expected.transport
+  )
+    return null;
+  const sourceAcks = expected.request.body?.ackIds,
+    localAcks = actual.request.body?.ackIds;
+  if (
+    !Array.isArray(sourceAcks) ||
+    sourceAcks.length === 0 ||
+    !Array.isArray(localAcks) ||
+    localAcks.length !== sourceAcks.length
+  )
+    return null;
+  const crossed = sourceAcks.some((ack, j) => {
+    const from = sourceOrigin.get(ack),
+      to = localOrigin.get(localAcks[j]);
+    return from !== undefined && to !== undefined && from !== to;
+  });
+  return crossed ? decision("DIVERGES", ORIGIN_REASON) : null;
+}
+function recordAckOrigins(origin, response, index) {
+  const list = response.body?.receivedMessages;
+  if (!Array.isArray(list)) return;
+  for (const item of list)
+    if (typeof item?.ackId === "string" && item.ackId) origin.set(item.ackId, index);
+}
+
 export function observationOutcome(reply, method, request) {
   const response = normalizeOutcome(reply);
   if (
@@ -211,10 +414,21 @@ export function compareObservation(source, local) {
     const peer = local.cells.find((c) => c.id === cell.id);
     const debts = [...cell.debts, ...(peer?.debts ?? ["local cell missing"])];
     const rows = [];
-    if (cell.exchanges.length !== peer?.exchanges.length)
-      debts.push("different exchange cardinality");
+    // The Pull position that delivered each ack id, per side.
+    const sourceOrigin = new Map(),
+      localOrigin = new Map();
+    // Both new rules pair rows by position, so they apply only to cells that line up.
+    const aligned = cell.exchanges.length === peer?.exchanges.length;
+    const orderedNames = {
+      source: orderedSubscriptions(cell.exchanges),
+      local: orderedSubscriptions(peer?.exchanges),
+    };
+    const pending = [];
+    if (!aligned) debts.push("different exchange cardinality");
     for (const [i, expected] of cell.exchanges.entries()) {
       const actual = peer?.exchanges[i];
+      const crossed =
+        actual && aligned ? ackOriginDivergence(expected, actual, sourceOrigin, localOrigin) : null;
       let judgment;
       if (!actual) judgment = decision("NOT_COMPARABLE", "local exchange missing");
       else if (contains(expected.request, "omitted"))
@@ -222,12 +436,19 @@ export function compareObservation(source, local) {
           "NOT_COMPARABLE",
           "omitted request payload requires exact reconstruction proof",
         );
-      else if (contains(expected.response.body, "ackId") || contains(actual.response.body, "ackId"))
-        judgment = decision(
-          "NOT_COMPARABLE",
-          "ACK selector unresolved; no shape selection inferred",
-        );
-      else {
+      else if (crossed) judgment = crossed;
+      else if (
+        contains(expected.response.body, "ackId") ||
+        contains(actual.response.body, "ackId")
+      ) {
+        const found = aligned
+          ? pullSelectionDivergence(bindings, expected, actual, orderedNames)
+          : null;
+        if (found) pending.push({ index: rows.length, ...found });
+        judgment =
+          found?.judgment ??
+          decision("NOT_COMPARABLE", "ACK selector unresolved; no shape selection inferred");
+      } else {
         try {
           const rewritten = bindings.request(expected);
           if (
@@ -254,6 +475,10 @@ export function compareObservation(source, local) {
           judgment = decision("NOT_COMPARABLE", error.message);
         }
       }
+      if (expected.method === "Pull" && successful(expected) && !expected.response.unknown)
+        recordAckOrigins(sourceOrigin, expected.response, i);
+      if (actual?.method === "Pull" && successful(actual) && !actual.response.unknown)
+        recordAckOrigins(localOrigin, actual.response, i);
       rows.push({
         sourceN: expected.n,
         sourceDispatchN: expected.dispatchN,
@@ -263,6 +488,9 @@ export function compareObservation(source, local) {
         ...judgment,
       });
     }
+    if (pending.length && peer)
+      for (const index of partitionRows(pending, cell.exchanges, peer.exchanges))
+        if (rows[index].reason === SELECTION_REASON) rows[index].reason = PARTITION_REASON;
     return {
       id: cell.id,
       group: cell.group,

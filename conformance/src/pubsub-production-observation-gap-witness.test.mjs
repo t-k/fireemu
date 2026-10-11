@@ -16,11 +16,11 @@ test("successor gap covers NOT and positive extension on both transports without
   );
   assert.deepEqual(
     [plan.caps.sourceRequests, plan.caps.totalRequests, plan.caps.sourceWallMs],
-    [398, 412, 4860000],
+    [400, 414, 4860000],
   );
   assert.deepEqual(
     [plan.caps.G1.requests, plan.caps.G1.rest, plan.caps.G1.grpc, plan.caps.largePublishes],
-    [272, 124, 148, 6],
+    [274, 125, 149, 8],
   );
   assert.deepEqual(plan.caps.G7, makePlan().caps.G7);
   assert.deepEqual([plan.caps.G4.requests, plan.caps.G4.rest, plan.caps.G4.streams], [126, 119, 7]);

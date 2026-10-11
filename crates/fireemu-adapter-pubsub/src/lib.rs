@@ -545,6 +545,25 @@ impl PubSubHandle {
     ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
         let now = self.now();
         self.publish_prepared(topic, now, |state| {
+            if self.paging_policy == PagingPolicy::Strict
+                && messages.len() <= fireemu_core_pubsub::state::MAX_MESSAGES_PER_PUBLISH
+                && state.topic_exists(topic)
+            {
+                // Preserve topic, count, and individual-message error precedence before batch validation.
+                for message in &messages {
+                    message.validate()?;
+                }
+                if let Some(first) = messages.first() {
+                    if messages
+                        .iter()
+                        .any(|message| message.ordering_key != first.ordering_key)
+                    {
+                        return Err(PubSubError::failed_precondition(
+                            "In a single publish request, all messages must have no ordering key or they must all have the same ordering key. [code=539b]",
+                        ));
+                    }
+                }
+            }
             state.prepare_publish(topic, messages, now)
         })
     }
@@ -593,25 +612,6 @@ impl PubSubHandle {
         messages: Vec<PubsubMessage>,
     ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
         let _publication = self.lock_publication();
-        if self.paging_policy == PagingPolicy::Strict
-            && messages.len() <= fireemu_core_pubsub::state::MAX_MESSAGES_PER_PUBLISH
-            && self.state().topic_exists(topic)
-        {
-            // Preserve topic, count, and individual-message error precedence before batch validation.
-            for message in &messages {
-                message.validate()?;
-            }
-            if let Some(first) = messages.first() {
-                if messages
-                    .iter()
-                    .any(|message| message.ordering_key != first.ordering_key)
-                {
-                    return Err(PubSubError::failed_precondition(
-                        "In a single publish request, all messages must have no ordering key or they must all have the same ordering key. [code=539b]",
-                    ));
-                }
-            }
-        }
         self.publish_locked(topic, messages)
     }
 
@@ -2584,6 +2584,82 @@ mod publication_gate_tests {
             )
             .is_err());
         assert_eq!(reserved.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn topic_creation_between_missing_observation_and_admission_cannot_publish_mixed_keys() {
+        use super::{
+            BridgeMessage, PagingPolicy, TopicDelivery, TopicDeliveryError,
+            TopicDeliveryReservation,
+        };
+        use fireemu_core_pubsub::{Code, PubsubMessage, TopicName};
+        use std::collections::BTreeMap;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Counting(Arc<AtomicUsize>);
+        struct Commit;
+        impl TopicDeliveryReservation for Commit {
+            fn commit(self: Box<Self>) {}
+        }
+        impl TopicDelivery for Counting {
+            fn reserve(
+                &self,
+                _: &str,
+                _: &[BridgeMessage],
+            ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(Box::new(Commit))
+            }
+        }
+        let reserved = Arc::new(AtomicUsize::new(0));
+        let mut handle = handle().with_paging_policy(PagingPolicy::Strict);
+        handle.bridge = Some(Arc::new(Counting(reserved.clone())));
+        let topic = TopicName::new("demo-app", "created-during-publish").unwrap();
+        let publication = handle.lock_publication().unwrap();
+        // Replay the old ingress observation, then insert through the state-only CreateTopic path.
+        assert!(!handle.state().topic_exists(&topic));
+        let creator = handle.clone();
+        let created_topic = topic.clone();
+        std::thread::spawn(move || {
+            creator
+                .state()
+                .create_topic(created_topic, BTreeMap::new())
+                .unwrap();
+        })
+        .join()
+        .unwrap();
+        // This is the existing admission seam reached after the old ingress skipped validation.
+        let result = handle.publish_locked(
+            &topic,
+            vec![
+                PubsubMessage {
+                    data: b"unkeyed".to_vec(),
+                    ..PubsubMessage::default()
+                },
+                PubsubMessage {
+                    data: b"keyed".to_vec(),
+                    ordering_key: "k1".to_owned(),
+                    ..PubsubMessage::default()
+                },
+            ],
+        );
+        assert_eq!(result.unwrap_err().code(), Code::FailedPrecondition);
+        assert_eq!(reserved.load(Ordering::SeqCst), 0);
+        drop(publication);
+        let published = handle
+            .publish(
+                &topic,
+                vec![PubsubMessage {
+                    data: b"valid".to_vec(),
+                    ..PubsubMessage::default()
+                }],
+            )
+            .unwrap();
+        assert_eq!(
+            published[0].message_id,
+            fireemu_core_pubsub::pubsub_message_id(1)
+        );
+        assert_eq!(reserved.load(Ordering::SeqCst), 1);
     }
 
     /// PUBGATE-1: the publication gate is held across the control-plane transitions that

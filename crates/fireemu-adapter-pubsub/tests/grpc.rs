@@ -1407,7 +1407,7 @@ async fn streaming_pull_initial_zero_is_strict_only_and_does_not_lease() {
             assert_eq!(error.code(), tonic::Code::Internal);
             assert_eq!(
                 error.message(),
-                "A service error has occurred. Please retry your request. If the error persists, please report it."
+                "A service error has occurred. Please retry your request. If the error persists, please report it. [code=e8c0]"
             );
             let pulled = subc
                 .pull(pb::PullRequest {

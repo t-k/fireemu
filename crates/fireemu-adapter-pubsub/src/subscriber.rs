@@ -464,7 +464,7 @@ impl Subscriber for SubscriberService {
             && first.stream_ack_deadline_seconds == 0
         {
             return Err(Status::internal(
-                "A service error has occurred. Please retry your request. If the error persists, please report it.",
+                "A service error has occurred. Please retry your request. If the error persists, please report it. [code=e8c0]",
             ));
         }
 

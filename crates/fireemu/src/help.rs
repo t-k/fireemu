@@ -348,14 +348,13 @@ pub fn command_names() -> String {
     names.join(", ")
 }
 
-/// The value-taking options of a topic, for finding a `--help` that is not a value.
-fn takes_value(topic: Topic, arg: &str) -> Option<Value> {
+/// Whether `arg` is an option of `topic` whose next argument is always its value. An optional
+/// value never starts with `-`, so it can never be `--help`, `-h` or `--` and needs no skipping.
+fn consumes_next(topic: Topic, arg: &str) -> bool {
     topic
         .options()
         .iter()
-        .filter(|spec| !matches!(spec.value, Value::None))
-        .find(|spec| spec.flags.contains(&arg))
-        .map(|spec| spec.value)
+        .any(|spec| matches!(spec.value, Value::Required(_)) && spec.flags.contains(&arg))
 }
 
 /// Whether `args` (the arguments after the command name) ask for help: a standalone
@@ -371,17 +370,7 @@ pub fn requested(topic: Topic, args: &[String]) -> bool {
         if arg == "--" && topic == Topic::Exec {
             return false;
         }
-        match takes_value(topic, arg) {
-            Some(Value::Required(_)) => i += 2,
-            Some(Value::Optional(_)) => {
-                i += if args.get(i + 1).is_some_and(|v| !v.starts_with('-')) {
-                    2
-                } else {
-                    1
-                };
-            }
-            _ => i += 1,
-        }
+        i += if consumes_next(topic, arg) { 2 } else { 1 };
     }
     false
 }

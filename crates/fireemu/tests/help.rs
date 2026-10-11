@@ -354,3 +354,31 @@ fn the_profile_documentation_recommends_strict_including_for_migrations() {
         );
     }
 }
+
+#[test]
+fn doctor_arguments_are_checked_and_an_unknown_one_points_to_the_help() {
+    // An unreachable control URL is attempted (not a usage error); a surplus argument is.
+    let attempted = run(&["doctor", "--connect", "http://127.0.0.1:9"]);
+    assert!(
+        !stderr(&attempted).contains("usage: fireemu doctor"),
+        "{}",
+        stderr(&attempted)
+    );
+    for args in [
+        &["doctor", "--connect", "http://127.0.0.1:9", "extra"][..],
+        &["doctor", "--connect"],
+        &["doctor", "--nope"],
+    ] {
+        let out = run(args);
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");
+        let message = stderr(&out);
+        assert!(
+            message.contains("usage: fireemu doctor"),
+            "{args:?}: {message}"
+        );
+        assert!(
+            message.contains("run `fireemu doctor --help` for the options"),
+            "{args:?}: {message}"
+        );
+    }
+}

@@ -463,9 +463,10 @@ impl Subscriber for SubscriberService {
         if self.handle.paging_policy == crate::PagingPolicy::Strict
             && first.stream_ack_deadline_seconds == 0
         {
-            return Err(Status::internal(
+            let terminal = Status::internal(
                 "A service error has occurred. Please retry your request. If the error persists, please report it. [code=e8c0]",
-            ));
+            );
+            return Ok(Response::new(Box::pin(tokio_stream::once(Err(terminal)))));
         }
 
         let message_limit = (self.handle.paging_policy == crate::PagingPolicy::Strict

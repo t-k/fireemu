@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- The documentation now recommends the `strict` profile explicitly, including when migrating from the official Firebase Local Emulator Suite: the README has a migration section naming the settings that relax single behaviors, and `fireemu init`, `fireemu init --help` and the configuration schema describe `emulator` as only for checking alignment with the pinned official emulator.
+
 ### Added
 
 - `fireemu --help`, `fireemu help` and `fireemu <command> --help` (also `-h` and `fireemu help <command>`) print the commands and, for each command, its synopsis and every option with its default. `emulators:start` and `emulators:exec` print the help of `up` and `exec`. `--help` after `--` in `exec` still belongs to the command, and an unknown argument now points to `fireemu <command> --help`.

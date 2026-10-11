@@ -177,12 +177,24 @@ An existing `fireemu.json` is not overwritten unless `--force` is supplied.
 
 | Profile | Behavior |
 |---|---|
-| `strict` | Matches production Firebase behavior and constraints as closely as possible within the supported scope. This is the default profile |
-| `emulator` | Targets the behavior of a pinned version of the official emulator. Known differences are documented in the compatibility documentation |
+| `strict` | Matches production Firebase behavior and constraints as closely as possible within the supported scope. This is the default profile. Recommended, including when migrating from the official emulator |
+| `emulator` | Targets the behavior of a pinned version of the official emulator. Known differences are documented in the compatibility documentation. Use it only to check alignment with the pinned official emulator (for example as an extra test target); it is not needed for a migration |
 
-Use `strict` when testing against production Firebase behavior. Add `emulator` to your test targets when you also need to check alignment with the official emulator.
+Use `strict` for your tests, also when you are moving a project over from the Firebase Local Emulator Suite. There is no benefit in choosing `emulator` to make a migration easier: it accepts behavior that production refuses, so a test can pass here and fail against production. Add `emulator` to your test targets only when you also need to check alignment with the official emulator.
 
 Under the `emulator` profile, a request that names a tenant the project does not have creates that tenant, and the number of tenants is not limited, as in the official emulator. The `strict` profile refuses such a request, as production does. A request that Fireemu refuses (a wrong credential, a browser page without the control token on the emulator routes, App Check, an unknown API key) creates nothing. As in the official emulator, a plain `GET` without an `Origin` header to a tenant route of `127.0.0.1` creates the tenant, so any web page you visit while the emulator runs can add tenants to it (not read them); use the `strict` profile where that matters.
+
+### Migrating from the Firebase Local Emulator Suite
+
+Keep `"profile": "strict"` (the default of `fireemu init`), and point fireemu at your existing `firebase.json` with `npx fireemu init --firebase-json firebase.json` or `--firebase-json` on the command line. Replace `firebase emulators:exec` with `fireemu exec` and `firebase emulators:start` with `fireemu up`; the official command names `emulators:exec` and `emulators:start` also work.
+
+When a test fails under `strict` but passed on the official emulator, it is usually behavior the application would also meet in production, for example a query that needs a composite index, a wrong-password sign-in that answers `INVALID_LOGIN_CREDENTIALS`, or TOTP that must be enabled in the project. Fix the test or the application. If you need the official emulator's behavior for one thing, relax only that documented setting in `fireemu.json` instead of switching the whole profile:
+
+| Setting | What it changes under `strict` |
+|---|---|
+| `firestore.enforceLimits` | `false` stops refusing queries that exceed the Standard edition query limits |
+| `auth.improvedEmailPrivacy` | `false` answers `EMAIL_NOT_FOUND` and `INVALID_PASSWORD` as the official Auth emulator does |
+| `auth.mfa` | Enables multi-factor authentication (including TOTP) the way a production project is configured; `strict` starts with it off |
 
 ### Basic configuration
 

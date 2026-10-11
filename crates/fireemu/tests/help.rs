@@ -317,3 +317,40 @@ mod exec_passthrough {
         assert!(!text.contains("should-not-run"));
     }
 }
+
+/// The documents an agent reads when it migrates a project must all recommend `strict`.
+#[test]
+fn the_profile_documentation_recommends_strict_including_for_migrations() {
+    let schema: serde_json::Value =
+        serde_json::from_str(include_str!("../../../spec/config/fireemu.schema.json")).unwrap();
+    let description = schema["properties"]["profile"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(
+        description.contains("strict is recommended, including when migrating"),
+        "{description}"
+    );
+    assert!(
+        description.contains("emulator is only for checking alignment"),
+        "{description}"
+    );
+    let readme = include_str!("../../../README.md");
+    assert!(readme.contains("Recommended, including when migrating from the official emulator"));
+    assert!(readme.contains("### Migrating from the Firebase Local Emulator Suite"));
+    assert!(readme.contains("it is not needed for a migration"));
+    // The settings the README names as single-behavior relaxations exist in the schema.
+    for (section, key) in [
+        ("firestore", "enforceLimits"),
+        ("auth", "improvedEmailPrivacy"),
+        ("auth", "mfa"),
+    ] {
+        assert!(
+            schema["properties"][section]["properties"][key].is_object(),
+            "{section}.{key}"
+        );
+        assert!(
+            readme.contains(&format!("`{section}.{key}`")),
+            "{section}.{key}"
+        );
+    }
+}

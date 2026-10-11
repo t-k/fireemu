@@ -160,7 +160,7 @@ const INIT_OPTIONS: &[OptionSpec] = &[
     opt(
         &["--profile"],
         Value::Required("strict|emulator"),
-        "Compatibility profile. strict follows production Firebase and is recommended, including when migrating from the official emulator; emulator is only for checking alignment with the pinned official emulator. Default: strict (asked interactively).",
+        "Compatibility profile. strict follows production Firebase and is recommended, including when migrating from the official emulator; emulator is only for checking alignment with the pinned official emulator and is not needed when migrating. Default: strict (asked interactively).",
     ),
     opt(
         &["--firebase-json"],
@@ -540,7 +540,8 @@ mod tests {
         assert!(exec.contains("  -h, --help\n"));
         let init = command_help(Topic::Init);
         assert!(init.contains("  --yes, --no-interactive\n"));
-        assert!(init.contains("recommended"));
+        assert!(init.contains("recommended, including when migrating from the official emulator"));
+        assert!(init.contains("not needed when migrating"));
     }
 
     #[test]

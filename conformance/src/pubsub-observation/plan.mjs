@@ -85,9 +85,45 @@ export function makePlan(selection = "full") {
       "invalid-path-gap",
       "s03-terminal-pair",
       "closure-mandatory-gap",
+      "closure-targeted-first-complement",
+      "closure-targeted-independent-second",
     ].includes(selection)
   )
     throw new Error("fixed observation selection required");
+  if (
+    ["closure-targeted-first-complement", "closure-targeted-independent-second"].includes(selection)
+  ) {
+    const plan = makePlan("closure-mandatory-gap");
+    const first = selection === "closure-targeted-first-complement";
+    // Fixed complements preserve the original H1 cell definitions and relative order.
+    const excluded = first
+      ? ["S10", "S11", "S12", "S13", "S14", "S15", "S16", "R1"]
+      : ["S12", "S13", "S14", "S15", "S16"];
+    plan.cells = plan.cells.filter((cell) => !excluded.includes(cell.id));
+    plan.selection = selection;
+    plan.recordings = 1;
+    plan.groups = first ? ["G1", "G7"] : ["G4", "G1", "G7"];
+    for (const group of ["G1", "G4"])
+      plan.caps[group] = { ...plan.caps[group], requests: 0, rest: 0, grpc: 0, streams: 0 };
+    plan.caps.sourceWallMs = 0;
+    for (const cell of plan.cells) {
+      const caps = plan.caps[cell.group];
+      const requests = Object.values(categoryCaps(cell.group, cell.variant)).reduce(
+        (sum, count) => sum + count,
+        0,
+      );
+      caps.requests += requests;
+      if (cell.group === "G4") {
+        caps.rest += requests - 1;
+        caps.streams += 1;
+      } else caps[cell.transport] += requests;
+      plan.caps.sourceWallMs += cell.cellMs ?? caps.cellMs;
+    }
+    plan.caps.sourceRequests = plan.caps.G1.requests + plan.caps.G4.requests;
+    plan.caps.totalRequests = plan.caps.sourceRequests + plan.caps.G7.requests;
+    plan.caps.framesOut = plan.caps.framesIn = plan.caps.G4.streams * 6;
+    return plan;
+  }
   const cells = [...streamCases, ...supplements].map((variant, index) => ({
     id: `S${String(index + 1).padStart(2, "0")}`,
     group: "G4",

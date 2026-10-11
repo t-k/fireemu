@@ -46,6 +46,9 @@ import { CONFORMANCE_DIR, REPO_ROOT } from "./config.mjs";
 import { PRINCIPALS as FS_RULES_PRINCIPALS } from "./fs-rules/corpus.mjs";
 
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
+const pubsubNames = JSON.parse(
+  readFileSync(join(CONFORMANCE_DIR, "pubsub-resource-names-production.json"), "utf8"),
+);
 
 /** The files stage 2's recorded rows depend on (its runner and recorder are not among them). */
 export const STAGE2_HARNESS_FILES = [
@@ -68,6 +71,33 @@ export const STAGE2_HARNESS_FILES = [
  * the JSON of the inputs that are data, not code. A lane's runner digests exactly this.
  */
 export const HARNESS_LANES = {
+  "pubsub-resource-names": {
+    fixture: "pubsub-resource-names-production.json",
+    files: [
+      "pubsub-release/resource-names.mjs",
+      "pubsub-production/rest.mjs",
+      "pubsub-production/grpc.mjs",
+      "pubsub-production/capture.mjs",
+      "pubsub-production/limits.mjs",
+      "pubsub-production/stream.mjs",
+      "pubsub-production/stream-dlq-compare-core.mjs",
+      "pubsub-production/stream-dlq-normalization.mjs",
+      "pubsub-production/iam.mjs",
+    ],
+    extra: JSON.stringify({
+      ...pubsubNames,
+      programs: Object.fromEntries(
+        Object.entries(pubsubNames.programs).map(([id, program]) => [
+          id,
+          Object.fromEntries(Object.entries(program).filter(([key]) => key !== "harnessDigest")),
+        ]),
+      ),
+    }),
+    guarded: [
+      "conformance/pubsub-resource-names-production.json",
+      "conformance/src/pubsub-release/fixtures/resource-names.fireemu.json",
+    ],
+  },
   "fs-rules": {
     fixture: "fs-rules-production.json",
     files: ["fs-rules/harness.mjs", "fs-rules/session.mjs", "auth-credential/tokens.mjs"],

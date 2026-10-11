@@ -486,18 +486,26 @@ export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep
           { data: data("ünïcödé ✓") },
           { data: data("x"), attributes: {} },
         ];
-        const publication = await send("publish", "Publish", { topic, messages });
-        const ids = publication.body?.messageIds;
-        if (
-          !publication.ok ||
-          !Array.isArray(ids) ||
-          ids.length !== 8 ||
-          new Set(ids).size !== 8 ||
-          ids.some((id) => typeof id !== "string" || !id)
-        )
-          throw new Error("publication batch is not bijective");
-        const expected = new Map(ids.map((id, index) => [id, { message: messages[index], index }])),
-          received = new Set();
+        const expected = new Map();
+        for (const indices of [[0, 1, 2, 3, 5, 6, 7], [4]]) {
+          const publication = await send("publish", "Publish", {
+            topic,
+            messages: indices.map((index) => messages[index]),
+          });
+          const ids = publication.body?.messageIds;
+          if (
+            !publication.ok ||
+            !Array.isArray(ids) ||
+            ids.length !== indices.length ||
+            new Set(ids).size !== indices.length ||
+            ids.some((id) => typeof id !== "string" || !id || expected.has(id))
+          )
+            throw new Error("publication batch is not bijective");
+          ids.forEach((id, slot) =>
+            expected.set(id, { message: messages[indices[slot]], index: indices[slot] }),
+          );
+        }
+        const received = new Set();
         for (const [messageId, { message, index }] of expected)
           journal.write({
             event: "publication-binding",

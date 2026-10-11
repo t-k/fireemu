@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { makePlan, validatePlan, categoryCaps } from "./pubsub-observation/plan.mjs";
 
-const firstIds = [
+const firstIds = ["R11", "N13", "N11", "N12", "R12", "N14", "R13", "N15", "R2"];
+const secondIds = [
+  "S10",
+  "S11",
+  "R1",
+  "R2",
   "R3",
   "R4",
   "R5",
@@ -23,9 +28,7 @@ const firstIds = [
   "N14",
   "R13",
   "N15",
-  "R2",
 ];
-const secondIds = ["S10", "S11", "R1", "R2", ...firstIds.filter((id) => id !== "R2")];
 const selections = ["closure-targeted-first-complement", "closure-targeted-independent-second"];
 
 test("fixed targeted selections preserve exact original cells and omit supplements", () => {
@@ -64,7 +67,7 @@ test("targeted caps include every selected category, stream and independent reco
       first.caps.G4.requests,
       first.caps.G4.streams,
     ],
-    [260, 112, 148, 0, 0],
+    [118, 53, 65, 0, 0],
   );
   assert.deepEqual(
     [
@@ -75,7 +78,7 @@ test("targeted caps include every selected category, stream and independent reco
       second.caps.G4.rest,
       second.caps.G4.streams,
     ],
-    [272, 124, 148, 36, 34, 2],
+    [274, 125, 149, 36, 34, 2],
   );
   assert.deepEqual(
     [
@@ -85,7 +88,7 @@ test("targeted caps include every selected category, stream and independent reco
       first.caps.framesOut,
       first.caps.framesIn,
     ],
-    [260, 274, 3480000, 0, 0],
+    [118, 132, 2040000, 0, 0],
   );
   assert.deepEqual(
     [
@@ -95,10 +98,10 @@ test("targeted caps include every selected category, stream and independent reco
       second.caps.framesOut,
       second.caps.framesIn,
     ],
-    [308, 322, 3960000, 12, 12],
+    [310, 324, 3960000, 12, 12],
   );
-  const aggregate = 87 + first.caps.totalRequests + second.caps.totalRequests;
-  assert.equal(aggregate, 683);
+  const aggregate = 240 + first.caps.totalRequests + second.caps.totalRequests;
+  assert.equal(aggregate, 696);
   assert.ok(aggregate <= 824);
   for (const plan of [first, second]) {
     const starts = plan.cells.reduce(

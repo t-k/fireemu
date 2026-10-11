@@ -101,6 +101,10 @@ export function makePlan(selection = "full") {
       : ["S12", "S13", "S14", "S15", "S16"];
     plan.cells = plan.cells.filter((cell) => !excluded.includes(cell.id));
     if (first)
+      plan.cells = plan.cells.filter((cell) =>
+        ["R11", "N13", "N11", "N12", "R12", "N14", "R13", "N15", "R2"].includes(cell.id),
+      );
+    if (first)
       plan.cells = [
         ...plan.cells.filter((cell) => cell.id !== "R2"),
         ...plan.cells.filter((cell) => cell.id === "R2"),
@@ -310,10 +314,20 @@ export function validatePlan(value) {
 export const categoryCaps = (group, variant) =>
   group === "G1" && variant === "positive-deadline-extension"
     ? { create: 2, get: 2, publish: 1, target: 5, cleanupDelete: 2, cleanupGet: 2 }
-    : group === "G1" && ["publish-wire-eight", "filter-negation"].includes(variant)
-      ? { create: 2, get: 2, publish: 1, target: 4, cleanupDelete: 2, cleanupGet: 2 }
-      : group === "G1"
-        ? { create: 2, get: 2, target: 4, cleanupDelete: 2, cleanupGet: 2 }
-        : group === "G4"
-          ? { create: 2, get: 2, publish: 3, target: 6, cleanupDelete: 2, cleanupGet: 2, stream: 1 }
-          : { resourceRead: 6, unknownDeleteRead: 6 };
+    : group === "G1" && variant === "publish-wire-eight"
+      ? { create: 2, get: 2, publish: 2, target: 4, cleanupDelete: 2, cleanupGet: 2 }
+      : group === "G1" && variant === "filter-negation"
+        ? { create: 2, get: 2, publish: 1, target: 4, cleanupDelete: 2, cleanupGet: 2 }
+        : group === "G1"
+          ? { create: 2, get: 2, target: 4, cleanupDelete: 2, cleanupGet: 2 }
+          : group === "G4"
+            ? {
+                create: 2,
+                get: 2,
+                publish: 3,
+                target: 6,
+                cleanupDelete: 2,
+                cleanupGet: 2,
+                stream: 1,
+              }
+            : { resourceRead: 6, unknownDeleteRead: 6 };

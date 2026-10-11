@@ -1247,6 +1247,39 @@ export function compareExecutedObservation(source, local, nativeWitnesses, appro
           `native error details ${cell.nativeOutcome.details.verdict}: availability and exact recorded values retained`,
         );
     }
+    const localInvalidAckObservation = actual?.events.find(
+      (e) => e.event === "stream-case-observation",
+    );
+    const invalidAckTerminal =
+      approvedBound &&
+      Boolean(observation?.state?.terminal) &&
+      Number.isFinite(proof?.invalidAckOutcome?.observedElapsedMs) &&
+      proof.invalidAckOutcome.observedElapsedMs >= 0 &&
+      proof.invalidAckOutcome.observationN === localInvalidAckObservation?.n &&
+      isDeepStrictEqual(proof.invalidAckOutcome.state, localInvalidAckObservation?.state) &&
+      [original, actual].every((c) => {
+        const observed = c?.events.find((e) => e.event === "stream-case-observation");
+        return (
+          observed?.state?.incomplete === false &&
+          !observed.state.windowExpired &&
+          Number.isFinite(observed.invalidAckObservedMs) &&
+          observed.invalidAckObservedMs >= 0 &&
+          !["UNKNOWN", "CANCELLED", "DEADLINE_EXCEEDED"].includes(
+            canonicalStatus(observed.state.terminal?.code),
+          ) &&
+          c.events.some(
+            (e) => e.event === "stream-status" && e.code === observed.state.terminal?.code,
+          ) &&
+          !c.events.some(
+            (e) =>
+              e.event === "stream-cancel" ||
+              e.event === "stream-observation-window-end" ||
+              e.phase ||
+              e.cancelReason,
+          )
+        );
+      }) &&
+      nativeTerminalVerdict(original, actual) !== "NOT_COMPARABLE";
     const exact =
       proof?.completed === true &&
       Array.isArray(proof.actions) &&
@@ -1264,7 +1297,10 @@ export function compareExecutedObservation(source, local, nativeWitnesses, appro
       ) &&
       observation?.state?.incomplete === false &&
       (observation.invalidAckObservedMs == null ||
-        (observation.invalidAckObservedMs >= 30000 && proof.silenceMs >= 30000));
+        invalidAckTerminal ||
+        (!observation.state?.terminal &&
+          observation.invalidAckObservedMs >= 30000 &&
+          proof.silenceMs >= 30000));
     if (!exact) continue;
     cell.debts = cell.debts.filter((debt) => debt !== nativeDebt);
     if (cell.id === "S07" && approvedBound && proof.semanticsVerified === true) {
@@ -1287,7 +1323,8 @@ export function compareExecutedObservation(source, local, nativeWitnesses, appro
     const layoutMatches =
       shapeMatches &&
       original.frames.every((f, i) => f.blob?.bytes === actual.frames[i].blob?.bytes);
-    const terminalVerdict = cell.id === "S03" ? nativeTerminalVerdict(original, actual) : "MATCH";
+    const terminalVerdict =
+      cell.id === "S03" || invalidAckTerminal ? nativeTerminalVerdict(original, actual) : "MATCH";
     cell.nativeSemantics = {
       verdict:
         proof.semanticsVerified !== true

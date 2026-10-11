@@ -2295,3 +2295,120 @@ test("S07 replay carries exact ordinary Pull and clock identities without invent
     "MATCH",
   );
 });
+
+async function invalidAckTerminalFixture(t, code = 3, elapsedMs = 3) {
+  const { createNativeReplay } = await import("./pubsub-observation/replay-native.mjs");
+  const { openStream } = await import("./pubsub-observation/stream.mjs");
+  const { EventEmitter } = await import("node:events");
+  let now = 0,
+    replay;
+  const rows = [],
+    rpc = new EventEmitter();
+  rpc.cancel = () => {};
+  rpc.write = (bytes) => {
+    const body = protos.google.pubsub.v1.StreamingPullRequest.decode(bytes);
+    if (code !== null && body.ackIds?.[0] === "invalid-ack-for-stream-observation")
+      queueMicrotask(() => {
+        rpc.emit("error", { code, details: "Invalid acknowledgment ID." });
+        rpc.emit("status", { code, details: "Invalid acknowledgment ID." });
+        rpc.emit("end");
+      });
+    return true;
+  };
+  const journal = {
+    write: (row) => {
+      const value = { ...structuredClone(row), n: rows.length + 1 };
+      rows.push(value);
+      return value;
+    },
+    frame: (_bytes, row) => replay.recordFrame(row),
+  };
+  replay = createNativeReplay({
+    journal,
+    bindings: createBindings(),
+    cells: [
+      {
+        id: "S16",
+        group: "G4",
+        variant: "invalid-ack-silence",
+        invalidAck: "invalid-ack-for-stream-observation",
+      },
+    ],
+    clock: createActionClock({
+      now: () => now,
+      wait: async (ms) => (now += ms),
+      advance: async () => {},
+    }),
+    wire: {
+      open: async ({ opener }) =>
+        openStream({
+          opener,
+          cellId: "S16",
+          journal,
+          now: () => now,
+          credential: async () => "synthetic",
+          meter: {
+            start() {},
+            frame() {},
+            remaining: () => (code === null ? 30001 : 90001),
+            clock: () => now,
+          },
+          client: { makeBidiStreamRequest: () => rpc },
+        }),
+    },
+  });
+  t.after(() => replay.close());
+  const row = (n, frameElapsedMs, body) => ({
+    n,
+    cellId: "S16",
+    event: "stream-frame",
+    direction: "out",
+    body,
+    elapsedMs: frameElapsedMs,
+    at: new Date(1000 + frameElapsedMs).toISOString(),
+  });
+  await replay.frame(row(1, 0, { subscription: "owned", streamAckDeadlineSeconds: 10 }));
+  await replay.frame(row(2, 1, { ackIds: ["invalid-ack-for-stream-observation"] }));
+  await Promise.resolve();
+  await replay.action({
+    n: 3,
+    cellId: "S16",
+    event: "stream-case-observation",
+    elapsedMs,
+    at: new Date(1000 + elapsedMs).toISOString(),
+    invalidAckObservedMs: elapsedMs - 1,
+    state: {
+      incomplete: code === null || [1, 2, 4, 8, 13, 14, 15].includes(code),
+      terminal: code === null ? null : { code },
+      inboundEnded: code !== null,
+    },
+  });
+  return { proof: replay.witnesses.get("S16"), rows };
+}
+
+test("S16 early remote terminal is an invalid ACK witness rather than a silence window", async (t) => {
+  const { proof, rows } = await invalidAckTerminalFixture(t);
+  assert.equal(proof.completed, true);
+  assert.equal(proof.semanticsVerified, true);
+  assert.equal(proof.invalidAckOutcome.state.terminal.code, 3);
+  assert.equal(proof.invalidAckOutcome.observedElapsedMs, 2);
+  assert.equal(proof.silenceMs, undefined);
+  assert.equal(
+    rows.find((r) => r.n === proof.invalidAckOutcome.observationN).state.terminal.code,
+    3,
+  );
+});
+
+test("S16 silence and uncertain timeout, cancellation or unknown terminal do not settle", async (t) => {
+  await assert.rejects(invalidAckTerminalFixture(t, null), /silence window incomplete/);
+  const silence = await invalidAckTerminalFixture(t, null, 30001);
+  assert.equal(silence.proof.silenceMs, 30000);
+  assert.equal(silence.proof.completed, false);
+  assert.equal(silence.proof.invalidAckOutcome, undefined);
+  for (const code of [1, 2, 4]) {
+    const { proof } = await invalidAckTerminalFixture(t, code);
+    assert.equal(proof.completed, false);
+    assert.equal(proof.semanticsVerified, false);
+    assert.equal(proof.invalidAckOutcome.state.terminal.code, code);
+  }
+});

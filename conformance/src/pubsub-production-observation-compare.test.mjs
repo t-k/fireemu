@@ -2556,3 +2556,156 @@ test("S06 approved unordered refuses coherently ordered cross-run positions", as
   assert.equal(c.approvedComparison.verdict, "DIVERGES");
   assert.notEqual(c.verdict, "MATCH");
 });
+
+function invalidAckTerminalComparisonFixture() {
+  const f = approvedNativeFixture();
+  const Type = protos.google.pubsub.v1.StreamingPullRequest;
+  const frames = [
+    { subscription: "owned", streamAckDeadlineSeconds: 10 },
+    { ackIds: ["invalid-ack-for-stream-observation"] },
+  ].map((body) => Buffer.from(Type.encode(Type.fromObject(body)).finish()));
+  const state = {
+    incomplete: false,
+    terminal: { code: 3 },
+    received: 0,
+    inboundEnded: true,
+    windowExpired: false,
+  };
+  for (const [observation, start] of [
+    [f.source, 7],
+    [f.local, 17],
+  ]) {
+    const cell = observation.cells.find((c) => c.id === "S16");
+    cell.frames = frames.map((raw, index) => ({
+      n: start + index,
+      direction: "out",
+      verified: true,
+      body: Type.toObject(Type.decode(raw), {
+        longs: String,
+        enums: String,
+        bytes: String,
+        defaults: false,
+      }),
+      blob: { bytes: raw.length, sha256: createHash("sha256").update(raw).digest("hex") },
+    }));
+    cell.events = [
+      {
+        n: start + 2,
+        event: "stream-error",
+        code: 3,
+        details: "Invalid acknowledgment ID.",
+        elapsedMs: 2,
+      },
+      {
+        n: start + 3,
+        event: "stream-status",
+        code: 3,
+        details: "Invalid acknowledgment ID.",
+        elapsedMs: 2,
+      },
+      { n: start + 4, event: "stream-inbound-end", elapsedMs: 2 },
+      {
+        n: start + 5,
+        event: "stream-case-observation",
+        elapsedMs: 3,
+        invalidAckObservedMs: 2,
+        state: structuredClone(state),
+      },
+    ];
+  }
+  f.witness.S16 = {
+    completed: true,
+    semanticsVerified: true,
+    sourceFrames: [7, 8],
+    actions: [{ sourceN: 12, event: "stream-case-observation", elapsedMs: 3 }],
+    invalidAckOutcome: { state: structuredClone(state), observedElapsedMs: 2, observationN: 22 },
+  };
+  f.disposition.rawFrames = frames.map((bytes, i) => ({
+    sourceN: 7 + i,
+    localN: 17 + i,
+    sourceBytes: bytes,
+    localBytes: bytes,
+  }));
+  return f;
+}
+
+test("S16 early bad ACK terminal retains exact details and raw comparison", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  const f = invalidAckTerminalComparisonFixture();
+  const compare = () =>
+    compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+      (c) => c.id === "S16",
+    );
+  assert.equal(compare().verdict, "MATCH");
+  assert.equal(compare().nativeLayout.verdict, "MATCH");
+  assert.equal(
+    compareExecutedObservation(f.source, f.local, f.witness).cells.find((c) => c.id === "S16")
+      .verdict,
+    "NOT_COMPARABLE",
+  );
+  f.local.cells.find((c) => c.id === "S16").events[0].details = "Different remote error.";
+  assert.equal(compare().verdict, "DIVERGES");
+  assert.equal(
+    compareExecutedObservation(f.source, f.local, f.witness).cells.find((c) => c.id === "S16")
+      .verdict,
+    "NOT_COMPARABLE",
+  );
+});
+
+test("S16 terminal admission refuses silence, censored outcomes and missing strict proof", async () => {
+  const { compareExecutedObservation } = await import("./pubsub-observation/compare-core.mjs");
+  for (const alter of [
+    (f) => {
+      for (const observation of [f.source, f.local]) {
+        const c = observation.cells.find((candidate) => candidate.id === "S16");
+        c.events = c.events.filter((e) => e.event === "stream-case-observation");
+        c.events[0].state = { incomplete: true, terminal: null, received: 0 };
+        c.events[0].invalidAckObservedMs = 30000;
+      }
+      f.witness.S16.completed = false;
+      f.witness.S16.silenceMs = 30000;
+    },
+    (f) => {
+      for (const observation of [f.source, f.local]) {
+        const c = observation.cells.find((candidate) => candidate.id === "S16");
+        c.events.find((e) => e.event === "stream-case-observation").state.terminal.code = 4;
+        c.events
+          .filter((e) => ["stream-error", "stream-status"].includes(e.event))
+          .forEach((e) => (e.code = 4));
+      }
+      f.witness.S16.invalidAckOutcome.state.terminal.code = 4;
+    },
+    (f) =>
+      f.local.cells
+        .find((c) => c.id === "S16")
+        .events.push({ event: "stream-cancel", reason: "dispose" }),
+    (f) => {
+      for (const observation of [f.source, f.local]) {
+        const c = observation.cells.find((candidate) => candidate.id === "S16");
+        c.events.find((e) => e.event === "stream-case-observation").state.terminal.code = 2;
+        c.events
+          .filter((e) => ["stream-error", "stream-status"].includes(e.event))
+          .forEach((e) => (e.code = 2));
+      }
+      f.witness.S16.invalidAckOutcome.state.terminal.code = 2;
+    },
+    (f) => delete f.witness.S16.invalidAckOutcome,
+    (f) => f.witness.S16.invalidAckOutcome.observationN++,
+    (f) => (f.disposition.rawFrames = []),
+    (f) => (f.disposition.source.runId = "foreign"),
+    (f) => delete f.local.cells.find((c) => c.id === "S16").events[0].details,
+    (f) => {
+      for (const observation of [f.source, f.local]) {
+        const c = observation.cells.find((candidate) => candidate.id === "S16");
+        c.events = c.events.filter((e) => e.event !== "stream-status");
+      }
+    },
+  ]) {
+    const f = invalidAckTerminalComparisonFixture();
+    alter(f);
+    const cell = compareExecutedObservation(f.source, f.local, f.witness, f.disposition).cells.find(
+      (c) => c.id === "S16",
+    );
+    assert.equal(cell.verdict, "NOT_COMPARABLE");
+  }
+});

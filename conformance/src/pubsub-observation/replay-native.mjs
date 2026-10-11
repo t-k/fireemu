@@ -577,13 +577,29 @@ export function createNativeReplay({
           const measured = clock.elapsed(row.cellId) - proof.invalidAckStartedMs;
           if (
             !Number.isFinite(measured) ||
-            row.invalidAckObservedMs < 30000 ||
-            measured < 30000 ||
-            state.terminal ||
-            state.received
+            measured < 0 ||
+            !Number.isFinite(row.invalidAckObservedMs) ||
+            row.invalidAckObservedMs < 0
           )
-            throw new Error("native silence window incomplete");
-          proof.silenceMs = measured;
+            throw new Error("native invalid ACK observation incomplete");
+          if (state.terminal) {
+            const observation = journal?.write({
+              event: "stream-case-observation",
+              cellId: active.cellId,
+              state: structuredClone(state),
+              elapsedMs: clock.elapsed(row.cellId),
+              invalidAckObservedMs: measured,
+            });
+            proof.invalidAckOutcome = {
+              state: structuredClone(state),
+              observedElapsedMs: measured,
+              observationN: observation?.n ?? null,
+            };
+          } else {
+            if (row.invalidAckObservedMs < 30000 || measured < 30000 || state.received)
+              throw new Error("native silence window incomplete");
+            proof.silenceMs = measured;
+          }
         }
         if (active.deadlineUntilMs !== undefined) {
           const observedUntilMs = clock.elapsed(row.cellId) - active.clockOriginOffsetMs;

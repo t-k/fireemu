@@ -325,7 +325,9 @@ test("the real 203C token relationship difference is named and not covered by D4
   write(options["local-browser"], local);
   const evidence = await closureEvidence(options);
   const compared = evidence.rows.find((r) => r.row === id);
-  assert.equal(compared.status, "DIVERGES");
+  assert.equal(compared.status, "NOT_COMPARABLE");
+  assert.equal(compared.aggregateStatus, "DIVERGES");
+  assert.equal(compared.callbackStatus, "UNOBSERVED");
   assert.deepEqual(
     compared.differences.map((d) => d.id),
     ["boundary-token-relationship", "unclassified-canonical-difference"],

@@ -92,8 +92,8 @@ test(
           zero.events.map((event) => event.event),
           ["metadata", "error", "status", "end"],
         );
-        for (const event of zero.events.filter((event) =>
-          ["error", "status"].includes(event.event),
+        for (const event of zero.events.filter((entry) =>
+          ["error", "status"].includes(entry.event),
         )) {
           assert.equal(event.code, 13);
           assert.equal(event.details, details);

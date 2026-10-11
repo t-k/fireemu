@@ -114,6 +114,18 @@ impl RestError {
     }
 }
 
+pub(crate) fn missing_credentials(policy: crate::PagingPolicy) -> Response {
+    error_response(
+        RestError {
+            status: StatusCode::FORBIDDEN,
+            code: "PERMISSION_DENIED",
+            message: crate::authentication::MISSING_CREDENTIAL_MESSAGE.to_owned(),
+            details: None,
+        },
+        policy,
+    )
+}
+
 pub(crate) fn unauthenticated(
     method: &Method,
     path: &str,

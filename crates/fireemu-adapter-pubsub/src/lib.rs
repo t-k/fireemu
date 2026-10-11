@@ -405,6 +405,7 @@ pub trait TopicDelivery: Send + Sync {
 #[derive(Clone)]
 pub struct PubSubHandle {
     paging_policy: PagingPolicy,
+    local_bearer_token: Option<String>,
     state: Arc<Mutex<PubSubState>>,
     clock: Arc<Mutex<VirtualClock>>,
     bridge: Option<Arc<dyn TopicDelivery>>,
@@ -429,6 +430,7 @@ impl PubSubHandle {
     ) -> Self {
         Self {
             paging_policy: PagingPolicy::Emulator,
+            local_bearer_token: None,
             state,
             clock,
             bridge,
@@ -450,6 +452,14 @@ impl PubSubHandle {
         self.state()
             .set_dead_letter_iam_enforcement(policy == PagingPolicy::Strict);
         self.paging_policy = policy;
+        self
+    }
+
+    /// Configures one exact local fixture Bearer for strict admission; emulator ignores it.
+    /// This does not verify Google credentials or model an IAM principal.
+    #[must_use]
+    pub fn with_local_bearer_token(mut self, token: Option<String>) -> Self {
+        self.local_bearer_token = token;
         self
     }
 
@@ -1245,7 +1255,7 @@ pub async fn serve_pubsub(
         async move { rest::handle(request, handle).await }
     });
     prepared_router = prepared_router.layer(axum::middleware::from_fn_with_state(
-        handle.paging_policy,
+        (handle.paging_policy, handle.local_bearer_token.clone()),
         authentication::authenticate,
     ));
     if handle.paging_policy == PagingPolicy::Strict {

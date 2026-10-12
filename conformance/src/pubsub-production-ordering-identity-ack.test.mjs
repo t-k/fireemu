@@ -970,7 +970,7 @@ test("only Acknowledge failures and exact REST publish paths affect the 1399 inp
     ...extra,
   ];
   // a failed Pull on the ordered subscription is not an Acknowledge failure
-  const failedPull = cell([ex("pull", `/v1/${ordered}:pull`, {}, 503, {})]);
+  const failedPull = cell([ex("pull", `/v1/${ordered}:pull`, {}, 503, pull(["zz", "k1"]))]);
   assert.equal(
     orderingCellResults(failedPull, failedPull, restOk)["ordering/rest"].owner1399.verdict,
     "MATCH",

@@ -223,19 +223,27 @@ fn callable_credential_refusal(
     )
 }
 
-/// The `consumeAppCheckToken` a callable is served with, or `None` for anything that is not a
-/// callable.
-fn callable_consumption(
-    runtime: &FunctionsRuntime,
-    function: &str,
-) -> Option<fireemu_core_functions::manifest::ConsumeAppCheckToken> {
+/// Whether a request to `function` may carry a token into a consuming `verifyToken`: a
+/// callable served with `consumeAppCheckToken` `enabled` or unobserved, or an onRequest route
+/// that startup marked `enabled` because the code exports a consuming callable under that name
+/// (any other value on an onRequest route means nothing).
+fn may_consume_app_check(runtime: &FunctionsRuntime, function: &str) -> bool {
+    use fireemu_core_functions::manifest::{ConsumeAppCheckToken, Trigger};
     match runtime.manifest().get(function).map(|f| &f.trigger) {
-        Some(fireemu_core_functions::manifest::Trigger::Http {
+        Some(Trigger::Http {
             callable: true,
             consume_app_check_token,
             ..
-        }) => Some(*consume_app_check_token),
-        _ => None,
+        }) => matches!(
+            consume_app_check_token,
+            ConsumeAppCheckToken::Enabled | ConsumeAppCheckToken::Undetermined
+        ),
+        Some(Trigger::Http {
+            callable: false,
+            consume_app_check_token: ConsumeAppCheckToken::Enabled,
+            ..
+        }) => true,
+        _ => false,
     }
 }
 
@@ -1013,13 +1021,9 @@ fn sanitize_credentials(
     raw: &hyper::HeaderMap,
     headers: Vec<(String, String)>,
 ) -> Result<Vec<(String, String)>, ProxiedResponse> {
-    use fireemu_core_functions::manifest::ConsumeAppCheckToken;
     // An unobserved value counts as consuming. With the trusted protocol startup already
     // refuses it, so there that half only matters for a runtime assembled without that check.
-    let may_consume = matches!(
-        callable_consumption(runtime, function),
-        Some(ConsumeAppCheckToken::Enabled | ConsumeAppCheckToken::Undetermined)
-    );
+    let may_consume = may_consume_app_check(runtime, function);
     let (Some(trust), Some(enforce_app_check)) = (
         runtime.callable_trust(),
         runtime.callable_enforces_app_check(function),

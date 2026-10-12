@@ -715,7 +715,6 @@ async fn start_consuming_as(
         trusted,
         vec![
             ("FIREEMU_FAKE_CONSUME".to_owned(), consume.to_owned()),
-            ("FIREEMU_FAKE_ECHO_CONSUME".to_owned(), "enabled".to_owned()),
             (
                 "FIREEMU_FAKE_GUARDED_ENFORCE".to_owned(),
                 enforce.to_string(),
@@ -2189,7 +2188,7 @@ async fn without_app_check_a_token_consuming_callable_runs_without_the_token() {
                     vec!["whatever".to_owned()]
                 );
                 // An onRequest function owns its own App Check handling and keeps the raw
-                // field, even when a manifest gives it the callable-only option.
+                // field.
                 let (status, body) = h.call("echo", &[("x-firebase-appcheck", "whatever")]).await;
                 assert_eq!(status, 200, "{case}: {body}");
                 assert_eq!(
@@ -2408,6 +2407,48 @@ mod without_app_check_token {
                 .filter(|(k, _)| !k.eq_ignore_ascii_case("x-firebase-appcheck"))
                 .collect();
             prop_assert_eq!(kept, expected);
+        }
+    }
+}
+
+/// An onRequest route whose served `consumeAppCheckToken` is `enabled` is one that startup
+/// found to front a token-consuming callable in the code (a configured manifest called it
+/// onRequest, review 2 M1): the runner still calls the onCall wrapper there, so the field is
+/// removed in both modes. Any other value on an onRequest route means nothing, and the raw
+/// field passes.
+#[tokio::test]
+async fn an_on_request_route_that_fronts_a_consuming_callable_loses_the_token() {
+    for trusted in [false, true] {
+        for (echo_consume, stripped) in [
+            ("enabled", true),
+            ("undetermined", false),
+            ("disabled", false),
+        ] {
+            let h = start_with_env(
+                trusted,
+                vec![(
+                    "FIREEMU_FAKE_ECHO_CONSUME".to_owned(),
+                    echo_consume.to_owned(),
+                )],
+                fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+                false,
+            )
+            .await;
+            let (status, body) = h
+                .call(
+                    "echo",
+                    &[("x-firebase-appcheck", "whatever"), ("x-custom", "kept")],
+                )
+                .await;
+            let case = format!("trusted={trusted} echo={echo_consume}");
+            assert_eq!(status, 200, "{case}: {body}");
+            assert_eq!(
+                echoed(&body, "x-firebase-appcheck").is_empty(),
+                stripped,
+                "{case}: {body}"
+            );
+            assert_eq!(echoed(&body, "x-custom"), vec!["kept".to_owned()]);
+            h.stop().await;
         }
     }
 }

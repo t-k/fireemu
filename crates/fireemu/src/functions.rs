@@ -3088,6 +3088,7 @@ async fn start_codebase(
             check_manifest_agrees_on_blocking_auth(&manifest, &discovered)?;
             if callable_trusted_protocol {
                 check_manifest_agrees_on_callables(&manifest, &discovered)?;
+                clear_on_request_consumption(&mut manifest);
             } else {
                 for warning in reconcile_consumption_without_app_check(&mut manifest, &discovered) {
                     eprintln!("warning: {warning}");
@@ -3773,6 +3774,12 @@ fn check_callable_app_check(
 ///   claim and takes what the code declares;
 /// - an explicit value that differs from the code is served as `Enabled`, whichever side said
 ///   `true`, and is reported.
+///
+/// A configured onRequest function keeps its routing, but if the code exports a callable under
+/// that name that consumes tokens or could not be observed, the runner still calls that
+/// callable's wrapper: the route is served with `Enabled`, which makes the proxy remove the
+/// token, and is reported. Every other configured onRequest route is served with
+/// `Undetermined`, which the proxy ignores on an onRequest route, whatever the manifest wrote.
 fn reconcile_consumption_without_app_check(
     configured: &mut fireemu_core_functions::manifest::FunctionManifest,
     discovered: &fireemu_core_functions::manifest::FunctionManifest,
@@ -3781,14 +3788,14 @@ fn reconcile_consumption_without_app_check(
     let mut warnings = Vec::new();
     for f in &mut configured.functions {
         let Trigger::Http {
-            callable: true,
+            callable,
             consume_app_check_token: configured_value,
             ..
         } = &mut f.trigger
         else {
             continue;
         };
-        let Some(code_value) = discovered
+        let code_value = discovered
             .functions
             .iter()
             .find(|d| d.name == f.name)
@@ -3799,8 +3806,28 @@ fn reconcile_consumption_without_app_check(
                     ..
                 } => Some(consume_app_check_token),
                 _ => None,
-            })
-        else {
+            });
+        if !*callable {
+            // The route stays onRequest, but the runner still calls the onCall wrapper the code
+            // exports under this name. `Enabled` on an onRequest route tells the proxy to
+            // remove the token; any other value there means nothing.
+            *configured_value = ConsumeAppCheckToken::Undetermined;
+            if let Some(
+                code_value @ (ConsumeAppCheckToken::Enabled | ConsumeAppCheckToken::Undetermined),
+            ) = code_value
+            {
+                warnings.push(format!(
+                    "the configured functions manifest serves {:?} as an onRequest function, but \
+                     the code declares a callable whose consumeAppCheckToken is {:?}; \
+                     X-Firebase-AppCheck is removed before it",
+                    f.name,
+                    code_value.as_str()
+                ));
+                *configured_value = ConsumeAppCheckToken::Enabled;
+            }
+            continue;
+        }
+        let Some(code_value) = code_value else {
             continue;
         };
         if *configured_value == code_value {
@@ -3821,6 +3848,24 @@ fn reconcile_consumption_without_app_check(
         *configured_value = ConsumeAppCheckToken::Enabled;
     }
     warnings
+}
+
+/// Serves every onRequest route of a configured manifest with `Undetermined`, which the proxy
+/// ignores there: only [`reconcile_consumption_without_app_check`] may mark an onRequest route
+/// as fronting a token-consuming callable. Used with App Check, where a manifest that calls a
+/// code-level callable onRequest is already refused.
+fn clear_on_request_consumption(manifest: &mut fireemu_core_functions::manifest::FunctionManifest) {
+    use fireemu_core_functions::manifest::{ConsumeAppCheckToken, Trigger};
+    for f in &mut manifest.functions {
+        if let Trigger::Http {
+            callable: false,
+            consume_app_check_token,
+            ..
+        } = &mut f.trigger
+        {
+            *consume_app_check_token = ConsumeAppCheckToken::Undetermined;
+        }
+    }
 }
 
 /// The startup note for the callables whose App Check token is not passed through as in
@@ -5770,13 +5815,14 @@ mod tests {
     use super::{
         blocking_auth_io_failure, blocking_auth_read_response, blocking_auth_response_failure,
         blocking_auth_write_request, changed_source_stamp, check_callable_app_check,
-        consume_app_check_note, function_pubsub_resources, functions_source_stamp,
-        functions_source_stamp_with_charge, functions_source_stamp_with_file_version,
-        hash_source_file, hash_source_stamp_entry, load_user_environment, node_engine_matches,
-        owned_pubsub_topic, package_node_engine, parse_node_version,
-        provision_function_pubsub_resources, reconcile_consumption_without_app_check,
-        select_node_installation, snapshot_functions_source, source_scan_pacing_delay,
-        source_scan_retry_delay, storage_trigger_buckets, stream_source_chunks, update_watch_hash,
+        clear_on_request_consumption, consume_app_check_note, function_pubsub_resources,
+        functions_source_stamp, functions_source_stamp_with_charge,
+        functions_source_stamp_with_file_version, hash_source_file, hash_source_stamp_entry,
+        load_user_environment, node_engine_matches, owned_pubsub_topic, package_node_engine,
+        parse_node_version, provision_function_pubsub_resources,
+        reconcile_consumption_without_app_check, select_node_installation,
+        snapshot_functions_source, source_scan_pacing_delay, source_scan_retry_delay,
+        storage_trigger_buckets, stream_source_chunks, update_watch_hash,
         validate_functions_codebase_budget, wait_for_fixed_inspector_port_release,
         warn_reload_once, BlockingAuthBridge, FunctionsSourceByteBudget,
         FunctionsSourceEntryBudget, FunctionsSourceFileVersion, FunctionsSourceScanBudget,
@@ -6676,6 +6722,111 @@ mod tests {
                 "{profile}"
             );
             assert_eq!(served("add"), ConsumeAppCheckToken::Disabled, "{profile}");
+            runtime.shutdown().await;
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Review 2 M1 end to end: without App Check, a configured manifest that calls a
+    /// token-consuming (or unobserved) code-level callable an onRequest function still loads,
+    /// and the token never reaches the runner, which would call the onCall wrapper anyway. A
+    /// non-consuming callable configured the same way keeps receiving the field.
+    #[tokio::test]
+    async fn without_app_check_a_callable_configured_as_on_request_never_gets_the_token() {
+        use fireemu_adapter_grpc::gateway::Gateway;
+        use fireemu_adapter_grpc::local::LocalBackend;
+        use fireemu_core_firestore::index::{IndexSet, PlanningContext};
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let dir =
+            std::env::temp_dir().join(format!("fireemu-consume-on-request-{}", std::process::id()));
+        let source = dir.join("src");
+        std::fs::create_dir_all(&source).unwrap();
+        let manifest_path = dir.join("manifest.json");
+        std::fs::write(
+            &manifest_path,
+            json!({"functions": [
+                {"name": "guarded", "trigger": {"type": "http", "callable": false}},
+                {"name": "add", "trigger": {"type": "http", "callable": false}},
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let hosts = super::EmulatorHosts {
+            firestore: None,
+            auth: None,
+            storage: None,
+            functions: None,
+            eventarc: None,
+            tasks: None,
+            logging: None,
+            pubsub: None,
+            hub: None,
+        };
+        for consume in ["enabled", "undetermined"] {
+            let mut cfg = crate::config::RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1, "profile": "emulator"
+            }))
+            .unwrap();
+            cfg.functions_source = Some(source.display().to_string());
+            cfg.functions_runner = Some(vec![
+                "env".to_owned(),
+                format!("FIREEMU_FAKE_CONSUME={consume}"),
+                "FIREEMU_FAKE_GUARDED_ENFORCE=false".to_owned(),
+                "python3".to_owned(),
+                script.display().to_string(),
+            ]);
+            cfg.functions_manifest = Some(manifest_path.display().to_string());
+            let clock = Arc::new(Mutex::new(VirtualClock::new(cfg.clock_start)));
+            let backend = Arc::new(LocalBackend::new(
+                Gateway {
+                    ctx: PlanningContext {
+                        edition: cfg.edition,
+                        api_mode: cfg.api_mode,
+                        policy: cfg.index_policy,
+                    },
+                    indexes: IndexSet::default(),
+                    enforce_limits: cfg.enforce_limits,
+                },
+                clock.clone(),
+                cfg.seed,
+            ));
+            let runtime = super::start(&cfg, &clock, &backend, &hosts, "test-secret", false)
+                .await
+                .expect("the codebase loads");
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(fireemu_adapter_functions::http::serve_functions(
+                listener,
+                runtime.clone(),
+                fireemu_adapter_functions::http::HttpAdmission::new(),
+            ));
+            let project = runtime.project().to_owned();
+            for (function, stripped) in [("guarded", true), ("add", false)] {
+                let body = br#"{"data":{}}"#;
+                let request = format!(
+                    "POST /{project}/us-central1/{function} HTTP/1.1\r\nhost: {addr}\r\nx-firebase-appcheck: token\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+                stream.write_all(request.as_bytes()).await.unwrap();
+                stream.write_all(body).await.unwrap();
+                let mut raw = Vec::new();
+                stream.read_to_end(&mut raw).await.unwrap();
+                let response = fireemu_adapter_functions::http::parse_response(&raw, "POST")
+                    .expect("a well-formed response");
+                assert_eq!(response.status, 200, "{consume} {function}");
+                let echoed: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+                let forwarded = echoed["headers"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|field| field[0] == "x-firebase-appcheck");
+                assert_eq!(!forwarded, stripped, "{consume} {function}: {echoed}");
+            }
+            server.abort();
             runtime.shutdown().await;
         }
         std::fs::remove_dir_all(dir).unwrap();
@@ -11577,6 +11728,122 @@ mod tests {
         .expect("the fixture manifest parses");
         assert!(reconcile_consumption_without_app_check(&mut serving, &on_request).is_empty());
         assert_eq!(served(&serving), ConsumeAppCheckToken::Disabled);
+    }
+
+    /// With App Check a configured onRequest route can never be marked as fronting a consuming
+    /// callable (startup refuses that manifest), so whatever it wrote is cleared; callables keep
+    /// their value.
+    #[test]
+    fn with_app_check_configured_on_request_routes_are_cleared() {
+        use fireemu_core_functions::manifest::{ConsumeAppCheckToken, Trigger};
+        let mut m = parse_manifest(&json!({"functions": [
+            {"name": "route", "trigger": {"type": "http", "callable": false, "consumeAppCheckToken": "enabled"}},
+            {"name": "call", "trigger": {"type": "http", "callable": true, "consumeAppCheckToken": "enabled"}},
+        ]}))
+        .expect("the fixture manifest parses");
+        clear_on_request_consumption(&mut m);
+        let values: Vec<ConsumeAppCheckToken> = m
+            .functions
+            .iter()
+            .map(|f| match f.trigger {
+                Trigger::Http {
+                    consume_app_check_token,
+                    ..
+                } => consume_app_check_token,
+                _ => panic!("HTTP fixtures"),
+            })
+            .collect();
+        assert_eq!(
+            values,
+            vec![
+                ConsumeAppCheckToken::Undetermined,
+                ConsumeAppCheckToken::Enabled
+            ]
+        );
+    }
+
+    /// Review 2 M1: a configured manifest that calls a code-level callable an onRequest function
+    /// keeps its routing, but when that callable consumes tokens or could not be observed, the
+    /// route is marked `Enabled` so the proxy removes the token, with a warning. Any other
+    /// onRequest route is marked `Undetermined`, which the proxy ignores, whatever the manifest
+    /// wrote.
+    #[test]
+    fn without_app_check_an_on_request_route_for_a_consuming_callable_is_marked() {
+        use fireemu_core_functions::manifest::{ConsumeAppCheckToken, Trigger};
+        let on_request = |consume: Option<&str>| {
+            let mut trigger = json!({"type": "http", "callable": false});
+            if let Some(consume) = consume {
+                trigger["consumeAppCheckToken"] = json!(consume);
+            }
+            parse_manifest(&json!({"functions": [{"name": "guarded", "trigger": trigger}]}))
+                .expect("the fixture manifest parses")
+        };
+        let served =
+            |m: &fireemu_core_functions::manifest::FunctionManifest| match m.functions[0].trigger {
+                Trigger::Http {
+                    callable: false,
+                    consume_app_check_token,
+                    ..
+                } => consume_app_check_token,
+                _ => panic!("the route stays onRequest"),
+            };
+        for (configured, code, expected, warns) in [
+            (
+                None,
+                manifest(Some("enabled")),
+                ConsumeAppCheckToken::Enabled,
+                true,
+            ),
+            (
+                None,
+                manifest(Some("undetermined")),
+                ConsumeAppCheckToken::Enabled,
+                true,
+            ),
+            (
+                Some("disabled"),
+                manifest(Some("enabled")),
+                ConsumeAppCheckToken::Enabled,
+                true,
+            ),
+            (
+                None,
+                manifest(Some("disabled")),
+                ConsumeAppCheckToken::Undetermined,
+                false,
+            ),
+            (
+                Some("enabled"),
+                manifest(Some("disabled")),
+                ConsumeAppCheckToken::Undetermined,
+                false,
+            ),
+            (
+                Some("enabled"),
+                on_request(None),
+                ConsumeAppCheckToken::Undetermined,
+                false,
+            ),
+            (
+                Some("enabled"),
+                parse_manifest(&json!({"functions": []})).unwrap(),
+                ConsumeAppCheckToken::Undetermined,
+                false,
+            ),
+        ] {
+            let mut serving = on_request(configured);
+            let warnings = reconcile_consumption_without_app_check(&mut serving, &code);
+            let case = format!(
+                "configured={configured:?} code={:?}",
+                code.functions.first().map(|f| &f.trigger)
+            );
+            assert_eq!(served(&serving), expected, "{case}");
+            assert_eq!(warnings.len(), usize::from(warns), "{case}: {warnings:?}");
+            if warns {
+                assert!(warnings[0].contains("onRequest"), "{warnings:?}");
+                assert!(warnings[0].contains("X-Firebase-AppCheck"), "{warnings:?}");
+            }
+        }
     }
 
     /// Without App Check, an undetermined callable is named too, and an enforcing one is said to

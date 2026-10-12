@@ -72,6 +72,7 @@ struct BoundStartup {
 
 struct ServiceAssembly {
     listen_expiry: fireemu_adapter_grpc::rules::ListenExpiry,
+    denial_log: Option<fireemu_core_rules::denial::DenialLog>,
     cfg: RuntimeConfig,
     config_origin: String,
     only: Selection,
@@ -585,6 +586,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     }
     // The client only sees production's (or the official emulator's) refusal, which does not
     // say how to load rules.
+    let denial_log = (!quiet && cfg.rules_denial_log).then(denial_line_writer);
     if !quiet {
         storage_rules
             .registry
@@ -592,14 +594,10 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                 |event| eprintln!("{}", storage_no_rules_warning(event)),
             )));
         // The client sees production's 403, which does not say which rule refused.
-        if cfg.rules_denial_log {
+        if let Some(log) = &denial_log {
             storage_rules
                 .registry
-                .set_denial_log(fireemu_adapter_http::storage::StorageDenialLog(Arc::new(
-                    |denial| {
-                        eprintln!("note: {}", denial.summary());
-                    },
-                )));
+                .set_denial_log(fireemu_adapter_http::storage::StorageDenialLog(log.clone()));
         }
     }
     // The buckets the deployed Storage triggers name exist for the strict profile, as in production.
@@ -851,6 +849,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     ));
     Ok(ServiceAssembly {
         listen_expiry,
+        denial_log,
         log_bus,
         cfg,
         config_origin,
@@ -961,6 +960,39 @@ fn storage_no_rules_warning(event: NoticeEvent<'_>) -> String {
     )
 }
 
+/// How many denial lines wait for stderr before further ones are dropped.
+const DENIAL_LINE_QUEUE: usize = 1024;
+
+/// The denial log of `rules.denialLog`: each denial is formatted where it is decided, which
+/// can be under a database or store lock, and written to stderr by a thread of its own, so a
+/// stderr nobody reads never blocks a request. Past [`DENIAL_LINE_QUEUE`] waiting lines,
+/// further ones are dropped and counted, and the count is printed with the next line written.
+fn denial_line_writer() -> fireemu_core_rules::denial::DenialLog {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<String>(DENIAL_LINE_QUEUE);
+    let dropped = Arc::new(AtomicU64::new(0));
+    let counted = dropped.clone();
+    let spawned = std::thread::Builder::new()
+        .name("fireemu-denial-log".to_owned())
+        .spawn(move || {
+            for line in receiver {
+                let missed = counted.swap(0, Ordering::Relaxed);
+                if missed > 0 {
+                    eprintln!("note: {missed} Security Rules denial line(s) were dropped while stderr was not read");
+                }
+                eprintln!("note: {line}");
+            }
+        });
+    if spawned.is_err() {
+        return Arc::new(|_| {});
+    }
+    Arc::new(move |denial| {
+        if sender.try_send(denial.summary()).is_err() {
+            dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    })
+}
+
 /// The Firestore enforcer's settings that follow from the compatibility profile.
 fn firestore_profile_settings(
     enforcer: RulesEnforcer,
@@ -980,6 +1012,7 @@ fn firestore_profile_settings(
 fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySuite, String> {
     let ServiceAssembly {
         listen_expiry,
+        denial_log,
         log_bus,
         cfg,
         config_origin,
@@ -1176,12 +1209,9 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
             let enforcer = enforcer.with_no_ruleset_notice(Arc::new(|event| {
                 eprintln!("{}", firestore_no_rules_warning(event));
             }));
-            if cfg.rules_denial_log {
-                enforcer.with_denial_log(Arc::new(|denial| {
-                    eprintln!("note: {}", denial.summary());
-                }))
-            } else {
-                enforcer
+            match &denial_log {
+                Some(log) => enforcer.with_denial_log(log.clone()),
+                None => enforcer,
             }
         })
     });

@@ -442,6 +442,7 @@ async fn rest_call(
     let method = req.method().as_str().to_owned();
     let path = req.uri().path().to_owned();
     let query = req.uri().query().unwrap_or("").to_owned();
+    let remote_peer = req.extensions().get::<RemotePeer>().is_some();
     let authorization = header(&req, "authorization").map(str::to_owned);
     let browser_metadata =
         fireemu_core_session::loopback::carries_browser_metadata(|name| header(&req, name));
@@ -494,6 +495,7 @@ async fn rest_call(
             origin: origin.clone(),
             // The privileged emulator routes need to know whether a browser issued the request;
             // the set of fields that says so is the shared one.
+            remote_peer,
             browser_metadata,
             app_check,
             body,
@@ -879,11 +881,17 @@ fn channel_kind(path: &str) -> Option<StreamKind> {
     }
 }
 
-async fn accept_connection(listener: &TcpListener) -> std::io::Result<TcpStream> {
-    let (stream, _) = listener.accept().await?;
+/// Marks a request whose connection came from another host (its peer address is not loopback;
+/// an IPv4-mapped loopback address is loopback). Only a listener exposed with
+/// `network.allowNonLoopbackHosts` accepts one.
+#[derive(Clone, Copy, Debug)]
+struct RemotePeer;
+
+async fn accept_connection(listener: &TcpListener) -> std::io::Result<(TcpStream, bool)> {
+    let (stream, peer) = listener.accept().await?;
     // Streaming gRPC frames must not wait for a delayed ACK before flushing.
     stream.set_nodelay(true)?;
-    Ok(stream)
+    Ok((stream, !peer.ip().to_canonical().is_loopback()))
 }
 
 /// Serves gRPC, `WebChannel` and REST on `listener` until the task is aborted.
@@ -928,7 +936,7 @@ where
 {
     let hub = Arc::new(Hub::new(rest.clone()));
     loop {
-        let stream = accept_connection(&listener).await?;
+        let (stream, remote_peer) = accept_connection(&listener).await?;
         let grpc = grpc.clone();
         let rest = rest.clone();
         let hub = hub.clone();
@@ -937,7 +945,10 @@ where
                 stream,
                 DrainBounds::for_largest_body(MAX_REST_BODY_BYTES),
             ));
-            let svc = service_fn(move |req: Request<Incoming>| {
+            let svc = service_fn(move |mut req: Request<Incoming>| {
+                if remote_peer {
+                    req.extensions_mut().insert(RemotePeer);
+                }
                 let mut grpc = grpc.clone();
                 let rest = rest.clone();
                 let hub = hub.clone();
@@ -1070,7 +1081,8 @@ mod tests {
             .await
             .unwrap();
         let accepted = super::accept_connection(&listener).await.unwrap();
-        assert!(accepted.nodelay().unwrap());
+        assert!(accepted.0.nodelay().unwrap());
+        assert!(!accepted.1, "a loopback peer is not remote");
         drop(peer);
     }
 
@@ -1797,6 +1809,7 @@ mod tests {
                 query: String::new(),
                 authorization: None,
                 origin: None,
+                remote_peer: false,
                 browser_metadata: false,
                 app_check: Vec::new(),
                 body: serde_json::Value::Object(serde_json::Map::new()),
@@ -3237,6 +3250,7 @@ mod document_not_found_layout_tests {
             query: String::new(),
             authorization: None,
             origin: None,
+            remote_peer: false,
             browser_metadata: false,
             app_check: Vec::new(),
             body: serde_json::json!({}),

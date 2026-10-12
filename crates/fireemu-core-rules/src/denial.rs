@@ -95,10 +95,12 @@ fn outcome(value: &ExprValue) -> String {
             cause.span.column,
             excerpt(&cause.message)
         ),
+        // Only the type: a condition such as `request.auth.token.secret` would otherwise print a
+        // claim or document value into the log.
         ExprValue::Null => "null, not a boolean".to_owned(),
-        ExprValue::Int(i) => format!("{i}, not a boolean"),
-        ExprValue::Float(f) => format!("{f}, not a boolean"),
-        ExprValue::String(s) => format!("{:?}, not a boolean", excerpt(s)),
+        ExprValue::Int(_) => "an int, not a boolean".to_owned(),
+        ExprValue::Float(_) => "a float, not a boolean".to_owned(),
+        ExprValue::String(_) => "a string, not a boolean".to_owned(),
         ExprValue::Composite(kind) => format!("a {kind}, not a boolean"),
     }
 }
@@ -126,8 +128,10 @@ impl RulesDenial {
             || "no request.auth".to_owned(),
             |uid| format!("request.auth.uid {:?}", excerpt(uid)),
         );
+        // The path and the location come from the client: quoted (`{:?}` escapes control and
+        // format characters such as U+202E), they cannot pass for the line's own text.
         let mut line = format!(
-            "{}: Security Rules denied {} on {} in {} ({caller}): {}",
+            "{}: Security Rules denied {} on {:?} in {:?} ({caller}): {}",
             self.service,
             self.method,
             excerpt(&self.path),
@@ -203,7 +207,7 @@ mod tests {
         };
         assert_eq!(
             denial.summary(),
-            "firestore: Security Rules denied update on notes/n1 in database (default) (request.auth.uid \"bob\"): no allow statement evaluated to true; line 3:21 `request.auth.uid == resource.data.owner` was false; line 3:21 was an error at 4:4: Property owner is undefined on object."
+            "firestore: Security Rules denied update on \"notes/n1\" in \"database (default)\" (request.auth.uid \"bob\"): no allow statement evaluated to true; line 3:21 `request.auth.uid == resource.data.owner` was false; line 3:21 was an error at 4:4: Property owner is undefined on object."
         );
         let anonymous = RulesDenial {
             uid: None,
@@ -211,6 +215,16 @@ mod tests {
             ..denial
         };
         assert!(anonymous.summary().contains("(no request.auth)"));
+        // A client-chosen path cannot forge a condition or hide text behind a bidi override.
+        let forged = RulesDenial {
+            path: "x`; line 1:1 `true` was true\u{202e}".to_owned(),
+            ..anonymous
+        };
+        let summary = forged.summary();
+        assert!(
+            summary.contains("on \"x`; line 1:1 `true` was true\\u{202e}\" in"),
+            "{summary}"
+        );
     }
 
     #[test]
@@ -225,10 +239,15 @@ mod tests {
             Some(source),
         );
         assert_eq!(condition.outcome, "true, then false");
+        // A non-boolean value is named by its type, never printed: it can be a token claim.
         for (value, expected) in [
             (ExprValue::Null, "null, not a boolean"),
-            (ExprValue::Int(3), "3, not a boolean"),
-            (ExprValue::String("a".to_owned()), "\"a\", not a boolean"),
+            (ExprValue::Int(31_337), "an int, not a boolean"),
+            (ExprValue::Float(2.5), "a float, not a boolean"),
+            (
+                ExprValue::String("s3cr3t-claim".to_owned()),
+                "a string, not a boolean",
+            ),
             (ExprValue::Composite("map"), "a map, not a boolean"),
         ] {
             let condition = DeniedCondition::from_entry(

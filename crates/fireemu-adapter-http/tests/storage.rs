@@ -112,6 +112,7 @@ fn owned_req(
             .collect::<BTreeMap<_, _>>(),
         app_check: Vec::new(),
         body,
+        remote_peer: false,
     }
 }
 
@@ -9200,5 +9201,45 @@ fn resumable_offsets_and_308_checksums_differ_between_the_profiles() {
             strict,
             "{acceptance:?}"
         );
+    }
+}
+
+/// With `network.allowNonLoopbackHosts` a peer on another host can reach the Storage port;
+/// `PUT /internal/setRules`, which replaces the rules of every bucket, refuses it (owner
+/// decision 2026-10-13), and the same request from a loopback peer is admitted.
+#[test]
+fn set_rules_refuses_a_remote_peer() {
+    const DENY_ALL: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if false; } } }";
+    const ALLOW_ALL: &str = ALLOW_ALL_RULES;
+    let rules =
+        serde_json::json!({"rules": {"files": [{"name": "storage.rules", "content": ALLOW_ALL}]}})
+            .to_string()
+            .into_bytes();
+    for remote_peer in [true, false] {
+        let s = state(Some(DENY_ALL));
+        let mut request = owned_req(
+            "PUT",
+            "/internal/setRules",
+            &[("content-type", "application/json")],
+            rules.clone(),
+        );
+        request.remote_peer = remote_peer;
+        let response = handle(&s, request);
+        if remote_peer {
+            assert_eq!(response.status, 403);
+            assert!(
+                String::from_utf8_lossy(&response.body).contains("loopback peers only"),
+                "{}",
+                String::from_utf8_lossy(&response.body)
+            );
+            assert_eq!(anonymous_multipart_upload(&s, "after.txt").status, 403);
+        } else {
+            assert_eq!(
+                response.status,
+                200,
+                "{}",
+                String::from_utf8_lossy(&response.body)
+            );
+        }
     }
 }

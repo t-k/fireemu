@@ -91,6 +91,7 @@ impl Harness {
                     .collect::<BTreeMap<_, _>>(),
                 app_check: app_check.iter().map(|v| (*v).to_owned()).collect(),
                 body: body.to_vec(),
+                remote_peer: false,
             },
         )
     }

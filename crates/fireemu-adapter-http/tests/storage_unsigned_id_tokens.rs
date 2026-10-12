@@ -96,6 +96,7 @@ fn read(s: &StorageState, owner: &str, authorization: &str) -> (u16, Vec<u8>) {
             headers: BTreeMap::from([("authorization".to_owned(), authorization.to_owned())]),
             app_check: Vec::new(),
             body: Vec::new(),
+            remote_peer: false,
         },
     );
     (response.status, response.body.to_vec())

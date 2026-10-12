@@ -404,34 +404,59 @@ fn publish_into_mount_point_with(
         let path = target.join(name);
         path != stage && path != displaced
     };
-    let result =
-        move_entries(target, &displaced, current, false, rename, &mut moved_out).and_then(|()| {
-            let mut moved_in = Vec::new();
-            move_entries(stage, target, |_| true, true, rename, &mut moved_in).inspect_err(|_| {
-                for name in moved_in.iter().rev() {
-                    let _ = std::fs::rename(target.join(name), stage.join(name));
-                }
-            })
-        });
+    let mut moved_in: Vec<std::ffi::OsString> = Vec::new();
+    let result = move_entries(target, &displaced, current, false, rename, &mut moved_out)
+        .and_then(|()| move_entries(stage, target, |_| true, true, rename, &mut moved_in));
     if let Err(error) = result {
-        let mut restored = true;
-        for name in moved_out.iter().rev() {
-            restored &= std::fs::rename(displaced.join(name), target.join(name)).is_ok();
-        }
-        if restored {
-            let _ = std::fs::remove_dir(&displaced);
-            return Err(format!(
-                "publication into the mount point failed ({error}); the prior export was restored"
-            ));
-        }
-        return Err(format!(
-            "publication into the mount point failed ({error}), and the prior export could not be restored; it is in {}",
-            displaced.display()
+        return Err(roll_back(
+            stage, target, &displaced, &moved_in, &moved_out, rename, &error,
         ));
     }
+    // The new export is in place; a displaced tree that cannot be removed now is a publication
+    // entry, which the next export moves out and removes with the rest.
     let _ = std::fs::remove_dir(stage);
-    std::fs::remove_dir_all(&displaced)
-        .map_err(|error| format!("cannot remove the displaced export: {error}"))
+    let _ = std::fs::remove_dir_all(&displaced);
+    Ok(())
+}
+
+/// Undoes a failed publication into a mount point and words the refusal. The new entries go back
+/// to the stage, then the old ones to the target, the old manifest last and only once every
+/// other entry is back: a target whose rollback fails part-way holds no manifest, so an import
+/// refuses it rather than reading a mixture of the two exports.
+#[cfg(unix)]
+fn roll_back(
+    stage: &Path,
+    target: &Path,
+    displaced: &Path,
+    moved_in: &[std::ffi::OsString],
+    moved_out: &[std::ffi::OsString],
+    rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>,
+    error: &str,
+) -> String {
+    let mut restored = true;
+    for name in moved_in.iter().rev() {
+        restored &= rename(&target.join(name), &stage.join(name)).is_ok();
+    }
+    let (manifest, data): (Vec<_>, Vec<_>) =
+        moved_out.iter().partition(|name| *name == MANIFEST_NAME);
+    for name in data {
+        restored &= rename(&displaced.join(name), &target.join(name)).is_ok();
+    }
+    if restored {
+        for name in manifest {
+            restored &= rename(&displaced.join(name), &target.join(name)).is_ok();
+        }
+    }
+    if restored {
+        let _ = std::fs::remove_dir(displaced);
+        return format!(
+            "publication into the mount point failed ({error}); the prior export was restored"
+        );
+    }
+    format!(
+        "publication into the mount point failed ({error}), and the prior export could not be restored; it is in {}, and the export directory holds no {MANIFEST_NAME}",
+        displaced.display()
+    )
 }
 
 /// Renames every entry of `from` that `keep` selects into `to`, the manifest last when
@@ -897,12 +922,16 @@ mod mount_point_tests {
             Killed(usize),
             /// Rename number `n` fails: publication rolls back.
             Fails(usize),
+            /// Rename number `n` fails, and so does the later rename `n + 1 + m`, one the
+            /// rollback makes.
+            FailsTwice(usize, usize),
         }
 
         fn interruption() -> impl Strategy<Value = Interruption> {
             prop_oneof![
                 (0usize..12).prop_map(Interruption::Killed),
                 (0usize..12).prop_map(Interruption::Fails),
+                (0usize..12, 0usize..12).prop_map(|(n, m)| Interruption::FailsTwice(n, m)),
             ]
         }
 
@@ -933,8 +962,11 @@ mod mount_point_tests {
                     calls.set(call + 1);
                     match interruption {
                         Interruption::Killed(n) if call == n => panic!("killed"),
-                        Interruption::Fails(n) if call == n => {
+                        Interruption::Fails(n) | Interruption::FailsTwice(n, _) if call == n => {
                             Err(std::io::Error::other("injected"))
+                        }
+                        Interruption::FailsTwice(n, m) if call == n + 1 + m => {
+                            Err(std::io::Error::other("injected in the rollback"))
                         }
                         _ => std::fs::rename(from, to),
                     }
@@ -957,6 +989,18 @@ mod mount_point_tests {
                         prop_assert!(error.contains("the prior export was restored"), "{}", error);
                         prop_assert_eq!(&after, &old);
                         prop_assert_eq!(&contents(&stage), &new);
+                    }
+                    (Interruption::FailsTwice(n, _), Ok(Err(error))) => {
+                        prop_assert!(n < renames);
+                        // Restored or not, a target with a manifest is one whole export.
+                        if after.contains_key(MANIFEST) {
+                            prop_assert!(after == old || after == new, "{:?}", after);
+                        }
+                        if error.contains("the prior export was restored") {
+                            prop_assert_eq!(&after, &old);
+                        } else {
+                            prop_assert!(!after.contains_key(MANIFEST), "{}", error);
+                        }
                     }
                     (Interruption::Killed(n), Err(_)) => {
                         prop_assert!(n < renames);

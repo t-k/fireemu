@@ -369,6 +369,7 @@ impl Harness {
             body,
             batch_field_order: Vec::new(),
             origin: None,
+            remote_peer: false,
             browser_metadata: false,
         });
         (r.status, r.body)

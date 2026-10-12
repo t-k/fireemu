@@ -878,6 +878,10 @@ pub struct StorageRequest {
     pub app_check: Vec<String>,
     /// Body.
     pub body: Vec<u8>,
+    /// Whether the connection's peer is on another host (its address is not loopback). The
+    /// privileged `PUT /internal/setRules` refuses such a peer, which only reaches the listener
+    /// when `network.allowNonLoopbackHosts` exposed it.
+    pub remote_peer: bool,
 }
 
 impl StorageRequest {
@@ -1162,6 +1166,12 @@ pub const MAX_SET_RULES_BODY_BYTES: usize = crate::server::MAX_BODY_BYTES;
 /// which attaches `sec-fetch-mode: cors` and nothing else a browser would; that header alone
 /// is therefore not browser evidence (see the doc comment on the header set).
 fn set_rules_browser_guard(state: &StorageState, req: &StorageRequest) -> Option<StorageResponse> {
+    if req.remote_peer {
+        return Some(StorageResponse::json(
+            403,
+            &json!({"message": "this route answers loopback peers only: network.allowNonLoopbackHosts exposes the emulators, not rule loading"}),
+        ));
+    }
     let presented = req
         .header("authorization")
         .and_then(|a| a.strip_prefix("Bearer "))

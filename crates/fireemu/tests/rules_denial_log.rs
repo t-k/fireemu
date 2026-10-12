@@ -207,7 +207,7 @@ fn a_denied_request_is_printed_with_the_condition_that_refused_it() {
         .find(|l| l.contains("Security Rules denied"))
         .unwrap_or_else(|| panic!("no denial line: {stderr}"));
     assert!(
-        line.starts_with("note: firestore: Security Rules denied get on notes/n1 in database (default) (no request.auth): no allow statement evaluated to true; line 5:"),
+        line.starts_with("note: firestore: Security Rules denied get on \"notes/n1\" in \"database (default)\" (no request.auth): no allow statement evaluated to true; line 5:"),
         "{line}"
     );
     assert!(
@@ -247,7 +247,7 @@ fn a_denied_storage_request_is_printed_with_the_condition_that_refused_it() {
         .find(|l| l.contains("storage: Security Rules denied"))
         .unwrap_or_else(|| panic!("no denial line: {stderr}"));
     assert!(
-        line.starts_with(&format!("note: storage: Security Rules denied get on private/a.txt in bucket {bucket} (no request.auth): no allow statement evaluated to true; line 5:")),
+        line.starts_with(&format!("note: storage: Security Rules denied get on \"private/a.txt\" in \"bucket {bucket}\" (no request.auth): no allow statement evaluated to true; line 5:")),
         "{line}"
     );
     assert!(line.contains("`request.auth != null` was false"), "{line}");

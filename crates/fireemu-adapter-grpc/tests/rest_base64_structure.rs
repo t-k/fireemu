@@ -48,6 +48,7 @@ fn call(state: &RestState, method: &str, path: &str, body: Value) -> RestRespons
         query: String::new(),
         authorization: Some("Bearer owner".to_owned()),
         origin: None,
+        remote_peer: false,
         browser_metadata: false,
         app_check: Vec::new(),
         body,

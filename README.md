@@ -229,7 +229,7 @@ The answers keep production's wording, which does not mention Fireemu. The start
 A Security Rules denial is answered with production's wording (Firestore's `PERMISSION_DENIED` "Missing or insufficient permissions.", Storage's 403), which does not say which rule refused. Fireemu therefore prints each denial of an end-user request to standard error, with every `allow` condition the request evaluated and what it evaluated to:
 
 ```text
-note: firestore: Security Rules denied get on notes/n1 in database (default) (request.auth.uid "bob"): no allow statement evaluated to true; line 5:22 `request.auth.uid == resource.data.owner` was false
+note: firestore: Security Rules denied get on "notes/n1" in "database (default)" (request.auth.uid "bob"): no allow statement evaluated to true; line 5:22 `request.auth.uid == resource.data.owner` was false
 ```
 
 - Set `rules.denialLog` to `"off"` in `fireemu.json` to silence these lines (for example in a suite that asserts many denials). The answer to the client is the same either way.
@@ -583,9 +583,11 @@ By default every listener is on loopback, which a published container port canno
 { "emulators": { "firestore": { "host": "0.0.0.0", "port": 8080 }, "auth": { "host": "0.0.0.0", "port": 9099 } } }
 ```
 
-- Only Firestore, Auth, Storage, Functions, Eventarc, Cloud Tasks and Pub/Sub may listen off loopback. The Hub, the UI and the Logging emulator stay on loopback.
-- The emulators serve without a credential, so the start prints a `warning:` line for each listener off loopback. Publish the ports only to a network you trust.
-- The control API (`/v1/` and `/health/` on the Auth port) answers loopback peers only and returns 403 to any other peer. Run the commands that use it (`fireemu/testing`, `fireemu exec`, the UI) inside the container. The official routes that `@firebase/rules-unit-testing` calls (loading rules, clearing Firestore data) stay reachable as on the official emulator.
+- Only Firestore, Auth, Storage, Functions, Eventarc, Cloud Tasks and Pub/Sub may listen off loopback. The Hub, the UI and the Logging emulator stay on loopback. Auth, whose port also serves the control API, listens on loopback or on every interface (`0.0.0.0` or `::`), not on one other address.
+- The emulators serve without a credential, so the start prints a `warning:` line for each listener off loopback. Any client that reaches a published port can do what a local client can on the product APIs, including the Admin SDK's `Bearer owner` credential and the Auth emulator's own routes. Publish the ports only to a network you trust.
+- Fireemu's own controls answer loopback peers only and return 403 to any other peer: the control API (`/v1/` and `/health/` on the Auth port), App Check debug-token management, and the routes that load Security Rules or clear Firestore data (what `@firebase/rules-unit-testing`'s `loadFirestoreRules`, `loadStorageRules` and `clearFirestore` call). Run the code that uses them in the emulator's network namespace: inside the container, or in a container that shares it (a Podman pod, `--network container:<name>`).
+- Because a forwarder inside that namespace (`kubectl port-forward`, a sidecar proxy) connects from loopback, every control API request also needs `Authorization: Bearer <control token>` once the option is on, from a process as from a page; only `/health/` is exempt. `fireemu exec` gives its command the token in `FIREEMU_CONTROL_TOKEN`, and `fireemu/testing` and the UI send it.
+- Browser pages must still come from a loopback origin (`http://localhost:...`), so a page served from another host cannot use the exposed ports.
 - A listener on `0.0.0.0` or `::` is advertised as `127.0.0.1` or `::1` in the environment and the Hub, as the official CLI does.
 
 ### Changes between versions

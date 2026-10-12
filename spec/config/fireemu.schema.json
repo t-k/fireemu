@@ -60,7 +60,7 @@
         "allowNonLoopbackHosts": {
           "type": "boolean",
           "default": false,
-          "description": "Let emulators.<name>.host in firebase.json name a non-loopback IP address such as 0.0.0.0 or :: for the product emulators (firestore, auth, storage, functions, eventarc, tasks, pubsub), for example to publish them from a container. They serve without a credential, so every such listener is warned about at start. The Hub, the UI and the Logging emulator stay on loopback, and the control API (/v1/, /health/) answers loopback peers only."
+          "description": "Let emulators.<name>.host in firebase.json name a non-loopback IP address such as 0.0.0.0 or :: for the product emulators (firestore, auth, storage, functions, eventarc, tasks, pubsub), for example to publish them from a container. They serve without a credential, so every such listener is warned about at start. The Hub, the UI and the Logging emulator stay on loopback, and Auth, whose port serves the control API, binds loopback or every interface only. The control API (/v1/, /health/), App Check debug-token management and the routes that load Security Rules or clear Firestore data answer loopback peers only, and every control API request but /health/ then needs Authorization: Bearer <control token> (FIREEMU_CONTROL_TOKEN in a fireemu exec command)."
         }
       }
     },
@@ -1097,6 +1097,21 @@
                   }
                 }
               }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["profile"],
+        "properties": { "profile": { "const": "emulator" } }
+      },
+      "then": {
+        "properties": {
+          "firestore": {
+            "properties": {
+              "listenStreamLifetime": { "not": { "const": "oneHour" } }
             }
           }
         }

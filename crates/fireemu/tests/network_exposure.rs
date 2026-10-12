@@ -31,11 +31,43 @@ fn free_port() -> u16 {
 }
 
 fn http(host: IpAddr, port: u16, method: &str, path: &str, body: &str) -> (u16, String) {
-    try_http(host, port, method, path, body, Duration::from_secs(20))
-        .unwrap_or_else(|e| panic!("{method} {host}:{port}{path}: {e}"))
+    http_as("owner", host, port, method, path, body)
+}
+
+/// [`http`] with `Authorization: Bearer <bearer>`.
+fn http_as(
+    bearer: &str,
+    host: IpAddr,
+    port: u16,
+    method: &str,
+    path: &str,
+    body: &str,
+) -> (u16, String) {
+    try_http_as(
+        bearer,
+        host,
+        port,
+        method,
+        path,
+        body,
+        Duration::from_secs(20),
+    )
+    .unwrap_or_else(|e| panic!("{method} {host}:{port}{path}: {e}"))
 }
 
 fn try_http(
+    host: IpAddr,
+    port: u16,
+    method: &str,
+    path: &str,
+    body: &str,
+    timeout: Duration,
+) -> std::io::Result<(u16, String)> {
+    try_http_as("owner", host, port, method, path, body, timeout)
+}
+
+fn try_http_as(
+    bearer: &str,
     host: IpAddr,
     port: u16,
     method: &str,
@@ -47,7 +79,7 @@ fn try_http(
     stream.set_read_timeout(Some(timeout))?;
     write!(
         stream,
-        "{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAuthorization: Bearer owner\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAuthorization: Bearer {bearer}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )?;
     stream.flush()?;
@@ -76,7 +108,7 @@ struct Daemon {
     child: Child,
     hub_port: u16,
     transcript: Arc<Mutex<String>>,
-    _dir: TrustedTempDir,
+    dir: TrustedTempDir,
 }
 
 impl Daemon {
@@ -134,7 +166,7 @@ impl Daemon {
             child,
             hub_port,
             transcript: Arc::clone(&transcript),
-            _dir: dir,
+            dir,
         };
         let (tx, rx) = mpsc::channel::<()>();
         let collected = Arc::clone(&transcript);
@@ -191,6 +223,16 @@ impl Daemon {
     }
 }
 
+impl Daemon {
+    /// The run's control token, from the Hub locator in the daemon's `TMPDIR`.
+    fn control_token(&self) -> String {
+        let locator = self.dir.join(format!("hub-{PROJECT}.json"));
+        let locator: Value =
+            serde_json::from_str(&std::fs::read_to_string(locator).unwrap()).unwrap();
+        locator["fireemuControlToken"].as_str().unwrap().to_owned()
+    }
+}
+
 impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -244,7 +286,15 @@ fn the_emulators_answer_other_hosts_and_the_control_api_answers_loopback_only() 
     );
     assert_eq!(status, 200, "{body}");
     let (status, body) = http(loopback, auth_port, "GET", "/health/live", "");
-    assert_eq!(status, 200, "loopback reaches the control API: {body}");
+    assert_eq!(status, 200, "loopback reaches the health check: {body}");
+    // Exposed, the control API needs the token even from loopback: a forwarder in the
+    // namespace would connect from there.
+    let (status, body) = http(loopback, auth_port, "GET", "/v1/sessions", "");
+    assert_eq!(status, 403, "{body}");
+    assert!(body.contains("CONTROL_TOKEN_REQUIRED"), "{body}");
+    let token = daemon.control_token();
+    let (status, body) = http_as(&token, loopback, auth_port, "GET", "/v1/sessions", "");
+    assert_eq!(status, 200, "{body}");
 
     let Some(remote) = own_non_loopback_address() else {
         eprintln!("skipped: this host has no non-loopback address to connect from");
@@ -278,8 +328,24 @@ fn the_emulators_answer_other_hosts_and_the_control_api_answers_loopback_only() 
     );
     assert_eq!(status, 200, "Auth answers {remote}: {body}");
     for path in ["/health/live", "/v1/sessions", "/v1/sessions/default/reset"] {
-        let (status, body) = http(remote, auth_port, "POST", path, "{}");
+        let (status, body) = http_as(&token, remote, auth_port, "POST", path, "{}");
         assert_eq!(status, 403, "{path} from {remote}: {body}");
         assert!(body.contains("loopback peers only"), "{body}");
     }
+    // Neither the rules route nor the data clear is the emulators' to expose.
+    for (method, path) in [
+        (
+            "PUT",
+            format!("/emulator/v1/projects/{PROJECT}:securityRules"),
+        ),
+        (
+            "DELETE",
+            format!("/emulator/v1/projects/{PROJECT}/databases/(default)/documents"),
+        ),
+    ] {
+        let (status, body) = http(remote, firestore_port, method, &path, "{}");
+        assert_eq!(status, 403, "{method} {path} from {remote}: {body}");
+    }
+    let (status, _) = http(remote, firestore_port, "GET", &document, "");
+    assert_eq!(status, 200, "the data was not cleared");
 }

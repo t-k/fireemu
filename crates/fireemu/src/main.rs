@@ -3096,6 +3096,9 @@ fn control_state(
         control_token,
         barrier: Some(backend.barrier()),
         app_check,
+        // Exposed listeners can sit behind a forwarder that connects from loopback, so the peer
+        // address alone does not prove a local caller: every control request needs the token.
+        require_control_token: cfg.allow_non_loopback_hosts,
         firestore_listen_expiry: listen_expiry.map(|expiry| {
             Arc::new(move || expiry.expire()) as Arc<dyn Fn() -> usize + Send + Sync>
         }),

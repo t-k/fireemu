@@ -37,7 +37,7 @@ async fn respond(
         return Ok(finish(
             403,
             &serde_json::json!({
-                "error": "the control API answers loopback peers only (network.allowNonLoopbackHosts exposes the emulators, not the control API)"
+                "error": "this route answers loopback peers only: network.allowNonLoopbackHosts exposes the emulators, not the control API, rule loading, data clearing or App Check debug-token management"
             }),
             None,
             false,
@@ -374,11 +374,18 @@ fn with_cors(
     b
 }
 
-/// Whether a request is refused because it asks a remote peer's connection for the control
-/// API. `remote_peer` is a peer whose address is not loopback (an IPv4-mapped loopback address
-/// is loopback).
+/// Whether a request is refused because a remote peer asks for a privileged route: the control
+/// API, or App Check's debug-token management. `remote_peer` is a peer whose address is not
+/// loopback (an IPv4-mapped loopback address is loopback). App Check's token exchange and JWKS
+/// are product routes under `/v1/` and stay reachable.
 fn refuses_remote_control(remote_peer: bool, serves_control: bool, path: &str) -> bool {
-    remote_peer && serves_control && control::is_control_path(path)
+    if !remote_peer {
+        return false;
+    }
+    if crate::app_check::is_app_check_path(path) {
+        return crate::app_check::is_management_path(path);
+    }
+    serves_control && control::is_control_path(path)
 }
 
 /// Whether a connection from `peer` comes from another host.
@@ -460,8 +467,22 @@ mod tests {
             "/identitytoolkit.googleapis.com/v1/accounts:signUp",
             "/emulator/v1/projects/demo/accounts",
             "/",
+            // App Check's product routes are not control routes.
+            "/v1/jwks",
+            "/v1/projects/demo/apps/1:123:web:abc:exchangeDebugToken",
+            "/v1beta/jwks",
         ] {
             assert!(!refuses_remote_control(true, true, path), "{path}");
+        }
+        // App Check's debug-token management is refused to a remote peer, on any listener.
+        for path in [
+            "/emulator/v1/projects/demo/apps/1:123:web:abc/debugTokens",
+            "/emulator/v1/projects/demo/apps/1:123:web:abc/debugTokens/t1",
+            "/emulator/v1/projects/demo/apps/1:123:web:abc/debugTokens?x=1",
+        ] {
+            assert!(refuses_remote_control(true, true, path), "{path}");
+            assert!(refuses_remote_control(true, false, path), "{path}");
+            assert!(!refuses_remote_control(false, true, path), "{path}");
         }
     }
 

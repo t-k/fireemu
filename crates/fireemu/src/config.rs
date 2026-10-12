@@ -1900,6 +1900,11 @@ fn emulator_host(
         .and_then(|rest| rest.strip_suffix(']'))
         .unwrap_or(host);
     match bare.parse::<std::net::IpAddr>() {
+        // The control API shares the Auth port and answers loopback peers only, so Auth listens
+        // on loopback or on every interface, never on one other address alone.
+        Ok(address) if name == "auth" && !address.is_unspecified() => Err(ConfigError(format!(
+            "{key} {host:?}: the Auth port also serves the control API, which answers loopback peers only, so Auth listens on loopback or on every interface (0.0.0.0 or ::), not on one other address"
+        ))),
         Ok(std::net::IpAddr::V4(address)) => Ok(address.to_string()),
         Ok(std::net::IpAddr::V6(address)) => Ok(format!("[{address}]")),
         Err(_) => Err(ConfigError(format!(
@@ -5703,6 +5708,24 @@ mod tests {
     }
 
     #[test]
+    fn auth_listens_on_loopback_or_every_interface_only() {
+        for host in ["192.168.1.10", "fe80::1", "10.0.0.2"] {
+            let error = with_hosts(Some(true), &json!({"auth": {"host": host, "port": 9099}}))
+                .expect_err("one other address would cut loopback off the control API");
+            assert!(
+                error.0.contains("also serves the control API"),
+                "{host}: {error}"
+            );
+        }
+        for host in ["0.0.0.0", "::", "127.0.0.1"] {
+            assert!(
+                with_hosts(Some(true), &json!({"auth": {"host": host, "port": 9099}})).is_ok(),
+                "{host}"
+            );
+        }
+    }
+
+    #[test]
     fn a_host_name_is_refused_with_the_network_opt_in() {
         let error = with_hosts(
             Some(true),
@@ -7628,6 +7651,21 @@ mod tests {
                 "{extra}"
             );
         }
+        // Two ids that differ only in case are one id: they would share an export file.
+        let twice = RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "profile": "strict",
+            "auth": {
+                "multiTenant": {"allowTenants": true},
+                "tenants": [
+                    {"tenantId": "tenant-a", "displayName": "acme"},
+                    {"tenantId": "Tenant-A", "displayName": "beta"},
+                ],
+            },
+        }))
+        .expect_err("a case-insensitive repeat");
+        assert!(twice.0.contains("auth.tenants[1]"), "{twice}");
+        assert!(twice.0.contains("ignoring case"), "{twice}");
         // An explicit key decides over productionExact.
         let cfg = read(
             json!({"productionExact": true, "auth": {"tenantIdFormat": "readable"}}),

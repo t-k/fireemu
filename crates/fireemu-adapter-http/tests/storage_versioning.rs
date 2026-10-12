@@ -102,6 +102,7 @@ fn call(s: &StorageState, method: &str, target: &str, body: &[u8]) -> StorageRes
             ]),
             app_check: Vec::new(),
             body: body.to_vec(),
+            remote_peer: false,
         },
     )
 }

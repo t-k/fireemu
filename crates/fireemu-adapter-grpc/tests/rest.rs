@@ -137,6 +137,7 @@ fn call_as(
         body,
         batch_field_order: Vec::new(),
         origin: None,
+        remote_peer: false,
         browser_metadata: false,
     });
     (r.status, r.body)
@@ -5543,6 +5544,7 @@ fn the_security_rules_route_needs_the_control_token_from_a_browser() {
             query: String::new(),
             authorization: authorization.map(str::to_owned),
             origin: origin.map(str::to_owned),
+            remote_peer: false,
             browser_metadata: browser,
             app_check: Vec::new(),
             body: json!({"rules": {"files": [{"name": "firestore.rules", "content": ALLOW}]}}),
@@ -5612,6 +5614,7 @@ fn the_emulator_clear_route_needs_the_control_token_from_a_browser() {
                 query: String::new(),
                 authorization: authorization.map(str::to_owned),
                 origin: origin.map(str::to_owned),
+                remote_peer: false,
                 browser_metadata: browser,
                 app_check: Vec::new(),
                 body: json!({}),
@@ -6833,4 +6836,56 @@ fn another_projects_token_is_refused_on_its_database_in_productions_shape() {
         Some(&format!("Bearer {token}")),
     );
     assert_eq!(status, 200);
+}
+
+/// With `network.allowNonLoopbackHosts` a peer on another host can reach the Firestore port. The
+/// privileged emulator routes, replacing the ruleset and clearing the data, refuse it whatever
+/// it presents (owner decision 2026-10-13: the emulators are exposed, not their control); the
+/// same request from a loopback peer is admitted as before.
+#[test]
+fn the_privileged_emulator_routes_refuse_a_remote_peer() {
+    const ALLOW: &str = "rules_version = '2';\nservice cloud.firestore {\n  match /databases/{db}/documents {\n    match /{document=**} { allow read, write: if true; }\n  }\n}\n";
+    const TOKEN: &str = "rest-test-control-token";
+    let request = |method: &str, path: String, body: Value, remote_peer: bool| RestRequest {
+        method: method.to_owned(),
+        path,
+        query: String::new(),
+        authorization: Some(format!("Bearer {TOKEN}")),
+        origin: None,
+        remote_peer,
+        browser_metadata: false,
+        app_check: Vec::new(),
+        body,
+        batch_field_order: Vec::new(),
+    };
+    let rules = json!({"rules": {"files": [{"name": "firestore.rules", "content": ALLOW}]}});
+    for remote_peer in [true, false] {
+        let mut s = state(Some(ALLOW));
+        s.control_token = Some(TOKEN.to_owned());
+        let put = s.handle(&request(
+            "PUT",
+            format!("{EMULATOR}:securityRules"),
+            rules.clone(),
+            remote_peer,
+        ));
+        let clear = s.handle(&request(
+            "DELETE",
+            format!("{EMULATOR}/databases/(default)/documents"),
+            json!({}),
+            remote_peer,
+        ));
+        if remote_peer {
+            for r in [&put, &clear] {
+                assert_eq!(r.status, 403, "{}", r.body);
+                assert!(
+                    r.body.to_string().contains("loopback peers only"),
+                    "{}",
+                    r.body
+                );
+            }
+        } else {
+            assert_eq!(put.status, 200, "{}", put.body);
+            assert_eq!(clear.status, 200, "{}", clear.body);
+        }
+    }
 }

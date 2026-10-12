@@ -147,9 +147,14 @@ pub fn prepare_tenant_seeds_with(
     for (index, document) in documents.iter().enumerate() {
         let seed = prepare_one(document, emulator, written_at.map(str::to_owned), format)
             .map_err(|error| format!("auth.tenants[{index}]: {error}"))?;
-        if seeds.iter().any(|earlier| earlier.id == seed.id) {
+        // Ids that differ only in case would share an export file (`accounts-<tenant>.json`) on
+        // a volume that ignores case, the macOS default.
+        if seeds
+            .iter()
+            .any(|earlier| earlier.id.eq_ignore_ascii_case(&seed.id))
+        {
             return Err(format!(
-                "auth.tenants[{index}]: tenantId {:?} repeats an earlier entry",
+                "auth.tenants[{index}]: tenantId {:?} repeats an earlier entry (ids are compared ignoring case)",
                 seed.id
             ));
         }

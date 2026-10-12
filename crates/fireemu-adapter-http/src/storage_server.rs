@@ -365,6 +365,7 @@ fn handler_error_response(
 async fn respond(
     state: Arc<StorageState>,
     budget: &'static BodyBudget,
+    remote_peer: bool,
     req: Request<Incoming>,
 ) -> Result<Response<StorageBody>, std::io::Error> {
     let origin = req
@@ -506,6 +507,7 @@ async fn respond(
                     headers,
                     app_check,
                     body,
+                    remote_peer,
                 },
             )
         })
@@ -587,14 +589,15 @@ pub async fn serve_storage_with_budget(
     budget: &'static BodyBudget,
 ) -> std::io::Result<()> {
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, peer) = listener.accept().await?;
+        let remote_peer = !peer.ip().to_canonical().is_loopback();
         let state = state.clone();
         tokio::spawn(async move {
             let io = TokioIo::new(GracefulClose::new(
                 stream,
                 DrainBounds::for_largest_body(MAX_STORAGE_BODY_BYTES),
             ));
-            let svc = service_fn(move |req| respond(state.clone(), budget, req));
+            let svc = service_fn(move |req| respond(state.clone(), budget, remote_peer, req));
             let _ = http1::Builder::new().serve_connection(io, svc).await;
         });
     }

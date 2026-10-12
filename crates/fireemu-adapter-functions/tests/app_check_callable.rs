@@ -703,6 +703,7 @@ async fn start_consuming(
         trusted,
         vec![
             ("FIREEMU_FAKE_CONSUME".to_owned(), "enabled".to_owned()),
+            ("FIREEMU_FAKE_ECHO_CONSUME".to_owned(), "enabled".to_owned()),
             (
                 "FIREEMU_FAKE_GUARDED_ENFORCE".to_owned(),
                 enforce.to_string(),
@@ -2157,6 +2158,14 @@ async fn without_app_check_a_token_consuming_callable_runs_without_the_token() {
         );
         // The near miss: `add` does not consume, so its field still reaches the runner.
         let (status, body) = h.call("add", &[("x-firebase-appcheck", "whatever")]).await;
+        assert_eq!(status, 200, "{profile:?}: {body}");
+        assert_eq!(
+            echoed(&body, "x-firebase-appcheck"),
+            vec!["whatever".to_owned()]
+        );
+        // An onRequest function owns its own App Check handling and keeps the raw field, even
+        // when a manifest gives it the callable-only option.
+        let (status, body) = h.call("echo", &[("x-firebase-appcheck", "whatever")]).await;
         assert_eq!(status, 200, "{profile:?}: {body}");
         assert_eq!(
             echoed(&body, "x-firebase-appcheck"),

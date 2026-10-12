@@ -39,6 +39,8 @@ npx fireemu exec -- <command>
 npx fireemu exec -- npm test
 ```
 
+`up` and `exec` read `fireemu.json` from the current directory, or, when there is none, the nearest `firebase.json` (see [Which configuration files are loaded](#which-configuration-files-are-loaded)). The first lines of the startup output name the files that were loaded and say, for Firestore and Storage, whether Security Rules are loaded.
+
 ### Supported platforms
 
 | OS | Architecture |
@@ -171,6 +173,43 @@ npx fireemu init --yes
 
 An existing `fireemu.json` is not overwritten unless `--force` is supplied.
 
+### Which configuration files are loaded
+
+`up`, `exec`, `emulators:start` and `emulators:exec` choose their configuration files as follows.
+
+1. `--config <file>` and `--firebase-json <file>` load exactly the files they name, and nothing is searched for.
+2. Otherwise, `fireemu.json` in the current directory is loaded as if it were passed with `--config`. Its `firebaseJson` entry, resolved relative to `fireemu.json`, names the `firebase.json` to load. A `firebase.json` beside a `fireemu.json` without a `firebaseJson` entry is not loaded, and the startup output says so. A `fireemu.json` in a parent directory is not used, because the paths it contains are relative to the current directory.
+3. Otherwise, the nearest `firebase.json` is loaded as if it were passed with `--firebase-json`: the one in the current directory, else the first one found in a parent directory, as the Firebase CLI finds it. Its paths and the `.firebaserc` beside it are read from its directory.
+4. Otherwise, the built-in defaults apply, and no Security Rules are loaded.
+
+`--no-config-discovery` skips steps 2 and 3. The `config:` line of the startup output names the files that were loaded.
+
+A discovered file can name Functions code to run and the rules to enforce, so on Unix the search checks who owns what it finds, as git checks repository ownership. The Firebase CLI does not check this. The trusted owners are you (the effective user), root, and, when you run as root through `sudo`, the user in `SUDO_UID`.
+
+- A `fireemu.json` or `firebase.json` whose owner is not trusted, or that any user can write, is skipped. Group write is allowed, so files created under a user-private-group umask (002, the Debian and Ubuntu default) are loaded.
+- A `.firebaserc` names only project and target aliases, never code or rules, so its owner is not checked. It is skipped only when it, or its directory, can be written by any user.
+- The search stops before a parent directory whose owner is not trusted or that any user can write, such as `/tmp`. It also stops, without a warning, at a parent it cannot inspect, such as one you may not enter.
+- The owner of the current directory is not checked, because you chose to run there. A current directory that any user can write is not searched at all.
+- A symbolic link is judged by the file it points to. The directory that holds the target is not checked.
+- Each candidate is opened once. Its owner and mode are checked on the open file before anything is read, and its text is then read from the same file. A discovered file larger than 16 MiB is refused with an error.
+
+A skipped file or directory is named in a warning, and the run continues as if nothing had been found. To load a file anyway, name it with `--config` or `--firebase-json`. To silence the warning, pass `--no-config-discovery`. Errors in a discovered file say that the search found the file.
+
+Two common setups run into this rule:
+
+- A root container with a bind-mounted checkout. Examples are GitHub Actions `container:` jobs and `docker run -v "$PWD":/app` as root. The `fireemu.json` and `firebase.json` there are owned by a host user that the container's root does not trust, so they are skipped. Use the explicit flags, or `chown` the checkout. The `.firebaserc` still names the project. Rootless Podman maps your user to the container's root, so it is not affected.
+- `sudo`. Files owned by the user that `sudo` names in `SUDO_UID` are trusted.
+
+On Windows, ownership is not checked.
+
+If you relied on the old behavior, where a `firebase.json` next to your tests was ignored, pass `--no-config-discovery`. Discovery means that the project ID comes from the `.firebaserc` beside the discovered `firebase.json`, that its emulator ports, Hub, UI and single-project settings apply, and that a `functions` entry starts the Functions runtime. `fireemu capabilities` also reports the profile of a discovered `fireemu.json`.
+
+### Security Rules that are not loaded
+
+Under the `strict` profile, a project without Security Rules behaves as a production project without a rules release: every client request to Firestore is refused with `PERMISSION_DENIED`, and every end-user request to Storage is refused with production's 400 "bucket has not been set up" answer. The Admin SDK and other owner credentials are not affected. The `emulator` profile allows every Firestore request, and every Storage request for a `demo-*` project, as the official emulator does.
+
+The answers keep production's wording, which does not mention Fireemu. The startup output therefore has a `firestore rules:` and a `storage rules:` line that say when no rules are loaded and how to load them, and the first refused request for each database and bucket (up to 32 of each) prints a warning to standard error. Name the rules files in `firebase.json` (`firestore.rules`, `storage.rules`) or in `fireemu.json` (`rules.source`, `storage.rules`).
+
 ### Compatibility profiles
 
 | Profile | Behavior |
@@ -179,6 +218,28 @@ An existing `fireemu.json` is not overwritten unless `--force` is supplied.
 | `emulator` | Targets the behavior of a pinned version of the official emulator. Known differences are documented in the compatibility documentation |
 
 Use `strict` when testing against production Firebase behavior. Add `emulator` to your test targets when you also need to check alignment with the official emulator.
+
+#### Development defaults and `productionExact`
+
+Fireemu is mostly run by tests, in CI and on a developer's machine. Where production needs setup that a test should not have to do (signed tokens, signing keys, enabling a feature through an Admin API call), the default in both profiles is the development behavior, and each such behavior has its own configuration key. To get production's behavior for all of them at once, set `productionExact` to `true` (strict profile only); an explicit key still decides over it:
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "productionExact": true,
+  "auth": { "allowUnsignedCustomTokens": true }
+}
+```
+
+| Development default | Key | With `productionExact` |
+|---|---|---|
+| Unsigned emulator custom tokens are accepted | `auth.allowUnsignedCustomTokens` | refused |
+| Identity-provider sign-in accepts the fixture assertions and the sign-in widget (`/emulator/auth/handler`), for built-in, `oidc.*` and `saml.*` providers | `auth.idpAssertions` (`"fixture"`) | `"signed"`: OIDC ID tokens must verify with an `auth.idpSigners` key, SAML responses with the provider's certificates, and the fixture and built-in providers are refused |
+| The strict Eventarc listener admits any credential or none, so the Admin SDK publishes with a fake credential (see [Eventarc authentication](docs/eventarc-authentication.md)) | `eventarc.authentication` (`"permissive"`) | `"production"`: a missing, malformed or JWT-shaped bearer is refused with production's 401 |
+| A query whose composite index is not defined (or is still building, or was deleted) runs, and each missing index is reported once per database on stderr with production's refusal text and the `firestore.indexes.json` entry | `firestore.missingIndexes` (`"report"`) | refused with `FAILED_PRECONDITION` and the console link (`"refuse"`) |
+
+The start banner and `fireemu capabilities` report whether `productionExact` is set.
 
 Under the `emulator` profile, a request that names a tenant the project does not have creates that tenant, and the number of tenants is not limited, as in the official emulator. The `strict` profile refuses such a request, as production does. A request that Fireemu refuses (a wrong credential, a browser page without the control token on the emulator routes, App Check, an unknown API key) creates nothing. As in the official emulator, a plain `GET` without an `Origin` header to a tenant route of `127.0.0.1` creates the tenant, so any web page you visit while the emulator runs can add tenants to it (not read them); use the `strict` profile where that matters.
 
@@ -198,7 +259,7 @@ The initial configuration selects Standard edition Firestore with the Native API
 }
 ```
 
-You can specify the configuration file with `--config`.
+You can also name the configuration file with `--config`.
 
 ```sh
 npx fireemu up --config ./fireemu.json
@@ -225,7 +286,8 @@ The `auth` section of `fireemu.json` lets you configure sign-in methods, passwor
 | Project- and tenant-specific password policies and account permissions | `auth.passwordPolicyOverrides`, `auth.configOverrides` |
 | Blocking functions before account creation or sign-in, and credential forwarding to those functions | `auth.blockingFunctions` |
 | Initial custom OIDC and SAML provider resources | `auth.providers.oidc`, `auth.providers.saml` |
-| Accept unsigned emulator custom tokens (default `true` in both profiles) | `auth.allowUnsignedCustomTokens` |
+| Accept unsigned emulator custom tokens (default `true` in both profiles, `false` with `productionExact`) | `auth.allowUnsignedCustomTokens` |
+| Accept the fixture identity-provider assertions and sign-in widget (`"fixture"`, the default in both profiles), or verify signed assertions as production does (`"signed"`, `strict` only; the default with `productionExact` or `auth.idpSigners`) | `auth.idpAssertions` |
 | Public keys for verifying custom tokens and OIDC ID tokens | `auth.customTokenSigners`, `auth.idpSigners` |
 | Sign-up quota configuration and local quota-exceeded simulation | `auth.quota`, `auth.quotaSimulation` |
 
@@ -237,7 +299,7 @@ Declare `auth.authorizedDomains`, for example `["localhost", "app.test"]`, to se
 
 An Admin update changes the live list. A session reset restores the declared list, when present, and preserves an Admin-written list when no initial list was declared. Projects created later receive the declaration word for word, independently of the default project's live list; listing a particular project's `firebaseapp.com` or `web.app` domain therefore gives later projects that same domain. Clearing accounts leaves the live list alone. Auth export/import carries accounts without the domain list or its declaration. The `emulator` profile accepts the setting and exposes the list, while continuing to allow action-link continue URLs outside it.
 
-Declare project OIDC and SAML resources with `auth.providers.oidc` and `auth.providers.saml`, using the Admin v2 resource fields and an ID-only `name` such as `oidc.fixture` or `saml.fixture`. Full resource names are refused. For example, `"providers": {"oidc": [{"name": "oidc.fixture", "enabled": true, "clientId": "local-client", "issuer": "https://issuer.test", "responseType": {"idToken": true}}]}` initializes that provider in both profiles. Strict OIDC sign-in also needs matching public issuer keys in `auth.idpSigners`; no key is fetched. Strict SAML uses the declared provider certificates and retains its existing assertion checks.
+Declare project OIDC and SAML resources with `auth.providers.oidc` and `auth.providers.saml`, using the Admin v2 resource fields and an ID-only `name` such as `oidc.fixture` or `saml.fixture`. Full resource names are refused. For example, `"providers": {"oidc": [{"name": "oidc.fixture", "enabled": true, "clientId": "local-client", "issuer": "https://issuer.test", "responseType": {"idToken": true}}]}` initializes that provider in both profiles. By default both profiles accept the fixture assertions the official emulator accepts (a JSON or unsigned ID token, a JSON SAML response, the sign-in widget), whether or not the provider is declared. With `auth.idpAssertions` set to `"signed"` (or `productionExact`, or `auth.idpSigners` present), strict OIDC sign-in needs matching public issuer keys in `auth.idpSigners`; no key is fetched. Strict SAML then uses the declared provider certificates and retains its existing assertion checks.
 
 Each declared array replaces that provider kind; `[]` explicitly starts it empty, while an absent or `null` kind declares no initial resources. Admin operations change live resources until a session reset restores the declared kinds. Later session and routed projects inherit the declaration independently of the default project's live changes. Tenant resources and built-in providers remain separate. Clearing accounts preserves live resources; snapshots and Auth export/import transfer no provider resources or declarations. The emulator profile continues to accept its unsigned fixture credentials without requiring configured or enabled provider resources. These declarations require a canonical document with `"schemaVersion": 1`; a Firebase deployment `auth.providers` section without that version remains deployment data and installs no provider seeds.
 

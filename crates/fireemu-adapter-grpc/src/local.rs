@@ -3476,31 +3476,8 @@ impl LocalBackend {
     fn index_rejection(&self, parent: &Parent, rejection: &crate::gateway::Rejection) -> Status {
         let database = crate::gateway::database_name(parent);
         if let crate::gateway::Rejection::MissingIndex { requirement, .. } = rejection {
-            if let Some(index) = self.admin.indexes().building(
-                parent.project.as_str(),
-                parent.database.as_str(),
-                requirement,
-                self.admin_now(),
-            ) {
-                let mut refused =
-                    Status::failed_precondition(crate::index_messages::building_index_message(
-                        &database,
-                        &index.id,
-                        requirement,
-                    ));
-                if let Ok(v) = "FS_GW_MISSING_INDEX".parse() {
-                    refused.metadata_mut().insert("fireemu-reason", v);
-                }
-                return refused;
-            }
-            if let Some(index) = self.admin.indexes().deleted(
-                parent.project.as_str(),
-                parent.database.as_str(),
-                requirement,
-            ) {
-                let mut refused = Status::failed_precondition(
-                    crate::index_messages::deleted_index_message(&database, &index.id, requirement),
-                );
+            if let Some(message) = self.admin_index_refusal(parent, requirement) {
+                let mut refused = Status::failed_precondition(message);
                 if let Ok(v) = "FS_GW_MISSING_INDEX".parse() {
                     refused.metadata_mut().insert("fireemu-reason", v);
                 }
@@ -3508,6 +3485,38 @@ impl LocalBackend {
             }
         }
         rejection.to_status_in(&database)
+    }
+
+    /// Production's refusal of a query whose index an Admin create is still building, or whose
+    /// index was deleted through the Admin API; `None` for any other missing index.
+    fn admin_index_refusal(
+        &self,
+        parent: &Parent,
+        requirement: &fireemu_core_firestore::index::IndexDefinition,
+    ) -> Option<String> {
+        let database = crate::gateway::database_name(parent);
+        if let Some(index) = self.admin.indexes().building(
+            parent.project.as_str(),
+            parent.database.as_str(),
+            requirement,
+            self.admin_now(),
+        ) {
+            return Some(crate::index_messages::building_index_message(
+                &database,
+                &index.id,
+                requirement,
+            ));
+        }
+        self.admin
+            .indexes()
+            .deleted(
+                parent.project.as_str(),
+                parent.database.as_str(),
+                requirement,
+            )
+            .map(|index| {
+                crate::index_messages::deleted_index_message(&database, &index.id, requirement)
+            })
     }
 
     /// Decodes and validates a structured query through the strict gateway.
@@ -3522,6 +3531,7 @@ impl LocalBackend {
         self.gateway
             .validate_query_with_indexes(&query, &database_indexes)
             .map_err(|rejection| self.index_rejection(parent, &rejection))
+            .inspect(|accepted| self.report_missing_index(parent, accepted))
     }
 
     /// Decodes and validates a structured aggregation query through the strict gateway.
@@ -3537,6 +3547,27 @@ impl LocalBackend {
         self.gateway
             .validate_aggregation_query_with_indexes(&query, aggregations, &database_indexes)
             .map_err(|rejection| self.index_rejection(parent, &rejection))
+            .inspect(|accepted| self.report_missing_index(parent, accepted))
+    }
+
+    /// Reports a query served without the composite index production would refuse it
+    /// without (`firestore.missingIndexes: "report"`), naming the database it ran on.
+    fn report_missing_index(&self, parent: &Parent, accepted: &AcceptedQuery) {
+        let database = crate::gateway::database_name(parent);
+        self.gateway.report_missing_index_as(
+            &database,
+            accepted,
+            |requirement, multiple_inequalities| {
+                self.admin_index_refusal(parent, requirement)
+                    .unwrap_or_else(|| {
+                        crate::index_messages::missing_index_message(
+                            &database,
+                            requirement,
+                            multiple_inequalities,
+                        )
+                    })
+            },
+        );
     }
 
     /// Atomically replaces the index catalog used by subsequent query plans.

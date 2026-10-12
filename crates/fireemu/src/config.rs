@@ -20,10 +20,10 @@ use serde_json::{Map, Value};
 ///
 /// The two profiles are declared in `spec/compatibility/contract.json`; this enum is the
 /// half the daemon executes. The keys a profile only *declares* stay declared: what the
-/// runtime derives from it is [`Self::index_policy`], [`Self::enforce_limits`],
-/// [`Self::token_acceptance`] and [`Self::implicit_database_creation`]. The index policy has
-/// no configuration key of its own and follows the profile; `firestore.enforceLimits` may
-/// still override its default.
+/// runtime derives from it is [`RuntimeConfig::index_policy`] (with
+/// `firestore.missingIndexes`), [`Self::enforce_limits`], [`Self::token_acceptance`] and
+/// [`Self::implicit_database_creation`]; `firestore.enforceLimits` may still override its
+/// default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CompatibilityProfile {
     /// Reproduce the behaviour the pinned Local Emulator Suite ships, including its
@@ -237,6 +237,20 @@ impl PasswordPolicyConfig {
     }
 }
 
+/// How `signInWithIdp` assertions are checked (`auth.idpAssertions`, owner decision 1396).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IdpAssertionMode {
+    /// The official emulator's fixture `IdP`: an assertion (a JSON or unsigned ID token, a JSON
+    /// SAML response, what the sign-in widget posts) is parsed and never verified. The
+    /// development default in both profiles.
+    #[default]
+    Fixture,
+    /// Production's verification (strict only): an `oidc.*` ID token must verify with an
+    /// `auth.idpSigners` key and a `saml.*` response with the provider's certificates; the
+    /// fixture and the built-in providers are refused.
+    Signed,
+}
+
 impl CompatibilityProfile {
     /// Parses the canonical configuration value.
     #[must_use]
@@ -254,21 +268,6 @@ impl CompatibilityProfile {
         match self {
             Self::Emulator => "emulator",
             Self::Strict => "strict",
-        }
-    }
-
-    /// The index validation policy; it has no configuration key of its own.
-    ///
-    /// The pinned official Firestore emulator does not check composite indexes at all, so
-    /// the profile that reproduces it assumes them and reports each one it assumed. `strict`
-    /// applies production's rules, verified against a real project: a query without a
-    /// supporting index is refused with the `firestore.indexes.json` fragment production
-    /// would need, and the index merges production performs are accepted.
-    #[must_use]
-    pub const fn index_policy(self) -> IndexValidationPolicy {
-        match self {
-            Self::Emulator => IndexValidationPolicy::Emulator,
-            Self::Strict => IndexValidationPolicy::Production,
         }
     }
 
@@ -955,6 +954,19 @@ fn parse_auth_quota_simulation(
     })
 }
 
+/// `firestore.missingIndexes`: what the strict profile does with a query whose composite index
+/// is not defined. The emulator profile always runs it, as the official emulator checks no
+/// composite index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingIndexes {
+    /// Run the query and report the index production would need, once per database and
+    /// index (development default, owner decision 1396).
+    Report,
+    /// Refuse the query with production's `FAILED_PRECONDITION` and console link
+    /// (`productionExact`).
+    Refuse,
+}
+
 /// Effective daemon configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)] // independent switches, each read on its own
@@ -962,10 +974,19 @@ pub struct RuntimeConfig {
     /// Optional local OAuth authority for the strict Eventarc listener. An empty catalog denies every OAuth-shaped bearer.
     pub eventarc_oauth_credentials:
         Option<fireemu_adapter_functions::eventarc_strict::OAuthCredentialCatalog>,
-    /// Compatibility profile (`profile`). It sets the defaults of [`Self::index_policy`],
+    /// `eventarc.authentication`: whether the strict Eventarc listener checks the credential.
+    /// Permissive (the development default) admits any credential or none, as the official emulator
+    /// does; production keeps the recorded refusals and reads [`Self::eventarc_oauth_credentials`].
+    pub eventarc_authentication: fireemu_adapter_functions::eventarc_strict::EventarcAuthentication,
+    /// Compatibility profile (`profile`). It decides [`Self::index_policy`] with
+    /// [`Self::firestore_missing_indexes`] and sets the defaults of
     /// [`Self::enforce_limits`], [`Self::token_acceptance`] and
     /// [`Self::implicit_database_creation`]; an explicit key wins.
     pub profile: CompatibilityProfile,
+    /// `productionExact`: the development defaults that differ from production (see
+    /// [`Self::set_production_exact`]) take production's values instead. Only the strict
+    /// profile accepts it; an explicit key still decides over it.
+    pub production_exact: bool,
     /// Firestore gRPC bind address.
     pub firestore_addr: String,
     /// HTTP (Auth REST + control API) bind address.
@@ -978,8 +999,10 @@ pub struct RuntimeConfig {
     pub api_mode: FirestoreApiMode,
     /// `firestore.location`: opaque database location used by strict second-generation Firestore events. Defaults to `nam5`; the emulator profile keeps `nam5`. Unknown identifiers are accepted, but whitespace and control characters are refused; this value does not control routing.
     pub firestore_location: String,
-    /// Index validation policy, derived from the profile (no key of its own).
-    pub index_policy: IndexValidationPolicy,
+    /// `firestore.missingIndexes`: whether the strict profile refuses a query whose composite
+    /// index is not defined, as production does, or runs it and reports the index
+    /// (development default; see [`Self::index_policy`]).
+    pub firestore_missing_indexes: MissingIndexes,
     /// Whether a Standard query limit violation refuses the query
     /// (`firestore.enforceLimits`; profile default). When it does not, each violation is
     /// reported as an `FS_LIMIT_OBSERVED:<id>` warning and the query runs.
@@ -1230,6 +1253,9 @@ pub struct RuntimeConfig {
     /// JWK set (`auth.idpSigners`, AUTH-FEDERATION owner decision O4). No key is fetched from
     /// an issuer; without an entry, strict refuses the issuer's sign-ins.
     pub auth_idp_signers: Option<serde_json::Map<String, Value>>,
+    /// How `signInWithIdp` assertions are checked (`auth.idpAssertions`): the fixture `IdP`
+    /// by default, signed assertions under `productionExact` or with `auth.idpSigners`.
+    pub auth_idp_assertions: IdpAssertionMode,
     /// The default project's API keys (`auth.apiKeys`). When any is declared, client requests
     /// with another key are refused as production's API front end refuses them; when none is,
     /// any key is accepted, as by the official emulator.
@@ -1368,6 +1394,8 @@ impl Default for RuntimeConfig {
         let profile = CompatibilityProfile::default();
         Self {
             eventarc_oauth_credentials: None,
+            eventarc_authentication:
+                fireemu_adapter_functions::eventarc_strict::EventarcAuthentication::Permissive,
             profile,
             firestore_addr: "127.0.0.1:8080".to_owned(),
             http_addr: "127.0.0.1:9099".to_owned(),
@@ -1375,8 +1403,9 @@ impl Default for RuntimeConfig {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
             firestore_location: "nam5".to_owned(),
-            index_policy: profile.index_policy(),
+            firestore_missing_indexes: MissingIndexes::Report,
             enforce_limits: profile.enforce_limits(),
+            production_exact: false,
             token_acceptance: profile.token_acceptance(),
             implicit_database_creation: profile.implicit_database_creation(),
             refuse_without_ruleset: profile.refuse_without_ruleset(),
@@ -1468,6 +1497,7 @@ impl Default for RuntimeConfig {
             auth_allow_unsigned_custom_tokens: true,
             auth_custom_token_signers: None,
             auth_idp_signers: None,
+            auth_idp_assertions: IdpAssertionMode::Fixture,
             auth_api_keys: Vec::new(),
             app_check: AppCheckConfig::disabled(),
         }
@@ -1475,7 +1505,7 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 25] = [
+pub(crate) const AUTH_KEYS: [&str; 26] = [
     "enabled",
     "apiKeys",
     "projectIssuer",
@@ -1483,6 +1513,7 @@ pub(crate) const AUTH_KEYS: [&str; 25] = [
     "customTokenSigners",
     "allowUnsignedCustomTokens",
     "idpSigners",
+    "idpAssertions",
     "providers",
     "totp",
     "mfa",
@@ -2859,6 +2890,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "schemaVersion",
     "firebaseJson",
     "profile",
+    "productionExact",
     "bind",
     "projects",
     "limits",
@@ -2971,7 +3003,6 @@ impl RuntimeConfig {
     /// simply overwrites it.
     pub fn set_profile(&mut self, profile: CompatibilityProfile) {
         self.profile = profile;
-        self.index_policy = profile.index_policy();
         self.enforce_limits = profile.enforce_limits();
         self.token_acceptance = profile.token_acceptance();
         self.implicit_database_creation = profile.implicit_database_creation();
@@ -2983,6 +3014,95 @@ impl RuntimeConfig {
             self.auth_improved_email_privacy = profile == CompatibilityProfile::Strict;
         }
         self.listen_stream_lifetime = profile.listen_stream_lifetime();
+    }
+
+    /// Applies `productionExact`. fireemu is mostly run by tests in CI and on a laptop, so
+    /// where production needs setup a test should not have to do (signed tokens, keys,
+    /// Admin API calls), the default is the development behaviour and this switch restores
+    /// production's (owner decisions 1196 and 1396). Every development default is written
+    /// here, so an explicit key parsed afterwards overwrites it, and
+    /// `docs/compatibility-contract.md` ("Development defaults") lists the same set. A
+    /// setting only the production behaviour reads (`auth.idpSigners`,
+    /// `eventarc.oauthCredentials`) also selects it when its key is absent; the parsers of
+    /// those keys apply that rule.
+    pub fn set_production_exact(&mut self, exact: bool) {
+        self.production_exact = exact;
+        self.auth_allow_unsigned_custom_tokens = !exact;
+        self.auth_idp_assertions = if exact {
+            IdpAssertionMode::Signed
+        } else {
+            IdpAssertionMode::Fixture
+        };
+        self.eventarc_authentication = if exact {
+            fireemu_adapter_functions::eventarc_strict::EventarcAuthentication::Production
+        } else {
+            fireemu_adapter_functions::eventarc_strict::EventarcAuthentication::Permissive
+        };
+        self.firestore_missing_indexes = if exact {
+            MissingIndexes::Refuse
+        } else {
+            MissingIndexes::Report
+        };
+    }
+
+    /// Reads `auth.idpAssertions` after `auth.idpSigners`. The keys are read only by signed
+    /// assertions, so under the strict profile they select them when the key is absent (the
+    /// configurations that verify signed sign-ins keep doing so), and an explicit `fixture`
+    /// beside them is refused rather than left to ignore them. `signed` refuses what the
+    /// official emulator accepts, so it requires the strict profile.
+    fn parse_idp_assertions(
+        auth: &serde_json::Map<String, Value>,
+        cfg: &mut Self,
+    ) -> Result<(), ConfigError> {
+        let strict = cfg.profile == CompatibilityProfile::Strict;
+        match auth.get("idpAssertions") {
+            Some(value) => {
+                let mode = match value.as_str() {
+                    Some("fixture") => IdpAssertionMode::Fixture,
+                    Some("signed") => IdpAssertionMode::Signed,
+                    _ => {
+                        return Err(ConfigError(
+                            "auth.idpAssertions must be \"fixture\" or \"signed\"".to_owned(),
+                        ))
+                    }
+                };
+                if mode == IdpAssertionMode::Signed && !strict {
+                    return Err(ConfigError(
+                        "auth.idpAssertions \"signed\" requires the strict profile".to_owned(),
+                    ));
+                }
+                if mode == IdpAssertionMode::Fixture && strict && cfg.auth_idp_signers.is_some() {
+                    return Err(ConfigError(
+                        "auth.idpSigners requires auth.idpAssertions \"signed\"".to_owned(),
+                    ));
+                }
+                cfg.auth_idp_assertions = mode;
+            }
+            None if strict && cfg.auth_idp_signers.is_some() => {
+                cfg.auth_idp_assertions = IdpAssertionMode::Signed;
+            }
+            None => {}
+        }
+        Ok(())
+    }
+
+    /// The index validation policy of the profile and `firestore.missingIndexes`. The pinned
+    /// official Firestore emulator does not check composite indexes at all, so the profile
+    /// that reproduces it assumes them and reports each one it assumed. `strict` applies
+    /// production's rules, verified against a real project, including the index merges
+    /// production performs; a query production refuses for a missing composite index is
+    /// refused with the console link (`refuse`) or run and reported (`report`).
+    #[must_use]
+    pub const fn index_policy(&self) -> IndexValidationPolicy {
+        match (self.profile, self.firestore_missing_indexes) {
+            (CompatibilityProfile::Emulator, _) => IndexValidationPolicy::Emulator,
+            (CompatibilityProfile::Strict, MissingIndexes::Refuse) => {
+                IndexValidationPolicy::Production
+            }
+            (CompatibilityProfile::Strict, MissingIndexes::Report) => {
+                IndexValidationPolicy::ProductionReport
+            }
+        }
     }
 
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
@@ -3141,16 +3261,51 @@ impl RuntimeConfig {
     }
 
     fn parse_eventarc(value: &Value, cfg: &mut Self) -> Result<(), ConfigError> {
+        use fireemu_adapter_functions::eventarc_strict::EventarcAuthentication;
         let invalid = || {
             ConfigError("eventarc.oauthCredentials must map lowercase SHA-256 digests to objects containing unique nonempty string scopes".to_owned())
         };
         let section = value.as_object().ok_or_else(invalid)?;
-        if section.keys().any(|key| key != "oauthCredentials") {
-            return Err(invalid());
+        if let Some(key) = section
+            .keys()
+            .find(|key| *key != "oauthCredentials" && *key != "authentication")
+        {
+            return Err(ConfigError(format!("unknown config key eventarc.{key}")));
+        }
+        let explicit = section
+            .get("authentication")
+            .map(|value| match value.as_str() {
+                Some("permissive") => Ok(EventarcAuthentication::Permissive),
+                Some("production") => Ok(EventarcAuthentication::Production),
+                _ => Err(ConfigError(
+                    "eventarc.authentication must be \"permissive\" or \"production\"".to_owned(),
+                )),
+            })
+            .transpose()?;
+        let strict = cfg.profile == CompatibilityProfile::Strict;
+        if explicit == Some(EventarcAuthentication::Production) && !strict {
+            return Err(ConfigError(
+                "eventarc.authentication \"production\" requires the strict profile".to_owned(),
+            ));
+        }
+        if let Some(authentication) = explicit {
+            cfg.eventarc_authentication = authentication;
         }
         let Some(credentials) = section.get("oauthCredentials") else {
             return Ok(());
         };
+        // A catalog asks for credential checks, which only production makes: it selects production
+        // under strict unless the key says otherwise, and an explicit permissive would ignore it.
+        // The emulator profile ignores the catalog, as the official emulator checks no credential.
+        if strict {
+            if explicit == Some(EventarcAuthentication::Permissive) {
+                return Err(ConfigError(
+                    "eventarc.oauthCredentials requires eventarc.authentication \"production\""
+                        .to_owned(),
+                ));
+            }
+            cfg.eventarc_authentication = EventarcAuthentication::Production;
+        }
         let credentials = credentials.as_object().ok_or_else(invalid)?;
         let mut catalog = fireemu_adapter_functions::eventarc_strict::OAuthCredentialCatalog::new();
         for (digest, entry) in credentials {
@@ -3597,6 +3752,18 @@ impl RuntimeConfig {
                 }
             })?);
         }
+        // Read after the profile it depends on and before every key it moves the default of.
+        if let Some(exact) = obj.get("productionExact") {
+            let exact = exact
+                .as_bool()
+                .ok_or_else(|| ConfigError("productionExact must be a boolean".to_owned()))?;
+            if exact && cfg.profile != CompatibilityProfile::Strict {
+                return Err(ConfigError(
+                    "productionExact requires the strict profile".to_owned(),
+                ));
+            }
+            cfg.set_production_exact(exact);
+        }
         if let Some(limits) = obj.get("limits") {
             Self::parse_limits(limits)?;
         }
@@ -3628,9 +3795,31 @@ impl RuntimeConfig {
                 return Err(ConfigError(
                     "firestore.indexValidationPolicy was removed in fireemu 0.7.0: the index \
                      policy follows the profile (strict checks composite indexes with \
-                     production's rules, emulator assumes them)"
+                     production's rules, emulator assumes them), and firestore.missingIndexes \
+                     decides whether strict refuses a missing composite index"
                         .to_owned(),
                 ));
+            }
+            if let Some(value) = fs.get("missingIndexes") {
+                cfg.firestore_missing_indexes = match value.as_str() {
+                    Some("report") => MissingIndexes::Report,
+                    Some("refuse") => MissingIndexes::Refuse,
+                    _ => {
+                        return Err(ConfigError(
+                            "firestore.missingIndexes must be \"report\" or \"refuse\"".to_owned(),
+                        ))
+                    }
+                };
+                // The emulator profile reproduces the official emulator, which checks no
+                // composite index; refusing is production's behaviour.
+                if cfg.firestore_missing_indexes == MissingIndexes::Refuse
+                    && cfg.profile != CompatibilityProfile::Strict
+                {
+                    return Err(ConfigError(
+                        "firestore.missingIndexes \"refuse\" requires the strict profile"
+                            .to_owned(),
+                    ));
+                }
             }
             if let Some(f) = fs.get("textIndexDefinitionFile").and_then(Value::as_str) {
                 cfg.text_index_file = Some(f.to_owned());
@@ -3819,6 +4008,7 @@ impl RuntimeConfig {
                     .map_err(|e| ConfigError(format!("auth.idpSigners: {e}")))?;
                 cfg.auth_idp_signers = Some(signers.clone());
             }
+            Self::parse_idp_assertions(auth, &mut cfg)?;
             if let Some(providers) = auth.get("providers") {
                 cfg.auth_provider_seeds =
                     fireemu_adapter_http::identity_toolkit::provider_config_seeds(
@@ -4695,7 +4885,7 @@ mod tests {
         // without a create.
         let emulator = with_profile(json!({"profile": "emulator"})).unwrap();
         assert_eq!(emulator.profile, CompatibilityProfile::Emulator);
-        assert_eq!(emulator.index_policy, IndexValidationPolicy::Emulator);
+        assert_eq!(emulator.index_policy(), IndexValidationPolicy::Emulator);
         assert!(!emulator.enforce_limits);
         assert_eq!(emulator.token_acceptance, TokenAcceptance::EmulatorMock);
         assert!(emulator.implicit_database_creation);
@@ -4703,9 +4893,13 @@ mod tests {
         assert!(emulator.end_user_transactions);
         assert!(!emulator.listen_stream_lifetime);
 
-        // strict: every one of those becomes production's refusal.
+        // strict: every one of those becomes production's refusal, except a missing composite
+        // index, which runs and is reported until productionExact asks for the refusal.
         let strict = with_profile(json!({"profile": "strict"})).unwrap();
-        assert_eq!(strict.index_policy, IndexValidationPolicy::Production);
+        assert_eq!(
+            strict.index_policy(),
+            IndexValidationPolicy::ProductionReport
+        );
         assert!(strict.enforce_limits);
         assert_eq!(strict.token_acceptance, TokenAcceptance::Verified);
         assert!(!strict.implicit_database_creation);
@@ -4923,7 +5117,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(cfg.profile, CompatibilityProfile::Emulator);
-        assert_eq!(cfg.index_policy, IndexValidationPolicy::Emulator);
+        assert_eq!(cfg.index_policy(), IndexValidationPolicy::Emulator);
         assert!(cfg.enforce_limits);
 
         let cfg = with_profile(json!({
@@ -4936,10 +5130,10 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(cfg.profile, CompatibilityProfile::Strict);
-        assert_eq!(cfg.index_policy, IndexValidationPolicy::Production);
+        assert_eq!(cfg.index_policy(), IndexValidationPolicy::ProductionReport);
         assert!(!cfg.enforce_limits);
-        // The token semantics and the index policy have no key of their own: the profile is
-        // the only way to ask for them, so an explicit limit switch never quietly loosens them.
+        // The token semantics have no key of their own: the profile is the only way to ask
+        // for them, so an explicit limit switch never quietly loosens them.
         assert_eq!(cfg.token_acceptance, TokenAcceptance::Verified);
     }
 
@@ -6143,6 +6337,281 @@ mod tests {
         }
     }
 
+    /// The `auth.idpAssertions` the loader is expected to settle on, or its refusal: the
+    /// fixture `IdP` by default, signed assertions under `productionExact` or when
+    /// `auth.idpSigners` (read only by signed assertions) is set, and an explicit key over both.
+    fn expected_idp_assertions(
+        strict: bool,
+        exact: Option<bool>,
+        key: Option<&str>,
+        signers: bool,
+    ) -> Result<IdpAssertionMode, String> {
+        if exact == Some(true) && !strict {
+            return Err("productionExact requires the strict profile".to_owned());
+        }
+        match key {
+            Some("signed") if !strict => {
+                Err("auth.idpAssertions \"signed\" requires the strict profile".to_owned())
+            }
+            Some("fixture") if strict && signers => {
+                Err("auth.idpSigners requires auth.idpAssertions \"signed\"".to_owned())
+            }
+            Some("signed") => Ok(IdpAssertionMode::Signed),
+            Some("fixture") => Ok(IdpAssertionMode::Fixture),
+            Some(_) => Err("auth.idpAssertions must be \"fixture\" or \"signed\"".to_owned()),
+            None if strict && (exact == Some(true) || signers) => Ok(IdpAssertionMode::Signed),
+            None => Ok(IdpAssertionMode::Fixture),
+        }
+    }
+
+    fn idp_assertions_config(
+        profile: Option<&str>,
+        exact: Option<bool>,
+        key: Option<&str>,
+        signers: bool,
+    ) -> Value {
+        // A public 2048-bit modulus; the key it belongs to was discarded.
+        let modulus = "0lwNtQWMVy0QqgEvrBmoFqwky_dcMx8CgS-o2rTesEV7QbG4cvNigTcDV7b_u0twRkJdonkMPjbUs0b8NKe_0_UOZ5vE_kILFG4TtPdeZWub8xnqhETc7WifXhEfqcB8xFbRyIxU9V0d_epsuNnQ-Nd7NlnFsH-aaq6f1HKp55_BVNxudwmHwT49P6JhNDDh7FWyoYBBBFtQ0St8dky4MFQTd2swZP4pEA8xGp-q-1mxbn0g9gfbq5voYWtOaDW9a2lsC_S_d6DecsrNWn4YYJ7Qc5xcx4pI70a23zftkVBj_I-Eip2hcvNUEsZJA4LlR4BgDLsNWu3ZWQxe08fOew";
+        let mut auth = json!({});
+        if let Some(key) = key {
+            auth["idpAssertions"] = json!(key);
+        }
+        if signers {
+            auth["idpSigners"] = json!({"https://idp.example/oidc/run": {"keys": [{"kty": "RSA", "alg": "RS256", "use": "sig", "kid": "k", "n": modulus, "e": "AQAB"}]}});
+        }
+        let mut config = json!({"schemaVersion": 1, "auth": auth});
+        if let Some(profile) = profile {
+            config["profile"] = json!(profile);
+        }
+        if let Some(exact) = exact {
+            config["productionExact"] = json!(exact);
+        }
+        config
+    }
+
+    #[test]
+    fn idp_assertions_default_to_the_fixture_and_production_exact_or_signers_select_signed() {
+        // Every combination of the inputs the loader reads, against the model above; an absent
+        // profile is the strict default.
+        for profile in [None, Some("strict"), Some("emulator")] {
+            let strict = profile != Some("emulator");
+            for exact in [None, Some(false), Some(true)] {
+                for key in [None, Some("fixture"), Some("signed"), Some("Signed")] {
+                    for signers in [false, true] {
+                        let config = idp_assertions_config(profile, exact, key, signers);
+                        let parsed = RuntimeConfig::from_json(&config)
+                            .map(|cfg| cfg.auth_idp_assertions)
+                            .map_err(|e| e.0);
+                        assert_eq!(
+                            parsed,
+                            expected_idp_assertions(strict, exact, key, signers),
+                            "{config}"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            RuntimeConfig::default().auth_idp_assertions,
+            IdpAssertionMode::Fixture
+        );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn idp_assertions_accept_exactly_the_two_mode_names(
+            value in proptest::prop_oneof![
+                proptest::sample::select(vec![
+                    json!("fixture"), json!("signed"), json!("Fixture"), json!("SIGNED"),
+                    json!(" signed"), json!("signed "), json!("fixtures"), json!(""),
+                    json!("verified"), json!(null), json!(true), json!(1), json!([]),
+                    json!({}), json!(["signed"]),
+                ]),
+                proptest::strategy::Strategy::prop_map("[a-z]{0,8}", Value::String),
+            ],
+        ) {
+            let parsed = RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1,
+                "profile": "strict",
+                "auth": {"idpAssertions": value.clone()},
+            }));
+            match value.as_str() {
+                Some("fixture") => proptest::prop_assert_eq!(
+                    parsed.unwrap().auth_idp_assertions,
+                    IdpAssertionMode::Fixture
+                ),
+                Some("signed") => proptest::prop_assert_eq!(
+                    parsed.unwrap().auth_idp_assertions,
+                    IdpAssertionMode::Signed
+                ),
+                _ => proptest::prop_assert_eq!(
+                    parsed.map(|cfg| cfg.auth_idp_assertions),
+                    Err(ConfigError(
+                        "auth.idpAssertions must be \"fixture\" or \"signed\"".to_owned()
+                    ))
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn production_exact_restores_production_defaults_and_explicit_keys_win() {
+        let read = |extra: Value| {
+            let mut config = json!({
+                "schemaVersion": 1,
+                "firestore": {"edition": "standard", "apiMode": "native"},
+            });
+            for (key, value) in extra.as_object().unwrap() {
+                config[key] = value.clone();
+            }
+            RuntimeConfig::from_json(&config)
+        };
+        for (extra, exact) in [
+            (json!({}), false),
+            (json!({"productionExact": false}), false),
+            (
+                json!({"profile": "strict", "productionExact": false}),
+                false,
+            ),
+            (json!({"productionExact": true}), true),
+            (json!({"profile": "strict", "productionExact": true}), true),
+        ] {
+            let cfg = read(extra.clone()).unwrap();
+            assert_eq!(cfg.production_exact, exact, "{extra}");
+            assert_eq!(cfg.auth_allow_unsigned_custom_tokens, !exact, "{extra}");
+        }
+        // An explicit key decides over the switch in both directions, whatever its position.
+        for (explicit, exact) in [(true, true), (false, false), (true, false), (false, true)] {
+            let cfg = read(json!({
+                "auth": {"allowUnsignedCustomTokens": explicit},
+                "productionExact": exact,
+            }))
+            .unwrap();
+            assert_eq!(cfg.production_exact, exact);
+            assert_eq!(cfg.auth_allow_unsigned_custom_tokens, explicit);
+        }
+        // The emulator profile reproduces the official emulators; production's refusals are
+        // the strict profile's, so the two cannot be combined.
+        assert_eq!(
+            read(json!({"profile": "emulator", "productionExact": true})),
+            Err(ConfigError(
+                "productionExact requires the strict profile".to_owned()
+            ))
+        );
+        assert!(read(json!({"profile": "emulator", "productionExact": false})).is_ok());
+        for invalid in [json!(null), json!("true"), json!(1), json!([]), json!({})] {
+            assert_eq!(
+                read(json!({"productionExact": invalid})),
+                Err(ConfigError("productionExact must be a boolean".to_owned()))
+            );
+        }
+    }
+
+    #[test]
+    fn missing_indexes_are_reported_by_default_and_refused_under_production_exact() {
+        // Owner decision 1396: a query whose composite index is not defined runs and is
+        // reported in both profiles; production's refusal is opt-in, through productionExact
+        // or the key, and only the strict profile can refuse.
+        let read = |profile: &str, exact: Option<bool>, key: Option<&str>| {
+            let mut firestore = json!({"edition": "standard", "apiMode": "native"});
+            if let Some(key) = key {
+                firestore["missingIndexes"] = json!(key);
+            }
+            let mut extra = json!({"profile": profile, "firestore": firestore});
+            if let Some(exact) = exact {
+                extra["productionExact"] = json!(exact);
+            }
+            with_profile(extra)
+        };
+        let strict = |exact, key| read("strict", exact, key).unwrap();
+        for (exact, key, expected, policy) in [
+            (
+                None,
+                None,
+                MissingIndexes::Report,
+                IndexValidationPolicy::ProductionReport,
+            ),
+            (
+                Some(false),
+                None,
+                MissingIndexes::Report,
+                IndexValidationPolicy::ProductionReport,
+            ),
+            (
+                Some(true),
+                None,
+                MissingIndexes::Refuse,
+                IndexValidationPolicy::Production,
+            ),
+            (
+                None,
+                Some("refuse"),
+                MissingIndexes::Refuse,
+                IndexValidationPolicy::Production,
+            ),
+            (
+                Some(false),
+                Some("refuse"),
+                MissingIndexes::Refuse,
+                IndexValidationPolicy::Production,
+            ),
+            (
+                Some(true),
+                Some("report"),
+                MissingIndexes::Report,
+                IndexValidationPolicy::ProductionReport,
+            ),
+            (
+                Some(true),
+                Some("refuse"),
+                MissingIndexes::Refuse,
+                IndexValidationPolicy::Production,
+            ),
+            (
+                None,
+                Some("report"),
+                MissingIndexes::Report,
+                IndexValidationPolicy::ProductionReport,
+            ),
+        ] {
+            let cfg = strict(exact, key);
+            assert_eq!(cfg.firestore_missing_indexes, expected, "{exact:?} {key:?}");
+            assert_eq!(cfg.index_policy(), policy, "{exact:?} {key:?}");
+        }
+        assert_eq!(
+            RuntimeConfig::default().index_policy(),
+            IndexValidationPolicy::ProductionReport
+        );
+        // The emulator profile assumes every index, as the official emulator checks none.
+        for key in [None, Some("report")] {
+            let cfg = read("emulator", None, key).unwrap();
+            assert_eq!(cfg.firestore_missing_indexes, MissingIndexes::Report);
+            assert_eq!(cfg.index_policy(), IndexValidationPolicy::Emulator);
+        }
+        assert_eq!(
+            read("emulator", None, Some("refuse")),
+            Err(ConfigError(
+                "firestore.missingIndexes \"refuse\" requires the strict profile".to_owned()
+            ))
+        );
+        for invalid in [
+            json!("enforce"),
+            json!(true),
+            json!(null),
+            json!(["refuse"]),
+        ] {
+            let cfg = with_profile(json!({
+                "firestore": {"edition": "standard", "apiMode": "native", "missingIndexes": invalid},
+            }));
+            assert_eq!(
+                cfg,
+                Err(ConfigError(
+                    "firestore.missingIndexes must be \"report\" or \"refuse\"".to_owned()
+                ))
+            );
+        }
+    }
+
     #[test]
     fn custom_token_signers_are_validated_when_the_configuration_is_read() {
         // A public 2048-bit modulus; the key it belongs to was discarded.
@@ -7103,6 +7572,247 @@ mod eventarc_oauth_catalog_properties {
                     prop_assert_eq!(catalog.get(&digest).unwrap().contains("https://www.googleapis.com/auth/cloud-platform"), granted);
                     prop_assert!(catalog.get(&digest).unwrap().contains(scope));
                 }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod eventarc_authentication_tests {
+    use super::*;
+    use fireemu_adapter_functions::eventarc_strict::EventarcAuthentication::{
+        Permissive, Production,
+    };
+    use proptest::prelude::*;
+    use serde_json::json;
+
+    fn read(
+        profile: Option<&str>,
+        exact: Option<bool>,
+        eventarc: Option<Value>,
+    ) -> Result<RuntimeConfig, ConfigError> {
+        let mut config = json!({"schemaVersion": 1});
+        if let Some(profile) = profile {
+            config["profile"] = json!(profile);
+        }
+        if let Some(exact) = exact {
+            config["productionExact"] = json!(exact);
+        }
+        if let Some(eventarc) = eventarc {
+            config["eventarc"] = eventarc;
+        }
+        RuntimeConfig::from_json(&config)
+    }
+
+    #[test]
+    fn eventarc_authentication_is_permissive_by_default_and_production_under_production_exact() {
+        for profile in [None, Some("strict"), Some("emulator")] {
+            for eventarc in [None, Some(json!({}))] {
+                assert_eq!(
+                    read(profile, None, eventarc.clone())
+                        .unwrap()
+                        .eventarc_authentication,
+                    Permissive,
+                    "{profile:?} {eventarc:?}"
+                );
+                if profile != Some("emulator") {
+                    assert_eq!(
+                        read(profile, Some(false), eventarc.clone())
+                            .unwrap()
+                            .eventarc_authentication,
+                        Permissive
+                    );
+                    assert_eq!(
+                        read(profile, Some(true), eventarc)
+                            .unwrap()
+                            .eventarc_authentication,
+                        Production
+                    );
+                }
+            }
+        }
+        assert_eq!(RuntimeConfig::default().eventarc_authentication, Permissive);
+    }
+
+    #[test]
+    fn an_explicit_eventarc_authentication_decides_over_production_exact() {
+        for (value, expected) in [("permissive", Permissive), ("production", Production)] {
+            for exact in [None, Some(false), Some(true)] {
+                assert_eq!(
+                    read(
+                        Some("strict"),
+                        exact,
+                        Some(json!({"authentication": value}))
+                    )
+                    .unwrap()
+                    .eventarc_authentication,
+                    expected,
+                    "{value} {exact:?}"
+                );
+            }
+        }
+        // The emulator profile admits every credential as the official emulator does; it cannot be
+        // told to refuse more.
+        assert_eq!(
+            read(
+                Some("emulator"),
+                None,
+                Some(json!({"authentication": "permissive"}))
+            )
+            .unwrap()
+            .eventarc_authentication,
+            Permissive
+        );
+        assert_eq!(
+            read(
+                Some("emulator"),
+                None,
+                Some(json!({"authentication": "production"}))
+            ),
+            Err(ConfigError(
+                "eventarc.authentication \"production\" requires the strict profile".to_owned()
+            ))
+        );
+        for invalid in [
+            json!(null),
+            json!(true),
+            json!("Production"),
+            json!("catalog"),
+            json!(""),
+            json!(["production"]),
+        ] {
+            assert_eq!(
+                read(
+                    Some("strict"),
+                    None,
+                    Some(json!({"authentication": invalid}))
+                ),
+                Err(ConfigError(
+                    "eventarc.authentication must be \"permissive\" or \"production\"".to_owned()
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_eventarc_key_is_named() {
+        for key in ["authentification", "extra", "oauthcredentials"] {
+            assert_eq!(
+                read(Some("strict"), None, Some(json!({key: "production"}))),
+                Err(ConfigError(format!("unknown config key eventarc.{key}")))
+            );
+        }
+    }
+
+    /// A local OAuth catalog is a request for credential checks: without an explicit
+    /// `authentication` it selects production, and it cannot be combined with an explicit permissive.
+    #[test]
+    fn an_oauth_catalog_selects_production_and_refuses_an_explicit_permissive() {
+        let catalog = json!({"ab".repeat(32): {"scopes": []}});
+        for exact in [None, Some(false), Some(true)] {
+            for credentials in [json!({}), catalog.clone()] {
+                assert_eq!(
+                    read(
+                        Some("strict"),
+                        exact,
+                        Some(json!({"oauthCredentials": credentials.clone()}))
+                    )
+                    .unwrap()
+                    .eventarc_authentication,
+                    Production
+                );
+                assert_eq!(
+                    read(Some("strict"), exact, Some(json!({"oauthCredentials": credentials.clone(), "authentication": "production"})))
+                        .unwrap()
+                        .eventarc_authentication,
+                    Production
+                );
+                assert_eq!(
+                    read(
+                        Some("strict"),
+                        exact,
+                        Some(
+                            json!({"oauthCredentials": credentials, "authentication": "permissive"})
+                        )
+                    ),
+                    Err(ConfigError(
+                        "eventarc.oauthCredentials requires eventarc.authentication \"production\""
+                            .to_owned()
+                    ))
+                );
+            }
+        }
+        // The emulator profile keeps ignoring the catalog, as before.
+        assert_eq!(
+            read(
+                Some("emulator"),
+                None,
+                Some(json!({"oauthCredentials": catalog}))
+            )
+            .unwrap()
+            .eventarc_authentication,
+            Permissive
+        );
+    }
+
+    /// The schema corpus `config-schema-check` validates holds the same verdicts in the loader.
+    #[test]
+    fn eventarc_authentication_schema_examples_match_the_loader() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/config");
+        let mut seen = 0;
+        for (directory, valid) in [("examples", true), ("invalid-examples", false)] {
+            for path in std::fs::read_dir(root.join(directory))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("eventarc-authentication-")
+                })
+            {
+                let value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                assert_eq!(
+                    RuntimeConfig::from_json(&value).is_ok(),
+                    valid,
+                    "{}",
+                    path.display()
+                );
+                seen += 1;
+            }
+        }
+        assert_eq!(seen, 6, "the corpus must not silently shrink");
+    }
+
+    proptest! {
+        /// Every combination resolves by one rule: an explicit value wins, else a catalog under strict
+        /// selects production, else productionExact decides.
+        #[test]
+        fn eventarc_authentication_follows_explicit_then_catalog_then_production_exact(
+            strict in any::<bool>(),
+            exact in proptest::option::of(any::<bool>()),
+            explicit in proptest::option::of(any::<bool>()),
+            catalog in any::<bool>(),
+        ) {
+            let mut eventarc = serde_json::Map::new();
+            if let Some(production) = explicit {
+                eventarc.insert("authentication".to_owned(), json!(if production { "production" } else { "permissive" }));
+            }
+            if catalog {
+                eventarc.insert("oauthCredentials".to_owned(), json!({}));
+            }
+            let parsed = read(Some(if strict { "strict" } else { "emulator" }), exact, Some(Value::Object(eventarc)));
+            let exact_on = exact == Some(true);
+            let refused = if strict {
+                catalog && explicit == Some(false)
+            } else {
+                exact_on || explicit == Some(true)
+            };
+            prop_assert_eq!(parsed.is_err(), refused);
+            if let Ok(cfg) = parsed {
+                let production = explicit.unwrap_or(strict && (catalog || exact_on));
+                let expected = if production { Production } else { Permissive };
+                prop_assert_eq!(cfg.eventarc_authentication, expected);
             }
         }
     }

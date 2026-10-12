@@ -15,8 +15,14 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "authentication": {
+          "type": "string",
+          "enum": ["permissive", "production"],
+          "default": "permissive",
+          "description": "Whether the strict Eventarc listener checks the request's credential. permissive (the development default, in both profiles) admits any credential or none, as the official emulator does, so the Admin SDK publishes with a fake credential in CI; every other strict check keeps production's order and answers. production refuses a missing, malformed or JWT-shaped bearer with production's 401 and applies oauthCredentials. Defaults to production under productionExact, and under the strict profile when oauthCredentials is configured; an explicit value wins, except that permissive with oauthCredentials under strict is an error. production requires the strict profile."
+        },
         "oauthCredentials": {
-          "description": "Optional local OAuth credential authority for strict Eventarc. Keys are SHA-256 digests of synthetic bearer bytes; absence preserves legacy shape-only admission. An empty catalog admits no OAuth-shaped credential. This does not verify Google credentials or IAM permissions.",
+          "description": "Optional local OAuth credential authority for strict Eventarc, applied when eventarc.authentication is production (which it selects when authentication is absent). Keys are SHA-256 digests of synthetic bearer bytes; absence preserves legacy shape-only admission. An empty catalog admits no OAuth-shaped credential. This does not verify Google credentials or IAM permissions.",
           "type": "object",
           "propertyNames": { "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
           "additionalProperties": {
@@ -40,6 +46,11 @@
       "description": "Compatibility profile (spec/compatibility/contract.json). strict behaves like production Firebase where the official emulators do not (composite index validation with production's rules, Standard query limits, ID-token verification); emulator reproduces the pinned official emulators, including their documented limitations. The profile decides the index validation and the ID-token semantics of the Security Rules surfaces and sets the default of firestore.enforceLimits; an explicit enforceLimits wins over it.",
       "enum": ["strict", "emulator"],
       "default": "strict"
+    },
+    "productionExact": {
+      "type": "boolean",
+      "default": false,
+      "description": "fireemu is run mostly by tests in CI and on a developer's machine, so where production needs setup a test should not have to do (signed tokens, signing keys, Admin API calls), the default is the development behaviour, in both profiles. true restores production's behaviour for every such default; an explicit key still decides over it. Requires the strict profile. docs/compatibility-contract.md (\"Development defaults\") lists the keys it moves."
     },
     "bind": { "type": "string", "default": "127.0.0.1" },
     "projects": {
@@ -108,6 +119,12 @@
         "indexFile": { "type": "string" },
         "textIndexDefinitionFile": { "type": "string" },
         "enforceLimits": { "type": "boolean" },
+        "missingIndexes": {
+          "type": "string",
+          "enum": ["report", "refuse"],
+          "default": "report",
+          "description": "What the strict profile does with a query whose composite index is not defined. report (the default, and \"refuse\" under productionExact): run the query as if the index existed, but only where production would refuse it (a query production serves by merging indexes is not reported), and print once per database and index production's refusal text, with the console link, and the firestore.indexes.json entry (an index an Admin create is still building, or one that was deleted, also runs, and is reported in production's wording for that state); the query's answer carries the FS_MISSING_INDEX_REPORTED warning. refuse: production's FAILED_PRECONDITION. The emulator profile always runs the query, as the official emulator checks no composite index, and refuse requires the strict profile."
+        },
         "databaseCreateTime": {
           "type": "string",
           "format": "date-time",
@@ -232,7 +249,7 @@
         "allowUnsignedCustomTokens": {
           "type": "boolean",
           "default": true,
-          "description": "Accept well-formed unsigned custom JWTs from the Admin SDK in emulator mode, in both strict and emulator profiles, even when customTokenSigners is configured. Set false to require signed custom tokens verified by customTokenSigners. Strict claim validation still applies. In the emulator profile, false also disables JSON fake custom tokens. This setting does not affect ID tokens or other credentials."
+          "description": "Accept well-formed unsigned custom JWTs from the Admin SDK in emulator mode, in both strict and emulator profiles, even when customTokenSigners is configured. Defaults to true, and to false under productionExact. Set false to require signed custom tokens verified by customTokenSigners. Strict claim validation still applies. In the emulator profile, false also disables JSON fake custom tokens. This setting does not affect ID tokens or other credentials."
         },
         "customTokenSigners": {
           "type": "object",
@@ -474,9 +491,15 @@
             }
           }
         },
+        "idpAssertions": {
+          "type": "string",
+          "enum": ["fixture", "signed"],
+          "default": "fixture",
+          "description": "How signInWithIdp assertions are checked. fixture (the default in both profiles) accepts the official emulator's fixture assertions without verifying them: a JSON or unsigned ID token, a JSON SAML response and what the sign-in widget (/emulator/auth/handler) posts, for built-in, oidc.* and saml.* providers; the strict profile's answer shapes and other checks are unchanged. signed (strict profile only) verifies them as production does: an oidc.* ID token only with an idpSigners key, a saml.* response only with the provider's certificates, and the fixture and the built-in providers are refused. Under the strict profile the default is signed with productionExact or when idpSigners is set, and fixture beside idpSigners is refused."
+        },
         "idpSigners": {
           "type": "object",
-          "description": "OIDC issuers whose signed ID tokens the strict profile verifies, each mapped to its public JWK set. No key is fetched from an issuer. Under the strict profile, signInWithIdp accepts only an ID token of an enabled oidc.* provider whose issuer is listed here and whose key (selected by the token's kid) verifies it; the unsigned fixture IdP and other providers are refused. The emulator profile ignores this setting.",
+          "description": "OIDC issuers whose signed ID tokens the strict profile verifies with idpAssertions signed, each mapped to its public JWK set; under the strict profile, setting it makes signed the default of idpAssertions. No key is fetched from an issuer. With signed assertions, signInWithIdp accepts only an ID token of an enabled oidc.* provider whose issuer is listed here and whose key (selected by the token's kid) verifies it; the unsigned fixture IdP and other providers are refused. The emulator profile ignores this setting.",
           "propertyNames": { "pattern": "^https://[^/?#\\s]+(/[^?#\\s]*)?$" },
           "additionalProperties": {
             "type": "object",

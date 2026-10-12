@@ -301,6 +301,9 @@ test("closure recipes and corpus programs cover each other", async () => {
 test("the local configuration uses the lane indexes under the strict profile", () => {
   const config = readRepo("conformance/fs-query-index.fireemu.json");
   assert.equal(config.profile, "strict");
+  // The production rows include missing-index refusals, which strict gives only with
+  // productionExact (firestore.missingIndexes defaults to "report").
+  assert.equal(config.productionExact, true);
   assert.equal(config.firestore.edition, "standard");
   assert.equal(config.firestore.indexFile, "conformance/fs-query-index.indexes.json");
   assert.equal(config.daemon?.clockStart, undefined, "run-window masking needs the wall clock");

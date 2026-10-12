@@ -194,8 +194,7 @@ fn with_local_cors(mut response: Response<OutBody>, origin: Option<&str>) -> Res
 /// Encodes a daemon-side callable refusal the same way the v2 SDK wrapper answers a
 /// streaming request. The wrapper writes one SSE record without replacing the response's
 /// default `200` status, even when token admission fails before the handler starts.
-fn streaming_callable_refusal() -> Response<OutBody> {
-    let response = crate::callable::unauthenticated_response();
+fn streaming_callable_refusal(response: &ProxiedResponse) -> Response<OutBody> {
     let mut body = Vec::with_capacity("data: ".len() + response.body.len() + 2);
     body.extend_from_slice(b"data: ");
     body.extend_from_slice(&response.body);
@@ -204,18 +203,48 @@ fn streaming_callable_refusal() -> Response<OutBody> {
 }
 
 fn callable_credential_refusal(
-    denial: Response<OutBody>,
+    denial: &ProxiedResponse,
     streaming: bool,
     origin: Option<&str>,
 ) -> Response<OutBody> {
     with_local_cors(
         if streaming {
-            streaming_callable_refusal()
+            streaming_callable_refusal(denial)
         } else {
-            denial
+            let mut builder = Response::builder().status(denial.status);
+            for (k, v) in &denial.headers {
+                builder = builder.header(k, v);
+            }
+            builder
+                .body(full(Bytes::from(denial.body.clone())))
+                .unwrap_or_else(|_| Response::new(full(Bytes::new())))
         },
         origin,
     )
+}
+
+/// Whether a request to `function` may carry a token into a consuming `verifyToken`: a
+/// callable served with `consumeAppCheckToken` `enabled` or unobserved, or an onRequest route
+/// that startup marked `enabled` because the code exports a consuming callable under that name
+/// (any other value on an onRequest route means nothing).
+fn may_consume_app_check(runtime: &FunctionsRuntime, function: &str) -> bool {
+    use fireemu_core_functions::manifest::{ConsumeAppCheckToken, Trigger};
+    match runtime.manifest().get(function).map(|f| &f.trigger) {
+        Some(Trigger::Http {
+            callable: true,
+            consume_app_check_token,
+            ..
+        }) => matches!(
+            consume_app_check_token,
+            ConsumeAppCheckToken::Enabled | ConsumeAppCheckToken::Undetermined
+        ),
+        Some(Trigger::Http {
+            callable: false,
+            consume_app_check_token: ConsumeAppCheckToken::Enabled,
+            ..
+        }) => true,
+        _ => false,
+    }
 }
 
 fn http_trigger_kinds(runtime: &FunctionsRuntime, function: &str) -> (bool, bool, bool) {
@@ -981,18 +1010,29 @@ fn resolve_route<'a>(runtime: &FunctionsRuntime, path: &'a str) -> Result<Route<
 ///
 /// An `onRequest` function keeps receiving the raw field list, because application code owns
 /// custom-backend verification there (specification section 7.3); a callable only reaches the
-/// runner once the daemon has verified and re-inserted both credentials.
+/// runner once the daemon has verified and re-inserted both credentials. Without the trusted
+/// protocol a callable gets the raw list too, except that a callable that declares
+/// `consumeAppCheckToken: true`, or whose value could not be observed, never gets an App Check
+/// token: nothing verified it, and the wrapper would consume it against production. With the
+/// trusted protocol the same callables answer a valid token with `501`.
 fn sanitize_credentials(
     runtime: &FunctionsRuntime,
     function: &str,
     raw: &hyper::HeaderMap,
     headers: Vec<(String, String)>,
-) -> Result<Vec<(String, String)>, Refusal> {
+) -> Result<Vec<(String, String)>, ProxiedResponse> {
+    // An unobserved value counts as consuming. With the trusted protocol startup already
+    // refuses it, so there that half only matters for a runtime assembled without that check.
+    let may_consume = may_consume_app_check(runtime, function);
     let (Some(trust), Some(enforce_app_check)) = (
         runtime.callable_trust(),
         runtime.callable_enforces_app_check(function),
     ) else {
-        return Ok(headers);
+        return Ok(if may_consume {
+            crate::callable::without_app_check_token(headers)
+        } else {
+            headers
+        });
     };
     // The credential fields are collected separately and lossily: a value that is not
     // renderable as text must still count as an instance, or a second copy could hide behind
@@ -1002,6 +1042,7 @@ fn sanitize_credentials(
     match trust.sanitize(&crate::callable::CallableRequest {
         function,
         enforce_app_check,
+        consume_app_check_token: may_consume,
         headers: &headers,
         app_check: &presented_app_check,
         authorization: &presented_auth,
@@ -1009,16 +1050,10 @@ fn sanitize_credentials(
     }) {
         crate::callable::CallableDecision::Forward { headers, .. } => Ok(headers),
         crate::callable::CallableDecision::Unauthenticated { .. } => {
-            let denial = crate::callable::unauthenticated_response();
-            let mut builder = Response::builder().status(denial.status);
-            for (k, v) in denial.headers {
-                builder = builder.header(k, v);
-            }
-            Err(Box::new(
-                builder
-                    .body(full(Bytes::from(denial.body)))
-                    .unwrap_or_else(|_| Response::new(full(Bytes::new()))),
-            ))
+            Err(crate::callable::unauthenticated_response())
+        }
+        crate::callable::CallableDecision::ReplayUnsupported => {
+            Err(crate::callable::replay_unsupported_response())
         }
     }
 }
@@ -1663,7 +1698,7 @@ async fn respond(
             Err(denial) => {
                 drain_refused_body(req.into_body()).await;
                 return Ok(callable_credential_refusal(
-                    *denial,
+                    &denial,
                     streaming,
                     origin.as_deref(),
                 ));
@@ -1885,7 +1920,7 @@ pub async fn serve_eventarc_with_channels_and_project_number(
         channels,
         crate::eventarc_strict::EventarcContext {
             project_number,
-            oauth_credentials: None,
+            ..crate::eventarc_strict::EventarcContext::default()
         },
     )
     .await

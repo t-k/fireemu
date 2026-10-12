@@ -186,7 +186,15 @@ impl Daemon {
     /// A query that needs a composite index nothing configured: an equality filter and an
     /// order by another field.
     fn unindexed_query(&self) -> (u16, String) {
-        http(
+        self.unindexed_query_with(http)
+    }
+
+    /// [`Self::unindexed_query`] sent through `send` (as the owner, for example).
+    fn unindexed_query_with(
+        &self,
+        send: fn(u16, &str, &str, Option<&str>) -> (u16, String),
+    ) -> (u16, String) {
+        send(
             self.firestore_port(),
             "POST",
             "/v1/projects/demo-profile/databases/(default)/documents:runQuery",
@@ -194,6 +202,18 @@ impl Daemon {
                 r#"{"structuredQuery": {"from": [{"collectionId": "notes"}], "where": {"fieldFilter": {"field": {"fieldPath": "owner"}, "op": "EQUAL", "value": {"stringValue": "a"}}}, "orderBy": [{"field": {"fieldPath": "created"}, "direction": "ASCENDING"}]}}"#,
             ),
         )
+    }
+
+    /// Stops the daemon and returns everything it wrote to stderr.
+    fn stop_with_stderr(mut self) -> String {
+        let mut stderr = self.child.stderr.take().unwrap();
+        let _ = Command::new("kill")
+            .args(["-TERM", &self.child.id().to_string()])
+            .status();
+        let _ = self.child.wait();
+        let mut text = String::new();
+        let _ = std::io::Read::read_to_string(&mut stderr, &mut text);
+        text
     }
 
     fn stop(mut self) {
@@ -212,6 +232,34 @@ impl Drop for Daemon {
 }
 
 #[test]
+fn the_strict_profile_runs_a_query_without_its_composite_index_and_reports_it_once() {
+    let strict = Daemon::start("strict");
+    for _ in 0..2 {
+        // As the owner: without a ruleset the strict profile denies every end user.
+        let (status, body) = strict.unindexed_query_with(http_as_owner);
+        assert_eq!(
+            status, 200,
+            "a missing composite index is reported, not refused: {body}"
+        );
+    }
+    let stderr = strict.stop_with_stderr();
+    let reported: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.contains("served a query without its composite index"))
+        .collect();
+    assert_eq!(reported.len(), 1, "once per database and index:\n{stderr}");
+    assert!(
+        reported[0].starts_with("[firestore] projects/demo-profile/databases/(default): ")
+            && reported[0].contains("The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/demo-profile/firestore/indexes?create_composite="),
+        "production's refusal text with its console link:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Add to firestore.indexes.json:\n{\n  \"collectionGroup\": \"notes\""),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn the_same_official_limitation_is_served_under_emulator_and_refused_under_strict() {
     let emulator = Daemon::start("emulator");
     let (status, body) = emulator.unindexed_query();
@@ -226,7 +274,8 @@ fn the_same_official_limitation_is_served_under_emulator_and_refused_under_stric
     );
     emulator.stop();
 
-    let strict = Daemon::start("strict");
+    // Production's refusal is opt-in (`productionExact` or this key, owner decision 1396).
+    let strict = Daemon::start_with("strict", "strict", r#""missingIndexes": "refuse", "#);
     let (status, body) = strict.unindexed_query();
     assert_eq!(status, 400, "{body}");
     assert!(body.contains("FAILED_PRECONDITION"), "{body}");
@@ -571,7 +620,7 @@ fn without_a_ruleset_strict_refuses_client_requests_and_the_emulator_profile_all
     // The rules line follows the readiness line; give it a moment.
     let rules_line = |daemon: &Daemon| {
         for _ in 0..100 {
-            if daemon.banner().contains("  rules: ") {
+            if daemon.banner().contains("  firestore rules: ") {
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -580,7 +629,8 @@ fn without_a_ruleset_strict_refuses_client_requests_and_the_emulator_profile_all
     };
     let strict = Daemon::start_with("unruled", "strict", "");
     assert!(
-        rules_line(&strict).contains("rules: none loaded; every client request is refused"),
+        rules_line(&strict)
+            .contains("firestore rules:  none loaded, so every client request is refused"),
         "{}",
         strict.banner()
     );
@@ -600,7 +650,8 @@ fn without_a_ruleset_strict_refuses_client_requests_and_the_emulator_profile_all
 
     let emulator = Daemon::start_with("unruled", "emulator", "");
     assert!(
-        rules_line(&emulator).contains("rules: none loaded; every request is allowed"),
+        rules_line(&emulator)
+            .contains("firestore rules:  none loaded, so every request is allowed"),
         "{}",
         emulator.banner()
     );

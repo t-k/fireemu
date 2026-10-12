@@ -10,6 +10,7 @@ import {
   admit,
   browserProduction,
   checkProject,
+  fireemuConfig,
   nativeProduction,
   newRunId,
   openJournal,
@@ -1404,4 +1405,14 @@ test("browser production checks the project as a browser recording and reads the
   assert.deepEqual(seen.checked, ["browser", "fireemu-oracle-query"]);
   assert.equal(seen.keyPath, "K");
   assert.deepEqual(seen.journal, ["o.json", "browser", "rid"]);
+});
+
+test("the local recording asks the strict profile for production's refusals", () => {
+  // native/target-protocol/missing-index records production's REMOVE for a target whose
+  // composite index is missing; strict refuses it only with productionExact, and the emulator
+  // profile refuses the key.
+  assert.equal(fireemuConfig("strict").productionExact, true);
+  assert.equal(fireemuConfig("strict").profile, "strict");
+  assert.equal("productionExact" in fireemuConfig("emulator"), false);
+  assert.equal(fireemuConfig("emulator").profile, "emulator");
 });

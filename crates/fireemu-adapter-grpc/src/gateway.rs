@@ -136,6 +136,70 @@ pub const OFFICIAL_EMULATOR_REFUSES: &[&str] = &[
     "FS-QUERY-LIMIT-ARRAY-CONTAINS-PER-DISJUNCTION",
 ];
 
+/// The warning a query carries when the strict profile served it without its composite index
+/// (`firestore.missingIndexes: "report"`); production refuses the same query.
+pub const MISSING_INDEX_REPORTED: &str = "FS_MISSING_INDEX_REPORTED";
+
+/// A composite index the strict profile assumed for a query production refuses without it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingIndexReport {
+    /// `projects/<p>/databases/<d>`.
+    pub database: String,
+    /// The `firestore.indexes.json` entry that serves the query.
+    pub fragment: String,
+    /// Production's refusal of the query, with the console link that creates the index.
+    pub message: String,
+}
+
+/// Distinct missing indexes kept for [`missing_index_reports`]; later ones are only logged.
+const MAX_MISSING_INDEX_REPORTS: usize = 1000;
+
+static MISSING_INDEX_REPORTS: std::sync::Mutex<Vec<MissingIndexReport>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Whether a report is the first of its (database, index).
+enum Noted {
+    New,
+    Seen,
+    /// New, but the list is full.
+    OverBound,
+}
+
+/// The stderr line of a report. Field paths reach it only JSON-escaped (the fragment) or with
+/// control characters escaped (production's text), each cut at the shared echo bound.
+fn missing_index_log_line(report: &MissingIndexReport) -> String {
+    format!(
+        "[firestore] {}: served a query without its composite index (firestore.missingIndexes \
+         is \"report\"); production refuses it: {}\nAdd to firestore.indexes.json:\n{}",
+        report.database,
+        fireemu_core_types::codec::echo(&escape_control_characters(&report.message)),
+        fireemu_core_types::codec::echo(&report.fragment),
+    )
+}
+
+/// `text` with every control character but a line feed written as its Rust escape.
+fn escape_control_characters(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_control() && c != '\n' {
+            escaped.extend(c.escape_default());
+        } else {
+            escaped.push(c);
+        }
+    }
+    escaped
+}
+
+/// Every distinct (database, index) the strict profile has reported since the process
+/// started, in the order first seen, so a test run can fail on any of them.
+#[must_use]
+pub fn missing_index_reports() -> Vec<MissingIndexReport> {
+    MISSING_INDEX_REPORTS
+        .lock()
+        .map(|reports| reports.clone())
+        .unwrap_or_default()
+}
+
 /// Strict gateway configuration.
 #[derive(Debug, Clone)]
 pub struct Gateway {
@@ -151,11 +215,83 @@ pub struct Gateway {
 }
 
 impl Gateway {
-    /// Whether requests get the refusals only production makes: the strict profile's index
-    /// policy. The emulator profile may add no rejection (`spec/compatibility/contract.json`).
+    /// Whether requests get the refusals only production makes: the strict profile, whatever
+    /// `firestore.missingIndexes` says. The emulator profile may add no rejection
+    /// (`spec/compatibility/contract.json`).
     #[must_use]
     pub fn production_refusals(&self) -> bool {
-        self.ctx.policy == IndexValidationPolicy::Production
+        self.ctx.policy.production_rules()
+    }
+
+    /// Records and logs, once per database and index, a query on `database`
+    /// (`projects/<p>/databases/<d>`) that this gateway served without the composite index
+    /// production refuses it without (`firestore.missingIndexes: "report"`). Anything else,
+    /// including the emulator profile's assumptions, is left alone. Returns the line written
+    /// to stderr, if any.
+    pub fn report_missing_index(&self, database: &str, accepted: &AcceptedQuery) -> Option<String> {
+        self.report_missing_index_as(database, accepted, |requirement, multiple_inequalities| {
+            crate::index_messages::missing_index_message(
+                database,
+                requirement,
+                multiple_inequalities,
+            )
+        })
+    }
+
+    /// [`Self::report_missing_index`] with production's refusal text from `message` (given the
+    /// required index and whether the query has inequalities on several fields), for a caller
+    /// that knows the index's state (an Admin create still building it, or its deletion).
+    pub fn report_missing_index_as(
+        &self,
+        database: &str,
+        accepted: &AcceptedQuery,
+        message: impl FnOnce(&IndexDefinition, bool) -> String,
+    ) -> Option<String> {
+        use std::io::Write as _;
+        let IndexDecision::AssumedIndex { requirement } = &accepted.decision else {
+            return None;
+        };
+        if self.ctx.policy != IndexValidationPolicy::ProductionReport {
+            return None;
+        }
+        let report = MissingIndexReport {
+            database: database.to_owned(),
+            fragment: requirement.indexes_json_fragment(),
+            message: message(requirement, accepted.query.inequality_fields().len() > 1),
+        };
+        let noted = MISSING_INDEX_REPORTS
+            .lock()
+            .map(|mut reports| {
+                let seen = reports
+                    .iter()
+                    .any(|r| r.database == report.database && r.fragment == report.fragment);
+                if seen {
+                    Noted::Seen
+                } else if reports.len() < MAX_MISSING_INDEX_REPORTS {
+                    reports.push(report.clone());
+                    Noted::New
+                } else {
+                    Noted::OverBound
+                }
+            })
+            .unwrap_or(Noted::Seen);
+        let line = match noted {
+            Noted::Seen => return None,
+            Noted::New => missing_index_log_line(&report),
+            Noted::OverBound => {
+                static OVER_BOUND: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if OVER_BOUND.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    return None;
+                }
+                format!(
+                    "[firestore] more than {MAX_MISSING_INDEX_REPORTS} distinct missing composite \
+                     indexes; later ones are served without being reported"
+                )
+            }
+        };
+        let _ = writeln!(std::io::stderr(), "{line}");
+        Some(line)
     }
 
     /// Runs every strict check on a decoded query.
@@ -198,9 +334,10 @@ impl Gateway {
     /// The canonical query, with the refusals of the profile's policy: production's under
     /// the strict profile, the official emulator's under the emulator profile.
     fn canonicalize(&self, query: &Query) -> Result<Query, Rejection> {
-        match self.ctx.policy {
-            IndexValidationPolicy::Production => query.canonicalize(),
-            IndexValidationPolicy::Emulator => query.canonicalize_emulator(),
+        if self.production_refusals() {
+            query.canonicalize()
+        } else {
+            query.canonicalize_emulator()
         }
         .map_err(|e| Rejection::InvalidQuery(e.to_string()))
     }
@@ -213,9 +350,8 @@ impl Gateway {
     ) -> Result<AcceptedQuery, Rejection> {
         // Production refuses a cursor whose `__name__` value is not a document reference,
         // or whose reference names a document the query does not select. The compatibility
-        // contract keeps production-only refusals out of the `emulator` profile, and the
-        // production index policy is exactly what the strict profile selects.
-        if self.ctx.policy == IndexValidationPolicy::Production {
+        // contract keeps production-only refusals out of the `emulator` profile.
+        if self.production_refusals() {
             canonical
                 .check_production_cursor_constraints()
                 .map_err(|error| Rejection::InvalidQuery(error.to_string()))?;
@@ -270,6 +406,11 @@ impl Gateway {
             IndexDecision::UseIndex { .. }
             | IndexDecision::MergeIndexes { .. }
             | IndexDecision::KindlessScan => {}
+            // The strict profile reports with the database's console link, which only the
+            // caller knows ([`Self::report_missing_index`]).
+            IndexDecision::AssumedIndex { .. } if self.production_refusals() => {
+                warnings.push(MISSING_INDEX_REPORTED.to_owned());
+            }
             IndexDecision::AssumedIndex { requirement } => {
                 warnings.push("FS_EMULATOR_INDEX_ASSUMED".to_owned());
                 note_assumed_index(&requirement.indexes_json_fragment());
@@ -333,5 +474,49 @@ fn note_assumed_index(fragment: &str) {
             std::io::stderr(),
             "[firestore] served without a configured composite index (emulator profile); production needs: {fragment}"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{escape_control_characters, missing_index_log_line, MissingIndexReport};
+    use proptest::prelude::*;
+
+    #[test]
+    fn the_log_line_keeps_line_feeds_and_escapes_every_other_control_character() {
+        assert_eq!(escape_control_characters("a\nb"), "a\nb");
+        assert_eq!(
+            escape_control_characters("a\tb\rc\u{1b}d\u{7f}"),
+            "a\\tb\\rc\\u{1b}d\\u{7f}"
+        );
+        assert_eq!(escape_control_characters("名前 `x y`"), "名前 `x y`");
+    }
+
+    #[test]
+    fn the_log_line_names_the_database_the_refusal_and_the_fragment() {
+        let report = MissingIndexReport {
+            database: "projects/p/databases/(default)".to_owned(),
+            fragment: "{\n  \"collectionGroup\": \"c\"\n}".to_owned(),
+            message: "The query requires an index.\tlink".to_owned(),
+        };
+        assert_eq!(
+            missing_index_log_line(&report),
+            "[firestore] projects/p/databases/(default): served a query without its composite \
+             index (firestore.missingIndexes is \"report\"); production refuses it: The query \
+             requires an index.\\tlink\nAdd to firestore.indexes.json:\n{\n  \"collectionGroup\": \"c\"\n}"
+        );
+    }
+
+    proptest! {
+        /// Nothing but a line feed reaches the log as a control character, and text without
+        /// one is written as it is.
+        #[test]
+        fn escaping_leaves_no_control_character_but_line_feeds(text in any::<String>()) {
+            let escaped = escape_control_characters(&text);
+            prop_assert!(escaped.chars().all(|c| !c.is_control() || c == '\n'));
+            if text.chars().all(|c| !c.is_control() || c == '\n') {
+                prop_assert_eq!(escaped, text);
+            }
+        }
     }
 }

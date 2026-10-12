@@ -57,15 +57,24 @@ impl Daemon {
     }
 
     fn spawn(name: &str, profile: &str, auth: &Value, extra: &[&str]) -> Self {
+        Self::launch(name, profile, auth, &json!({}), extra)
+    }
+
+    /// [`Self::start`] with further top-level configuration keys (`productionExact`).
+    fn start_with(name: &str, profile: &str, auth: &Value, top: &Value) -> Self {
+        Self::launch(name, profile, auth, top, &[])
+    }
+
+    fn launch(name: &str, profile: &str, auth: &Value, top: &Value, extra: &[&str]) -> Self {
         let dir = TrustedTempDir::new(&format!("auth-provider-seeds-{name}"));
         let config = dir.join("fireemu.json");
         let mut auth = auth.clone();
         auth["apiKeys"] = json!(["provider-fixture-key"]);
-        std::fs::write(
-            &config,
-            json!({"schemaVersion": 1, "profile": profile, "auth": auth, "daemon":{"clockStart":"2027-01-15T08:00:30Z"}}).to_string(),
-        )
-        .unwrap();
+        let mut document = json!({"schemaVersion": 1, "profile": profile, "auth": auth, "daemon":{"clockStart":"2027-01-15T08:00:30Z"}});
+        for (key, value) in top.as_object().unwrap() {
+            document[key] = value.clone();
+        }
+        std::fs::write(&config, document.to_string()).unwrap();
         let http_port = "0";
         let mut child = Command::new(env!("CARGO_BIN_EXE_fireemu"))
             .args([
@@ -460,7 +469,11 @@ fn auth_provider_seeds_strict_oidc_requires_live_enabled_config_and_local_signat
 #[test]
 fn auth_provider_seeds_strict_saml_uses_seeded_resource_without_relaxing_signatures() {
     let config = saml("saml.seed");
-    let daemon = Daemon::start("saml", "strict", &json!({"providers":{"saml":[config]}}));
+    let daemon = Daemon::start(
+        "saml",
+        "strict",
+        &json!({"providers":{"saml":[config]},"idpAssertions":"signed"}),
+    );
     let (status, body) = http(
         daemon.auth_port(),
         "POST",
@@ -655,7 +668,7 @@ fn auth_provider_seeds_strict_saml_signed_fixture_uses_declared_certificate() {
     let daemon = Daemon::start(
         "saml-signed",
         "strict",
-        &json!({"providers":{"saml":[config]}}),
+        &json!({"providers":{"saml":[config]},"idpAssertions":"signed"}),
     );
     for (file, expected) in [
         ("assertion-signed.xml", 200),
@@ -681,4 +694,410 @@ fn auth_provider_seeds_strict_saml_signed_fixture_uses_declared_certificate() {
             assert!(body["idToken"].is_null());
         }
     }
+}
+
+/// Production's refusal of a provider without a configuration (record-oidc 39209e).
+const NOT_FOUND_REFUSAL: &str =
+    "OPERATION_NOT_ALLOWED : The identity provider configuration is not found.";
+
+/// Percent-encodes `text` for a URL query value (everything but the unreserved characters).
+fn query_value(text: &str) -> String {
+    text.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+                char::from(b).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+
+/// The fixture assertions a test signs in with, in the shapes the client SDKs send them: a
+/// `signInWithCredential(GoogleAuthProvider.credential(json))` post body, the sign-in widget's
+/// handoff URL (`/emulator/auth/handler`, built-in and SAML), and an unsigned OIDC ID token of an
+/// undeclared `oidc.*` provider. `tag` keeps the subjects of one scenario apart from another's.
+fn fixture_assertions(auth_port: u16, tag: &str) -> Vec<(&'static str, Value)> {
+    let claims = |sub: &str| {
+        json!({"sub": sub, "email": format!("{sub}@example.test"), "email_verified": true})
+            .to_string()
+    };
+    let widget = |provider: &str, sub: &str| {
+        let mut uri = format!(
+            "http://127.0.0.1:{auth_port}/emulator/auth/handler?providerId={}&id_token={}",
+            query_value(provider),
+            query_value(&claims(sub))
+        );
+        if provider.starts_with("saml.") {
+            let saml = json!({"assertion": {"subject": {"nameId": format!("{sub}@example.test")}}});
+            uri.push_str("&SAMLResponse=");
+            uri.push_str(&query_value(&saml.to_string()));
+        }
+        json!({"requestUri": uri, "postBody": "", "sessionId": "ValueNotUsedByAuthEmulator", "returnSecureToken": true, "returnIdpCredential": true})
+    };
+    let unsigned =
+        fireemu_core_auth::jwt::encode_payload_with(&claims(&format!("oidc-{tag}")), None);
+    vec![
+        (
+            "google.com",
+            json!({"requestUri": "http://localhost", "postBody": format!("id_token={}&providerId=google.com", query_value(&claims(&format!("google-{tag}")))), "returnSecureToken": true, "returnIdpCredential": true}),
+        ),
+        ("github.com", widget("github.com", &format!("github-{tag}"))),
+        ("saml.corp", widget("saml.corp", &format!("saml-{tag}"))),
+        (
+            "oidc.corp",
+            json!({"requestUri": "http://localhost", "postBody": format!("providerId=oidc.corp&id_token={unsigned}"), "returnSecureToken": true}),
+        ),
+    ]
+}
+
+fn sign_in_with_idp(daemon: &Daemon, request: &Value) -> (u16, Value) {
+    http(
+        daemon.auth_port(),
+        "POST",
+        &format!("{V1}/accounts:signInWithIdp?key=provider-fixture-key"),
+        "",
+        request,
+    )
+}
+
+#[test]
+fn auth_idp_fixture_assertions_sign_in_under_both_profiles_by_default() {
+    // Owner decision 1396: the fixture IdP and the sign-in widget are a development default of
+    // the strict profile too; the rest of strict Auth (its answer shapes) is unchanged.
+    for profile in ["strict", "emulator"] {
+        let daemon = Daemon::start(&format!("idp-fixture-{profile}"), profile, &json!({}));
+        let banner = daemon.banner.lock().unwrap().clone();
+        assert_eq!(
+            banner.contains("identity providers: fixture IdP"),
+            profile == "strict",
+            "{banner}"
+        );
+        let (status, page) = {
+            let mut stream = TcpStream::connect(("127.0.0.1", daemon.auth_port())).unwrap();
+            write!(
+                stream,
+                "GET /emulator/auth/handler?apiKey=provider-fixture-key&providerId=github.com HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+            let mut raw = String::new();
+            stream.read_to_string(&mut raw).unwrap();
+            (
+                raw.split_whitespace().nth(1).unwrap_or_default().to_owned(),
+                raw,
+            )
+        };
+        assert_eq!(status, "200", "{page}");
+        for (provider, request) in fixture_assertions(daemon.auth_port(), "sign-in") {
+            let (status, body) = sign_in_with_idp(&daemon, &request);
+            assert_eq!(status, 200, "{profile} {provider}: {body}");
+            assert_eq!(body["providerId"], provider, "{profile}: {body}");
+            assert!(body["idToken"].is_string(), "{profile} {provider}: {body}");
+            // Strict keeps its local continuation handles, and a fixture one resumes.
+            if profile == "strict" {
+                let token = body["pendingToken"]
+                    .as_str()
+                    .expect("a strict continuation");
+                let (status, resumed) = sign_in_with_idp(
+                    &daemon,
+                    &json!({"requestUri": request["requestUri"], "pendingToken": token, "returnSecureToken": true}),
+                );
+                assert_eq!(status, 200, "{provider}: {resumed}");
+                assert_eq!(resumed["localId"], body["localId"], "{provider}: {resumed}");
+            } else {
+                assert!(body.get("pendingToken").is_none(), "{provider}: {body}");
+            }
+        }
+    }
+}
+
+#[test]
+fn auth_idp_signed_assertions_refuse_every_fixture_shape() {
+    use fireemu_adapter_http::signing::RsaSigner;
+    let signer = RsaSigner::from_seed(4402).unwrap();
+    for (name, auth, top) in [
+        ("explicit", json!({"idpAssertions": "signed"}), json!({})),
+        (
+            "production-exact",
+            json!({}),
+            json!({"productionExact": true}),
+        ),
+        (
+            "signers",
+            json!({"idpSigners": {"https://issuer.test": signer.jwks()}}),
+            json!({}),
+        ),
+    ] {
+        let daemon = Daemon::start_with(&format!("idp-signed-{name}"), "strict", &auth, &top);
+        let banner = daemon.banner.lock().unwrap().clone();
+        assert!(
+            !banner.contains("identity providers: fixture IdP"),
+            "{name}: {banner}"
+        );
+        assert_eq!(
+            banner.contains("identity providers: OIDC refused"),
+            name != "signers",
+            "{name}: {banner}"
+        );
+        // The previous strict answers (a 37a748392 build answered these exactly): no provider
+        // is declared, so each is refused as one without a configuration.
+        for (provider, request) in fixture_assertions(daemon.auth_port(), "sign-in") {
+            let (status, body) = sign_in_with_idp(&daemon, &request);
+            assert_eq!(status, 400, "{name} {provider}: {body}");
+            assert_eq!(
+                body["error"]["message"], NOT_FOUND_REFUSAL,
+                "{name} {provider}: {body}"
+            );
+            assert!(body["idToken"].is_null(), "{name} {provider}: {body}");
+        }
+        // Nothing was created by a refused assertion.
+        let (status, body) = http(
+            daemon.auth_port(),
+            "POST",
+            &format!("/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:query"),
+            OWNER,
+            &json!({"returnUserInfo": false}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["recordsCount"], "0", "{name}: {body}");
+    }
+}
+
+#[test]
+fn auth_idp_declared_saml_provider_takes_the_fixture_unless_assertions_are_signed() {
+    // A strict configuration that declares a SAML provider (with certificates) but names no
+    // assertion mode takes the development default: the widget's JSON SAML response signs in.
+    // Production's certificate check needs "signed".
+    for (mode, expected) in [(None, 200), (Some("signed"), 400)] {
+        let mut auth = json!({"providers": {"saml": [saml("saml.seed")]}});
+        if let Some(mode) = mode {
+            auth["idpAssertions"] = json!(mode);
+        }
+        let daemon = Daemon::start(&format!("idp-saml-{expected}"), "strict", &auth);
+        let saml_response = json!({"assertion": {"subject": {"nameId": "seed@example.test"}}});
+        let request = json!({
+            "requestUri": format!(
+                "http://127.0.0.1:{}/emulator/auth/handler?providerId=saml.seed&id_token={}&SAMLResponse={}",
+                daemon.auth_port(),
+                query_value(&json!({"sub": "seed-sub", "email": "seed@example.test"}).to_string()),
+                query_value(&saml_response.to_string()),
+            ),
+            "postBody": "",
+            "returnSecureToken": true,
+        });
+        let (status, body) = sign_in_with_idp(&daemon, &request);
+        assert_eq!(status, expected, "{mode:?}: {body}");
+        assert_eq!(
+            body["idToken"].is_string(),
+            expected == 200,
+            "{mode:?}: {body}"
+        );
+    }
+}
+
+/// A strict daemon whose `IdP` assertions are `mode` (`None`: the default), with a configured
+/// `google.com`, `oidc.corp` (an issuer without a key) and `saml.corp`, and a tenant.
+fn configured_idp_daemon(name: &str, mode: Option<&str>) -> (Daemon, String) {
+    let mut auth = json!({"providers": {
+        "oidc": [{"name": "oidc.corp", "enabled": true, "clientId": "local-client", "issuer": "https://issuer.test"}],
+        "saml": [saml("saml.corp")],
+    }});
+    if let Some(mode) = mode {
+        auth["idpAssertions"] = json!(mode);
+    }
+    let daemon = Daemon::start(name, "strict", &auth);
+    let admin = format!("/identitytoolkit.googleapis.com/admin/v2/projects/{PROJECT}");
+    for (method, path, body) in [
+        (
+            "POST",
+            format!("{admin}/defaultSupportedIdpConfigs?idpId=google.com"),
+            json!({"enabled": true, "clientId": "c", "clientSecret": "s"}),
+        ),
+        (
+            "PATCH",
+            format!("{admin}/config?updateMask=multiTenant.allowTenants"),
+            json!({"multiTenant": {"allowTenants": true}}),
+        ),
+    ] {
+        let (status, body) = http(daemon.auth_port(), method, &path, OWNER, &body);
+        assert_eq!(status, 200, "{path}: {body}");
+    }
+    let (status, body) = http(
+        daemon.auth_port(),
+        "POST",
+        &format!("/identitytoolkit.googleapis.com/v2/projects/{PROJECT}/tenants"),
+        OWNER,
+        &json!({"displayName": "idp-paths"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let tenant = body["name"].as_str().unwrap().rsplit('/').next().unwrap();
+    let tenant = tenant.to_owned();
+    (daemon, tenant)
+}
+
+fn tenant_records(daemon: &Daemon, tenant: &str) -> Value {
+    let (status, body) = http(
+        daemon.auth_port(),
+        "POST",
+        &format!(
+            "/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/tenants/{tenant}/accounts:query"
+        ),
+        OWNER,
+        &json!({"returnUserInfo": false}),
+    );
+    assert_eq!(status, 200, "{body}");
+    body["recordsCount"].clone()
+}
+
+/// The ID token of a new password account.
+fn password_account(daemon: &Daemon, email: &str) -> String {
+    let (status, body) = http(
+        daemon.auth_port(),
+        "POST",
+        &format!("{V1}/accounts:signUp?key=provider-fixture-key"),
+        "",
+        &json!({"email": email, "password": "password-1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    body["idToken"].as_str().unwrap().to_owned()
+}
+
+fn linked_providers(daemon: &Daemon, id_token: &str) -> Vec<String> {
+    let (status, body) = http(
+        daemon.auth_port(),
+        "POST",
+        &format!("{V1}/accounts:lookup?key=provider-fixture-key"),
+        "",
+        &json!({"idToken": id_token}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let mut providers: Vec<String> = body["users"][0]["providerUserInfo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|info| info["providerId"].as_str().unwrap().to_owned())
+        .collect();
+    providers.sort();
+    providers
+}
+
+/// An account made by the Admin API that already links the `google.com` subject `re-sub`.
+fn admin_google_account(daemon: &Daemon) -> String {
+    let (status, made) = http(
+        daemon.auth_port(),
+        "POST",
+        &format!("/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts"),
+        OWNER,
+        &json!({"email": "re@example.test"}),
+    );
+    assert_eq!(status, 200, "{made}");
+    let uid = made["localId"].as_str().unwrap().to_owned();
+    let (status, body) = http(
+        daemon.auth_port(),
+        "POST",
+        &format!("/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:update"),
+        OWNER,
+        &json!({"localId": uid, "linkProviderUserInfo": {"providerId": "google.com", "rawId": "re-sub", "email": "re@example.test"}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    uid
+}
+
+fn reauth_google(daemon: &Daemon) -> (u16, Value) {
+    let claims = json!({"sub": "re-sub", "email": "re@example.test"}).to_string();
+    sign_in_with_idp(
+        daemon,
+        &json!({"requestUri": "http://localhost", "postBody": format!("id_token={}&providerId=google.com", query_value(&claims)), "returnSecureToken": true}),
+    )
+}
+
+#[test]
+fn auth_idp_fixture_signs_in_tenants_links_and_reauthenticates_under_strict() {
+    let (daemon, tenant) = configured_idp_daemon("idp-fixture-paths", None);
+    // A tenant sign-in (the client SDKs send tenantId in the body) lands in the tenant.
+    for (provider, request) in fixture_assertions(daemon.auth_port(), "tenant") {
+        let mut request = request;
+        request["tenantId"] = json!(tenant);
+        let (status, body) = sign_in_with_idp(&daemon, &request);
+        assert_eq!(status, 200, "{provider}: {body}");
+        assert!(body["idToken"].is_string(), "{provider}: {body}");
+    }
+    assert_eq!(tenant_records(&daemon, &tenant), "4");
+    // Linking to a signed-in account (an idToken in the request).
+    let id_token = password_account(&daemon, "link@example.test");
+    for (provider, request) in fixture_assertions(daemon.auth_port(), "link") {
+        let mut request = request;
+        request["idToken"] = json!(id_token);
+        let (status, body) = sign_in_with_idp(&daemon, &request);
+        assert_eq!(status, 200, "{provider}: {body}");
+        assert!(body.get("errorMessage").is_none(), "{provider}: {body}");
+    }
+    assert_eq!(
+        linked_providers(&daemon, &id_token),
+        [
+            "github.com",
+            "google.com",
+            "oidc.corp",
+            "password",
+            "saml.corp"
+        ]
+    );
+    // Reauthentication of an account that already links the identity.
+    let uid = admin_google_account(&daemon);
+    let (status, body) = reauth_google(&daemon);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["localId"], uid.as_str(), "{body}");
+}
+
+#[test]
+fn auth_idp_signed_refuses_tenants_links_and_reauthentication_with_the_previous_messages() {
+    // Every answer below is what a strict daemon built from 37a748392 (before
+    // auth.idpAssertions) gave for the same requests.
+    let (daemon, tenant) = configured_idp_daemon("idp-signed-paths", Some("signed"));
+    let expected = |provider: &str, sub: &str| -> String {
+        match provider {
+            "google.com" => format!(
+                "INVALID_IDP_RESPONSE : Unable to parse Google id_token: {}",
+                json!({"sub": sub, "email": format!("{sub}@example.test"), "email_verified": true})
+            ),
+            "github.com" => NOT_FOUND_REFUSAL.to_owned(),
+            "oidc.corp" => {
+                "INVALID_IDP_RESPONSE : Error connecting to the given credential's issuer."
+                    .to_owned()
+            }
+            _ => "INVALID_IDP_RESPONSE".to_owned(),
+        }
+    };
+    for (provider, request) in fixture_assertions(daemon.auth_port(), "sign-in") {
+        let (status, body) = sign_in_with_idp(&daemon, &request);
+        assert_eq!(status, 400, "{provider}: {body}");
+        let sub = format!("{}-sign-in", provider.split('.').next().unwrap());
+        assert_eq!(body["error"]["message"], expected(provider, &sub).as_str());
+    }
+    // A tenant has none of the project's providers.
+    for (provider, request) in fixture_assertions(daemon.auth_port(), "tenant") {
+        let mut request = request;
+        request["tenantId"] = json!(tenant);
+        let (status, body) = sign_in_with_idp(&daemon, &request);
+        assert_eq!(status, 400, "{provider}: {body}");
+        assert_eq!(body["error"]["message"], NOT_FOUND_REFUSAL, "{provider}");
+    }
+    assert_eq!(tenant_records(&daemon, &tenant), "0");
+    let id_token = password_account(&daemon, "link@example.test");
+    for (provider, request) in fixture_assertions(daemon.auth_port(), "link") {
+        let mut request = request;
+        request["idToken"] = json!(id_token);
+        let (status, body) = sign_in_with_idp(&daemon, &request);
+        assert_eq!(status, 400, "{provider}: {body}");
+        let sub = format!("{}-link", provider.split('.').next().unwrap());
+        assert_eq!(body["error"]["message"], expected(provider, &sub).as_str());
+    }
+    assert_eq!(linked_providers(&daemon, &id_token), ["password"]);
+    admin_google_account(&daemon);
+    let (status, body) = reauth_google(&daemon);
+    assert_eq!(status, 400, "{body}");
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("INVALID_IDP_RESPONSE : Unable to parse Google id_token: "));
 }

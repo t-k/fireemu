@@ -2724,6 +2724,38 @@ async fn a_missing_index_removes_only_its_own_target_and_the_stream_keeps_listen
 }
 
 #[tokio::test]
+async fn in_report_mode_a_listen_target_without_its_composite_index_is_served_and_reported() {
+    // `firestore.missingIndexes: "report"`: the target that production removes with
+    // FAILED_PRECONDITION stays active, and the index is reported once.
+    let (mut client, handle) =
+        start_configured(None, IndexValidationPolicy::ProductionReport).await;
+    let (tx, rx) = mpsc::channel(8);
+    let mut responses = client
+        .listen(ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    tx.send(add_owner_ordered_target(22, "updatedAt"))
+        .await
+        .unwrap();
+    let served = next_until(&mut responses, "NO_CHANGE[]").await;
+    assert_eq!(served, vec!["ADD[22]", "CURRENT[22]", "NO_CHANGE[]"]);
+    let reports: Vec<_> = fireemu_adapter_grpc::gateway::missing_index_reports()
+        .into_iter()
+        .filter(|r| r.database == DB)
+        .collect();
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    assert!(
+        reports[0]
+            .message
+            .starts_with("The query requires an index."),
+        "{}",
+        reports[0].message
+    );
+    handle.abort();
+}
+
+#[tokio::test]
 async fn the_streaming_surfaces_refuse_a_database_that_was_never_created() {
     // Production answers NOT_FOUND for a database `databases.create` was never called for,
     // before the target or the write is considered. The message is the one recorded from the

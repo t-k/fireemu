@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::RestState;
-use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
+use fireemu_adapter_grpc::rules::{NoticeEvent, NoticeLimit, RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::serve::serve_multiplexed;
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_http::identity_toolkit::{AuthState, AuthWallClock};
@@ -38,6 +38,7 @@ use super::{
 
 struct BoundStartup {
     cfg: RuntimeConfig,
+    config_origin: String,
     only: Selection,
     verbosity: Verbosity,
     import: Option<PathBuf>,
@@ -70,6 +71,7 @@ struct BoundStartup {
 
 struct ServiceAssembly {
     cfg: RuntimeConfig,
+    config_origin: String,
     only: Selection,
     verbosity: Verbosity,
     import: Option<PathBuf>,
@@ -342,17 +344,20 @@ const fn contention_for(
     }
 }
 
-/// How `signInWithIdp` assertions are verified (AUTH-FEDERATION owner decision O4). Strict
-/// verifies signed OIDC ID tokens with the `auth.idpSigners` keys, and refuses every `IdP`
-/// sign-in without them; the emulator profile keeps the fixture `IdP` and ignores the keys.
+/// How `signInWithIdp` assertions are verified (`auth.idpAssertions`). Signed assertions
+/// (AUTH-FEDERATION owner decision O4) verify OIDC ID tokens with the `auth.idpSigners` keys and
+/// refuse every other `IdP` sign-in without them; the fixture `IdP` (owner decision 1396: the
+/// development default of both profiles) parses assertions without verifying them. The emulator
+/// profile always keeps the official emulator's fixture.
 fn idp_assertion_policy(
     profile: crate::config::CompatibilityProfile,
+    mode: crate::config::IdpAssertionMode,
     signers: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Result<fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy, String> {
+    use crate::config::{CompatibilityProfile, IdpAssertionMode};
     use fireemu_adapter_http::identity_toolkit::{IdpAssertionPolicy, IdpSignerTrust};
-    Ok(match profile {
-        crate::config::CompatibilityProfile::Emulator => IdpAssertionPolicy::Fixture,
-        crate::config::CompatibilityProfile::Strict => {
+    Ok(match (profile, mode) {
+        (CompatibilityProfile::Strict, IdpAssertionMode::Signed) => {
             // Validated when the configuration was parsed; a failure here is a configuration bug.
             let trust = signers
                 .map(IdpSignerTrust::from_jwks)
@@ -360,6 +365,9 @@ fn idp_assertion_policy(
                 .map_err(|e| format!("auth.idpSigners: {e}"))?
                 .unwrap_or_default();
             IdpAssertionPolicy::SignedOidc(Arc::new(trust))
+        }
+        (CompatibilityProfile::Emulator, _) | (_, IdpAssertionMode::Fixture) => {
+            IdpAssertionPolicy::Fixture
         }
     })
 }
@@ -479,25 +487,39 @@ pub(crate) fn custom_token_signer_note(cfg: &RuntimeConfig) -> Option<&'static s
     )
 }
 
-/// The startup notice for a strict profile without `IdP` signers: strict verifies OIDC ID
-/// tokens only with `auth.idpSigners` keys, so without them it refuses every OIDC sign-in (SAML
-/// responses are verified with each provider's configured certificates).
-pub(crate) fn idp_signer_note(cfg: &RuntimeConfig) -> Option<&'static str> {
-    idp_signer_note_for(cfg.profile, cfg.auth_idp_signers.is_some())
+/// The startup notice of the strict profile's `IdP` assertions: the fixture `IdP` (the
+/// development default) and how to restore production's verification, or signed assertions
+/// without `IdP` signers, which refuse every OIDC sign-in (SAML responses are verified with each
+/// provider's configured certificates).
+pub(crate) fn idp_assertion_note(cfg: &RuntimeConfig) -> Option<&'static str> {
+    idp_assertion_note_for(
+        cfg.profile,
+        cfg.auth_idp_assertions,
+        cfg.auth_idp_signers.is_some(),
+    )
 }
 
-fn idp_signer_note_for(
+fn idp_assertion_note_for(
     profile: crate::config::CompatibilityProfile,
+    mode: crate::config::IdpAssertionMode,
     configured: bool,
 ) -> Option<&'static str> {
-    (profile == crate::config::CompatibilityProfile::Strict && !configured).then_some(
-        "  identity providers: OIDC refused (strict accepts only signed OIDC ID tokens: set auth.idpSigners to the issuers' public JWK sets); SAML responses are verified with each provider's certificates; use profile \"emulator\" for the fixture IdP",
-    )
+    use crate::config::{CompatibilityProfile, IdpAssertionMode};
+    match (profile, mode, configured) {
+        (CompatibilityProfile::Emulator, _, _) | (_, IdpAssertionMode::Signed, true) => None,
+        (CompatibilityProfile::Strict, IdpAssertionMode::Fixture, _) => Some(
+            "  identity providers: fixture IdP (assertions and the sign-in widget are accepted unverified, as by the official emulator; set auth.idpAssertions \"signed\" or productionExact for production's verification)",
+        ),
+        (CompatibilityProfile::Strict, IdpAssertionMode::Signed, false) => Some(
+            "  identity providers: OIDC refused (signed assertions accept only signed OIDC ID tokens: set auth.idpSigners to the issuers' public JWK sets); SAML responses are verified with each provider's certificates; the fixture IdP and the built-in providers are refused",
+        ),
+    }
 }
 
 fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     let BoundStartup {
         cfg,
+        config_origin,
         only,
         verbosity,
         import,
@@ -558,6 +580,15 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                 cfg.pubsub_push_minimum_redelivery_interval_millis,
             ),
         );
+    }
+    // The client only sees production's (or the official emulator's) refusal, which does not
+    // say how to load rules.
+    if !quiet {
+        storage_rules
+            .registry
+            .set_no_rules_notice(fireemu_adapter_http::storage::NoRulesNotice(Arc::new(
+                |event| eprintln!("{}", storage_no_rules_warning(event)),
+            )));
     }
     // The buckets the deployed Storage triggers name exist for the strict profile, as in production.
     if let Some(runtime) = &functions_runtime {
@@ -639,7 +670,11 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         })
         .transpose()
         .map_err(|e| format!("auth.customTokenSigners: {e}"))?;
-    let idp_assertions = idp_assertion_policy(cfg.profile, cfg.auth_idp_signers.as_ref())?;
+    let idp_assertions = idp_assertion_policy(
+        cfg.profile,
+        cfg.auth_idp_assertions,
+        cfg.auth_idp_signers.as_ref(),
+    )?;
     let auth = Arc::new(AuthState {
         store: auth_store.clone(),
         clock: clock.clone(),
@@ -806,6 +841,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     Ok(ServiceAssembly {
         log_bus,
         cfg,
+        config_origin,
         only,
         verbosity,
         import,
@@ -862,6 +898,40 @@ fn firestore_wall_source(
     Some(Arc::new(move || wall_clock.now()))
 }
 
+/// The warning printed the first time a client request to a database is refused because no
+/// Firestore Security Rules are loaded for it, and once when further ones are suppressed.
+fn firestore_no_rules_warning(event: NoticeEvent<'_>) -> String {
+    let database = match event {
+        NoticeEvent::First(database) => database,
+        NoticeEvent::Suppressed => {
+            return format!(
+                "warning: firestore: further no-rules warnings are suppressed ({} databases were reported)",
+                NoticeLimit::LIMIT
+            )
+        }
+    };
+    format!(
+        "warning: firestore: a client request to database {database:?} was refused with PERMISSION_DENIED because no Security Rules are loaded for it (the strict profile refuses client requests without rules, as production does); set firestore.rules in firebase.json, rules.source in fireemu.json, or PUT /v1/rules. Reported once per database."
+    )
+}
+
+/// The warning printed the first time an end-user request on a bucket is refused because no
+/// Storage Rules are loaded for it, and once when further ones are suppressed.
+fn storage_no_rules_warning(event: NoticeEvent<'_>) -> String {
+    let bucket = match event {
+        NoticeEvent::First(bucket) => bucket,
+        NoticeEvent::Suppressed => {
+            return format!(
+            "warning: storage: further no-rules warnings are suppressed ({} buckets were reported)",
+            NoticeLimit::LIMIT
+        )
+        }
+    };
+    format!(
+        "warning: storage: an end-user request on bucket {bucket:?} was refused because no Storage Rules are loaded for it; set storage.rules in firebase.json or fireemu.json. Reported once per bucket."
+    )
+}
+
 /// The Firestore enforcer's settings that follow from the compatibility profile.
 fn firestore_profile_settings(
     enforcer: RulesEnforcer,
@@ -879,6 +949,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     let ServiceAssembly {
         log_bus,
         cfg,
+        config_origin,
         only,
         verbosity,
         import,
@@ -988,6 +1059,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         print_banner(
             &cfg,
             if exec_mode { "exec" } else { "up" },
+            &config_origin,
             &addrs,
             functions_runtime.as_deref(),
         );
@@ -1015,7 +1087,9 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         if let Some(note) = ui_note {
             println!("{note}");
         }
-        print_rules_status(&cfg, rules.snapshot().is_ok_and(|r| r.is_loaded()));
+        if addrs.firestore.is_some() {
+            print_rules_status(&cfg, rules.snapshot().is_ok_and(|r| r.is_loaded()));
+        }
         if addrs.auth.is_some() {
             if cfg.auth_log_action_codes {
                 println!("  auth codes:       email action links and SMS codes are printed here as they are issued (they are credentials: do not forward this output to CI or shared logs; auth.logActionCodes = false silences them)");
@@ -1045,11 +1119,17 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
             Some(source) => enforcer.with_wall_clock(source),
             None => enforcer,
         };
-        Arc::new(
-            firestore_profile_settings(enforcer, &cfg)
-                .with_registry(registry.clone())
-                .with_database_rules(database_rules.clone()),
-        )
+        let enforcer = firestore_profile_settings(enforcer, &cfg)
+            .with_registry(registry.clone())
+            .with_database_rules(database_rules.clone());
+        // The client only sees production's denial, which does not say that nothing is loaded.
+        Arc::new(if quiet {
+            enforcer
+        } else {
+            enforcer.with_no_ruleset_notice(Arc::new(|event| {
+                eprintln!("{}", firestore_no_rules_warning(event));
+            }))
+        })
     });
     let mut service = GatewayService::local(gateway.clone(), backend.clone());
     if let Some(e) = &enforcer {
@@ -1244,7 +1324,8 @@ async fn serve_suite(
                 Arc::new(fireemu_adapter_functions::eventarc_channels::ChannelStore::default()),
                 fireemu_adapter_functions::eventarc_strict::EventarcContext {
                     project_number,
-                    oauth_credentials: cfg.eventarc_oauth_credentials.clone().map(Arc::new)
+                    oauth_credentials: cfg.eventarc_oauth_credentials.clone().map(Arc::new),
+                    authentication: cfg.eventarc_authentication,
                 },
             )
         );
@@ -1529,6 +1610,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         export_on_exit,
         ready_file,
         owner_stdin,
+        config_origin,
     } = options;
     let quiet = verbosity == Verbosity::Quiet;
     let auth_wall_clock = if cfg.clock_start_pinned {
@@ -1573,7 +1655,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             ctx: PlanningContext {
                 edition: cfg.edition,
                 api_mode: cfg.api_mode,
-                policy: cfg.index_policy,
+                policy: cfg.index_policy(),
             },
             indexes: default_indexes,
         };
@@ -1872,6 +1954,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         }
         let assembly = assemble_adapters(BoundStartup {
                 cfg,
+                config_origin,
                 only,
                 verbosity,
                 import,
@@ -1926,6 +2009,29 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    /// The per-name warnings name the resource; past the limit a single line says the rest are
+    /// suppressed.
+    #[test]
+    fn no_rules_warnings_name_the_resource_and_the_suppression() {
+        use super::{firestore_no_rules_warning, storage_no_rules_warning, NoticeEvent};
+        let first = firestore_no_rules_warning(NoticeEvent::First("(default)"));
+        assert!(first.starts_with("warning: firestore:") && first.contains("\"(default)\""));
+        let first = storage_no_rules_warning(NoticeEvent::First("b.appspot.com"));
+        assert!(first.starts_with("warning: storage:") && first.contains("\"b.appspot.com\""));
+        for (line, what) in [
+            (
+                firestore_no_rules_warning(NoticeEvent::Suppressed),
+                "warning: firestore: further no-rules warnings are suppressed (32 databases",
+            ),
+            (
+                storage_no_rules_warning(NoticeEvent::Suppressed),
+                "warning: storage: further no-rules warnings are suppressed (32 buckets",
+            ),
+        ] {
+            assert!(line.starts_with(what), "{line}");
+        }
+    }
+
     #[test]
     fn the_strict_profile_waits_20_s_on_both_clocks_and_the_emulator_profile_15_s_on_the_wall_clock(
     ) {
@@ -2720,43 +2826,79 @@ mod tests {
     }
 
     #[test]
-    fn only_strict_without_idp_signers_says_identity_providers_are_refused() {
-        use super::idp_signer_note_for;
-        use crate::config::CompatibilityProfile;
-        assert!(idp_signer_note_for(CompatibilityProfile::Strict, false)
-            .is_some_and(|note| note.contains("auth.idpSigners")));
+    fn strict_names_its_idp_assertion_mode_and_the_emulator_profile_says_nothing() {
+        use super::idp_assertion_note_for;
+        use crate::config::{CompatibilityProfile, IdpAssertionMode};
+        // The development default: the fixture IdP, with the way back to production's checks.
+        for configured in [false, true] {
+            assert!(
+                idp_assertion_note_for(
+                    CompatibilityProfile::Strict,
+                    IdpAssertionMode::Fixture,
+                    configured
+                )
+                .is_some_and(|note| note.contains("fixture IdP")
+                    && note.contains("auth.idpAssertions")
+                    && note.contains("productionExact")),
+                "{configured}"
+            );
+        }
+        assert!(idp_assertion_note_for(
+            CompatibilityProfile::Strict,
+            IdpAssertionMode::Signed,
+            false
+        )
+        .is_some_and(|note| note.contains("OIDC refused") && note.contains("auth.idpSigners")));
         assert_eq!(
-            idp_signer_note_for(CompatibilityProfile::Strict, true),
+            idp_assertion_note_for(CompatibilityProfile::Strict, IdpAssertionMode::Signed, true),
             None
         );
-        assert_eq!(
-            idp_signer_note_for(CompatibilityProfile::Emulator, false),
-            None
-        );
+        for mode in [IdpAssertionMode::Fixture, IdpAssertionMode::Signed] {
+            for configured in [false, true] {
+                assert_eq!(
+                    idp_assertion_note_for(CompatibilityProfile::Emulator, mode, configured),
+                    None
+                );
+            }
+        }
     }
 
     #[test]
-    fn strict_verifies_idp_assertions_even_without_signers_and_the_emulator_keeps_the_fixture() {
-        use crate::config::CompatibilityProfile;
+    fn signed_strict_verifies_idp_assertions_even_without_signers_and_the_fixture_is_the_default() {
+        use crate::config::{CompatibilityProfile, IdpAssertionMode};
         use fireemu_adapter_http::identity_toolkit::IdpAssertionPolicy;
         // A public 2048-bit modulus; the key it belongs to was discarded.
         let modulus = "0lwNtQWMVy0QqgEvrBmoFqwky_dcMx8CgS-o2rTesEV7QbG4cvNigTcDV7b_u0twRkJdonkMPjbUs0b8NKe_0_UOZ5vE_kILFG4TtPdeZWub8xnqhETc7WifXhEfqcB8xFbRyIxU9V0d_epsuNnQ-Nd7NlnFsH-aaq6f1HKp55_BVNxudwmHwT49P6JhNDDh7FWyoYBBBFtQ0St8dky4MFQTd2swZP4pEA8xGp-q-1mxbn0g9gfbq5voYWtOaDW9a2lsC_S_d6DecsrNWn4YYJ7Qc5xcx4pI70a23zftkVBj_I-Eip2hcvNUEsZJA4LlR4BgDLsNWu3ZWQxe08fOew";
         let issuer = "https://idp.example/oidc/run";
         let signers = json!({issuer: {"keys": [{"kty": "RSA", "alg": "RS256", "use": "sig", "kid": "k", "n": modulus, "e": "AQAB"}]}});
         let signers = signers.as_object().unwrap();
-        match idp_assertion_policy(CompatibilityProfile::Strict, Some(signers)).unwrap() {
+        let signed = IdpAssertionMode::Signed;
+        match idp_assertion_policy(CompatibilityProfile::Strict, signed, Some(signers)).unwrap() {
             IdpAssertionPolicy::SignedOidc(trust) => assert!(trust.key(issuer, "k").is_some()),
-            IdpAssertionPolicy::Fixture => panic!("strict must verify signed assertions"),
+            IdpAssertionPolicy::Fixture => panic!("signed assertions must be verified"),
         }
-        match idp_assertion_policy(CompatibilityProfile::Strict, None).unwrap() {
+        match idp_assertion_policy(CompatibilityProfile::Strict, signed, None).unwrap() {
             IdpAssertionPolicy::SignedOidc(trust) => assert!(!trust.knows(issuer)),
-            IdpAssertionPolicy::Fixture => panic!("strict without signers must still refuse"),
+            IdpAssertionPolicy::Fixture => panic!("signed assertions without signers still refuse"),
         }
-        for configured in [None, Some(signers)] {
-            assert!(matches!(
-                idp_assertion_policy(CompatibilityProfile::Emulator, configured).unwrap(),
-                IdpAssertionPolicy::Fixture
-            ));
+        assert!(matches!(
+            idp_assertion_policy(
+                CompatibilityProfile::Strict,
+                IdpAssertionMode::Fixture,
+                None
+            )
+            .unwrap(),
+            IdpAssertionPolicy::Fixture
+        ));
+        // The emulator profile never verifies, whatever it is handed: the loader refuses
+        // signed assertions there, and the official emulator accepts the fixture.
+        for mode in [IdpAssertionMode::Fixture, IdpAssertionMode::Signed] {
+            for configured in [None, Some(signers)] {
+                assert!(matches!(
+                    idp_assertion_policy(CompatibilityProfile::Emulator, mode, configured).unwrap(),
+                    IdpAssertionPolicy::Fixture
+                ));
+            }
         }
     }
 }

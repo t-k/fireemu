@@ -6043,6 +6043,93 @@ fn no_loaded_ruleset_denies_every_end_user_request(acceptance: TokenAcceptance) 
     assert_eq!(r.status, 200);
 }
 
+fn notice_text(event: fireemu_adapter_http::storage::NoticeEvent<'_>) -> String {
+    match event {
+        fireemu_adapter_http::storage::NoticeEvent::First(bucket) => bucket.to_owned(),
+        fireemu_adapter_http::storage::NoticeEvent::Suppressed => "<suppressed>".to_owned(),
+    }
+}
+
+/// The bucket name comes from the client, so the reports are bounded: the limit, then one
+/// suppression notice, however many distinct names are refused. The refusal bytes are the same
+/// with and without a notice installed.
+#[test]
+fn refusals_without_rules_report_at_most_the_limit_and_keep_their_bytes() {
+    for acceptance in BOTH_PROFILES {
+        let mut plain = state_with(None, acceptance);
+        "real-app".clone_into(&mut plain.project);
+        let mut s = state_with(None, acceptance);
+        "real-app".clone_into(&mut s.project);
+        let notices = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = notices.clone();
+        s.rules
+            .set_no_rules_notice(fireemu_adapter_http::storage::NoRulesNotice(Arc::new(
+                move |event| sink.lock().unwrap().push(notice_text(event)),
+            )));
+        for i in 0..100 {
+            let path = format!("/v0/b/b{i}.appspot.com/o");
+            let with_notice = handle(&s, req("GET", &path, &[], b""));
+            let silent = handle(&plain, req("GET", &path, &[], b""));
+            assert_ne!(with_notice.status, 200, "{acceptance:?}");
+            assert_eq!(with_notice.status, silent.status, "{acceptance:?}");
+            assert_eq!(with_notice.body, silent.body, "{acceptance:?}");
+        }
+        let notices = notices.lock().unwrap();
+        let limit = fireemu_adapter_http::storage::NoticeLimit::LIMIT;
+        assert_eq!(notices.len(), limit + 1, "{acceptance:?}");
+        assert_eq!(notices[limit], "<suppressed>");
+    }
+}
+
+/// The refusal of an end-user request for want of rules is reported once per bucket, in both
+/// profiles, while the answer the client receives stays production's (or the official
+/// emulator's) bytes; an admitted request and the owner credential report nothing.
+#[test]
+fn a_refusal_without_rules_is_reported_once_per_bucket() {
+    for acceptance in BOTH_PROFILES {
+        let mut s = state_with(None, acceptance);
+        if acceptance == TokenAcceptance::EmulatorMock {
+            "real-app".clone_into(&mut s.project);
+        }
+        let notices = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = notices.clone();
+        s.rules
+            .set_no_rules_notice(fireemu_adapter_http::storage::NoRulesNotice(Arc::new(
+                move |event| sink.lock().unwrap().push(notice_text(event)),
+            )));
+        let owner = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/v0/b/{BUCKET}/o"),
+                &[("authorization", "Bearer owner")],
+                b"",
+            ),
+        );
+        assert_eq!(owner.status, 200);
+        assert!(notices.lock().unwrap().is_empty(), "{acceptance:?}");
+        for _ in 0..3 {
+            let r = handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o"), &[], b""));
+            assert_ne!(r.status, 200, "{acceptance:?}");
+        }
+        assert_eq!(anonymous_multipart_upload(&s, "anon.txt").status / 100, 4);
+        assert_eq!(*notices.lock().unwrap(), [BUCKET], "{acceptance:?}");
+    }
+    // A demo project under the emulator profile is admitted, so nothing is reported.
+    let s = state_with(None, TokenAcceptance::EmulatorMock);
+    let notices = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = notices.clone();
+    s.rules
+        .set_no_rules_notice(fireemu_adapter_http::storage::NoRulesNotice(Arc::new(
+            move |event| sink.lock().unwrap().push(notice_text(event)),
+        )));
+    assert_eq!(
+        handle(&s, req("GET", &format!("/v0/b/{BUCKET}/o"), &[], b"")).status,
+        200
+    );
+    assert!(notices.lock().unwrap().is_empty());
+}
+
 /// A `demo-*` project with no Storage rules gets the official emulator's default open rules in
 /// the emulator profile (measured, firebase-tools 15.28.2: `allow read, write` for every path), so
 /// nothing is refused that the official emulator admits; strict still answers production's 400.

@@ -18,12 +18,19 @@ fn state() -> (RestState, Arc<Mutex<VirtualClock>>) {
 }
 
 fn state_with_limits(enforce_limits: bool) -> (RestState, Arc<Mutex<VirtualClock>>) {
+    state_with(enforce_limits, IndexValidationPolicy::Production)
+}
+
+fn state_with(
+    enforce_limits: bool,
+    policy: IndexValidationPolicy,
+) -> (RestState, Arc<Mutex<VirtualClock>>) {
     let gateway = Gateway {
         enforce_limits,
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Production,
+            policy,
         },
         indexes: IndexSet::default(),
     };
@@ -536,6 +543,92 @@ fn an_index_is_creating_then_ready_and_queries_follow_its_state() {
     let decoded = crate::rest::json::base64_decode(blob).unwrap();
     let text = String::from_utf8_lossy(&decoded);
     assert!(text.contains(&format!("/indexes/{id}")), "{text}");
+}
+
+#[test]
+fn report_mode_serves_a_building_or_deleted_index_and_reports_it_in_production_words() {
+    // firestore.missingIndexes "report": a missing index never blocks a query, but the report
+    // says what production answers in that state: "currently building", or the link naming
+    // the deleted index.
+    let (state, clock) = state_with(true, IndexValidationPolicy::ProductionReport);
+    state
+        .local
+        .admin()
+        .indexes()
+        .set_build_duration(std::time::Duration::from_secs(3600));
+    let query = json!({"structuredQuery": {
+        "from": [{"collectionId": "items"}],
+        "where": {"fieldFilter": {"field": {"fieldPath": "a"}, "op": "EQUAL", "value": {"integerValue": "1"}}},
+        "orderBy": [{"field": {"fieldPath": "b"}, "direction": "DESCENDING"}]
+    }});
+    let index = json!({"queryScope": "COLLECTION", "fields": [
+        {"fieldPath": "a", "order": "ASCENDING"}, {"fieldPath": "b", "order": "DESCENDING"}]});
+    let report_of = |database: &str| {
+        crate::gateway::missing_index_reports()
+            .into_iter()
+            .find(|r| r.database == format!("projects/p/databases/{database}"))
+            .map(|r| r.message)
+    };
+
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=building",
+        native(),
+    );
+    let (status, _) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/building/collectionGroups/items/indexes",
+        index.clone(),
+    );
+    assert_eq!(status, 200);
+    let (status, answer) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/building/documents:runQuery",
+        query.clone(),
+    );
+    assert_eq!(status, 200, "{answer}");
+    let building = report_of("building").expect("the building index is reported");
+    assert!(
+        building.starts_with(
+            "The query requires an index. That index is currently building and cannot be used yet."
+        ),
+        "{building}"
+    );
+
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=deleted",
+        native(),
+    );
+    let (_, operation) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/deleted/collectionGroups/items/indexes",
+        index,
+    );
+    let name = operation["metadata"]["index"].as_str().unwrap().to_owned();
+    advance(&clock, 3600);
+    let (status, _) = call(&state, "DELETE", &format!("/v1/{name}"), Value::Null);
+    assert_eq!(status, 200);
+    let (status, answer) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/deleted/documents:runQuery",
+        query,
+    );
+    assert_eq!(status, 200, "{answer}");
+    let deleted = report_of("deleted").expect("the deleted index is reported");
+    let blob = deleted.rsplit("create_composite=").next().unwrap();
+    let decoded = crate::rest::json::base64_decode(blob).unwrap();
+    let id = name.rsplit('/').next().unwrap();
+    assert!(
+        String::from_utf8_lossy(&decoded).contains(&format!("/indexes/{id}")),
+        "{deleted}"
+    );
 }
 
 #[test]

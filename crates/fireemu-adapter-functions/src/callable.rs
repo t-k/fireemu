@@ -22,7 +22,18 @@
 //!    with a missing or invalid token, before the runner is reached at all. A normal request
 //!    gets the wrapper's `401` JSON response and a v2 streaming request gets its `200` SSE error
 //!    record. The guarantee does not depend on the wrapper, and a denied request costs no
-//!    concurrency slot, no invocation record and no handler run.
+//!    concurrency slot, no invocation record and no handler run;
+//! 5. answers `501 UNIMPLEMENTED` (`APP_CHECK_REPLAY_UNSUPPORTED`) itself for a valid token
+//!    presented to a callable that declares `consumeAppCheckToken: true`. That is the one call
+//!    that needs limited-use consumption, which is unimplemented (`APPCHECK-REPLAY-1`); the
+//!    wrapper would answer it with `alreadyConsumed: false`. Calls without a valid token need
+//!    no consumption and run.
+//!
+//! Without App Check there is no trust boundary, and a callable receives its fields as sent,
+//! with one exception: [`without_app_check_token`] removes `X-Firebase-AppCheck` on the way to a
+//! callable that declares `consumeAppCheckToken: true` or whose value could not be observed, so
+//! that callable runs without App Check rather than handing the token to the Admin SDK's
+//! consuming `verifyToken`, which would call production.
 
 use std::sync::Arc;
 
@@ -99,6 +110,9 @@ pub enum CallableDecision {
         /// The original App Check classification that caused the refusal.
         app_check: CredentialState,
     },
+    /// Answer [`replay_unsupported_response`]; the runner is not reached. A valid token was
+    /// presented to a callable that consumes tokens.
+    ReplayUnsupported,
 }
 
 /// One callable request as the proxy presents it.
@@ -107,6 +121,8 @@ pub struct CallableRequest<'a> {
     pub function: &'a str,
     /// The callable's declared `enforceAppCheck`.
     pub enforce_app_check: bool,
+    /// Whether the callable declared `consumeAppCheckToken: true`.
+    pub consume_app_check_token: bool,
     /// The fields as received, duplicates in wire order.
     pub headers: &'a [(String, String)],
     /// Every `X-Firebase-AppCheck` instance, in wire order.
@@ -167,6 +183,9 @@ impl CallableTrust {
         if req.enforce_app_check && !admitted {
             return CallableDecision::Unauthenticated { app_check };
         }
+        if req.consume_app_check_token && admitted {
+            return CallableDecision::ReplayUnsupported;
+        }
         let mut headers: Vec<(String, String)> = req
             .headers
             .iter()
@@ -208,6 +227,44 @@ impl CallableTrust {
             _ => false,
         }
     }
+}
+
+/// The callable `501 UNIMPLEMENTED` envelope for a call that needs limited-use token
+/// consumption. `details.reason` carries the stable code the App Check exchange uses for the
+/// same missing capability, and the callable client SDKs surface `details` to the caller.
+#[must_use]
+pub fn replay_unsupported_response() -> ProxiedResponse {
+    let body = serde_json::json!({
+        "error": {
+            "message": "consumeAppCheckToken needs limited-use token consumption \
+                        (APPCHECK-REPLAY-1), which this runtime does not implement",
+            "status": "UNIMPLEMENTED",
+            "details": {"reason": "APP_CHECK_REPLAY_UNSUPPORTED"},
+        }
+    });
+    ProxiedResponse {
+        status: 501,
+        headers: vec![(
+            "content-type".to_owned(),
+            "application/json; charset=utf-8".to_owned(),
+        )],
+        body: serde_json::to_vec(&body).unwrap_or_default(),
+    }
+}
+
+/// `headers` without any `X-Firebase-AppCheck` field, in their original order.
+///
+/// Used without App Check for a callable that declares `consumeAppCheckToken: true`: with no
+/// verifier in front of it, the installed wrapper would hand the token to the Admin SDK's
+/// consuming `verifyToken`, which calls the production App Check API.
+#[must_use]
+pub fn without_app_check_token(headers: Vec<(String, String)>) -> Vec<(String, String)> {
+    headers
+        .into_iter()
+        .filter(|(name, _)| {
+            !name.eq_ignore_ascii_case(fireemu_core_app_check::header::APP_CHECK_HEADER)
+        })
+        .collect()
 }
 
 /// The callable `401 UNAUTHENTICATED` envelope, byte-identical to the one the

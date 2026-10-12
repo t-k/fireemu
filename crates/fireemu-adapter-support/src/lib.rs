@@ -7,4 +7,5 @@ pub mod api_error;
 pub mod body;
 pub mod connection;
 pub mod entropy;
+pub mod notice_limit;
 pub mod secret;

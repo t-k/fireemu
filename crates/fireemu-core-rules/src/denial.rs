@@ -89,12 +89,12 @@ fn excerpt(text: &str) -> String {
 fn outcome(value: &ExprValue) -> String {
     match value {
         ExprValue::Bool(b) => b.to_string(),
-        ExprValue::Undefined(cause) => format!(
-            "an error at {}:{}: {}",
-            cause.span.line,
-            cause.span.column,
-            excerpt(&cause.message)
-        ),
+        // Only where: an error's message can carry an evaluated value (`missing key <claim>`).
+        // The request trace (`GET /v1/sessions/default/rules/requests`, behind the control
+        // token) keeps the message.
+        ExprValue::Undefined(cause) => {
+            format!("an error at {}:{}", cause.span.line, cause.span.column)
+        }
         // Only the type: a condition such as `request.auth.token.secret` would otherwise print a
         // claim or document value into the log.
         ExprValue::Null => "null, not a boolean".to_owned(),
@@ -188,7 +188,7 @@ mod tests {
                         offset: 0,
                     },
                     end: 1,
-                    message: "Property owner is undefined\non object.".to_owned(),
+                    message: "missing key s3cr3t-claim".to_owned(),
                 }),
                 1,
             )],
@@ -207,8 +207,9 @@ mod tests {
         };
         assert_eq!(
             denial.summary(),
-            "firestore: Security Rules denied update on \"notes/n1\" in \"database (default)\" (request.auth.uid \"bob\"): no allow statement evaluated to true; line 3:21 `request.auth.uid == resource.data.owner` was false; line 3:21 was an error at 4:4: Property owner is undefined on object."
+            "firestore: Security Rules denied update on \"notes/n1\" in \"database (default)\" (request.auth.uid \"bob\"): no allow statement evaluated to true; line 3:21 `request.auth.uid == resource.data.owner` was false; line 3:21 was an error at 4:4"
         );
+        assert!(!denial.summary().contains("s3cr3t"), "{}", denial.summary());
         let anonymous = RulesDenial {
             uid: None,
             conditions: Vec::new(),

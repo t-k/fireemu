@@ -378,8 +378,20 @@ pub fn nothing_to_import(dir: &Path, export_on_exit: Option<&Path>) -> Option<St
 #[cfg(unix)]
 fn directory_is_empty(dir: &Path) -> bool {
     use rustix::fs::{Mode, OFlags};
+    use std::path::Component;
+    // `O_NOFOLLOW` guards the last component only as spelled: `dir/` or `dir/.` would follow a
+    // symlink named `dir`. The path is rebuilt from its components, so the one opened ends in
+    // the directory's own name.
+    let components: Vec<Component<'_>> = dir
+        .components()
+        .filter(|component| !matches!(component, Component::CurDir))
+        .collect();
+    if !matches!(components.last(), Some(Component::Normal(_))) {
+        return false;
+    }
+    let dir: std::path::PathBuf = components.iter().collect();
     let Ok(fd) = rustix::fs::open(
-        dir,
+        &dir,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     ) else {
@@ -4376,6 +4388,25 @@ mod tests {
         std::os::unix::fs::symlink(&empty, &link).unwrap();
         assert!(!super::directory_is_empty(&link));
         assert!(super::nothing_to_import(&link, None).is_none());
+        // Spelled with a trailing separator or `.`, the symlink is still not followed.
+        for spelling in [
+            format!("{}/", link.display()),
+            format!("{}/.", link.display()),
+        ] {
+            assert!(
+                !super::directory_is_empty(std::path::Path::new(&spelling)),
+                "{spelling}"
+            );
+        }
+        for spelling in [
+            format!("{}/", empty.display()),
+            format!("{}/.", empty.display()),
+        ] {
+            assert!(
+                super::directory_is_empty(std::path::Path::new(&spelling)),
+                "{spelling}"
+            );
+        }
         let hidden = root.join("hidden");
         std::fs::create_dir(&hidden).unwrap();
         std::fs::write(hidden.join(".keep"), b"").unwrap();

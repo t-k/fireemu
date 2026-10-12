@@ -73,6 +73,7 @@ struct BoundStartup {
 struct ServiceAssembly {
     listen_expiry: fireemu_adapter_grpc::rules::ListenExpiry,
     denial_log: Option<fireemu_core_rules::denial::DenialLog>,
+    denial_flush: Option<DenialFlush>,
     cfg: RuntimeConfig,
     config_origin: String,
     only: Selection,
@@ -586,7 +587,11 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     }
     // The client only sees production's (or the official emulator's) refusal, which does not
     // say how to load rules.
-    let denial_log = (!quiet && cfg.rules_denial_log).then(denial_line_writer);
+    let (denial_log, denial_flush) = match (!quiet && cfg.rules_denial_log).then(denial_line_writer)
+    {
+        Some((log, flush)) => (Some(log), Some(flush)),
+        None => (None, None),
+    };
     if !quiet {
         storage_rules
             .registry
@@ -850,6 +855,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     Ok(ServiceAssembly {
         listen_expiry,
         denial_log,
+        denial_flush,
         log_bus,
         cfg,
         config_origin,
@@ -963,34 +969,76 @@ fn storage_no_rules_warning(event: NoticeEvent<'_>) -> String {
 /// How many denial lines wait for stderr before further ones are dropped.
 const DENIAL_LINE_QUEUE: usize = 1024;
 
+/// Waits, for at most [`DENIAL_FLUSH_LIMIT`], until the denial lines queued so far are written.
+type DenialFlush = Arc<dyn Fn() + Send + Sync>;
+
+/// How long the shutdown waits for queued denial lines: a stderr nobody reads must not hold
+/// the exit.
+const DENIAL_FLUSH_LIMIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+enum DenialLine {
+    Line(String),
+    Flush(std::sync::mpsc::SyncSender<()>),
+}
+
 /// The denial log of `rules.denialLog`: each denial is formatted where it is decided, which
 /// can be under a database or store lock, and written to stderr by a thread of its own, so a
 /// stderr nobody reads never blocks a request. Past [`DENIAL_LINE_QUEUE`] waiting lines,
 /// further ones are dropped and counted, and the count is printed with the next line written.
-fn denial_line_writer() -> fireemu_core_rules::denial::DenialLog {
+/// The flush is called at shutdown so the lines of a run that just ended are not lost.
+fn denial_line_writer() -> (fireemu_core_rules::denial::DenialLog, DenialFlush) {
     use std::sync::atomic::{AtomicU64, Ordering};
-    let (sender, receiver) = std::sync::mpsc::sync_channel::<String>(DENIAL_LINE_QUEUE);
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<DenialLine>(DENIAL_LINE_QUEUE);
     let dropped = Arc::new(AtomicU64::new(0));
     let counted = dropped.clone();
     let spawned = std::thread::Builder::new()
         .name("fireemu-denial-log".to_owned())
         .spawn(move || {
-            for line in receiver {
-                let missed = counted.swap(0, Ordering::Relaxed);
-                if missed > 0 {
-                    eprintln!("note: {missed} Security Rules denial line(s) were dropped while stderr was not read");
+            for message in receiver {
+                match message {
+                    DenialLine::Line(line) => {
+                        let missed = counted.swap(0, Ordering::Relaxed);
+                        if missed > 0 {
+                            eprintln!("note: {missed} Security Rules denial line(s) were dropped while stderr was not read");
+                        }
+                        eprintln!("note: {line}");
+                    }
+                    DenialLine::Flush(done) => {
+                        let _ = done.send(());
+                    }
                 }
-                eprintln!("note: {line}");
             }
         });
     if spawned.is_err() {
-        return Arc::new(|_| {});
+        return (Arc::new(|_| {}), Arc::new(|| {}));
     }
-    Arc::new(move |denial| {
-        if sender.try_send(denial.summary()).is_err() {
+    let flusher = sender.clone();
+    let log: fireemu_core_rules::denial::DenialLog = Arc::new(move |denial| {
+        if sender.try_send(DenialLine::Line(denial.summary())).is_err() {
             dropped.fetch_add(1, Ordering::Relaxed);
         }
-    })
+    });
+    let flush: DenialFlush = Arc::new(move || {
+        let deadline = std::time::Instant::now() + DENIAL_FLUSH_LIMIT;
+        let (done, written) = std::sync::mpsc::sync_channel(1);
+        let mut marker = DenialLine::Flush(done);
+        // The queue may be full while stderr drains: retry the marker until the deadline.
+        loop {
+            match flusher.try_send(marker) {
+                Ok(()) => break,
+                Err(std::sync::mpsc::TrySendError::Full(back)) => {
+                    if std::time::Instant::now() >= deadline {
+                        return;
+                    }
+                    marker = back;
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return,
+            }
+        }
+        let _ = written.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()));
+    });
+    (log, flush)
 }
 
 /// The Firestore enforcer's settings that follow from the compatibility profile.
@@ -1013,6 +1061,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     let ServiceAssembly {
         listen_expiry,
         denial_log,
+        denial_flush,
         log_bus,
         cfg,
         config_origin,
@@ -1230,6 +1279,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         control_token: Some(control_token.clone()),
     });
     Ok(ReadySuite {
+        denial_flush,
         log_bus,
         cfg,
         only,
@@ -1257,6 +1307,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
 }
 
 struct ReadySuite {
+    denial_flush: Option<DenialFlush>,
     cfg: RuntimeConfig,
     only: Selection,
     quiet: bool,
@@ -1294,6 +1345,7 @@ async fn serve_suite(
         mut terminate,
     } = signals;
     let ReadySuite {
+        denial_flush,
         log_bus,
         cfg,
         only,
@@ -1653,6 +1705,10 @@ async fn serve_suite(
     // cannot be relied on to run at all.
     if let Some(note) = locator.and_then(hub::Locator::release) {
         eprintln!("warning: {note}");
+    }
+    // The denial lines of the run's last requests are on their way to stderr.
+    if let Some(flush) = &denial_flush {
+        flush();
     }
     outcome.map(|_| code)
 }
@@ -2346,6 +2402,30 @@ mod tests {
         assert!(super::firestore_wall_source(CompatibilityProfile::Strict, None).is_none());
         assert!(super::firestore_wall_source(CompatibilityProfile::Emulator, Some(wall)).is_none());
     }
+    /// The denial log never blocks its caller, even past its queue, and the shutdown's flush
+    /// returns within its limit.
+    #[test]
+    fn the_denial_log_never_blocks_and_its_flush_is_bounded() {
+        let (log, flush) = super::denial_line_writer();
+        let denial = fireemu_core_rules::denial::RulesDenial {
+            service: "firestore",
+            location: "database (default)".to_owned(),
+            method: "get",
+            path: "notes/n1".to_owned(),
+            uid: None,
+            reason: "no allow statement evaluated to true".to_owned(),
+            conditions: Vec::new(),
+        };
+        let started = std::time::Instant::now();
+        for _ in 0..(3 * super::DENIAL_LINE_QUEUE) {
+            log(&denial);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        let started = std::time::Instant::now();
+        flush();
+        assert!(started.elapsed() <= super::DENIAL_FLUSH_LIMIT + std::time::Duration::from_secs(1));
+    }
+
     /// Firestore ends an end user's `Listen` stream an hour after it opened only when
     /// `productionExact` or `firestore.listenStreamLifetime` asks for production's hour.
     #[test]

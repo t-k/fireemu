@@ -966,6 +966,10 @@ pub struct RuntimeConfig {
     /// [`Self::enforce_limits`], [`Self::token_acceptance`] and
     /// [`Self::implicit_database_creation`]; an explicit key wins.
     pub profile: CompatibilityProfile,
+    /// `productionExact`: the development defaults that differ from production (see
+    /// [`Self::set_production_exact`]) take production's values instead. Only the strict
+    /// profile accepts it; an explicit key still decides over it.
+    pub production_exact: bool,
     /// Firestore gRPC bind address.
     pub firestore_addr: String,
     /// HTTP (Auth REST + control API) bind address.
@@ -1377,6 +1381,7 @@ impl Default for RuntimeConfig {
             firestore_location: "nam5".to_owned(),
             index_policy: profile.index_policy(),
             enforce_limits: profile.enforce_limits(),
+            production_exact: false,
             token_acceptance: profile.token_acceptance(),
             implicit_database_creation: profile.implicit_database_creation(),
             refuse_without_ruleset: profile.refuse_without_ruleset(),
@@ -2859,6 +2864,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "schemaVersion",
     "firebaseJson",
     "profile",
+    "productionExact",
     "bind",
     "projects",
     "limits",
@@ -2983,6 +2989,17 @@ impl RuntimeConfig {
             self.auth_improved_email_privacy = profile == CompatibilityProfile::Strict;
         }
         self.listen_stream_lifetime = profile.listen_stream_lifetime();
+    }
+
+    /// Applies `productionExact`. fireemu is mostly run by tests in CI and on a laptop, so
+    /// where production needs setup a test should not have to do (signed tokens, keys,
+    /// Admin API calls), the default is the development behaviour and this switch restores
+    /// production's (owner decisions 1196 and 1396). Every development default is written
+    /// here and nowhere else, so an explicit key parsed afterwards overwrites it, and
+    /// `docs/compatibility-contract.md` ("Development defaults") lists the same set.
+    pub fn set_production_exact(&mut self, exact: bool) {
+        self.production_exact = exact;
+        self.auth_allow_unsigned_custom_tokens = !exact;
     }
 
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
@@ -3596,6 +3613,18 @@ impl RuntimeConfig {
                     ConfigError(format!("unknown profile {p:?}"))
                 }
             })?);
+        }
+        // Read after the profile it depends on and before every key it moves the default of.
+        if let Some(exact) = obj.get("productionExact") {
+            let exact = exact
+                .as_bool()
+                .ok_or_else(|| ConfigError("productionExact must be a boolean".to_owned()))?;
+            if exact && cfg.profile != CompatibilityProfile::Strict {
+                return Err(ConfigError(
+                    "productionExact requires the strict profile".to_owned(),
+                ));
+            }
+            cfg.set_production_exact(exact);
         }
         if let Some(limits) = obj.get("limits") {
             Self::parse_limits(limits)?;
@@ -6139,6 +6168,59 @@ mod tests {
                 Err(ConfigError(
                     "auth.allowUnsignedCustomTokens must be a boolean".to_owned()
                 ))
+            );
+        }
+    }
+
+    #[test]
+    fn production_exact_restores_production_defaults_and_explicit_keys_win() {
+        let read = |extra: Value| {
+            let mut config = json!({
+                "schemaVersion": 1,
+                "firestore": {"edition": "standard", "apiMode": "native"},
+            });
+            for (key, value) in extra.as_object().unwrap() {
+                config[key] = value.clone();
+            }
+            RuntimeConfig::from_json(&config)
+        };
+        for (extra, exact) in [
+            (json!({}), false),
+            (json!({"productionExact": false}), false),
+            (
+                json!({"profile": "strict", "productionExact": false}),
+                false,
+            ),
+            (json!({"productionExact": true}), true),
+            (json!({"profile": "strict", "productionExact": true}), true),
+        ] {
+            let cfg = read(extra.clone()).unwrap();
+            assert_eq!(cfg.production_exact, exact, "{extra}");
+            assert_eq!(cfg.auth_allow_unsigned_custom_tokens, !exact, "{extra}");
+        }
+        // An explicit key decides over the switch in both directions, whatever its position.
+        for (explicit, exact) in [(true, true), (false, false), (true, false), (false, true)] {
+            let cfg = read(json!({
+                "auth": {"allowUnsignedCustomTokens": explicit},
+                "productionExact": exact,
+            }))
+            .unwrap();
+            assert_eq!(cfg.production_exact, exact);
+            assert_eq!(cfg.auth_allow_unsigned_custom_tokens, explicit);
+        }
+        // The emulator profile reproduces the official emulators; production's refusals are
+        // the strict profile's, so the two cannot be combined.
+        assert_eq!(
+            read(json!({"profile": "emulator", "productionExact": true})),
+            Err(ConfigError(
+                "productionExact requires the strict profile".to_owned()
+            ))
+        );
+        assert!(read(json!({"profile": "emulator", "productionExact": false})).is_ok());
+        for invalid in [json!(null), json!("true"), json!(1), json!([]), json!({})] {
+            assert_eq!(
+                read(json!({"productionExact": invalid})),
+                Err(ConfigError("productionExact must be a boolean".to_owned()))
             );
         }
     }

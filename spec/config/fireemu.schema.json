@@ -41,6 +41,11 @@
       "enum": ["strict", "emulator"],
       "default": "strict"
     },
+    "productionExact": {
+      "type": "boolean",
+      "default": false,
+      "description": "fireemu is run mostly by tests in CI and on a developer's machine, so where production needs setup a test should not have to do (signed tokens, signing keys, Admin API calls), the default is the development behaviour, in both profiles. true restores production's behaviour for every such default; an explicit key still decides over it. Requires the strict profile. docs/compatibility-contract.md (\"Development defaults\") lists the keys it moves."
+    },
     "bind": { "type": "string", "default": "127.0.0.1" },
     "projects": {
       "type": "object",
@@ -232,7 +237,7 @@
         "allowUnsignedCustomTokens": {
           "type": "boolean",
           "default": true,
-          "description": "Accept well-formed unsigned custom JWTs from the Admin SDK in emulator mode, in both strict and emulator profiles, even when customTokenSigners is configured. Set false to require signed custom tokens verified by customTokenSigners. Strict claim validation still applies. In the emulator profile, false also disables JSON fake custom tokens. This setting does not affect ID tokens or other credentials."
+          "description": "Accept well-formed unsigned custom JWTs from the Admin SDK in emulator mode, in both strict and emulator profiles, even when customTokenSigners is configured. Defaults to true, and to false under productionExact. Set false to require signed custom tokens verified by customTokenSigners. Strict claim validation still applies. In the emulator profile, false also disables JSON fake custom tokens. This setting does not affect ID tokens or other credentials."
         },
         "customTokenSigners": {
           "type": "object",

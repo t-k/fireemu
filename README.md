@@ -180,6 +180,25 @@ An existing `fireemu.json` is not overwritten unless `--force` is supplied.
 
 Use `strict` when testing against production Firebase behavior. Add `emulator` to your test targets when you also need to check alignment with the official emulator.
 
+#### Development defaults and `productionExact`
+
+Fireemu is mostly run by tests, in CI and on a developer's machine. Where production needs setup that a test should not have to do (signed tokens, signing keys, enabling a feature through an Admin API call), the default in both profiles is the development behavior, and each such behavior has its own configuration key. To get production's behavior for all of them at once, set `productionExact` to `true` (strict profile only); an explicit key still decides over it:
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "productionExact": true,
+  "auth": { "allowUnsignedCustomTokens": true }
+}
+```
+
+| Development default | Key | With `productionExact` |
+|---|---|---|
+| Unsigned emulator custom tokens are accepted | `auth.allowUnsignedCustomTokens` | refused |
+
+The start banner and `fireemu capabilities` report whether `productionExact` is set.
+
 Under the `emulator` profile, a request that names a tenant the project does not have creates that tenant, and the number of tenants is not limited, as in the official emulator. The `strict` profile refuses such a request, as production does. A request that Fireemu refuses (a wrong credential, a browser page without the control token on the emulator routes, App Check, an unknown API key) creates nothing. As in the official emulator, a plain `GET` without an `Origin` header to a tenant route of `127.0.0.1` creates the tenant, so any web page you visit while the emulator runs can add tenants to it (not read them); use the `strict` profile where that matters.
 
 ### Basic configuration
@@ -225,7 +244,7 @@ The `auth` section of `fireemu.json` lets you configure sign-in methods, passwor
 | Project- and tenant-specific password policies and account permissions | `auth.passwordPolicyOverrides`, `auth.configOverrides` |
 | Blocking functions before account creation or sign-in, and credential forwarding to those functions | `auth.blockingFunctions` |
 | Initial custom OIDC and SAML provider resources | `auth.providers.oidc`, `auth.providers.saml` |
-| Accept unsigned emulator custom tokens (default `true` in both profiles) | `auth.allowUnsignedCustomTokens` |
+| Accept unsigned emulator custom tokens (default `true` in both profiles, `false` with `productionExact`) | `auth.allowUnsignedCustomTokens` |
 | Public keys for verifying custom tokens and OIDC ID tokens | `auth.customTokenSigners`, `auth.idpSigners` |
 | Sign-up quota configuration and local quota-exceeded simulation | `auth.quota`, `auth.quotaSimulation` |
 

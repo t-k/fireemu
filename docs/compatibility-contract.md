@@ -124,6 +124,16 @@ value is a statement of intent and not a switch (`events.delivery = at-least-onc
 `rules.staticLimitChecks` / `rules.runtimeBudgets` keys of both). `fireemu capabilities` and
 `GET /v1/capabilities` publish the active profile and the start banner prints it.
 
+### Development defaults
+
+fireemu is run mostly by tests in CI and on a developer's machine. Where production behaviour needs setup a test should not have to do (signed tokens, signing keys, enabling a feature through an Admin API call), the default in both profiles is a development behaviour, each with its own configuration key (owner decisions 1196 and 1396 of 2026-10-10 and 2026-10-12). The top-level `productionExact` key, accepted only with the `strict` profile, gives every such key production's value; an explicit key still decides over it. `RuntimeConfig::set_production_exact` in `crates/fireemu/src/config.rs` writes these defaults and nowhere else does, and the table below lists the same set:
+
+| Key | Development default | `productionExact` |
+|---|---|---|
+| `auth.allowUnsignedCustomTokens` | `true`: unsigned emulator custom tokens are accepted | `false`: refused, as production refuses an unsigned custom token |
+
+A development default is not a parity claim. A strict comparison against production recordings whose rows depend on one of these behaviours runs with `productionExact: true` or with the key set to its production value; adding a key to this table means updating the configurations of those comparisons in the same change.
+
 Where the `emulator` profile cannot reproduce the official emulator exactly, the difference is
 recorded in that profile's `officialEmulatorDivergences`, whose `key` names either a
 configuration key or the profile-derived behaviour. Two are recorded today:

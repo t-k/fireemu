@@ -172,6 +172,7 @@ impl std::fmt::Debug for RedactedRuntimeConfig<'_> {
         formatter
             .debug_struct("RuntimeConfig")
             .field("profile", &config.profile)
+            .field("production_exact", &config.production_exact)
             .field("edition", &config.edition)
             .field("api_mode", &config.api_mode)
             .field("index_policy", &config.index_policy)
@@ -304,7 +305,8 @@ fn main() -> ExitCode {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&control::capabilities_manifest(
-                        options.cfg.profile
+                        options.cfg.profile,
+                        options.cfg.production_exact,
                     ))
                     .unwrap_or_default()
                 );
@@ -771,6 +773,7 @@ fn read_config_file(path: &Path) -> Result<(serde_json::Value, bool), CliError> 
         const FIREEMU_ONLY_KEYS: &[&str] = &[
             "firebaseJson",
             "profile",
+            "productionExact",
             "bind",
             "projects",
             "limits",
@@ -2276,6 +2279,14 @@ fn print_banner(
         }
     );
     println!(
+        "  development defaults: {}",
+        if cfg.production_exact {
+            "off (productionExact: production's behaviour where it needs extra setup)"
+        } else {
+            "on (unsigned test tokens and similar conveniences; set productionExact for production's behaviour)"
+        }
+    );
+    println!(
         "  edition: {}   clock: {}{}",
         cfg.edition,
         cfg.clock_start,
@@ -2640,7 +2651,8 @@ fn control_state(
         edition: cfg.edition,
         capabilities: fireemu_adapter_http::control::CapabilityManifest::lazy({
             let profile = cfg.profile;
-            move || control::capabilities_manifest(profile)
+            let production_exact = cfg.production_exact;
+            move || control::capabilities_manifest(profile, production_exact)
         }),
         rules: rules.clone(),
         storage_rules: storage_rules.clone(),

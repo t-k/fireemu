@@ -4615,6 +4615,22 @@ fn request_traces_can_be_kept_from_the_first_request_and_across_a_reload() {
             .authorize_get(&Principal::Anonymous, &path, None, &reader)
             .is_err());
         assert_eq!(traced(), usize::from(record), "record {record}");
+        if record {
+            let reason = enforcer
+                .rules()
+                .snapshot()
+                .unwrap()
+                .diagnostics
+                .lock()
+                .unwrap()
+                .requests()[0]
+                .reason
+                .clone();
+            assert_eq!(
+                reason,
+                "get on profiles/alice denied by Security Rules: no allow statement evaluated to true"
+            );
+        }
         enforcer.replace_source(RULES).unwrap();
         assert_eq!(traced(), 0, "a reload starts a new trace");
         assert!(enforcer
@@ -4626,4 +4642,39 @@ fn request_traces_can_be_kept_from_the_first_request_and_across_a_reload() {
             "record {record} after a reload"
         );
     }
+}
+
+/// A refusal decided outside the evaluator (an end user's read-write transaction) reaches the
+/// denial log too, with the user.
+#[test]
+fn a_refusal_outside_the_evaluator_reaches_the_denial_log_with_the_user() {
+    use fireemu_adapter_grpc::rules::RulesDenial;
+    let denials: Arc<Mutex<Vec<RulesDenial>>> = Arc::default();
+    let bob = Principal::User(fireemu_core_rules::value::AuthContext {
+        uid: "bob".to_owned(),
+        token: BTreeMap::from([("aud".to_owned(), RulesValue::String("demo-app".to_owned()))]),
+    });
+    let transactions = RulesEnforcer::new(
+        Arc::new(RulesetSlot::new(LoadedRules::from_source(RULES).unwrap())),
+        Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(3),
+            TotpPolicy::default(),
+        ))),
+        Arc::new(Mutex::new(VirtualClock::new(START))),
+    )
+    .with_end_user_transactions(false)
+    .with_denial_log({
+        let seen = denials.clone();
+        Arc::new(move |denial| seen.lock().unwrap().push(denial.clone()))
+    });
+    assert!(transactions.check_new_transaction(&bob, None).is_err());
+    let logged = std::mem::take(&mut *denials.lock().unwrap());
+    assert_eq!(logged.len(), 1, "{logged:?}");
+    assert_eq!(logged[0].uid.as_deref(), Some("bob"));
+    assert_eq!(logged[0].path, "BeginTransaction");
+    assert_eq!(
+        logged[0].reason,
+        "an end user may not open a read-write transaction in production"
+    );
 }

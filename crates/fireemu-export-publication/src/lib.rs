@@ -852,6 +852,98 @@ mod mount_point_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// The renames of one publication: `manifest` and `a` leave (0, 1), `b` and `manifest`
+    /// arrive (2, 3); a failure of rename 3 rolls back with `b` back to the stage (4), `a` back
+    /// (5) and the old manifest last (6). `failing` names the renames that fail.
+    fn publish_failing(name: &str, failing: &[usize]) -> (PathBuf, Result<(), String>) {
+        use std::cell::Cell;
+        let root = scratch(name);
+        let target = root.join("volume");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("firebase-export-metadata.json"), b"old").unwrap();
+        std::fs::write(target.join("a"), b"old").unwrap();
+        let stage = super::create_private_child(&target, "stage").unwrap();
+        std::fs::write(stage.join("firebase-export-metadata.json"), b"new").unwrap();
+        std::fs::write(stage.join("b"), b"new").unwrap();
+        let calls = Cell::new(0usize);
+        let rename = |from: &Path, to: &Path| {
+            let call = calls.get();
+            calls.set(call + 1);
+            if failing.contains(&call) {
+                Err(std::io::Error::other("injected"))
+            } else {
+                std::fs::rename(from, to)
+            }
+        };
+        let result = super::publish_into_mount_point_with(&stage, &target, &rename);
+        (target, result)
+    }
+
+    fn visible(dir: &Path) -> Vec<String> {
+        names(dir)
+            .into_iter()
+            .filter(|name| !is_publication_entry(name.as_ref()))
+            .collect()
+    }
+
+    #[test]
+    fn a_failed_publication_whose_rollback_completes_restores_the_prior_export() {
+        let (target, result) = publish_failing("rollback-ok", &[3]);
+        let error = result.unwrap_err();
+        assert!(error.contains("the prior export was restored"), "{error}");
+        assert_eq!(visible(&target), ["a", "firebase-export-metadata.json"]);
+        assert_eq!(
+            std::fs::read(target.join("firebase-export-metadata.json")).unwrap(),
+            b"old"
+        );
+        let _ = std::fs::remove_dir_all(target.parent().unwrap());
+    }
+
+    /// When a new entry cannot go back to the stage, or an old one cannot come back, the old
+    /// manifest stays out: the target is never an importable mixture.
+    #[test]
+    fn a_rollback_that_fails_part_way_leaves_no_manifest() {
+        for (label, failing) in [
+            ("undo-new", [3, 4]),
+            ("restore-old", [3, 5]),
+            ("manifest", [3, 6]),
+        ] {
+            let (target, result) = publish_failing(&format!("rollback-{label}"), &failing);
+            let error = result.unwrap_err();
+            assert!(
+                !error.contains("the prior export was restored"),
+                "{label}: {error}"
+            );
+            assert!(error.contains("could not be restored"), "{label}: {error}");
+            assert!(
+                !visible(&target).contains(&"firebase-export-metadata.json".to_owned()),
+                "{label}: {:?}",
+                visible(&target)
+            );
+            let _ = std::fs::remove_dir_all(target.parent().unwrap());
+        }
+    }
+
+    /// A stage name already taken is skipped for the next one; any other error is reported.
+    #[test]
+    fn a_taken_stage_name_is_skipped_and_another_error_is_reported() {
+        use std::sync::atomic::Ordering;
+        let root = scratch("collision");
+        let next = super::NEXT_STAGE_ID.load(Ordering::Relaxed);
+        for id in next..next + 8 {
+            std::fs::create_dir(root.join(format!(".fireemu-stage-{}-{id}", std::process::id())))
+                .unwrap();
+        }
+        let made = super::create_private_child(&root, "stage").unwrap();
+        assert!(made.is_dir());
+        let error = super::create_private_child(&root.join("missing"), "stage").unwrap_err();
+        assert!(
+            error.starts_with("cannot create private export stage"),
+            "{error}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn publication_entries_are_the_stage_and_displaced_prefixes_only() {
         for name in [".fireemu-stage-1-2", ".fireemu-displaced-1-2"] {
@@ -952,6 +1044,7 @@ mod mount_point_tests {
                 std::fs::create_dir(&target).unwrap();
                 let old = tree(&old_names, b"old");
                 let new = tree(&new_names, b"new");
+                prop_assert!(old.contains_key(MANIFEST) && new.contains_key(MANIFEST));
                 write(&target, &old);
                 let stage = create_private_child(&target, "stage").unwrap();
                 write(&stage, &new);

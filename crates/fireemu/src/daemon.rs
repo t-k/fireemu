@@ -1706,9 +1706,9 @@ async fn serve_suite(
     if let Some(note) = locator.and_then(hub::Locator::release) {
         eprintln!("warning: {note}");
     }
-    // The denial lines of the run's last requests are on their way to stderr. A request still
-    // running in a detached connection task can log after this; its client gets no answer
-    // either, so that line is an accepted loss.
+    // The denial lines queued so far are written before the exit. A request still running in a
+    // detached connection task when the listeners stop can queue a line after this flush, and
+    // that line may be lost at exit: an accepted loss, bounded to the requests in flight then.
     if let Some(flush) = &denial_flush {
         flush();
     }

@@ -92,7 +92,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -131,7 +131,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -168,7 +168,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -204,7 +204,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -250,7 +250,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -295,7 +295,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -337,7 +337,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -379,7 +379,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -420,7 +420,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -462,7 +462,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -506,7 +506,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -549,7 +549,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -587,7 +587,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -630,7 +630,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -679,7 +679,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -724,7 +724,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -761,7 +761,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -793,7 +793,7 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
         "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
@@ -810,7 +810,7 @@
   "perCaseAdjudication": {
     "mode": "per-case-adjudication",
     "path": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-    "sha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4"
+    "sha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141"
   },
   "integratedRegression": {
     "integrationCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
@@ -822,7 +822,7 @@
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "sha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
+        "sha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
         "rows": 227,
         "summary": {
           "EXCLUDED_STEP": 6,
@@ -924,6 +924,12 @@
     },
     "restContentType": {
       "statement": "REST Content-Type: the release binary a97b87c1 answers JSON with Content-Type application/json, while production sends application/json; charset=UTF-8. Found in header-bearing production captures outside the comparison set (two GET-404 cause probes); no comparison in this closure judges headers. Owner 1404 has the charset fixed as a separate change in v0.17; that fix is not part of the binary this closure is bound to.",
+      "rules": [
+        "1404"
+      ]
+    },
+    "restResponseHeaders": {
+      "statement": "REST response headers are not compared anywhere in this closure. In the header-bearing production captures production sends 10 response headers (alt-svc, content-encoding, content-type, date, server, transfer-encoding, vary, x-content-type-options, x-frame-options, x-xss-protection); the release binary sends 3 (content-type, content-length, date).",
       "rules": [
         "1404"
       ]

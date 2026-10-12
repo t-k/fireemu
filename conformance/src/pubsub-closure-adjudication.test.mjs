@@ -515,3 +515,13 @@ test("the committed record is pre-review with only 17/0 pending, or promoted wit
     limited.every(({ status, rules }) => status === "MATCH_BY_RELATION" && rules.includes("1402")),
   );
 });
+
+test("the method states what each recording family compares on REST rows", () => {
+  const { closure, comparison } = committed();
+  assert.doesNotMatch(comparison.method, /D raw body bytes/);
+  assert.match(comparison.method, /REST body bytes are not compared/);
+  assert.match(comparison.method, /raw bytes only for recovered native Pull responses/);
+  assert.match(comparison.method, /No comparison judges any response header/);
+  assert.match(closure.knownDifferences.restResponseHeaders.statement, /10 response headers/);
+  assert.match(closure.knownDifferences.restResponseHeaders.statement, /sends 3/);
+});

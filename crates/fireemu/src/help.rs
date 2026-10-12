@@ -44,12 +44,17 @@ pub const DAEMON_OPTIONS: &[OptionSpec] = &[
     opt(
         &["--config"],
         Value::Required("<file>"),
-        "Configuration file: a fireemu.json (schemaVersion 1) or a firebase.json. Default: none, the built-in defaults.",
+        "Configuration file: a fireemu.json (schemaVersion 1) or a firebase.json. Default: ./fireemu.json when neither --config nor --firebase-json is given, else the nearest firebase.json (see --no-config-discovery), else the built-in defaults.",
     ),
     opt(
         &["--firebase-json"],
         Value::Required("<file>"),
-        "Read ports, rules, indexes and Functions codebases from this firebase.json. Takes precedence over one referenced by --config. Default: none; firebase.json is not searched for.",
+        "Read ports, rules, indexes and Functions codebases from this firebase.json. Takes precedence over one referenced by --config. Default: the one ./fireemu.json names, else, without ./fireemu.json, the nearest firebase.json in the current directory or a parent.",
+    ),
+    opt(
+        &["--no-config-discovery"],
+        Value::None,
+        "Do not search for ./fireemu.json or the nearest firebase.json when neither --config nor --firebase-json is given; use the built-in defaults. Also silences the warning for a discovered file that was skipped because of its owner or permissions. Default: the search is on.",
     ),
     opt(
         &["-P", "--project"],

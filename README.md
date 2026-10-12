@@ -180,7 +180,7 @@ An existing `fireemu.json` is not overwritten unless `--force` is supplied.
 | `strict` | Matches production Firebase behavior and constraints as closely as possible within the supported scope. This is the default profile. Recommended, including when migrating from the official emulator |
 | `emulator` | Targets the behavior of a pinned version of the official emulator. Known differences are documented in the compatibility documentation. Use it only to check alignment with the pinned official emulator (for example as an extra test target); it is not needed for a migration |
 
-Use `strict` for your tests, also when you are moving a project over from the Firebase Local Emulator Suite. There is no benefit in choosing `emulator` to make a migration easier: it accepts behavior that production refuses, so a test can pass here and fail against production. Add `emulator` to your test targets only when you also need to check alignment with the official emulator.
+Use `strict` for your tests, also when you are moving a project over from the Firebase Local Emulator Suite. `strict` is recommended; `emulator` is only for checking alignment with the pinned official emulator (for example as an extra test target). It accepts behavior that production refuses, so a test can pass there and fail against production.
 
 Under the `emulator` profile, a request that names a tenant the project does not have creates that tenant, and the number of tenants is not limited, as in the official emulator. The `strict` profile refuses such a request, as production does. A request that Fireemu refuses (a wrong credential, a browser page without the control token on the emulator routes, App Check, an unknown API key) creates nothing. As in the official emulator, a plain `GET` without an `Origin` header to a tenant route of `127.0.0.1` creates the tenant, so any web page you visit while the emulator runs can add tenants to it (not read them); use the `strict` profile where that matters.
 
@@ -188,13 +188,17 @@ Under the `emulator` profile, a request that names a tenant the project does not
 
 Keep `"profile": "strict"` (the default of `fireemu init`), and point fireemu at your existing `firebase.json` with `npx fireemu init --firebase-json firebase.json` or `--firebase-json` on the command line. Replace `firebase emulators:exec` with `fireemu exec` and `firebase emulators:start` with `fireemu up`; the official command names `emulators:exec` and `emulators:start` also work.
 
-When a test fails under `strict` but passed on the official emulator, it is usually behavior the application would also meet in production, for example a query that needs a composite index, a wrong-password sign-in that answers `INVALID_LOGIN_CREDENTIALS`, or TOTP that must be enabled in the project. Fix the test or the application. If you need the official emulator's behavior for one thing, relax only that documented setting in `fireemu.json` instead of switching the whole profile:
+When a test fails under `strict` but passed on the official emulator, it is usually behavior the application would also meet in production. Fix the test or the application, or relax only the specific setting below instead of switching the whole profile.
 
-| Setting | What it changes under `strict` |
+- **Unsigned emulator ID tokens** (`@firebase/rules-unit-testing` `authenticatedContext()`, the client SDK's `mockUserToken`) work under `strict` by default. Set `auth.allowUnsignedIdTokens` to `false` to test production's refusal of them on the Security Rules surfaces.
+- **Composite indexes** are validated as production does, and no setting changes that. Declare the index a query needs in `firestore.indexes.json`, referenced from `firebase.json`.
+- **Settings that mirror your production project.** Set them to match it instead of switching the profile:
+
+| Setting | What it does under `strict` |
 |---|---|
-| `firestore.enforceLimits` | `false` stops refusing queries that exceed the Standard edition query limits |
-| `auth.improvedEmailPrivacy` | `false` answers `EMAIL_NOT_FOUND` and `INVALID_PASSWORD` as the official Auth emulator does |
-| `auth.mfa` | Enables multi-factor authentication (including TOTP) the way a production project is configured; `strict` starts with it off |
+| `auth.improvedEmailPrivacy` | Email enumeration protection, on for a new production project. Set `false` only if your production project turned it off; sign-ins then answer `EMAIL_NOT_FOUND` and `INVALID_PASSWORD` as the official Auth emulator does |
+| `auth.mfa` | Your project's multi-factor configuration (an object, see [Enable multi-factor authentication at start](#enable-multi-factor-authentication-at-start)). `strict` starts with multi-factor off, as a new production project does, and the official emulator has no TOTP at all |
+| `firestore.enforceLimits` | Production always enforces the Standard edition query limits. `false` lets queries pass that production refuses, so leave it on unless you have a specific reason |
 
 ### Basic configuration
 

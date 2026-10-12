@@ -54,12 +54,12 @@ pub const DAEMON_OPTIONS: &[OptionSpec] = &[
     opt(
         &["-P", "--project"],
         Value::Required("<id|alias>"),
-        "Project ID, or an alias from the .firebaserc next to the firebase.json (else the current directory). Default: the .firebaserc default, else demo-app.",
+        "Project ID, or an alias from the .firebaserc next to the firebase.json (else the current directory). Default: the .firebaserc default, else daemon.authProject from --config, else demo-app.",
     ),
     opt(
         &["--only"],
         Value::Required("<list>"),
-        "Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, appcheck. Default: all of them except eventarc and tasks, which start when configured or when their port option is given.",
+        "Comma-separated services to start: auth, firestore, storage, functions (or functions:<codebase>), eventarc, tasks, pubsub, appcheck. Default: Firestore, Auth, Storage and App Check; Functions when a codebase is configured (firebase.json or --functions), and with it Eventarc and Cloud Tasks; Pub/Sub when configured (emulators.pubsub, daemon.pubsubPort or --pubsub-port).",
     ),
     opt(
         &["--firestore-port"],
@@ -79,22 +79,22 @@ pub const DAEMON_OPTIONS: &[OptionSpec] = &[
     opt(
         &["--functions-port"],
         Value::Required("<n>"),
-        "Functions port. Default: 5001 (0 picks a free port).",
+        "Functions port, used when a codebase is loaded. Default: 5001 (0 picks a free port).",
     ),
     opt(
         &["--eventarc-port"],
         Value::Required("<n>"),
-        "Eventarc port; also enables Eventarc. Default: 9299 when enabled.",
+        "Eventarc port. Eventarc starts exactly when a Functions backend is loaded; this option only sets the port. Default: 9299.",
     ),
     opt(
         &["--tasks-port"],
         Value::Required("<n>"),
-        "Cloud Tasks port; also enables Cloud Tasks. Default: 9499 when enabled.",
+        "Cloud Tasks port. Cloud Tasks starts exactly when a Functions backend is loaded; this option only sets the port. Default: 9499.",
     ),
     opt(
         &["--pubsub-port"],
         Value::Required("<n>"),
-        "Pub/Sub port; also enables Pub/Sub. Default: 8085.",
+        "Pub/Sub port; giving it also enables Pub/Sub, which otherwise starts only when configured or named by --only. Default: 8085.",
     ),
     opt(
         &["--functions"],
@@ -286,11 +286,11 @@ impl Topic {
     const fn description(self) -> &'static str {
         match self {
             Self::Init => "Creates fireemu.json in the current directory and prints the command to start with it. It never overwrites an existing file unless --force is given.",
-            Self::Up => "Serves the selected emulators (Firestore, Auth, Storage, Functions, Pub/Sub, App Check, and Eventarc and Cloud Tasks when configured) plus the control API, the Emulator Hub and the UI on loopback until Ctrl-C.",
-            Self::Exec => "Starts the same emulators as `up`, runs the command with the emulator host environment variables (FIRESTORE_EMULATOR_HOST, FIREBASE_AUTH_EMULATOR_HOST, and so on) once every listener is bound, stops everything when the command exits, and exits with the command's status (128 + n when it was ended by signal n). SIGINT and SIGTERM are forwarded to the command.\n\nWith \"shell script\" (the official form) the script is run by the system shell. With `--` the command is run as exactly that program and argv, without a shell. Everything after `--` belongs to the command, including --help; a `--help` inside the script text is script text.",
+            Self::Up => "Serves the selected emulators (Firestore, Auth, Storage and App Check; Functions when a codebase is configured, and with it Eventarc and Cloud Tasks; Pub/Sub when configured) plus the control API, the Emulator Hub and the UI on loopback until Ctrl-C.",
+            Self::Exec => "Starts the same emulators as `up`, runs the command with the emulator host environment variables (FIRESTORE_EMULATOR_HOST, FIREBASE_AUTH_EMULATOR_HOST, and so on) once every listener is bound, stops everything when the command exits, and exits with the command's status. On Unix, a command ended by signal n gives 128 + n, and SIGINT and SIGTERM are forwarded to it.\n\nWith \"shell script\" (the official form) the script is run by the system shell. With `--` the command is run as exactly that program and argv, without a shell. Everything after `--` belongs to the command, including --help; a `--help` inside the script text is script text.",
             Self::Export => "Asks the suite that is already running for the project (found through its Emulator Hub locator file) to write its state to <dir>, in the format --import reads. Not available on Windows.",
             Self::Doctor => "Reports the Fireemu binary, UI, Functions runner and Node.js that this installation finds, and suggests a remedy for each problem.",
-            Self::Capabilities => "Prints the capability manifest for the profile the options resolve to. It accepts the same options as `up`; only those that change the resolved profile (--config, --firebase-json, --project) matter.",
+            Self::Capabilities => "Prints the capability manifest for the profile the options resolve to. It accepts the same options as `up` and validates them the same way, but only --config (the profile it names) changes the result.",
         }
     }
 }
@@ -460,10 +460,9 @@ mod tests {
         }
     }
 
-    /// Every flag spelled as a match arm of `parse_raw_options`.
-    fn parser_flags() -> Vec<String> {
-        let source = include_str!("main.rs");
-        let start = source.find("fn parse_raw_options").expect("parser present");
+    /// Every flag spelled as a match arm of the function `name` in `source`.
+    fn arm_flags(source: &str, name: &str) -> Vec<String> {
+        let start = source.find(&format!("fn {name}")).expect("parser present");
         let body = &source[start..];
         let end = body.find("\n}\n").expect("parser ends");
         let mut flags = Vec::new();
@@ -486,23 +485,78 @@ mod tests {
         flags
     }
 
+    /// Every flag spelled as a match arm of `parse_raw_options`.
+    fn parser_flags() -> Vec<String> {
+        arm_flags(include_str!("main.rs"), "parse_raw_options")
+    }
+
+    fn documented(options: &[OptionSpec]) -> Vec<&'static str> {
+        options
+            .iter()
+            .flat_map(|spec| spec.flags.iter().copied())
+            .collect()
+    }
+
+    /// Both directions: every arm is described and every described flag has an arm.
+    fn assert_table_matches_arms(label: &str, options: &[OptionSpec], arms: &[String]) {
+        assert!(!arms.is_empty(), "{label}: the scan found no arms");
+        let documented = documented(options);
+        for flag in arms {
+            assert!(
+                documented.contains(&flag.as_str()),
+                "{label}: {flag} is undocumented"
+            );
+        }
+        for flag in documented {
+            assert!(
+                arms.iter().any(|p| p == flag),
+                "{label}: {flag} has no parser arm"
+            );
+        }
+    }
+
+    #[test]
+    fn the_init_export_and_doctor_tables_match_their_parsers() {
+        assert_table_matches_arms(
+            "init",
+            INIT_OPTIONS,
+            &arm_flags(include_str!("init.rs"), "parse_args"),
+        );
+        assert_table_matches_arms(
+            "emulators:export",
+            EXPORT_OPTIONS,
+            &arm_flags(include_str!("main.rs"), "export_command"),
+        );
+        // `doctor` is parsed inline in `main`: its one option is the `Some("--connect")` arm.
+        let main = include_str!("main.rs");
+        let start = main.find("Some(\"doctor\") =>").expect("doctor arm");
+        let block = &main[start..main[start..].find("Some(\"capabilities\")").unwrap() + start];
+        let mut arms: Vec<String> = Vec::new();
+        for part in block.split("Some(\"-").skip(1) {
+            arms.push(format!("-{}", part.split('"').next().unwrap()));
+        }
+        assert_table_matches_arms("doctor", DOCTOR_OPTIONS, &arms);
+    }
+
+    #[test]
+    fn every_command_help_lists_every_flag_its_parser_accepts() {
+        for (topic, options) in [
+            (Topic::Init, INIT_OPTIONS),
+            (Topic::Export, EXPORT_OPTIONS),
+            (Topic::Doctor, DOCTOR_OPTIONS),
+        ] {
+            let text = command_help(topic);
+            for flag in documented(options) {
+                assert!(text.contains(flag), "{}: {flag}", topic.name());
+            }
+        }
+    }
+
     #[test]
     fn every_flag_the_parser_has_an_arm_for_is_documented() {
         let parsed = parser_flags();
         assert!(parsed.len() >= 20, "the scan found {parsed:?}");
-        let documented: Vec<&str> = DAEMON_OPTIONS
-            .iter()
-            .flat_map(|spec| spec.flags.iter().copied())
-            .collect();
-        for flag in &parsed {
-            assert!(
-                documented.contains(&flag.as_str()),
-                "{flag} is undocumented"
-            );
-        }
-        for flag in documented {
-            assert!(parsed.iter().any(|p| p == flag), "{flag} has no parser arm");
-        }
+        assert_table_matches_arms("up/exec", DAEMON_OPTIONS, &parsed);
     }
 
     #[test]
@@ -561,6 +615,53 @@ mod tests {
             );
         }
         assert!(help.contains(&cfg.auth_project));
+    }
+
+    #[test]
+    fn the_service_start_wording_matches_the_start_conditions() {
+        // The conditions in `bind_listeners`/`child_environment`: Firestore, Auth and Storage
+        // are selected by default and always start; Functions is selected but needs a codebase;
+        // Pub/Sub is selected but needs configuration; Eventarc and Cloud Tasks are never
+        // selected by default and start exactly with a loaded Functions backend.
+        let selection = crate::config::Selection::default();
+        let cfg = crate::config::RuntimeConfig::default();
+        assert!(selection.firestore && selection.auth && selection.storage && selection.appcheck);
+        assert!(selection.functions && cfg.functions_source.is_none());
+        assert!(selection.pubsub && !cfg.pubsub_enabled);
+        assert!(!selection.eventarc && !selection.tasks);
+
+        let only = DAEMON_OPTIONS
+            .iter()
+            .find(|spec| spec.flags == ["--only"])
+            .unwrap()
+            .text;
+        let default = only.split("Default: ").nth(1).expect("a default is stated");
+        assert!(
+            default.starts_with("Firestore, Auth, Storage and App Check;"),
+            "{default}"
+        );
+        assert!(
+            default.contains("Functions when a codebase is configured"),
+            "{default}"
+        );
+        assert!(
+            default.contains("and with it Eventarc and Cloud Tasks"),
+            "{default}"
+        );
+        assert!(default.contains("Pub/Sub when configured"), "{default}");
+        let up = command_help(Topic::Up);
+        assert!(up.contains("Pub/Sub when configured"), "{up}");
+        assert!(
+            up.contains("Functions when a codebase is configured"),
+            "{up}"
+        );
+        for flag in ["--eventarc-port", "--tasks-port"] {
+            let spec = DAEMON_OPTIONS.iter().find(|s| s.flags == [flag]).unwrap();
+            assert!(spec
+                .text
+                .contains("starts exactly when a Functions backend is loaded"));
+            assert!(!spec.text.contains("also enables"), "{}", spec.text);
+        }
     }
 
     #[test]

@@ -273,6 +273,75 @@ mod exec_passthrough {
         run(&args)
     }
 
+    /// The environment variables the child sees, with `args` added to ports that leave
+    /// Pub/Sub, Eventarc and Cloud Tasks at their defaults.
+    fn child_env(args: &[&str]) -> Vec<String> {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fireemu"));
+        command.arg("exec");
+        for flag in [
+            "--firestore-port",
+            "--http-port",
+            "--storage-port",
+            "--ui-port",
+            "--hub-port",
+            "--logging-port",
+        ] {
+            command.args([flag, "0"]);
+        }
+        let out = command
+            .args(args)
+            .args(["--", "/bin/sh", "-c", "env"])
+            .env_clear()
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+        stdout(&out)
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(name, _)| name.to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn the_documented_default_services_are_the_ones_that_start() {
+        let env = child_env(&[]);
+        for name in [
+            "FIRESTORE_EMULATOR_HOST",
+            "FIREBASE_AUTH_EMULATOR_HOST",
+            "FIREBASE_STORAGE_EMULATOR_HOST",
+        ] {
+            assert!(
+                env.iter().any(|n| n == name),
+                "{name} must start by default"
+            );
+        }
+        for name in [
+            "PUBSUB_EMULATOR_HOST",
+            "FIREEMU_FUNCTIONS_HOST",
+            "CLOUD_EVENTARC_EMULATOR_HOST",
+            "CLOUD_TASKS_EMULATOR_HOST",
+        ] {
+            assert!(
+                !env.iter().any(|n| n == name),
+                "{name} must not start without configuration or a codebase"
+            );
+        }
+    }
+
+    #[test]
+    fn the_support_service_ports_only_set_ports_and_the_pubsub_port_enables_pubsub() {
+        let env = child_env(&["--eventarc-port", "0", "--tasks-port", "0"]);
+        for name in ["CLOUD_EVENTARC_EMULATOR_HOST", "CLOUD_TASKS_EMULATOR_HOST"] {
+            assert!(
+                !env.iter().any(|n| n == name),
+                "{name}: without Functions the port option binds nothing"
+            );
+        }
+        assert!(!env.iter().any(|n| n == "PUBSUB_EMULATOR_HOST"));
+        let env = child_env(&["--pubsub-port", "0"]);
+        assert!(env.iter().any(|n| n == "PUBSUB_EMULATOR_HOST"));
+    }
+
     #[test]
     fn help_after_the_double_dash_belongs_to_the_child() {
         for flag in ["--help", "-h"] {

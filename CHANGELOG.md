@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Pub/Sub REST JSON responses, success and error alike, now send `Content-Type: application/json; charset=UTF-8` in both profiles, as production does (the media type previously lacked the charset parameter). The HTML route-not-found page is unchanged.
+
 ## [0.17.0] - 2026-10-10
 
 ### Changed

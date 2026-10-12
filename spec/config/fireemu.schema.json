@@ -615,15 +615,20 @@
         },
         "tenants": {
           "type": ["array", "null"],
-          "description": "The default project's tenants, each an Admin v2 Tenant document with its tenantId (a display name, a hyphen and five characters of [a-z0-9], as production generates it). A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty in the default project when the daemon starts, in every session project created later, and again after a control-plane reset of a session (the default session's included); an --import is authoritative for a tenant of the same id. A namespace the emulator profile creates for an unknown project id is seeded when it is created (by a request that writes a tenant there, or by an Admin user, provider or project-setting write). Absent or null, no tenant is created.",
+          "description": "The default project's tenants, each an Admin v2 Tenant document with its tenantId: under auth.tenantIdFormat \"readable\" (the default) any id that starts with a letter and holds letters, digits and hyphens (at most 63 characters, such as tenant-a), under \"generated\" (productionExact) a display name, a hyphen and five characters of [a-z0-9], as production generates it. A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty in the default project when the daemon starts, in every session project created later, and again after a control-plane reset of a session (the default session's included); an --import is authoritative for a tenant of the same id. A namespace the emulator profile creates for an unknown project id is seeded when it is created (by a request that writes a tenant there, or by an Admin user, provider or project-setting write). Absent or null, no tenant is created.",
           "items": {
             "type": "object",
             "required": ["tenantId", "displayName"],
             "properties": {
-              "tenantId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{3,19}-[a-z0-9]{5}$" },
+              "tenantId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,62}$" },
               "displayName": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{3,19}$" }
             }
           }
+        },
+        "tenantIdFormat": {
+          "enum": ["readable", "generated"],
+          "default": "readable",
+          "description": "Which tenantId a tenant of auth.tenants may have. readable (the default, a development default, and \"generated\" under productionExact): any id that starts with a letter and holds letters, digits and hyphens, at most 63 characters, such as tenant-a. generated: the id production would generate, the display name, a hyphen and five characters of [a-z0-9]."
         },
         "secretMaterialization": { "enum": ["redact", "allow"] },
         "forwardInboundCredentials": {
@@ -1052,6 +1057,38 @@
                   },
                   "then": {
                     "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "required": ["auth"],
+            "properties": { "auth": { "required": ["tenantIdFormat"], "properties": { "tenantIdFormat": { "const": "generated" } } } }
+          },
+          {
+            "required": ["productionExact"],
+            "properties": {
+              "productionExact": { "const": true },
+              "auth": { "not": { "required": ["tenantIdFormat"] } }
+            }
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "auth": {
+            "properties": {
+              "tenants": {
+                "items": {
+                  "properties": {
+                    "tenantId": { "pattern": "^[A-Za-z][A-Za-z0-9-]{3,19}-[a-z0-9]{5}$" }
                   }
                 }
               }

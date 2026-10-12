@@ -3,8 +3,10 @@
 //!
 //! An entry is an Admin v2 `Tenant` document with the `tenantId` the file chooses. Production
 //! generates a tenant's id (its display name, a hyphen and five characters of `[a-z0-9]`), so a
-//! file cannot ask for a generated one; the id it names must have that shape, and its display
-//! name must be one production takes. The document is read by the code the create route reads
+//! file cannot ask for a generated one. By default ([`TenantIdFormat::Readable`], a development
+//! default) the file may name any id a test finds readable, such as `tenant-a`; with
+//! [`TenantIdFormat::Generated`] (`productionExact`) the id must have production's shape. The
+//! display name must be one production takes either way. The document is read by the code the create route reads
 //! one with, so the two validate and default alike. Applying an entry needs no request: it
 //! creates the tenant in the registry and writes the members, which lets a reset (holding the
 //! admission barrier) create its tenants again.
@@ -39,6 +41,29 @@ fn message(response: &JsonResponse) -> String {
         .to_owned()
 }
 
+/// Which `tenantId` a declared tenant may have (`auth.tenantIdFormat`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TenantIdFormat {
+    /// Any id of [`readable_id`]'s form, such as `tenant-a` (the development default).
+    #[default]
+    Readable,
+    /// The id production would generate: the display name, a hyphen and five characters of
+    /// `[a-z0-9]` (`productionExact`).
+    Generated,
+}
+
+/// The longest readable tenant id.
+const READABLE_ID_MAX_LEN: usize = 63;
+
+/// Whether `id` is a readable tenant id: an ASCII letter, then ASCII letters, digits and
+/// hyphens, at most [`READABLE_ID_MAX_LEN`] characters. It is safe in a URL path segment and in
+/// the export's `accounts-<tenant>.json` file name, and every id production generates has it.
+fn readable_id(id: &str) -> bool {
+    id.len() <= READABLE_ID_MAX_LEN
+        && id.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
 /// Whether `id` is a display name, a hyphen and five characters of `[a-z0-9]`.
 fn id_names(id: &str, display_name: &str) -> bool {
     id.strip_prefix(display_name)
@@ -55,6 +80,7 @@ fn prepare_one(
     document: &Value,
     emulator: bool,
     written_at: Option<String>,
+    format: TenantIdFormat,
 ) -> Result<TenantSeed, String> {
     let Some(object) = document.as_object() else {
         return Err("a tenant is an object".to_owned());
@@ -78,10 +104,18 @@ fn prepare_one(
         .get("displayName")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if !id_names(&id, display_name) {
-        return Err(format!(
-            "tenantId {id:?} is not the display name {display_name:?}, a hyphen and five characters of a-z and 0-9, as production generates one"
-        ));
+    match format {
+        TenantIdFormat::Generated if !id_names(&id, display_name) => {
+            return Err(format!(
+                "tenantId {id:?} is not the display name {display_name:?}, a hyphen and five characters of a-z and 0-9, as production generates one (auth.tenantIdFormat \"generated\"; \"readable\" accepts an id such as \"tenant-a\")"
+            ));
+        }
+        TenantIdFormat::Readable if !readable_id(&id) => {
+            return Err(format!(
+                "tenantId {id:?} must start with a letter and hold only letters, digits and hyphens, at most {READABLE_ID_MAX_LEN} characters"
+            ));
+        }
+        TenantIdFormat::Generated | TenantIdFormat::Readable => {}
     }
     let prepared = prepare_tenant_create(&members, emulator, written_at)
         .map_err(|response| message(&response))?;
@@ -92,15 +126,26 @@ fn prepare_one(
     })
 }
 
-/// Validates the entries of `auth.tenants`, in order. An error names the entry (`auth.tenants[i]:`).
+/// Validates the entries of `auth.tenants`, in order, holding each id to production's generated
+/// shape ([`TenantIdFormat::Generated`]). An error names the entry (`auth.tenants[i]:`).
 pub fn prepare_tenant_seeds(
     documents: &[Value],
     emulator: bool,
     written_at: Option<&str>,
 ) -> Result<Vec<TenantSeed>, String> {
+    prepare_tenant_seeds_with(documents, emulator, written_at, TenantIdFormat::Generated)
+}
+
+/// [`prepare_tenant_seeds`] with the id rule `format` names.
+pub fn prepare_tenant_seeds_with(
+    documents: &[Value],
+    emulator: bool,
+    written_at: Option<&str>,
+    format: TenantIdFormat,
+) -> Result<Vec<TenantSeed>, String> {
     let mut seeds: Vec<TenantSeed> = Vec::with_capacity(documents.len());
     for (index, document) in documents.iter().enumerate() {
-        let seed = prepare_one(document, emulator, written_at.map(str::to_owned))
+        let seed = prepare_one(document, emulator, written_at.map(str::to_owned), format)
             .map_err(|error| format!("auth.tenants[{index}]: {error}"))?;
         if seeds.iter().any(|earlier| earlier.id == seed.id) {
             return Err(format!(

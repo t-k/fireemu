@@ -253,6 +253,7 @@ Fireemu is mostly run by tests, in CI and on a developer's machine. Where produc
 | Identity-provider sign-in accepts the fixture assertions and the sign-in widget (`/emulator/auth/handler`), for built-in, `oidc.*` and `saml.*` providers | `auth.idpAssertions` (`"fixture"`) | `"signed"`: OIDC ID tokens must verify with an `auth.idpSigners` key, SAML responses with the provider's certificates, and the fixture and built-in providers are refused |
 | The strict Eventarc listener admits any credential or none, so the Admin SDK publishes with a fake credential (see [Eventarc authentication](docs/eventarc-authentication.md)) | `eventarc.authentication` (`"permissive"`) | `"production"`: a missing, malformed or JWT-shaped bearer is refused with production's 401 |
 | A query whose composite index is not defined (or is still building, or was deleted) runs, and each missing index is reported once per database on stderr with production's refusal text and the `firestore.indexes.json` entry | `firestore.missingIndexes` (`"report"`) | refused with `FAILED_PRECONDITION` and the console link (`"refuse"`) |
+| A tenant of `auth.tenants` can have any readable id, such as `tenant-a` | `auth.tenantIdFormat` (`"readable"`) | the id must have production's generated form, the display name, a hyphen and five characters of `a-z0-9` (`"generated"`) |
 | An end user's native gRPC `Listen` stream stays open however long it is held. `POST /v1/firestore/listen:expire` on the control API ends every held end-user stream at once, with production's status, to test a client's reconnect | `firestore.listenStreamLifetime` (`"unlimited"`) | ended with `INTERNAL` an hour after it opened, as production ends it (`"oneHour"`) |
 
 The start banner and `fireemu capabilities` report whether `productionExact` is set.
@@ -428,7 +429,7 @@ Under the `strict` profile, enable `multiTenant.allowTenants` before using multi
 
 #### Start with tenants
 
-Instead of creating tenants through the Admin API in every session, declare the default project's tenants and the multi-tenancy switch in the file. Each entry of `auth.tenants` is an Admin v2 `Tenant` document plus its `tenantId`, which has the form production generates, the display name, a hyphen, and five characters of `a-z0-9`:
+Instead of creating tenants through the Admin API in every session, declare the default project's tenants and the multi-tenancy switch in the file. Each entry of `auth.tenants` is an Admin v2 `Tenant` document plus its `tenantId`. By default the id can be any readable name that starts with a letter and holds letters, digits and hyphens (up to 63 characters), such as `tenant-a`. With `productionExact` or `auth.tenantIdFormat: "generated"` it must have the form production generates, the display name, a hyphen, and five characters of `a-z0-9`, such as `acme-x7k2q`:
 
 ```json
 {
@@ -438,7 +439,7 @@ Instead of creating tenants through the Admin API in every session, declare the 
     "multiTenant": { "allowTenants": true },
     "tenants": [
       {
-        "tenantId": "acme-x7k2q",
+        "tenantId": "tenant-a",
         "displayName": "acme",
         "allowPasswordSignup": true,
         "mfaConfig": { "state": "ENABLED", "enabledProviders": ["PHONE_SMS"] }

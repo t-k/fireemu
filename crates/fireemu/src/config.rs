@@ -1250,6 +1250,10 @@ pub struct RuntimeConfig {
     pub auth_custom_token_signers: Option<serde_json::Map<String, Value>>,
     /// Allow unsigned emulator custom tokens in either profile (default true).
     pub auth_allow_unsigned_custom_tokens: bool,
+    /// `auth.tenantIdFormat`: which `tenantId` a tenant of `auth.tenants` may have. A development
+    /// default: `"readable"` (any id such as `tenant-a`) unless `productionExact` asks for
+    /// production's generated shape, `"generated"` (owner decision 2026-10-13).
+    pub auth_tenant_id_format: fireemu_adapter_http::identity_toolkit::TenantIdFormat,
     /// Admit unsigned emulator ID tokens (`alg: none`, empty signature; the `mockUserToken` of
     /// `@firebase/rules-unit-testing`) on the Firestore and Storage Security Rules surfaces in
     /// either profile (`auth.allowUnsignedIdTokens`, default true, owner ledger 1393). Signed
@@ -1505,6 +1509,7 @@ impl Default for RuntimeConfig {
             scheduler_catch_up: "all".to_owned(),
             id_token_signing: fireemu_core_auth::jwt::SigningMode::UnsignedEmulator,
             auth_allow_unsigned_custom_tokens: true,
+            auth_tenant_id_format: fireemu_adapter_http::identity_toolkit::TenantIdFormat::Readable,
             auth_allow_unsigned_id_tokens: true,
             auth_custom_token_signers: None,
             auth_idp_signers: None,
@@ -1516,7 +1521,7 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 27] = [
+pub(crate) const AUTH_KEYS: [&str; 28] = [
     "enabled",
     "apiKeys",
     "projectIssuer",
@@ -1532,6 +1537,7 @@ pub(crate) const AUTH_KEYS: [&str; 27] = [
     "authorizedDomains",
     "multiTenant",
     "tenants",
+    "tenantIdFormat",
     "secretMaterialization",
     "forwardInboundCredentials",
     "improvedEmailPrivacy",
@@ -1968,10 +1974,11 @@ impl RuntimeConfig {
     pub fn tenant_seeding(
         &self,
     ) -> Result<fireemu_adapter_http::identity_toolkit::TenantSeeding, String> {
-        let seeds = fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds(
+        let seeds = fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds_with(
             &self.auth_tenants,
             self.profile == CompatibilityProfile::Emulator,
             self.clock_start.to_rfc3339().ok().as_deref(),
+            self.auth_tenant_id_format,
         )?;
         Ok(fireemu_adapter_http::identity_toolkit::TenantSeeding::new(
             self.auth_multi_tenant_allow_tenants,
@@ -2017,8 +2024,11 @@ impl RuntimeConfig {
             None | Some(Value::Null) => {}
             Some(Value::Array(documents)) => {
                 let emulator = cfg.profile == CompatibilityProfile::Emulator;
-                fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds(
-                    documents, emulator, None,
+                fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds_with(
+                    documents,
+                    emulator,
+                    None,
+                    cfg.auth_tenant_id_format,
                 )
                 .map_err(ConfigError)?;
                 if !emulator
@@ -3172,6 +3182,11 @@ impl RuntimeConfig {
             MissingIndexes::Report
         };
         self.listen_stream_lifetime = exact;
+        self.auth_tenant_id_format = if exact {
+            fireemu_adapter_http::identity_toolkit::TenantIdFormat::Generated
+        } else {
+            fireemu_adapter_http::identity_toolkit::TenantIdFormat::Readable
+        };
     }
 
     /// Reads `auth.idpAssertions` after `auth.idpSigners`. The keys are read only by signed
@@ -4196,6 +4211,19 @@ impl RuntimeConfig {
                             })
                     })
                     .collect::<Result<_, _>>()?;
+            }
+            // Read before auth.tenants, whose ids it validates.
+            if let Some(value) = auth.get("tenantIdFormat") {
+                use fireemu_adapter_http::identity_toolkit::TenantIdFormat;
+                cfg.auth_tenant_id_format = match value.as_str() {
+                    Some("readable") => TenantIdFormat::Readable,
+                    Some("generated") => TenantIdFormat::Generated,
+                    _ => {
+                        return Err(ConfigError(
+                            "auth.tenantIdFormat must be \"readable\" or \"generated\"".to_owned(),
+                        ))
+                    }
+                };
             }
             if let Some(value) = auth.get("allowUnsignedCustomTokens") {
                 cfg.auth_allow_unsigned_custom_tokens = value.as_bool().ok_or_else(|| {
@@ -7468,9 +7496,14 @@ mod tests {
                 "config.mfa.state",
             ),
             (
-                json!({"tenants": [with("tenantId", json!("wrong"))]}),
+                json!({"tenantIdFormat": "generated", "tenants": [with("tenantId", json!("wrong"))]}),
                 "tenantId",
             ),
+            (
+                json!({"tenants": [with("tenantId", json!("1-starts-with-a-digit"))]}),
+                "must start with a letter",
+            ),
+            (json!({"tenantIdFormat": "short"}), "auth.tenantIdFormat"),
             (
                 json!({"tenants": [acme_tenant(), acme_tenant()]}),
                 "auth.tenants[1]:",
@@ -7489,6 +7522,89 @@ mod tests {
                 assert!(error.0.contains(expected), "{invalid}: {error:?}");
             }
         }
+    }
+
+    #[test]
+    fn a_readable_tenant_id_is_a_development_default_and_production_exact_asks_for_the_generated_one(
+    ) {
+        use fireemu_adapter_http::identity_toolkit::TenantIdFormat;
+        // Owner decision 2026-10-13: a test names its tenants freely unless productionExact (or
+        // the key) asks for the id production would generate.
+        let read = |extra: Value, id: &str| {
+            let mut document = json!({
+                "schemaVersion": 1,
+                "profile": "strict",
+                "auth": {
+                    "multiTenant": {"allowTenants": true},
+                    "tenants": [{"tenantId": id, "displayName": "acme"}],
+                },
+            });
+            for (key, value) in extra.as_object().unwrap() {
+                if key == "auth" {
+                    for (member, value) in value.as_object().unwrap() {
+                        document["auth"][member] = value.clone();
+                    }
+                } else {
+                    document[key] = value.clone();
+                }
+            }
+            RuntimeConfig::from_json(&document)
+        };
+        for id in ["tenant-a", "acme", "Acme-Test-1", "acme-x7k2q", "t"] {
+            let cfg = read(json!({}), id).unwrap_or_else(|e| panic!("{id}: {e}"));
+            assert_eq!(cfg.auth_tenant_id_format, TenantIdFormat::Readable);
+            assert_eq!(cfg.auth_tenants[0]["tenantId"], id);
+            // The daemon validates the declaration again when it seeds the tenants.
+            assert!(!cfg.tenant_seeding().unwrap().is_empty());
+        }
+        let long = format!("a{}", "b".repeat(62));
+        assert!(read(json!({}), &long).is_ok());
+        for id in [
+            "",
+            "1tenant",
+            "-tenant",
+            "tenant_a",
+            "tenant.a",
+            "テナント",
+            &format!("{long}c"),
+        ] {
+            let error = read(json!({}), id).expect_err(id);
+            assert!(
+                error.0.contains("must start with a letter"),
+                "{id}: {error}"
+            );
+        }
+        for extra in [
+            json!({"productionExact": true}),
+            json!({"auth": {"tenantIdFormat": "generated"}}),
+        ] {
+            let error = read(extra.clone(), "tenant-a").expect_err("generated shape");
+            assert!(
+                error.0.contains("as production generates one"),
+                "{extra}: {error}"
+            );
+            let cfg = read(extra.clone(), "acme-x7k2q").unwrap();
+            assert_eq!(
+                cfg.auth_tenant_id_format,
+                TenantIdFormat::Generated,
+                "{extra}"
+            );
+        }
+        // An explicit key decides over productionExact.
+        let cfg = read(
+            json!({"productionExact": true, "auth": {"tenantIdFormat": "readable"}}),
+            "tenant-a",
+        )
+        .unwrap();
+        assert_eq!(cfg.auth_tenant_id_format, TenantIdFormat::Readable);
+        // The emulator profile reads the key the same way.
+        let emulator = RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "profile": "emulator",
+            "auth": {"tenants": [{"tenantId": "tenant-a", "displayName": "acme"}]},
+        }))
+        .unwrap();
+        assert!(!emulator.tenant_seeding().unwrap().is_empty());
     }
 
     #[test]

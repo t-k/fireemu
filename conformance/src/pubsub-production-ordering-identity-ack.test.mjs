@@ -49,6 +49,7 @@ test("subscription identity comes from the REST path or the gRPC body", () => {
     { method: "POST", path: `/v1/${SUB}:modifyAckDeadline`, body: {} },
     { method: "POST", path: `/v1/${SUB}`, body: {} },
     { rpc: "Subscriber/Pull", body: {} },
+    { rpc: "Subscriber/Pull", body: { subscription: "" } },
     {},
   ])
     assert.throws(() => subscriptionOf(bad), /ordering identity subscription/);
@@ -208,6 +209,14 @@ test("owner 1392 judge refuses per-key reordering, mixing and set differences", 
   assert.equal(
     judgeOrderingCell(source, [pull(["n", ""]), pull(["a0", "k1"], ["a1", "k1"])]).verdict,
     "DIVERGES",
+  );
+  // unkeyed messages carry no order obligation
+  assert.equal(
+    judgeOrderingCell(
+      [pull(["n1", ""], ["n2", ""]), pull(["a0", "k1"])],
+      [pull(["n2", ""], ["n1", ""]), pull(["a0", "k1"])],
+    ).verdict,
+    "MATCH",
   );
   // a redelivery keeps the set but repeats inside a key: order is judged on first deliveries
   assert.equal(

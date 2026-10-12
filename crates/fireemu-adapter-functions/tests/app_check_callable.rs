@@ -683,11 +683,60 @@ async fn start_with_serve_entry(
     profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
     default_entry: bool,
 ) -> Harness {
+    start_with_env(
+        trusted,
+        vec![("FIREEMU_FAKE_CONSUME".to_owned(), consume.to_owned())],
+        profile,
+        default_entry,
+    )
+    .await
+}
+
+/// A runner whose `guarded` and `guardedV2` callables declare `consumeAppCheckToken: true`
+/// and the given `enforceAppCheck`.
+async fn start_consuming(
+    trusted: bool,
+    enforce: bool,
+    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
+) -> Harness {
+    start_consuming_as(trusted, "enabled", enforce, profile).await
+}
+
+/// Like [`start_consuming`], with the `consumeAppCheckToken` value the runner reports for
+/// `guarded` and `guardedV2` (`undetermined` is what an unsupported firebase-functions version,
+/// such as 5.x, reports).
+async fn start_consuming_as(
+    trusted: bool,
+    consume: &str,
+    enforce: bool,
+    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
+) -> Harness {
+    start_with_env(
+        trusted,
+        vec![
+            ("FIREEMU_FAKE_CONSUME".to_owned(), consume.to_owned()),
+            (
+                "FIREEMU_FAKE_GUARDED_ENFORCE".to_owned(),
+                enforce.to_string(),
+            ),
+        ],
+        profile,
+        false,
+    )
+    .await
+}
+
+async fn start_with_env(
+    trusted: bool,
+    env: Vec<(String, String)>,
+    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
+    default_entry: bool,
+) -> Harness {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_runner.py");
     let spec = SpawnSpec {
         command: vec!["python3".to_owned(), script.to_owned()],
         cwd: None,
-        env: vec![("FIREEMU_FAKE_CONSUME".to_owned(), consume.to_owned())],
+        env,
         hello_timeout: Duration::from_secs(60),
     };
     let runner = Runner::spawn_spec(&spec)
@@ -2077,4 +2126,329 @@ async fn without_the_trusted_protocol_a_callable_receives_what_it_always_did() {
         vec!["Bearer owner".to_owned()]
     );
     h.stop().await;
+}
+
+// ------------------------------------------------------------------------------------------
+// consumeAppCheckToken: true without replay protection (APPCHECK-REPLAY-1 is unimplemented)
+// ------------------------------------------------------------------------------------------
+
+const PROFILES: [fireemu_adapter_functions::http::FunctionsHttpProfile; 2] = [
+    fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+    fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
+];
+
+/// With App Check disabled a token-consuming callable runs without App Check: every
+/// `X-Firebase-AppCheck` field is removed before the runner, so the installed wrapper sees no
+/// token, never calls the Admin SDK's consuming `verifyToken` against production and never
+/// reports a made-up `alreadyConsumed`. The same holds for a callable whose value could not be
+/// observed (review M1), for v1 and v2, streaming or not, enforcing or not (review S1). A
+/// callable that does not consume keeps receiving the field, exactly as before.
+///
+/// The request is written to the socket with both spellings of the field name, but hyper
+/// lowercases names while parsing, so the proxy sees two `x-firebase-appcheck` instances: this
+/// checks duplicates end to end, and the case-insensitive match itself is covered by the
+/// `without_app_check_token` property below.
+#[tokio::test]
+async fn without_app_check_a_token_consuming_callable_runs_without_the_token() {
+    for profile in PROFILES {
+        for consume in ["enabled", "undetermined"] {
+            for enforce in [false, true] {
+                let case = format!("{profile:?} consume={consume} enforce={enforce}");
+                let h = start_consuming_as(false, consume, enforce, profile).await;
+                for (function, accept) in [
+                    ("guarded", "application/json"),
+                    ("guardedV2", "application/json"),
+                    ("guardedV2", "text/event-stream"),
+                ] {
+                    let (status, body) = h
+                        .call(
+                            function,
+                            &[
+                                ("accept", accept),
+                                ("x-firebase-appcheck", "first"),
+                                ("X-Firebase-AppCheck", "second"),
+                                ("x-custom", "kept"),
+                            ],
+                        )
+                        .await;
+                    assert_eq!(status, 200, "{case} {function} {accept}: {body}");
+                    assert!(
+                        echoed(&body, "x-firebase-appcheck").is_empty(),
+                        "{case} {function} {accept}: {body}"
+                    );
+                    assert_eq!(echoed(&body, "x-custom"), vec!["kept".to_owned()]);
+                }
+                let (status, body) = h.call("guarded", &[]).await;
+                assert_eq!(status, 200, "{case}: a call without a token runs: {body}");
+                // The near miss: `add` does not consume, so its field still reaches the runner.
+                let (status, body) = h.call("add", &[("x-firebase-appcheck", "whatever")]).await;
+                assert_eq!(status, 200, "{case}: {body}");
+                assert_eq!(
+                    echoed(&body, "x-firebase-appcheck"),
+                    vec!["whatever".to_owned()]
+                );
+                // An onRequest function owns its own App Check handling and keeps the raw
+                // field.
+                let (status, body) = h.call("echo", &[("x-firebase-appcheck", "whatever")]).await;
+                assert_eq!(status, 200, "{case}: {body}");
+                assert_eq!(
+                    echoed(&body, "x-firebase-appcheck"),
+                    vec!["whatever".to_owned()]
+                );
+                h.stop().await;
+            }
+        }
+    }
+}
+
+/// With App Check enabled, a call that presents a valid token to a token-consuming callable is
+/// the one call that would need consumption, and the trusted wrapper would answer it with
+/// `alreadyConsumed: false`. The daemon refuses it before the runner is reached.
+#[tokio::test]
+async fn with_app_check_a_valid_token_for_a_consuming_callable_is_refused_as_unimplemented() {
+    for profile in PROFILES {
+        for (consume, enforce) in [
+            ("enabled", true),
+            ("enabled", false),
+            ("undetermined", false),
+        ] {
+            // Startup refuses an undetermined value with App Check, so that row checks the
+            // proxy on its own: it fails closed as well.
+            let h = start_consuming_as(true, consume, enforce, profile).await;
+            let token = h.token();
+            let (status, body) = h.call("guarded", &[("x-firebase-appcheck", &token)]).await;
+            assert_eq!(
+                status, 501,
+                "{profile:?} consume={consume} enforce={enforce}: {body}"
+            );
+            assert_eq!(body["error"]["status"], "UNIMPLEMENTED");
+            assert_eq!(
+                body["error"]["details"]["reason"],
+                "APP_CHECK_REPLAY_UNSUPPORTED"
+            );
+            assert!(
+                body.get("headers").is_none(),
+                "the runner was never reached: {body}"
+            );
+            // The near miss: a callable that does not consume accepts the same token.
+            let (status, body) = h.call("add", &[("x-firebase-appcheck", &token)]).await;
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(echoed(&body, "x-firebase-appcheck"), vec![token]);
+            h.stop().await;
+        }
+    }
+}
+
+/// Calls that need no consumption still run: no token, or a token the daemon could not verify
+/// (which is removed), on a callable that does not enforce. An enforcing callable keeps its
+/// `401` for the same calls.
+#[tokio::test]
+async fn with_app_check_a_consuming_callable_runs_calls_that_need_no_consumption() {
+    for profile in PROFILES {
+        let h = start_consuming(true, false, profile).await;
+        let (status, body) = h.call("guarded", &[]).await;
+        assert_eq!(status, 200, "{profile:?}: {body}");
+        let (status, body) = h
+            .call("guarded", &[("x-firebase-appcheck", "malformed")])
+            .await;
+        assert_eq!(status, 200, "{profile:?}: {body}");
+        assert!(echoed(&body, "x-firebase-appcheck").is_empty(), "{body}");
+        h.stop().await;
+
+        let h = start_consuming(true, true, profile).await;
+        let (status, body) = h.call("guarded", &[]).await;
+        assert_eq!(status, 401, "{profile:?}: {body}");
+        assert_eq!(body["error"]["status"], "UNAUTHENTICATED");
+        h.stop().await;
+    }
+}
+
+/// A v2 streaming call gets the refusal as the SDK's `200` SSE error record, like the
+/// `UNAUTHENTICATED` denial.
+#[tokio::test]
+async fn with_app_check_a_streaming_consuming_callable_refuses_in_the_sse_error_record() {
+    let h = start_consuming(
+        true,
+        false,
+        fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+    )
+    .await;
+    let token = h.token();
+    let denial = h
+        .request(
+            "POST",
+            "guardedV2",
+            &[
+                ("accept", "text/event-stream"),
+                ("x-firebase-appcheck", &token),
+            ],
+        )
+        .await;
+    assert_eq!(denial.status, 200);
+    let frame = denial
+        .body
+        .strip_prefix(b"data: ")
+        .and_then(|body| body.strip_suffix(b"\n\n"))
+        .expect("the streaming SDK receives one complete SSE frame");
+    let body: Value = serde_json::from_slice(frame).expect("the SSE payload is JSON");
+    assert_eq!(body["error"]["status"], "UNIMPLEMENTED");
+    assert_eq!(
+        body["error"]["details"]["reason"],
+        "APP_CHECK_REPLAY_UNSUPPORTED"
+    );
+    h.stop().await;
+}
+
+/// The whole decision table of the trust boundary over `enforceAppCheck`,
+/// `consumeAppCheckToken` and the token's classification: refusal as unimplemented happens
+/// exactly when a valid token meets a consuming callable, and only after the enforcement
+/// refusal had its turn.
+#[test]
+fn the_trust_boundary_refuses_consumption_exactly_for_a_valid_token() {
+    use fireemu_adapter_functions::callable::{CallableDecision, CallableRequest};
+
+    let gate = gate();
+    let token = token_for(&gate, PROJECT, APP_ID);
+    let policy = ServiceAdmission::new(gate.clone(), "functions", BaselineMode::Unenforced)
+        .map(Arc::new)
+        .expect("unenforced is a policy");
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        PROJECT,
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let verifier = Arc::new(RulesEnforcer::new(
+        Arc::new(RulesetSlot::default()),
+        auth,
+        clock,
+    ));
+    let trust = CallableTrust::new(policy, verifier, PROJECT);
+    for enforce in [false, true] {
+        for consume in [false, true] {
+            for (label, presented) in [
+                ("missing", Vec::new()),
+                ("valid", vec![token.clone()]),
+                ("invalid", vec!["malformed".to_owned()]),
+            ] {
+                let headers: Vec<(String, String)> = presented
+                    .iter()
+                    .map(|v| ("x-firebase-appcheck".to_owned(), v.clone()))
+                    .collect();
+                let decision = trust.sanitize(&CallableRequest {
+                    function: "guarded",
+                    enforce_app_check: enforce,
+                    consume_app_check_token: consume,
+                    headers: &headers,
+                    app_check: &presented,
+                    authorization: &[],
+                    now: START,
+                });
+                let valid = label == "valid";
+                let case = format!("enforce={enforce} consume={consume} token={label}");
+                match decision {
+                    CallableDecision::Unauthenticated { .. } => {
+                        assert!(enforce && !valid, "{case}");
+                    }
+                    CallableDecision::ReplayUnsupported => {
+                        assert!(consume && valid, "{case}");
+                    }
+                    CallableDecision::Forward { headers, .. } => {
+                        assert!((!enforce || valid) && (!consume || !valid), "{case}");
+                        let forwarded: Vec<&String> = headers
+                            .iter()
+                            .filter(|(k, _)| k == "x-firebase-appcheck")
+                            .map(|(_, v)| v)
+                            .collect();
+                        if valid {
+                            assert_eq!(forwarded, vec![&token], "{case}");
+                        } else {
+                            assert!(forwarded.is_empty(), "{case}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+mod without_app_check_token {
+    use fireemu_adapter_functions::callable::without_app_check_token;
+    use proptest::prelude::*;
+
+    /// A header name: either some spelling of `X-Firebase-AppCheck` or one of a few others,
+    /// including near misses that must survive.
+    fn name() -> impl Strategy<Value = String> {
+        prop_oneof![
+            proptest::collection::vec(any::<bool>(), 18).prop_map(|upper| {
+                "x-firebase-appcheck"
+                    .chars()
+                    .zip(upper)
+                    .map(|(c, u)| if u { c.to_ascii_uppercase() } else { c })
+                    .collect()
+            }),
+            Just("x-firebase-appcheck-token".to_owned()),
+            Just("x-firebase-appchec".to_owned()),
+            Just("authorization".to_owned()),
+            "[a-z-]{1,12}",
+        ]
+    }
+
+    proptest! {
+        /// Every `X-Firebase-AppCheck` spelling is removed, and every other field survives in
+        /// its original order with its value.
+        #[test]
+        fn removes_every_app_check_field_and_keeps_the_rest_in_order(
+            headers in proptest::collection::vec((name(), "[ -~]{0,8}"), 0..12),
+        ) {
+            let kept = without_app_check_token(headers.clone());
+            let expected: Vec<(String, String)> = headers
+                .into_iter()
+                .filter(|(k, _)| !k.eq_ignore_ascii_case("x-firebase-appcheck"))
+                .collect();
+            prop_assert_eq!(kept, expected);
+        }
+    }
+}
+
+/// An onRequest route whose served `consumeAppCheckToken` is `enabled` is one that startup
+/// found to front a token-consuming callable in the code (a configured manifest called it
+/// onRequest, review 2 M1): the runner still calls the onCall wrapper there, so the field is
+/// removed in both modes. Any other value on an onRequest route means nothing, and the raw
+/// field passes.
+#[tokio::test]
+async fn an_on_request_route_that_fronts_a_consuming_callable_loses_the_token() {
+    for trusted in [false, true] {
+        for (echo_consume, stripped) in [
+            ("enabled", true),
+            ("undetermined", false),
+            ("disabled", false),
+        ] {
+            let h = start_with_env(
+                trusted,
+                vec![(
+                    "FIREEMU_FAKE_ECHO_CONSUME".to_owned(),
+                    echo_consume.to_owned(),
+                )],
+                fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator,
+                false,
+            )
+            .await;
+            let (status, body) = h
+                .call(
+                    "echo",
+                    &[("x-firebase-appcheck", "whatever"), ("x-custom", "kept")],
+                )
+                .await;
+            let case = format!("trusted={trusted} echo={echo_consume}");
+            assert_eq!(status, 200, "{case}: {body}");
+            assert_eq!(
+                echoed(&body, "x-firebase-appcheck").is_empty(),
+                stripped,
+                "{case}: {body}"
+            );
+            assert_eq!(echoed(&body, "x-custom"), vec!["kept".to_owned()]);
+            h.stop().await;
+        }
+    }
 }

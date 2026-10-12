@@ -19,6 +19,7 @@ import { createRuntimeClock } from "./clock.mjs";
 import { execFileSync, spawn } from "node:child_process";
 import { url as inspectorUrl } from "node:inspector";
 import { instrumentCallables } from "./callable-app-check.mjs";
+import { removeAppCheckToken, withholdsAppCheckToken } from "./app-check-token.mjs";
 import { blockingFailure } from "./blocking-error.mjs";
 import { blockingEvent, loadIdentityParsers, portedIdentityParsers } from "./blocking-event.mjs";
 import { blockingResult } from "./blocking-response.mjs";
@@ -1320,6 +1321,9 @@ async function makeHttpServer(functions, manifest) {
         .send(`no HTTP function ${req.params.project}/${req.params.region}/${req.params.name}`);
       return;
     }
+    // Without App Check a callable that could consume a token never sees one, whichever path
+    // the request took here (spec 13.4; app-check-token.mjs).
+    if (withholdsAppCheckToken(spec, process.env)) removeAppCheckToken(req);
     // The function sees the path relative to its mount point: drop the three route segments.
     const original = req.url;
     const queryAt = original.indexOf("?");

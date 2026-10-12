@@ -37,6 +37,7 @@ export const RUNNER_FILES = [
   "clock.mjs",
   "callable-app-check.mjs",
   "callable-app-check-loader.mjs",
+  "app-check-token.mjs",
   "blocking-error.mjs",
   "blocking-event.mjs",
   "blocking-response.mjs",

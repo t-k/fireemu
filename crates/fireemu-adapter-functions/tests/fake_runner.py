@@ -9,6 +9,10 @@ bytes that reach the runner, not on the daemon's intent.
 
 FIREEMU_FAKE_CONSUME=enabled|undetermined makes the guarded callable declare that
 consumeAppCheckToken value, for the fail-closed discovery tests.
+FIREEMU_FAKE_GUARDED_ENFORCE=false makes the guarded callables declare enforceAppCheck: false,
+for the token-consumption tests that need a callable reachable without a token.
+FIREEMU_FAKE_ECHO_CONSUME=enabled gives the onRequest echo function that consumeAppCheckToken
+value, which only callables honour.
 FIREEMU_FAKE_EXIT_BEFORE_HELLO=1 records the start and exits without a hello.
 """
 import http.server
@@ -150,6 +154,10 @@ echo = LoopbackServer(("127.0.0.1", 0), Echo)
 threading.Thread(target=echo.serve_forever, daemon=True).start()
 
 consume = os.environ.get("FIREEMU_FAKE_CONSUME", "disabled")
+echo_trigger = {"type": "http", "callable": False}
+if echo_consume := os.environ.get("FIREEMU_FAKE_ECHO_CONSUME"):
+    echo_trigger["consumeAppCheckToken"] = echo_consume
+guarded_enforce = os.environ.get("FIREEMU_FAKE_GUARDED_ENFORCE", "true") != "false"
 time.sleep(int(os.environ.get("FIREEMU_FAKE_HELLO_DELAY_MS", "0")) / 1000)
 
 send({
@@ -182,11 +190,11 @@ send({
             {"name": "onUser", "trigger": {"type": "auth", "eventType": "google.firebase.auth.user.v1.created"}},
             {"name": "onGone", "trigger": {"type": "auth", "eventType": "providers/firebase.auth/eventTypes/user.delete"}},
             {"name": "withAuth", "trigger": {"type": "firestore", "eventType": "google.cloud.firestore.document.v1.written.withAuthContext", "document": "audited/{id}"}},
-            {"name": "echo", "trigger": {"type": "http", "callable": False}},
+            {"name": "echo", "trigger": echo_trigger},
             {"name": "hold", "generation": 2, "concurrency": None, "platformOptions": {"availableMemoryMb": 2048}, "trigger": {"type": "http", "callable": False}},
             {"name": "add", "trigger": {"type": "http", "callable": True, "enforceAppCheck": False, "consumeAppCheckToken": "disabled"}},
-            {"name": "guarded", "trigger": {"type": "http", "callable": True, "enforceAppCheck": True, "consumeAppCheckToken": consume}},
-            {"name": "guardedV2", "generation": 2, "trigger": {"type": "http", "callable": True, "enforceAppCheck": True, "consumeAppCheckToken": consume}},
+            {"name": "guarded", "trigger": {"type": "http", "callable": True, "enforceAppCheck": guarded_enforce, "consumeAppCheckToken": consume}},
+            {"name": "guardedV2", "generation": 2, "trigger": {"type": "http", "callable": True, "enforceAppCheck": guarded_enforce, "consumeAppCheckToken": consume}},
         ]
     },
 })

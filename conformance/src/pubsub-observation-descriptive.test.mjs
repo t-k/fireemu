@@ -585,3 +585,25 @@ test("descriptive reports mark cells with a recorded difference so their row ver
     false,
   );
 });
+
+test("markCells counts each cell's own differences and leaves unmarked cells alone", () => {
+  const d = createDescriptiveDifferences({ profile: "emulator", mode: "descriptive" });
+  const error = new Error("native receive semantic mismatch");
+  d.record({ sourceN: 1, cellId: "R3" }, error);
+  d.record({ sourceN: 2, cellId: "R3" }, error);
+  d.record({ sourceN: 3, cellId: "R4" }, error);
+  d.record({ sourceN: 4 }, error);
+  const cells = [{ id: "R3", rows: [{}, {}] }, { id: "R4" }, { id: "R5", rows: [{}] }];
+  d.markCells(cells);
+  assert.deepEqual(cells[0].descriptiveDifferences, {
+    count: 2,
+    rowVerdictsAreCellEvidence: false,
+  });
+  assert.deepEqual(cells[1].descriptiveDifferences, {
+    count: 1,
+    rowVerdictsAreCellEvidence: false,
+  });
+  assert.equal(Object.hasOwn(cells[2], "descriptiveDifferences"), false);
+  assert.deepEqual(cells[2].rows, [{}]);
+  assert.deepEqual(d.summary().cellsWithDifferences, ["R3", "R4"]);
+});

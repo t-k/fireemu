@@ -939,3 +939,54 @@ test("publish order uses only successful publishes to the ordered subscription's
     "MATCH",
   );
 });
+
+test("only Acknowledge failures and exact REST publish paths affect the 1399 inputs (review near misses)", () => {
+  const ordered = "projects/p/subscriptions/fe1-or-r-s";
+  const restOk = (e) => e.response?.status >= 200 && e.response.status < 300;
+  const ex = (op, path, body, status, response = {}) => ({
+    case: "ordering/rest",
+    op,
+    request: { method: "POST", path, body },
+    response: { status, body: response },
+  });
+  const cell = (extra) => [
+    {
+      case: "ordering/rest",
+      op: "createSubscription",
+      request: {
+        method: "PUT",
+        path: `/v1/${ordered}`,
+        body: { topic: "projects/p/topics/t", enableMessageOrdering: true },
+      },
+      response: { status: 200, body: {} },
+    },
+    ex(
+      "publish",
+      "/v1/projects/p/topics/t:publish",
+      { messages: [{ data: data("a0"), orderingKey: "k1" }] },
+      200,
+    ),
+    ex("pull", `/v1/${ordered}:pull`, {}, 200, pull(["a0", "k1"])),
+    ...extra,
+  ];
+  // a failed Pull on the ordered subscription is not an Acknowledge failure
+  const failedPull = cell([ex("pull", `/v1/${ordered}:pull`, {}, 503, {})]);
+  assert.equal(
+    orderingCellResults(failedPull, failedPull, restOk)["ordering/rest"].owner1399.verdict,
+    "MATCH",
+  );
+  // a publish whose REST path only starts like ":publish" does not enter the order
+  const lookalike = cell([
+    ex(
+      "publish",
+      "/v1/projects/p/topics/t:publishBatch",
+      { messages: [{ data: data("zz"), orderingKey: "k1" }] },
+      200,
+    ),
+  ]);
+  const reordered = [lookalike[0], lookalike[3], ...lookalike.slice(1, 3)];
+  assert.equal(
+    orderingCellResults(reordered, reordered, restOk)["ordering/rest"].owner1399.verdict,
+    "MATCH",
+  );
+});

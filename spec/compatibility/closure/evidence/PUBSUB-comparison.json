@@ -13,7 +13,7 @@
   "method": "Per-case adjudication of the 122 frozen cases (18 conditions) against the final strict release binary. Every witness is a LOCAL strict replay of genuine production recordings on that binary; raw physical differences are retained in the private run outputs. A row status is the case verdict for each declared transport. Rules are owner decision ledger entries applied exactly; basis text names private evidence files of the per-case proof.",
   "caseProof": {
     "path": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-    "sha256": "30fa9781a809cddc196725cd23bf64233fb0ac07d60e28c4f4759add35f491aa",
+    "sha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
     "note": "private (docs.local), not published"
   },
   "statuses": {
@@ -47,13 +47,15 @@
     "1392": "Original ordering cells (/conditions/11/cases/0, 1, 4): the key production serves next on later Pulls varies by run and transport; per-key order, no keyed/unkeyed mixing in one Pull and the cell delivered set must match (2026-10-12).",
     "1394": "Differences explained only by (1) delivery order of messages without an ordering guarantee and (2) a Pull returning fewer messages than available (including 0) MATCH when the cell delivered set, each message content and, with ordering enabled, per-key order match; cases /conditions/6/cases/4, 6/8, 9/0, 9/4, 11/2, 14/3; fireemu answers immediately and does not simulate empty Pulls (2026-10-12).",
     "1395": "Original ordering cells are replayed with identity acknowledgements (the replay acknowledges its own delivery of the message production acknowledged) on the final binary (2026-10-12).",
-    "1399": "Original ordering cells in the second recording: MATCH when on both sides each key delivered set is a prefix of its publish order, keyed and unkeyed are never mixed in a Pull, and the whole-cell difference is only the tail of a key held by an unacknowledged delivery at cell end (2026-10-12)."
+    "1399": "Original ordering cells in the second recording: MATCH when on both sides each key delivered set is a prefix of its publish order, keyed and unkeyed are never mixed in a Pull, and the whole-cell difference is only the tail of a key held by an unacknowledged delivery at cell end (2026-10-12).",
+    "1400": "Clarifies 1399: MATCH when each side holds at most one ordering key by an unacknowledged delivery at cell end and the whole-cell difference is only the tails of those held keys; per-key prefix, per-key order and no unkeyed/keyed mixing still required; any unsuccessful Pull or Acknowledge on the ordered subscription on either side is DIVERGES (2026-10-12).",
+    "1401": "Coordinator interpretation of 1400: a side holds an ordering key when it delivered fewer of the key messages than the other side and its last delivery of the key is unacknowledged at cell end; keys whose final batch is unacknowledged on both sides with equal counts are not held (2026-10-12)."
   },
   "summary": {
     "EXCLUDED_STEP": 6,
     "MATCH": 26,
-    "MATCH_BY_RELATION": 183,
-    "PENDING": 12
+    "MATCH_BY_RELATION": 191,
+    "PENDING": 4
   },
   "rows": [
     {
@@ -2502,11 +2504,16 @@
       "row": "pubsub/delivery/ordering#single-key-sequence",
       "transport": "rest",
       "coordinate": "/conditions/11/cases/0",
-      "status": "PENDING",
+      "status": "MATCH_BY_RELATION",
       "rules": [
         "1392",
         "1395",
         "1399",
+        "1400",
+        "1401",
+        "1100",
+        "1135",
+        "1390",
         "1204",
         "1213",
         "1215"
@@ -2517,18 +2524,22 @@
         "567e1cd8",
         "a8ed1cce"
       ],
-      "basis": "Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213).",
-      "pendingReason": "awaiting the corrected owner 1399 judge"
+      "basis": "Original ordering cells replayed on a97b87c1 with identity acknowledgements (owner 1395; ordering-identity-1399 runs, harness 2a905f740, other cells identical to final-generation). The owner 1399 judge as fixed at 9b9b5c228 (approved in delta review 2, review file 2026-10-12-pubsub-descriptive-and-ordering-judge-review.md) re-applied to the recorded runs gives output sha256 e6615f6d..., byte-identical to the 2a905f7 control. r1 rest/grpc: delivered sets equal (10/10), MATCH under 1392 and 1399. r2 rest (9/10) and grpc (10/9): DIVERGES under 1392, MATCH under 1399 as clarified by owner 1400 (each side holds at most one ordering key by an unacknowledged delivery at cell end, the whole-cell difference is only the tails of those held keys, per-key prefix and order, no keyed/unkeyed mixing, no unsuccessful Pull or Acknowledge on the ordered subscription) with the coordinator 1401 definition of a held key (that side delivered fewer of the key messages and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held). r2 rest: k1 held on LOCAL (tail a4), k2 held on production (tail b3,b4); r2 grpc: k1 held on LOCAL (a3,a4), k2 held on production (b4). The independent re-check (check_1399.py, written without reading ordering-identity-ack.mjs) agrees on all four arms. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213)."
     },
     {
       "row": "pubsub/delivery/ordering#single-key-sequence",
       "transport": "grpc",
       "coordinate": "/conditions/11/cases/0",
-      "status": "PENDING",
+      "status": "MATCH_BY_RELATION",
       "rules": [
         "1392",
         "1395",
         "1399",
+        "1400",
+        "1401",
+        "1100",
+        "1135",
+        "1390",
         "1204",
         "1213",
         "1215"
@@ -2539,18 +2550,22 @@
         "567e1cd8",
         "a8ed1cce"
       ],
-      "basis": "Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213).",
-      "pendingReason": "awaiting the corrected owner 1399 judge"
+      "basis": "Original ordering cells replayed on a97b87c1 with identity acknowledgements (owner 1395; ordering-identity-1399 runs, harness 2a905f740, other cells identical to final-generation). The owner 1399 judge as fixed at 9b9b5c228 (approved in delta review 2, review file 2026-10-12-pubsub-descriptive-and-ordering-judge-review.md) re-applied to the recorded runs gives output sha256 e6615f6d..., byte-identical to the 2a905f7 control. r1 rest/grpc: delivered sets equal (10/10), MATCH under 1392 and 1399. r2 rest (9/10) and grpc (10/9): DIVERGES under 1392, MATCH under 1399 as clarified by owner 1400 (each side holds at most one ordering key by an unacknowledged delivery at cell end, the whole-cell difference is only the tails of those held keys, per-key prefix and order, no keyed/unkeyed mixing, no unsuccessful Pull or Acknowledge on the ordered subscription) with the coordinator 1401 definition of a held key (that side delivered fewer of the key messages and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held). r2 rest: k1 held on LOCAL (tail a4), k2 held on production (tail b3,b4); r2 grpc: k1 held on LOCAL (a3,a4), k2 held on production (b4). The independent re-check (check_1399.py, written without reading ordering-identity-ack.mjs) agrees on all four arms. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213)."
     },
     {
       "row": "pubsub/delivery/ordering#separate-keys",
       "transport": "rest",
       "coordinate": "/conditions/11/cases/1",
-      "status": "PENDING",
+      "status": "MATCH_BY_RELATION",
       "rules": [
         "1392",
         "1395",
         "1399",
+        "1400",
+        "1401",
+        "1100",
+        "1135",
+        "1390",
         "1204",
         "1213",
         "1215"
@@ -2561,18 +2576,22 @@
         "567e1cd8",
         "a8ed1cce"
       ],
-      "basis": "Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213).",
-      "pendingReason": "awaiting the corrected owner 1399 judge"
+      "basis": "Original ordering cells replayed on a97b87c1 with identity acknowledgements (owner 1395; ordering-identity-1399 runs, harness 2a905f740, other cells identical to final-generation). The owner 1399 judge as fixed at 9b9b5c228 (approved in delta review 2, review file 2026-10-12-pubsub-descriptive-and-ordering-judge-review.md) re-applied to the recorded runs gives output sha256 e6615f6d..., byte-identical to the 2a905f7 control. r1 rest/grpc: delivered sets equal (10/10), MATCH under 1392 and 1399. r2 rest (9/10) and grpc (10/9): DIVERGES under 1392, MATCH under 1399 as clarified by owner 1400 (each side holds at most one ordering key by an unacknowledged delivery at cell end, the whole-cell difference is only the tails of those held keys, per-key prefix and order, no keyed/unkeyed mixing, no unsuccessful Pull or Acknowledge on the ordered subscription) with the coordinator 1401 definition of a held key (that side delivered fewer of the key messages and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held). r2 rest: k1 held on LOCAL (tail a4), k2 held on production (tail b3,b4); r2 grpc: k1 held on LOCAL (a3,a4), k2 held on production (b4). The independent re-check (check_1399.py, written without reading ordering-identity-ack.mjs) agrees on all four arms. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213)."
     },
     {
       "row": "pubsub/delivery/ordering#separate-keys",
       "transport": "grpc",
       "coordinate": "/conditions/11/cases/1",
-      "status": "PENDING",
+      "status": "MATCH_BY_RELATION",
       "rules": [
         "1392",
         "1395",
         "1399",
+        "1400",
+        "1401",
+        "1100",
+        "1135",
+        "1390",
         "1204",
         "1213",
         "1215"
@@ -2583,20 +2602,22 @@
         "567e1cd8",
         "a8ed1cce"
       ],
-      "basis": "Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213).",
-      "pendingReason": "awaiting the corrected owner 1399 judge"
+      "basis": "Original ordering cells replayed on a97b87c1 with identity acknowledgements (owner 1395; ordering-identity-1399 runs, harness 2a905f740, other cells identical to final-generation). The owner 1399 judge as fixed at 9b9b5c228 (approved in delta review 2, review file 2026-10-12-pubsub-descriptive-and-ordering-judge-review.md) re-applied to the recorded runs gives output sha256 e6615f6d..., byte-identical to the 2a905f7 control. r1 rest/grpc: delivered sets equal (10/10), MATCH under 1392 and 1399. r2 rest (9/10) and grpc (10/9): DIVERGES under 1392, MATCH under 1399 as clarified by owner 1400 (each side holds at most one ordering key by an unacknowledged delivery at cell end, the whole-cell difference is only the tails of those held keys, per-key prefix and order, no keyed/unkeyed mixing, no unsuccessful Pull or Acknowledge on the ordered subscription) with the coordinator 1401 definition of a held key (that side delivered fewer of the key messages and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held). r2 rest: k1 held on LOCAL (tail a4), k2 held on production (tail b3,b4); r2 grpc: k1 held on LOCAL (a3,a4), k2 held on production (b4). The independent re-check (check_1399.py, written without reading ordering-identity-ack.mjs) agrees on all four arms. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213)."
     },
     {
       "row": "pubsub/delivery/ordering#ordering-disabled",
       "transport": "rest",
       "coordinate": "/conditions/11/cases/2",
-      "status": "PENDING",
+      "status": "MATCH_BY_RELATION",
       "rules": [
         "1100",
         "1135",
         "1390",
         "1394",
-        "1399"
+        "1392",
+        "1399",
+        "1400",
+        "1401"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2604,20 +2625,22 @@
         "567e1cd8",
         "a8ed1cce"
       ],
-      "basis": "Plain (ordering omitted) subscription: drain step 17 delivers the same 11 messages with equal contents in all four arms, receipt order differs in 3 (1394 MATCH, cell-1394.json, rows from the 1399 runs). The step 19 rows read the ordered subscription of the same original ordering cell after the plain drain; they are equal in r1 but in r2 differ by the held-key tail, which only the owner 1399 cell relation covers. Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C R9/N9 control subscription disposition MATCH (1204/1215).",
-      "pendingReason": "awaiting the corrected owner 1399 judge"
+      "basis": "Plain (ordering omitted) subscription: drain step 17 delivers the same 11 messages with equal contents in all four arms, receipt order differs in 3 (owner 1394, cell-1394.json, rows from the 1399 runs). The step 19 rows read the ordered subscription of the same original ordering cell after the plain drain; that cell is MATCH: Original ordering cells replayed on a97b87c1 with identity acknowledgements (owner 1395; ordering-identity-1399 runs, harness 2a905f740, other cells identical to final-generation). The owner 1399 judge as fixed at 9b9b5c228 (approved in delta review 2, review file 2026-10-12-pubsub-descriptive-and-ordering-judge-review.md) re-applied to the recorded runs gives output sha256 e6615f6d..., byte-identical to the 2a905f7 control. r1 rest/grpc: delivered sets equal (10/10), MATCH under 1392 and 1399. r2 rest (9/10) and grpc (10/9): DIVERGES under 1392, MATCH under 1399 as clarified by owner 1400 (each side holds at most one ordering key by an unacknowledged delivery at cell end, the whole-cell difference is only the tails of those held keys, per-key prefix and order, no keyed/unkeyed mixing, no unsuccessful Pull or Acknowledge on the ordered subscription) with the coordinator 1401 definition of a held key (that side delivered fewer of the key messages and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held). r2 rest: k1 held on LOCAL (tail a4), k2 held on production (tail b3,b4); r2 grpc: k1 held on LOCAL (a3,a4), k2 held on production (b4). The independent re-check (check_1399.py, written without reading ordering-identity-ack.mjs) agrees on all four arms. C R9/N9 control subscription disposition MATCH (1204/1215)."
     },
     {
       "row": "pubsub/delivery/ordering#ordering-disabled",
       "transport": "grpc",
       "coordinate": "/conditions/11/cases/2",
-      "status": "PENDING",
+      "status": "MATCH_BY_RELATION",
       "rules": [
         "1100",
         "1135",
         "1390",
         "1394",
-        "1399"
+        "1392",
+        "1399",
+        "1400",
+        "1401"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2625,8 +2648,7 @@
         "567e1cd8",
         "a8ed1cce"
       ],
-      "basis": "Plain (ordering omitted) subscription: drain step 17 delivers the same 11 messages with equal contents in all four arms, receipt order differs in 3 (1394 MATCH, cell-1394.json, rows from the 1399 runs). The step 19 rows read the ordered subscription of the same original ordering cell after the plain drain; they are equal in r1 but in r2 differ by the held-key tail, which only the owner 1399 cell relation covers. Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C R9/N9 control subscription disposition MATCH (1204/1215).",
-      "pendingReason": "awaiting the corrected owner 1399 judge"
+      "basis": "Plain (ordering omitted) subscription: drain step 17 delivers the same 11 messages with equal contents in all four arms, receipt order differs in 3 (owner 1394, cell-1394.json, rows from the 1399 runs). The step 19 rows read the ordered subscription of the same original ordering cell after the plain drain; that cell is MATCH: Original ordering cells replayed on a97b87c1 with identity acknowledgements (owner 1395; ordering-identity-1399 runs, harness 2a905f740, other cells identical to final-generation). The owner 1399 judge as fixed at 9b9b5c228 (approved in delta review 2, review file 2026-10-12-pubsub-descriptive-and-ordering-judge-review.md) re-applied to the recorded runs gives output sha256 e6615f6d..., byte-identical to the 2a905f7 control. r1 rest/grpc: delivered sets equal (10/10), MATCH under 1392 and 1399. r2 rest (9/10) and grpc (10/9): DIVERGES under 1392, MATCH under 1399 as clarified by owner 1400 (each side holds at most one ordering key by an unacknowledged delivery at cell end, the whole-cell difference is only the tails of those held keys, per-key prefix and order, no keyed/unkeyed mixing, no unsuccessful Pull or Acknowledge on the ordered subscription) with the coordinator 1401 definition of a held key (that side delivered fewer of the key messages and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held). r2 rest: k1 held on LOCAL (tail a4), k2 held on production (tail b3,b4); r2 grpc: k1 held on LOCAL (a3,a4), k2 held on production (b4). The independent re-check (check_1399.py, written without reading ordering-identity-ack.mjs) agrees on all four arms. C R9/N9 control subscription disposition MATCH (1204/1215)."
     },
     {
       "row": "pubsub/delivery/ordering#nack-blocks-key",
@@ -2660,11 +2682,16 @@
       "row": "pubsub/delivery/ordering#ack-unblocks-key",
       "transport": "rest",
       "coordinate": "/conditions/11/cases/4",
-      "status": "PENDING",
+      "status": "MATCH_BY_RELATION",
       "rules": [
         "1392",
         "1395",
         "1399",
+        "1400",
+        "1401",
+        "1100",
+        "1135",
+        "1390",
         "1204",
         "1213",
         "1215"
@@ -2675,18 +2702,22 @@
         "567e1cd8",
         "a8ed1cce"
       ],
-      "basis": "Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213).",
-      "pendingReason": "awaiting the corrected owner 1399 judge"
+      "basis": "Original ordering cells replayed on a97b87c1 with identity acknowledgements (owner 1395; ordering-identity-1399 runs, harness 2a905f740, other cells identical to final-generation). The owner 1399 judge as fixed at 9b9b5c228 (approved in delta review 2, review file 2026-10-12-pubsub-descriptive-and-ordering-judge-review.md) re-applied to the recorded runs gives output sha256 e6615f6d..., byte-identical to the 2a905f7 control. r1 rest/grpc: delivered sets equal (10/10), MATCH under 1392 and 1399. r2 rest (9/10) and grpc (10/9): DIVERGES under 1392, MATCH under 1399 as clarified by owner 1400 (each side holds at most one ordering key by an unacknowledged delivery at cell end, the whole-cell difference is only the tails of those held keys, per-key prefix and order, no keyed/unkeyed mixing, no unsuccessful Pull or Acknowledge on the ordered subscription) with the coordinator 1401 definition of a held key (that side delivered fewer of the key messages and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held). r2 rest: k1 held on LOCAL (tail a4), k2 held on production (tail b3,b4); r2 grpc: k1 held on LOCAL (a3,a4), k2 held on production (b4). The independent re-check (check_1399.py, written without reading ordering-identity-ack.mjs) agrees on all four arms. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213)."
     },
     {
       "row": "pubsub/delivery/ordering#ack-unblocks-key",
       "transport": "grpc",
       "coordinate": "/conditions/11/cases/4",
-      "status": "PENDING",
+      "status": "MATCH_BY_RELATION",
       "rules": [
         "1392",
         "1395",
         "1399",
+        "1400",
+        "1401",
+        "1100",
+        "1135",
+        "1390",
         "1204",
         "1213",
         "1215"
@@ -2697,8 +2728,7 @@
         "567e1cd8",
         "a8ed1cce"
       ],
-      "basis": "Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213).",
-      "pendingReason": "awaiting the corrected owner 1399 judge"
+      "basis": "Original ordering cells replayed on a97b87c1 with identity acknowledgements (owner 1395; ordering-identity-1399 runs, harness 2a905f740, other cells identical to final-generation). The owner 1399 judge as fixed at 9b9b5c228 (approved in delta review 2, review file 2026-10-12-pubsub-descriptive-and-ordering-judge-review.md) re-applied to the recorded runs gives output sha256 e6615f6d..., byte-identical to the 2a905f7 control. r1 rest/grpc: delivered sets equal (10/10), MATCH under 1392 and 1399. r2 rest (9/10) and grpc (10/9): DIVERGES under 1392, MATCH under 1399 as clarified by owner 1400 (each side holds at most one ordering key by an unacknowledged delivery at cell end, the whole-cell difference is only the tails of those held keys, per-key prefix and order, no keyed/unkeyed mixing, no unsuccessful Pull or Acknowledge on the ordered subscription) with the coordinator 1401 definition of a held key (that side delivered fewer of the key messages and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held). r2 rest: k1 held on LOCAL (tail a4), k2 held on production (tail b3,b4); r2 grpc: k1 held on LOCAL (a3,a4), k2 held on production (b4). The independent re-check (check_1399.py, written without reading ordering-identity-ack.mjs) agrees on all four arms. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213)."
     },
     {
       "row": "pubsub/delivery/dead-letter#policy-round-trip",
@@ -3543,7 +3573,7 @@
       "status": "MATCH",
       "rules": [],
       "witnessRunPrefixes": [],
-      "basis": "Scoped, EVENTARC precedent (full70 emulator-official ACCEPT_SCOPED_CANDIDATE: one fireemu emulator-profile replay of every eligible recorded request on the accepted binary, production comparisons descriptive). emulator-16-1: all 24 applicable runs of the same complete set replayed under the emulator profile on a97b87c1 to completion (closed, exit 0, cleanupErrors [], productionRequests 0); 100 recorded differences, every one a production-binding assertion classified against the emulator-profile code paths; production stays the oracle and the rows are descriptive (gate false). Strict unchanged (three strict re-runs on the patched harness identical, strict-identity.json). Qualifications: not an official-emulator (firebase-tools 15.28.2) oracle run; the unchanged C comparer records a TypeError reason on 4 Pull rows in each of C 45298/567e (emulator only, filed P3)."
+      "basis": "Scoped, EVENTARC precedent (full70 emulator-official ACCEPT_SCOPED_CANDIDATE: one fireemu emulator-profile replay of every eligible recorded request on the accepted binary, production comparisons descriptive). emulator-16-1: all 24 applicable runs of the same complete set replayed under the emulator profile on a97b87c1 to completion (closed, exit 0, cleanupErrors [], productionRequests 0); 100 recorded differences, every one a production-binding assertion classified against the emulator-profile code paths; production stays the oracle and the rows are descriptive (gate false). Strict unchanged (three strict re-runs on the patched harness identical, strict-identity.json). Qualifications: not an official-emulator (firebase-tools 15.28.2) oracle run; the unchanged C comparer records a TypeError reason on 4 Pull rows in each of C 45298/567e (emulator only, filed P3). No emulator per-row MATCH is counted as evidence: descriptive-cells.json (review fix S4) lists, per unit, the cells with a recorded difference whose row verdicts are not cell evidence, and this verdict rests only on run completion, classification of every difference and strict identity."
     },
     {
       "row": "pubsub/final#complete-case-set",
@@ -3552,7 +3582,7 @@
       "status": "PENDING",
       "rules": [],
       "witnessRunPrefixes": [],
-      "basis": "The 122-case matrix with per-case witnesses on a97b87c1 and no inherited MATCH is this file; it is complete only when 6/8 (1394 condition unmet) and 11/0, 11/1, 11/2, 11/4 (1399 judge fix) are settled.",
+      "basis": "The 122-case matrix with per-case witnesses on a97b87c1 and no inherited MATCH is this file; it is complete only when 6/8 (owner 1394 condition unmet) is settled; every other case is in an allowed end state and 17/0 is the parent review itself.",
       "pendingReason": "awaiting a coordinator or owner disposition"
     },
     {

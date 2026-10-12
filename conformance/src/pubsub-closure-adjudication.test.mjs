@@ -99,9 +99,13 @@ test("keyed starvation under continuous unkeyed traffic is a disclosed limitatio
   assert.match(known.statement, /unary Pull/);
 });
 
-test("the judging rules 1392, 1394 and 1399 are disclosed", () => {
+test("the judging rules 1392, 1394, 1399, 1400 and 1401 are disclosed", () => {
   const { closure, comparison } = committed();
-  for (const id of ["1392", "1394", "1399"]) {
+  assert.match(
+    closure.knownDifferences.judgingRules.statement,
+    /delivered fewer of the key messages/,
+  );
+  for (const id of ["1392", "1394", "1399", "1400", "1401"]) {
     assert.ok(comparison.rules[id], id);
     assert.ok(closure.knownDifferences.judgingRules.rules.includes(id), id);
   }

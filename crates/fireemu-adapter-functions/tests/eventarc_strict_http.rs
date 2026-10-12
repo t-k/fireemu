@@ -2051,8 +2051,9 @@ async fn local_oauth_catalog_empty_and_absent_and_emulator_are_distinct() {
     }
 }
 
-/// The request firebase-admin 13.10.0 sends for `getEventarc().channel(...).publish()` to
-/// `CLOUD_EVENTARC_EMULATOR_HOST` (captured from the SDK on 2026-10-12): no `/v1`, no content type, the
+/// The request firebase-admin 14.3.0 (the conformance pin) sends for
+/// `getEventarc().channel(...).publish()` to `CLOUD_EVENTARC_EMULATOR_HOST` (captured from the SDK
+/// on 2026-10-12; 13.10.0, the sdk-smoke pin, sends the same request): no `/v1`, no content type, the
 /// SDK's own headers and the bearer of the app's credential. `owner` is the fake credential the
 /// emulators' tooling uses; `None` stands for a client that sends no credential at all.
 async fn sdk_publish(server: &Listener, bearer: Option<&str>, id: &str) -> Exchange {
@@ -2063,7 +2064,7 @@ async fn sdk_publish(server: &Listener, bearer: Option<&str>, id: &str) -> Excha
         format!("authorization: Bearer {token}\r\n")
     });
     let request = format!(
-        "POST /{CUSTOM}:publishEvents HTTP/1.1\r\nx-firebase-client: fire-admin-node/13.10.0\r\n{auth}x-goog-api-client: gl-node/24.14.0 fire-admin/13.10.0\r\ncontent-length: {}\r\nhost: {}\r\nconnection: close\r\n\r\n{body}",
+        "POST /{CUSTOM}:publishEvents HTTP/1.1\r\nx-firebase-client: fire-admin-node/14.3.0\r\n{auth}x-goog-api-client: gl-node/24.14.0 fire-admin/14.3.0\r\ncontent-length: {}\r\nhost: {}\r\nconnection: close\r\n\r\n{body}",
         body.len(),
         server.addr,
     );

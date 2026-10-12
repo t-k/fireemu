@@ -3174,11 +3174,11 @@ impl RuntimeConfig {
             ConfigError("eventarc.oauthCredentials must map lowercase SHA-256 digests to objects containing unique nonempty string scopes".to_owned())
         };
         let section = value.as_object().ok_or_else(invalid)?;
-        if section
+        if let Some(key) = section
             .keys()
-            .any(|key| key != "oauthCredentials" && key != "authentication")
+            .find(|key| *key != "oauthCredentials" && *key != "authentication")
         {
-            return Err(invalid());
+            return Err(ConfigError(format!("unknown config key eventarc.{key}")));
         }
         let explicit = section
             .get("authentication")
@@ -7349,6 +7349,16 @@ mod eventarc_authentication_tests {
                 Err(ConfigError(
                     "eventarc.authentication must be \"permissive\" or \"production\"".to_owned()
                 ))
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_eventarc_key_is_named() {
+        for key in ["authentification", "extra", "oauthcredentials"] {
+            assert_eq!(
+                read(Some("strict"), None, Some(json!({key: "production"}))),
+                Err(ConfigError(format!("unknown config key eventarc.{key}")))
             );
         }
     }

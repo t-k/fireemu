@@ -363,8 +363,8 @@ pub enum EventarcAuthentication {
     #[default]
     Production,
     /// Every request is admitted whatever its credential, or without one, as the official emulator
-    /// admits it. The credential is never read, so neither its value nor its shape reaches an answer
-    /// or a log; every other check keeps production's order and shapes. This is the development
+    /// admits it. The credential is never inspected (no shape check, no catalog lookup), logged or
+    /// echoed; every other check keeps production's order and shapes. This is the development
     /// default of the daemon (owner decision 1396): the Admin SDK in CI has no Google credential.
     Permissive,
 }
@@ -3726,7 +3726,7 @@ mod tests {
     }
 
     proptest! {
-        /// Permissive never reads the credential: whatever the bearer, and whatever catalog is present,
+        /// Permissive never inspects the credential: whatever the bearer, and whatever catalog is present,
         /// the answer is production's answer to an admitted bearer.
         #[test]
         fn permissive_answers_do_not_depend_on_the_credential(

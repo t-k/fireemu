@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- The strict profile's Eventarc listener now admits any credential, or none, by default (`eventarc.authentication: "permissive"`), as the official emulator does. The Admin SDK's `getEventarc().channel().publish()` therefore works in CI with a fake credential, without Google credentials. Every other strict Eventarc check keeps production's order and answers. A test that expected a 401 for a missing, malformed or JWT-shaped bearer now gets the publication's normal answer. To restore production's refusals, set `"eventarc": {"authentication": "production"}` or `"productionExact": true` (strict profile). A configured `eventarc.oauthCredentials` also selects `"production"` when the key is absent. See docs/eventarc-authentication.md.
+
 ## [0.16.0] - 2026-10-10
 
 ### Added

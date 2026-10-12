@@ -14,7 +14,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Changed
 
-- Under the `strict` profile with the default `auth.idTokenSigning: "unsigned-emulator"`, the ID tokens fireemu issues are unsigned too. With `auth.allowUnsignedIdTokens` left at `true`, such a token that no longer verifies (expired, of a deleted account or of an earlier session) is now accepted by Firestore and Storage Security Rules with its claims as given. Tests of production's expiry or revocation refusals should set `auth.allowUnsignedIdTokens` to `false` or use `auth.idTokenSigning: "session-rsa"`.
+- Under the `strict` profile with the default `auth.idTokenSigning: "unsigned-emulator"`, the ID tokens fireemu issues are unsigned too. With `auth.allowUnsignedIdTokens` left at `true`, such a token that no longer verifies (expired, of a deleted account or of an earlier session) is now accepted by Firestore and Storage Security Rules with its claims as given, and a Firestore Listen stream opened with it is not ended when it expires. Tests of production's expiry or revocation refusals should set `auth.allowUnsignedIdTokens` to `false` or use `auth.idTokenSigning: "session-rsa"`.
 
 ## [0.16.0] - 2026-10-10
 

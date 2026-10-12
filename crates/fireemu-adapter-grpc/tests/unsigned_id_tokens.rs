@@ -3,6 +3,9 @@
 //! setting is on, refuses it exactly as before when it is off, and refuses a token that claims a
 //! signature that does not verify either way. The emulator profile is unchanged.
 
+// `tonic::Status` is the error type the enforcer's API dictates.
+#![allow(clippy::result_large_err)]
+
 use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_grpc::gateway::Gateway;
@@ -236,4 +239,45 @@ fn strict_rest_evaluates_rules_with_the_mock_tokens_claims() {
         body["error"]["message"], EXPIRED_CREDENTIALS_MESSAGE,
         "{body}"
     );
+}
+
+/// Tokens next to the unsigned shape that count as signed: under strict each one gets the same
+/// refusal with the setting on as with it off.
+fn near_misses() -> Vec<(&'static str, String)> {
+    let payload = mock_payload("alice", PROJECT);
+    let padded_header = format!("{}=", base64url_encode(br#"{"alg":"none","type":"JWT"}"#));
+    vec![
+        (
+            "alg None",
+            token(r#"{"alg":"None","type":"JWT"}"#, &payload, ""),
+        ),
+        ("alg NONE", token(r#"{"alg":"NONE"}"#, &payload, "")),
+        (
+            "none with a signature",
+            token(r#"{"alg":"none","type":"JWT"}"#, &payload, "c2ln"),
+        ),
+        (
+            "RS256 without a signature",
+            token(r#"{"alg":"RS256"}"#, &payload, ""),
+        ),
+        ("no alg", token(r#"{"type":"JWT"}"#, &payload, "")),
+        ("header not an object", token(r#""none""#, &payload, "")),
+        (
+            "padded header",
+            format!("{padded_header}.{}.", base64url_encode(payload.as_bytes())),
+        ),
+        ("four segments", format!("{}.", mock_user_token("alice"))),
+    ]
+}
+
+#[test]
+fn strict_near_misses_get_the_same_refusal_whatever_the_setting() {
+    let allowing = enforcer(TokenAcceptance::Verified, Some(true));
+    let refusing = enforcer(TokenAcceptance::Verified, Some(false));
+    for (name, candidate) in near_misses() {
+        let with = resolve(&allowing, &candidate).expect_err(name);
+        let without = resolve(&refusing, &candidate).expect_err(name);
+        assert_eq!(with.code(), without.code(), "{name}");
+        assert_eq!(with.message(), without.message(), "{name}");
+    }
 }

@@ -750,6 +750,9 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         )));
     if let Some(runtime) = &functions_runtime {
         runtime.set_faults(faults.for_project(runtime.project()));
+        // The callable verifier keeps the full ID token verification in both profiles: it never
+        // takes the profile's acceptance or `auth.allowUnsignedIdTokens`, so an unsigned mock
+        // token is not a callable identity (the setting is for the Security Rules surfaces).
         let verifier = Arc::new(
             RulesEnforcer::new(
                 Arc::new(RulesetSlot::default()),

@@ -80,7 +80,8 @@ pub enum TokenAcceptance {
     /// Firestore does not (see [`verify_firestore_token`]).
     #[default]
     Verified,
-    /// The `emulator` profile: a token this store cannot verify is still accepted when it is
+    /// The `emulator` profile: by default ([`RulesTokenPolicy::from`]; `auth.allowUnsignedIdTokens`
+    /// decides it on its own) a token this store cannot verify is still accepted when it is
     /// *unsigned* and minted for this project, and `request.auth` is then built from its
     /// claims as given. Two checks the official emulators skip are kept deliberately: a
     /// signed token must still verify against the session key, so a forged `RS256` token is

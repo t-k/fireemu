@@ -294,3 +294,21 @@ fn the_emulator_profile_default_is_unchanged() {
     assert_eq!(daemon.storage_read("alice", &alice).0, 404);
     assert_eq!(daemon.storage_read("bob", &alice).0, 403);
 }
+
+/// A session that signs its own ID tokens admits no unsigned token, whatever the setting says.
+#[test]
+fn a_signing_session_refuses_the_mock_token_with_the_setting_on() {
+    let daemon = Daemon::start(
+        "strict",
+        &json!({"idTokenSigning": "session-rsa", "allowUnsignedIdTokens": true}),
+    );
+    let alice = mock_user_token("alice");
+    let (status, body) = daemon.firestore_read("alice", &alice);
+    assert_eq!(status, 403, "{body}");
+    assert!(
+        body.contains("Missing or insufficient permissions."),
+        "{body}"
+    );
+    let (status, body) = daemon.storage_read("alice", &alice);
+    assert_eq!(status, 401, "{body}");
+}

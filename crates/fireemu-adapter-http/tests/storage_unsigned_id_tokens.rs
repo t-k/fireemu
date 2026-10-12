@@ -181,3 +181,64 @@ fn the_emulator_profile_is_unchanged_and_the_setting_can_refuse() {
     let refusing = state(TokenAcceptance::EmulatorMock, false);
     assert_eq!(read(&refusing, "alice", &credential).0, 401);
 }
+
+/// Tokens next to the unsigned shape that count as signed: under strict each one gets the same
+/// answer with the setting on as with it off, and none is admitted as its claimed user.
+#[test]
+fn strict_near_misses_get_the_same_answer_whatever_the_setting() {
+    let payload = mock_payload("alice", PROJECT);
+    let padded_header = format!("{}=", base64url_encode(br#"{"alg":"none","type":"JWT"}"#));
+    let near_misses = [
+        (
+            "alg None",
+            token(r#"{"alg":"None","type":"JWT"}"#, &payload, ""),
+        ),
+        ("alg NONE", token(r#"{"alg":"NONE"}"#, &payload, "")),
+        (
+            "none with a signature",
+            token(r#"{"alg":"none","type":"JWT"}"#, &payload, "c2ln"),
+        ),
+        (
+            "RS256 without a signature",
+            token(r#"{"alg":"RS256"}"#, &payload, ""),
+        ),
+        ("no alg", token(r#"{"type":"JWT"}"#, &payload, "")),
+        ("header not an object", token(r#""none""#, &payload, "")),
+        (
+            "padded header",
+            format!("{padded_header}.{}.", base64url_encode(payload.as_bytes())),
+        ),
+        ("four segments", format!("{}.", mock_user_token("alice"))),
+    ];
+    let allowing = state(TokenAcceptance::Verified, true);
+    let refusing = state(TokenAcceptance::Verified, false);
+    for (name, candidate) in near_misses {
+        let credential = format!("Firebase {candidate}");
+        let with = read(&allowing, "alice", &credential);
+        assert_eq!(with, read(&refusing, "alice", &credential), "{name}");
+        assert_ne!(with.0, 404, "{name} must not be admitted as alice");
+    }
+}
+
+/// A mock token that names a tenant is checked against the tenant registry before the setting
+/// is consulted: an unknown tenant is refused whatever the setting, so a tenant boundary is
+/// never crossed by an unsigned token.
+#[test]
+fn a_mock_token_of_an_unknown_tenant_is_refused_whatever_the_setting() {
+    let tenant_mock = token(
+        r#"{"alg":"none","type":"JWT"}"#,
+        &format!(
+            r#"{{"iss":"https://securetoken.google.com/{PROJECT}","aud":"{PROJECT}","iat":0,"exp":3600,"auth_time":0,"sub":"alice","firebase":{{"tenant":"tenant-x"}}}}"#
+        ),
+        "",
+    );
+    for allow in [true, false] {
+        let strict = state(TokenAcceptance::Verified, allow);
+        let (status, body) = read(&strict, "alice", &format!("Firebase {tenant_mock}"));
+        assert_eq!(status, 401, "setting {allow}");
+        assert!(
+            String::from_utf8(body).unwrap().contains("unknown tenant"),
+            "setting {allow}"
+        );
+    }
+}

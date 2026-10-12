@@ -130,14 +130,6 @@ impl Opened {
     }
 }
 
-impl std::fmt::Debug for Opened {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Opened")
-            .field("stat", &self.stat)
-            .finish_non_exhaustive()
-    }
-}
-
 /// What the search found. A found file carries the text it was judged by.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Discovered {

@@ -1014,6 +1014,15 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     });
     // The import happens before the command starts and before the banner claims the
     // suite is ready: a run that cannot install its fixture must not run at all.
+    let import = import.filter(|dir| {
+        let Some(reason) = import_export::nothing_to_import(dir, export_on_exit.as_deref()) else {
+            return true;
+        };
+        if !quiet {
+            eprintln!("note: --import {}: {reason}", dir.display());
+        }
+        false
+    });
     if let Some(dir) = &import {
         let prepared = import_export::prepare(dir, exporter.products, &cfg.auth_project)
             .map_err(|e| format!("--import {}: {e}", dir.display()))?;
@@ -1532,7 +1541,7 @@ async fn serve_suite(
     if let Some(pump) = &functions_log_pump {
         pump.abort();
     }
-    let code = match (&outcome, child.as_mut(), child_pid) {
+    let mut code = match (&outcome, child.as_mut(), child_pid) {
         (Ok(Some(code)), Some(child), Some(pid)) => {
             #[cfg(not(windows))]
             super::sweep_child_tree(child, pid);
@@ -1554,14 +1563,18 @@ async fn serve_suite(
                     println!("exported to {}", dir.display());
                 }
             }
-            // The command's own status is what `exec` reports, a failed export included. The
-            // official CLI's `exportOnExit` catches the failure and logs "Automatic export to
-            // ... failed, going to exit now" as a warning, leaving the script's exit code
-            // alone, and spec/compatibility/contract.json claims that behaviour.
-            Err(e) => eprintln!(
-                "warning: automatic export to {} failed, going to exit now: {e}",
-                dir.display()
-            ),
+            // The official CLI's `exportOnExit` catches the failure, logs "Automatic export
+            // to ... failed, going to exit now" as a warning and leaves the script's exit code
+            // alone, so a CI job that depends on the export passes without it. fireemu reports
+            // it as an error instead (owner decision 2026-10-13): a command that failed keeps
+            // its own status, and any other run exits 1.
+            Err(e) => {
+                eprintln!(
+                    "error: automatic export to {} failed, going to exit now: {e}",
+                    dir.display()
+                );
+                code = export_failure_exit_code(code);
+            }
         }
     }
     if let Some(runtime) = functions_runtime {
@@ -1583,6 +1596,16 @@ async fn serve_suite(
         eprintln!("warning: {note}");
     }
     outcome.map(|_| code)
+}
+
+/// The exit status of a run whose `--export-on-exit` failed: a command's own failure is kept,
+/// and a status that reported success becomes 1.
+const fn export_failure_exit_code(code: i32) -> i32 {
+    if code == 0 {
+        1
+    } else {
+        code
+    }
 }
 
 fn close_functions_source_admission(

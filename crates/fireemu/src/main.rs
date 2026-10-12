@@ -1389,7 +1389,11 @@ fn parse_options(
     // export replaces what the directory holds.
     let export_on_exit = resolve_export_on_exit(raw.export_on_exit, raw.import.as_deref())?;
     if let Some(dir) = &raw.import {
-        if !dir.is_dir() {
+        // A missing directory that `--export-on-exit` writes is the first run of a persisted
+        // directory: the daemon starts it with no data (`import_export::nothing_to_import`).
+        let first_run = std::path::absolute(dir)
+            .is_ok_and(|absolute| export_on_exit.as_deref() == Some(absolute.as_path()));
+        if !dir.is_dir() && (!first_run || dir.exists()) {
             return Err(CliError::refused(format!(
                 "--import {}: no such directory",
                 dir.display()

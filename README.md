@@ -149,6 +149,18 @@ On Unix-like systems, the destination and its ancestor directories are subject t
 
 On macOS, an ancestor directory with an ACL is refused when the ACL has an `allow` entry for anyone but the owner, root or the user running the export, whatever permissions the entry shows (the kernel grants rights that `ls -le` does not list). `deny` entries are accepted, so a standard home directory (which carries `group:everyone deny delete`) and the folders below it work. When an export is refused for an ACL, the message names the entry; remove it (`chmod -a`) or export to another directory, for example one under `$TMPDIR`. Check an ancestor with `/bin/ls -led <directory>`. A destination on a volume that ignores ownership (exFAT and FAT sticks and cards, or an external APFS volume with "Ignore ownership on this volume" turned on) is refused, because the owner and the mode of its directories do not show who can change them; export to a volume that enforces ownership. A volume without atomic directory rename (exFAT, FAT, some network filesystems) cannot publish an export either: use a directory on an APFS volume.
 
+### Keep data between runs
+
+`--import <dir>` loads an export at startup, and `--export-on-exit` (without a directory of its own) writes the state back to the same directory when the run ends:
+
+```sh
+npx fireemu exec --import ./emulator-data --export-on-exit -- npm test
+```
+
+- An empty `--import` directory starts with no data, so the first run of a new volume needs no separate command. A missing directory is refused (a mistyped path must not start an empty suite), unless it is also where `--export-on-exit` writes. A directory that holds anything but no `firebase-export-metadata.json` is refused.
+- A failed `--export-on-exit` is printed as an `error:` line, and the run exits 1 when the command succeeded (a failing command keeps its own exit code). The official CLI only warns and exits 0; Fireemu differs so that a CI job that depends on the saved data cannot pass without it.
+- The export directory may be a volume mount point, for example a container volume mounted at `/data`. A mount point cannot be replaced by an atomic rename, so the export is staged inside it and moved into place, the old `firebase-export-metadata.json` leaving first and the new one arriving last. That replacement is not atomic: an interrupted export leaves a directory without the manifest, which `--import` refuses instead of loading part of it. Any other directory is still replaced atomically.
+
 ### Troubleshooting
 
 For startup or installation problems, inspect the environment and bundled files with:

@@ -351,6 +351,32 @@ impl Products {
 // Import
 // ---------------------------------------------------------------------------------------
 
+/// Why `--import dir` installs nothing, or `None` when `dir` is to be imported (and refused by
+/// [`prepare`] if it is not an export).
+///
+/// A persisted volume starts empty, and its first run would otherwise need a separate command
+/// line: an empty directory, which no export ever is, starts the suite with no data. A missing
+/// directory is still refused, because a mistyped path must not start an empty suite, unless
+/// it is also where `--export-on-exit` writes, so the run creates it.
+pub fn nothing_to_import(dir: &Path, export_on_exit: Option<&Path>) -> Option<String> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(metadata) if metadata.file_type().is_dir() => {
+            let mut entries = std::fs::read_dir(dir).ok()?;
+            entries
+                .next()
+                .is_none()
+                .then(|| "the directory is empty, so the suite starts with no data".to_owned())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let absolute = std::path::absolute(dir).ok()?;
+            (export_on_exit == Some(absolute.as_path())).then(|| {
+                "the directory does not exist yet, so the suite starts with no data (--export-on-exit creates it)".to_owned()
+            })
+        }
+        _ => None,
+    }
+}
+
 /// Reads every section of the selected products into memory. Nothing is installed.
 ///
 /// A section of a product `--only` did not select is skipped with a notice rather than an
@@ -3797,8 +3823,13 @@ fn export_storage(
 // Overwrite protection and permissions
 // ---------------------------------------------------------------------------------------
 
+/// Whether a top-level entry of an export directory belongs to the export (and so is not
+/// carried into the next one): an export file, or the stage and displaced tree that publication
+/// into a mount point keeps inside the directory.
 fn export_owns(name: &str) -> bool {
-    EXPORT_OWNED_ENTRIES.contains(&name) || name.ends_with(".overall_export_metadata")
+    EXPORT_OWNED_ENTRIES.contains(&name)
+        || name.ends_with(".overall_export_metadata")
+        || fireemu_export_publication::is_publication_entry(name.as_ref())
 }
 
 #[cfg(not(unix))]
@@ -4288,6 +4319,29 @@ mod tests {
     use super::open_file_inside;
     #[cfg(unix)]
     use super::trusted_temp::TrustedTempDir;
+
+    /// Publication into a mount point keeps its stage inside the target, so the copy of the
+    /// target's unmanaged entries into that stage must not copy the stage (or a displaced tree
+    /// an interrupted run left) into itself.
+    #[cfg(unix)]
+    #[test]
+    fn the_unmanaged_copy_skips_publication_entries_and_keeps_the_rest() {
+        let source = TrustedTempDir::new("unmanaged-skip-source");
+        let destination = TrustedTempDir::new("unmanaged-skip-destination");
+        std::fs::write(source.join("notes.txt"), b"kept").unwrap();
+        std::fs::write(source.join("firebase-export-metadata.json"), b"{}").unwrap();
+        for name in [".fireemu-stage-1-2", ".fireemu-displaced-1-3"] {
+            std::fs::create_dir(source.join(name)).unwrap();
+            std::fs::write(source.join(name).join("x"), b"").unwrap();
+        }
+        super::copy_unmanaged_entries(&source, &destination).unwrap();
+        let mut names: Vec<_> = std::fs::read_dir(&*destination)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["notes.txt"]);
+    }
 
     #[cfg(windows)]
     #[test]

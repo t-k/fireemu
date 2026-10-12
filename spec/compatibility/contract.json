@@ -2308,7 +2308,7 @@
         },
         {
           "id": "CLI-CLAIM-IMPORT-EXPORT",
-          "statement": "An export directory firebase emulators:export wrote with firebase-tools 15.28.2 imports into fireemu with its Firestore documents, Auth accounts and Storage objects intact, and an export fireemu writes imports back into the official suite the same way: the firebase-export-metadata.json manifest, every Firestore managed-export output partition referenced by overall_export_metadata, the Identity Toolkit accounts and config documents and the Storage bucket, blob and metadata files are the pinned formats. --import, --export-on-exit and emulators:export behave as the official commands do, an import across products is all or nothing, and corrupt metadata, duplicate or aliased partition outputs, a partition-count overflow, and a section of a deferred product are refused before any imported state is published rather than silently dropped.",
+          "statement": "An export directory firebase emulators:export wrote with firebase-tools 15.28.2 imports into fireemu with its Firestore documents, Auth accounts and Storage objects intact, and an export fireemu writes imports back into the official suite the same way: the firebase-export-metadata.json manifest, every Firestore managed-export output partition referenced by overall_export_metadata, the Identity Toolkit accounts and config documents and the Storage bucket, blob and metadata files are the pinned formats. --import, --export-on-exit and emulators:export behave as the official commands do except for the fireemuOnly rows below (an empty or first-run --import directory, a failed --export-on-exit, a mount-point target), an import across products is all or nothing, and corrupt metadata, duplicate or aliased partition outputs, a partition-count overflow, and a section of a deferred product are refused before any imported state is published rather than silently dropped.",
           "capabilities": [
             {
               "id": "DATA-1",
@@ -2331,6 +2331,10 @@
               "every_document_the_official_emulator_wrote_survives_a_fireemu_re_encode",
               "an_official_multi_product_export_is_imported_whole",
               "an_export_on_exit_reimports_into_the_same_state",
+              "a_failed_export_on_exit_fails_a_command_that_succeeded",
+              "a_failed_export_on_exit_keeps_the_status_of_a_command_that_failed",
+              "an_empty_import_directory_starts_with_no_data",
+              "a_missing_import_directory_is_refused_unless_it_is_the_export_target",
               "a_corrupt_firestore_section_refuses_the_whole_import",
               "a_realtime_database_section_is_refused_with_the_deferred_status",
               "the_export_runs_when_the_daemon_is_interrupted",
@@ -2352,6 +2356,18 @@
             "the official CLI overwrites a non-empty target directory once --force or --export-on-exit is given, whatever it holds"
           ],
           "fireemuOnly": [
+            {
+              "behaviour": "a failed --export-on-exit is reported as an error and a run whose command succeeded exits 1 (a failing command keeps its own status); firebase-tools 15.28.2 logs a warning and keeps the script's exit code, which lets a CI job that depends on the saved data pass without it (owner decision 2026-10-13)",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "an empty --import directory, or a missing one that --export-on-exit writes, starts the suite with no data and a note, so the first run of a persisted volume needs no separate command line; a missing directory that is not the export target and a non-empty directory without firebase-export-metadata.json are still refused",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "an export target that is a mount point (a container volume), which rename(2) cannot replace, is staged inside itself and published by moving entries, the old manifest first and the new one last; that publication is not atomic, and an interrupted one leaves a directory without the manifest, which an import refuses",
+              "precision": "exact-for-local-semantics"
+            },
             {
               "behaviour": "an export directory and every file in it are created owner-only (0700 / 0600), because the Auth section carries password material",
               "precision": "exact-for-local-semantics"

@@ -2499,9 +2499,10 @@ fn an_over_budget_unmanaged_entry_leaves_the_existing_export_unchanged() {
         .unwrap();
 
     let log = text(&output);
-    assert!(
-        output.status.success(),
-        "the command's exit code is preserved: {log}"
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a failed export fails the run: {log}"
     );
     assert!(
         log.contains("1073741824 byte cumulative copy limit"),
@@ -2536,9 +2537,10 @@ fn a_failed_staged_export_leaves_the_existing_export_unchanged() {
         .output()
         .unwrap();
     let log = text(&output);
-    assert!(
-        output.status.success(),
-        "the command's exit code is preserved: {log}"
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a failed export fails the run: {log}"
     );
     assert!(log.contains("not a regular file or directory"), "{log}");
     assert_eq!(std::fs::read(&manifest).unwrap(), original_manifest);
@@ -2584,9 +2586,10 @@ fn a_hard_linked_unmanaged_file_leaves_the_existing_export_unchanged() {
         .unwrap();
     let log = text(&output);
 
-    assert!(
-        output.status.success(),
-        "the command's exit code is preserved: {log}"
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a failed export fails the run: {log}"
     );
     assert!(log.contains("multiple hard links"), "{log}");
     assert_eq!(std::fs::read(&manifest).unwrap(), original_manifest);
@@ -2864,22 +2867,20 @@ fn emulators_export_refuses_a_locator_it_must_not_believe() {
     }
 }
 
-/// EXPEXIT-1: a refused `--export-on-exit` warns and leaves the command's exit code alone.
+/// EXPEXIT-1: a refused `--export-on-exit` is an error, and a command that succeeded exits 1.
 ///
-/// The export runs after the command, so its refusal is only ever a warning: the official
-/// CLI's `exportOnExit` catches the failure, logs "Automatic export to ... failed, going to
-/// exit now" and lets the script's own status stand, and the compatibility contract claims
-/// that behaviour for this flag. Reporting the refusal in the exit code was considered and
-/// rejected for parity, so this scenario pins the parity rule rather than leaving it implied
-/// by the scenarios that exercise a refused export for other reasons.
+/// The official CLI's `exportOnExit` catches the failure, logs "Automatic export to ...
+/// failed, going to exit now" and lets the script's own status stand. A CI job that relies on
+/// the export then passes without it, so fireemu departs from the official CLI here (owner
+/// decision 2026-10-13): the failure is reported on stderr and a successful command's status
+/// becomes 1.
 #[cfg(unix)]
-#[test]
-fn a_failed_export_on_exit_warns_and_preserves_the_command_exit_code() {
+fn export_on_exit_into_a_sealed_directory(name: &str, command: &[&str]) -> (Output, PathBuf) {
     use std::os::unix::fs::PermissionsExt as _;
 
-    let dir = scratch("export-on-exit-failure");
+    let dir = scratch(name);
     // The export target's parent has to be created at exit, inside a directory this user
-    // cannot write to, so the export fails after the command has already succeeded.
+    // cannot write to, so the export fails after the command has already run.
     let sealed = dir.join("sealed");
     std::fs::create_dir_all(&sealed).unwrap();
     let target = sealed.join("inner").join("out");
@@ -2888,19 +2889,128 @@ fn a_failed_export_on_exit_warns_and_preserves_the_command_exit_code() {
     let output = exec()
         .arg("--export-on-exit")
         .arg(&target)
+        .arg("--")
+        .args(command)
+        .output()
+        .unwrap();
+    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o700)).unwrap();
+    (output, target)
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_export_on_exit_fails_a_command_that_succeeded() {
+    let (output, target) =
+        export_on_exit_into_a_sealed_directory("export-on-exit-failure", &["true"]);
+    let log = text(&output);
+
+    assert_eq!(output.status.code(), Some(1), "{log}");
+    assert!(log.contains("error: automatic export to"), "{log}");
+    assert!(log.contains(&target.display().to_string()), "{log}");
+    assert!(!target.exists(), "{log}");
+}
+
+/// EXPEXIT-2: a command that already failed keeps its own status when the export fails too.
+#[cfg(unix)]
+#[test]
+fn a_failed_export_on_exit_keeps_the_status_of_a_command_that_failed() {
+    let (output, _) =
+        export_on_exit_into_a_sealed_directory("export-on-exit-failure-3", &["sh", "-c", "exit 3"]);
+    let log = text(&output);
+
+    assert_eq!(output.status.code(), Some(3), "{log}");
+    assert!(log.contains("error: automatic export to"), "{log}");
+}
+
+/// IMPEMPTY-1: an empty `--import` directory starts the suite with no data, so the first run
+/// of a persisted volume (`--import data --export-on-exit`) needs no separate command.
+#[test]
+fn an_empty_import_directory_starts_with_no_data() {
+    let dir = scratch("import-empty");
+    let data = dir.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let output = exec()
+        .arg("--import")
+        .arg(&data)
+        .arg("--export-on-exit")
         .args(["--", "true"])
         .output()
         .unwrap();
     let log = text(&output);
-    std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o700)).unwrap();
-
+    assert!(output.status.success(), "{log}");
     assert!(
-        output.status.success(),
-        "the command's exit code is preserved: {log}"
+        log.contains("is empty, so the suite starts with no data"),
+        "{log}"
     );
-    assert!(log.contains("going to exit now"), "{log}");
-    assert!(log.contains(&target.display().to_string()), "{log}");
-    assert!(!target.exists(), "{log}");
+    assert!(
+        data.join("firebase-export-metadata.json").is_file(),
+        "{log}"
+    );
+
+    // The second run imports what the first one exported.
+    let again = exec()
+        .arg("--import")
+        .arg(&data)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&again);
+    assert!(again.status.success(), "{log}");
+    assert!(!log.contains("starts with no data"), "{log}");
+}
+
+/// IMPEMPTY-2: a missing `--import` directory is still refused (a mistyped path must not
+/// start an empty suite), unless it is also where `--export-on-exit` writes.
+#[test]
+fn a_missing_import_directory_is_refused_unless_it_is_the_export_target() {
+    let dir = scratch("import-missing");
+    let data = dir.join("data");
+    let refused = exec()
+        .arg("--import")
+        .arg(&data)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&refused);
+    assert_eq!(refused.status.code(), Some(1), "{log}");
+    assert!(log.contains("--import"), "{log}");
+
+    let started = exec()
+        .arg("--import")
+        .arg(&data)
+        .arg("--export-on-exit")
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&started);
+    assert!(started.status.success(), "{log}");
+    assert!(
+        log.contains("does not exist yet, so the suite starts with no data"),
+        "{log}"
+    );
+    assert!(
+        data.join("firebase-export-metadata.json").is_file(),
+        "{log}"
+    );
+}
+
+/// IMPEMPTY-3: a directory with any entry is an import as before: one without the manifest
+/// is refused rather than treated as empty.
+#[test]
+fn a_non_empty_import_directory_without_a_manifest_is_refused() {
+    let dir = scratch("import-not-empty");
+    let data = dir.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join(".keep"), b"").unwrap();
+    let output = exec()
+        .arg("--import")
+        .arg(&data)
+        .args(["--", "true"])
+        .output()
+        .unwrap();
+    let log = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{log}");
+    assert!(log.contains("firebase-export-metadata.json"), "{log}");
 }
 
 /// Issue strict-multi-tenancy-switch-lost-on-export-import: the project's written config

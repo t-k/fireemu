@@ -5,6 +5,13 @@
 //! replace the captured target identity. Both typestates clean up only the stage identity
 //! they created.
 //!
+//! A target that is itself a mount point (a container volume mounted at the export path) cannot
+//! be renamed, so its stage is made inside it and publication moves entries instead: the old
+//! entries go to a private `.fireemu-displaced-*` directory, `firebase-export-metadata.json`
+//! first, and the new ones come in with the manifest last. That publication is not atomic: an
+//! interrupted one leaves a directory without the manifest, which an import refuses rather than
+//! reads half of.
+//!
 //! Unix cleanup requires every canonical namespace ancestor to be root/current-user owned and
 //! not group/world writable; on macOS an ACL entry that lets another principal change an ancestor
 //! (every `allow` entry of a principal but the owner, root and the user running the export) is refused,
@@ -25,6 +32,28 @@ mod volume;
 #[cfg(unix)]
 static NEXT_STAGE_ID: AtomicU64 = AtomicU64::new(1);
 
+/// The name of the manifest that marks a directory as a complete export.
+const MANIFEST_NAME: &str = "firebase-export-metadata.json";
+
+/// Where the stage lives and so how it is published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Placement {
+    /// A sibling of the target, published by one atomic rename.
+    Sibling,
+    /// Inside a target that is a mount point, published by moving entries.
+    InsideMountPoint,
+}
+
+/// Whether `name`, an entry of an export directory, is a stage or a displaced tree that
+/// publication into a mount point keeps there while it runs (or left behind when interrupted).
+/// The caller must not copy such an entry into a new export.
+#[must_use]
+pub fn is_publication_entry(name: &std::ffi::OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        name.starts_with(".fireemu-stage-") || name.starts_with(".fireemu-displaced-")
+    })
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct TargetIdentity {
     present: bool,
@@ -43,6 +72,8 @@ pub struct PublicationStage {
     expected_target: TargetIdentity,
     #[cfg(unix)]
     owned_stage: TargetIdentity,
+    #[cfg(unix)]
+    placement: Placement,
     armed: bool,
 }
 
@@ -55,6 +86,16 @@ impl PublicationStage {
     pub fn create(
         target: &Path,
         validate_target: impl FnOnce(&Path) -> Result<(), String>,
+    ) -> Result<Self, String> {
+        Self::create_with(target, validate_target, &is_mount_root)
+    }
+
+    /// [`Self::create`] with the mount-point test passed in (the tests cannot mount a volume).
+    #[cfg(unix)]
+    fn create_with(
+        target: &Path,
+        validate_target: impl FnOnce(&Path) -> Result<(), String>,
+        mount_root: &dyn Fn(&Path, &Path) -> Result<bool, String>,
     ) -> Result<Self, String> {
         // A one-element relative name such as `out` has the empty path as its parent, and
         // every operation on "" fails with ENOENT. Resolving against the working directory
@@ -82,13 +123,33 @@ impl PublicationStage {
                     .to_owned(),
             );
         }
-        let root = create_stage_sibling(&target, &parent)?;
+        let placement = if expected_target.present && mount_root(&target, &parent)? {
+            Placement::InsideMountPoint
+        } else {
+            Placement::Sibling
+        };
+        let root = match placement {
+            Placement::Sibling => create_stage_sibling(&target, &parent)?,
+            // The stage is made inside the target, so the target itself must pass the checks
+            // its ancestors pass.
+            Placement::InsideMountPoint => {
+                let inside = parent::prepare_and_validate_parent(&target)?;
+                if inside != target {
+                    return Err(
+                        "the export target changed while its overwrite policy was checked; it was left unchanged"
+                            .to_owned(),
+                    );
+                }
+                create_private_child(&target, "stage")?
+            }
+        };
         let owned_stage = stage_identity(&root)?;
         Ok(Self {
             target,
             root,
             expected_target,
             owned_stage,
+            placement,
             armed: true,
         })
     }
@@ -149,6 +210,17 @@ impl CompletePublicationStage {
                 "the owned export stage changed before publication; it was not published"
                     .to_owned(),
             );
+        }
+        if self.0.placement == Placement::InsideMountPoint {
+            if !identity_matches_path(&self.0.target, &self.0.expected_target)? {
+                return Err(
+                    "the export target changed after it was checked; it was left unchanged"
+                        .to_owned(),
+                );
+            }
+            publish_into_mount_point(&self.0.root, &self.0.target)?;
+            self.0.armed = false;
+            return Ok(());
         }
         publish_stage(
             &self.0.root,
@@ -249,6 +321,144 @@ fn create_stage_sibling(target: &Path, parent: &Path) -> Result<PathBuf, String>
         }
     }
     Err("cannot allocate a unique private export stage".to_owned())
+}
+
+/// Creates an owner-only `.fireemu-<kind>-<pid>-<n>` directory inside `directory`.
+#[cfg(unix)]
+fn create_private_child(directory: &Path, kind: &str) -> Result<PathBuf, String> {
+    for _ in 0..32 {
+        let id = NEXT_STAGE_ID.fetch_add(1, Ordering::Relaxed);
+        let child = directory.join(format!(".fireemu-{kind}-{}-{id}", std::process::id()));
+        match create_private_stage(&child) {
+            Ok(()) => {
+                #[cfg(target_os = "macos")]
+                if let Err(error) = acl::clear_stage_acl(&child) {
+                    let _ = std::fs::remove_dir(&child);
+                    return Err(error);
+                }
+                return Ok(child);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(format!("cannot create private export {kind}: {error}")),
+        }
+    }
+    Err(format!("cannot allocate a unique private export {kind}"))
+}
+
+/// Whether `target` is the root of a mount, which `rename(2)` refuses to move (`EBUSY` or
+/// `EXDEV`): a different device than its parent's, or, on Linux, a bind mount of the same one.
+#[cfg(unix)]
+fn is_mount_root(target: &Path, parent: &Path) -> Result<bool, String> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let target_device = std::fs::symlink_metadata(target)
+        .map_err(|error| format!("cannot inspect the export target: {error}"))?
+        .dev();
+    let parent_device = std::fs::metadata(parent)
+        .map_err(|error| format!("cannot inspect the export parent: {error}"))?
+        .dev();
+    if target_device != parent_device {
+        return Ok(true);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use rustix::fs::{statx, AtFlags, StatxAttributes, StatxFlags};
+        if let Ok(status) = statx(
+            rustix::fs::CWD,
+            target,
+            AtFlags::SYMLINK_NOFOLLOW,
+            StatxFlags::BASIC_STATS,
+        ) {
+            if status
+                .stx_attributes_mask
+                .contains(StatxAttributes::MOUNT_ROOT)
+            {
+                return Ok(status.stx_attributes.contains(StatxAttributes::MOUNT_ROOT));
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Replaces what `target` holds with what `stage` (a directory inside it) holds, by renames on
+/// the target's own volume.
+///
+/// The old manifest leaves first and the new one arrives last, so a directory caught in the
+/// middle never holds a manifest beside a partial tree. A failure moves back what was moved;
+/// when that fails too, the message names where the old export is.
+#[cfg(unix)]
+fn publish_into_mount_point(stage: &Path, target: &Path) -> Result<(), String> {
+    publish_into_mount_point_with(stage, target, &|from, to| std::fs::rename(from, to))
+}
+
+/// [`publish_into_mount_point`] with the rename of each entry passed in (the tests interrupt it).
+#[cfg(unix)]
+fn publish_into_mount_point_with(
+    stage: &Path,
+    target: &Path,
+    rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), String> {
+    let displaced = create_private_child(target, "displaced")?;
+    let mut moved_out: Vec<std::ffi::OsString> = Vec::new();
+    let current = |name: &std::ffi::OsStr| {
+        let path = target.join(name);
+        path != stage && path != displaced
+    };
+    let result =
+        move_entries(target, &displaced, current, false, rename, &mut moved_out).and_then(|()| {
+            let mut moved_in = Vec::new();
+            move_entries(stage, target, |_| true, true, rename, &mut moved_in).inspect_err(|_| {
+                for name in moved_in.iter().rev() {
+                    let _ = std::fs::rename(target.join(name), stage.join(name));
+                }
+            })
+        });
+    if let Err(error) = result {
+        let mut restored = true;
+        for name in moved_out.iter().rev() {
+            restored &= std::fs::rename(displaced.join(name), target.join(name)).is_ok();
+        }
+        if restored {
+            let _ = std::fs::remove_dir(&displaced);
+            return Err(format!(
+                "publication into the mount point failed ({error}); the prior export was restored"
+            ));
+        }
+        return Err(format!(
+            "publication into the mount point failed ({error}), and the prior export could not be restored; it is in {}",
+            displaced.display()
+        ));
+    }
+    let _ = std::fs::remove_dir(stage);
+    std::fs::remove_dir_all(&displaced)
+        .map_err(|error| format!("cannot remove the displaced export: {error}"))
+}
+
+/// Renames every entry of `from` that `keep` selects into `to`, the manifest last when
+/// `manifest_last` (entering the target) and first otherwise (leaving it). Each moved name is
+/// pushed onto `moved`.
+#[cfg(unix)]
+fn move_entries(
+    from: &Path,
+    to: &Path,
+    keep: impl Fn(&std::ffi::OsStr) -> bool,
+    manifest_last: bool,
+    rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>,
+    moved: &mut Vec<std::ffi::OsString>,
+) -> Result<(), String> {
+    let mut names = std::fs::read_dir(from)
+        .map_err(|error| format!("cannot read {}: {error}", from.display()))?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("cannot read {}: {error}", from.display()))?;
+    names.retain(|name| keep(name));
+    names.sort_by_key(|name| (name == MANIFEST_NAME) == manifest_last);
+    for name in names {
+        rename(&from.join(&name), &to.join(&name))
+            .map_err(|error| format!("cannot move {}: {error}", from.join(&name).display()))?;
+        moved.push(name);
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -472,5 +682,313 @@ mod windows_tests {
         assert!(error.contains("unavailable on Windows"), "{error}");
         assert!(!validator_called);
         assert!(!parent.exists());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod mount_point_tests {
+    use super::{is_mount_root, is_publication_entry, move_entries, PublicationStage};
+    use std::path::{Path, PathBuf};
+
+    fn scratch(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-publication-mount-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        std::fs::canonicalize(root).unwrap()
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A target with an old export, staged as a mount point.
+    fn staged(root: &Path) -> (PathBuf, PublicationStage) {
+        let target = root.join("volume");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("firebase-export-metadata.json"), b"old").unwrap();
+        std::fs::create_dir(target.join("auth_export")).unwrap();
+        std::fs::write(target.join("auth_export/accounts.json"), b"old").unwrap();
+        let stage = PublicationStage::create_with(&target, |_| Ok(()), &|_, _| Ok(true)).unwrap();
+        (target, stage)
+    }
+
+    #[test]
+    fn a_mount_point_target_is_staged_inside_itself_and_replaced_by_moves() {
+        let root = scratch("replace");
+        let (target, stage) = staged(&root);
+        assert_eq!(stage.root().parent(), Some(target.as_path()));
+        assert!(is_publication_entry(stage.root().file_name().unwrap()));
+        std::fs::write(stage.root().join("firebase-export-metadata.json"), b"new").unwrap();
+        std::fs::create_dir(stage.root().join("firestore_export")).unwrap();
+
+        stage.complete().publish().unwrap();
+
+        assert_eq!(
+            names(&target),
+            ["firebase-export-metadata.json", "firestore_export"]
+        );
+        assert_eq!(
+            std::fs::read(target.join("firebase-export-metadata.json")).unwrap(),
+            b"new"
+        );
+        assert_eq!(names(&root), ["volume"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_unpublished_stage_inside_a_mount_point_is_removed_and_the_target_kept() {
+        let root = scratch("drop");
+        let (target, stage) = staged(&root);
+        std::fs::write(stage.root().join("firebase-export-metadata.json"), b"new").unwrap();
+        drop(stage);
+        assert_eq!(
+            names(&target),
+            ["auth_export", "firebase-export-metadata.json"]
+        );
+        assert_eq!(
+            std::fs::read(target.join("firebase-export-metadata.json")).unwrap(),
+            b"old"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_failed_move_into_a_mount_point_restores_the_prior_export() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if rustix::process::geteuid().is_root() {
+            return; // root ignores the permission that makes the move fail
+        }
+        let root = scratch("restore");
+        let (target, stage) = staged(&root);
+        std::fs::write(stage.root().join("firebase-export-metadata.json"), b"new").unwrap();
+        let stage_root = stage.root().to_path_buf();
+        // Entries cannot be renamed out of a directory its owner cannot write.
+        std::fs::set_permissions(&stage_root, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        let error = stage.complete().publish().unwrap_err();
+        std::fs::set_permissions(&stage_root, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(error.contains("the prior export was restored"), "{error}");
+        assert_eq!(
+            std::fs::read(target.join("firebase-export-metadata.json")).unwrap(),
+            b"old"
+        );
+        assert!(target.join("auth_export/accounts.json").is_file());
+        assert!(
+            !names(&target)
+                .iter()
+                .any(|name| name.starts_with(".fireemu-displaced-")),
+            "{:?}",
+            names(&target)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_manifest_leaves_first_and_arrives_last() {
+        let root = scratch("order");
+        let from = root.join("from");
+        let to = root.join("to");
+        std::fs::create_dir(&from).unwrap();
+        std::fs::create_dir(&to).unwrap();
+        for name in ["a", "firebase-export-metadata.json", "z"] {
+            std::fs::write(from.join(name), b"").unwrap();
+        }
+        let plain = |from: &Path, to: &Path| std::fs::rename(from, to);
+        let mut moved = Vec::new();
+        move_entries(&from, &to, |_| true, false, &plain, &mut moved).unwrap();
+        assert_eq!(moved[0], "firebase-export-metadata.json");
+        let mut moved = Vec::new();
+        move_entries(&to, &from, |_| true, true, &plain, &mut moved).unwrap();
+        assert_eq!(moved[2], "firebase-export-metadata.json");
+        let mut moved = Vec::new();
+        move_entries(&from, &to, |name| name != "a", true, &plain, &mut moved).unwrap();
+        assert_eq!(moved, ["z", "firebase-export-metadata.json"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_directory_on_another_device_is_a_mount_root_and_an_ordinary_one_is_not() {
+        let root = scratch("detect");
+        std::fs::create_dir(root.join("plain")).unwrap();
+        assert!(!is_mount_root(&root.join("plain"), &root).unwrap());
+        #[cfg(target_os = "macos")]
+        assert!(is_mount_root(Path::new("/dev"), Path::new("/")).unwrap());
+        #[cfg(target_os = "linux")]
+        assert!(is_mount_root(Path::new("/proc"), Path::new("/")).unwrap());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn publication_entries_are_the_stage_and_displaced_prefixes_only() {
+        for name in [".fireemu-stage-1-2", ".fireemu-displaced-1-2"] {
+            assert!(is_publication_entry(name.as_ref()), "{name}");
+        }
+        for name in [
+            "firebase-export-metadata.json",
+            ".fireemu-stage",
+            "fireemu-stage-1",
+            ".out.fireemu-stage-1-2",
+        ] {
+            assert!(!is_publication_entry(name.as_ref()), "{name}");
+        }
+    }
+
+    mod properties {
+        use super::super::{
+            create_private_child, is_publication_entry, publish_into_mount_point_with,
+        };
+        use proptest::prelude::*;
+        use std::cell::Cell;
+        use std::collections::BTreeMap;
+        use std::path::Path;
+
+        const MANIFEST: &str = "firebase-export-metadata.json";
+        const NAMES: [&str; 4] = [
+            "auth_export",
+            "firestore_export",
+            "notes.txt",
+            "storage_export",
+        ];
+
+        /// What a directory holds: each entry that is not a publication entry, with its content.
+        fn contents(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+            std::fs::read_dir(dir)
+                .unwrap()
+                .map(Result::unwrap)
+                .filter(|entry| !is_publication_entry(&entry.file_name()))
+                .map(|entry| {
+                    (
+                        entry.file_name().to_string_lossy().into_owned(),
+                        std::fs::read(entry.path()).unwrap(),
+                    )
+                })
+                .collect()
+        }
+
+        fn tree(names: &[bool], content: &[u8]) -> BTreeMap<String, Vec<u8>> {
+            let mut tree: BTreeMap<String, Vec<u8>> = NAMES
+                .iter()
+                .zip(names)
+                .filter(|(_, present)| **present)
+                .map(|(name, _)| ((*name).to_owned(), content.to_vec()))
+                .collect();
+            tree.insert(MANIFEST.to_owned(), content.to_vec());
+            tree
+        }
+
+        fn write(dir: &Path, tree: &BTreeMap<String, Vec<u8>>) {
+            for (name, content) in tree {
+                std::fs::write(dir.join(name), content).unwrap();
+            }
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        enum Interruption {
+            /// The process dies before rename number `n`: nothing is rolled back.
+            Killed(usize),
+            /// Rename number `n` fails: publication rolls back.
+            Fails(usize),
+        }
+
+        fn interruption() -> impl Strategy<Value = Interruption> {
+            prop_oneof![
+                (0usize..12).prop_map(Interruption::Killed),
+                (0usize..12).prop_map(Interruption::Fails),
+            ]
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(64))]
+
+            /// Whatever rename is interrupted, an importable target (one holding the manifest)
+            /// holds a whole export, old or new, and nothing is lost; a failed rename restores
+            /// the old export exactly.
+            #[test]
+            fn an_interrupted_mount_point_publication_never_leaves_a_partial_importable_export(
+                old_names in proptest::collection::vec(any::<bool>(), 4),
+                new_names in proptest::collection::vec(any::<bool>(), 4),
+                interruption in interruption(),
+            ) {
+                let root = super::scratch("property");
+                let target = root.join("volume");
+                std::fs::create_dir(&target).unwrap();
+                let old = tree(&old_names, b"old");
+                let new = tree(&new_names, b"new");
+                write(&target, &old);
+                let stage = create_private_child(&target, "stage").unwrap();
+                write(&stage, &new);
+
+                let calls = Cell::new(0usize);
+                let rename = |from: &Path, to: &Path| {
+                    let call = calls.get();
+                    calls.set(call + 1);
+                    match interruption {
+                        Interruption::Killed(n) if call == n => panic!("killed"),
+                        Interruption::Fails(n) if call == n => {
+                            Err(std::io::Error::other("injected"))
+                        }
+                        _ => std::fs::rename(from, to),
+                    }
+                };
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    publish_into_mount_point_with(&stage, &target, &rename)
+                }));
+                let renames = old.len() + new.len();
+                let after = contents(&target);
+                match (interruption, outcome) {
+                    (_, Ok(Ok(()))) => {
+                        prop_assert_eq!(&after, &new);
+                        let clean = std::fs::read_dir(&target)
+                            .unwrap()
+                            .all(|entry| !is_publication_entry(&entry.unwrap().file_name()));
+                        prop_assert!(clean, "publication entries remain");
+                    }
+                    (Interruption::Fails(n), Ok(Err(error))) => {
+                        prop_assert!(n < renames);
+                        prop_assert!(error.contains("the prior export was restored"), "{}", error);
+                        prop_assert_eq!(&after, &old);
+                        prop_assert_eq!(&contents(&stage), &new);
+                    }
+                    (Interruption::Killed(n), Err(_)) => {
+                        prop_assert!(n < renames);
+                        if after.contains_key(MANIFEST) {
+                            prop_assert!(after == old || after == new, "{:?}", after);
+                        }
+                        // Every old entry is in the target or the displaced tree, and every new
+                        // one in the target or the stage.
+                        let mut kept = contents(&stage);
+                        for entry in std::fs::read_dir(&target).unwrap() {
+                            let entry = entry.unwrap();
+                            if entry.file_name().to_string_lossy().starts_with(".fireemu-displaced-") {
+                                kept.extend(contents(&entry.path()).into_iter().map(|(k, v)| (format!("old/{k}"), v)));
+                            }
+                        }
+                        for (name, content) in &after {
+                            let key = if content == b"old" { format!("old/{name}") } else { name.clone() };
+                            kept.insert(key, content.clone());
+                        }
+                        for name in old.keys() {
+                            prop_assert!(kept.contains_key(&format!("old/{name}")), "lost old {}", name);
+                        }
+                        for name in new.keys() {
+                            prop_assert!(kept.contains_key(name), "lost new {}", name);
+                        }
+                    }
+                    (interruption, outcome) => {
+                        prop_assert!(false, "{:?} ended as {:?}", interruption, outcome.map_err(|_| "panic"));
+                    }
+                }
+                let _ = std::fs::remove_dir_all(root);
+            }
+        }
     }
 }

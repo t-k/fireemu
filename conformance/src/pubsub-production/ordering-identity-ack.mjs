@@ -158,6 +158,107 @@ export function judgeOrderingCell(sourcePulls, localPulls) {
   };
 }
 
+// Owner 1399 judge (refines 1392 for the original ordering cells). `published` lists the identities
+// ({data, attributes, orderingKey}) in publish order; each side gives its Pull bodies on the ordered
+// subscription and the identities it acknowledged there. MATCH when no Pull mixes keyed and unkeyed
+// messages, the unkeyed sets are equal, every key's first deliveries form a prefix of its publish order, and
+// for every key whose delivered sets differ the shorter side holds that key at cell end (its last delivery
+// of the key is unacknowledged) and the difference lies in the publish order after that delivery.
+export function judgeOrderingCellHeldTail(publishedOrder, source, local) {
+  const key = (value) => JSON.stringify(identity(value));
+  const mixed = (pulls) =>
+    pulls.some(
+      (p) =>
+        new Set((p?.receivedMessages ?? []).map((d) => Boolean(d.message?.orderingKey))).size > 1,
+    );
+  const verdict = (reason) => ({ verdict: "DIVERGES", reason: `owner 1399: ${reason}` });
+  if (mixed(source.pulls) || mixed(local.pulls))
+    return verdict("keyed and unkeyed messages mixed in one Pull");
+  const view = (s) => {
+    const byKey = new Map(),
+      seen = new Set();
+    for (const p of s.pulls)
+      for (const d of p?.receivedMessages ?? []) {
+        const k = key(d.message);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        const ordering = d.message?.orderingKey ?? "";
+        if (!byKey.has(ordering)) byKey.set(ordering, []);
+        byKey.get(ordering).push(k);
+      }
+    return { byKey, acked: new Set(s.acked.map(key)) };
+  };
+  const a = view(source),
+    b = view(local);
+  const order = new Map();
+  for (const value of publishedOrder) {
+    const ordering = value.orderingKey ?? "";
+    if (!order.has(ordering)) order.set(ordering, []);
+    order.get(ordering).push(key(value));
+  }
+  const sorted = (list) => [...(list ?? [])].toSorted();
+  if (!isDeepStrictEqual(sorted(a.byKey.get("")), sorted(b.byKey.get(""))))
+    return verdict("unkeyed delivered set differs");
+  const keys = [...new Set([...a.byKey.keys(), ...b.byKey.keys()])].filter(Boolean).toSorted();
+  for (const k of keys) {
+    const x = a.byKey.get(k) ?? [],
+      y = b.byKey.get(k) ?? [];
+    const onlyX = x.filter((m) => !y.includes(m)),
+      onlyY = y.filter((m) => !x.includes(m));
+    if (onlyX.length === 0 && onlyY.length === 0) continue;
+    if (onlyX.length && onlyY.length) return verdict(`difference in key ${k} is not a held tail`);
+    const [shorter, sideView, missing] = onlyY.length ? [x, a, onlyY] : [y, b, onlyX];
+    const last = shorter.at(-1);
+    if (last === undefined || sideView.acked.has(last))
+      return verdict(`difference in key ${k} is not a held tail`);
+    const tail = new Set((order.get(k) ?? []).slice((order.get(k) ?? []).indexOf(last) + 1));
+    if (!missing.every((m) => tail.has(m)))
+      return verdict(`difference in key ${k} exceeds the held tail`);
+  }
+  for (const s of [a, b])
+    for (const [k, delivered] of s.byKey) {
+      if (!k) continue;
+      if (!isDeepStrictEqual(delivered, (order.get(k) ?? []).slice(0, delivered.length)))
+        return verdict(`key ${k} delivered set is not a prefix of its publish order`);
+    }
+  return {
+    verdict: "MATCH",
+    reason:
+      "owner 1399: per-key prefixes, no keyed/unkeyed mixing, difference only in held key tails",
+  };
+}
+
+// Messages published in the cell's source exchanges, in publish order.
+function publishedOrderOf(exchanges) {
+  return exchanges
+    .filter((e) => e.op === "publish")
+    .flatMap((e) => (e.request?.body?.messages ?? []).map((m) => identity(m)));
+}
+// One side's successful Pulls on the ordered subscription and the identities its successful
+// Acknowledge requests there acknowledged (ackIds resolved through that side's own deliveries).
+function heldView(exchanges, cell, subscription, success) {
+  const mine = exchanges.filter(
+    (e) =>
+      e.case === cell &&
+      ["pull", "acknowledge"].includes(e.op) &&
+      success(e) &&
+      subscriptionOf(e.request) === subscription,
+  );
+  const byAck = new Map();
+  const pulls = [];
+  for (const e of mine)
+    if (e.op === "pull") {
+      pulls.push(e.response.body);
+      for (const d of e.response.body?.receivedMessages ?? []) byAck.set(d.ackId, d.message);
+    }
+  const acked = mine
+    .filter((e) => e.op === "acknowledge")
+    .flatMap((e) => e.request.body?.ackIds ?? [])
+    .filter((ack) => byAck.has(ack))
+    .map((ack) => identity(byAck.get(ack)));
+  return { pulls, acked };
+}
+
 // Owner 1392 cell results for every ordering cell present in the source exchanges. `success` is the
 // replay's own success predicate; only successful Pulls on the ordered subscription are judged.
 export function orderingCellResults(sourceExchanges, localExchanges, success) {
@@ -197,6 +298,11 @@ export function orderingCellResults(sourceExchanges, localExchanges, success) {
       sourceDelivered: delivered(sourcePulls),
       localDelivered: delivered(localPulls),
       ...judgeOrderingCell(sourcePulls, localPulls),
+      owner1399: judgeOrderingCellHeldTail(
+        publishedOrderOf(original),
+        heldView(original, cell, orderedSubscription, success),
+        heldView(localExchanges, cell, orderedSubscription, success),
+      ),
     };
   }
   return results;

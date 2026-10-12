@@ -5,6 +5,7 @@ import {
   ORDERING_IDENTITY_CASES,
   createOrderingIdentityAck,
   judgeOrderingCell,
+  judgeOrderingCellHeldTail,
   orderedSubscriptionOf,
   orderingCellResults,
   subscriptionOf,
@@ -355,7 +356,8 @@ test("cell results judge the ordered subscription's successful Pulls of each ord
     exchanges([pull(["n", ""]), pull(["a0", "k1"])]),
     success,
   );
-  assert.deepEqual(same["ordering/rest"], {
+  const { owner1399: _owner1399, ...rest1392 } = same["ordering/rest"];
+  assert.deepEqual(rest1392, {
     orderedSubscription: ordered,
     sourcePulls: 2,
     localPulls: 2,
@@ -384,5 +386,260 @@ test("cell results judge the ordered subscription's successful Pulls of each ord
   assert.throws(
     () => orderingCellResults([...source, source[0]], source, success),
     /ordered subscription/,
+  );
+});
+
+// Owner 1399: MATCH when, on both sides, each key's delivered set is a prefix of its publish order, unkeyed and
+// keyed are never mixed in a Pull, and the whole-cell difference is only the tail of a key held by an
+// unacknowledged delivery at cell end.
+const id = (text, key) => ({ data: data(text), attributes: {}, orderingKey: key ?? "" });
+const PUBLISHED = [
+  ...["a0", "a1", "a2", "a3", "a4"].map((t) => id(t, "k1")),
+  ...["b0", "b1", "b2", "b3", "b4"].map((t) => id(t, "k2")),
+  id("n", ""),
+];
+const side = (pulls, acked) => ({ pulls, acked: acked.map(([t, k]) => id(t, k)) });
+const r2RestProduction = side(
+  [
+    pull(["n", ""]),
+    pull(["a0", "k1"], ["a1", "k1"]),
+    pull(["b0", "k2"]),
+    pull(["b1", "k2"]),
+    pull(["a2", "k1"]),
+    pull(["b2", "k2"]),
+    pull(["a3", "k1"], ["a4", "k1"]),
+  ],
+  [
+    ["n", ""],
+    ["a0", "k1"],
+    ["a1", "k1"],
+    ["b0", "k2"],
+    ["b1", "k2"],
+    ["a2", "k1"],
+  ],
+);
+const r2RestLocal = side(
+  [
+    pull(["n", ""]),
+    pull(["a0", "k1"], ["a1", "k1"]),
+    pull(["a2", "k1"]),
+    pull(["b0", "k2"]),
+    pull(["b1", "k2"]),
+    pull(["a3", "k1"]),
+    pull(["b2", "k2"], ["b3", "k2"], ["b4", "k2"]),
+  ],
+  [
+    ["n", ""],
+    ["a0", "k1"],
+    ["a1", "k1"],
+    ["a2", "k1"],
+    ["b0", "k2"],
+    ["b1", "k2"],
+  ],
+);
+
+test("owner 1399 accepts a difference that is only the tail of a key held at cell end", () => {
+  assert.deepEqual(judgeOrderingCellHeldTail(PUBLISHED, r2RestProduction, r2RestLocal), {
+    verdict: "MATCH",
+    reason:
+      "owner 1399: per-key prefixes, no keyed/unkeyed mixing, difference only in held key tails",
+  });
+  assert.equal(
+    judgeOrderingCellHeldTail(PUBLISHED, r2RestLocal, r2RestProduction).verdict,
+    "MATCH",
+  );
+  assert.equal(judgeOrderingCellHeldTail(PUBLISHED, r2RestLocal, r2RestLocal).verdict, "MATCH");
+});
+
+test("owner 1399 refuses a gap, an unheld difference, a mixed Pull and a difference beyond the held tail", () => {
+  // a non-prefix gap in a key (LOCAL skips a1)
+  const gap = side(
+    [pull(["n", ""]), pull(["a0", "k1"]), pull(["a2", "k1"]), pull(["b0", "k2"])],
+    [
+      ["n", ""],
+      ["a0", "k1"],
+      ["a2", "k1"],
+    ],
+  );
+  const gapSource = side(
+    [pull(["n", ""]), pull(["a0", "k1"]), pull(["a1", "k1"]), pull(["b0", "k2"])],
+    [
+      ["n", ""],
+      ["a0", "k1"],
+      ["a1", "k1"],
+    ],
+  );
+  assert.equal(
+    judgeOrderingCellHeldTail(PUBLISHED, gapSource, gap).reason,
+    "owner 1399: difference in key k1 is not a held tail",
+  );
+  const gapBoth = side([pull(["n", ""]), pull(["a0", "k1"]), pull(["a2", "k1"])], [["n", ""]]);
+  assert.equal(
+    judgeOrderingCellHeldTail(PUBLISHED, gapBoth, gapBoth).reason,
+    "owner 1399: key k1 delivered set is not a prefix of its publish order",
+  );
+  // a difference in a key that is not held: the shorter side acknowledged its last k2 delivery
+  const unheld = structuredClone(r2RestProduction);
+  unheld.acked.push(id("b2", "k2"));
+  unheld.acked.push(id("a3", "k1"), id("a4", "k1"));
+  assert.equal(
+    judgeOrderingCellHeldTail(PUBLISHED, unheld, r2RestLocal).reason,
+    "owner 1399: difference in key k2 is not a held tail",
+  );
+  // a key with no delivery at all on one side is not held
+  const none = side([pull(["n", ""]), pull(["a0", "k1"])], []);
+  const some = side([pull(["n", ""]), pull(["a0", "k1"]), pull(["b0", "k2"])], []);
+  assert.equal(
+    judgeOrderingCellHeldTail(PUBLISHED, none, some).reason,
+    "owner 1399: difference in key k2 is not a held tail",
+  );
+  // an unkeyed difference is never a held tail
+  const noUnkeyed = side([pull(["a0", "k1"])], []);
+  assert.equal(
+    judgeOrderingCellHeldTail(PUBLISHED, noUnkeyed, side([pull(["n", ""]), pull(["a0", "k1"])], []))
+      .reason,
+    "owner 1399: unkeyed delivered set differs",
+  );
+  // a mixed Pull on either side
+  const mixed = side([pull(["n", ""], ["a0", "k1"])], []);
+  assert.equal(
+    judgeOrderingCellHeldTail(PUBLISHED, mixed, mixed).reason,
+    "owner 1399: keyed and unkeyed messages mixed in one Pull",
+  );
+  assert.equal(
+    judgeOrderingCellHeldTail(PUBLISHED, side([pull(["n", ""]), pull(["a0", "k1"])], []), mixed)
+      .reason,
+    "owner 1399: keyed and unkeyed messages mixed in one Pull",
+  );
+  // a difference larger than the held key's tail: the longer side delivered a k1 message that was never published
+  const beyond = side(
+    [pull(["n", ""]), pull(["a0", "k1"]), pull(["a1", "k1"]), pull(["zz", "k1"])],
+    [],
+  );
+  const held = side([pull(["n", ""]), pull(["a0", "k1"])], []);
+  assert.equal(
+    judgeOrderingCellHeldTail(PUBLISHED, held, beyond).reason,
+    "owner 1399: difference in key k1 exceeds the held tail",
+  );
+});
+
+test("property: equal prefixes with any held/acknowledged split are MATCH, unheld shorter prefixes are not", () => {
+  const next = random(9);
+  const keys = { k1: ["a0", "a1", "a2", "a3", "a4"], k2: ["b0", "b1", "b2", "b3", "b4"] };
+  for (let i = 0; i < 300; i++) {
+    const make = (lengths, ackAll) => {
+      const pulls = [pull(["n", ""])],
+        acked = [["n", ""]];
+      for (const k of ["k1", "k2"]) {
+        const items = keys[k].slice(0, lengths[k]).map((t) => [t, k]);
+        for (const item of items) pulls.push(pull(item));
+        acked.push(...items.slice(0, ackAll[k] ? items.length : Math.max(0, items.length - 1)));
+      }
+      return side(pulls, acked);
+    };
+    const a = { k1: 1 + Math.floor(next() * 5), k2: 1 + Math.floor(next() * 5) },
+      b = { k1: 1 + Math.floor(next() * 5), k2: 1 + Math.floor(next() * 5) };
+    const heldA = { k1: next() < 0.5, k2: next() < 0.5 },
+      heldB = { k1: next() < 0.5, k2: next() < 0.5 };
+    const expected = ["k1", "k2"].every(
+      (k) => a[k] === b[k] || (a[k] < b[k] ? heldA[k] : heldB[k]),
+    );
+    const verdict = judgeOrderingCellHeldTail(
+      PUBLISHED,
+      make(a, { k1: !heldA.k1, k2: !heldA.k2 }),
+      make(b, { k1: !heldB.k1, k2: !heldB.k2 }),
+    ).verdict;
+    assert.equal(verdict, expected ? "MATCH" : "DIVERGES", JSON.stringify({ a, b, heldA, heldB }));
+  }
+});
+
+test("cell results add the owner 1399 verdict from published order and each side's acknowledgements", () => {
+  const ordered = "projects/p/subscriptions/fe1-or-g-s",
+    plain = "projects/p/subscriptions/fe1-or-g-plain";
+  const ok = (op, body, response) => ({
+    case: "ordering/grpc",
+    op,
+    request: { rpc: `Subscriber/${op}`, body },
+    response: { code: 0, body: response },
+  });
+  const publish = (key, texts) => ({
+    case: "ordering/grpc",
+    op: "publish",
+    request: {
+      rpc: "Publisher/Publish",
+      body: {
+        topic: "t",
+        messages: texts.map((t) => ({ data: data(t), ...(key ? { orderingKey: key } : {}) })),
+      },
+    },
+    response: { code: 0, body: {} },
+  });
+  const success = (e) => e.response?.code === 0;
+  const cell = (pulls, acks, extra = []) => [
+    ok("createSubscription", { name: ordered, topic: "t", enableMessageOrdering: true }, {}),
+    ok("createSubscription", { name: plain, topic: "t" }, {}),
+    publish("k1", ["a0", "a1", "a2"]),
+    publish("k2", ["b0", "b1"]),
+    publish("", ["n"]),
+    ...pulls.map((p) => ok("pull", { subscription: ordered }, p)),
+    ...acks.map((ackIds) => ok("acknowledge", { subscription: ordered, ackIds }, {})),
+    ...extra,
+  ];
+  // source: n, a0, b0 (b0 acknowledged, a0 held); LOCAL: n, a0, a1, b0 (all acknowledged except a1)
+  const source = cell([pull(["n", ""]), pull(["a0", "k1"]), pull(["b0", "k2"])], [["x-n", "x-b0"]]);
+  const local = cell(
+    [pull(["n", ""]), pull(["a0", "k1"]), pull(["a1", "k1"]), pull(["b0", "k2"])],
+    [["x-n", "x-a0", "x-b0"]],
+  );
+  const held = orderingCellResults(source, local, success)["ordering/grpc"];
+  assert.equal(held.verdict, "DIVERGES");
+  assert.deepEqual(
+    held.owner1399,
+    judgeOrderingCellHeldTail(
+      [id("a0", "k1"), id("a1", "k1"), id("a2", "k1"), id("b0", "k2"), id("b1", "k2"), id("n", "")],
+      side(
+        [pull(["n", ""]), pull(["a0", "k1"]), pull(["b0", "k2"])],
+        [
+          ["n", ""],
+          ["b0", "k2"],
+        ],
+      ),
+      side(
+        [pull(["n", ""]), pull(["a0", "k1"]), pull(["a1", "k1"]), pull(["b0", "k2"])],
+        [
+          ["n", ""],
+          ["a0", "k1"],
+          ["b0", "k2"],
+        ],
+      ),
+    ),
+  );
+  assert.equal(held.owner1399.verdict, "MATCH");
+  // the same difference with a0 acknowledged by the source is not a held tail
+  const ackedSource = cell(
+    [pull(["n", ""]), pull(["a0", "k1"]), pull(["b0", "k2"])],
+    [["x-n", "x-b0", "x-a0"]],
+  );
+  assert.equal(
+    orderingCellResults(ackedSource, local, success)["ordering/grpc"].owner1399.reason,
+    "owner 1399: difference in key k1 is not a held tail",
+  );
+  // acknowledgements on the plain subscription, unknown ackIds and failed acknowledgements do not count
+  const noise = [
+    { ...ok("acknowledge", { subscription: plain, ackIds: ["x-a0"] }, {}) },
+    ok("acknowledge", { subscription: ordered, ackIds: ["unknown"] }, {}),
+    {
+      ...ok("acknowledge", { subscription: ordered, ackIds: ["x-a0"] }, {}),
+      response: { code: 9 },
+    },
+  ];
+  const noisySource = cell(
+    [pull(["n", ""]), pull(["a0", "k1"]), pull(["b0", "k2"])],
+    [["x-n", "x-b0"]],
+    noise,
+  );
+  assert.equal(
+    orderingCellResults(noisySource, local, success)["ordering/grpc"].owner1399.verdict,
+    "MATCH",
   );
 });

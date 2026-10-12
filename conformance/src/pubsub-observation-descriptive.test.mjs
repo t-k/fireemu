@@ -152,6 +152,18 @@ test("property: recorded messages are bounded, printable and keep short messages
   }
 });
 
+test("every C0 control and DEL is replaced while space and printable text stay", () => {
+  const replacement = String.fromCodePoint(0xfffd);
+  for (let code = 0; code < 0x20; code++)
+    assert.equal(
+      boundedMessage(`a${String.fromCodePoint(code)}b`),
+      `a${replacement}b`,
+      String(code),
+    );
+  assert.equal(boundedMessage("a\u007fb"), `a${replacement}b`);
+  assert.equal(boundedMessage("a b~\u0080"), "a b~\u0080");
+});
+
 test("attempt records a failure with its context and returns null on success", async () => {
   const d = createDescriptiveDifferences({ profile: "emulator", mode: "descriptive" });
   assert.equal(await d.attempt({ sourceN: 1, cellId: "R3" }, async () => {}), null);

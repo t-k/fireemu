@@ -1249,6 +1249,12 @@ pub struct RuntimeConfig {
     pub auth_custom_token_signers: Option<serde_json::Map<String, Value>>,
     /// Allow unsigned emulator custom tokens in either profile (default true).
     pub auth_allow_unsigned_custom_tokens: bool,
+    /// Admit unsigned emulator ID tokens (`alg: none`, empty signature; the `mockUserToken` of
+    /// `@firebase/rules-unit-testing`) on the Firestore and Storage Security Rules surfaces in
+    /// either profile (`auth.allowUnsignedIdTokens`, default true, owner ledger 1393). Signed
+    /// tokens are verified as before, and a session that signs its own tokens
+    /// (`auth.idTokenSigning: session-rsa`) admits no unsigned token.
+    pub auth_allow_unsigned_id_tokens: bool,
     /// OIDC issuers whose signed ID tokens the strict profile verifies, each with its public
     /// JWK set (`auth.idpSigners`, AUTH-FEDERATION owner decision O4). No key is fetched from
     /// an issuer; without an entry, strict refuses the issuer's sign-ins.
@@ -1495,6 +1501,7 @@ impl Default for RuntimeConfig {
             scheduler_catch_up: "all".to_owned(),
             id_token_signing: fireemu_core_auth::jwt::SigningMode::UnsignedEmulator,
             auth_allow_unsigned_custom_tokens: true,
+            auth_allow_unsigned_id_tokens: true,
             auth_custom_token_signers: None,
             auth_idp_signers: None,
             auth_idp_assertions: IdpAssertionMode::Fixture,
@@ -1505,13 +1512,14 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 26] = [
+pub(crate) const AUTH_KEYS: [&str; 27] = [
     "enabled",
     "apiKeys",
     "projectIssuer",
     "idTokenSigning",
     "customTokenSigners",
     "allowUnsignedCustomTokens",
+    "allowUnsignedIdTokens",
     "idpSigners",
     "idpAssertions",
     "providers",
@@ -3028,6 +3036,7 @@ impl RuntimeConfig {
     pub fn set_production_exact(&mut self, exact: bool) {
         self.production_exact = exact;
         self.auth_allow_unsigned_custom_tokens = !exact;
+        self.auth_allow_unsigned_id_tokens = !exact;
         self.auth_idp_assertions = if exact {
             IdpAssertionMode::Signed
         } else {
@@ -3990,6 +3999,11 @@ impl RuntimeConfig {
             if let Some(value) = auth.get("allowUnsignedCustomTokens") {
                 cfg.auth_allow_unsigned_custom_tokens = value.as_bool().ok_or_else(|| {
                     ConfigError("auth.allowUnsignedCustomTokens must be a boolean".to_owned())
+                })?;
+            }
+            if let Some(value) = auth.get("allowUnsignedIdTokens") {
+                cfg.auth_allow_unsigned_id_tokens = value.as_bool().ok_or_else(|| {
+                    ConfigError("auth.allowUnsignedIdTokens must be a boolean".to_owned())
                 })?;
             }
             if let Some(signers) = auth.get("customTokenSigners") {
@@ -6610,6 +6624,83 @@ mod tests {
                 ))
             );
         }
+    }
+
+    /// `auth.allowUnsignedIdTokens` takes the development value (true) unless `productionExact`
+    /// asks for production's (false); an explicit key decides over both.
+    #[test]
+    fn unsigned_id_tokens_follow_production_exact_and_an_explicit_key_wins() {
+        for exact in [None, Some(false), Some(true)] {
+            for key in [None, Some(true), Some(false)] {
+                let mut auth = json!({});
+                if let Some(value) = key {
+                    auth["allowUnsignedIdTokens"] = json!(value);
+                }
+                let mut config = json!({"schemaVersion": 1, "profile": "strict", "auth": auth});
+                if let Some(exact) = exact {
+                    config["productionExact"] = json!(exact);
+                }
+                let cfg = RuntimeConfig::from_json(&config).unwrap();
+                assert_eq!(
+                    cfg.auth_allow_unsigned_id_tokens,
+                    key.unwrap_or(exact != Some(true)),
+                    "productionExact {exact:?}, allowUnsignedIdTokens {key:?}"
+                );
+            }
+        }
+        let mut cfg = RuntimeConfig::default();
+        cfg.set_production_exact(true);
+        assert!(!cfg.auth_allow_unsigned_id_tokens);
+        cfg.set_production_exact(false);
+        assert!(cfg.auth_allow_unsigned_id_tokens);
+    }
+
+    #[test]
+    fn unsigned_id_token_policy_defaults_and_explicit_overrides() {
+        for profile in ["strict", "emulator"] {
+            for allowed in [None, Some(true), Some(false)] {
+                let mut auth = json!({});
+                if let Some(value) = allowed {
+                    auth["allowUnsignedIdTokens"] = json!(value);
+                }
+                let cfg = RuntimeConfig::from_json(&json!({
+                    "schemaVersion": 1, "profile": profile,
+                    "firestore": {"edition": "standard", "apiMode": "native"},
+                    "auth": auth,
+                }))
+                .unwrap();
+                assert_eq!(cfg.auth_allow_unsigned_id_tokens, allowed.unwrap_or(true));
+                // The setting is independent of the profile's verification and of the custom
+                // token setting.
+                assert_eq!(
+                    cfg.token_acceptance,
+                    if profile == "strict" {
+                        TokenAcceptance::Verified
+                    } else {
+                        TokenAcceptance::EmulatorMock
+                    }
+                );
+                assert!(cfg.auth_allow_unsigned_custom_tokens);
+            }
+        }
+        for invalid in [json!(null), json!("false"), json!(0), json!([]), json!({})] {
+            assert_eq!(
+                parse(&json!({"allowUnsignedIdTokens": invalid})),
+                Err(ConfigError(
+                    "auth.allowUnsignedIdTokens must be a boolean".to_owned()
+                ))
+            );
+        }
+        let cfg = RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1, "profile": "strict",
+            "firestore": {"edition": "standard", "apiMode": "native"},
+            "auth": {"allowUnsignedCustomTokens": false},
+        }))
+        .unwrap();
+        assert!(
+            cfg.auth_allow_unsigned_id_tokens,
+            "the custom token setting does not reach ID tokens"
+        );
     }
 
     #[test]

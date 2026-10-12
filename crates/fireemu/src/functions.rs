@@ -3095,6 +3095,9 @@ async fn start_codebase(
             runner.hello().app_check.as_ref(),
             callable_trusted_protocol,
         )?;
+        if let Some(note) = consume_app_check_note(&manifest, callable_trusted_protocol) {
+            eprintln!("note: {note}");
+        }
         Ok(fireemu_adapter_functions::runtime::CodebaseSpec {
             name: label.clone(),
             manifest,
@@ -3658,13 +3661,13 @@ fn check_manifest_agrees_on_callables(
 /// Fails startup when the callable App Check contract cannot be honoured (specification
 /// section 13.4).
 ///
-/// Three separate things have to hold, and each of them is fatal in its own way:
+/// A callable that declares `consumeAppCheckToken: true` is not one of those cases (owner
+/// decision 1396): replay protection is unimplemented, but the callable proxy keeps it from
+/// being silently wrong per call, and [`consume_app_check_note`] says how at startup. Two
+/// things have to hold, and each of them is fatal in its own way:
 ///
-/// - a callable that declares `consumeAppCheckToken: true` fails discovery outright, whatever
-///   else is configured, because replay protection is unimplemented and running such a callable
-///   would hand it `alreadyConsumed: false` -- a silently wrong answer;
 /// - with App Check enabled, a callable whose value could not be observed fails startup. The
-///   value is never guessed as `false`;
+///   value is never guessed as `false`: the proxy could not tell which calls need consumption;
 /// - with App Check enabled, the runner must have proved that the installed
 ///   `firebase-functions` reads the debug switches the way the trusted protocol relies on. The
 ///   daemon turns `skipTokenVerification` on; if that flag does not mean what it is expected to
@@ -3685,16 +3688,8 @@ fn check_callable_app_check(
         else {
             continue;
         };
-        match consume_app_check_token {
-            ConsumeAppCheckToken::Enabled => {
-                return Err(format!(
-                    "callable {:?} declares consumeAppCheckToken: true, which needs limited-use \
-                     token consumption (APP_CHECK_REPLAY_UNSUPPORTED); it is not implemented",
-                    f.name
-                ))
-            }
-            ConsumeAppCheckToken::Undetermined => undetermined.push(&f.name),
-            ConsumeAppCheckToken::Disabled => {}
+        if *consume_app_check_token == ConsumeAppCheckToken::Undetermined {
+            undetermined.push(&f.name);
         }
     }
     if !callable_trusted_protocol {
@@ -3758,6 +3753,62 @@ fn check_callable_app_check(
         ));
     }
     Ok(())
+}
+
+/// The startup note for the callables that declare `consumeAppCheckToken: true`, or `None`
+/// when there are none.
+///
+/// Limited-use consumption (`APPCHECK-REPLAY-1`) is unimplemented, so such a callable can
+/// never run exactly as in production. What it does instead depends on the mode:
+///
+/// - without App Check, the callable proxy removes `X-Firebase-AppCheck` before the runner, so
+///   the callable runs without App Check: no token is verified or consumed, and the handler
+///   sees no app context. Forwarding the token would let the installed wrapper hand it to the
+///   Admin SDK's consuming `verifyToken`, which calls production;
+/// - with App Check, the proxy refuses a call that presents a valid token with `501
+///   UNIMPLEMENTED` (`APP_CHECK_REPLAY_UNSUPPORTED`), because the trusted wrapper would answer
+///   it with `alreadyConsumed: false`. Calls without a valid token need no consumption and run
+///   (or get `401` from an enforcing callable).
+///
+/// TODO(productionExact): when replay protection exists, the production-exact setting should
+/// consume tokens as production does; until then there is no production-exact variant.
+fn consume_app_check_note(
+    manifest: &fireemu_core_functions::manifest::FunctionManifest,
+    callable_trusted_protocol: bool,
+) -> Option<String> {
+    use fireemu_core_functions::manifest::{ConsumeAppCheckToken, Trigger};
+    let names: Vec<String> = manifest
+        .functions
+        .iter()
+        .filter(|f| {
+            matches!(
+                f.trigger,
+                Trigger::Http {
+                    callable: true,
+                    consume_app_check_token: ConsumeAppCheckToken::Enabled,
+                    ..
+                }
+            )
+        })
+        .map(|f| format!("{:?}", f.name))
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    let names = names.join(", ");
+    Some(if callable_trusted_protocol {
+        format!(
+            "callable(s) {names} declare consumeAppCheckToken: true, but limited-use token \
+             consumption is not implemented (APP_CHECK_REPLAY_UNSUPPORTED); a call that presents \
+             a valid App Check token is refused with 501 UNIMPLEMENTED, and calls without one run"
+        )
+    } else {
+        format!(
+            "callable(s) {names} declare consumeAppCheckToken: true; App Check is disabled, so \
+             they run without App Check: X-Firebase-AppCheck is removed before the handler, no \
+             token is consumed and replay protection is not applied"
+        )
+    })
 }
 
 /// The Storage event observer for `runtime` (called inside the store's critical section).
@@ -5632,18 +5683,19 @@ mod tests {
     use super::{
         blocking_auth_io_failure, blocking_auth_read_response, blocking_auth_response_failure,
         blocking_auth_write_request, changed_source_stamp, check_callable_app_check,
-        function_pubsub_resources, functions_source_stamp, functions_source_stamp_with_charge,
-        functions_source_stamp_with_file_version, hash_source_file, hash_source_stamp_entry,
-        load_user_environment, node_engine_matches, owned_pubsub_topic, package_node_engine,
-        parse_node_version, provision_function_pubsub_resources, select_node_installation,
-        snapshot_functions_source, source_scan_pacing_delay, source_scan_retry_delay,
-        storage_trigger_buckets, stream_source_chunks, update_watch_hash,
-        validate_functions_codebase_budget, wait_for_fixed_inspector_port_release,
-        warn_reload_once, BlockingAuthBridge, FunctionsSourceByteBudget,
-        FunctionsSourceEntryBudget, FunctionsSourceFileVersion, FunctionsSourceScanBudget,
-        FunctionsSourceSnapshot, FunctionsSourceStamp, FunctionsSourceTraversal, NodeInstallation,
-        PubSubBridge, PubSubSchedulePublisher, UserEnvironment, BLOCKING_AUTH_DEADLINE,
-        MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
+        consume_app_check_note, function_pubsub_resources, functions_source_stamp,
+        functions_source_stamp_with_charge, functions_source_stamp_with_file_version,
+        hash_source_file, hash_source_stamp_entry, load_user_environment, node_engine_matches,
+        owned_pubsub_topic, package_node_engine, parse_node_version,
+        provision_function_pubsub_resources, select_node_installation, snapshot_functions_source,
+        source_scan_pacing_delay, source_scan_retry_delay, storage_trigger_buckets,
+        stream_source_chunks, update_watch_hash, validate_functions_codebase_budget,
+        wait_for_fixed_inspector_port_release, warn_reload_once, BlockingAuthBridge,
+        FunctionsSourceByteBudget, FunctionsSourceEntryBudget, FunctionsSourceFileVersion,
+        FunctionsSourceScanBudget, FunctionsSourceSnapshot, FunctionsSourceStamp,
+        FunctionsSourceTraversal, NodeInstallation, PubSubBridge, PubSubSchedulePublisher,
+        UserEnvironment, BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES,
+        MAX_FUNCTIONS_SOURCE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
         MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
         SOURCE_IO_BUFFER_BYTES,
     };
@@ -11214,21 +11266,56 @@ mod tests {
         assert_eq!(conflicting.list_subscriptions("demo-app").len(), 1);
     }
 
-    /// Functions scenario 6: `consumeAppCheckToken: true` fails discovery outright, whether or
-    /// not App Check is enabled -- replay protection is unimplemented, and the callable would
-    /// otherwise run with `alreadyConsumed: false`.
+    /// Functions scenario 6, revised by owner decision 1396: a callable that declares
+    /// `consumeAppCheckToken: true` no longer stops the codebase from loading, with App Check
+    /// enabled or not. The per-call answer lives in the callable proxy.
     #[test]
-    fn consume_app_check_token_fails_function_discovery_while_replay_support_is_unavailable() {
-        for trusted in [true, false] {
-            let e = check_callable_app_check(
-                &manifest(Some("enabled")),
-                Some(&report("ok", "verified")),
-                trusted,
-            )
-            .expect_err("a callable that consumes tokens cannot be served");
-            assert!(e.contains("APP_CHECK_REPLAY_UNSUPPORTED"), "{e}");
-            assert!(e.contains("guarded"), "{e}");
+    fn a_token_consuming_callable_loads_whether_or_not_app_check_is_enabled() {
+        check_callable_app_check(
+            &manifest(Some("enabled")),
+            Some(&report("ok", "verified")),
+            true,
+        )
+        .expect("the codebase loads with App Check enabled");
+        check_callable_app_check(&manifest(Some("enabled")), None, false)
+            .expect("the codebase loads without App Check");
+    }
+
+    /// The one startup note names every token-consuming callable and says what a call to it
+    /// gets in the active mode; nothing is printed when no callable consumes tokens.
+    #[test]
+    fn the_consumption_note_names_the_callables_and_the_mode() {
+        let without = consume_app_check_note(&manifest(Some("enabled")), false)
+            .expect("a note without App Check");
+        assert!(without.contains("\"guarded\""), "{without}");
+        assert!(without.contains("App Check is disabled"), "{without}");
+        assert!(without.contains("no token is consumed"), "{without}");
+        let with = consume_app_check_note(&manifest(Some("enabled")), true)
+            .expect("a note with App Check");
+        assert!(with.contains("\"guarded\""), "{with}");
+        assert!(with.contains("501"), "{with}");
+        assert!(with.contains("APP_CHECK_REPLAY_UNSUPPORTED"), "{with}");
+        for trusted in [false, true] {
+            for consume in [None, Some("disabled"), Some("undetermined")] {
+                assert_eq!(
+                    consume_app_check_note(&manifest(consume), trusted),
+                    None,
+                    "{consume:?} trusted={trusted}"
+                );
+            }
         }
+        let two = parse_manifest(&json!({"functions": [
+            {"name": "b", "trigger": {"type": "http", "callable": true, "consumeAppCheckToken": "enabled"}},
+            {"name": "plain", "trigger": {"type": "http", "callable": false, "consumeAppCheckToken": "enabled"}},
+            {"name": "a", "trigger": {"type": "http", "callable": true, "consumeAppCheckToken": "enabled"}},
+        ]}))
+        .expect("the fixture manifest parses");
+        let note = consume_app_check_note(&two, false).expect("a note");
+        assert!(note.contains("\"b\", \"a\""), "{note}");
+        assert!(
+            !note.contains("plain"),
+            "an onRequest function is not a callable: {note}"
+        );
     }
 
     /// An undeterminable value is never guessed as `false`: it fails startup, but only when

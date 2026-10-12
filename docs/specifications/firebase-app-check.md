@@ -201,7 +201,7 @@ The activation contract is:
 | enabled and `appcheck` selected, Functions not selected | available | selected non-Functions services apply configured modes | not applicable |
 | enabled and `functions` selected | available because Functions selects its App Check dependency | selected non-Functions services apply configured modes only when explicitly selected | active for callable requests, including callables without enforcement so valid app context is available |
 
-When `--only` is absent, an enabled App Check configuration selects the logical `appcheck` service. With `--only`, selecting `functions` implicitly selects its App Check exchange/verifier dependency when App Check is enabled; other products require both their own name and `appcheck`. A selected service whose configured mode is omitted remains `off`. `consumeAppCheckToken: true` always fails discovery while replay support is unavailable.
+When `--only` is absent, an enabled App Check configuration selects the logical `appcheck` service. With `--only`, selecting `functions` implicitly selects its App Check exchange/verifier dependency when App Check is enabled; other products require both their own name and `appcheck`. A selected service whose configured mode is omitted remains `off`. `consumeAppCheckToken: true` never stops Functions from starting; section 13.4 says what a call to such a callable gets while replay support is unavailable.
 
 ## 9. App registration and debug secrets
 
@@ -385,7 +385,14 @@ Callable `OPTIONS` requests reach the SDK CORS wrapper without Auth or App Check
 
 For a valid token, v2 `request.app` and v1 `context.app` contain the app ID and decoded claims. When the callable declares `enforceAppCheck: true`, missing or invalid input returns the callable `UNAUTHENTICATED` envelope before the user handler runs. An ordinary request receives the wrapper-compatible HTTP 401 JSON response; an exact v2 streaming request receives the wrapper-compatible HTTP 200 response containing one SSE error record. When enforcement is false or omitted, missing or invalid input invokes the handler with `app` undefined. Raw `onRequest` functions preserve `X-Firebase-AppCheck` and receive no automatic verification context.
 
-`consumeAppCheckToken: true` is unsupported in the initial delivery. Current `firebase-functions` keeps the option inside the callable wrapper's closure (v1 and v2 alike; `__endpoint.callableTrigger` is an empty object), so reading `__endpoint` / `__trigger` cannot reveal it. Discovery therefore needs a version-bounded loader instrumentation in the runner (wrapping the `onCall` exports of the installed, supported `firebase-functions` versions before user code loads, capturing the options) or an explicit trusted runner protocol extension. The fail-closed interpretation is three-valued: `true` obtained → discovery fails with `APP_CHECK_REPLAY_UNSUPPORTED`; `false` obtained reliably → callable App Check may be enabled; the value cannot be obtained → starting Functions with App Check enabled fails at startup. The value is never guessed as `false`, because a hidden `consumeAppCheckToken: true` would otherwise run with `alreadyConsumed: false`. Unknown metadata shapes are startup errors, not warnings.
+`consumeAppCheckToken: true` is unsupported in the initial delivery. Current `firebase-functions` keeps the option inside the callable wrapper's closure (v1 and v2 alike; `__endpoint.callableTrigger` is an empty object), so reading `__endpoint` / `__trigger` cannot reveal it. Discovery therefore needs a version-bounded loader instrumentation in the runner (wrapping the `onCall` exports of the installed, supported `firebase-functions` versions before user code loads, capturing the options) or an explicit trusted runner protocol extension. The fail-closed interpretation is three-valued: `true` obtained → the codebase loads and the proxy applies the per-call rules below; `false` obtained reliably → callable App Check may be enabled; the value cannot be obtained → starting Functions with App Check enabled fails at startup, because the proxy could not tell which calls need consumption. The value is never guessed as `false`, because a hidden `consumeAppCheckToken: true` would otherwise run with `alreadyConsumed: false`. Unknown metadata shapes are startup errors, not warnings.
+
+Owner decision 1396 (2026-10-12) replaced the earlier rule that `true` fails discovery in every configuration, which kept a whole codebase from starting because of one callable. With `true` obtained, Functions start with one startup note naming the callables, and each call is decided by the daemon:
+
+- App Check disabled (no trusted protocol): every `X-Firebase-AppCheck` field is removed on the way to that callable, so it runs without App Check. No token is verified or consumed, the handler sees no app context, and replay protection is not applied. Forwarding the field instead would let the installed wrapper, which runs without `skipTokenVerification` here, pass the token to the Admin SDK's consuming `verifyToken`, which calls the production App Check API. An enforcing callable therefore answers `401` to every call, as it already does for a token the Admin SDK cannot verify.
+- App Check enabled: a call presenting a valid token is the only call that needs consumption, and the trusted wrapper would answer it with `alreadyConsumed: false`. The daemon answers it `501` with the callable envelope `{"error": {"status": "UNIMPLEMENTED", "details": {"reason": "APP_CHECK_REPLAY_UNSUPPORTED"}}}` (as the SSE error record for a v2 streaming request) before the runner is reached. A call without a valid token needs no consumption: an enforcing callable answers `401` as before, a non-enforcing one runs with the invalid token removed.
+
+Production consumes the token; there is no production-exact variant until `APPCHECK-REPLAY-1` exists.
 
 ## 14. Lifecycle, sessions, reset, and snapshots
 
@@ -543,7 +550,7 @@ For each Auth, Firestore, and Storage surface, cover the Cartesian matrix of bas
 3. `a valid callable exposes the app ID and decoded claims`
 4. `an unenforced callable invokes the handler with app undefined for invalid input`
 5. `onRequest receives the original App Check header without automatic enforcement`
-6. `consumeAppCheckToken fails function discovery while replay support is unavailable`
+6. `a token-consuming callable loads, runs without App Check when App Check is disabled, and refuses a valid token with APP_CHECK_REPLAY_UNSUPPORTED when it is enabled`
 7. `a forged Auth token never populates callable Auth context when App Check is active`
 8. `mixed-case duplicate App Check headers never reach runner-side decoding`
 9. `Bearer owner never populates callable Auth context`
@@ -618,7 +625,7 @@ The project may change App Check from `unsupported` to `implemented` only when a
 - forged, wrong-project, and unknown-app tokens fail on every supported ingress;
 - Auth, Firestore, and Storage implement all three baseline modes and the bypass matrix;
 - callable `enforceAppCheck` behavior and app context pass with supported `firebase-functions` versions;
-- unsupported `consumeAppCheckToken` fails closed;
+- unsupported `consumeAppCheckToken` fails closed per call (section 13.4) without stopping the codebase from loading;
 - denied operations demonstrate no side effects;
 - reset and session isolation tests pass;
 - traces, snapshots, logs, errors, and UI/API output pass secret-redaction tests;

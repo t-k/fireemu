@@ -100,7 +100,7 @@ fn report_mode_reports_nothing_production_serves_by_a_merge() {
     ));
     assert!(accepted.warnings.is_empty());
     let database = database("merged-only");
-    gateway.report_missing_index(&database, &accepted);
+    assert_eq!(gateway.report_missing_index(&database, &accepted), None);
     assert!(missing_index_reports()
         .iter()
         .all(|report| report.database != database));
@@ -152,10 +152,11 @@ fn a_reported_index_carries_production_refusal_text_and_the_fragment_once_per_da
     let accepted = gateway.validate_query(&needs_composite()).unwrap();
     let first = database("reported-a");
     let second = database("reported-b");
-    for _ in 0..3 {
-        gateway.report_missing_index(&first, &accepted);
+    let line = gateway.report_missing_index(&first, &accepted).unwrap();
+    for _ in 0..2 {
+        assert_eq!(gateway.report_missing_index(&first, &accepted), None);
     }
-    gateway.report_missing_index(&second, &accepted);
+    assert!(gateway.report_missing_index(&second, &accepted).is_some());
 
     let production = gateway_refusal_message(&first);
     let reports: Vec<_> = missing_index_reports()
@@ -174,6 +175,10 @@ fn a_reported_index_carries_production_refusal_text_and_the_fragment_once_per_da
         "{}",
         in_first.message
     );
+    assert!(
+        line.contains(&production) && line.contains(&in_first.fragment),
+        "{line}"
+    );
 }
 
 #[test]
@@ -185,8 +190,11 @@ fn neither_refuse_mode_nor_the_emulator_profile_reports_through_the_strict_regis
         accepted.warnings,
         vec!["FS_EMULATOR_INDEX_ASSUMED".to_owned()]
     );
-    emulator.report_missing_index(&database, &accepted);
-    gateway(IndexValidationPolicy::Production).report_missing_index(&database, &accepted);
+    assert_eq!(emulator.report_missing_index(&database, &accepted), None);
+    assert_eq!(
+        gateway(IndexValidationPolicy::Production).report_missing_index(&database, &accepted),
+        None
+    );
     assert!(missing_index_reports()
         .iter()
         .all(|report| report.database != database));
@@ -287,4 +295,33 @@ fn the_local_backend_reports_the_query_it_serves_in_report_mode() {
             .unwrap_err()
             .message()
     );
+}
+
+#[test]
+fn a_reported_query_with_several_inequality_fields_carries_the_multiple_range_text() {
+    let query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("tasks").unwrap(),
+    ))
+    .with_filter(FilterExpr::And(vec![
+        field("done", FieldOp::Equal, Value::Boolean(false)),
+        field("priority", FieldOp::GreaterThan, Value::Integer(1)),
+        field("size", FieldOp::LessThan, Value::Integer(9)),
+    ]));
+    let database = database("several-ranges");
+    let production = gateway(IndexValidationPolicy::Production)
+        .validate_query(&query)
+        .unwrap_err()
+        .to_status_in(&database)
+        .message()
+        .to_owned();
+    assert!(production.contains("multiple-range-fields"), "{production}");
+    let gateway = gateway(IndexValidationPolicy::ProductionReport);
+    let accepted = gateway.validate_query(&query).unwrap();
+    gateway.report_missing_index(&database, &accepted);
+    let report = missing_index_reports()
+        .into_iter()
+        .find(|r| r.database == database)
+        .unwrap();
+    assert_eq!(report.message, production);
 }

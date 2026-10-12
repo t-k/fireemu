@@ -85,7 +85,7 @@ export function projectOwnedTopics(body, names, runId) {
   return { topics: body.topics.filter((t) => names.includes(t?.name)) };
 }
 // Emulator-profile descriptive mode: where a replay step stopped and what each side answered.
-function descriptiveContext(row) {
+export function descriptiveContext(row) {
   return {
     phase: "replay-row",
     sourceN: row.n,
@@ -100,7 +100,7 @@ const replyShape = (reply) =>
   reply ? { ok: reply.ok ?? null, status: reply.status ?? null, code: reply.code ?? null } : null;
 const streamEnd = (event) =>
   event ? { event: event.event, code: event.code ?? null, sourceN: event.n ?? null } : null;
-function descriptiveEvidence(row, sourceCells, localCells) {
+export function descriptiveEvidence(row, sourceCells, localCells) {
   const original = sourceCells.find((c) => c.id === row.cellId),
     actual = localCells.find((c) => c.id === row.cellId);
   if (row.event === "request-dispatch")

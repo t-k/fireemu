@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  MAX_DIFFERENCES,
   MAX_DIFFERENCE_MESSAGE_BYTES,
   boundedMessage,
   classifyDifference,
@@ -12,7 +13,13 @@ import {
   isControl,
   selectDescriptiveMode,
 } from "./pubsub-observation/descriptive.mjs";
-import { descriptiveModeFor, options, replayA } from "./pubsub-observation/replay.mjs";
+import {
+  descriptiveContext,
+  descriptiveEvidence,
+  descriptiveModeFor,
+  options,
+  replayA,
+} from "./pubsub-observation/replay.mjs";
 import { fixture } from "./pubsub-production-observation-compare.test.mjs";
 import { PROJECT } from "./pubsub-observation/plan.mjs";
 
@@ -375,4 +382,150 @@ test("mode selection reads the launch config only through the caller's pinned re
       () => selectDescriptiveMode("descriptive", bad, reader('{"profile":"emulator"}')),
       /launch config required/,
     );
+});
+
+test("row context names the source row and keeps direction only for frames", () => {
+  assert.deepEqual(
+    descriptiveContext({
+      n: 7,
+      event: "request-dispatch",
+      cellId: "R3",
+      method: "Pull",
+      transport: "rest",
+    }),
+    {
+      phase: "replay-row",
+      sourceN: 7,
+      sourceEvent: "request-dispatch",
+      cellId: "R3",
+      method: "Pull",
+      transport: "rest",
+    },
+  );
+  assert.deepEqual(
+    descriptiveContext({ n: 8, event: "stream-frame", cellId: "S1", direction: "in" }),
+    {
+      phase: "replay-row",
+      sourceN: 8,
+      sourceEvent: "stream-frame",
+      cellId: "S1",
+      method: null,
+      transport: null,
+      direction: "in",
+    },
+  );
+  assert.deepEqual(descriptiveContext({ n: 9, event: "case-result" }), {
+    phase: "replay-row",
+    sourceN: 9,
+    sourceEvent: "case-result",
+    cellId: null,
+    method: null,
+    transport: null,
+  });
+});
+
+test("evidence reports the recorded and local answer of the failing row without bodies", () => {
+  const sourceCells = [
+    {
+      id: "R3",
+      exchanges: [
+        {
+          dispatchN: 4,
+          response: { ok: false, status: 404, code: "NOT_FOUND", body: { secret: 1 } },
+        },
+      ],
+    },
+    { id: "S1", exchanges: [] },
+  ];
+  const localCells = [
+    {
+      id: "R3",
+      exchanges: [
+        { dispatchN: 4, response: { ok: true, status: 200, code: "OK", body: { x: 1 } } },
+      ],
+      events: [],
+      frames: [],
+    },
+    {
+      id: "S1",
+      exchanges: [],
+      events: [
+        { event: "stream-status", code: "OK", n: 10 },
+        { event: "stream-error", code: "INVALID_ARGUMENT", n: 11 },
+        { event: "stream-frame", n: 12 },
+      ],
+      frames: [{}, {}],
+    },
+  ];
+  assert.deepEqual(
+    descriptiveEvidence({ n: 4, event: "request-dispatch", cellId: "R3" }, sourceCells, localCells),
+    {
+      recorded: { ok: false, status: 404, code: "NOT_FOUND" },
+      local: { ok: true, status: 200, code: "OK" },
+    },
+  );
+  assert.deepEqual(
+    descriptiveEvidence({ n: 5, event: "request-dispatch", cellId: "R3" }, sourceCells, localCells),
+    { recorded: null, local: null },
+  );
+  assert.deepEqual(
+    descriptiveEvidence(
+      {
+        n: 13,
+        event: "stream-case-observation",
+        cellId: "S1",
+        state: { terminal: { code: "FAILED_PRECONDITION" }, inboundEnded: true, incomplete: false },
+      },
+      sourceCells,
+      localCells,
+    ),
+    {
+      recorded: { terminalCode: "FAILED_PRECONDITION", inboundEnded: true, incomplete: false },
+      local: { event: "stream-error", code: "INVALID_ARGUMENT", sourceN: 11 },
+    },
+  );
+  assert.deepEqual(
+    descriptiveEvidence(
+      { n: 14, event: "stream-case-observation", cellId: "S1", state: {} },
+      sourceCells,
+      [{ id: "S1", events: [], frames: [] }],
+    ),
+    {
+      recorded: { terminalCode: null, inboundEnded: null, incomplete: null },
+      local: null,
+    },
+  );
+  assert.deepEqual(
+    descriptiveEvidence(
+      { n: 15, event: "stream-frame", cellId: "S1", body: { receivedMessages: [{}, {}, {}] } },
+      sourceCells,
+      localCells,
+    ),
+    { recorded: { receivedMessages: 3 }, localFrames: 2 },
+  );
+  assert.deepEqual(
+    descriptiveEvidence(
+      { n: 16, event: "stream-frame", cellId: "S9", body: {} },
+      sourceCells,
+      localCells,
+    ),
+    { recorded: { receivedMessages: 0 }, localFrames: 0 },
+  );
+  assert.equal(
+    descriptiveEvidence(
+      { n: 17, event: "stream-write-end", cellId: "S1" },
+      sourceCells,
+      localCells,
+    ),
+    undefined,
+  );
+});
+
+test("the difference log is bounded", () => {
+  const d = createDescriptiveDifferences({ profile: "emulator", mode: "descriptive" });
+  const error = new Error("native receive semantic mismatch");
+  for (let i = 0; i < MAX_DIFFERENCES; i++) d.record({ sourceN: i }, error);
+  assert.equal(d.entries.length, MAX_DIFFERENCES);
+  assert.throws(() => d.record({ sourceN: -1 }, error), /descriptive difference bound/);
+  assert.equal(d.entries.length, MAX_DIFFERENCES);
 });

@@ -388,7 +388,8 @@ mod tests {
 
         fn open(&self) -> impl Fn(&Path) -> Option<Opened> + '_ {
             |path| {
-                let text = format!("text of {}", path.display());
+                // `/` on every platform, so the expected texts read the same on Windows.
+                let text = format!("text of {}", path.display()).replace('\\', "/");
                 self.0
                     .get(path)
                     .map(|stat| Opened::new(*stat, move || Ok(text)))
@@ -890,7 +891,7 @@ mod tests {
                 if let Some((name, s)) = candidate {
                     let shown = if i == last { PathBuf::from(name) } else { dirs[i].join(name) };
                     let file_ok = trusted(s.owner) && s.mode & 0o002 == 0;
-                    let text = Ok(format!("text of {}", dirs[i].join(name).display()));
+                    let text = Ok(format!("text of {}", dirs[i].join(name).display()).replace('\\', "/"));
                     expected = if dir_ok && file_ok {
                         (if name == CANONICAL_FILE {
                             Discovered::Canonical(shown, text)

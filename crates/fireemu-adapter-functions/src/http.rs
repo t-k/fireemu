@@ -1005,8 +1005,8 @@ fn resolve_route<'a>(runtime: &FunctionsRuntime, path: &'a str) -> Result<Route<
 /// runner once the daemon has verified and re-inserted both credentials. Without the trusted
 /// protocol a callable gets the raw list too, except that a callable that declares
 /// `consumeAppCheckToken: true`, or whose value could not be observed, never gets an App Check
-/// token: nothing verified it, and the wrapper would consume it against production. (With the
-/// trusted protocol an unobserved value fails startup, so only `Enabled` reaches the proxy.)
+/// token: nothing verified it, and the wrapper would consume it against production. With the
+/// trusted protocol the same callables answer a valid token with `501`.
 fn sanitize_credentials(
     runtime: &FunctionsRuntime,
     function: &str,
@@ -1014,21 +1014,21 @@ fn sanitize_credentials(
     headers: Vec<(String, String)>,
 ) -> Result<Vec<(String, String)>, ProxiedResponse> {
     use fireemu_core_functions::manifest::ConsumeAppCheckToken;
-    let consumption = callable_consumption(runtime, function);
+    // An unobserved value counts as consuming. With the trusted protocol startup already
+    // refuses it, so there that half only matters for a runtime assembled without that check.
+    let may_consume = matches!(
+        callable_consumption(runtime, function),
+        Some(ConsumeAppCheckToken::Enabled | ConsumeAppCheckToken::Undetermined)
+    );
     let (Some(trust), Some(enforce_app_check)) = (
         runtime.callable_trust(),
         runtime.callable_enforces_app_check(function),
     ) else {
-        return Ok(
-            if matches!(
-                consumption,
-                Some(ConsumeAppCheckToken::Enabled | ConsumeAppCheckToken::Undetermined)
-            ) {
-                crate::callable::without_app_check_token(headers)
-            } else {
-                headers
-            },
-        );
+        return Ok(if may_consume {
+            crate::callable::without_app_check_token(headers)
+        } else {
+            headers
+        });
     };
     // The credential fields are collected separately and lossily: a value that is not
     // renderable as text must still count as an instance, or a second copy could hide behind
@@ -1038,7 +1038,7 @@ fn sanitize_credentials(
     match trust.sanitize(&crate::callable::CallableRequest {
         function,
         enforce_app_check,
-        consume_app_check_token: consumption == Some(ConsumeAppCheckToken::Enabled),
+        consume_app_check_token: may_consume,
         headers: &headers,
         app_check: &presented_app_check,
         authorization: &presented_auth,

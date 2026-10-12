@@ -2208,11 +2208,20 @@ async fn without_app_check_a_token_consuming_callable_runs_without_the_token() {
 #[tokio::test]
 async fn with_app_check_a_valid_token_for_a_consuming_callable_is_refused_as_unimplemented() {
     for profile in PROFILES {
-        for enforce in [true, false] {
-            let h = start_consuming(true, enforce, profile).await;
+        for (consume, enforce) in [
+            ("enabled", true),
+            ("enabled", false),
+            ("undetermined", false),
+        ] {
+            // Startup refuses an undetermined value with App Check, so that row checks the
+            // proxy on its own: it fails closed as well.
+            let h = start_consuming_as(true, consume, enforce, profile).await;
             let token = h.token();
             let (status, body) = h.call("guarded", &[("x-firebase-appcheck", &token)]).await;
-            assert_eq!(status, 501, "{profile:?} enforce={enforce}: {body}");
+            assert_eq!(
+                status, 501,
+                "{profile:?} consume={consume} enforce={enforce}: {body}"
+            );
             assert_eq!(body["error"]["status"], "UNIMPLEMENTED");
             assert_eq!(
                 body["error"]["details"]["reason"],

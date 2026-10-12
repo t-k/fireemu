@@ -155,13 +155,33 @@ test("the 1390 rule says headers were neither recorded nor compared", () => {
           "status, header semantics and body content are equal; headers were neither recorded nor compared"),
     ],
     ["no disclosure", (c) => (c.comparison.rules["1390"] = "status and body content are equal")],
-    ["no 1404", (c) => delete c.comparison.rules["1404"]],
   ]) {
     const fixture = committed();
     change(fixture);
     const hashOf = rebind(fixture.closure, fixture.comparison);
     assert.throws(() => check(fixture.closure, fixture.comparison, hashOf), /1390|1404/, name);
   }
+});
+
+test("the 1404 clarification must be defined even when no row cites it", () => {
+  const fixture = committed();
+  for (const row of fixture.comparison.rows)
+    row.rules = row.rules.filter((rule) => rule !== "1404");
+  delete fixture.comparison.rules["1404"];
+  const hashOf = rebind(fixture.closure, fixture.comparison);
+  assert.throws(
+    () => check(fixture.closure, fixture.comparison, hashOf),
+    /rule 1404 \(the 1390 clarification\)/,
+  );
+});
+
+test("the disclosed excluded steps name exactly the excluded coordinates", () => {
+  const fixture = committed();
+  delete fixture.closure.knownDifferences.restNegativeCache.excludedSteps["/conditions/14/cases/2"];
+  assert.throws(
+    () => check(fixture.closure, fixture.comparison),
+    /restNegativeCache.excludedSteps/,
+  );
 });
 
 test("the REST Content-Type difference is disclosed", () => {

@@ -360,7 +360,8 @@ impl Products {
 /// it is also where `--export-on-exit` writes, so the run creates it.
 pub fn nothing_to_import(dir: &Path, export_on_exit: Option<&Path>) -> Option<String> {
     match std::fs::symlink_metadata(dir) {
-        Ok(metadata) if metadata.file_type().is_dir() => directory_is_empty(dir)
+        // `directory_is_empty` refuses anything but a real directory (a symlink, a file).
+        Ok(_) => directory_is_empty(dir)
             .then(|| "the directory is empty, so the suite starts with no data".to_owned()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let absolute = std::path::absolute(dir).ok()?;

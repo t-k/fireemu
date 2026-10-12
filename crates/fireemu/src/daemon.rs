@@ -981,6 +981,15 @@ enum DenialLine {
     Flush(std::sync::mpsc::SyncSender<()>),
 }
 
+/// The line that reports `missed` dropped denial lines, if any were dropped.
+fn dropped_denials_note(missed: u64) -> Option<String> {
+    (missed > 0).then(|| {
+        format!(
+            "note: {missed} Security Rules denial line(s) were dropped while stderr was not read"
+        )
+    })
+}
+
 /// The denial log of `rules.denialLog`: each denial is formatted where it is decided, which
 /// can be under a database or store lock, and written to stderr by a thread of its own, so a
 /// stderr nobody reads never blocks a request. Past [`DENIAL_LINE_QUEUE`] waiting lines,
@@ -997,9 +1006,9 @@ fn denial_line_writer() -> (fireemu_core_rules::denial::DenialLog, DenialFlush) 
             for message in receiver {
                 match message {
                     DenialLine::Line(line) => {
-                        let missed = counted.swap(0, Ordering::Relaxed);
-                        if missed > 0 {
-                            eprintln!("note: {missed} Security Rules denial line(s) were dropped while stderr was not read");
+                        if let Some(note) = dropped_denials_note(counted.swap(0, Ordering::Relaxed))
+                        {
+                            eprintln!("{note}");
                         }
                         eprintln!("note: {line}");
                     }
@@ -2404,6 +2413,15 @@ mod tests {
         assert!(super::firestore_wall_source(CompatibilityProfile::Strict, None).is_none());
         assert!(super::firestore_wall_source(CompatibilityProfile::Emulator, Some(wall)).is_none());
     }
+    #[test]
+    fn only_dropped_denial_lines_are_reported() {
+        assert_eq!(super::dropped_denials_note(0), None);
+        assert_eq!(
+            super::dropped_denials_note(3).as_deref(),
+            Some("note: 3 Security Rules denial line(s) were dropped while stderr was not read")
+        );
+    }
+
     /// The denial log never blocks its caller, even past its queue, and the shutdown's flush
     /// returns within its limit.
     #[test]

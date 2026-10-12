@@ -125,7 +125,7 @@ test("a COMPAT_VERIFIED PUBSUB cannot keep a PENDING row", () => {
   comparison.rows[0].status = "PENDING";
   comparison.rows[0].pendingReason = "x";
   const hashOf = rebind(closure, comparison);
-  assert.throws(() => check(closure, comparison, hashOf), /PENDING row/);
+  assert.throws(() => check(closure, comparison, hashOf), /COMPAT_VERIFIED with a PENDING row/);
 });
 
 test("a condition with a PENDING row cannot be VERIFIED", () => {
@@ -234,4 +234,129 @@ test("an excluded step needs its exclusion rule and the named steps", () => {
   const closure2 = committed().closure;
   hashOf = rebind(closure2, withoutRule);
   assert.throws(() => check(closure2, withoutRule, hashOf), /exclusion rule/);
+});
+
+test("each binding and bookkeeping field is checked on its own", () => {
+  const cases = [
+    ["closure parent", (f) => (f.closure.parent = "EVENTARC"), /closure parent/, false],
+    [
+      "mode",
+      (f) => (f.closure.perCaseAdjudication.mode = "other"),
+      /perCaseAdjudication binding/,
+      false,
+    ],
+    [
+      "second listed comparison",
+      (f) =>
+        f.closure.integratedRegression.comparisons.push({
+          ...f.closure.integratedRegression.comparisons[0],
+        }),
+      /exactly the pinned comparison/,
+      false,
+    ],
+    [
+      "listed sha256",
+      (f) => (f.closure.integratedRegression.comparisons[0].sha256 = "3".repeat(64)),
+      /exactly the pinned comparison/,
+      false,
+    ],
+    [
+      "listed rows",
+      (f) => (f.closure.integratedRegression.comparisons[0].rows += 1),
+      /exactly the pinned comparison/,
+      false,
+    ],
+    [
+      "production requests",
+      (f) => (f.closure.integratedRegression.productionRequests = 1),
+      /production/,
+      false,
+    ],
+    ["comparison summary", (f) => (f.comparison.summary.MATCH += 1), /comparison summary/, "pin"],
+    [
+      "regression summary",
+      (f) => (f.closure.integratedRegression.comparisons[0].summary = { MATCH: 1 }),
+      /integratedRegression summary/,
+      false,
+    ],
+    [
+      "cache statement",
+      (f) => (f.closure.knownDifferences.restNegativeCache.statement = "emulated"),
+      /NOT emulated/,
+      false,
+    ],
+    [
+      "cache coordinates",
+      (f) => f.closure.knownDifferences.restNegativeCache.affectedCoordinates.pop(),
+      /exactly the excluded coordinates/,
+      false,
+    ],
+  ];
+  for (const [name, change, expected, mode] of cases) {
+    const fixture = committed();
+    change(fixture);
+    let hashOf = sha256;
+    if (mode === "pin") {
+      const digest = hashOfObject(fixture.comparison)(COMPARISON_PATH);
+      fixture.closure.perCaseAdjudication.sha256 = digest;
+      fixture.closure.integratedRegression.comparisons[0].sha256 = digest;
+      for (const condition of fixture.closure.conditions)
+        condition.evidence.comparisonSha256 = digest;
+      hashOf = hashOfObject(fixture.comparison);
+    }
+    assert.throws(() => check(fixture.closure, fixture.comparison, hashOf), expected, name);
+  }
+});
+
+test("row checks refuse an extra row, a wrong coordinate and a PENDING row without a reason", () => {
+  const extra = committed();
+  extra.comparison.rows.push({ ...extra.comparison.rows[0], row: "pubsub/unknown#case" });
+  let hashOf = rebind(extra.closure, extra.comparison);
+  assert.throws(() => check(extra.closure, extra.comparison, hashOf), /unexpected row/);
+
+  const coordinate = committed();
+  coordinate.comparison.rows[4].coordinate = "/conditions/0/cases/0";
+  hashOf = rebind(coordinate.closure, coordinate.comparison);
+  assert.throws(
+    () => check(coordinate.closure, coordinate.comparison, hashOf),
+    /names \/conditions\/0\/cases\/0/,
+  );
+
+  const reason = committed();
+  const pending = reason.comparison.rows.find(({ status }) => status === "PENDING");
+  delete pending.pendingReason;
+  hashOf = rebind(reason.closure, reason.comparison);
+  assert.throws(() => check(reason.closure, reason.comparison, hashOf), /PENDING without a reason/);
+});
+
+test("a COMPAT_VERIFIED closure names the PENDING row it still holds", () => {
+  const { closure, comparison } = committed();
+  closure.parentStatus = "COMPAT_VERIFIED";
+  for (const condition of closure.conditions) condition.status = "VERIFIED";
+  closure.closureReview = { decision: "APPROVED" };
+  assert.throws(() => check(closure, comparison), /COMPAT_VERIFIED with a PENDING row/);
+});
+
+test("an excluded step outside the negative cache is refused even when the disclosure lists it", () => {
+  const { closure, comparison } = committed();
+  const index = comparison.rows.findIndex(
+    ({ coordinate }) => coordinate === "/conditions/0/cases/0",
+  );
+  comparison.rows[index].status = "EXCLUDED_STEP";
+  comparison.rows[index].rules = ["1385"];
+  comparison.rows[index].excludedSteps = [{ owner: "1385", reason: "x" }];
+  comparison.rows[index + 1].status = "EXCLUDED_STEP";
+  comparison.rows[index + 1].rules = ["1385"];
+  comparison.rows[index + 1].excludedSteps = [{ owner: "1385", reason: "x" }];
+  closure.knownDifferences.restNegativeCache.affectedCoordinates.push("/conditions/0/cases/0");
+  const hashOf = rebind(closure, comparison);
+  assert.throws(() => check(closure, comparison, hashOf), /outside the REST negative cache/);
+});
+
+test("a rule the comparison does not define is refused", () => {
+  const { closure, comparison } = committed();
+  const index = comparison.rows.findIndex(({ status }) => status === "MATCH");
+  comparison.rows[index].rules = ["9999"];
+  const hashOf = rebind(closure, comparison);
+  assert.throws(() => check(closure, comparison, hashOf), /unknown rule 9999/);
 });

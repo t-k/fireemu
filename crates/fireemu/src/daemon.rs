@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::RestState;
-use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
+use fireemu_adapter_grpc::rules::{NoticeEvent, NoticeLimit, RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::serve::serve_multiplexed;
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_http::identity_toolkit::{AuthState, AuthWallClock};
@@ -38,6 +38,7 @@ use super::{
 
 struct BoundStartup {
     cfg: RuntimeConfig,
+    config_origin: String,
     only: Selection,
     verbosity: Verbosity,
     import: Option<PathBuf>,
@@ -70,6 +71,7 @@ struct BoundStartup {
 
 struct ServiceAssembly {
     cfg: RuntimeConfig,
+    config_origin: String,
     only: Selection,
     verbosity: Verbosity,
     import: Option<PathBuf>,
@@ -517,6 +519,7 @@ fn idp_assertion_note_for(
 fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     let BoundStartup {
         cfg,
+        config_origin,
         only,
         verbosity,
         import,
@@ -577,6 +580,15 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                 cfg.pubsub_push_minimum_redelivery_interval_millis,
             ),
         );
+    }
+    // The client only sees production's (or the official emulator's) refusal, which does not
+    // say how to load rules.
+    if !quiet {
+        storage_rules
+            .registry
+            .set_no_rules_notice(fireemu_adapter_http::storage::NoRulesNotice(Arc::new(
+                |event| eprintln!("{}", storage_no_rules_warning(event)),
+            )));
     }
     // The buckets the deployed Storage triggers name exist for the strict profile, as in production.
     if let Some(runtime) = &functions_runtime {
@@ -829,6 +841,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     Ok(ServiceAssembly {
         log_bus,
         cfg,
+        config_origin,
         only,
         verbosity,
         import,
@@ -885,6 +898,40 @@ fn firestore_wall_source(
     Some(Arc::new(move || wall_clock.now()))
 }
 
+/// The warning printed the first time a client request to a database is refused because no
+/// Firestore Security Rules are loaded for it, and once when further ones are suppressed.
+fn firestore_no_rules_warning(event: NoticeEvent<'_>) -> String {
+    let database = match event {
+        NoticeEvent::First(database) => database,
+        NoticeEvent::Suppressed => {
+            return format!(
+                "warning: firestore: further no-rules warnings are suppressed ({} databases were reported)",
+                NoticeLimit::LIMIT
+            )
+        }
+    };
+    format!(
+        "warning: firestore: a client request to database {database:?} was refused with PERMISSION_DENIED because no Security Rules are loaded for it (the strict profile refuses client requests without rules, as production does); set firestore.rules in firebase.json, rules.source in fireemu.json, or PUT /v1/rules. Reported once per database."
+    )
+}
+
+/// The warning printed the first time an end-user request on a bucket is refused because no
+/// Storage Rules are loaded for it, and once when further ones are suppressed.
+fn storage_no_rules_warning(event: NoticeEvent<'_>) -> String {
+    let bucket = match event {
+        NoticeEvent::First(bucket) => bucket,
+        NoticeEvent::Suppressed => {
+            return format!(
+            "warning: storage: further no-rules warnings are suppressed ({} buckets were reported)",
+            NoticeLimit::LIMIT
+        )
+        }
+    };
+    format!(
+        "warning: storage: an end-user request on bucket {bucket:?} was refused because no Storage Rules are loaded for it; set storage.rules in firebase.json or fireemu.json. Reported once per bucket."
+    )
+}
+
 /// The Firestore enforcer's settings that follow from the compatibility profile.
 fn firestore_profile_settings(
     enforcer: RulesEnforcer,
@@ -902,6 +949,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     let ServiceAssembly {
         log_bus,
         cfg,
+        config_origin,
         only,
         verbosity,
         import,
@@ -1011,6 +1059,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         print_banner(
             &cfg,
             if exec_mode { "exec" } else { "up" },
+            &config_origin,
             &addrs,
             functions_runtime.as_deref(),
         );
@@ -1038,7 +1087,9 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         if let Some(note) = ui_note {
             println!("{note}");
         }
-        print_rules_status(&cfg, rules.snapshot().is_ok_and(|r| r.is_loaded()));
+        if addrs.firestore.is_some() {
+            print_rules_status(&cfg, rules.snapshot().is_ok_and(|r| r.is_loaded()));
+        }
         if addrs.auth.is_some() {
             if cfg.auth_log_action_codes {
                 println!("  auth codes:       email action links and SMS codes are printed here as they are issued (they are credentials: do not forward this output to CI or shared logs; auth.logActionCodes = false silences them)");
@@ -1068,11 +1119,17 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
             Some(source) => enforcer.with_wall_clock(source),
             None => enforcer,
         };
-        Arc::new(
-            firestore_profile_settings(enforcer, &cfg)
-                .with_registry(registry.clone())
-                .with_database_rules(database_rules.clone()),
-        )
+        let enforcer = firestore_profile_settings(enforcer, &cfg)
+            .with_registry(registry.clone())
+            .with_database_rules(database_rules.clone());
+        // The client only sees production's denial, which does not say that nothing is loaded.
+        Arc::new(if quiet {
+            enforcer
+        } else {
+            enforcer.with_no_ruleset_notice(Arc::new(|event| {
+                eprintln!("{}", firestore_no_rules_warning(event));
+            }))
+        })
     });
     let mut service = GatewayService::local(gateway.clone(), backend.clone());
     if let Some(e) = &enforcer {
@@ -1553,6 +1610,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         export_on_exit,
         ready_file,
         owner_stdin,
+        config_origin,
     } = options;
     let quiet = verbosity == Verbosity::Quiet;
     let auth_wall_clock = if cfg.clock_start_pinned {
@@ -1896,6 +1954,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         }
         let assembly = assemble_adapters(BoundStartup {
                 cfg,
+                config_origin,
                 only,
                 verbosity,
                 import,
@@ -1950,6 +2009,29 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    /// The per-name warnings name the resource; past the limit a single line says the rest are
+    /// suppressed.
+    #[test]
+    fn no_rules_warnings_name_the_resource_and_the_suppression() {
+        use super::{firestore_no_rules_warning, storage_no_rules_warning, NoticeEvent};
+        let first = firestore_no_rules_warning(NoticeEvent::First("(default)"));
+        assert!(first.starts_with("warning: firestore:") && first.contains("\"(default)\""));
+        let first = storage_no_rules_warning(NoticeEvent::First("b.appspot.com"));
+        assert!(first.starts_with("warning: storage:") && first.contains("\"b.appspot.com\""));
+        for (line, what) in [
+            (
+                firestore_no_rules_warning(NoticeEvent::Suppressed),
+                "warning: firestore: further no-rules warnings are suppressed (32 databases",
+            ),
+            (
+                storage_no_rules_warning(NoticeEvent::Suppressed),
+                "warning: storage: further no-rules warnings are suppressed (32 buckets",
+            ),
+        ] {
+            assert!(line.starts_with(what), "{line}");
+        }
+    }
+
     #[test]
     fn the_strict_profile_waits_20_s_on_both_clocks_and_the_emulator_profile_15_s_on_the_wall_clock(
     ) {

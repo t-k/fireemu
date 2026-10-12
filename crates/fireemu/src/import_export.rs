@@ -4335,6 +4335,7 @@ mod tests {
             app_check_policy: None,
             admin_capability: None,
             token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+            allow_unsigned_id_tokens: false,
             control_token: None,
         });
         let endpoints = super::Endpoints {
@@ -5081,6 +5082,7 @@ mod tests {
                 app_check_policy: None,
                 admin_capability: None,
                 token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+                allow_unsigned_id_tokens: false,
                 control_token: None,
             });
             (backend, storage)
@@ -5709,6 +5711,7 @@ mod tests {
             app_check_policy: None,
             admin_capability: None,
             token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+            allow_unsigned_id_tokens: false,
             control_token: None,
         });
         let endpoints = super::Endpoints {

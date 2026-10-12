@@ -8,6 +8,8 @@
 //! fireemu emulators:export <dir> [options]
 //! fireemu doctor
 //! fireemu capabilities
+//! fireemu --help | -h | help [command]
+//! fireemu <command> --help | -h
 //!
 //! options: [--config <file>] [--firebase-json firebase.json] [--project <id|alias>]
 //!          [--only auth,firestore,storage,functions,pubsub,appcheck]
@@ -23,6 +25,9 @@
 //! command with the emulator host variables once every listener is bound, stops everything
 //! when the command exits and exits with its status (SIGINT / SIGTERM are forwarded to the
 //! command).
+//!
+//! `--help` is answered before a command parses anything (see the `help` module); for `exec`
+//! it only counts before `--`, so `fireemu exec -- cmd --help` runs `cmd --help`.
 //!
 //! `emulators:start`, `emulators:exec` and `emulators:export` are the official command
 //! spellings; the first two are exact aliases of `up` and `exec`.
@@ -42,6 +47,7 @@ mod control;
 mod daemon;
 mod doctor;
 mod functions;
+mod help;
 mod hub;
 mod import_export;
 mod init;
@@ -70,7 +76,7 @@ use crate::config::{RuntimeConfig, Selection};
 const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
 
 fn usage() -> ExitCode {
-    eprintln!("usage: fireemu init [--profile strict|emulator] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities\n       fireemu --version");
+    eprintln!("usage: fireemu init [--profile strict|emulator] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities\n       fireemu --version\n       fireemu --help | fireemu help <command>\n\nrun `fireemu --help` for the commands, or `fireemu <command> --help` for the options of one");
     ExitCode::from(2)
 }
 
@@ -251,6 +257,10 @@ fn runtime_thread_counts(
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(code) = help_command(&args) {
+        return code;
+    }
+    let command = args.first().map_or("", String::as_str);
     match args.first().map(String::as_str) {
         // Version is answered before anything else so tooling that records which build it
         // drove (benchmarks, packaging) never has to start a daemon to find out.
@@ -265,38 +275,30 @@ fn main() -> ExitCode {
                 println!("next: fireemu up --config fireemu.json");
                 ExitCode::SUCCESS
             }
-            Err(e) => fail(&e),
+            Err(e) => fail_for(command, &e),
         },
         Some("up" | "emulators:start") => match parse_options(&args[1..], OptionContext::Start) {
             Ok((options, None)) => daemon::run(options, None),
             Ok((_, Some(_))) => unreachable!("start does not accept a positional argument"),
-            Err(e) => fail(&e),
+            Err(e) => fail_for(command, &e),
         },
         #[cfg(windows)]
         Some("__test-world-command") => supervise_world_command(&args[1..]),
         Some("exec" | "emulators:exec") => match parse_exec(&args[1..]) {
             Ok((options, plan)) => daemon::run(options, Some(plan)),
-            Err(e) => fail(&e),
+            Err(e) => fail_for(command, &e),
         },
         Some("emulators:export") => match export_command(&args[1..]) {
             Ok(()) => ExitCode::SUCCESS,
-            Err(e) => fail(&e),
+            Err(e) => fail_for(command, &e),
         },
         Some("doctor") => match args.get(1).map(String::as_str) {
             None => doctor::run(),
             Some("--connect") => match args.get(2) {
                 Some(url) if args.len() == 3 => doctor::run_connect(url),
-                _ => fail(&CliError {
-                    code: 2,
-                    message: "usage: fireemu doctor [--connect http://127.0.0.1:<control port>]"
-                        .to_owned(),
-                }),
+                _ => fail(&doctor_usage()),
             },
-            Some(_) => fail(&CliError {
-                code: 2,
-                message: "usage: fireemu doctor [--connect http://127.0.0.1:<control port>]"
-                    .to_owned(),
-            }),
+            Some(_) => fail(&doctor_usage()),
         },
         // The manifest describes the behaviour of one profile, so the command takes the same
         // options the daemon does and reports the profile they resolve to.
@@ -313,7 +315,7 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
             Ok((_, Some(_))) => unreachable!("capabilities does not accept a positional argument"),
-            Err(e) => fail(&e),
+            Err(e) => fail_for(command, &e),
         },
         _ => usage(),
     }
@@ -323,6 +325,76 @@ fn main() -> ExitCode {
 fn fail(e: &CliError) -> ExitCode {
     eprintln!("error: {}", e.message);
     ExitCode::from(e.code)
+}
+
+/// The pointer to a command's options that an unknown argument is answered with.
+fn options_hint(command: &str) -> String {
+    format!("run `fireemu {command} --help` for the options")
+}
+
+/// Whether a usage failure is the parsers' "unknown argument" refusal.
+fn is_unknown_argument(e: &CliError) -> bool {
+    e.code == 2
+        && (e.message.starts_with("unknown argument ")
+            || e.message.starts_with("unknown init argument "))
+}
+
+/// [`fail`] for a failure of `command`: an unknown argument also says where the options are.
+fn fail_for(command: &str, e: &CliError) -> ExitCode {
+    if is_unknown_argument(e) {
+        eprintln!("error: {} ({})", e.message, options_hint(command));
+        ExitCode::from(e.code)
+    } else {
+        fail(e)
+    }
+}
+
+fn doctor_usage() -> CliError {
+    CliError::usage(format!(
+        "usage: fireemu doctor [--connect http://127.0.0.1:<control port>] ({})",
+        options_hint("doctor")
+    ))
+}
+
+/// Answers `--help`, `-h`, `help` and `<command> --help`; `None` when `args` ask for neither.
+///
+/// This runs before any command parses its arguments, so help is never delayed or replaced by
+/// a configuration error, and nothing is started or written.
+fn help_command(args: &[String]) -> Option<ExitCode> {
+    let first = args.first()?.as_str();
+    match first {
+        "--help" | "-h" => {
+            print!("{}", help::overall_help());
+            Some(ExitCode::SUCCESS)
+        }
+        "help" => Some(
+            match args[1..].iter().map(String::as_str).collect::<Vec<_>>()[..] {
+                [] | ["--help" | "-h"] => {
+                    print!("{}", help::overall_help());
+                    ExitCode::SUCCESS
+                }
+                [name] => match help::Topic::for_command(name) {
+                    Some(topic) => {
+                        print!("{}", help::command_help(topic));
+                        ExitCode::SUCCESS
+                    }
+                    None => fail(&CliError::usage(format!(
+                        "unknown command {name}; the commands are {}",
+                        help::command_names()
+                    ))),
+                },
+                _ => fail(&CliError::usage("usage: fireemu help [command]")),
+            },
+        ),
+        name => {
+            let topic = help::Topic::for_command(name)?;
+            if !help::requested(topic, &args[1..]) {
+                return None;
+            }
+            print!("{}", help::command_help(topic));
+            Some(ExitCode::SUCCESS)
+        }
+    }
 }
 
 /// `fireemu emulators:export <dir> [--project <id>] [--force]`.
@@ -1938,6 +2010,7 @@ fn storage_state(
         app_check_policy,
         admin_capability: Some(admin_capability),
         token_acceptance: cfg.token_acceptance,
+        allow_unsigned_id_tokens: cfg.auth_allow_unsigned_id_tokens,
         control_token: Some(control_token),
     });
     state

@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use fireemu_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, ServiceAdmission};
 use fireemu_core_app_check::header::classify_app_check_header;
 use fireemu_core_app_check::verify::BaselineMode;
-use fireemu_core_auth::jwt::{verify_rules_token_for_project, TokenAcceptance};
+use fireemu_core_auth::jwt::{verify_rules_token_for_project, RulesTokenPolicy, TokenAcceptance};
 use fireemu_core_rules::eval::{
     evaluate_request_with, Decision, DocumentAccess, Method, RequestContext, RulesService,
 };
@@ -646,6 +646,11 @@ pub struct StorageState {
     /// profile decides (`emulator` admits the official emulator's mock tokens, `strict`
     /// does not).
     pub token_acceptance: TokenAcceptance,
+    /// `auth.allowUnsignedIdTokens`: whether an unsigned emulator ID token (the `mockUserToken`
+    /// of `@firebase/rules-unit-testing`) that does not verify is admitted as a mock token, with
+    /// `request.auth` built from its claims (owner ledger 1393). Only the token's admission
+    /// follows it; every other answer stays the profile's.
+    pub allow_unsigned_id_tokens: bool,
     /// The run's control token, as [`crate::control::ControlState::control_token`] holds it.
     /// `PUT /internal/setRules` is the one privileged route on this port, and a browser
     /// request (one carrying `Origin` or any `Sec-Fetch-*` field) has to present it, exactly
@@ -2218,7 +2223,7 @@ impl StorageState {
             token,
             &store,
             self.now(),
-            self.token_acceptance,
+            RulesTokenPolicy::new(self.token_acceptance, self.allow_unsigned_id_tokens),
             &expected_rules_project,
         ) {
             Ok(decoded) => decoded,

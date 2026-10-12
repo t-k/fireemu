@@ -157,3 +157,47 @@ export function judgeOrderingCell(sourcePulls, localPulls) {
     reason: "owner 1392: per-key order, no keyed/unkeyed mixing and delivered set equal",
   };
 }
+
+// Owner 1392 cell results for every ordering cell present in the source exchanges. `success` is the
+// replay's own success predicate; only successful Pulls on the ordered subscription are judged.
+export function orderingCellResults(sourceExchanges, localExchanges, success) {
+  const results = {};
+  for (const cell of ORDERING_IDENTITY_CASES) {
+    const original = sourceExchanges.filter((e) => e.case === cell);
+    if (original.length === 0) continue;
+    const created = original
+      .filter((e) => e.op === "createSubscription")
+      .map((e) => orderedSubscriptionOf(e.request))
+      .filter(Boolean);
+    if (created.length !== 1)
+      throw new Error("ordering cell needs exactly one ordered subscription");
+    const [orderedSubscription] = created;
+    const pulls = (exchanges) =>
+      exchanges
+        .filter(
+          (e) =>
+            e.case === cell &&
+            e.op === "pull" &&
+            success(e) &&
+            subscriptionOf(e.request) === orderedSubscription,
+        )
+        .map((e) => e.response.body);
+    const sourcePulls = pulls(original),
+      localPulls = pulls(localExchanges);
+    const delivered = (bodies) =>
+      new Set(
+        bodies.flatMap((b) =>
+          (b?.receivedMessages ?? []).map((d) => JSON.stringify(identity(d.message))),
+        ),
+      ).size;
+    results[cell] = {
+      orderedSubscription,
+      sourcePulls: sourcePulls.length,
+      localPulls: localPulls.length,
+      sourceDelivered: delivered(sourcePulls),
+      localDelivered: delivered(localPulls),
+      ...judgeOrderingCell(sourcePulls, localPulls),
+    };
+  }
+  return results;
+}

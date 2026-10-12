@@ -6,6 +6,7 @@ import {
   createOrderingIdentityAck,
   judgeOrderingCell,
   orderedSubscriptionOf,
+  orderingCellResults,
   subscriptionOf,
 } from "./pubsub-production/ordering-identity-ack.mjs";
 
@@ -294,4 +295,81 @@ test("the ordered subscription is the one created with message ordering enabled"
     { rpc: "Subscriber/CreateSubscription", body: { enableMessageOrdering: true } },
   ])
     assert.equal(orderedSubscriptionOf(request), null, JSON.stringify(request));
+});
+
+test("cell results judge the ordered subscription's successful Pulls of each ordering cell", () => {
+  const ordered = "projects/p/subscriptions/fe1-or-r-s",
+    plain = "projects/p/subscriptions/fe1-or-r-plain";
+  const ok = (step, op, request, body) => ({
+    case: "ordering/rest",
+    step,
+    op,
+    request,
+    response: { status: 200, body },
+  });
+  const exchanges = (deliveries) => [
+    ok(
+      "02",
+      "createSubscription",
+      { method: "PUT", path: `/v1/${ordered}`, body: { enableMessageOrdering: true } },
+      {},
+    ),
+    ok("03", "createSubscription", { method: "PUT", path: `/v1/${plain}`, body: {} }, {}),
+    ok("07", "pull", { method: "POST", path: `/v1/${ordered}:pull`, body: {} }, deliveries[0]),
+    ok("08", "pull", { method: "POST", path: `/v1/${ordered}:pull`, body: {} }, deliveries[1]),
+    ok(
+      "17",
+      "pull",
+      { method: "POST", path: `/v1/${plain}:pull`, body: {} },
+      pull(["zz", ""], ["a0", "k1"]),
+    ),
+    {
+      ...ok(
+        "19",
+        "pull",
+        { method: "POST", path: `/v1/${ordered}:pull`, body: {} },
+        pull(["qq", "k9"]),
+      ),
+      response: { status: 500, body: pull(["qq", "k9"]) },
+    },
+    {
+      case: "other/rest",
+      op: "pull",
+      request: { method: "POST", path: `/v1/${ordered}:pull`, body: {} },
+      response: { status: 200, body: pull(["ww", "k3"]) },
+    },
+  ];
+  const success = (row) => row.response?.status >= 200 && row.response.status < 300;
+  const source = exchanges([pull(["n", ""]), pull(["a0", "k1"])]);
+  const same = orderingCellResults(
+    source,
+    exchanges([pull(["n", ""]), pull(["a0", "k1"])]),
+    success,
+  );
+  assert.deepEqual(same["ordering/rest"], {
+    orderedSubscription: ordered,
+    sourcePulls: 2,
+    localPulls: 2,
+    sourceDelivered: 2,
+    localDelivered: 2,
+    verdict: "MATCH",
+    reason: "owner 1392: per-key order, no keyed/unkeyed mixing and delivered set equal",
+  });
+  assert.equal(same["ordering/grpc"], undefined);
+  const short = orderingCellResults(
+    source,
+    exchanges([pull(["n", ""]), { receivedMessages: [] }]),
+    success,
+  );
+  assert.equal(short["ordering/rest"].verdict, "DIVERGES");
+  assert.equal(short["ordering/rest"].localDelivered, 1);
+  assert.throws(
+    () =>
+      orderingCellResults(
+        source.filter((e) => e.step !== "02"),
+        source,
+        success,
+      ),
+    /ordered subscription/,
+  );
 });

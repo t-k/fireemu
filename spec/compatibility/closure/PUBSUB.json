@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "PUBSUB",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "inventoryStatus": "FROZEN",
   "frozenOn": "2026-09-30",
   "freezeAuthority": "docs.local/instructions/owner-decisions.md (2026-09-30 PUBSUB and EVENTARC scope: coordinator rulings)",
@@ -11,8 +11,35 @@
     "region": "us-central1"
   },
   "closureReview": {
-    "decision": "PENDING",
-    "note": "The independent parent review (/conditions/17/cases/0) is pending; the per-case proof v2 named by every condition is its input. The only row still PENDING in the adjudication is /conditions/17/cases/0."
+    "decision": "APPROVED",
+    "decidedOn": "2026-10-12",
+    "decisionRef": "docs.local/instructions/owner-decisions.md (ledger 1407)",
+    "reviewedCommit": "76acec2b696c3f1025b68b126d836b8d21daab20",
+    "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a",
+    "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+    "reviews": [
+      {
+        "reportPath": "docs.local/reviews/2026-10-12-pubsub-parent-closure-review.md",
+        "reportSha256": "2961038820ad8880151e80e855beaba411396c2a46724154ca20f70d32e502cb",
+        "outcome": "Opus general-purpose: initial CHANGES REQUESTED, delta 1 and delta 2 APPROVE"
+      },
+      {
+        "reportPath": "docs.local/reviews/2026-10-12-pubsub-parent-closure-review-codex.md",
+        "reportSha256": "788cf12b4b92c0133a52ea48627155039c163873a096228da855836a225d3dc5",
+        "outcome": "Codex: initial CHANGES REQUESTED"
+      },
+      {
+        "reportPath": "docs.local/reviews/2026-10-12-pubsub-parent-closure-review-codex-delta.md",
+        "reportSha256": "da88692401fa035869e7a1ffd6fabbf4e63be16cbcdd9305d32c4597b221aef6",
+        "outcome": "Codex: delta 1 CHANGES REQUESTED"
+      },
+      {
+        "reportPath": "docs.local/reviews/2026-10-12-pubsub-parent-closure-review-codex-delta2.md",
+        "reportSha256": "f97db1d1faec3b1e9342267016a861ab4eca2c6f37989a90c93cc4f0c20631b5",
+        "outcome": "Codex: delta 2 APPROVE"
+      }
+    ],
+    "note": "Two independent parent reviews approved the per-case adjudication at reviewedCommit for the bound binary a97b87c1 built from 01d284ca7 (/conditions/17/cases/0). The flip commit applies the remaining minor D wording item. Known differences and excluded steps are unchanged."
   },
   "scopeDecisions": [
     {
@@ -89,12 +116,12 @@
         "rest",
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/0",
           "/cases/1",
@@ -128,12 +155,12 @@
         "rest",
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/6",
           "/cases/7",
@@ -165,12 +192,12 @@
         "rest",
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/12",
           "/cases/13",
@@ -201,12 +228,12 @@
         "rest",
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/15",
           "/cases/16",
@@ -247,12 +274,12 @@
         "rest",
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/21",
           "/cases/22",
@@ -292,12 +319,12 @@
         "rest",
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/33",
           "/cases/34",
@@ -334,12 +361,12 @@
         "rest",
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/39",
           "/cases/40",
@@ -376,12 +403,12 @@
         "rest",
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/48",
           "/cases/49",
@@ -417,12 +444,12 @@
         "rest",
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/54",
           "/cases/55",
@@ -459,12 +486,12 @@
         "rest",
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/62",
           "/cases/63",
@@ -503,12 +530,12 @@
         "rest",
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/68",
           "/cases/69",
@@ -546,12 +573,12 @@
         "rest",
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/78",
           "/cases/79",
@@ -584,12 +611,12 @@
         "rest",
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/83",
           "/cases/84",
@@ -627,12 +654,12 @@
       "transports": [
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/89",
           "/cases/90",
@@ -676,12 +703,12 @@
         "rest",
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/100",
           "/cases/101",
@@ -721,12 +748,12 @@
         "rest",
         "grpc"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/110",
           "/cases/111",
@@ -758,12 +785,12 @@
       "transports": [
         "artifact"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/116",
           "/cases/117",
@@ -790,17 +817,17 @@
       "transports": [
         "artifact"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
         "caseProofSelectors": [
           "/cases/121"
         ],
         "rows": {
-          "PENDING": 1
+          "MATCH": 1
         },
         "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
         "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
@@ -810,7 +837,7 @@
   "perCaseAdjudication": {
     "mode": "per-case-adjudication",
     "path": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-    "sha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141"
+    "sha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739"
   },
   "integratedRegression": {
     "integrationCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
@@ -822,13 +849,12 @@
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "sha256": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+        "sha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
         "rows": 227,
         "summary": {
           "EXCLUDED_STEP": 6,
-          "MATCH": 27,
-          "MATCH_BY_RELATION": 193,
-          "PENDING": 1
+          "MATCH": 28,
+          "MATCH_BY_RELATION": 193
         }
       }
     ],
@@ -923,13 +949,13 @@
       ]
     },
     "restContentType": {
-      "statement": "REST Content-Type: the release binary a97b87c1 answers JSON with Content-Type application/json, while production sends application/json; charset=UTF-8. Found in header-bearing production captures outside the comparison set (two GET-404 cause probes); no comparison in this closure judges headers. Owner 1404 has the charset fixed as a separate change in v0.17; that fix is not part of the binary this closure is bound to.",
+      "statement": "REST Content-Type: the bound binary a97b87c1 answers JSON with Content-Type application/json, while production sends application/json; charset=UTF-8. Found in header-bearing production captures outside the comparison set (two GET-404 cause probes); no comparison in this closure judges headers. Owner 1404 has the charset fixed as a separate change in v0.17; that fix is not part of the binary this closure is bound to.",
       "rules": [
         "1404"
       ]
     },
     "restResponseHeaders": {
-      "statement": "REST response headers are not compared anywhere in this closure. In the header-bearing production captures production sends 10 response headers (alt-svc, content-encoding, content-type, date, server, transfer-encoding, vary, x-content-type-options, x-frame-options, x-xss-protection); the release binary sends 3 (content-type, content-length, date).",
+      "statement": "REST response headers are not compared anywhere in this closure. In the header-bearing production captures production sends 10 response headers (alt-svc, content-encoding, content-type, date, server, transfer-encoding, vary, x-content-type-options, x-frame-options, x-xss-protection); the bound binary a97b87c1 sends 3 (content-type, content-length, date).",
       "rules": [
         "1404"
       ]

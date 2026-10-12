@@ -522,6 +522,7 @@ test("the method states what each recording family compares on REST rows", () =>
   assert.match(comparison.method, /REST body bytes are not compared/);
   assert.match(comparison.method, /raw bytes only for recovered native Pull responses/);
   assert.match(comparison.method, /No comparison judges any response header/);
+  assert.match(comparison.method, /physicalVerdict also becomes DIVERGES when a timestamp proof/);
   assert.match(closure.knownDifferences.restResponseHeaders.statement, /10 response headers/);
   assert.match(closure.knownDifferences.restResponseHeaders.statement, /sends 3/);
 });

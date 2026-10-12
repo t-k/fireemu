@@ -10,10 +10,10 @@
   },
   "witnessRunPrefixNote": "witnessRunPrefixes are the first 8 characters of the private recording run ids replayed for the case; the original 2026-10-05 recordings are 14802609 and a8ed1cce.",
   "productionRequests": 0,
-  "method": "Per-case adjudication of the 122 frozen cases (18 conditions) against the final strict release binary. Every witness is a LOCAL strict replay of genuine production recordings on that binary; raw physical differences are retained in the private run outputs. A row status is the case verdict for each declared transport. Rules are owner decision ledger entries; 1391 and 1401 are coordinator readings recorded in the ledger. What is compared on REST rows: original r1/r2 rows: status and normalized body (no headers or wire length were recorded). H1 and A: status, normalized body and recorded bodyBytes equality. B: status and the semantic body; physical layout is kept as a debt, not compared. C: status and semantic body for the case verdict; bodyBytes and bodySha256 equality is the retained physical verdict. D: ok/code/status and the normalized body with timestamp evidence; for REST the physical check is only that the local body size and digest are well formed and within the caps and that the replay clock is bound, so REST body bytes are not compared (D compares raw bytes only for recovered native Pull responses). No comparison judges any response header. The original-row comparator sorts topics, subscriptions and snapshots list members before comparing (a base comparator rule, not an owner relation). Basis text names private evidence files of the per-case proof.",
+  "method": "Per-case adjudication of the 122 frozen cases (18 conditions) against the final strict release binary. Every witness is a LOCAL strict replay of genuine production recordings on that binary; raw physical differences are retained in the private run outputs. A row status is the case verdict for each declared transport. Rules are owner decision ledger entries; 1391 and 1401 are coordinator readings recorded in the ledger. What is compared on REST rows: original r1/r2 rows: status and normalized body (no headers or wire length were recorded). H1 and A: status, normalized body and recorded bodyBytes equality. B: status and the semantic body; physical layout is kept as a debt, not compared. C: status and semantic body for the case verdict; bodyBytes and bodySha256 equality is the retained physical verdict. D: ok/code/status and the normalized body with timestamp evidence; for REST the physical check is only that the local body size and digest are well formed and within the caps and that the replay clock is bound, so REST body bytes are not compared (D compares raw bytes only for recovered native Pull responses); the final physicalVerdict also becomes DIVERGES when a timestamp proof finds unequal source and local values. No comparison judges any response header. The original-row comparator sorts topics, subscriptions and snapshots list members before comparing (a base comparator rule, not an owner relation). Basis text names private evidence files of the per-case proof.",
   "caseProof": {
     "path": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-    "sha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
+    "sha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
     "note": "private (docs.local), not published"
   },
   "statuses": {
@@ -55,9 +55,8 @@
   },
   "summary": {
     "EXCLUDED_STEP": 6,
-    "MATCH": 27,
-    "MATCH_BY_RELATION": 193,
-    "PENDING": 1
+    "MATCH": 28,
+    "MATCH_BY_RELATION": 193
   },
   "rows": [
     {
@@ -3788,11 +3787,10 @@
       "row": "pubsub/closure#independent-approval",
       "transport": "artifact",
       "coordinate": "/conditions/17/cases/0",
-      "status": "PENDING",
+      "status": "MATCH",
       "rules": [],
       "witnessRunPrefixes": [],
-      "basis": "Independent parent review not yet held; the coordinator runs it next with this file as input.",
-      "pendingReason": "awaiting the independent parent review"
+      "basis": "Independent parent closure review APPROVED at work/claude-pubsub-closure-integration 76acec2b6 by two reviewers (ledger 1407): Opus general-purpose (docs.local/reviews/2026-10-12-pubsub-parent-closure-review.md: initial CHANGES REQUESTED, delta 1 and delta 2 APPROVE) and Codex (2026-10-12-pubsub-parent-closure-review-codex.md and -codex-delta.md CHANGES REQUESTED, -codex-delta2.md APPROVE), bound binary a97b87c1 from 01d284ca7. The remaining minor D wording item is applied in the flip commit."
     }
   ]
 }

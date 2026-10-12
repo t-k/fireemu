@@ -136,7 +136,7 @@
     "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-build.json": "d2cf20294a0acfb8e135cb734d8e6cad8c9d854549681cf316082d43c56b9aa4",
     "spec/compatibility/closure/evidence/FUNCTIONS-EVENTS-comparison.json": "6b6d0b8de46fae1d3dc75f94caf006ec1cef3d5d122841476b5e6ddfbd94a2d2",
     "spec/compatibility/closure/evidence/FUNCTIONS-HTTP-comparison.json": "659186bb0bcf4e0a1bb655fcf7cf9b32309c5a76d52cd9a76e6269e5504169d2",
-    "spec/compatibility/closure/evidence/PUBSUB-comparison.json": "c3afeb0f7daf7e0074dd8c9b24289160cb9fe682327d072a24901dc16fa30141",
+    "spec/compatibility/closure/evidence/PUBSUB-comparison.json": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
     "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-build.json": "c60dda3a1bba898642e83aa5033c5cddcb7b10397cf930ee1c8fd24a46cb5963",
     "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-calendar-comparison.json": "56b8939d64443fdc98dae28d1d2c56c843a350f21516d8958a5a0c3724742689",
     "spec/compatibility/closure/evidence/SCHEDULED-FUNCTIONS-delivery-comparison.json": "18fec42ecc67713698e1e63379590ad0dc22e70f0bc9518aec16e6c1aa5975cb",

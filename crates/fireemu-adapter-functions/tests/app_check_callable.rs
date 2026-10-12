@@ -699,10 +699,22 @@ async fn start_consuming(
     enforce: bool,
     profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
 ) -> Harness {
+    start_consuming_as(trusted, "enabled", enforce, profile).await
+}
+
+/// Like [`start_consuming`], with the `consumeAppCheckToken` value the runner reports for
+/// `guarded` and `guardedV2` (`undetermined` is what an unsupported firebase-functions version,
+/// such as 5.x, reports).
+async fn start_consuming_as(
+    trusted: bool,
+    consume: &str,
+    enforce: bool,
+    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
+) -> Harness {
     start_with_env(
         trusted,
         vec![
-            ("FIREEMU_FAKE_CONSUME".to_owned(), "enabled".to_owned()),
+            ("FIREEMU_FAKE_CONSUME".to_owned(), consume.to_owned()),
             ("FIREEMU_FAKE_ECHO_CONSUME".to_owned(), "enabled".to_owned()),
             (
                 "FIREEMU_FAKE_GUARDED_ENFORCE".to_owned(),
@@ -2129,49 +2141,64 @@ const PROFILES: [fireemu_adapter_functions::http::FunctionsHttpProfile; 2] = [
 /// With App Check disabled a token-consuming callable runs without App Check: every
 /// `X-Firebase-AppCheck` field is removed before the runner, so the installed wrapper sees no
 /// token, never calls the Admin SDK's consuming `verifyToken` against production and never
-/// reports a made-up `alreadyConsumed`. A callable that does not consume keeps receiving the
-/// field, exactly as before.
+/// reports a made-up `alreadyConsumed`. The same holds for a callable whose value could not be
+/// observed (review M1), for v1 and v2, streaming or not, enforcing or not (review S1). A
+/// callable that does not consume keeps receiving the field, exactly as before.
+///
+/// The request is written to the socket with both spellings of the field name, but hyper
+/// lowercases names while parsing, so the proxy sees two `x-firebase-appcheck` instances: this
+/// checks duplicates end to end, and the case-insensitive match itself is covered by the
+/// `without_app_check_token` property below.
 #[tokio::test]
 async fn without_app_check_a_token_consuming_callable_runs_without_the_token() {
     for profile in PROFILES {
-        let h = start_consuming(false, false, profile).await;
-        let (status, body) = h
-            .call(
-                "guarded",
-                &[
-                    ("x-firebase-appcheck", "first"),
-                    ("X-Firebase-AppCheck", "second"),
-                    ("x-custom", "kept"),
-                ],
-            )
-            .await;
-        assert_eq!(status, 200, "{profile:?}: {body}");
-        assert!(
-            echoed(&body, "x-firebase-appcheck").is_empty(),
-            "{profile:?}: {body}"
-        );
-        assert_eq!(echoed(&body, "x-custom"), vec!["kept".to_owned()]);
-        let (status, body) = h.call("guarded", &[]).await;
-        assert_eq!(
-            status, 200,
-            "{profile:?}: a call without a token runs: {body}"
-        );
-        // The near miss: `add` does not consume, so its field still reaches the runner.
-        let (status, body) = h.call("add", &[("x-firebase-appcheck", "whatever")]).await;
-        assert_eq!(status, 200, "{profile:?}: {body}");
-        assert_eq!(
-            echoed(&body, "x-firebase-appcheck"),
-            vec!["whatever".to_owned()]
-        );
-        // An onRequest function owns its own App Check handling and keeps the raw field, even
-        // when a manifest gives it the callable-only option.
-        let (status, body) = h.call("echo", &[("x-firebase-appcheck", "whatever")]).await;
-        assert_eq!(status, 200, "{profile:?}: {body}");
-        assert_eq!(
-            echoed(&body, "x-firebase-appcheck"),
-            vec!["whatever".to_owned()]
-        );
-        h.stop().await;
+        for consume in ["enabled", "undetermined"] {
+            for enforce in [false, true] {
+                let case = format!("{profile:?} consume={consume} enforce={enforce}");
+                let h = start_consuming_as(false, consume, enforce, profile).await;
+                for (function, accept) in [
+                    ("guarded", "application/json"),
+                    ("guardedV2", "application/json"),
+                    ("guardedV2", "text/event-stream"),
+                ] {
+                    let (status, body) = h
+                        .call(
+                            function,
+                            &[
+                                ("accept", accept),
+                                ("x-firebase-appcheck", "first"),
+                                ("X-Firebase-AppCheck", "second"),
+                                ("x-custom", "kept"),
+                            ],
+                        )
+                        .await;
+                    assert_eq!(status, 200, "{case} {function} {accept}: {body}");
+                    assert!(
+                        echoed(&body, "x-firebase-appcheck").is_empty(),
+                        "{case} {function} {accept}: {body}"
+                    );
+                    assert_eq!(echoed(&body, "x-custom"), vec!["kept".to_owned()]);
+                }
+                let (status, body) = h.call("guarded", &[]).await;
+                assert_eq!(status, 200, "{case}: a call without a token runs: {body}");
+                // The near miss: `add` does not consume, so its field still reaches the runner.
+                let (status, body) = h.call("add", &[("x-firebase-appcheck", "whatever")]).await;
+                assert_eq!(status, 200, "{case}: {body}");
+                assert_eq!(
+                    echoed(&body, "x-firebase-appcheck"),
+                    vec!["whatever".to_owned()]
+                );
+                // An onRequest function owns its own App Check handling and keeps the raw
+                // field, even when a manifest gives it the callable-only option.
+                let (status, body) = h.call("echo", &[("x-firebase-appcheck", "whatever")]).await;
+                assert_eq!(status, 200, "{case}: {body}");
+                assert_eq!(
+                    echoed(&body, "x-firebase-appcheck"),
+                    vec!["whatever".to_owned()]
+                );
+                h.stop().await;
+            }
+        }
     }
 }
 

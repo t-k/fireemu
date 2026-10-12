@@ -31,8 +31,9 @@
 //!
 //! Without App Check there is no trust boundary, and a callable receives its fields as sent,
 //! with one exception: [`without_app_check_token`] removes `X-Firebase-AppCheck` on the way to a
-//! token-consuming callable, so that callable runs without App Check rather than handing the
-//! token to the Admin SDK's consuming `verifyToken`, which would call production.
+//! callable that declares `consumeAppCheckToken: true` or whose value could not be observed, so
+//! that callable runs without App Check rather than handing the token to the Admin SDK's
+//! consuming `verifyToken`, which would call production.
 
 use std::sync::Arc;
 

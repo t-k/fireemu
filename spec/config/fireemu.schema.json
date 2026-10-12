@@ -117,7 +117,7 @@
           "type": "string",
           "enum": ["report", "refuse"],
           "default": "report",
-          "description": "What the strict profile does with a query whose composite index is not defined. report (the default, and \"refuse\" under productionExact): run the query as if the index existed, but only where production would refuse it (a query production serves by merging indexes is not reported), and print once per database and index production's refusal text, with the console link, and the firestore.indexes.json entry; the query's answer carries the FS_MISSING_INDEX_REPORTED warning. refuse: production's FAILED_PRECONDITION. The emulator profile always runs the query, as the official emulator checks no composite index, and refuse requires the strict profile."
+          "description": "What the strict profile does with a query whose composite index is not defined. report (the default, and \"refuse\" under productionExact): run the query as if the index existed, but only where production would refuse it (a query production serves by merging indexes is not reported), and print once per database and index production's refusal text, with the console link, and the firestore.indexes.json entry (an index an Admin create is still building, or one that was deleted, also runs, and is reported in production's wording for that state); the query's answer carries the FS_MISSING_INDEX_REPORTED warning. refuse: production's FAILED_PRECONDITION. The emulator profile always runs the query, as the official emulator checks no composite index, and refuse requires the strict profile."
         },
         "databaseCreateTime": {
           "type": "string",

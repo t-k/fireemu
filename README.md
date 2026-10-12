@@ -196,7 +196,7 @@ Fireemu is mostly run by tests, in CI and on a developer's machine. Where produc
 | Development default | Key | With `productionExact` |
 |---|---|---|
 | Unsigned emulator custom tokens are accepted | `auth.allowUnsignedCustomTokens` | refused |
-| A query whose composite index is not defined runs, and the index is reported once on stderr with production's refusal text and the `firestore.indexes.json` entry | `firestore.missingIndexes` (`"report"`) | refused with `FAILED_PRECONDITION` and the console link (`"refuse"`) |
+| A query whose composite index is not defined (or is still building, or was deleted) runs, and each missing index is reported once per database on stderr with production's refusal text and the `firestore.indexes.json` entry | `firestore.missingIndexes` (`"report"`) | refused with `FAILED_PRECONDITION` and the console link (`"refuse"`) |
 
 The start banner and `fireemu capabilities` report whether `productionExact` is set.
 

@@ -131,7 +131,7 @@ fireemu is run mostly by tests in CI and on a developer's machine. Where product
 | Key | Development default | `productionExact` |
 |---|---|---|
 | `auth.allowUnsignedCustomTokens` | `true`: unsigned emulator custom tokens are accepted | `false`: refused, as production refuses an unsigned custom token |
-| `firestore.missingIndexes` | `"report"`: a query production refuses for a missing composite index runs as if the index existed (production's index merges still decide what is missing), and the index is reported once per database with production's refusal text and console link, plus the `firestore.indexes.json` entry; the answer carries `FS_MISSING_INDEX_REPORTED` | `"refuse"`: production's `FAILED_PRECONDITION` with the console link |
+| `firestore.missingIndexes` | `"report"`: a query production refuses for a missing composite index runs as if the index existed (production's index merges still decide what is missing), and the index is reported once per database and index with production's refusal text and console link (for an index an Admin create is still building, or one that was deleted, production's wording for that state; the query still runs), plus the `firestore.indexes.json` entry; the answer carries `FS_MISSING_INDEX_REPORTED` | `"refuse"`: production's `FAILED_PRECONDITION` with the console link |
 
 A development default is not a parity claim. A strict comparison against production recordings whose rows depend on one of these behaviours runs with `productionExact: true` or with the key set to its production value; adding a key to this table means updating the configurations of those comparisons in the same change.
 

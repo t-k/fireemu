@@ -260,19 +260,26 @@ async function nativeInsideFireemu(options) {
   }
 }
 
+/**
+ * The fireemu configuration of a local recording. The production rows include a missing-index
+ * refusal (native/target-protocol/missing-index), which strict gives only with productionExact;
+ * the emulator profile refuses the key.
+ */
+export function fireemuConfig(profile) {
+  return {
+    schemaVersion: 1,
+    profile,
+    ...(profile === "strict" ? { productionExact: true } : {}),
+    auth: { idTokenSigning: "session-rsa", apiKeys: ["fake-api-key"] },
+  };
+}
+
 /** Starts fireemu with `profile` and runs `args` (a node script) inside it. */
 export async function withFireemu({ profile, script, args, env, rules }) {
   const dir = await mkdtemp(join(tmpdir(), "fs-listen-"));
   const config = join(dir, "fireemu.json");
   const firebase = join(dir, "firebase.json");
-  await writeFile(
-    config,
-    JSON.stringify({
-      schemaVersion: 1,
-      profile,
-      auth: { idTokenSigning: "session-rsa", apiKeys: ["fake-api-key"] },
-    }),
-  );
+  await writeFile(config, JSON.stringify(fireemuConfig(profile)));
   await writeFile(
     firebase,
     JSON.stringify({ firestore: [{ database: "(default)", ...(rules ? { rules } : {}) }] }),

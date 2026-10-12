@@ -229,6 +229,24 @@ impl Gateway {
     /// including the emulator profile's assumptions, is left alone. Returns the line written
     /// to stderr, if any.
     pub fn report_missing_index(&self, database: &str, accepted: &AcceptedQuery) -> Option<String> {
+        self.report_missing_index_as(database, accepted, |requirement, multiple_inequalities| {
+            crate::index_messages::missing_index_message(
+                database,
+                requirement,
+                multiple_inequalities,
+            )
+        })
+    }
+
+    /// [`Self::report_missing_index`] with production's refusal text from `message` (given the
+    /// required index and whether the query has inequalities on several fields), for a caller
+    /// that knows the index's state (an Admin create still building it, or its deletion).
+    pub fn report_missing_index_as(
+        &self,
+        database: &str,
+        accepted: &AcceptedQuery,
+        message: impl FnOnce(&IndexDefinition, bool) -> String,
+    ) -> Option<String> {
         use std::io::Write as _;
         let IndexDecision::AssumedIndex { requirement } = &accepted.decision else {
             return None;
@@ -239,11 +257,7 @@ impl Gateway {
         let report = MissingIndexReport {
             database: database.to_owned(),
             fragment: requirement.indexes_json_fragment(),
-            message: crate::index_messages::missing_index_message(
-                database,
-                requirement,
-                accepted.query.inequality_fields().len() > 1,
-            ),
+            message: message(requirement, accepted.query.inequality_fields().len() > 1),
         };
         let noted = MISSING_INDEX_REPORTS
             .lock()

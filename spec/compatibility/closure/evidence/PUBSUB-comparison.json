@@ -1,0 +1,3587 @@
+{
+  "schemaVersion": 1,
+  "kind": "pubsub-production-comparison-v1",
+  "parent": "PUBSUB",
+  "artifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a",
+  "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+  "sourceTree": "1c86b12762a77160357c8a87dda33eea3cca623c",
+  "oracle": {
+    "project": "fireemu-oracle-idp"
+  },
+  "witnessRunPrefixNote": "witnessRunPrefixes are the first 8 characters of the private recording run ids replayed for the case; the original 2026-10-05 recordings are 14802609 and a8ed1cce.",
+  "productionRequests": 0,
+  "method": "Per-case adjudication of the 122 frozen cases (18 conditions) against the final strict release binary. Every witness is a LOCAL strict replay of genuine production recordings on that binary; raw physical differences are retained in the private run outputs. A row status is the case verdict for each declared transport. Rules are owner decision ledger entries applied exactly; basis text names private evidence files of the per-case proof.",
+  "caseProof": {
+    "path": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+    "sha256": "30fa9781a809cddc196725cd23bf64233fb0ac07d60e28c4f4759add35f491aa",
+    "note": "private (docs.local), not published"
+  },
+  "statuses": {
+    "MATCH": "every witness MATCH, no rule needed",
+    "MATCH_BY_RELATION": "MATCH once the listed rules are applied exactly",
+    "EXCLUDED_STEP": "the listed rules exclude named steps; every other step MATCH or MATCH_BY_RELATION",
+    "PENDING": "not yet settled (pendingReason)"
+  },
+  "rules": {
+    "651": "Transport mapping: path-body-mismatch over native gRPC is observed as routing metadata versus message resource name (2026-09-30).",
+    "897": "Strict accepts a connection without an Authorization header as the PUBSUB_EMULATOR_HOST exception (registered divergence); a configured credential that fails local verification answers the recorded 401/UNAUTHENTICATED shape (2026-10-05).",
+    "1100": "Generated acknowledgement ids are compared by type, presence, wire tag, non-emptiness, message correspondence and actual ACK behaviour, not by value or internal length; clockStart is a replay parameter bound to each recording (2026-10-08).",
+    "1135": "message.publishTime of a proven publication is compared by relation (generated seconds/nanos and the encoding widths they imply), not by value (2026-10-09).",
+    "1146": "LIST order and page boundaries across separate runs are not compared; each environment proves the complete set through its own cursors. Snapshot.expireTime is compared by relation (2026-10-09).",
+    "1171": "StreamingPull S06 (ordering disabled, no key): receipt frame position and order are not compared; each receipt maps to one successful publication and its ACK (2026-10-09).",
+    "1193": "Dead-letter forwarded messages: sink publishTime compared by relation (2026-10-10).",
+    "1194": "Dead-letter forwarded messages: CloudPubSubDeadLetterSourceTopicPublishTime equals each environment's own source publishTime (2026-10-10).",
+    "1199": "Dead-letter R5/N5: deliveryAttempt after the recorded inactivity boundary restarts at 1 or previous+1 and then advances by exactly 1 (2026-10-10).",
+    "1203": "Named unfiltered positive-control windows permit per-Pull partition and receipt-order differences; valid-Seek windows permit an eligible marker in a different Pull inside the original window (2026-10-10).",
+    "1204": "C R9: relative interleaving across different ordering keys permitted; same-key order and ACK barriers retained (2026-10-10).",
+    "1209": "C N7 (run 567e1cd860a1): empty-string map value presence or omission and the ancestor lengths it implies (2026-10-10).",
+    "1210": "C N7 (run 45298b949da0): same allowance as 1209 (2026-10-10).",
+    "1213": "C R8/N8: Pull partition and cross-key receipt order inside the finite window permitted; same-key order and ACK gating retained (2026-10-10).",
+    "1215": "C N9 (one response of run 45298b949da0): cross-key placement order inside one Pull permitted (2026-10-10).",
+    "1243": "Snapshot 14/4: adaptive comparison (count 2, attempts 3, own latest ACK, separate post-ACK Pull returns 0, 20 s per Pull) in both recordings and transports; raw differences retained; final-binary qualification required (2026-10-11).",
+    "1319": "Snapshot N13: bounded post-Seek comparison (Seek window at most 90 s, equivalent sequential constructions, successful current-delivery ACK before the next Seek); only early empty responses and delivery timing may differ (2026-10-11).",
+    "1383": "The production REST GET 404 right after create in /conditions/3/cases/0 and /conditions/14/cases/2 is excluded from comparison; fireemu returns the steady-state 200 (2026-10-11; description corrected by 1385).",
+    "1385": "Production REST negative cache for subscriptions and snapshots (about 9.5 s after a slow 404, reproduced in some orders, counterexamples exist, rule not established) is NOT emulated; the affected GET steps of /conditions/3/cases/0, /conditions/14/cases/2 and /conditions/1/cases/4 R2 are excluded; strict unchanged; follow-up after the release (2026-10-11).",
+    "1390": "Original 2026-10-05 recordings did not store REST wire length: their REST rows MATCH when status, header semantics and body content are equal; later recordings keep wire-shape comparison (2026-10-12).",
+    "1391": "The /conditions/1/cases/4 R2 exclusion covers the GET right after CREATE and the same-name cleanup GET (2026-10-12, coordinator reading of 1385).",
+    "1392": "Original ordering cells (/conditions/11/cases/0, 1, 4): the key production serves next on later Pulls varies by run and transport; per-key order, no keyed/unkeyed mixing in one Pull and the cell delivered set must match (2026-10-12).",
+    "1394": "Differences explained only by (1) delivery order of messages without an ordering guarantee and (2) a Pull returning fewer messages than available (including 0) MATCH when the cell delivered set, each message content and, with ordering enabled, per-key order match; cases /conditions/6/cases/4, 6/8, 9/0, 9/4, 11/2, 14/3; fireemu answers immediately and does not simulate empty Pulls (2026-10-12).",
+    "1395": "Original ordering cells are replayed with identity acknowledgements (the replay acknowledges its own delivery of the message production acknowledged) on the final binary (2026-10-12).",
+    "1399": "Original ordering cells in the second recording: MATCH when on both sides each key delivered set is a prefix of its publish order, keyed and unkeyed are never mixed in a Pull, and the whole-cell difference is only the tail of a key held by an unacknowledged delivery at cell end (2026-10-12)."
+  },
+  "summary": {
+    "EXCLUDED_STEP": 6,
+    "MATCH": 26,
+    "MATCH_BY_RELATION": 183,
+    "PENDING": 12
+  },
+  "rows": [
+    {
+      "row": "pubsub/topics/lifecycle#create-get-list-delete",
+      "transport": "rest",
+      "coordinate": "/conditions/0/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/topics/lifecycle#create-get-list-delete",
+      "transport": "grpc",
+      "coordinate": "/conditions/0/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/topics/lifecycle#labels",
+      "transport": "rest",
+      "coordinate": "/conditions/0/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "36bad45b",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original rows MATCH/1390; H1 R9/N9 (topic-labels-empty) MATCH in 36bad and b873."
+    },
+    {
+      "row": "pubsub/topics/lifecycle#labels",
+      "transport": "grpc",
+      "coordinate": "/conditions/0/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "36bad45b",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original rows MATCH/1390; H1 R9/N9 (topic-labels-empty) MATCH in 36bad and b873."
+    },
+    {
+      "row": "pubsub/topics/lifecycle#duplicate-create",
+      "transport": "rest",
+      "coordinate": "/conditions/0/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/topics/lifecycle#duplicate-create",
+      "transport": "grpc",
+      "coordinate": "/conditions/0/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/topics/lifecycle#missing-get-delete",
+      "transport": "rest",
+      "coordinate": "/conditions/0/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/topics/lifecycle#missing-get-delete",
+      "transport": "grpc",
+      "coordinate": "/conditions/0/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/topics/lifecycle#list-topic-subscriptions",
+      "transport": "rest",
+      "coordinate": "/conditions/0/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/topics/lifecycle#list-topic-subscriptions",
+      "transport": "grpc",
+      "coordinate": "/conditions/0/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/topics/lifecycle#delete-topic-with-subscription",
+      "transport": "rest",
+      "coordinate": "/conditions/0/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "36bad45b",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original rows MATCH/1390; H1 R5/N5 (delete-recreate) MATCH in 36bad and b873."
+    },
+    {
+      "row": "pubsub/topics/lifecycle#delete-topic-with-subscription",
+      "transport": "grpc",
+      "coordinate": "/conditions/0/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "36bad45b",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original rows MATCH/1390; H1 R5/N5 (delete-recreate) MATCH in 36bad and b873."
+    },
+    {
+      "row": "pubsub/names#valid-name",
+      "transport": "rest",
+      "coordinate": "/conditions/1/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/names#valid-name",
+      "transport": "grpc",
+      "coordinate": "/conditions/1/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/names#invalid-name",
+      "transport": "rest",
+      "coordinate": "/conditions/1/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/names#invalid-name",
+      "transport": "grpc",
+      "coordinate": "/conditions/1/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/names#length-boundary",
+      "transport": "rest",
+      "coordinate": "/conditions/1/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/names#length-boundary",
+      "transport": "grpc",
+      "coordinate": "/conditions/1/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/names#reserved-prefix",
+      "transport": "rest",
+      "coordinate": "/conditions/1/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/names#reserved-prefix",
+      "transport": "grpc",
+      "coordinate": "/conditions/1/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/names#path-body-mismatch",
+      "transport": "rest",
+      "coordinate": "/conditions/1/cases/4",
+      "status": "EXCLUDED_STEP",
+      "rules": [
+        "1385",
+        "1391",
+        "651"
+      ],
+      "witnessRunPrefixes": [
+        "3efb4c7c",
+        "966b6f3f",
+        "9f9fc202",
+        "b8734748",
+        "de14f6d9"
+      ],
+      "basis": "R1 MATCH in 3efb and de14; native N11/N12 MATCH in 9f9 and b873 (native applicability decided by 651(b): routing metadata vs message name, observed in production). R2 diverges only on the two GetSubscription rows per set (966b n88/n92, de14 n93/n97, 3efb n249/n253), excluded by 1385 as clarified by 1391 (\"production REST negative cache, not emulated\"); every other R2 row MATCH.",
+      "excludedSteps": [
+        {
+          "unit": "h1-966",
+          "cell": "R2",
+          "sourceN": [
+            88,
+            92
+          ],
+          "owner": "1385,1391",
+          "reason": "GetSubscription immediately after CreateSubscription and the same-name cleanup GET: production REST negative cache (subscription/snapshot only), not emulated"
+        },
+        {
+          "unit": "h1-de14",
+          "cell": "R2",
+          "sourceN": [
+            93,
+            97
+          ],
+          "owner": "1385,1391",
+          "reason": "GetSubscription immediately after CreateSubscription and the same-name cleanup GET: production REST negative cache (subscription/snapshot only), not emulated"
+        },
+        {
+          "unit": "h1-3ef",
+          "cell": "R2",
+          "sourceN": [
+            249,
+            253
+          ],
+          "owner": "1385,1391",
+          "reason": "GetSubscription immediately after CreateSubscription and the same-name cleanup GET: production REST negative cache (subscription/snapshot only), not emulated"
+        }
+      ]
+    },
+    {
+      "row": "pubsub/names#path-body-mismatch",
+      "transport": "grpc",
+      "coordinate": "/conditions/1/cases/4",
+      "status": "EXCLUDED_STEP",
+      "rules": [
+        "1385",
+        "1391",
+        "651"
+      ],
+      "witnessRunPrefixes": [
+        "3efb4c7c",
+        "966b6f3f",
+        "9f9fc202",
+        "b8734748",
+        "de14f6d9"
+      ],
+      "basis": "R1 MATCH in 3efb and de14; native N11/N12 MATCH in 9f9 and b873 (native applicability decided by 651(b): routing metadata vs message name, observed in production). R2 diverges only on the two GetSubscription rows per set (966b n88/n92, de14 n93/n97, 3efb n249/n253), excluded by 1385 as clarified by 1391 (\"production REST negative cache, not emulated\"); every other R2 row MATCH.",
+      "excludedSteps": [
+        {
+          "unit": "h1-966",
+          "cell": "R2",
+          "sourceN": [
+            88,
+            92
+          ],
+          "owner": "1385,1391",
+          "reason": "GetSubscription immediately after CreateSubscription and the same-name cleanup GET: production REST negative cache (subscription/snapshot only), not emulated"
+        },
+        {
+          "unit": "h1-de14",
+          "cell": "R2",
+          "sourceN": [
+            93,
+            97
+          ],
+          "owner": "1385,1391",
+          "reason": "GetSubscription immediately after CreateSubscription and the same-name cleanup GET: production REST negative cache (subscription/snapshot only), not emulated"
+        },
+        {
+          "unit": "h1-3ef",
+          "cell": "R2",
+          "sourceN": [
+            249,
+            253
+          ],
+          "owner": "1385,1391",
+          "reason": "GetSubscription immediately after CreateSubscription and the same-name cleanup GET: production REST negative cache (subscription/snapshot only), not emulated"
+        }
+      ]
+    },
+    {
+      "row": "pubsub/names#invalid-resource-path",
+      "transport": "rest",
+      "coordinate": "/conditions/1/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "gRPC rows MATCH; REST rows MATCH/1390; the 4 REST invalid-path rows (r1 n58/n60, r2 n55/n57) are comparator NC \"unknown response\" only because local marks a non-JSON body unknown: status 404 both and the Google HTML bodies are character-identical, so status and body content match (1390)."
+    },
+    {
+      "row": "pubsub/names#invalid-resource-path",
+      "transport": "grpc",
+      "coordinate": "/conditions/1/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "gRPC rows MATCH; REST rows MATCH/1390; the 4 REST invalid-path rows (r1 n58/n60, r2 n55/n57) are comparator NC \"unknown response\" only because local marks a non-JSON body unknown: status 404 both and the Google HTML bodies are character-identical, so status and body content match (1390)."
+    },
+    {
+      "row": "pubsub/lists#page-traversal",
+      "transport": "rest",
+      "coordinate": "/conditions/2/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1146",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce",
+        "b304ebda",
+        "d4e5b9a3"
+      ],
+      "basis": "Original paging/grpc listTopicSubscriptions rows differ only in page boundary across runs (1146); B 18/18 own-cursor witnesses MATCH in both sets; p1/p2 own-cursor original runs are retained as raw (same rows as detection)."
+    },
+    {
+      "row": "pubsub/lists#page-traversal",
+      "transport": "grpc",
+      "coordinate": "/conditions/2/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1146",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce",
+        "b304ebda",
+        "d4e5b9a3"
+      ],
+      "basis": "Original paging/grpc listTopicSubscriptions rows differ only in page boundary across runs (1146); B 18/18 own-cursor witnesses MATCH in both sets; p1/p2 own-cursor original runs are retained as raw (same rows as detection)."
+    },
+    {
+      "row": "pubsub/lists#invalid-page-token",
+      "transport": "rest",
+      "coordinate": "/conditions/2/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390",
+        "1146"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce",
+        "b304ebda",
+        "d4e5b9a3"
+      ],
+      "basis": "Original rows MATCH/1390; B own-cursor witnesses 18/18 MATCH in both B sets."
+    },
+    {
+      "row": "pubsub/lists#invalid-page-token",
+      "transport": "grpc",
+      "coordinate": "/conditions/2/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390",
+        "1146"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce",
+        "b304ebda",
+        "d4e5b9a3"
+      ],
+      "basis": "Original rows MATCH/1390; B own-cursor witnesses 18/18 MATCH in both B sets."
+    },
+    {
+      "row": "pubsub/lists#owned-resources-only",
+      "transport": "rest",
+      "coordinate": "/conditions/2/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1146"
+      ],
+      "witnessRunPrefixes": [
+        "b304ebda",
+        "d4e5b9a3"
+      ],
+      "basis": "B own-inventory witnesses 18/18 MATCH in both B sets (owner 1146)."
+    },
+    {
+      "row": "pubsub/lists#owned-resources-only",
+      "transport": "grpc",
+      "coordinate": "/conditions/2/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1146"
+      ],
+      "witnessRunPrefixes": [
+        "b304ebda",
+        "d4e5b9a3"
+      ],
+      "basis": "B own-inventory witnesses 18/18 MATCH in both B sets (owner 1146)."
+    },
+    {
+      "row": "pubsub/subscriptions/lifecycle#create-get-list-delete",
+      "transport": "rest",
+      "coordinate": "/conditions/3/cases/0",
+      "status": "EXCLUDED_STEP",
+      "rules": [
+        "1383",
+        "1385",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "Only r2 n10 (lifecycle/rest step 10 getSubscription, production 404 vs local 200) diverges; excluded by 1383 (description corrected by 1385: production REST negative cache, not emulated). r1 n10 (same step, production 200) MATCH/1390 and is kept. All remaining steps MATCH or MATCH/1390.",
+      "excludedSteps": [
+        {
+          "run": "r2",
+          "n": 10,
+          "owner": "1383",
+          "reason": "production REST GET 404 after create (3/0 getSubscription); recorded as production REST negative cache / visibility, not emulated (1383 as corrected by 1385)"
+        }
+      ]
+    },
+    {
+      "row": "pubsub/subscriptions/lifecycle#create-get-list-delete",
+      "transport": "grpc",
+      "coordinate": "/conditions/3/cases/0",
+      "status": "EXCLUDED_STEP",
+      "rules": [
+        "1383",
+        "1385",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "Only r2 n10 (lifecycle/rest step 10 getSubscription, production 404 vs local 200) diverges; excluded by 1383 (description corrected by 1385: production REST negative cache, not emulated). r1 n10 (same step, production 200) MATCH/1390 and is kept. All remaining steps MATCH or MATCH/1390.",
+      "excludedSteps": [
+        {
+          "run": "r2",
+          "n": 10,
+          "owner": "1383",
+          "reason": "production REST GET 404 after create (3/0 getSubscription); recorded as production REST negative cache / visibility, not emulated (1383 as corrected by 1385)"
+        }
+      ]
+    },
+    {
+      "row": "pubsub/subscriptions/lifecycle#default-ack-deadline",
+      "transport": "rest",
+      "coordinate": "/conditions/3/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/lifecycle#default-ack-deadline",
+      "transport": "grpc",
+      "coordinate": "/conditions/3/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/lifecycle#explicit-ack-deadline",
+      "transport": "rest",
+      "coordinate": "/conditions/3/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/lifecycle#explicit-ack-deadline",
+      "transport": "grpc",
+      "coordinate": "/conditions/3/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/lifecycle#missing-topic",
+      "transport": "rest",
+      "coordinate": "/conditions/3/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/lifecycle#missing-topic",
+      "transport": "grpc",
+      "coordinate": "/conditions/3/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/lifecycle#duplicate-create",
+      "transport": "rest",
+      "coordinate": "/conditions/3/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/lifecycle#duplicate-create",
+      "transport": "grpc",
+      "coordinate": "/conditions/3/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/lifecycle#missing-subscription",
+      "transport": "rest",
+      "coordinate": "/conditions/3/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/lifecycle#missing-subscription",
+      "transport": "grpc",
+      "coordinate": "/conditions/3/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#message-retention-duration",
+      "transport": "rest",
+      "coordinate": "/conditions/4/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "36bad45b",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original rows MATCH/1390. H1 R10/N10 (retention-ordering) MATCH in 36bad and b873 is joined here as auxiliary (the canonical joins list H1 only for 4/5)."
+    },
+    {
+      "row": "pubsub/subscriptions/config#message-retention-duration",
+      "transport": "grpc",
+      "coordinate": "/conditions/4/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "36bad45b",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original rows MATCH/1390. H1 R10/N10 (retention-ordering) MATCH in 36bad and b873 is joined here as auxiliary (the canonical joins list H1 only for 4/5)."
+    },
+    {
+      "row": "pubsub/subscriptions/config#retain-acked-messages",
+      "transport": "rest",
+      "coordinate": "/conditions/4/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#retain-acked-messages",
+      "transport": "grpc",
+      "coordinate": "/conditions/4/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#filter",
+      "transport": "rest",
+      "coordinate": "/conditions/4/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#filter",
+      "transport": "grpc",
+      "coordinate": "/conditions/4/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#dead-letter-policy",
+      "transport": "rest",
+      "coordinate": "/conditions/4/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#dead-letter-policy",
+      "transport": "grpc",
+      "coordinate": "/conditions/4/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#retry-policy",
+      "transport": "rest",
+      "coordinate": "/conditions/4/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#retry-policy",
+      "transport": "grpc",
+      "coordinate": "/conditions/4/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#enable-message-ordering",
+      "transport": "rest",
+      "coordinate": "/conditions/4/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "36bad45b",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original rows MATCH/1390; H1 R10/N10 MATCH in 36bad and b873."
+    },
+    {
+      "row": "pubsub/subscriptions/config#enable-message-ordering",
+      "transport": "grpc",
+      "coordinate": "/conditions/4/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "36bad45b",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original rows MATCH/1390; H1 R10/N10 MATCH in 36bad and b873."
+    },
+    {
+      "row": "pubsub/subscriptions/config#create-get-round-trip",
+      "transport": "rest",
+      "coordinate": "/conditions/4/cases/6",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "36bad45b",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original rows MATCH/1390; H1 R3/N1/N2/N3 MATCH in 36bad and b873."
+    },
+    {
+      "row": "pubsub/subscriptions/config#create-get-round-trip",
+      "transport": "grpc",
+      "coordinate": "/conditions/4/cases/6",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "36bad45b",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original rows MATCH/1390; H1 R3/N1/N2/N3 MATCH in 36bad and b873."
+    },
+    {
+      "row": "pubsub/subscriptions/config#atomic-field-mask-update",
+      "transport": "rest",
+      "coordinate": "/conditions/4/cases/7",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "36bad45b",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original rows MATCH/1390; H1 R4/N4 MATCH in 36bad and b873."
+    },
+    {
+      "row": "pubsub/subscriptions/config#atomic-field-mask-update",
+      "transport": "grpc",
+      "coordinate": "/conditions/4/cases/7",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "36bad45b",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original rows MATCH/1390; H1 R4/N4 MATCH in 36bad and b873."
+    },
+    {
+      "row": "pubsub/subscriptions/config#omitted-field-preservation",
+      "transport": "rest",
+      "coordinate": "/conditions/4/cases/8",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#omitted-field-preservation",
+      "transport": "grpc",
+      "coordinate": "/conditions/4/cases/8",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#immutable-field-update",
+      "transport": "rest",
+      "coordinate": "/conditions/4/cases/9",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#immutable-field-update",
+      "transport": "grpc",
+      "coordinate": "/conditions/4/cases/9",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#duration-boundaries",
+      "transport": "rest",
+      "coordinate": "/conditions/4/cases/10",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#duration-boundaries",
+      "transport": "grpc",
+      "coordinate": "/conditions/4/cases/10",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#ack-deadline-boundaries",
+      "transport": "rest",
+      "coordinate": "/conditions/4/cases/11",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/config#ack-deadline-boundaries",
+      "transport": "grpc",
+      "coordinate": "/conditions/4/cases/11",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/push-config#create-push-config",
+      "transport": "rest",
+      "coordinate": "/conditions/5/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/push-config#create-push-config",
+      "transport": "grpc",
+      "coordinate": "/conditions/5/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/push-config#get-push-config",
+      "transport": "rest",
+      "coordinate": "/conditions/5/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/push-config#get-push-config",
+      "transport": "grpc",
+      "coordinate": "/conditions/5/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/push-config#modify-push-config",
+      "transport": "rest",
+      "coordinate": "/conditions/5/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/push-config#modify-push-config",
+      "transport": "grpc",
+      "coordinate": "/conditions/5/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/push-config#switch-to-pull",
+      "transport": "rest",
+      "coordinate": "/conditions/5/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/push-config#switch-to-pull",
+      "transport": "grpc",
+      "coordinate": "/conditions/5/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/push-config#invalid-push-config",
+      "transport": "rest",
+      "coordinate": "/conditions/5/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/push-config#invalid-push-config",
+      "transport": "grpc",
+      "coordinate": "/conditions/5/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/push-config#no-publications",
+      "transport": "rest",
+      "coordinate": "/conditions/5/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/subscriptions/push-config#no-publications",
+      "transport": "grpc",
+      "coordinate": "/conditions/5/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/wire#binary-data",
+      "transport": "rest",
+      "coordinate": "/conditions/6/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "9f9fc202",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original publish rows MATCH/1390 (input octets, REST base64/native bytes, publish identity). Pulled data bytes: H1 R11 (REST) and N13 (native) in 9f9 and b873 pass the owner-1100 ACK predicate join; delivered sets including the binary payload AP+A are equal in every Pull. R11 Pull 1 receipt order of the 7 unkeyed messages differs (production delivers the last-published \"x\" first in both sets), which is not part of this case's obligation."
+    },
+    {
+      "row": "pubsub/publish/wire#binary-data",
+      "transport": "grpc",
+      "coordinate": "/conditions/6/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "9f9fc202",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original publish rows MATCH/1390 (input octets, REST base64/native bytes, publish identity). Pulled data bytes: H1 R11 (REST) and N13 (native) in 9f9 and b873 pass the owner-1100 ACK predicate join; delivered sets including the binary payload AP+A are equal in every Pull. R11 Pull 1 receipt order of the 7 unkeyed messages differs (production delivers the last-published \"x\" first in both sets), which is not part of this case's obligation."
+    },
+    {
+      "row": "pubsub/publish/wire#attributes-only",
+      "transport": "rest",
+      "coordinate": "/conditions/6/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "9f9fc202",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original publish rows MATCH/1390. In-delivery data/attribute/orderingKey presence and representation: H1 R11/N13 in 9f9 and b873 pass the owner-1100 ACK predicate join (delivered sets with field presence equal per Pull position, acks target the same messages, all replies OK). R11 Pull 1 unkeyed receipt order differs, not part of this obligation."
+    },
+    {
+      "row": "pubsub/publish/wire#attributes-only",
+      "transport": "grpc",
+      "coordinate": "/conditions/6/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "9f9fc202",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original publish rows MATCH/1390. In-delivery data/attribute/orderingKey presence and representation: H1 R11/N13 in 9f9 and b873 pass the owner-1100 ACK predicate join (delivered sets with field presence equal per Pull position, acks target the same messages, all replies OK). R11 Pull 1 unkeyed receipt order differs, not part of this obligation."
+    },
+    {
+      "row": "pubsub/publish/wire#data-only",
+      "transport": "rest",
+      "coordinate": "/conditions/6/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "9f9fc202",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original publish rows MATCH/1390. In-delivery data/attribute/orderingKey presence and representation: H1 R11/N13 in 9f9 and b873 pass the owner-1100 ACK predicate join (delivered sets with field presence equal per Pull position, acks target the same messages, all replies OK). R11 Pull 1 unkeyed receipt order differs, not part of this obligation."
+    },
+    {
+      "row": "pubsub/publish/wire#data-only",
+      "transport": "grpc",
+      "coordinate": "/conditions/6/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "9f9fc202",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original publish rows MATCH/1390. In-delivery data/attribute/orderingKey presence and representation: H1 R11/N13 in 9f9 and b873 pass the owner-1100 ACK predicate join (delivered sets with field presence equal per Pull position, acks target the same messages, all replies OK). R11 Pull 1 unkeyed receipt order differs, not part of this obligation."
+    },
+    {
+      "row": "pubsub/publish/wire#ordering-key",
+      "transport": "rest",
+      "coordinate": "/conditions/6/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "9f9fc202",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original publish rows MATCH/1390. In-delivery data/attribute/orderingKey presence and representation: H1 R11/N13 in 9f9 and b873 pass the owner-1100 ACK predicate join (delivered sets with field presence equal per Pull position, acks target the same messages, all replies OK). R11 Pull 1 unkeyed receipt order differs, not part of this obligation."
+    },
+    {
+      "row": "pubsub/publish/wire#ordering-key",
+      "transport": "grpc",
+      "coordinate": "/conditions/6/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "9f9fc202",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Original publish rows MATCH/1390. In-delivery data/attribute/orderingKey presence and representation: H1 R11/N13 in 9f9 and b873 pass the owner-1100 ACK predicate join (delivered sets with field presence equal per Pull position, acks target the same messages, all replies OK). R11 Pull 1 unkeyed receipt order differs, not part of this obligation."
+    },
+    {
+      "row": "pubsub/publish/wire#mixed-batch",
+      "transport": "rest",
+      "coordinate": "/conditions/6/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1390",
+        "1394"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "9f9fc202",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Owner 1394 names this case. requiredObservation includes batch order: H1 R11 (REST) Pull 1 delivers the 7 unkeyed messages in a different order from production in both independent sets; Pull delivered sets, contents and field presence are equal per Pull position (so the cell set is equal), ack targets equal, the one keyed message (k1) is alone in Pull 2 on both sides, N13 (native) equal in order. The only difference is receipt order of unordered messages, which 1394 allows. Original publish rows MATCH/1390."
+    },
+    {
+      "row": "pubsub/publish/wire#mixed-batch",
+      "transport": "grpc",
+      "coordinate": "/conditions/6/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1390",
+        "1394"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "9f9fc202",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "Owner 1394 names this case. requiredObservation includes batch order: H1 R11 (REST) Pull 1 delivers the 7 unkeyed messages in a different order from production in both independent sets; Pull delivered sets, contents and field presence are equal per Pull position (so the cell set is equal), ack targets equal, the one keyed message (k1) is alone in Pull 2 on both sides, N13 (native) equal in order. The only difference is receipt order of unordered messages, which 1394 allows. Original publish rows MATCH/1390."
+    },
+    {
+      "row": "pubsub/publish/wire#empty-message",
+      "transport": "rest",
+      "coordinate": "/conditions/6/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/wire#empty-message",
+      "transport": "grpc",
+      "coordinate": "/conditions/6/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/wire#invalid-base64",
+      "transport": "rest",
+      "coordinate": "/conditions/6/cases/6",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/wire#invalid-base64",
+      "transport": "grpc",
+      "coordinate": "/conditions/6/cases/6",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/wire#nonempty-unique-message-ids",
+      "transport": "rest",
+      "coordinate": "/conditions/6/cases/7",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/wire#nonempty-unique-message-ids",
+      "transport": "grpc",
+      "coordinate": "/conditions/6/cases/7",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/wire#publish-pull-id-correlation",
+      "transport": "rest",
+      "coordinate": "/conditions/6/cases/8",
+      "status": "PENDING",
+      "rules": [
+        "1100",
+        "1135",
+        "1394"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Owner 1394 names this case, but its MATCH condition fails on the original arms: each publish-wire arm has exactly one Pull (maxMessages 1) over 1011 published messages, and production and LOCAL deliver a different single message (r1 rest two vs one, r1 grpc unicode vs one, r2 rest/grpc x vs one), so the cell delivered sets differ ({1} vs {1}, different members). The difference is explained by unordered delivery order plus maxMessages, and per side the pulled message correlates exactly with its own Publish reply (messageId in the same-side publish replies, content equal: corr-6-8.json), but 1394 requires the delivered set to be equal. C R4/N4 (dedicated correlation cells) semantic MATCH in both C sets. Needs a coordinator/owner disposition.",
+      "pendingReason": "awaiting a coordinator or owner disposition"
+    },
+    {
+      "row": "pubsub/publish/wire#publish-pull-id-correlation",
+      "transport": "grpc",
+      "coordinate": "/conditions/6/cases/8",
+      "status": "PENDING",
+      "rules": [
+        "1100",
+        "1135",
+        "1394"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Owner 1394 names this case, but its MATCH condition fails on the original arms: each publish-wire arm has exactly one Pull (maxMessages 1) over 1011 published messages, and production and LOCAL deliver a different single message (r1 rest two vs one, r1 grpc unicode vs one, r2 rest/grpc x vs one), so the cell delivered sets differ ({1} vs {1}, different members). The difference is explained by unordered delivery order plus maxMessages, and per side the pulled message correlates exactly with its own Publish reply (messageId in the same-side publish replies, content equal: corr-6-8.json), but 1394 requires the delivered set to be equal. C R4/N4 (dedicated correlation cells) semantic MATCH in both C sets. Needs a coordinator/owner disposition.",
+      "pendingReason": "awaiting a coordinator or owner disposition"
+    },
+    {
+      "row": "pubsub/publish/limits#request-bytes-boundary",
+      "transport": "rest",
+      "coordinate": "/conditions/7/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/limits#request-bytes-boundary",
+      "transport": "grpc",
+      "coordinate": "/conditions/7/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/limits#batch-count-boundary",
+      "transport": "rest",
+      "coordinate": "/conditions/7/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/limits#batch-count-boundary",
+      "transport": "grpc",
+      "coordinate": "/conditions/7/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/limits#message-bytes-boundary",
+      "transport": "rest",
+      "coordinate": "/conditions/7/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/limits#message-bytes-boundary",
+      "transport": "grpc",
+      "coordinate": "/conditions/7/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/limits#attribute-count-boundary",
+      "transport": "rest",
+      "coordinate": "/conditions/7/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/limits#attribute-count-boundary",
+      "transport": "grpc",
+      "coordinate": "/conditions/7/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/limits#attribute-size-boundary",
+      "transport": "rest",
+      "coordinate": "/conditions/7/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/limits#attribute-size-boundary",
+      "transport": "grpc",
+      "coordinate": "/conditions/7/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/limits#ordering-key-bytes-boundary",
+      "transport": "rest",
+      "coordinate": "/conditions/7/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/publish/limits#ordering-key-bytes-boundary",
+      "transport": "grpc",
+      "coordinate": "/conditions/7/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/unary#empty-pull",
+      "transport": "rest",
+      "coordinate": "/conditions/8/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390",
+        "1199"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "295cfe3e",
+        "788b877b",
+        "a8ed1cce"
+      ],
+      "basis": "Original empty-Pull rows MATCH/1390; D d1/d2 roles semantic MATCH (R5/N5 through the 1199 restart relation)."
+    },
+    {
+      "row": "pubsub/delivery/unary#empty-pull",
+      "transport": "grpc",
+      "coordinate": "/conditions/8/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390",
+        "1199"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "295cfe3e",
+        "788b877b",
+        "a8ed1cce"
+      ],
+      "basis": "Original empty-Pull rows MATCH/1390; D d1/d2 roles semantic MATCH (R5/N5 through the 1199 restart relation)."
+    },
+    {
+      "row": "pubsub/delivery/unary#max-messages-validity",
+      "transport": "rest",
+      "coordinate": "/conditions/8/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/unary#max-messages-validity",
+      "transport": "grpc",
+      "coordinate": "/conditions/8/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/unary#publish-pull-ack",
+      "transport": "rest",
+      "coordinate": "/conditions/8/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390",
+        "1199"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "295cfe3e",
+        "45298b94",
+        "567e1cd8",
+        "788b877b",
+        "a8ed1cce"
+      ],
+      "basis": "r1 n350 differs only in generated ackId/messageId/publishTime (1100/1135); other rows MATCH/1390; C R4/N4 and R1/N1 semantic MATCH in both C sets; D roles semantic MATCH (R5/N5 via 1199)."
+    },
+    {
+      "row": "pubsub/delivery/unary#publish-pull-ack",
+      "transport": "grpc",
+      "coordinate": "/conditions/8/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390",
+        "1199"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "295cfe3e",
+        "45298b94",
+        "567e1cd8",
+        "788b877b",
+        "a8ed1cce"
+      ],
+      "basis": "r1 n350 differs only in generated ackId/messageId/publishTime (1100/1135); other rows MATCH/1390; C R4/N4 and R1/N1 semantic MATCH in both C sets; D roles semantic MATCH (R5/N5 via 1199)."
+    },
+    {
+      "row": "pubsub/delivery/unary#multiple-subscriptions",
+      "transport": "rest",
+      "coordinate": "/conditions/8/cases/3",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R1/N1 semantic MATCH in 45298 and 567e."
+    },
+    {
+      "row": "pubsub/delivery/unary#multiple-subscriptions",
+      "transport": "grpc",
+      "coordinate": "/conditions/8/cases/3",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R1/N1 semantic MATCH in 45298 and 567e."
+    },
+    {
+      "row": "pubsub/delivery/unary#acked-not-redelivered",
+      "transport": "rest",
+      "coordinate": "/conditions/8/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Original rows MATCH/1390; C R1/N1 semantic MATCH in 45298 and 567e."
+    },
+    {
+      "row": "pubsub/delivery/unary#acked-not-redelivered",
+      "transport": "grpc",
+      "coordinate": "/conditions/8/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Original rows MATCH/1390; C R1/N1 semantic MATCH in 45298 and 567e."
+    },
+    {
+      "row": "pubsub/delivery/unary#unknown-ack-id",
+      "transport": "rest",
+      "coordinate": "/conditions/8/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/unary#unknown-ack-id",
+      "transport": "grpc",
+      "coordinate": "/conditions/8/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/unary#repeated-ack-id",
+      "transport": "rest",
+      "coordinate": "/conditions/8/cases/6",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/unary#repeated-ack-id",
+      "transport": "grpc",
+      "coordinate": "/conditions/8/cases/6",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/unary#stale-ack-id",
+      "transport": "rest",
+      "coordinate": "/conditions/8/cases/7",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R2/N2 semantic MATCH in 45298 and 567e."
+    },
+    {
+      "row": "pubsub/delivery/unary#stale-ack-id",
+      "transport": "grpc",
+      "coordinate": "/conditions/8/cases/7",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R2/N2 semantic MATCH in 45298 and 567e."
+    },
+    {
+      "row": "pubsub/delivery/deadlines#nack-zero",
+      "transport": "rest",
+      "coordinate": "/conditions/9/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390",
+        "1199",
+        "1394"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "295cfe3e",
+        "788b877b",
+        "a8ed1cce"
+      ],
+      "basis": "Owner 1394 names these cases. r2 n603 (nack-deadline/rest step 04) delivers the same 2 messages in a different order; across every nack-deadline arm the delivered set and contents are equal and every redelivery is consistent with the own modifyAckDeadline(0) or the ack deadline on both sides (cell-1394.json). Other rows opaque-only (1100/1135) or MATCH/1390; D roles semantic MATCH (R5/N5 via 1199)."
+    },
+    {
+      "row": "pubsub/delivery/deadlines#nack-zero",
+      "transport": "grpc",
+      "coordinate": "/conditions/9/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390",
+        "1199",
+        "1394"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "295cfe3e",
+        "788b877b",
+        "a8ed1cce"
+      ],
+      "basis": "Owner 1394 names these cases. r2 n603 (nack-deadline/rest step 04) delivers the same 2 messages in a different order; across every nack-deadline arm the delivered set and contents are equal and every redelivery is consistent with the own modifyAckDeadline(0) or the ack deadline on both sides (cell-1394.json). Other rows opaque-only (1100/1135) or MATCH/1390; D roles semantic MATCH (R5/N5 via 1199)."
+    },
+    {
+      "row": "pubsub/delivery/deadlines#deadline-extension",
+      "transport": "rest",
+      "coordinate": "/conditions/9/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "966b6f3f",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "H1 R13 (REST) and N15 (native) positive-deadline-extension in 966b and b873 pass the owner-1100 ACK predicate join (Pull, ModifyAckDeadline on own delivery, post-deadline probe Pull, Ack: same targets, equal outcomes, all OK). Original r1 n614 / r2 n623 opaque-only (1100/1135); the original arms alone did not establish 9/1 (exact-ack-deadline-four.md), H1 supplies it."
+    },
+    {
+      "row": "pubsub/delivery/deadlines#deadline-extension",
+      "transport": "grpc",
+      "coordinate": "/conditions/9/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "966b6f3f",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "H1 R13 (REST) and N15 (native) positive-deadline-extension in 966b and b873 pass the owner-1100 ACK predicate join (Pull, ModifyAckDeadline on own delivery, post-deadline probe Pull, Ack: same targets, equal outcomes, all OK). Original r1 n614 / r2 n623 opaque-only (1100/1135); the original arms alone did not establish 9/1 (exact-ack-deadline-four.md), H1 supplies it."
+    },
+    {
+      "row": "pubsub/delivery/deadlines#invalid-deadline",
+      "transport": "rest",
+      "coordinate": "/conditions/9/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/deadlines#invalid-deadline",
+      "transport": "grpc",
+      "coordinate": "/conditions/9/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/deadlines#deadline-expiry",
+      "transport": "rest",
+      "coordinate": "/conditions/9/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390",
+        "1199"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "295cfe3e",
+        "788b877b",
+        "a8ed1cce"
+      ],
+      "basis": "Original deadline-expiry Pull rows r1 n614 / r2 n623 opaque-only (1100/1135), r2 n610 MATCH/1390; D roles semantic MATCH."
+    },
+    {
+      "row": "pubsub/delivery/deadlines#deadline-expiry",
+      "transport": "grpc",
+      "coordinate": "/conditions/9/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390",
+        "1199"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "295cfe3e",
+        "788b877b",
+        "a8ed1cce"
+      ],
+      "basis": "Original deadline-expiry Pull rows r1 n614 / r2 n623 opaque-only (1100/1135), r2 n610 MATCH/1390; D roles semantic MATCH."
+    },
+    {
+      "row": "pubsub/delivery/deadlines#redelivery-id-correlation",
+      "transport": "rest",
+      "coordinate": "/conditions/9/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390",
+        "1199",
+        "1394"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "295cfe3e",
+        "788b877b",
+        "a8ed1cce"
+      ],
+      "basis": "Owner 1394 names these cases. r2 n603 (nack-deadline/rest step 04) delivers the same 2 messages in a different order; across every nack-deadline arm the delivered set and contents are equal and every redelivery is consistent with the own modifyAckDeadline(0) or the ack deadline on both sides (cell-1394.json). Other rows opaque-only (1100/1135) or MATCH/1390; D roles semantic MATCH (R5/N5 via 1199)."
+    },
+    {
+      "row": "pubsub/delivery/deadlines#redelivery-id-correlation",
+      "transport": "grpc",
+      "coordinate": "/conditions/9/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390",
+        "1199",
+        "1394"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "295cfe3e",
+        "788b877b",
+        "a8ed1cce"
+      ],
+      "basis": "Owner 1394 names these cases. r2 n603 (nack-deadline/rest step 04) delivers the same 2 messages in a different order; across every nack-deadline arm the delivered set and contents are equal and every redelivery is consistent with the own modifyAckDeadline(0) or the ack deadline on both sides (cell-1394.json). Other rows opaque-only (1100/1135) or MATCH/1390; D roles semantic MATCH (R5/N5 via 1199)."
+    },
+    {
+      "row": "pubsub/delivery/deadlines#cancel-without-ack",
+      "transport": "rest",
+      "coordinate": "/conditions/9/cases/5",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R3/N3 semantic MATCH in 45298 and 567e."
+    },
+    {
+      "row": "pubsub/delivery/deadlines#cancel-without-ack",
+      "transport": "grpc",
+      "coordinate": "/conditions/9/cases/5",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R3/N3 semantic MATCH in 45298 and 567e."
+    },
+    {
+      "row": "pubsub/delivery/filters#match",
+      "transport": "rest",
+      "coordinate": "/conditions/10/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "r1 n397 / r2 n394 differ only in generated values (1100/1135); other rows MATCH/1390."
+    },
+    {
+      "row": "pubsub/delivery/filters#match",
+      "transport": "grpc",
+      "coordinate": "/conditions/10/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "r1 n397 / r2 n394 differ only in generated values (1100/1135); other rows MATCH/1390."
+    },
+    {
+      "row": "pubsub/delivery/filters#nonmatch",
+      "transport": "rest",
+      "coordinate": "/conditions/10/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "r1 n397 / r2 n394 differ only in generated values (1100/1135); other rows MATCH/1390."
+    },
+    {
+      "row": "pubsub/delivery/filters#nonmatch",
+      "transport": "grpc",
+      "coordinate": "/conditions/10/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "r1 n397 / r2 n394 differ only in generated values (1100/1135); other rows MATCH/1390."
+    },
+    {
+      "row": "pubsub/delivery/filters#missing-attribute",
+      "transport": "rest",
+      "coordinate": "/conditions/10/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "r1 n397 / r2 n394 differ only in generated values (1100/1135); other rows MATCH/1390."
+    },
+    {
+      "row": "pubsub/delivery/filters#missing-attribute",
+      "transport": "grpc",
+      "coordinate": "/conditions/10/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "r1 n397 / r2 n394 differ only in generated values (1100/1135); other rows MATCH/1390."
+    },
+    {
+      "row": "pubsub/delivery/filters#attribute-exists",
+      "transport": "rest",
+      "coordinate": "/conditions/10/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390",
+        "1209",
+        "1210"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Original rows MATCH/1390; C R7/N7 semantic MATCH in both C sets (N7 empty-attribute physical difference under 1209/1210)."
+    },
+    {
+      "row": "pubsub/delivery/filters#attribute-exists",
+      "transport": "grpc",
+      "coordinate": "/conditions/10/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390",
+        "1209",
+        "1210"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Original rows MATCH/1390; C R7/N7 semantic MATCH in both C sets (N7 empty-attribute physical difference under 1209/1210)."
+    },
+    {
+      "row": "pubsub/delivery/filters#inequality",
+      "transport": "rest",
+      "coordinate": "/conditions/10/cases/4",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R4/N4 semantic MATCH in 45298 and 567e."
+    },
+    {
+      "row": "pubsub/delivery/filters#inequality",
+      "transport": "grpc",
+      "coordinate": "/conditions/10/cases/4",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R4/N4 semantic MATCH in 45298 and 567e."
+    },
+    {
+      "row": "pubsub/delivery/filters#conjunction",
+      "transport": "rest",
+      "coordinate": "/conditions/10/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1203"
+      ],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R5/N5: semantic MATCH except 567e N5 (NC), disposition MATCH under 1203 in both sets."
+    },
+    {
+      "row": "pubsub/delivery/filters#conjunction",
+      "transport": "grpc",
+      "coordinate": "/conditions/10/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1203"
+      ],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R5/N5: semantic MATCH except 567e N5 (NC), disposition MATCH under 1203 in both sets."
+    },
+    {
+      "row": "pubsub/delivery/filters#disjunction",
+      "transport": "rest",
+      "coordinate": "/conditions/10/cases/6",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1203"
+      ],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R6/N6: R6 NC in both sets and 567e N6 NC, disposition MATCH under 1203."
+    },
+    {
+      "row": "pubsub/delivery/filters#disjunction",
+      "transport": "grpc",
+      "coordinate": "/conditions/10/cases/6",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1203"
+      ],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R6/N6: R6 NC in both sets and 567e N6 NC, disposition MATCH under 1203."
+    },
+    {
+      "row": "pubsub/delivery/filters#negation",
+      "transport": "rest",
+      "coordinate": "/conditions/10/cases/7",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "9f9fc202",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "H1 R12/N14 (filter-negation) in 9f9 and b873 pass the owner-1100 ACK predicate join; original r1 n392, r2 n389/n401 opaque-only (1100/1135)."
+    },
+    {
+      "row": "pubsub/delivery/filters#negation",
+      "transport": "grpc",
+      "coordinate": "/conditions/10/cases/7",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "9f9fc202",
+        "a8ed1cce",
+        "b8734748"
+      ],
+      "basis": "H1 R12/N14 (filter-negation) in 9f9 and b873 pass the owner-1100 ACK predicate join; original r1 n392, r2 n389/n401 opaque-only (1100/1135)."
+    },
+    {
+      "row": "pubsub/delivery/filters#invalid-filter",
+      "transport": "rest",
+      "coordinate": "/conditions/10/cases/8",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/filters#invalid-filter",
+      "transport": "grpc",
+      "coordinate": "/conditions/10/cases/8",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/filters#filter-update-refusal",
+      "transport": "rest",
+      "coordinate": "/conditions/10/cases/9",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/filters#filter-update-refusal",
+      "transport": "grpc",
+      "coordinate": "/conditions/10/cases/9",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/ordering#single-key-sequence",
+      "transport": "rest",
+      "coordinate": "/conditions/11/cases/0",
+      "status": "PENDING",
+      "rules": [
+        "1392",
+        "1395",
+        "1399",
+        "1204",
+        "1213",
+        "1215"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213).",
+      "pendingReason": "awaiting the corrected owner 1399 judge"
+    },
+    {
+      "row": "pubsub/delivery/ordering#single-key-sequence",
+      "transport": "grpc",
+      "coordinate": "/conditions/11/cases/0",
+      "status": "PENDING",
+      "rules": [
+        "1392",
+        "1395",
+        "1399",
+        "1204",
+        "1213",
+        "1215"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213).",
+      "pendingReason": "awaiting the corrected owner 1399 judge"
+    },
+    {
+      "row": "pubsub/delivery/ordering#separate-keys",
+      "transport": "rest",
+      "coordinate": "/conditions/11/cases/1",
+      "status": "PENDING",
+      "rules": [
+        "1392",
+        "1395",
+        "1399",
+        "1204",
+        "1213",
+        "1215"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213).",
+      "pendingReason": "awaiting the corrected owner 1399 judge"
+    },
+    {
+      "row": "pubsub/delivery/ordering#separate-keys",
+      "transport": "grpc",
+      "coordinate": "/conditions/11/cases/1",
+      "status": "PENDING",
+      "rules": [
+        "1392",
+        "1395",
+        "1399",
+        "1204",
+        "1213",
+        "1215"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213).",
+      "pendingReason": "awaiting the corrected owner 1399 judge"
+    },
+    {
+      "row": "pubsub/delivery/ordering#ordering-disabled",
+      "transport": "rest",
+      "coordinate": "/conditions/11/cases/2",
+      "status": "PENDING",
+      "rules": [
+        "1100",
+        "1135",
+        "1390",
+        "1394",
+        "1399"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Plain (ordering omitted) subscription: drain step 17 delivers the same 11 messages with equal contents in all four arms, receipt order differs in 3 (1394 MATCH, cell-1394.json, rows from the 1399 runs). The step 19 rows read the ordered subscription of the same original ordering cell after the plain drain; they are equal in r1 but in r2 differ by the held-key tail, which only the owner 1399 cell relation covers. Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C R9/N9 control subscription disposition MATCH (1204/1215).",
+      "pendingReason": "awaiting the corrected owner 1399 judge"
+    },
+    {
+      "row": "pubsub/delivery/ordering#ordering-disabled",
+      "transport": "grpc",
+      "coordinate": "/conditions/11/cases/2",
+      "status": "PENDING",
+      "rules": [
+        "1100",
+        "1135",
+        "1390",
+        "1394",
+        "1399"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Plain (ordering omitted) subscription: drain step 17 delivers the same 11 messages with equal contents in all four arms, receipt order differs in 3 (1394 MATCH, cell-1394.json, rows from the 1399 runs). The step 19 rows read the ordered subscription of the same original ordering cell after the plain drain; they are equal in r1 but in r2 differ by the held-key tail, which only the owner 1399 cell relation covers. Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C R9/N9 control subscription disposition MATCH (1204/1215).",
+      "pendingReason": "awaiting the corrected owner 1399 judge"
+    },
+    {
+      "row": "pubsub/delivery/ordering#nack-blocks-key",
+      "transport": "rest",
+      "coordinate": "/conditions/11/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1213"
+      ],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R8/N8 semantic DIVERGES (cross-key interleaving / Pull partition), disposition MATCH under 1213 in both sets."
+    },
+    {
+      "row": "pubsub/delivery/ordering#nack-blocks-key",
+      "transport": "grpc",
+      "coordinate": "/conditions/11/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1213"
+      ],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R8/N8 semantic DIVERGES (cross-key interleaving / Pull partition), disposition MATCH under 1213 in both sets."
+    },
+    {
+      "row": "pubsub/delivery/ordering#ack-unblocks-key",
+      "transport": "rest",
+      "coordinate": "/conditions/11/cases/4",
+      "status": "PENDING",
+      "rules": [
+        "1392",
+        "1395",
+        "1399",
+        "1204",
+        "1213",
+        "1215"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213).",
+      "pendingReason": "awaiting the corrected owner 1399 judge"
+    },
+    {
+      "row": "pubsub/delivery/ordering#ack-unblocks-key",
+      "transport": "grpc",
+      "coordinate": "/conditions/11/cases/4",
+      "status": "PENDING",
+      "rules": [
+        "1392",
+        "1395",
+        "1399",
+        "1204",
+        "1213",
+        "1215"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Coordinator note 2026-10-12: the owner 1399 judge (ordering-identity-ack.mjs) got CHANGES REQUESTED (failed ACKs could make a truncated delivery MATCH); the fix is on another lane and the new verdicts come from the coordinator. Interim evidence on a97b87c1 (ordering-identity-1399 runs, harness 2a905f740): r1 rest/grpc MATCH under 1392 (10/10), r2 rest/grpc DIVERGES under 1392 (9/10, 10/9) and MATCH under 1399 (held key tails); this proof's independent re-check (check_1399.py, counts only successful ACKs as releasing a key) agrees on all four arms. Not judged here. C witnesses: R9/N9 disposition MATCH (1204, 1215), R8/N8 disposition MATCH (1213).",
+      "pendingReason": "awaiting the corrected owner 1399 judge"
+    },
+    {
+      "row": "pubsub/delivery/dead-letter#policy-round-trip",
+      "transport": "rest",
+      "coordinate": "/conditions/12/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/dead-letter#policy-round-trip",
+      "transport": "grpc",
+      "coordinate": "/conditions/12/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/dead-letter#delivery-attempt-without-policy",
+      "transport": "rest",
+      "coordinate": "/conditions/12/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "r1 n350 opaque-only (1100/1135); other rows MATCH/1390."
+    },
+    {
+      "row": "pubsub/delivery/dead-letter#delivery-attempt-without-policy",
+      "transport": "grpc",
+      "coordinate": "/conditions/12/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "r1 n350 opaque-only (1100/1135); other rows MATCH/1390."
+    },
+    {
+      "row": "pubsub/delivery/dead-letter#delivery-attempt-with-policy",
+      "transport": "rest",
+      "coordinate": "/conditions/12/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390",
+        "1199",
+        "1193",
+        "1194"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "295cfe3e",
+        "788b877b",
+        "a8ed1cce"
+      ],
+      "basis": "Original DLQ Pull rows opaque-only (1100/1135); D R5/N5 deliveryAttempt restart relation MATCH (1199) in d1 and d2; managed cells semantic MATCH (1193/1194)."
+    },
+    {
+      "row": "pubsub/delivery/dead-letter#delivery-attempt-with-policy",
+      "transport": "grpc",
+      "coordinate": "/conditions/12/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1390",
+        "1199",
+        "1193",
+        "1194"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "295cfe3e",
+        "788b877b",
+        "a8ed1cce"
+      ],
+      "basis": "Original DLQ Pull rows opaque-only (1100/1135); D R5/N5 deliveryAttempt restart relation MATCH (1199) in d1 and d2; managed cells semantic MATCH (1193/1194)."
+    },
+    {
+      "row": "pubsub/delivery/dead-letter#eventual-forwarding",
+      "transport": "rest",
+      "coordinate": "/conditions/12/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1193",
+        "1194"
+      ],
+      "witnessRunPrefixes": [
+        "295cfe3e",
+        "788b877b"
+      ],
+      "basis": "D managed R2/R4/R6/N2/N4/N6 semantic MATCH in d1 (788b877b5f72) and d2 (295cfe3e583e)."
+    },
+    {
+      "row": "pubsub/delivery/dead-letter#eventual-forwarding",
+      "transport": "grpc",
+      "coordinate": "/conditions/12/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1193",
+        "1194"
+      ],
+      "witnessRunPrefixes": [
+        "295cfe3e",
+        "788b877b"
+      ],
+      "basis": "D managed R2/R4/R6/N2/N4/N6 semantic MATCH in d1 (788b877b5f72) and d2 (295cfe3e583e)."
+    },
+    {
+      "row": "pubsub/delivery/dead-letter#forwarded-payload-identity",
+      "transport": "rest",
+      "coordinate": "/conditions/12/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1193",
+        "1194"
+      ],
+      "witnessRunPrefixes": [
+        "295cfe3e",
+        "788b877b"
+      ],
+      "basis": "D managed R2/R4/R6/N2/N4/N6 semantic MATCH in d1 (788b877b5f72) and d2 (295cfe3e583e)."
+    },
+    {
+      "row": "pubsub/delivery/dead-letter#forwarded-payload-identity",
+      "transport": "grpc",
+      "coordinate": "/conditions/12/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1193",
+        "1194"
+      ],
+      "witnessRunPrefixes": [
+        "295cfe3e",
+        "788b877b"
+      ],
+      "basis": "D managed R2/R4/R6/N2/N4/N6 semantic MATCH in d1 (788b877b5f72) and d2 (295cfe3e583e)."
+    },
+    {
+      "row": "pubsub/delivery/dead-letter#invalid-policy",
+      "transport": "rest",
+      "coordinate": "/conditions/12/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/dead-letter#invalid-policy",
+      "transport": "grpc",
+      "coordinate": "/conditions/12/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/delivery/stream#opening-frame",
+      "transport": "grpc",
+      "coordinate": "/conditions/13/cases/0",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "d7efbfda",
+        "da4c5709"
+      ],
+      "basis": "A S01 MATCH in both independent native sets (da4c5709f33b, d7efbfdaf305)."
+    },
+    {
+      "row": "pubsub/delivery/stream#future-publications",
+      "transport": "grpc",
+      "coordinate": "/conditions/13/cases/1",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "d7efbfda",
+        "da4c5709"
+      ],
+      "basis": "A S02 MATCH in both independent native sets (da4c5709f33b, d7efbfdaf305)."
+    },
+    {
+      "row": "pubsub/delivery/stream#in-stream-ack",
+      "transport": "grpc",
+      "coordinate": "/conditions/13/cases/2",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "7dc3e0a8",
+        "d7efbfda",
+        "da4c5709"
+      ],
+      "basis": "A S03 MATCH in d7efbfdaf305 and in the independent S03 source 7dc3e0a86e6e; the da4c5709f33b S03 cell stays NC on terminal details (retained, not used)."
+    },
+    {
+      "row": "pubsub/delivery/stream#in-stream-nack",
+      "transport": "grpc",
+      "coordinate": "/conditions/13/cases/3",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "d7efbfda",
+        "da4c5709"
+      ],
+      "basis": "A S04 MATCH in both independent native sets (da4c5709f33b, d7efbfdaf305)."
+    },
+    {
+      "row": "pubsub/delivery/stream#in-stream-deadline-update",
+      "transport": "grpc",
+      "coordinate": "/conditions/13/cases/4",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "d7efbfda",
+        "da4c5709"
+      ],
+      "basis": "A S05 MATCH in both independent native sets (da4c5709f33b, d7efbfdaf305)."
+    },
+    {
+      "row": "pubsub/delivery/stream#flow-control",
+      "transport": "grpc",
+      "coordinate": "/conditions/13/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1171"
+      ],
+      "witnessRunPrefixes": [
+        "d7efbfda",
+        "da4c5709"
+      ],
+      "basis": "A S06 MATCH in both native sets; unordered StreamingPull receipt order compared under 1171."
+    },
+    {
+      "row": "pubsub/delivery/stream#client-cancel",
+      "transport": "grpc",
+      "coordinate": "/conditions/13/cases/6",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "d7efbfda",
+        "da4c5709"
+      ],
+      "basis": "A S07 MATCH in both independent native sets (da4c5709f33b, d7efbfdaf305)."
+    },
+    {
+      "row": "pubsub/delivery/stream#half-close",
+      "transport": "grpc",
+      "coordinate": "/conditions/13/cases/7",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "d7efbfda",
+        "da4c5709"
+      ],
+      "basis": "A S08 MATCH in both independent native sets (da4c5709f33b, d7efbfdaf305)."
+    },
+    {
+      "row": "pubsub/delivery/stream#missing-subscription",
+      "transport": "grpc",
+      "coordinate": "/conditions/13/cases/8",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "d7efbfda",
+        "da4c5709"
+      ],
+      "basis": "A S09 MATCH in both independent native sets (da4c5709f33b, d7efbfdaf305)."
+    },
+    {
+      "row": "pubsub/delivery/stream#invalid-opening-frame",
+      "transport": "grpc",
+      "coordinate": "/conditions/13/cases/9",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "3efb4c7c",
+        "de14f6d9"
+      ],
+      "basis": "H1 S10 MATCH in 3efb and de14."
+    },
+    {
+      "row": "pubsub/delivery/stream#invalid-update-frame",
+      "transport": "grpc",
+      "coordinate": "/conditions/13/cases/10",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "3efb4c7c",
+        "de14f6d9"
+      ],
+      "basis": "H1 S11 MATCH in 3efb and de14."
+    },
+    {
+      "row": "pubsub/replay#snapshot-lifecycle",
+      "transport": "rest",
+      "coordinate": "/conditions/14/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1146",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce",
+        "b304ebda",
+        "d4e5b9a3"
+      ],
+      "basis": "Original listSnapshots rows differ in page boundary (r1 n499/r2 n496 also carry \"causal cursor collision\"); B ListSnapshots own-cursor witnesses MATCH in both sets (1146)."
+    },
+    {
+      "row": "pubsub/replay#snapshot-lifecycle",
+      "transport": "grpc",
+      "coordinate": "/conditions/14/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1146",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce",
+        "b304ebda",
+        "d4e5b9a3"
+      ],
+      "basis": "Original listSnapshots rows differ in page boundary (r1 n499/r2 n496 also carry \"causal cursor collision\"); B ListSnapshots own-cursor witnesses MATCH in both sets (1146)."
+    },
+    {
+      "row": "pubsub/replay#snapshot-labels",
+      "transport": "rest",
+      "coordinate": "/conditions/14/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/replay#snapshot-labels",
+      "transport": "grpc",
+      "coordinate": "/conditions/14/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/replay#snapshot-topic-relationship",
+      "transport": "rest",
+      "coordinate": "/conditions/14/cases/2",
+      "status": "EXCLUDED_STEP",
+      "rules": [
+        "1383",
+        "1385",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "Only r1 n484 (snapshot-seek/rest step 41 getSnapshot, production 404 vs local 200) diverges; excluded by 1383/1385. All remaining steps MATCH or MATCH/1390.",
+      "excludedSteps": [
+        {
+          "run": "r1",
+          "n": 484,
+          "owner": "1383",
+          "reason": "production REST GET 404 (14/2 getSnapshot); recorded as production REST negative cache / visibility, not emulated (1383 as corrected by 1385)"
+        }
+      ]
+    },
+    {
+      "row": "pubsub/replay#snapshot-topic-relationship",
+      "transport": "grpc",
+      "coordinate": "/conditions/14/cases/2",
+      "status": "EXCLUDED_STEP",
+      "rules": [
+        "1383",
+        "1385",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "Only r1 n484 (snapshot-seek/rest step 41 getSnapshot, production 404 vs local 200) diverges; excluded by 1383/1385. All remaining steps MATCH or MATCH/1390.",
+      "excludedSteps": [
+        {
+          "run": "r1",
+          "n": 484,
+          "owner": "1383",
+          "reason": "production REST GET 404 (14/2 getSnapshot); recorded as production REST negative cache / visibility, not emulated (1383 as corrected by 1385)"
+        }
+      ]
+    },
+    {
+      "row": "pubsub/replay#backlog-replay",
+      "transport": "rest",
+      "coordinate": "/conditions/14/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1203",
+        "1390",
+        "1394"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Owner 1394 names this case. Post-Seek windows: production first Pull empty (r1 n463 rest, r1 n505 grpc, r2 n460 rest) where LOCAL delivers 2; per subscription and Seek window the delivered set and contents are equal, so the difference is a Pull returning fewer (0) messages. The extra LOCAL deliveries in the same window are redeliveries after the ack deadline on the replay clock (LOCAL delivers at the request instant, production at the end of its long poll; cell-1394.json redelivery bounds). C R12/N12 disposition MATCH under 1203."
+    },
+    {
+      "row": "pubsub/replay#backlog-replay",
+      "transport": "grpc",
+      "coordinate": "/conditions/14/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1203",
+        "1390",
+        "1394"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Owner 1394 names this case. Post-Seek windows: production first Pull empty (r1 n463 rest, r1 n505 grpc, r2 n460 rest) where LOCAL delivers 2; per subscription and Seek window the delivered set and contents are equal, so the difference is a Pull returning fewer (0) messages. The extra LOCAL deliveries in the same window are redeliveries after the ack deadline on the replay clock (LOCAL delivers at the request instant, production at the end of its long poll; cell-1394.json redelivery bounds). C R12/N12 disposition MATCH under 1203."
+    },
+    {
+      "row": "pubsub/replay#post-snapshot-publication",
+      "transport": "rest",
+      "coordinate": "/conditions/14/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1243",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Owner 1243 comparison re-qualified on a97b87c1: 4 source-bound groups (r1-rest, r1-native, r2-rest, r2-native) QUALIFIED, partial-delivery negative NOT_COMPARABLE, no verdict change from 0faa (case14-4-5/report.md section 3). Original post-Seek rows (r1 n463/n505, r2 n460) keep raw DIVERGES as 1243 requires (rawDAndNCRetained) and are related by those groups; they also pass the 1394-type cell check. C R12/N12 disposition MATCH (1203) retained as context."
+    },
+    {
+      "row": "pubsub/replay#post-snapshot-publication",
+      "transport": "grpc",
+      "coordinate": "/conditions/14/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1243",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Owner 1243 comparison re-qualified on a97b87c1: 4 source-bound groups (r1-rest, r1-native, r2-rest, r2-native) QUALIFIED, partial-delivery negative NOT_COMPARABLE, no verdict change from 0faa (case14-4-5/report.md section 3). Original post-Seek rows (r1 n463/n505, r2 n460) keep raw DIVERGES as 1243 requires (rawDAndNCRetained) and are related by those groups; they also pass the 1394-type cell check. C R12/N12 disposition MATCH (1203) retained as context."
+    },
+    {
+      "row": "pubsub/replay#seek-time-retain-true",
+      "transport": "rest",
+      "coordinate": "/conditions/14/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1319",
+        "1203",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Owner 1319 N13 supplement re-run on a97b87c1: two genuine native sequential sources (4d181bc66794, 2aa2726342ee), both sets closed, 20 positive/20 positive, every contract assertion passed, no verdict change from d022 (case14-4-5/report.md section 3). C R10/N10/R13 MATCH in both C sets; the C N13 cells (semantic DIVERGES, disposition NOT_COMPARABLE, old3NC) are retained as raw evidence and are exactly what the owner-1319 supplement replaces. Original post-Seek rows (early empty production Pull, r1 n468/n510, r2 n465/n506) are raw temporal differences that 1319 retains; the 1394-type cell check also passes."
+    },
+    {
+      "row": "pubsub/replay#seek-time-retain-true",
+      "transport": "grpc",
+      "coordinate": "/conditions/14/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1100",
+        "1135",
+        "1319",
+        "1203",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "45298b94",
+        "567e1cd8",
+        "a8ed1cce"
+      ],
+      "basis": "Owner 1319 N13 supplement re-run on a97b87c1: two genuine native sequential sources (4d181bc66794, 2aa2726342ee), both sets closed, 20 positive/20 positive, every contract assertion passed, no verdict change from d022 (case14-4-5/report.md section 3). C R10/N10/R13 MATCH in both C sets; the C N13 cells (semantic DIVERGES, disposition NOT_COMPARABLE, old3NC) are retained as raw evidence and are exactly what the owner-1319 supplement replaces. Original post-Seek rows (early empty production Pull, r1 n468/n510, r2 n465/n506) are raw temporal differences that 1319 retains; the 1394-type cell check also passes."
+    },
+    {
+      "row": "pubsub/replay#seek-time-retain-false",
+      "transport": "rest",
+      "coordinate": "/conditions/14/cases/6",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R10/N10 semantic MATCH in 45298 and 567e."
+    },
+    {
+      "row": "pubsub/replay#seek-time-retain-false",
+      "transport": "grpc",
+      "coordinate": "/conditions/14/cases/6",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "45298b94",
+        "567e1cd8"
+      ],
+      "basis": "C R10/N10 semantic MATCH in 45298 and 567e."
+    },
+    {
+      "row": "pubsub/replay#wrong-topic-target",
+      "transport": "rest",
+      "coordinate": "/conditions/14/cases/7",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "1c92a1ee",
+        "db363fcb"
+      ],
+      "basis": "C R11/N11 semantic MATCH in the dedicated sources 1c92 and db363 (45298/567e R11/N11 stay NC, superseded per the ABC9 review)."
+    },
+    {
+      "row": "pubsub/replay#wrong-topic-target",
+      "transport": "grpc",
+      "coordinate": "/conditions/14/cases/7",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [
+        "1c92a1ee",
+        "db363fcb"
+      ],
+      "basis": "C R11/N11 semantic MATCH in the dedicated sources 1c92 and db363 (45298/567e R11/N11 stay NC, superseded per the ABC9 review)."
+    },
+    {
+      "row": "pubsub/replay#missing-snapshot",
+      "transport": "rest",
+      "coordinate": "/conditions/14/cases/8",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/replay#missing-snapshot",
+      "transport": "grpc",
+      "coordinate": "/conditions/14/cases/8",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/replay#snapshot-lifetime-shape",
+      "transport": "rest",
+      "coordinate": "/conditions/14/cases/9",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/replay#snapshot-lifetime-shape",
+      "transport": "grpc",
+      "coordinate": "/conditions/14/cases/9",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/errors#missing-resource",
+      "transport": "rest",
+      "coordinate": "/conditions/15/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/errors#missing-resource",
+      "transport": "grpc",
+      "coordinate": "/conditions/15/cases/0",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/errors#invalid-argument",
+      "transport": "rest",
+      "coordinate": "/conditions/15/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/errors#invalid-argument",
+      "transport": "grpc",
+      "coordinate": "/conditions/15/cases/1",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/errors#duplicate-resource",
+      "transport": "rest",
+      "coordinate": "/conditions/15/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/errors#duplicate-resource",
+      "transport": "grpc",
+      "coordinate": "/conditions/15/cases/2",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/errors#no-token",
+      "transport": "rest",
+      "coordinate": "/conditions/15/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "897",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "No-token 403/PERMISSION_DENIED equal on both transports and sets with a token configured; the headerless-without-token exception is the explicit local authentication disposition of owner 897; REST rows MATCH under 1390."
+    },
+    {
+      "row": "pubsub/errors#no-token",
+      "transport": "grpc",
+      "coordinate": "/conditions/15/cases/3",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "897",
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "No-token 403/PERMISSION_DENIED equal on both transports and sets with a token configured; the headerless-without-token exception is the explicit local authentication disposition of owner 897; REST rows MATCH under 1390."
+    },
+    {
+      "row": "pubsub/errors#invalid-token",
+      "transport": "rest",
+      "coordinate": "/conditions/15/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/errors#invalid-token",
+      "transport": "grpc",
+      "coordinate": "/conditions/15/cases/4",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/errors#canonical-error-shape",
+      "transport": "rest",
+      "coordinate": "/conditions/15/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/errors#canonical-error-shape",
+      "transport": "grpc",
+      "coordinate": "/conditions/15/cases/5",
+      "status": "MATCH_BY_RELATION",
+      "rules": [
+        "1390"
+      ],
+      "witnessRunPrefixes": [
+        "14802609",
+        "a8ed1cce"
+      ],
+      "basis": "All selected original r1/r2 rows on the final binary are MATCH (gRPC, semantic shape) or REST NOT_COMPARABLE only for \"recorded wire length missing\" after equal status and normalized body; owner 1390 makes those REST rows MATCH."
+    },
+    {
+      "row": "pubsub/final#strict-production",
+      "transport": "artifact",
+      "coordinate": "/conditions/16/cases/0",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [],
+      "basis": "Both independent production observation sets and every admitted variant were replayed against the one final strict binary a97b87c1: final-generation (24 units, every final run closed, cleanupErrors [], productionRequests 0, profile strict), the 14/4 owner-1243 groups and the 14/5 owner-1319 N13 supplement (case14-4-5, re-run on a97b87c1), and the original ordering cells with identity ACKs (ordering-identity-1399, other cells identical to final-generation). Case/transport parity and explicit gaps are this matrix (16/2)."
+    },
+    {
+      "row": "pubsub/final#emulator-official",
+      "transport": "artifact",
+      "coordinate": "/conditions/16/cases/1",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [],
+      "basis": "Scoped, EVENTARC precedent (full70 emulator-official ACCEPT_SCOPED_CANDIDATE: one fireemu emulator-profile replay of every eligible recorded request on the accepted binary, production comparisons descriptive). emulator-16-1: all 24 applicable runs of the same complete set replayed under the emulator profile on a97b87c1 to completion (closed, exit 0, cleanupErrors [], productionRequests 0); 100 recorded differences, every one a production-binding assertion classified against the emulator-profile code paths; production stays the oracle and the rows are descriptive (gate false). Strict unchanged (three strict re-runs on the patched harness identical, strict-identity.json). Qualifications: not an official-emulator (firebase-tools 15.28.2) oracle run; the unchanged C comparer records a TypeError reason on 4 Pull rows in each of C 45298/567e (emulator only, filed P3)."
+    },
+    {
+      "row": "pubsub/final#complete-case-set",
+      "transport": "artifact",
+      "coordinate": "/conditions/16/cases/2",
+      "status": "PENDING",
+      "rules": [],
+      "witnessRunPrefixes": [],
+      "basis": "The 122-case matrix with per-case witnesses on a97b87c1 and no inherited MATCH is this file; it is complete only when 6/8 (1394 condition unmet) and 11/0, 11/1, 11/2, 11/4 (1399 judge fix) are settled.",
+      "pendingReason": "awaiting a coordinator or owner disposition"
+    },
+    {
+      "row": "pubsub/final#clean-source-build",
+      "transport": "artifact",
+      "coordinate": "/conditions/16/cases/3",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [],
+      "basis": "Clean source 01d284ca7 (tree 1c86b127...), release build with RUSTC_WRAPPER empty and --locked, binary a97b87c1, binary-inputs.json 338 files (final-generation/report.md section 1; built twice there with the same sha). Independent provenance check: this lane rebuilt from a fresh detached worktree at 01d284ca7 (no untracked or ignored files, no ui/dist) into a new target dir (target/claude-pubsub-closure-rebuild) with the same clean env and command (12m38s). Result sha256 26c3d7ec03b742eb66c1075f9059ba16d1ca64922e2edfb159c717a9745f68af, same size; the only differing bytes are the 16-byte Mach-O LC_UUID and the page-0 code-directory hash slot that covers it (48 bytes; ld64 assigns a per-output-path UUID). With the final binary UUID copied in and the slot recomputed, the rebuild is byte-identical to a97b87c1 (confirmed; docs.local/runs/claude-pubsub-closure/rebuild/rebuild-record.json)."
+    },
+    {
+      "row": "pubsub/final#same-final-artifact",
+      "transport": "artifact",
+      "coordinate": "/conditions/16/cases/4",
+      "status": "MATCH",
+      "rules": [],
+      "witnessRunPrefixes": [],
+      "basis": "Start: every final strict run (final-generation 24, ordering-identity-1399 r1/r2) passes the build pin 3b8ad1ab (binary a97b87c1) to its worker, whose installed-build-pin check refuses a binary digest mismatch, and the launched server process args name final-generation/build/release/fireemu with profile strict. End: the server identity (pid/birth/args) is re-checked through the end-of-run signal decision, and the binary file was last modified at 2026-10-11T16:25:37.511142+00:00, before the first server start, and hashes to a97b87c1 at proof time, so it was the same file at every run end (artifact-identity.json). case14-4-5 asserts the same sha before the first run and at the end; emulator-16-1 uses the same unchanged binary."
+    },
+    {
+      "row": "pubsub/closure#independent-approval",
+      "transport": "artifact",
+      "coordinate": "/conditions/17/cases/0",
+      "status": "PENDING",
+      "rules": [],
+      "witnessRunPrefixes": [],
+      "basis": "Independent parent review not yet held; the coordinator runs it next with this file as input.",
+      "pendingReason": "awaiting the independent parent review"
+    }
+  ]
+}

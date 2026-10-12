@@ -160,6 +160,7 @@ export function createDescriptiveDifferences({ profile, mode } = {}) {
         differences: entries.length,
         primaryDifferences: entries.filter((entry) => !entry.followsEarlierDifferenceInCell).length,
         cellsWithDifferences: [...cellsWithDifferences].toSorted(),
+        unattributedDifferences: entries.filter((entry) => entry.cellId == null).length,
         byClassification,
         entries: structuredClone(entries),
       };

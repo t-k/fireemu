@@ -607,3 +607,14 @@ test("markCells counts each cell's own differences and leaves unmarked cells alo
   assert.deepEqual(cells[2].rows, [{}]);
   assert.deepEqual(d.summary().cellsWithDifferences, ["R3", "R4"]);
 });
+
+test("differences without a cell id are counted as unattributed (S4 gap)", () => {
+  const d = createDescriptiveDifferences({ profile: "emulator", mode: "descriptive" });
+  const error = new Error("missing supplemental dispatch");
+  assert.equal(d.summary().unattributedDifferences, 0);
+  d.record({ phase: "supplement-finish" }, error);
+  d.record({ sourceN: 2, cellId: "N4" }, error);
+  d.record({ sourceN: 3, cellId: null }, error);
+  assert.equal(d.summary().unattributedDifferences, 2);
+  assert.deepEqual(d.summary().cellsWithDifferences, ["N4"]);
+});

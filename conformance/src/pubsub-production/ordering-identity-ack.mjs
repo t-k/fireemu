@@ -289,11 +289,11 @@ export function orderingCellResults(sourceExchanges, localExchanges, success) {
       throw new Error("ordering cell needs exactly one ordered subscription");
     const orderedSubscription = orderedSubscriptionOf(created[0].request),
       orderedTopic = created[0].request.body.topic;
-    const failedAcknowledge = [original, localExchanges].some((exchanges) =>
+    const failedCall = [original, localExchanges].some((exchanges) =>
       exchanges.some(
         (e) =>
           e.case === cell &&
-          e.op === "acknowledge" &&
+          ["pull", "acknowledge"].includes(e.op) &&
           subscriptionOf(e.request) === orderedSubscription &&
           !success(e),
       ),
@@ -323,10 +323,11 @@ export function orderingCellResults(sourceExchanges, localExchanges, success) {
       sourceDelivered: delivered(sourcePulls),
       localDelivered: delivered(localPulls),
       ...judgeOrderingCell(sourcePulls, localPulls),
-      owner1399: failedAcknowledge
+      owner1399: failedCall
         ? {
             verdict: "DIVERGES",
-            reason: "owner 1399: an Acknowledge on the ordered subscription was not successful",
+            reason:
+              "owner 1399: a Pull or Acknowledge on the ordered subscription was not successful",
           }
         : judgeOrderingCellHeldTail(
             publishedOrderOf(original, orderedTopic, success),

@@ -776,7 +776,7 @@ test("owner 1399 refuses a cell where an Acknowledge on the ordered subscription
     ok("pull", { subscription: ordered }, pull(["b0", "k2"])),
     failedAck(["x-a0"]),
   ];
-  const reason = "owner 1399: an Acknowledge on the ordered subscription was not successful";
+  const reason = "owner 1399: a Pull or Acknowledge on the ordered subscription was not successful";
   assert.equal(
     orderingCellResults(source, local, success)["ordering/grpc"].owner1399.reason,
     reason,
@@ -825,6 +825,24 @@ test("owner 1399 allows at most one held key per side (S1)", () => {
     ],
   );
   assert.equal(judgeOrderingCellHeldTail(PUBLISHED, source, local).verdict, "MATCH");
+  assert.equal(judgeOrderingCellHeldTail(PUBLISHED, local, source).verdict, "MATCH");
+  // near miss: only k1 differs (LOCAL holds it), k2 equal on both sides
+  const k1Only = side(
+    [pull(["n", ""]), pull(["a0", "k1"]), pull(["b0", "k2"])],
+    [
+      ["n", ""],
+      ["b0", "k2"],
+    ],
+  );
+  const k1Longer = side(
+    [pull(["n", ""]), pull(["a0", "k1"]), pull(["a1", "k1"]), pull(["b0", "k2"])],
+    [
+      ["n", ""],
+      ["b0", "k2"],
+    ],
+  );
+  assert.equal(judgeOrderingCellHeldTail(PUBLISHED, k1Longer, k1Only).verdict, "MATCH");
+  assert.equal(judgeOrderingCellHeldTail(PUBLISHED, k1Only, k1Longer).verdict, "MATCH");
   // the review's probe shape: one side holds two keys
   const both = side([pull(["n", ""]), pull(["a0", "k1"]), pull(["b0", "k2"])], [["n", ""]]);
   const full = side(
@@ -969,10 +987,10 @@ test("only Acknowledge failures and exact REST publish paths affect the 1399 inp
     ex("pull", `/v1/${ordered}:pull`, {}, 200, pull(["a0", "k1"])),
     ...extra,
   ];
-  // a failed Pull on the ordered subscription is not an Acknowledge failure
-  const failedPull = cell([ex("pull", `/v1/${ordered}:pull`, {}, 503, pull(["zz", "k1"]))]);
+  // a failed Pull on another subscription does not count
+  const otherPull = cell([ex("pull", `/v1/${ordered}-plain:pull`, {}, 503, pull(["zz", "k1"]))]);
   assert.equal(
-    orderingCellResults(failedPull, failedPull, restOk)["ordering/rest"].owner1399.verdict,
+    orderingCellResults(otherPull, otherPull, restOk)["ordering/rest"].owner1399.verdict,
     "MATCH",
   );
   // a publish whose REST path only starts like ":publish" does not enter the order
@@ -987,6 +1005,69 @@ test("only Acknowledge failures and exact REST publish paths affect the 1399 inp
   const reordered = [lookalike[0], lookalike[3], ...lookalike.slice(1, 3)];
   assert.equal(
     orderingCellResults(reordered, reordered, restOk)["ordering/rest"].owner1399.verdict,
+    "MATCH",
+  );
+});
+
+test("owner 1399 refuses a cell where a Pull on the ordered subscription failed on either side (M2)", () => {
+  const ordered = "projects/p/subscriptions/fe1-or-r-s";
+  const restOk = (e) => e.response?.status >= 200 && e.response.status < 300;
+  const ex = (op, path, body, status, response = {}) => ({
+    case: "ordering/rest",
+    op,
+    request: { method: "POST", path, body },
+    response: { status, body: response },
+  });
+  const pullOk = (t) => ex("pull", `/v1/${ordered}:pull`, {}, 200, pull([t, "k1"]));
+  const ack = (t) => ex("acknowledge", `/v1/${ordered}:acknowledge`, { ackIds: [`x-${t}`] }, 200);
+  const head = [
+    {
+      case: "ordering/rest",
+      op: "createSubscription",
+      request: {
+        method: "PUT",
+        path: `/v1/${ordered}`,
+        body: { topic: "projects/p/topics/t", enableMessageOrdering: true },
+      },
+      response: { status: 200, body: {} },
+    },
+    ex(
+      "publish",
+      "/v1/projects/p/topics/t:publish",
+      { messages: ["a0", "a1", "a2"].map((t) => ({ data: data(t), orderingKey: "k1" })) },
+      200,
+    ),
+  ];
+  // the reviewer's probe
+  const source = [...head, pullOk("a0"), ack("a0"), pullOk("a1"), ack("a1"), pullOk("a2")];
+  const local = [
+    ...head,
+    pullOk("a0"),
+    ack("a0"),
+    ex("pull", `/v1/${ordered}:pull`, {}, 503, {}),
+    pullOk("a1"),
+  ];
+  const reason = "owner 1399: a Pull or Acknowledge on the ordered subscription was not successful";
+  assert.equal(
+    orderingCellResults(source, local, restOk)["ordering/rest"].owner1399.reason,
+    reason,
+  );
+  // the same failure on the source side
+  const sourceFailed = [
+    ...head,
+    pullOk("a0"),
+    ack("a0"),
+    ex("pull", `/v1/${ordered}:pull`, {}, 503, {}),
+    pullOk("a1"),
+  ];
+  assert.equal(
+    orderingCellResults(sourceFailed, source, restOk)["ordering/rest"].owner1399.reason,
+    reason,
+  );
+  // near miss: without the failed Pull the held tail is accepted
+  const localHeld = [...head, pullOk("a0"), ack("a0"), pullOk("a1")];
+  assert.equal(
+    orderingCellResults(source, localHeld, restOk)["ordering/rest"].owner1399.verdict,
     "MATCH",
   );
 });

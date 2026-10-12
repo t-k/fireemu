@@ -466,6 +466,29 @@ pub fn unverified_tenant_claim(token: &str) -> Option<String> {
     (!tenant.is_empty()).then(|| tenant.to_owned())
 }
 
+/// The header `createMockUserToken` (`@firebase/util`) writes for a `mockUserToken`, byte for
+/// byte: `JSON.stringify({alg: 'none', type: 'JWT'})`.
+pub const SDK_MOCK_TOKEN_HEADER: &[u8] = br#"{"alg":"none","type":"JWT"}"#;
+
+/// Whether `token` has the shape of the Firebase JS SDK's `mockUserToken`, which
+/// `@firebase/rules-unit-testing`'s `authenticatedContext()` sends: exactly three
+/// `.`-separated segments, a header segment that is base64url without padding of exactly the
+/// bytes [`SDK_MOCK_TOKEN_HEADER`] (another member order, spacing, an extra member, or the
+/// `typ` that fireemu's own unsigned ID tokens carry is not that shape), and an empty
+/// signature segment. The payload is not read here. Every SDK mock token is an unsigned token
+/// ([`is_unsigned_token`]).
+#[must_use]
+pub fn is_sdk_mock_token(token: &str) -> bool {
+    let mut parts = token.split('.');
+    let (Some(header_b64), Some(_payload), Some(signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    signature.is_empty()
+        && base64url_decode(header_b64).is_ok_and(|header| header == SDK_MOCK_TOKEN_HEADER)
+}
+
 /// Whether `token` is an unsigned emulator ID token: exactly three `.`-separated segments, a
 /// header segment that is base64url without padding of a JSON object whose `alg` member is
 /// the string `none` (case-sensitive; other members such as `typ`, or the `type` the Firebase JS
@@ -813,8 +836,14 @@ fn mock_fallback(
     // every surface (`auth.idTokenSigning: session-rsa`); the mock path would undo exactly
     // that, so it is not offered there whatever the policy says. Only an unsigned token can
     // be a mock token, so a forged `RS256` token keeps its refusal rather than becoming an
-    // identity.
-    if !policy.allows_unsigned() || store.signer().is_some() || !is_unsigned_token(token) {
+    // identity. Under strict only the exact shape `createMockUserToken` writes is one
+    // (owner ledger 1405): fireemu's own unsigned ID tokens keep every claim check, expiry
+    // included; the emulator profile admits any unsigned token, as the official emulator does.
+    let mock_shape = match policy.acceptance() {
+        TokenAcceptance::Verified => is_sdk_mock_token(token),
+        TokenAcceptance::EmulatorMock => is_unsigned_token(token),
+    };
+    if !policy.allows_unsigned() || store.signer().is_some() || !mock_shape {
         return Err(verified_error);
     }
     match unsigned_mock(token, expected_project) {

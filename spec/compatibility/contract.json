@@ -183,7 +183,7 @@
         "auth.allowUnsignedIdTokens": {
           "value": true,
           "status": "hand-written",
-          "note": "read by the loader, defaulting to true whatever the profile (owner decision 2026-10-12); the emulator profile admitted unsigned mock tokens on the Rules surfaces before the setting existed, and false refuses them in this profile too"
+          "note": "read by the loader, defaulting to true whatever the profile (owner decision 2026-10-12); the emulator profile admits any unsigned token on the Rules surfaces, as before the setting existed and as the official emulator does, and false refuses them in this profile too"
         },
         "appCheck.enabled": {
           "value": false,
@@ -393,7 +393,7 @@
       ]
     },
     "strict": {
-      "intent": "Behave like production Firebase where the official emulator does not: composite indexes are checked with production's rules, Standard query limits refuse the query, and ID tokens are verified (the Firestore and Storage Security Rules surfaces still admit unsigned emulator ID tokens unless auth.allowUnsignedIdTokens is false). Every key here may only refuse more than the official emulator, never less, and every refusal it adds must be published as a capability precision or a documented divergence.",
+      "intent": "Behave like production Firebase where the official emulator does not: composite indexes are checked with production's rules, Standard query limits refuse the query, and ID tokens are verified (the Firestore and Storage Security Rules surfaces still admit the unsigned mock token of @firebase/rules-unit-testing unless auth.allowUnsignedIdTokens is false or productionExact is set). Every key here may only refuse more than the official emulator, never less, and every refusal it adds must be published as a capability precision or a documented divergence.",
       "sets": {
         "firestore.enforceLimits": true
       },
@@ -426,7 +426,7 @@
         "auth.allowUnsignedIdTokens": {
           "value": false,
           "status": "hand-written",
-          "note": "read by the loader, defaulting to true whatever the profile (owner decision 2026-10-12): the Firestore and Storage Security Rules surfaces admit unsigned emulator ID tokens such as the mockUserToken of @firebase/rules-unit-testing, as the official emulator does; strict has to name false itself to refuse them as production does"
+          "note": "read by the loader, defaulting to true in both profiles and to false under productionExact (owner decisions 2026-10-12): the strict Firestore and Storage Security Rules surfaces admit only the exact createMockUserToken shape of @firebase/rules-unit-testing; strict names false itself, or sets productionExact, to refuse it as production does"
         },
         "appCheck.enabled": {
           "value": true,
@@ -1055,7 +1055,7 @@
               "precision": "exact-for-local-semantics"
             },
             {
-              "behaviour": "both profiles admit unsigned emulator ID tokens on the Firestore and Storage Security Rules surfaces by default (auth.allowUnsignedIdTokens, default true, an approved development exception, owner decision 2026-10-12): a three-segment JWT whose header is a JSON object with alg exactly \"none\" and whose signature segment is empty, as @firebase/rules-unit-testing authenticatedContext() and the client SDKs' mockUserToken send, is admitted when it names a subject and its audience is the routed project, and request.auth is built from its claims; every other token counts as signed and is verified as before, so a token that claims a signature that does not verify is refused; a session with auth.idTokenSigning session-rsa admits no unsigned token; with false the strict profile answers exactly as production (an expired mock token UNAUTHENTICATED on Firestore, 401 on Storage); callable Functions, Identity Toolkit and App Check are not affected",
+              "behaviour": "both profiles admit the unsigned mock ID token of @firebase/rules-unit-testing on the Firestore and Storage Security Rules surfaces by default (auth.allowUnsignedIdTokens, default true, false under productionExact, an approved development exception, owner decisions 2026-10-12): under strict only the exact createMockUserToken shape (header bytes {\"alg\":\"none\",\"type\":\"JWT\"}, empty signature) naming a subject with the routed project as its audience is admitted, without reading exp, and request.auth is built from its claims; every other token, including fireemu's own unsigned ID tokens, keeps every check, expiry included, so a token that claims a signature that does not verify is refused; the emulator profile admits any unsigned token, as the official emulator does; a session with auth.idTokenSigning session-rsa admits no unsigned token; with false the strict profile answers exactly as production (an expired mock token UNAUTHENTICATED on Firestore, 401 on Storage); callable Functions, Identity Toolkit and App Check are not affected",
               "precision": "documented-divergence"
             }
           ],

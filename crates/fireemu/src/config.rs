@@ -3036,6 +3036,7 @@ impl RuntimeConfig {
     pub fn set_production_exact(&mut self, exact: bool) {
         self.production_exact = exact;
         self.auth_allow_unsigned_custom_tokens = !exact;
+        self.auth_allow_unsigned_id_tokens = !exact;
         self.auth_idp_assertions = if exact {
             IdpAssertionMode::Signed
         } else {
@@ -6623,6 +6624,35 @@ mod tests {
                 ))
             );
         }
+    }
+
+    /// `auth.allowUnsignedIdTokens` takes the development value (true) unless `productionExact`
+    /// asks for production's (false); an explicit key decides over both.
+    #[test]
+    fn unsigned_id_tokens_follow_production_exact_and_an_explicit_key_wins() {
+        for exact in [None, Some(false), Some(true)] {
+            for key in [None, Some(true), Some(false)] {
+                let mut auth = json!({});
+                if let Some(value) = key {
+                    auth["allowUnsignedIdTokens"] = json!(value);
+                }
+                let mut config = json!({"schemaVersion": 1, "profile": "strict", "auth": auth});
+                if let Some(exact) = exact {
+                    config["productionExact"] = json!(exact);
+                }
+                let cfg = RuntimeConfig::from_json(&config).unwrap();
+                assert_eq!(
+                    cfg.auth_allow_unsigned_id_tokens,
+                    key.unwrap_or(exact != Some(true)),
+                    "productionExact {exact:?}, allowUnsignedIdTokens {key:?}"
+                );
+            }
+        }
+        let mut cfg = RuntimeConfig::default();
+        cfg.set_production_exact(true);
+        assert!(!cfg.auth_allow_unsigned_id_tokens);
+        cfg.set_production_exact(false);
+        assert!(cfg.auth_allow_unsigned_id_tokens);
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! not name a user, and an empty signature segment.
 
 use fireemu_core_auth::jwt::{
-    base64url_encode, encode_unsigned, encode_with, is_unsigned_token,
+    base64url_encode, encode_unsigned, encode_with, is_sdk_mock_token, is_unsigned_token,
     verify_firestore_rules_token, verify_firestore_rules_token_of_removed_tenant,
     verify_rules_token, verify_rules_token_for_project, IdTokenSigner, JwtError, RulesTokenPolicy,
     TokenAcceptance,
@@ -509,5 +509,114 @@ proptest! {
             verify_firestore_rules_token(&mock, &s, now(), TokenAcceptance::Verified, None)
         );
         prop_assert!(verify_firestore_rules_token(&mock, &s, now(), strict(false), None).is_err());
+    }
+}
+
+/// The exact header `createMockUserToken` (`@firebase/util` 1.15.3) writes:
+/// `JSON.stringify({alg: 'none', type: 'JWT'})`.
+const SDK_HEADER: &str = r#"{"alg":"none","type":"JWT"}"#;
+
+#[test]
+fn only_the_sdk_mock_token_shape_is_a_mock_token() {
+    let payload = mock_payload("alice", PROJECT);
+    assert!(is_sdk_mock_token(&token(SDK_HEADER, &payload, "")));
+    // The classifier reads the header and the signature only.
+    assert!(is_sdk_mock_token(&token(SDK_HEADER, "not json", "")));
+    for header in [
+        // fireemu's own unsigned ID tokens.
+        r#"{"alg":"none","typ":"JWT"}"#,
+        r#"{"alg":"none"}"#,
+        // The same members written differently: another order, spacing, an extra member.
+        r#"{"type":"JWT","alg":"none"}"#,
+        r#"{"alg": "none", "type": "JWT"}"#,
+        r#"{"alg":"none","type":"JWT","kid":"k"}"#,
+        r#"{"alg":"none","type":"jwt"}"#,
+        r#"{"alg":"None","type":"JWT"}"#,
+        r#"{"alg":"RS256","type":"JWT"}"#,
+    ] {
+        assert!(!is_sdk_mock_token(&token(header, &payload, "")), "{header}");
+    }
+    assert!(!is_sdk_mock_token(&token(SDK_HEADER, &payload, "c2ln")));
+    let mock = token(SDK_HEADER, &payload, "");
+    assert!(!is_sdk_mock_token(mock.trim_end_matches('.')));
+    assert!(!is_sdk_mock_token(&format!("{mock}.")));
+    assert!(!is_sdk_mock_token(&format!(
+        "{}=.{}.",
+        base64url_encode(SDK_HEADER.as_bytes()),
+        base64url_encode(payload.as_bytes())
+    )));
+}
+
+/// Under strict, fireemu's own unsigned ID tokens keep every claim check, expiry included: an
+/// expired one is refused with the setting on, as with it off.
+#[test]
+fn strict_keeps_every_check_on_fireemus_own_unsigned_tokens() {
+    let mut s = store();
+    let uid = s
+        .create_user(NewUser::email("a@example.com"), now())
+        .unwrap();
+    let claims = s.id_token_claims(&uid, None, now()).unwrap();
+    let issued = encode_unsigned(&claims);
+    let later = LogicalInstant::from_unix_seconds(claims.exp + 3600);
+    assert_eq!(
+        verify_rules_token(&issued, &s, later, strict(true)),
+        Err(JwtError::Expired)
+    );
+    assert_eq!(
+        verify_firestore_rules_token(&issued, &s, later, strict(true), None),
+        Err(JwtError::Expired)
+    );
+    // A mock-shaped payload under fireemu's headers is not a mock token under strict either.
+    for header in [r#"{"alg":"none","typ":"JWT"}"#, r#"{"alg":"none"}"#] {
+        let candidate = token(header, &mock_payload("alice", PROJECT), "");
+        assert_eq!(
+            verify_rules_token(&candidate, &s, now(), strict(true)),
+            verify_rules_token(&candidate, &s, now(), strict(false)),
+            "{header}"
+        );
+        assert!(verify_rules_token(&candidate, &s, now(), strict(true)).is_err());
+    }
+    // The emulator profile keeps admitting any unsigned token, as the official emulator does.
+    let any_unsigned = token(r#"{"alg":"none"}"#, &mock_payload("alice", PROJECT), "");
+    assert!(verify_rules_token(&any_unsigned, &s, now(), emulator(true)).is_ok());
+    assert!(verify_rules_token(&issued, &s, later, emulator(true)).is_ok());
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 512, ..ProptestConfig::default() })]
+
+    /// The SDK classifier is the exact header bytes and an empty signature, whatever else the
+    /// header says.
+    #[test]
+    fn the_sdk_classifier_is_the_exact_header_and_an_empty_signature(
+        header in prop_oneof![Just(SDK_HEADER.to_owned()), header_strategy()],
+        payload in "[ -~]{0,24}",
+        signature in prop_oneof![Just(String::new()), "[A-Za-z0-9_-]{1,12}"],
+    ) {
+        let candidate = token(&header, &payload, &signature);
+        prop_assert_eq!(
+            is_sdk_mock_token(&candidate),
+            header == SDK_HEADER && signature.is_empty()
+        );
+        // Every SDK mock token is an unsigned token.
+        if is_sdk_mock_token(&candidate) {
+            prop_assert!(is_unsigned_token(&candidate));
+        }
+    }
+
+    /// Under strict, an unsigned token that is not the SDK shape gets the same answer with the
+    /// setting on as off.
+    #[test]
+    fn strict_answers_other_unsigned_tokens_as_without_the_setting(
+        header in header_strategy(),
+        sub in "[a-z]{1,8}",
+    ) {
+        prop_assume!(header != SDK_HEADER);
+        let candidate = token(&header, &mock_payload(&sub, PROJECT), "");
+        let s = store();
+        prop_assert_eq!(
+            verify_rules_token(&candidate, &s, now(), strict(true)),
+            verify_rules_token(&candidate, &s, now(), strict(false))
+        );
     }
 }

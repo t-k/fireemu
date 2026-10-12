@@ -6832,6 +6832,79 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// With App Check, a configured onRequest route that names the callable-only option is
+    /// served cleared, so the proxy forwards its raw App Check field as for any onRequest
+    /// function.
+    #[tokio::test]
+    async fn with_app_check_a_configured_on_request_route_is_served_cleared() {
+        use fireemu_adapter_grpc::gateway::Gateway;
+        use fireemu_adapter_grpc::local::LocalBackend;
+        use fireemu_core_firestore::index::{IndexSet, PlanningContext};
+        use fireemu_core_functions::manifest::{ConsumeAppCheckToken, Trigger};
+
+        let dir =
+            std::env::temp_dir().join(format!("fireemu-consume-cleared-{}", std::process::id()));
+        let source = dir.join("src");
+        std::fs::create_dir_all(&source).unwrap();
+        let manifest_path = dir.join("manifest.json");
+        std::fs::write(
+            &manifest_path,
+            json!({"functions": [
+                {"name": "echo", "trigger": {"type": "http", "callable": false, "consumeAppCheckToken": "enabled"}},
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../fireemu-adapter-functions/tests/fake_runner.py");
+        let hosts = super::EmulatorHosts {
+            firestore: None,
+            auth: None,
+            storage: None,
+            functions: None,
+            eventarc: None,
+            tasks: None,
+            logging: None,
+            pubsub: None,
+            hub: None,
+        };
+        let mut cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1, "profile": "emulator"
+        }))
+        .unwrap();
+        cfg.functions_source = Some(source.display().to_string());
+        cfg.functions_runner = Some(vec!["python3".to_owned(), script.display().to_string()]);
+        cfg.functions_manifest = Some(manifest_path.display().to_string());
+        let clock = Arc::new(Mutex::new(VirtualClock::new(cfg.clock_start)));
+        let backend = Arc::new(LocalBackend::new(
+            Gateway {
+                ctx: PlanningContext {
+                    edition: cfg.edition,
+                    api_mode: cfg.api_mode,
+                    policy: cfg.index_policy,
+                },
+                indexes: IndexSet::default(),
+                enforce_limits: cfg.enforce_limits,
+            },
+            clock.clone(),
+            cfg.seed,
+        ));
+        let runtime = super::start(&cfg, &clock, &backend, &hosts, "test-secret", true)
+            .await
+            .expect("an agreeing manifest loads with App Check");
+        let served = match runtime.manifest().get("echo").map(|f| &f.trigger) {
+            Some(Trigger::Http {
+                callable: false,
+                consume_app_check_token,
+                ..
+            }) => *consume_app_check_token,
+            other => panic!("{other:?}"),
+        };
+        runtime.shutdown().await;
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(served, ConsumeAppCheckToken::Undetermined);
+    }
+
     fn claims_for(
         tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,

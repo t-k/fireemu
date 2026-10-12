@@ -4,8 +4,10 @@
 //! `Authorization: Bearer owner` (Admin SDK against an emulator) bypasses rules. Any other
 //! bearer token is verified as an ID token against the shared [`AuthStore`] (issuer,
 //! audience, expiry, revocation) and becomes `request.auth`. A request without a token is
-//! evaluated as unauthenticated. When no ruleset is loaded every request is allowed (the
-//! runtime prints a warning at start).
+//! evaluated as unauthenticated. When no ruleset is loaded the `emulator` profile allows every
+//! request and the `strict` profile refuses every client request, as production does without a
+//! release; the start banner says which, and [`RulesEnforcer::with_no_ruleset_notice`] reports
+//! the first refusal per database.
 //!
 //! How much of that verification a caller's token has to survive is the compatibility
 //! profile's decision, carried here as [`TokenAcceptance`]: the `emulator` profile also
@@ -380,6 +382,10 @@ pub const LISTEN_STREAM_LIFETIME_SECONDS: i64 = 3600;
 /// The wall time a real-time session follows (see [`RulesEnforcer::with_wall_clock`]).
 pub type WallSource = Arc<dyn Fn() -> LogicalInstant + Send + Sync>;
 
+/// Told the database ID the first time a client request to that database is refused because it
+/// has no ruleset (see [`RulesEnforcer::with_no_ruleset_notice`]).
+pub type NoRulesetNotice = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// Rules enforcement state shared by every surface.
 pub struct RulesEnforcer {
     rules: Arc<RulesetSlot>,
@@ -408,6 +414,11 @@ pub struct RulesEnforcer {
     /// production ends it (the `strict` profile); the official emulator keeps it (the `emulator`
     /// profile).
     listen_stream_lifetime: bool,
+    /// Where a refusal without a ruleset is reported, once per database: the client only sees
+    /// production's denial, which does not say why.
+    no_ruleset_notice: Option<NoRulesetNotice>,
+    /// The databases already reported to `no_ruleset_notice`.
+    noticed_without_ruleset: Mutex<BTreeSet<String>>,
 }
 
 impl RulesEnforcer {
@@ -430,7 +441,17 @@ impl RulesEnforcer {
             token_semantics: TokenSemantics::default(),
             wall_clock: None,
             listen_stream_lifetime: false,
+            no_ruleset_notice: None,
+            noticed_without_ruleset: Mutex::new(BTreeSet::new()),
         }
+    }
+
+    /// Reports the first refusal of a client request to each database that has no ruleset to
+    /// `notice`. The answer to the client stays production's denial.
+    #[must_use]
+    pub fn with_no_ruleset_notice(mut self, notice: NoRulesetNotice) -> Self {
+        self.no_ruleset_notice = Some(notice);
+        self
     }
 
     /// Moves the session clock forward to `source`'s wall time before every read of it, as the
@@ -519,21 +540,31 @@ impl RulesEnforcer {
         ))
     }
 
-    /// The answer to a client request against a database without a ruleset.
+    /// The answer to a client request against `database` while it has no ruleset.
     fn without_ruleset(
         &self,
         diagnostics: &Mutex<RulesDiagnostics>,
+        database: &str,
         principal: &Principal,
         method: Method,
         path: String,
     ) -> Result<(), Status> {
         if self.refuse_without_ruleset {
+            if let Some(notice) = &self.no_ruleset_notice {
+                let first = self
+                    .noticed_without_ruleset
+                    .lock()
+                    .is_ok_and(|mut noticed| noticed.insert(database.to_owned()));
+                if first {
+                    notice(database);
+                }
+            }
             Err(denied(
                 diagnostics,
                 principal,
                 method,
                 path,
-                "no ruleset is loaded for this database".to_owned(),
+                "no Security Rules are loaded for this database".to_owned(),
             ))
         } else {
             Ok(())
@@ -775,6 +806,7 @@ impl RulesEnforcer {
         if !rules.is_loaded() {
             return self.without_ruleset(
                 &rules.diagnostics,
+                fireemu_core_types::ids::DatabaseId::DEFAULT,
                 principal,
                 Method::List,
                 what.to_owned(),
@@ -808,7 +840,13 @@ impl RulesEnforcer {
             .snapshot()
             .map_err(Status::internal)?;
         let Some(ruleset) = &rules.ruleset else {
-            return self.without_ruleset(&rules.diagnostics, principal, method, path.relative());
+            return self.without_ruleset(
+                &rules.diagnostics,
+                path.database().as_str(),
+                principal,
+                method,
+                path.relative(),
+            );
         };
         let now = self.now()?;
         evaluate_with(
@@ -863,11 +901,17 @@ impl RulesEnforcer {
             .snapshot()
             .map_err(Status::internal)?;
         let Some(ruleset) = &rules.ruleset else {
-            let path = items
-                .first()
-                .map(|(path, _)| path.relative())
-                .unwrap_or_default();
-            return self.without_ruleset(&rules.diagnostics, principal, Method::Get, path);
+            let (database, path) = items.first().map_or(
+                (fireemu_core_types::ids::DatabaseId::DEFAULT, String::new()),
+                |(path, _)| (path.database().as_str(), path.relative()),
+            );
+            return self.without_ruleset(
+                &rules.diagnostics,
+                database,
+                principal,
+                Method::Get,
+                path,
+            );
         };
         let now = self.now()?;
         let reader = AggregateReader {
@@ -926,6 +970,7 @@ impl RulesEnforcer {
         let Some(ruleset) = &rules.ruleset else {
             return self.without_ruleset(
                 &rules.diagnostics,
+                parent.database.as_str(),
                 principal,
                 Method::List,
                 "a query".to_owned(),
@@ -1011,7 +1056,13 @@ impl RulesEnforcer {
                 .first()
                 .map(|write| write.op.path().relative())
                 .unwrap_or_default();
-            return self.without_ruleset(&rules.diagnostics, principal, Method::Update, path);
+            return self.without_ruleset(
+                &rules.diagnostics,
+                parent.database.as_str(),
+                principal,
+                Method::Update,
+                path,
+            );
         };
         let at = db.next_commit_time(now);
         // The state after the whole commit, for `getAfter()`.

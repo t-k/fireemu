@@ -38,6 +38,7 @@
 //! | 2 | usage: an unknown argument, a missing value or a malformed `--only` |
 
 mod config;
+mod config_discovery;
 mod control;
 mod daemon;
 mod doctor;
@@ -67,7 +68,7 @@ use process_wrap::tokio::{JobObject, KillOnDrop, TokioChildWrapper, TokioCommand
 
 use crate::config::{RuntimeConfig, Selection};
 
-const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
+const OPTIONS_USAGE: &str = "[--config <file>] [--firebase-json <file>] [--no-config-discovery] [--project <id|alias>] [--only auth,firestore,storage,functions,eventarc,tasks,pubsub,appcheck] [--firestore-port <n>] [--http-port <n>] [--storage-port <n>] [--functions-port <n>] [--eventarc-port <n>] [--tasks-port <n>] [--pubsub-port <n>] [--functions <dir>] [--ui-port <n>] [--hub-port <n>] [--logging-port <n>] [--inspect-functions [port]] [--log-verbosity quiet|silent|info|debug] [--import <dir>] [--export-on-exit [dir]] [--ready-file <file>]";
 
 fn usage() -> ExitCode {
     eprintln!("usage: fireemu init [--profile strict|emulator] [--firebase-json <file>] [--interactive|--yes|--no-interactive] [--force]\n       fireemu up|emulators:start {OPTIONS_USAGE}\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] \"shell script\"\n       fireemu exec|emulators:exec {OPTIONS_USAGE} [--ui] -- <command...>\n       fireemu emulators:export <dir> [--project <id>] [--force]\n       fireemu doctor\n       fireemu capabilities\n       fireemu --version");
@@ -218,6 +219,8 @@ struct Options {
     /// Private endpoint descriptor for a supervised test world.
     ready_file: Option<PathBuf>,
     owner_stdin: bool,
+    /// Which configuration files were loaded, for the start banner.
+    config_origin: String,
 }
 
 const DEFAULT_MAX_RUNTIME_WORKERS: usize = 4;
@@ -261,7 +264,9 @@ fn main() -> ExitCode {
         Some("init") => match init::run(&args[1..]) {
             Ok(path) => {
                 println!("created {}", diagnostic_path(&path));
-                println!("next: fireemu up --config fireemu.json");
+                println!(
+                    "next: fireemu up (fireemu.json in this directory is loaded automatically)"
+                );
                 ExitCode::SUCCESS
             }
             Err(e) => fail(&e),
@@ -542,6 +547,9 @@ struct RawOptions {
     ready_file: Option<PathBuf>,
     owner_stdin: bool,
     firebase_json: Option<PathBuf>,
+    /// Whether the working directory is searched when neither `--config` nor `--firebase-json`
+    /// is given (`--no-config-discovery` turns it off).
+    config_discovery: ConfigDiscovery,
     project: Option<String>,
     only: Option<Selection>,
     firestore_port: Option<u16>,
@@ -627,6 +635,10 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
                         CliError::usage("--firebase-json needs a value")
                     })?));
                 i += 2;
+            }
+            "--no-config-discovery" => {
+                raw.config_discovery = ConfigDiscovery::Off;
+                i += 1;
             }
             "--project" | "-P" => {
                 raw.project = Some(
@@ -898,38 +910,160 @@ fn apply_port_overrides(cfg: &mut RuntimeConfig, raw: &RawOptions) {
     }
 }
 
+/// Whether `up` and `exec` look for configuration files in the working directory.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ConfigDiscovery {
+    #[default]
+    On,
+    /// `--no-config-discovery`.
+    Off,
+}
+
+/// How the configuration files were chosen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConfigOrigin {
+    /// `--config` or `--firebase-json` named them.
+    Flags,
+    /// Neither flag: the working directory was searched (see `config_discovery`).
+    Discovered(config_discovery::Discovered),
+    /// `--no-config-discovery`.
+    DiscoveryOff,
+    /// Neither flag, and the working directory could not be read.
+    NoWorkingDirectory,
+}
+
+/// When neither `--config` nor `--firebase-json` is given, fills the one the working directory
+/// supplies: its `fireemu.json`, else the nearest `firebase.json` (see `config_discovery`).
+fn discover_project_config(raw: &mut RawOptions) -> ConfigOrigin {
+    if raw.config_path.is_some() || raw.firebase_json.is_some() {
+        return ConfigOrigin::Flags;
+    }
+    if raw.config_discovery == ConfigDiscovery::Off {
+        return ConfigOrigin::DiscoveryOff;
+    }
+    let Ok(cwd) = std::env::current_dir() else {
+        return ConfigOrigin::NoWorkingDirectory;
+    };
+    let found = config_discovery::discover(&cwd, Path::is_file);
+    match &found {
+        config_discovery::Discovered::Canonical(path) => raw.config_path = Some(path.clone()),
+        config_discovery::Discovered::FirebaseJson(path) => raw.firebase_json = Some(path.clone()),
+        config_discovery::Discovered::Nothing => {}
+    }
+    ConfigOrigin::Discovered(found)
+}
+
+/// How the loaded `firebase.json` was reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FirebaseJsonVia {
+    /// `--firebase-json`, or found by the search.
+    FirebaseJsonFlag,
+    /// `--config` named a `firebase.json`.
+    ConfigFlag,
+    /// The canonical configuration's `firebaseJson` entry.
+    Reference,
+}
+
+/// The files `load_project_config` read.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ConfigSources {
+    canonical: Option<PathBuf>,
+    firebase: Option<(PathBuf, FirebaseJsonVia)>,
+}
+
+/// The start banner's account of which configuration files were loaded.
+fn config_origin_line(origin: &ConfigOrigin, sources: &ConfigSources) -> String {
+    use config_discovery::Discovered;
+    const DEFAULTS: &str = "built-in defaults apply, so no Security Rules are loaded";
+    let how = match origin {
+        ConfigOrigin::Discovered(Discovered::Nothing) => {
+            return format!(
+                "none found (no fireemu.json in the working directory, no firebase.json in it or its parents); {DEFAULTS}"
+            )
+        }
+        ConfigOrigin::DiscoveryOff => return format!("none (--no-config-discovery); {DEFAULTS}"),
+        ConfigOrigin::NoWorkingDirectory => {
+            return format!("none (the working directory cannot be read); {DEFAULTS}")
+        }
+        ConfigOrigin::Discovered(Discovered::FirebaseJson(path)) if path.is_absolute() => {
+            "found in a parent of the working directory, as firebase-tools finds it"
+        }
+        ConfigOrigin::Discovered(_) => "found in the working directory",
+        ConfigOrigin::Flags => "",
+    };
+    let mut parts = Vec::new();
+    if let Some(path) = &sources.canonical {
+        let how = if how.is_empty() { "--config" } else { how };
+        parts.push(format!("{} ({how})", diagnostic_path(path)));
+    }
+    match &sources.firebase {
+        Some((path, via)) => {
+            let how = match via {
+                FirebaseJsonVia::Reference => "its firebaseJson entry",
+                FirebaseJsonVia::ConfigFlag => "--config",
+                FirebaseJsonVia::FirebaseJsonFlag if how.is_empty() => "--firebase-json",
+                FirebaseJsonVia::FirebaseJsonFlag => how,
+            };
+            parts.push(format!("{} ({how})", diagnostic_path(path)));
+        }
+        None => {
+            // A firebase.json next to a canonical configuration that does not reference it
+            // is easy to mistake for a loaded one.
+            if let Some(canonical) = &sources.canonical {
+                if project_dir(canonical)
+                    .join(config_discovery::FIREBASE_FILE)
+                    .is_file()
+                {
+                    parts.push(
+                        "firebase.json beside it is not loaded (the canonical configuration has no firebaseJson entry)"
+                            .to_owned(),
+                    );
+                }
+            }
+        }
+    }
+    parts.join("; ")
+}
+
 fn load_project_config(
     raw: &RawOptions,
     only: &Selection,
-) -> Result<(RuntimeConfig, PathBuf), CliError> {
+) -> Result<(RuntimeConfig, PathBuf, ConfigSources), CliError> {
+    let mut sources = ConfigSources::default();
     // `--config` carries either the canonical configuration or a firebase.json.
     let (mut cfg, firebase_from_config) = match &raw.config_path {
         Some(path) => {
             let (json, canonical) = read_config_file(path)?;
             if canonical {
+                sources.canonical = Some(path.clone());
                 let config = RuntimeConfig::from_json(&json)?;
                 let firebase = if raw.firebase_json.is_none() {
                     config::firebase_json_reference(&json)?
                         .map(|reference| project_dir(path).join(reference))
                         .map(|firebase_path| read_firebase_json(&firebase_path))
                         .transpose()?
+                        .map(|firebase| (firebase, FirebaseJsonVia::Reference))
                 } else {
                     None
                 };
                 (config, firebase)
             } else {
-                (RuntimeConfig::default(), Some((json, path.clone())))
+                (
+                    RuntimeConfig::default(),
+                    Some(((json, path.clone()), FirebaseJsonVia::ConfigFlag)),
+                )
             }
         }
         None => (RuntimeConfig::default(), None),
     };
     // A firebase.json from `--firebase-json` wins over one that reached `--config`.
     let firebase = match &raw.firebase_json {
-        Some(path) => Some(read_firebase_json(path)?),
+        Some(path) => Some((read_firebase_json(path)?, FirebaseJsonVia::FirebaseJsonFlag)),
         None => firebase_from_config,
     };
     let mut project_root = PathBuf::from(".");
-    if let Some((json, path)) = &firebase {
+    if let Some(((json, path), via)) = &firebase {
+        sources.firebase = Some((path.clone(), *via));
         project_root = project_dir(path);
         let report = cfg.apply_firebase_json(json, &project_root, only)?;
         if raw.verbosity > Verbosity::Quiet {
@@ -938,17 +1072,19 @@ fn load_project_config(
             }
         }
     }
-    Ok((cfg, project_root))
+    Ok((cfg, project_root, sources))
 }
 
 fn parse_options(
     args: &[String],
     context: OptionContext,
 ) -> Result<(Options, Option<String>), CliError> {
-    let raw = parse_raw_options(args, context)?;
+    let mut raw = parse_raw_options(args, context)?;
     let positional_script = raw.positional_script.clone();
     let only = raw.only.clone().unwrap_or_default();
-    let (mut cfg, project_root) = load_project_config(&raw, &only)?;
+    let origin = discover_project_config(&mut raw);
+    let (mut cfg, project_root, sources) = load_project_config(&raw, &only)?;
+    let config_origin = config_origin_line(&origin, &sources);
     let rc = read_firebaserc(&project_root)?;
     if let Some(project) = resolve_project(rc.as_ref(), raw.project.as_deref())? {
         // The alias, when `--project` named one, is what a codebase's `.env.<alias>` file is
@@ -1038,6 +1174,7 @@ fn parse_options(
             export_on_exit,
             ready_file: raw.ready_file,
             owner_stdin: raw.owner_stdin,
+            config_origin,
         },
         positional_script,
     ))
@@ -2154,10 +2291,12 @@ fn clock_millis(clock: &Arc<Mutex<VirtualClock>>) -> i64 {
 fn print_banner(
     cfg: &RuntimeConfig,
     verb: &str,
+    config_origin: &str,
     addrs: &BoundAddrs,
     functions_runtime: Option<&fireemu_adapter_functions::runtime::FunctionsRuntime>,
 ) {
     println!("fireemu {verb}");
+    println!("  config:           {config_origin}");
     match addrs.firestore {
         Some(a) => println!("  firestore (gRPC + REST): {a}   FIRESTORE_EMULATOR_HOST={a}"),
         None => println!("  firestore:        not selected by --only (nothing is bound)"),
@@ -2191,9 +2330,13 @@ fn print_banner(
                     println!(
                         "  storage rules:    none loaded, so the official emulator's open rules apply to this demo project and every request is allowed; set storage.rules in firebase.json to enforce rules"
                     );
+                } else if cfg.profile == config::CompatibilityProfile::Strict {
+                    println!(
+                        "  storage rules:    none loaded, so every end-user request is refused with production's 400 \"bucket has not been set up\" answer; set storage.rules in firebase.json or fireemu.json (the owner credential and the JSON API are unaffected)"
+                    );
                 } else {
                     println!(
-                        "  storage rules:    none loaded, so every end-user request is denied; set storage.rules in firebase.json (the owner credential and the JSON API are unaffected)"
+                        "  storage rules:    none loaded, so every end-user request is denied with 403; set storage.rules in firebase.json or fireemu.json (the owner credential and the JSON API are unaffected)"
                     );
                 }
             }
@@ -2531,17 +2674,23 @@ fn service_admission(
     fireemu_core_app_check::ServiceAdmission::new(gate?.clone(), service, mode).map(Arc::new)
 }
 
+/// The Firestore Security Rules state of the default database, and the rules file of each named
+/// database that has one.
 fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
+    const HOW_TO_LOAD: &str =
+        "set firestore.rules in firebase.json, rules.source in fireemu.json, or PUT /v1/rules";
     match (cfg.rules_enforced, loaded) {
-        (false, _) => println!("  rules: disabled by config (every request is allowed)"),
+        (false, _) => {
+            println!("  firestore rules:  disabled by config (every request is allowed)");
+        }
         (true, false) if cfg.refuse_without_ruleset => println!(
-            "  rules: none loaded; every client request is refused, as production refuses it without a release (PUT /v1/rules or rules.source)"
+            "  firestore rules:  none loaded, so every client request is refused with PERMISSION_DENIED, as production refuses it without a release; {HOW_TO_LOAD} (the owner credential and the Admin SDK are unaffected)"
         ),
         (true, false) => println!(
-            "  rules: none loaded; every request is allowed (PUT /v1/rules or rules.source)"
+            "  firestore rules:  none loaded, so every request is allowed, as the official emulator allows it; {HOW_TO_LOAD} to enforce rules"
         ),
         (true, true) => println!(
-            "  rules: enforced from {}",
+            "  firestore rules:  enforced from {}",
             cfg.rules_file.as_deref().unwrap_or("config")
         ),
     }
@@ -2551,7 +2700,7 @@ fn print_rules_status(cfg: &RuntimeConfig, loaded: bool) {
                 continue;
             }
             if let Some(path) = &files.rules {
-                println!("  rules [{database}]: enforced from {path}");
+                println!("  firestore rules [{database}]: enforced from {path}");
             }
         }
     }
@@ -2950,7 +3099,7 @@ mod config_reload_tests {
                     ..RawOptions::default()
                 },
             ] {
-                let (cfg, _) = load_project_config(&raw, &Selection::default())
+                let (cfg, _, _) = load_project_config(&raw, &Selection::default())
                     .unwrap_or_else(|e| panic!("{}", e.message));
                 assert!(cfg.http_addr.ends_with(":9199"));
                 assert_eq!(

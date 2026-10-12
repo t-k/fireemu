@@ -8,6 +8,11 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- `up`, `exec`, `emulators:start` and `emulators:exec` without `--config` or `--firebase-json` load `fireemu.json` from the current directory, or else the nearest `firebase.json` (the current directory or a parent, as the Firebase CLI finds it). Until now they used the built-in defaults, so the rules, indexes and Functions next to a project were silently ignored after `fireemu init`. `--no-config-discovery` keeps the old behavior. The startup output names the loaded files on a new `config:` line.
+- The startup output reports Firestore Security Rules on a `firestore rules:` line (it was `rules:`), printed only when Firestore is selected, and the `firestore rules:` and `storage rules:` lines say how to load rules when none are loaded. The first client request refused for want of rules prints a warning to standard error, once per Firestore database and Storage bucket. The answers to clients are unchanged.
+
 ## [0.16.0] - 2026-10-10
 
 ### Added

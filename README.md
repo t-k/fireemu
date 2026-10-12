@@ -39,6 +39,8 @@ npx fireemu exec -- <command>
 npx fireemu exec -- npm test
 ```
 
+`up` and `exec` read `fireemu.json` from the current directory, or, when there is none, the nearest `firebase.json` (see [Which configuration files are loaded](#which-configuration-files-are-loaded)). The first lines of the startup output name the files that were loaded and say, for Firestore and Storage, whether Security Rules are loaded.
+
 ### Supported platforms
 
 | OS | Architecture |
@@ -171,6 +173,23 @@ npx fireemu init --yes
 
 An existing `fireemu.json` is not overwritten unless `--force` is supplied.
 
+### Which configuration files are loaded
+
+`up`, `exec`, `emulators:start` and `emulators:exec` choose their configuration files as follows.
+
+1. `--config <file>` and `--firebase-json <file>` load exactly the files they name, and nothing is searched for.
+2. Otherwise, `fireemu.json` in the current directory is loaded as if it were passed with `--config`. Its `firebaseJson` entry, resolved relative to `fireemu.json`, names the `firebase.json` to load. A `firebase.json` beside a `fireemu.json` without a `firebaseJson` entry is not loaded, and the startup output says so. A `fireemu.json` in a parent directory is not used, because the paths it contains are relative to the current directory.
+3. Otherwise, the nearest `firebase.json` is loaded as if it were passed with `--firebase-json`: the one in the current directory, else the first one found in a parent directory, as the Firebase CLI finds it. Its paths and the `.firebaserc` beside it are read from its directory.
+4. Otherwise, the built-in defaults apply, and no Security Rules are loaded.
+
+`--no-config-discovery` skips steps 2 and 3. The `config:` line of the startup output names the files that were loaded.
+
+### Security Rules that are not loaded
+
+Under the `strict` profile, a project without Security Rules behaves as a production project without a rules release: every client request to Firestore is refused with `PERMISSION_DENIED`, and every end-user request to Storage is refused with production's 400 "bucket has not been set up" answer. The Admin SDK and other owner credentials are not affected. The `emulator` profile allows every Firestore request, and every Storage request for a `demo-*` project, as the official emulator does.
+
+The answers keep production's wording, which does not mention Fireemu. The startup output therefore has a `firestore rules:` and a `storage rules:` line that say when no rules are loaded and how to load them, and the first refused request for each database and bucket prints a warning to standard error. Name the rules files in `firebase.json` (`firestore.rules`, `storage.rules`) or in `fireemu.json` (`rules.source`, `storage.rules`).
+
 ### Compatibility profiles
 
 | Profile | Behavior |
@@ -198,7 +217,7 @@ The initial configuration selects Standard edition Firestore with the Native API
 }
 ```
 
-You can specify the configuration file with `--config`.
+You can also name the configuration file with `--config`.
 
 ```sh
 npx fireemu up --config ./fireemu.json

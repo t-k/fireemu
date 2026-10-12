@@ -38,6 +38,7 @@ use super::{
 
 struct BoundStartup {
     cfg: RuntimeConfig,
+    config_origin: String,
     only: Selection,
     verbosity: Verbosity,
     import: Option<PathBuf>,
@@ -70,6 +71,7 @@ struct BoundStartup {
 
 struct ServiceAssembly {
     cfg: RuntimeConfig,
+    config_origin: String,
     only: Selection,
     verbosity: Verbosity,
     import: Option<PathBuf>,
@@ -498,6 +500,7 @@ fn idp_signer_note_for(
 fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     let BoundStartup {
         cfg,
+        config_origin,
         only,
         verbosity,
         import,
@@ -558,6 +561,15 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                 cfg.pubsub_push_minimum_redelivery_interval_millis,
             ),
         );
+    }
+    // The client only sees production's (or the official emulator's) refusal, which does not
+    // say how to load rules.
+    if !quiet {
+        storage_rules
+            .registry
+            .set_no_rules_notice(fireemu_adapter_http::storage::NoRulesNotice(Arc::new(
+                |bucket| eprintln!("{}", storage_no_rules_warning(bucket)),
+            )));
     }
     // The buckets the deployed Storage triggers name exist for the strict profile, as in production.
     if let Some(runtime) = &functions_runtime {
@@ -806,6 +818,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     Ok(ServiceAssembly {
         log_bus,
         cfg,
+        config_origin,
         only,
         verbosity,
         import,
@@ -862,6 +875,22 @@ fn firestore_wall_source(
     Some(Arc::new(move || wall_clock.now()))
 }
 
+/// The warning printed the first time a client request to `database` is refused because no
+/// Firestore Security Rules are loaded for it.
+fn firestore_no_rules_warning(database: &str) -> String {
+    format!(
+        "warning: firestore: a client request to database {database:?} was refused with PERMISSION_DENIED because no Security Rules are loaded for it (the strict profile refuses client requests without rules, as production does); set firestore.rules in firebase.json, rules.source in fireemu.json, or PUT /v1/rules. Reported once per database."
+    )
+}
+
+/// The warning printed the first time an end-user request on `bucket` is refused because no
+/// Storage Rules are loaded for it.
+fn storage_no_rules_warning(bucket: &str) -> String {
+    format!(
+        "warning: storage: an end-user request on bucket {bucket:?} was refused because no Storage Rules are loaded for it; set storage.rules in firebase.json or fireemu.json. Reported once per bucket."
+    )
+}
+
 /// The Firestore enforcer's settings that follow from the compatibility profile.
 fn firestore_profile_settings(
     enforcer: RulesEnforcer,
@@ -879,6 +908,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     let ServiceAssembly {
         log_bus,
         cfg,
+        config_origin,
         only,
         verbosity,
         import,
@@ -988,6 +1018,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         print_banner(
             &cfg,
             if exec_mode { "exec" } else { "up" },
+            &config_origin,
             &addrs,
             functions_runtime.as_deref(),
         );
@@ -1015,7 +1046,9 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         if let Some(note) = ui_note {
             println!("{note}");
         }
-        print_rules_status(&cfg, rules.snapshot().is_ok_and(|r| r.is_loaded()));
+        if addrs.firestore.is_some() {
+            print_rules_status(&cfg, rules.snapshot().is_ok_and(|r| r.is_loaded()));
+        }
         if addrs.auth.is_some() {
             if cfg.auth_log_action_codes {
                 println!("  auth codes:       email action links and SMS codes are printed here as they are issued (they are credentials: do not forward this output to CI or shared logs; auth.logActionCodes = false silences them)");
@@ -1045,11 +1078,17 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
             Some(source) => enforcer.with_wall_clock(source),
             None => enforcer,
         };
-        Arc::new(
-            firestore_profile_settings(enforcer, &cfg)
-                .with_registry(registry.clone())
-                .with_database_rules(database_rules.clone()),
-        )
+        let enforcer = firestore_profile_settings(enforcer, &cfg)
+            .with_registry(registry.clone())
+            .with_database_rules(database_rules.clone());
+        // The client only sees production's denial, which does not say that nothing is loaded.
+        Arc::new(if quiet {
+            enforcer
+        } else {
+            enforcer.with_no_ruleset_notice(Arc::new(|database| {
+                eprintln!("{}", firestore_no_rules_warning(database));
+            }))
+        })
     });
     let mut service = GatewayService::local(gateway.clone(), backend.clone());
     if let Some(e) = &enforcer {
@@ -1529,6 +1568,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         export_on_exit,
         ready_file,
         owner_stdin,
+        config_origin,
     } = options;
     let quiet = verbosity == Verbosity::Quiet;
     let auth_wall_clock = if cfg.clock_start_pinned {
@@ -1872,6 +1912,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         }
         let assembly = assemble_adapters(BoundStartup {
                 cfg,
+                config_origin,
                 only,
                 verbosity,
                 import,

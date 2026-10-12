@@ -592,6 +592,14 @@ impl RulesEnforcer {
         self
     }
 
+    /// Sets the profile's acceptance and `auth.allowUnsignedIdTokens` together, so neither
+    /// falls back to a default: the construction the daemon uses for its Firestore enforcer.
+    #[must_use]
+    pub const fn with_token_policy(self, policy: RulesTokenPolicy) -> Self {
+        self.with_token_acceptance(policy.acceptance())
+            .with_unsigned_id_tokens(policy.allows_unsigned())
+    }
+
     /// The token policy the verifiers apply.
     fn token_policy(&self) -> RulesTokenPolicy {
         match self.unsigned_id_tokens {

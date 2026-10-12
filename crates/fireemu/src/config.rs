@@ -1139,6 +1139,10 @@ pub struct RuntimeConfig {
     pub storage_buckets_by_target: BTreeMap<String, Vec<String>>,
     /// Whether Security Rules are enforced on the Firestore surface.
     pub rules_enforced: bool,
+    /// `rules.denialLog`: whether each Firestore Security Rules denial of an end-user request is
+    /// printed on stderr with the `allow` conditions it evaluated (`"summary"`, the default) or
+    /// not (`"off"`). The client's answer is production's either way.
+    pub rules_denial_log: bool,
     /// Functions HTTP bind address.
     pub functions_addr: String,
     /// Eventarc HTTP bind address. The pinned official suite starts this dependency only
@@ -1467,6 +1471,7 @@ impl Default for RuntimeConfig {
             storage_rules_by_bucket: BTreeMap::new(),
             storage_buckets_by_target: BTreeMap::new(),
             rules_enforced: true,
+            rules_denial_log: true,
             functions_addr: "127.0.0.1:5001".to_owned(),
             eventarc_addr: "127.0.0.1:9299".to_owned(),
             eventarc_enabled: false,
@@ -3371,6 +3376,17 @@ impl RuntimeConfig {
     ) -> Result<(), ConfigError> {
         if let Some(source) = rules.get("source").and_then(Value::as_str) {
             cfg.rules_file = Some(source.to_owned());
+        }
+        if let Some(value) = rules.get("denialLog") {
+            cfg.rules_denial_log = match value.as_str() {
+                Some("summary") => true,
+                Some("off") => false,
+                _ => {
+                    return Err(ConfigError(
+                        "rules.denialLog must be \"summary\" or \"off\"".to_owned(),
+                    ))
+                }
+            };
         }
         match rules.get("executionMode").and_then(Value::as_str) {
             None | Some("native" | "admin-bypass") => Ok(()),
@@ -5710,6 +5726,28 @@ mod tests {
             .unwrap_err();
         assert!(e.0.contains("unknown config key network.other"), "{}", e.0);
         assert!(!RuntimeConfig::default().allow_non_loopback_hosts);
+    }
+
+    #[test]
+    fn the_rules_denial_log_is_on_by_default_and_can_be_turned_off() {
+        assert!(RuntimeConfig::default().rules_denial_log);
+        let read = |value: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "rules": {"denialLog": value}}))
+        };
+        assert!(read(json!("summary")).unwrap().rules_denial_log);
+        assert!(!read(json!("off")).unwrap().rules_denial_log);
+        for invalid in [json!(true), json!("full"), json!(null)] {
+            assert_eq!(
+                read(invalid).unwrap_err(),
+                ConfigError("rules.denialLog must be \"summary\" or \"off\"".to_owned())
+            );
+        }
+        // productionExact does not touch it: the log changes nothing a client sees.
+        let exact = RuntimeConfig::from_json(
+            &json!({"schemaVersion": 1, "profile": "strict", "productionExact": true}),
+        )
+        .unwrap();
+        assert!(exact.rules_denial_log);
     }
 
     #[test]

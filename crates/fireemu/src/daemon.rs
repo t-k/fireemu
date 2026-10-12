@@ -591,6 +591,16 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             .set_no_rules_notice(fireemu_adapter_http::storage::NoRulesNotice(Arc::new(
                 |event| eprintln!("{}", storage_no_rules_warning(event)),
             )));
+        // The client sees production's 403, which does not say which rule refused.
+        if cfg.rules_denial_log {
+            storage_rules
+                .registry
+                .set_denial_log(fireemu_adapter_http::storage::StorageDenialLog(Arc::new(
+                    |denial| {
+                        eprintln!("note: {}", denial.summary());
+                    },
+                )));
+        }
     }
     // The buckets the deployed Storage triggers name exist for the strict profile, as in production.
     if let Some(runtime) = &functions_runtime {
@@ -1153,15 +1163,26 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         };
         let enforcer = firestore_profile_settings(enforcer, &cfg)
             .with_listen_expiry(listen_expiry)
+            // The UI's Rules page lists the decided requests: with the UI on, keep them from the
+            // first request rather than from the page's first read.
+            .with_request_traces(addrs.ui.is_some())
             .with_registry(registry.clone())
             .with_database_rules(database_rules.clone());
-        // The client only sees production's denial, which does not say that nothing is loaded.
+        // The client only sees production's denial, which does not say that nothing is loaded
+        // or which rule refused.
         Arc::new(if quiet {
             enforcer
         } else {
-            enforcer.with_no_ruleset_notice(Arc::new(|event| {
+            let enforcer = enforcer.with_no_ruleset_notice(Arc::new(|event| {
                 eprintln!("{}", firestore_no_rules_warning(event));
-            }))
+            }));
+            if cfg.rules_denial_log {
+                enforcer.with_denial_log(Arc::new(|denial| {
+                    eprintln!("note: {}", denial.summary());
+                }))
+            } else {
+                enforcer
+            }
         })
     });
     let mut service = GatewayService::local(gateway.clone(), backend.clone());

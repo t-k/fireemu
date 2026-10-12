@@ -224,6 +224,17 @@ Under the `strict` profile, a project without Security Rules behaves as a produc
 
 The answers keep production's wording, which does not mention Fireemu. The startup output therefore has a `firestore rules:` and a `storage rules:` line that say when no rules are loaded and how to load them, and the first refused request for each database and bucket (up to 32 of each) prints a warning to standard error. Name the rules files in `firebase.json` (`firestore.rules`, `storage.rules`) or in `fireemu.json` (`rules.source`, `storage.rules`).
 
+### Why a request was denied
+
+A Security Rules denial is answered with production's wording (Firestore's `PERMISSION_DENIED` "Missing or insufficient permissions.", Storage's 403), which does not say which rule refused. Fireemu therefore prints each denial of an end-user request to standard error, with every `allow` condition the request evaluated and what it evaluated to:
+
+```text
+note: firestore: Security Rules denied get on notes/n1 in database (default) (request.auth.uid "bob"): no allow statement evaluated to true; line 5:22 `request.auth.uid == resource.data.owner` was false
+```
+
+- Set `rules.denialLog` to `"off"` in `fireemu.json` to silence these lines (for example in a suite that asserts many denials). The answer to the client is the same either way.
+- When the UI is running, its Rules page lists the decided requests from the start of the run, with what every expression evaluated to. The same trace is served by `GET /v1/sessions/default/rules/requests` on the control API.
+
 ### Compatibility profiles
 
 | Profile | Behavior |

@@ -178,6 +178,31 @@ pub fn report(ruleset: &Ruleset, coverage: &Coverage) -> Vec<CoverageNode> {
     roots.iter().map(|e| node(e, coverage)).collect()
 }
 
+/// The `allow` conditions `coverage` (one request's) evaluated, in source order, with the values
+/// each took: the conditions a denial diagnostic names. A function body is not among them; the
+/// condition that called it is.
+#[must_use]
+pub fn decided_conditions(ruleset: &Ruleset, coverage: &Coverage) -> Vec<CoverageEntry> {
+    let mut decided = Vec::new();
+    let mut items: Vec<&Item> = ruleset.services.iter().flat_map(|s| &s.items).collect();
+    while let Some(item) = items.pop() {
+        if let Item::Match(m) = item {
+            items.extend(&m.items);
+            for condition in m.allows.iter().filter_map(|a: &Allow| a.condition.as_ref()) {
+                if let Some(values) = coverage.values_at(condition.span, condition.end) {
+                    decided.push(CoverageEntry {
+                        span: condition.span,
+                        end: condition.end,
+                        values: values.to_vec(),
+                    });
+                }
+            }
+        }
+    }
+    decided.sort_by_key(|entry| (entry.span.offset, entry.end));
+    decided
+}
+
 fn node(expr: &Expr, coverage: &Coverage) -> CoverageNode {
     CoverageNode {
         span: expr.span,

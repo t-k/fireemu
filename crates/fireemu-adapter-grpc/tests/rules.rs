@@ -4456,3 +4456,174 @@ service cloud.firestore {
         h.handle.abort();
     }
 }
+
+/// Every denial of an end-user request reaches the denial log with the `allow` conditions it
+/// evaluated, quoted from the loaded source; an allowed request, the owner and a database with
+/// no ruleset (reported once per database elsewhere) do not.
+#[test]
+fn a_denied_request_reaches_the_denial_log_with_the_conditions_it_evaluated() {
+    use fireemu_adapter_grpc::rules::RulesDenial;
+
+    let gateway = Gateway {
+        enforce_limits: true,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: IndexValidationPolicy::Production,
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+    let backend = Arc::new(LocalBackend::new(gateway, clock.clone(), 7));
+    let auth = Arc::new(Mutex::new(AuthStore::new(
+        "demo-app",
+        SplitMix64::new(3),
+        TotpPolicy::default(),
+    )));
+    let denials: Arc<Mutex<Vec<RulesDenial>>> = Arc::default();
+    let seen = denials.clone();
+    let enforcer = RulesEnforcer::new(
+        Arc::new(RulesetSlot::new(LoadedRules::from_source(RULES).unwrap())),
+        auth,
+        clock,
+    )
+    .with_database_rules(BTreeMap::from([(
+        "empty".to_owned(),
+        Arc::new(RulesetSlot::default()),
+    )]))
+    .with_refusal_without_ruleset(true)
+    .with_denial_log(Arc::new(move |denial| {
+        seen.lock().unwrap().push(denial.clone());
+    }));
+    let project = ProjectId::try_new("demo-app").unwrap();
+    let database = DatabaseId::default_database();
+    let reader = LatestReader {
+        backend,
+        parent: Parent {
+            project: project.clone(),
+            database: database.clone(),
+            document: None,
+        },
+    };
+    let bob = Principal::User(fireemu_core_rules::value::AuthContext {
+        uid: "bob".to_owned(),
+        token: BTreeMap::from([("aud".to_owned(), RulesValue::String("demo-app".to_owned()))]),
+    });
+    let alice_profile = DocumentPath::parse(&project, &database, "profiles/alice").unwrap();
+    let bob_profile = DocumentPath::parse(&project, &database, "profiles/bob").unwrap();
+
+    assert!(enforcer
+        .authorize_get(&bob, &bob_profile, None, &reader)
+        .is_ok());
+    assert!(enforcer
+        .authorize_get(&Principal::Owner, &alice_profile, None, &reader)
+        .is_ok());
+    assert!(denials.lock().unwrap().is_empty());
+
+    assert!(enforcer
+        .authorize_get(&bob, &alice_profile, None, &reader)
+        .is_err());
+    let logged = std::mem::take(&mut *denials.lock().unwrap());
+    assert_eq!(logged.len(), 1, "{logged:?}");
+    let denial = &logged[0];
+    assert_eq!(denial.service, "firestore");
+    assert_eq!(denial.location, "database (default)");
+    assert_eq!(denial.method, "get");
+    assert_eq!(denial.path, "profiles/alice");
+    assert_eq!(denial.uid.as_deref(), Some("bob"));
+    assert_eq!(denial.reason, "no allow statement evaluated to true");
+    assert_eq!(denial.conditions.len(), 1, "{denial:?}");
+    assert_eq!(
+        denial.conditions[0].excerpt.as_deref(),
+        Some("request.auth != null && request.auth.uid == uid")
+    );
+    assert_eq!(denial.conditions[0].line, 6);
+    assert_eq!(denial.conditions[0].outcome, "false");
+    assert!(denial.summary().contains("line 6:"), "{}", denial.summary());
+
+    // A path no match block covers names the reason and no condition.
+    let elsewhere = DocumentPath::parse(&project, &database, "unknown/x").unwrap();
+    assert!(enforcer
+        .authorize_get(&Principal::Anonymous, &elsewhere, None, &reader)
+        .is_err());
+    let logged = std::mem::take(&mut *denials.lock().unwrap());
+    assert_eq!(logged.len(), 1);
+    assert_eq!(logged[0].reason, "no match block covers this path");
+    assert!(logged[0].conditions.is_empty());
+    assert_eq!(logged[0].uid, None);
+
+    // No ruleset for the database: refused, not logged per request.
+    let empty = DatabaseId::try_new("empty").unwrap();
+    let unruled = DocumentPath::parse(&project, &empty, "profiles/bob").unwrap();
+    assert!(enforcer
+        .authorize_get(&bob, &unruled, None, &reader)
+        .is_err());
+    assert!(denials.lock().unwrap().is_empty());
+}
+
+/// With `with_request_traces`, every decision is in the trace from the first request on and
+/// after a reload, so the UI's Rules page lists denials that happened before it was opened;
+/// without it nothing is kept until the trace is first read.
+#[test]
+fn request_traces_can_be_kept_from_the_first_request_and_across_a_reload() {
+    for record in [false, true] {
+        let gateway = Gateway {
+            enforce_limits: true,
+            ctx: PlanningContext {
+                edition: FirestoreEdition::Standard,
+                api_mode: FirestoreApiMode::Native,
+                policy: IndexValidationPolicy::Production,
+            },
+            indexes: IndexSet::default(),
+        };
+        let clock = Arc::new(Mutex::new(VirtualClock::new(START)));
+        let backend = Arc::new(LocalBackend::new(gateway, clock.clone(), 7));
+        let auth = Arc::new(Mutex::new(AuthStore::new(
+            "demo-app",
+            SplitMix64::new(3),
+            TotpPolicy::default(),
+        )));
+        let enforcer = RulesEnforcer::new(
+            Arc::new(RulesetSlot::new(LoadedRules::from_source(RULES).unwrap())),
+            auth,
+            clock,
+        )
+        .with_request_traces(record);
+        let project = ProjectId::try_new("demo-app").unwrap();
+        let database = DatabaseId::default_database();
+        let reader = LatestReader {
+            backend,
+            parent: Parent {
+                project: project.clone(),
+                database: database.clone(),
+                document: None,
+            },
+        };
+        let path = DocumentPath::parse(&project, &database, "profiles/alice").unwrap();
+        let traced = || {
+            enforcer
+                .rules()
+                .snapshot()
+                .unwrap()
+                .diagnostics
+                .lock()
+                .unwrap()
+                .requests()
+                .len()
+        };
+        assert!(enforcer
+            .authorize_get(&Principal::Anonymous, &path, None, &reader)
+            .is_err());
+        assert_eq!(traced(), usize::from(record), "record {record}");
+        enforcer.replace_source(RULES).unwrap();
+        assert_eq!(traced(), 0, "a reload starts a new trace");
+        assert!(enforcer
+            .authorize_get(&Principal::Anonymous, &path, None, &reader)
+            .is_err());
+        assert_eq!(
+            traced(),
+            usize::from(record),
+            "record {record} after a reload"
+        );
+    }
+}

@@ -230,6 +230,11 @@
       "properties": {
         "executionMode": { "enum": ["admin-bypass", "native", "oracle", "disabled"] },
         "source": { "type": "string" },
+        "denialLog": {
+          "enum": ["summary", "off"],
+          "default": "summary",
+          "description": "Whether each Security Rules denial of an end-user Firestore or Storage request is printed on standard error with every allow condition it evaluated and what it evaluated to (summary), or not (off). The client is answered with production's denial either way."
+        },
         "staticLimitChecks": { "type": "boolean" },
         "runtimeBudgets": { "type": "boolean" },
         "compiledSize": {

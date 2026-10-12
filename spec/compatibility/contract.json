@@ -1156,7 +1156,11 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "GET /v1/sessions/{session}/rules/requests on the control API: the last 100 decided requests with their per-expression traces, behind the control token",
+              "behaviour": "GET /v1/sessions/{session}/rules/requests on the control API: the last 100 decided requests with their per-expression traces, behind the control token; with the UI running the trace is kept from the first request on",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "each Security Rules denial of an end-user Firestore or Storage request is printed on stderr with the request, the reason and every allow condition it evaluated with its line, source and value (rules.denialLog \"summary\" by default, \"off\" to silence; owner decision 2026-10-13); the client's answer stays production's denial",
               "precision": "exact-for-local-semantics"
             }
           ],

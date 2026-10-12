@@ -1,0 +1,252 @@
+//! What a Security Rules denial is reported with while developing.
+//!
+//! The client is answered with production's denial (Firestore's `PERMISSION_DENIED` "Missing or
+//! insufficient permissions.", Storage's 403), which does not say which rule refused. A [`RulesDenial`] carries what the
+//! daemon found instead: the request, the reason and every `allow` condition the request
+//! evaluated with what it took, so a log line or a page can name the failing rule at once. It
+//! never carries a token or a claim other than the subject the rule saw as `request.auth.uid`.
+
+use std::fmt::Write as _;
+use std::sync::Arc;
+
+use crate::coverage::{CoverageEntry, ExprValue};
+use crate::eval::DenyReason;
+
+/// Receives every denial of an end-user request.
+pub type DenialLog = Arc<dyn Fn(&RulesDenial) + Send + Sync>;
+
+/// The longest excerpt of a condition's source a summary prints.
+const EXCERPT_MAX_CHARS: usize = 120;
+
+/// One denied request.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RulesDenial {
+    /// `firestore` or `storage`.
+    pub service: &'static str,
+    /// Where the request went, as a summary names it: `database (default)`, `bucket b`.
+    pub location: String,
+    /// `get`, `list`, `create`, `update` or `delete`.
+    pub method: &'static str,
+    /// The document, collection or object the request named, relative to its location.
+    pub path: String,
+    /// `request.auth.uid`, when the request carried a signed-in user.
+    pub uid: Option<String>,
+    /// Why it was denied, in fireemu's words.
+    pub reason: String,
+    /// Every `allow` condition the request evaluated, in source order.
+    pub conditions: Vec<DeniedCondition>,
+}
+
+/// One `allow` condition a denied request evaluated.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeniedCondition {
+    /// 1-based line of the condition.
+    pub line: u32,
+    /// 1-based column of the condition.
+    pub column: u32,
+    /// The condition's source, whitespace collapsed and shortened, when the source is known.
+    pub excerpt: Option<String>,
+    /// What it evaluated to, in words (`false`, `an error: ...`).
+    pub outcome: String,
+}
+
+impl DeniedCondition {
+    /// The condition `entry` of `source` (the loaded rules text, when known).
+    #[must_use]
+    pub fn from_entry(entry: &CoverageEntry, source: Option<&str>) -> Self {
+        Self {
+            line: entry.span.line,
+            column: entry.span.column,
+            excerpt: source
+                .and_then(|source| source.get(entry.span.offset..entry.end))
+                .map(excerpt),
+            outcome: entry
+                .values
+                .iter()
+                .map(|(value, _)| outcome(value))
+                .collect::<Vec<_>>()
+                .join(", then "),
+        }
+    }
+}
+
+/// `text` on one line: every run of whitespace (control characters included) becomes one
+/// space, and a long condition ends in an ellipsis.
+fn excerpt(text: &str) -> String {
+    let collapsed = text
+        .split(|c: char| c.is_whitespace() || c.is_control())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if collapsed.chars().count() <= EXCERPT_MAX_CHARS {
+        return collapsed;
+    }
+    let mut short: String = collapsed.chars().take(EXCERPT_MAX_CHARS - 1).collect();
+    short.push('…');
+    short
+}
+
+fn outcome(value: &ExprValue) -> String {
+    match value {
+        ExprValue::Bool(b) => b.to_string(),
+        ExprValue::Undefined(cause) => format!(
+            "an error at {}:{}: {}",
+            cause.span.line,
+            cause.span.column,
+            excerpt(&cause.message)
+        ),
+        ExprValue::Null => "null, not a boolean".to_owned(),
+        ExprValue::Int(i) => format!("{i}, not a boolean"),
+        ExprValue::Float(f) => format!("{f}, not a boolean"),
+        ExprValue::String(s) => format!("{:?}, not a boolean", excerpt(s)),
+        ExprValue::Composite(kind) => format!("a {kind}, not a boolean"),
+    }
+}
+
+/// Why the evaluator denied a request, in fireemu's words.
+#[must_use]
+pub fn deny_reason_text(reason: &DenyReason) -> String {
+    match reason {
+        DenyReason::NoMatchingRule => "no match block covers this path".to_owned(),
+        DenyReason::NoMatchingAllow => "no allow statement evaluated to true".to_owned(),
+        DenyReason::Unsupported(m) => format!("unsupported rules feature: {m}"),
+        DenyReason::BudgetExceeded {
+            limit_id,
+            current,
+            maximum,
+        } => format!("{limit_id}: {current} exceeds {maximum}"),
+    }
+}
+
+impl RulesDenial {
+    /// The denial on one line, for a log.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let caller = self.uid.as_ref().map_or_else(
+            || "no request.auth".to_owned(),
+            |uid| format!("request.auth.uid {:?}", excerpt(uid)),
+        );
+        let mut line = format!(
+            "{}: Security Rules denied {} on {} in {} ({caller}): {}",
+            self.service,
+            self.method,
+            excerpt(&self.path),
+            excerpt(&self.location),
+            excerpt(&self.reason)
+        );
+        for condition in &self.conditions {
+            // Writing into a String cannot fail.
+            let _ = write!(line, "; line {}:{}", condition.line, condition.column);
+            if let Some(excerpt) = &condition.excerpt {
+                let _ = write!(line, " `{excerpt}`");
+            }
+            let _ = write!(line, " was {}", condition.outcome);
+        }
+        line
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{excerpt, DeniedCondition, RulesDenial, EXCERPT_MAX_CHARS};
+    use crate::ast::Span;
+    use crate::coverage::{CoverageEntry, ExprValue, UndefinedCause};
+
+    fn entry(source: &str, needle: &str, values: Vec<(ExprValue, u64)>) -> CoverageEntry {
+        let offset = source.find(needle).unwrap();
+        CoverageEntry {
+            span: Span {
+                line: 3,
+                column: 21,
+                offset,
+            },
+            end: offset + needle.len(),
+            values,
+        }
+    }
+
+    #[test]
+    fn a_summary_names_the_request_the_reason_and_each_condition_with_its_value() {
+        let source = "x\n\n      allow update: if request.auth.uid ==\n   resource.data.owner;\n";
+        let failed = entry(
+            source,
+            "request.auth.uid ==\n   resource.data.owner",
+            vec![(ExprValue::Bool(false), 1)],
+        );
+        let erred = entry(
+            source,
+            "resource.data.owner",
+            vec![(
+                ExprValue::Undefined(UndefinedCause {
+                    span: Span {
+                        line: 4,
+                        column: 4,
+                        offset: 0,
+                    },
+                    end: 1,
+                    message: "Property owner is undefined\non object.".to_owned(),
+                }),
+                1,
+            )],
+        );
+        let denial = RulesDenial {
+            service: "firestore",
+            location: "database (default)".to_owned(),
+            method: "update",
+            path: "notes/n1".to_owned(),
+            uid: Some("bob".to_owned()),
+            reason: "no allow statement evaluated to true".to_owned(),
+            conditions: vec![
+                DeniedCondition::from_entry(&failed, Some(source)),
+                DeniedCondition::from_entry(&erred, None),
+            ],
+        };
+        assert_eq!(
+            denial.summary(),
+            "firestore: Security Rules denied update on notes/n1 in database (default) (request.auth.uid \"bob\"): no allow statement evaluated to true; line 3:21 `request.auth.uid == resource.data.owner` was false; line 3:21 was an error at 4:4: Property owner is undefined on object."
+        );
+        let anonymous = RulesDenial {
+            uid: None,
+            conditions: Vec::new(),
+            ..denial
+        };
+        assert!(anonymous.summary().contains("(no request.auth)"));
+    }
+
+    #[test]
+    fn a_condition_that_took_several_values_lists_them_in_order() {
+        let source = "allow list: if resource.data.n > 1;";
+        let condition = DeniedCondition::from_entry(
+            &entry(
+                source,
+                "resource.data.n > 1",
+                vec![(ExprValue::Bool(true), 2), (ExprValue::Bool(false), 1)],
+            ),
+            Some(source),
+        );
+        assert_eq!(condition.outcome, "true, then false");
+        for (value, expected) in [
+            (ExprValue::Null, "null, not a boolean"),
+            (ExprValue::Int(3), "3, not a boolean"),
+            (ExprValue::String("a".to_owned()), "\"a\", not a boolean"),
+            (ExprValue::Composite("map"), "a map, not a boolean"),
+        ] {
+            let condition = DeniedCondition::from_entry(
+                &entry(source, "resource", vec![(value, 1)]),
+                Some(source),
+            );
+            assert_eq!(condition.outcome, expected);
+        }
+    }
+
+    #[test]
+    fn an_excerpt_is_one_line_and_bounded() {
+        assert_eq!(excerpt("a\n\t b\u{0}c"), "a b c");
+        let long = "x ".repeat(200);
+        let short = excerpt(&long);
+        assert_eq!(short.chars().count(), EXCERPT_MAX_CHARS);
+        assert!(short.ends_with('…'));
+        let exact = "y".repeat(EXCERPT_MAX_CHARS);
+        assert_eq!(excerpt(&exact), exact);
+    }
+}

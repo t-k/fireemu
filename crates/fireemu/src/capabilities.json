@@ -713,7 +713,8 @@
       "GET /emulator/v1/projects/{project}:ruleCoverage on the Firestore port: the loaded rules files, then a report of one tree per allow condition and per function body, each node naming its sourcePosition (line, column, currentOffset, endOffset) and the values it took with a count each",
       "GET /emulator/v1/projects/{project}:ruleCoverage.html: the same document as a page that underlines every evaluated expression and shows its values on hover",
       "PUT /emulator/v1/projects/{project}:securityRules: the official load route, answering 200 with issues or 400 whose message names the rejected position as L<line>:<column>",
-      "GET /v1/sessions/{session}/rules/requests on the control API: the last 100 decided requests, newest first, each with its decision and what every expression evaluated to",
+      "GET /v1/sessions/{session}/rules/requests on the control API: the last 100 decided requests, newest first, each with its decision and what every expression evaluated to; with the UI running the trace is kept from the first request on, so the Rules page lists denials that happened before it was opened",
+      "each denial of an end-user Firestore or Storage request is printed on stderr with the request, the reason and every allow condition it evaluated with its line, its source and what it took (rules.denialLog \"summary\", the default; \"off\" silences it); the client's answer stays production's",
       "the Emulator UI's Rules page lists the decided requests and expands one into its per-expression trace, reading the same control route"
     ],
     "notes": [

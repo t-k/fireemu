@@ -328,7 +328,8 @@ export async function replayA(
     });
     await clock.dispatch(input.rows[0]);
     for (const row of input.rows) {
-      const step = async () => {
+      // Strict rethrows the original error unchanged; only descriptive mode records and continues.
+      try {
         if (row.event === "request-dispatch" || row.event === "stream-frame") {
           if (currentCell !== row.cellId) {
             native.closeCell(currentCell);
@@ -439,13 +440,12 @@ export async function replayA(
           await native.action(row);
         else if (row.event === "case-result" || row.event === "case-budget-overrun")
           native.closeCell(row.cellId);
-      };
-      if (!descriptive) await step();
-      else {
-        const difference = await descriptive.attempt(descriptiveContext(row), step, () =>
+      } catch (error) {
+        if (!descriptive) throw error;
+        const difference = descriptive.record(descriptiveContext(row), error, () =>
           descriptiveEvidence(row, source.cells, localCells),
         );
-        if (difference) journal.write({ event: "descriptive-difference", ...difference });
+        journal.write({ event: "descriptive-difference", ...difference });
       }
     }
     for (const [cellId, witness] of native.witnesses) {

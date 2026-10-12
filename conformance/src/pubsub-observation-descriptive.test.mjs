@@ -195,13 +195,15 @@ test("attempt records a failure with its context and returns null on success", a
 
 test("strict replay still stops at the first failing row with the unchanged message", async () => {
   for (const message of ["native terminal witness mismatch", "unproven live ACK correlation"]) {
-    const calls = [];
+    const calls = [],
+      injected = new Error(message),
+      stack = injected.stack;
     await assert.rejects(
       replayA(unaryFixture(3), env, pin, {
         advance: async () => {},
-        wireFactory: failingWire(new Map([[2, new Error(message)]]), calls),
+        wireFactory: failingWire(new Map([[2, injected]]), calls),
       }),
-      (error) => error instanceof Error && error.message === message,
+      (error) => error === injected && error.message === message && error.stack === stack,
     );
     assert.deepEqual(calls, ["GetTopic", "GetTopic"]);
   }

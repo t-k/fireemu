@@ -1985,6 +1985,29 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    /// The per-name warnings name the resource; past the limit a single line says the rest are
+    /// suppressed.
+    #[test]
+    fn no_rules_warnings_name_the_resource_and_the_suppression() {
+        use super::{firestore_no_rules_warning, storage_no_rules_warning, NoticeEvent};
+        let first = firestore_no_rules_warning(NoticeEvent::First("(default)"));
+        assert!(first.starts_with("warning: firestore:") && first.contains("\"(default)\""));
+        let first = storage_no_rules_warning(NoticeEvent::First("b.appspot.com"));
+        assert!(first.starts_with("warning: storage:") && first.contains("\"b.appspot.com\""));
+        for (line, what) in [
+            (
+                firestore_no_rules_warning(NoticeEvent::Suppressed),
+                "warning: firestore: further no-rules warnings are suppressed (32 databases",
+            ),
+            (
+                storage_no_rules_warning(NoticeEvent::Suppressed),
+                "warning: storage: further no-rules warnings are suppressed (32 buckets",
+            ),
+        ] {
+            assert!(line.starts_with(what), "{line}");
+        }
+    }
+
     #[test]
     fn the_strict_profile_waits_20_s_on_both_clocks_and_the_emulator_profile_15_s_on_the_wall_clock(
     ) {

@@ -569,3 +569,26 @@ fn capabilities_follow_discovery() {
     assert_eq!(profile(&[]), "emulator");
     assert_eq!(profile(&["--no-config-discovery"]), "strict");
 }
+
+/// A discovered `fireemu.json` that is in fact a firebase.json (no `schemaVersion`) is loaded as
+/// `--config` would load it, and the banner says it was found rather than named.
+#[test]
+fn a_discovered_firebase_shaped_fireemu_json_is_labelled_as_found() {
+    let dir = scratch("firebase-shaped-canonical");
+    firebase_project(&dir);
+    std::fs::rename(dir.join("firebase.json"), dir.join("fireemu.json")).unwrap();
+    let (output, _) = exec_in(&dir, &[]);
+    let banner = stdout(&output);
+    let config = line(&banner, "config:");
+    assert!(
+        config.contains("fireemu.json (found in the working directory)"),
+        "{config}"
+    );
+    assert!(line(&banner, "firestore rules:").contains("enforced from"));
+    let (output, _) = exec_in(&dir, &["--config", "fireemu.json"]);
+    let banner = stdout(&output);
+    assert!(
+        line(&banner, "config:").contains("fireemu.json (--config)"),
+        "{banner}"
+    );
+}

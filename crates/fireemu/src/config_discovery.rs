@@ -74,12 +74,6 @@ pub(crate) struct Skipped {
     pub(crate) reason: String,
 }
 
-impl std::fmt::Display for Skipped {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}", self.path.display(), self.reason)
-    }
-}
-
 /// The search's result: what it found, or the candidate it refused to load.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Discovery {
@@ -366,7 +360,7 @@ mod tests {
         assert_eq!(skipped.path, PathBuf::from("/p/firebase.json"));
         assert!(
             skipped.reason.contains("another user (uid 502)"),
-            "{skipped}"
+            "{skipped:?}"
         );
     }
 
@@ -403,7 +397,7 @@ mod tests {
         assert_eq!(discovery.found, Discovered::Nothing);
         let skipped = discovery.skipped.unwrap();
         assert_eq!(skipped.path, PathBuf::from("/p/firebase.json"));
-        assert!(skipped.reason.contains("is in /p, which"), "{skipped}");
+        assert!(skipped.reason.contains("is in /p, which"), "{skipped:?}");
         // Without a candidate there the walk still stops, and says nothing.
         let stat = tree(&[("/p", dir(0, 0o1777)), ("/firebase.json", file(ME, 0o644))]);
         assert_eq!(
@@ -444,7 +438,7 @@ mod tests {
             ("/p/app/.firebaserc", file(ME, 0o644)),
         ]);
         let skipped = untrusted_firebaserc(Path::new("/p/app"), ME, shared).unwrap();
-        assert!(skipped.reason.contains("is in /p/app"), "{skipped}");
+        assert!(skipped.reason.contains("is in /p/app"), "{skipped:?}");
     }
 
     /// One directory level of the generated trees: who owns it and its mode, and the

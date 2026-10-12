@@ -15,15 +15,45 @@ const STORAGE_RULES: &str = "rules_version = '2';\nservice firebase.storage {\n 
 const FIREBASE_JSON: &str =
     r#"{"firestore": {"rules": "firestore.rules"}, "storage": {"rules": "storage.rules"}}"#;
 
+/// A scratch directory with an explicit mode, so no test depends on the umask.
 fn scratch(name: &str) -> Scratch {
-    Scratch::new("config-discovery", name)
+    let dir = Scratch::new("config-discovery", name);
+    set_mode(&dir, 0o755);
+    dir
 }
+
+/// Writes a fixture file with mode 644, whatever the umask.
+fn write(path: &Path, contents: &str) {
+    std::fs::write(path, contents).unwrap();
+    set_mode(path, 0o644);
+}
+
+/// Creates a fixture directory and its missing parents with mode 755, whatever the umask.
+fn mkdir(path: &Path) {
+    std::fs::create_dir_all(path).unwrap();
+    let temp = std::env::temp_dir();
+    for dir in path
+        .ancestors()
+        .take_while(|d| d.starts_with(&temp) && *d != temp)
+    {
+        set_mode(dir, 0o755);
+    }
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+#[cfg(not(unix))]
+fn set_mode(_path: &Path, _mode: u32) {}
 
 /// A Firebase project directory: `firebase.json` naming both rules files.
 fn firebase_project(dir: &Path) {
-    std::fs::write(dir.join("firebase.json"), FIREBASE_JSON).unwrap();
-    std::fs::write(dir.join("firestore.rules"), FIRESTORE_RULES).unwrap();
-    std::fs::write(dir.join("storage.rules"), STORAGE_RULES).unwrap();
+    write(&dir.join("firebase.json"), FIREBASE_JSON);
+    write(&dir.join("firestore.rules"), FIRESTORE_RULES);
+    write(&dir.join("storage.rules"), STORAGE_RULES);
 }
 
 /// `fireemu exec` in `cwd` with `extra` options, running a command that writes the project ID
@@ -101,13 +131,12 @@ fn a_firebase_json_in_the_working_directory_is_loaded() {
 fn a_firebase_json_in_a_parent_is_loaded_with_the_firebaserc_beside_it() {
     let dir = scratch("parent-firebase");
     firebase_project(&dir);
-    std::fs::write(
-        dir.join(".firebaserc"),
+    write(
+        &dir.join(".firebaserc"),
         r#"{"projects": {"default": "demo-discovered-parent"}}"#,
-    )
-    .unwrap();
+    );
     let sub = dir.join("functions").join("test");
-    std::fs::create_dir_all(&sub).unwrap();
+    mkdir(&sub);
     let (output, project) = exec_in(&sub, &[]);
     assert_eq!(project, "demo-discovered-parent");
     let banner = stdout(&output);
@@ -121,11 +150,10 @@ fn a_firebase_json_in_a_parent_is_loaded_with_the_firebaserc_beside_it() {
 fn a_fireemu_json_in_the_working_directory_is_loaded_with_its_firebase_json_reference() {
     let dir = scratch("cwd-canonical");
     firebase_project(&dir);
-    std::fs::write(
-        dir.join("fireemu.json"),
+    write(
+        &dir.join("fireemu.json"),
         r#"{"schemaVersion": 1, "profile": "emulator", "firebaseJson": "firebase.json"}"#,
-    )
-    .unwrap();
+    );
     let (output, _) = exec_in(&dir, &[]);
     let banner = stdout(&output);
     let config = line(&banner, "config:");
@@ -140,7 +168,7 @@ fn a_fireemu_json_in_the_working_directory_is_loaded_with_its_firebase_json_refe
 fn a_fireemu_json_without_a_reference_leaves_the_firebase_json_beside_it_unused_and_says_so() {
     let dir = scratch("cwd-canonical-alone");
     firebase_project(&dir);
-    std::fs::write(dir.join("fireemu.json"), r#"{"schemaVersion": 1}"#).unwrap();
+    write(&dir.join("fireemu.json"), r#"{"schemaVersion": 1}"#);
     let (output, _) = exec_in(&dir, &[]);
     let banner = stdout(&output);
     let config = line(&banner, "config:");
@@ -156,13 +184,12 @@ fn a_fireemu_json_without_a_reference_leaves_the_firebase_json_beside_it_unused_
 #[test]
 fn a_fireemu_json_in_a_parent_is_not_used() {
     let dir = scratch("parent-canonical");
-    std::fs::write(
-        dir.join("fireemu.json"),
+    write(
+        &dir.join("fireemu.json"),
         r#"{"schemaVersion": 1, "profile": "emulator"}"#,
-    )
-    .unwrap();
+    );
     let sub = dir.join("sub");
-    std::fs::create_dir_all(&sub).unwrap();
+    mkdir(&sub);
     let (output, _) = exec_in(&sub, &[]);
     let banner = stdout(&output);
     assert!(banner.contains("profile: strict"), "{banner}");
@@ -173,11 +200,10 @@ fn a_fireemu_json_in_a_parent_is_not_used() {
 fn an_explicit_config_turns_discovery_off() {
     let dir = scratch("explicit");
     firebase_project(&dir);
-    std::fs::write(
-        dir.join("other.json"),
+    write(
+        &dir.join("other.json"),
         r#"{"schemaVersion": 1, "profile": "emulator"}"#,
-    )
-    .unwrap();
+    );
     let (output, _) = exec_in(&dir, &["--config", "other.json"]);
     let banner = stdout(&output);
     let config = line(&banner, "config:");
@@ -189,8 +215,8 @@ fn an_explicit_config_turns_discovery_off() {
         "{rules}"
     );
     // An explicit --firebase-json wins as well.
-    std::fs::write(dir.join("fireemu.json"), r#"{"schemaVersion": 1}"#).unwrap();
-    std::fs::write(dir.join("empty.json"), "{}").unwrap();
+    write(&dir.join("fireemu.json"), r#"{"schemaVersion": 1}"#);
+    write(&dir.join("empty.json"), "{}");
     let (output, _) = exec_in(&dir, &["--firebase-json", "empty.json"]);
     let banner = stdout(&output);
     let config = line(&banner, "config:");
@@ -379,49 +405,81 @@ fn chmod(path: &Path, mode: u32) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
 }
 
-/// Unlike firebase-tools, discovery loads only files the user controls: a candidate in a
-/// directory anyone can write, or one its group can write, is skipped and named, and the run
-/// goes on with the built-in defaults.
+/// Unlike firebase-tools, discovery skips what anyone can write: a working directory anyone can
+/// write is not searched, and the warning names the remedies. Group write is allowed, as under
+/// user-private groups (umask 002), and an explicit flag always loads.
 #[cfg(unix)]
 #[test]
-fn a_candidate_others_can_write_is_skipped_with_a_warning() {
-    // The working directory can be written by anyone.
+fn a_world_writable_working_directory_is_not_searched_and_group_write_is_allowed() {
     let dir = scratch("world-writable-cwd");
     firebase_project(&dir);
     chmod(&dir, 0o777);
     let (output, _) = exec_in(&dir, &[]);
     let warning = stderr(&output);
     assert!(
-        warning.contains("warning: config discovery skipped firebase.json: is in ")
-            && warning.contains("which can be written by any user"),
+        warning.contains("warning: config discovery skipped ")
+            && warning.contains("it can be written by any user, so it is not searched")
+            && warning.contains("--config or --firebase-json")
+            && warning.contains("--no-config-discovery"),
         "{warning}"
     );
     let banner = stdout(&output);
     assert!(
-        line(&banner, "config:").contains("none loaded: firebase.json was skipped"),
+        line(&banner, "config:").contains("none loaded: "),
         "{banner}"
     );
     assert!(
         line(&banner, "firestore rules:").contains("none loaded"),
         "{banner}"
     );
+    // Naming the file explicitly still loads it.
+    let (output, _) = exec_in(&dir, &["--firebase-json", "firebase.json"]);
+    assert!(!stderr(&output).contains("config discovery skipped"));
+    assert!(line(&stdout(&output), "firestore rules:").contains("enforced from"));
     chmod(&dir, 0o755);
 
-    // The file can be written by its group.
-    let dir = scratch("group-writable-file");
+    // A 664 firebase.json and .firebaserc (umask 002) are the user's own files.
+    let dir = scratch("group-writable-files");
     firebase_project(&dir);
+    write(
+        &dir.join(".firebaserc"),
+        r#"{"projects": {"default": "demo-umask-002"}}"#,
+    );
     chmod(&dir.join("firebase.json"), 0o664);
+    chmod(&dir.join(".firebaserc"), 0o664);
+    let (output, project) = exec_in(&dir, &[]);
+    assert!(
+        !stderr(&output).contains("config discovery skipped"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(project, "demo-umask-002");
+    assert!(line(&stdout(&output), "firestore rules:").contains("enforced from"));
+
+    // A world-writable file is skipped.
+    chmod(&dir.join("firebase.json"), 0o666);
     let (output, _) = exec_in(&dir, &[]);
     assert!(
-        stderr(&output).contains("can be written by its group or by any user"),
+        stderr(&output).contains("skipped firebase.json: it can be written by any user"),
         "{}",
         stderr(&output)
     );
     assert!(line(&stdout(&output), "firestore rules:").contains("none loaded"));
-    // Naming it explicitly still loads it.
-    let (output, _) = exec_in(&dir, &["--firebase-json", "firebase.json"]);
-    assert!(!stderr(&output).contains("config discovery skipped"));
-    assert!(line(&stdout(&output), "firestore rules:").contains("enforced from"));
+}
+
+/// The `.firebaserc` in the working directory was read before discovery existed; a 664 one
+/// (umask 002) still names the project when there is no firebase.json.
+#[cfg(unix)]
+#[test]
+fn a_group_writable_firebaserc_alone_still_names_the_project() {
+    let dir = scratch("firebaserc-664");
+    write(
+        &dir.join(".firebaserc"),
+        r#"{"projects": {"default": "demo-rc-664"}}"#,
+    );
+    chmod(&dir.join(".firebaserc"), 0o664);
+    let (output, project) = exec_in(&dir, &[]);
+    assert_eq!(project, "demo-rc-664", "{}", stderr(&output));
 }
 
 /// A shared parent such as `/tmp` (sticky, anyone can write) ends the walk: a firebase.json
@@ -432,7 +490,7 @@ fn the_walk_stops_at_a_sticky_shared_parent() {
     let dir = scratch("sticky-parent");
     let shared = dir.join("shared");
     let project = shared.join("project");
-    std::fs::create_dir_all(&project).unwrap();
+    mkdir(&project);
     firebase_project(&shared);
     chmod(&shared, 0o1777);
     let (output, _) = exec_in(&project, &[]);
@@ -454,7 +512,7 @@ fn a_firebaserc_others_can_write_is_not_used_for_the_project() {
     let dir = scratch("writable-firebaserc");
     firebase_project(&dir);
     let rc = dir.join(".firebaserc");
-    std::fs::write(&rc, r#"{"projects": {"default": "demo-planted"}}"#).unwrap();
+    write(&rc, r#"{"projects": {"default": "demo-planted"}}"#);
     chmod(&rc, 0o666);
     let (output, project) = exec_in(&dir, &[]);
     assert_ne!(project, "demo-planted");
@@ -472,9 +530,9 @@ fn a_firebaserc_others_can_write_is_not_used_for_the_project() {
 #[test]
 fn an_error_in_a_discovered_file_says_it_was_discovered() {
     let dir = scratch("broken");
-    std::fs::write(dir.join("firebase.json"), "{not json").unwrap();
+    write(&dir.join("firebase.json"), "{not json");
     let sub = dir.join("sub");
-    std::fs::create_dir_all(&sub).unwrap();
+    mkdir(&sub);
     let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .current_dir(&sub)
         .args(["exec", "--only", "firestore", "--firestore-port", "0"])
@@ -507,8 +565,8 @@ fn a_parent_firebase_json_shadowed_by_a_canonical_file_is_named() {
     let dir = scratch("shadowed-parent");
     firebase_project(&dir);
     let sub = dir.join("web");
-    std::fs::create_dir_all(&sub).unwrap();
-    std::fs::write(sub.join("fireemu.json"), r#"{"schemaVersion": 1}"#).unwrap();
+    mkdir(&sub);
+    write(&sub.join("fireemu.json"), r#"{"schemaVersion": 1}"#);
     let (output, _) = exec_in(&sub, &[]);
     let config = stdout(&output);
     let config = line(&config, "config:");
@@ -524,13 +582,12 @@ fn a_parent_firebase_json_shadowed_by_a_canonical_file_is_named() {
 fn export_resolves_the_project_the_way_up_does() {
     let dir = scratch("export-project");
     firebase_project(&dir);
-    std::fs::write(
-        dir.join(".firebaserc"),
+    write(
+        &dir.join(".firebaserc"),
         r#"{"projects": {"default": "demo-export-discovered"}}"#,
-    )
-    .unwrap();
+    );
     let sub = dir.join("functions");
-    std::fs::create_dir_all(&sub).unwrap();
+    mkdir(&sub);
     let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .current_dir(&sub)
         .args(["emulators:export", "out"])
@@ -549,11 +606,10 @@ fn export_resolves_the_project_the_way_up_does() {
 #[test]
 fn capabilities_follow_discovery() {
     let dir = scratch("capabilities");
-    std::fs::write(
-        dir.join("fireemu.json"),
+    write(
+        &dir.join("fireemu.json"),
         r#"{"schemaVersion": 1, "profile": "emulator"}"#,
-    )
-    .unwrap();
+    );
     let profile = |extra: &[&str]| {
         let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
             .current_dir(&dir)

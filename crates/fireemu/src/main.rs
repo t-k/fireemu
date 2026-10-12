@@ -552,6 +552,8 @@ struct RawOptions {
     /// Whether the working directory is searched when neither `--config` nor `--firebase-json`
     /// is given (`--no-config-discovery` turns it off).
     config_discovery: ConfigDiscovery,
+    /// The file the search found and the text read from the handle it was judged by.
+    discovered_text: Option<(PathBuf, Result<String, String>)>,
     project: Option<String>,
     only: Option<Selection>,
     firestore_port: Option<u16>,
@@ -777,7 +779,13 @@ fn parse_raw_options(args: &[String], context: OptionContext) -> Result<RawOptio
 fn read_config_file(path: &Path) -> Result<(serde_json::Value, bool), CliError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| CliError::refused(format!("cannot read {}: {e}", diagnostic_path(path))))?;
-    let json: serde_json::Value = serde_json::from_str(&text)
+    parse_config_text(path, &text)
+}
+
+/// [`read_config_file`] for text already read: from the handle the search judged, when `path`
+/// is the file it found.
+fn parse_config_text(path: &Path, text: &str) -> Result<(serde_json::Value, bool), CliError> {
+    let json: serde_json::Value = serde_json::from_str(text)
         .map_err(|e| CliError::refused(format!("{} does not parse: {e}", diagnostic_path(path))))?;
     let canonical = json.get("schemaVersion").is_some();
     if !canonical {
@@ -821,7 +829,14 @@ fn read_config_file(path: &Path) -> Result<(serde_json::Value, bool), CliError> 
 
 /// Reads a Firebase project configuration and refuses a canonical fireemu document.
 fn read_firebase_json(path: &Path) -> Result<(serde_json::Value, PathBuf), CliError> {
-    let (json, canonical) = read_config_file(path)?;
+    firebase_json_document(path, read_config_file(path)?)
+}
+
+/// Refuses a canonical fireemu document or a non-object where a `firebase.json` belongs.
+fn firebase_json_document(
+    path: &Path,
+    (json, canonical): (serde_json::Value, bool),
+) -> Result<(serde_json::Value, PathBuf), CliError> {
     if canonical {
         return Err(CliError::refused(format!(
             "{}: this is a fireemu canonical configuration (it has schemaVersion), not a firebase.json; pass it with --config",
@@ -850,10 +865,12 @@ fn read_firebaserc(dir: &Path) -> Result<Option<serde_json::Value>, CliError> {
     let Ok(text) = std::fs::read_to_string(&rc_path) else {
         return Ok(None);
     };
-    let rc: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-        CliError::refused(format!("{} does not parse: {e}", diagnostic_path(&rc_path)))
-    })?;
-    Ok(Some(rc))
+    parse_firebaserc(&rc_path, &text).map(Some)
+}
+
+fn parse_firebaserc(rc_path: &Path, text: &str) -> Result<serde_json::Value, CliError> {
+    serde_json::from_str(text)
+        .map_err(|e| CliError::refused(format!("{} does not parse: {e}", diagnostic_path(rc_path))))
 }
 
 /// The project directory `up` and `exec` would find from the working directory: the directory
@@ -863,34 +880,50 @@ fn discovered_project_dir() -> PathBuf {
     let found = std::env::current_dir().ok().map(|cwd| {
         config_discovery::discover(
             &cwd,
-            config_discovery::current_user(),
+            &config_discovery::current_trust(),
             config_discovery::stat,
+            config_discovery::open,
         )
         .found
     });
     match found {
-        Some(config_discovery::Discovered::FirebaseJson(path)) => project_dir(&path),
+        Some(config_discovery::Discovered::FirebaseJson(path, _)) => project_dir(&path),
         _ => PathBuf::from("."),
     }
 }
 
 /// Reads the `.firebaserc` of a directory the search reached, unless the user does not control it
 /// (see `config_discovery`); a refused one is reported and ignored.
+/// `dir` is the working directory when it is `.`.
 fn discovered_firebaserc(dir: &Path) -> Result<Option<serde_json::Value>, CliError> {
+    let working = dir == Path::new(".");
     let absolute = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
-    if let Some(skipped) = config_discovery::untrusted_firebaserc(
+    match config_discovery::open_firebaserc(
         &absolute,
-        config_discovery::current_user(),
+        working,
+        &config_discovery::current_trust(),
         config_discovery::stat,
+        config_discovery::open,
     ) {
-        eprintln!(
-            "warning: config discovery skipped {}: {}, so it may have been put there by someone else; the project is not taken from it (pass --project)",
-            diagnostic_path(&skipped.path),
-            diagnostic_text(&skipped.reason)
-        );
-        return Ok(None);
+        Ok(None) => Ok(None),
+        Ok(Some(opened)) => {
+            let rc_path = dir.join(config_discovery::FIREBASERC_FILE);
+            let text = opened.text.map_err(|e| {
+                CliError::refused(format!("cannot read {}: {e}", diagnostic_path(&rc_path)))
+            })?;
+            parse_firebaserc(&rc_path, &text).map(Some)
+        }
+        Err(skipped) => {
+            eprintln!(
+                "{}",
+                skipped_config_warning(
+                    &skipped,
+                    "the project is not taken from it (pass --project)"
+                )
+            );
+            Ok(None)
+        }
     }
-    read_firebaserc(dir)
 }
 
 /// Resolves `--project` against the already-read `.firebaserc`, when there is one.
@@ -985,32 +1018,57 @@ fn discover_project_config(raw: &mut RawOptions) -> ConfigOrigin {
     };
     let discovery = config_discovery::discover(
         &cwd,
-        config_discovery::current_user(),
+        &config_discovery::current_trust(),
         config_discovery::stat,
+        config_discovery::open,
     );
     match &discovery.found {
-        config_discovery::Discovered::Canonical(path) => raw.config_path = Some(path.clone()),
-        config_discovery::Discovered::FirebaseJson(path) => raw.firebase_json = Some(path.clone()),
+        config_discovery::Discovered::Canonical(path, text) => {
+            raw.config_path = Some(path.clone());
+            raw.discovered_text = Some((path.clone(), text.clone()));
+        }
+        config_discovery::Discovered::FirebaseJson(path, text) => {
+            raw.firebase_json = Some(path.clone());
+            raw.discovered_text = Some((path.clone(), text.clone()));
+        }
         config_discovery::Discovered::Nothing => {}
     }
     if let Some(skipped) = &discovery.skipped {
         // A refused candidate never fails the run, but it must not go unnoticed either.
-        eprintln!("{}", skipped_config_warning(skipped));
+        eprintln!(
+            "{}",
+            skipped_config_warning(skipped, "the built-in defaults apply")
+        );
     }
     ConfigOrigin::Discovered(discovery)
 }
 
-/// The warning for a candidate the search refused to load.
-fn skipped_config_warning(skipped: &config_discovery::Skipped) -> String {
+/// The warning for a candidate the search refused to load, or a directory it did not search,
+/// naming what happens instead and the remedies.
+fn skipped_config_warning(skipped: &config_discovery::Skipped, instead: &str) -> String {
     format!(
-        "warning: config discovery skipped {}: {}, so it may have been put there by someone else; built-in defaults apply (name a file with --config or --firebase-json to load it anyway)",
+        "warning: config discovery skipped {}: it {}, so it may have been put there by someone else; {instead}. Load a file explicitly with --config or --firebase-json, or pass --no-config-discovery to silence this warning",
         diagnostic_path(&skipped.path),
         diagnostic_text(&skipped.reason)
     )
 }
 
+/// The configuration document at `path`: from the text the search judged when `path` is the
+/// file it found (so the check and the read see the same file), else read from disk.
+fn config_document(raw: &RawOptions, path: &Path) -> Result<(serde_json::Value, bool), CliError> {
+    match &raw.discovered_text {
+        Some((found, text)) if found == path => {
+            let text = text.as_ref().map_err(|e| {
+                CliError::refused(format!("cannot read {}: {e}", diagnostic_path(path)))
+            })?;
+            parse_config_text(path, text)
+        }
+        _ => read_config_file(path),
+    }
+}
+
 /// The suffix of an error about a file the search found rather than one the user named.
-const DISCOVERED_FILE_HINT: &str = "(this file was found by searching from the working directory, not named on the command line; pass --config or --firebase-json to choose the file, or --no-config-discovery to use none; a firebase.json in a directory you cannot enter is not seen, so a higher one may have been found)";
+const DISCOVERED_FILE_HINT: &str = "(this file was found by searching from the working directory, not named on the command line; pass --config or --firebase-json to choose the file, or --no-config-discovery to use none)";
 
 /// Adds [`DISCOVERED_FILE_HINT`] to a failure while reading discovered configuration.
 fn note_discovered(origin: &ConfigOrigin) -> impl Fn(CliError) -> CliError + '_ {
@@ -1063,7 +1121,7 @@ fn config_origin_line(origin: &ConfigOrigin, sources: &ConfigSources) -> String 
             return format!("none (the working directory cannot be read); {DEFAULTS}")
         }
         ConfigOrigin::Discovered(discovery)
-            if matches!(&discovery.found, Discovered::FirebaseJson(path) if path.is_absolute()) =>
+            if matches!(&discovery.found, Discovered::FirebaseJson(path, _) if path.is_absolute()) =>
         {
             "found in a parent of the working directory, as firebase-tools finds it"
         }
@@ -1127,7 +1185,7 @@ fn load_project_config(
     // `--config` carries either the canonical configuration or a firebase.json.
     let (mut cfg, firebase_from_config) = match &raw.config_path {
         Some(path) => {
-            let (json, canonical) = read_config_file(path)?;
+            let (json, canonical) = config_document(raw, path)?;
             if canonical {
                 sources.canonical = Some(path.clone());
                 let config = RuntimeConfig::from_json(&json)?;
@@ -1152,7 +1210,10 @@ fn load_project_config(
     };
     // A firebase.json from `--firebase-json` wins over one that reached `--config`.
     let firebase = match &raw.firebase_json {
-        Some(path) => Some((read_firebase_json(path)?, FirebaseJsonVia::FirebaseJsonFlag)),
+        Some(path) => Some((
+            firebase_json_document(path, config_document(raw, path)?)?,
+            FirebaseJsonVia::FirebaseJsonFlag,
+        )),
         None => firebase_from_config,
     };
     let mut project_root = PathBuf::from(".");

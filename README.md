@@ -184,7 +184,22 @@ An existing `fireemu.json` is not overwritten unless `--force` is supplied.
 
 `--no-config-discovery` skips steps 2 and 3. The `config:` line of the startup output names the files that were loaded.
 
-A discovered file can name Functions code to run and the rules to enforce, so on Unix the search only loads files that you control, which the Firebase CLI does not check. The search stops before a directory that another user owns or that any user can write, such as `/tmp`. A `fireemu.json`, `firebase.json` or `.firebaserc` that another user owns, or that its group or any user can write, is skipped. A skipped file is named in a warning, and the run continues as if nothing had been found. To load such a file anyway, name it with `--config` or `--firebase-json`. Errors in a discovered file say that the file was found by the search.
+A discovered file can name Functions code to run and the rules to enforce, so on Unix the search checks who owns what it finds, as git checks repository ownership. The Firebase CLI does not check this. The trusted owners are you (the effective user), root, and, when you run as root through `sudo`, the user in `SUDO_UID`.
+
+- A `fireemu.json`, `firebase.json` or `.firebaserc` whose owner is not trusted, or that any user can write, is skipped. Group write is allowed, so files created under a user-private-group umask (002, the Debian and Ubuntu default) are loaded.
+- The search stops before a parent directory whose owner is not trusted or that any user can write, such as `/tmp`.
+- The owner of the current directory is not checked, because you chose to run there. A current directory that any user can write is not searched at all.
+- A symbolic link is judged by the file it points to. The directory that holds the target is not checked.
+- Each candidate is opened once, and the ownership check and the read use the same open file.
+
+A skipped file or directory is named in a warning, and the run continues as if nothing had been found. To load a file anyway, name it with `--config` or `--firebase-json`. To silence the warning, pass `--no-config-discovery`. Errors in a discovered file say that the search found the file.
+
+Two common setups run into this rule:
+
+- A root container with a bind-mounted checkout. Examples are GitHub Actions `container:` jobs and `docker run -v "$PWD":/app` as root. The files are owned by a host user that the container's root does not trust, so they are skipped. Use the explicit flags, or `chown` the checkout. Rootless Podman maps your user to the container's root, so it is not affected.
+- `sudo`. Files owned by the user that `sudo` names in `SUDO_UID` are trusted.
+
+On Windows, ownership is not checked.
 
 If you relied on the old behavior, where a `firebase.json` next to your tests was ignored, pass `--no-config-discovery`. Discovery means that the project ID comes from the `.firebaserc` beside the discovered `firebase.json`, that its emulator ports, Hub, UI and single-project settings apply, and that a `functions` entry starts the Functions runtime. `fireemu capabilities` also reports the profile of a discovered `fireemu.json`.
 

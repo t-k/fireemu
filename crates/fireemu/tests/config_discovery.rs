@@ -347,3 +347,20 @@ fn the_first_refusal_without_rules_is_explained_on_standard_error_once() {
         );
     }
 }
+
+/// The Firestore rules line belongs to a run that serves Firestore.
+#[test]
+fn the_firestore_rules_line_is_printed_only_when_firestore_is_selected() {
+    let dir = scratch("storage-only");
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .current_dir(&dir)
+        .args(["exec", "--only", "storage", "--http-port", "0"])
+        .args(["--storage-port", "0", "--hub-port", "0", "--", "true"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let banner = stdout(&output);
+    assert!(!banner.contains("firestore rules:"), "{banner}");
+    assert!(banner.contains("storage rules:"), "{banner}");
+}

@@ -10,33 +10,83 @@ use crate::PagingPolicy;
 
 pub(crate) const INVALID_CREDENTIAL_MESSAGE: &str = "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.";
 
+pub(crate) const MISSING_CREDENTIAL_MESSAGE: &str = "Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API.";
+
+fn alternate_credential_present(headers: &HeaderMap, uri: &Uri) -> bool {
+    headers.contains_key("x-goog-api-key")
+        || uri.query().is_some_and(|query| {
+            query.split('&').any(|pair| {
+                let name = pair.split_once('=').map_or(pair, |(name, _)| name);
+                crate::rest::decode_query(name)
+                    .is_ok_and(|name| matches!(name.as_str(), "access_token" | "key"))
+            })
+        })
+}
+
 fn credential_rejected(policy: PagingPolicy, headers: &HeaderMap, uri: &Uri) -> bool {
-    // There is no trusted Google OAuth verifier. A present credential is unsupported,
-    // including empty, duplicated and undecodable values; it is never anonymous.
     policy == PagingPolicy::Strict
-        && (headers.contains_key(AUTHORIZATION)
-            || headers.contains_key("x-goog-api-key")
-            || uri.query().is_some_and(|query| {
-                query.split('&').any(|pair| {
-                    let name = pair.split_once('=').map_or(pair, |(name, _)| name);
-                    crate::rest::decode_query(name)
-                        .is_ok_and(|name| matches!(name.as_str(), "access_token" | "key"))
-                })
-            }))
+        && (headers.contains_key(AUTHORIZATION) || alternate_credential_present(headers, uri))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Admission {
+    Accepted,
+    Missing,
+    Invalid,
+}
+
+fn admission(
+    policy: PagingPolicy,
+    token: Option<&str>,
+    headers: &HeaderMap,
+    uri: &Uri,
+) -> Admission {
+    if policy == PagingPolicy::Emulator {
+        return Admission::Accepted;
+    }
+    if !credential_rejected(policy, headers, uri) {
+        return if token.is_some() {
+            Admission::Missing
+        } else {
+            Admission::Accepted
+        };
+    }
+    if let Some(token) = token.filter(|token| !token.is_empty()) {
+        let mut authorization = headers.get_all(AUTHORIZATION).iter();
+        if !alternate_credential_present(headers, uri)
+            && authorization
+                .next()
+                .is_some_and(|value| value.as_bytes() == format!("Bearer {token}").as_bytes())
+            && authorization.next().is_none()
+        {
+            return Admission::Accepted;
+        }
+    }
+    Admission::Invalid
 }
 
 pub(crate) async fn authenticate(
-    State(policy): State<PagingPolicy>,
+    State((policy, token)): State<(PagingPolicy, Option<String>)>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if credential_rejected(policy, request.headers(), request.uri()) {
-        if native_request(request.uri().path()) {
-            return tonic::Status::unauthenticated(INVALID_CREDENTIAL_MESSAGE).into_http::<Body>();
+    match admission(policy, token.as_deref(), request.headers(), request.uri()) {
+        Admission::Missing => {
+            if native_request(request.uri().path()) {
+                return tonic::Status::permission_denied(MISSING_CREDENTIAL_MESSAGE)
+                    .into_http::<Body>();
+            }
+            crate::rest::missing_credentials(policy)
         }
-        return crate::rest::unauthenticated(request.method(), request.uri().path(), policy);
+        Admission::Invalid => {
+            if native_request(request.uri().path()) {
+                return tonic::Status::unauthenticated(INVALID_CREDENTIAL_MESSAGE)
+                    .into_http::<Body>();
+            }
+            crate::rest::unauthenticated(request.method(), request.uri().path(), policy)
+        }
+        Admission::Accepted => next.run(request).await,
     }
-    next.run(request).await
 }
 
 fn native_request(path: &str) -> bool {
@@ -51,6 +101,22 @@ mod tests {
     use proptest::prelude::*;
 
     proptest! {
+        #[test]
+        fn configured_admission_matches_single_exact_bearer_reference(
+            values in prop::collection::vec("[A-Za-z0-9 _.-]{0,40}", 0..5),
+            exact in any::<bool>(), alternate in any::<bool>(),
+        ) {
+            let mut headers = HeaderMap::new();
+            for value in &values { headers.append(AUTHORIZATION, HeaderValue::from_str(value).unwrap()); }
+            if exact { headers.append(AUTHORIZATION, HeaderValue::from_static("Bearer fixture-token")); }
+            if alternate { headers.append("x-goog-api-key", HeaderValue::from_static("")); }
+            let all = headers.get_all(AUTHORIZATION).iter().collect::<Vec<_>>();
+            let expected = if all.is_empty() && !alternate { Admission::Missing }
+                else if !alternate && all.len() == 1 && all[0].as_bytes() == b"Bearer fixture-token" { Admission::Accepted }
+                else { Admission::Invalid };
+            prop_assert_eq!(admission(PagingPolicy::Strict, Some("fixture-token"), &headers, &Uri::from_static("/")), expected);
+            prop_assert_eq!(admission(PagingPolicy::Emulator, Some("fixture-token"), &headers, &Uri::from_static("/")), Admission::Accepted);
+        }
         #[test]
         fn local_verification_matches_absent_header_reference(
             values in prop::collection::vec(prop::collection::vec(0x20u8..=0xff, 0..80), 0..5),

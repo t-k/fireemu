@@ -609,17 +609,19 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             Arc::new(functions::PubSubBridge::new(r.clone()))
                 as Arc<dyn fireemu_adapter_pubsub::TopicDelivery>
         });
-    let pubsub_handle = fireemu_adapter_pubsub::PubSubHandle::new(
-        pubsub_state.clone(),
-        clock.clone(),
-        pubsub_bridge,
-    )
-    .with_paging_policy(match cfg.profile {
-        crate::config::CompatibilityProfile::Strict => fireemu_adapter_pubsub::PagingPolicy::Strict,
-        crate::config::CompatibilityProfile::Emulator => {
-            fireemu_adapter_pubsub::PagingPolicy::Emulator
-        }
-    });
+    pubsub_state
+        .lock()
+        .map_err(|_| "the Pub/Sub state lock is poisoned".to_owned())?
+        .set_project_numbers(cfg.pubsub_project_numbers.clone())
+        .map_err(|e| e.to_string())?;
+    let pubsub_handle = configured_pubsub_handle(
+        fireemu_adapter_pubsub::PubSubHandle::new(
+            pubsub_state.clone(),
+            clock.clone(),
+            pubsub_bridge,
+        ),
+        &cfg,
+    );
     // Under the strict profile a first-generation schedule's occurrence also puts its message on the job's topic, as Cloud
     // Scheduler does; without a Pub/Sub listener there is no topic and nothing to publish to.
     if functions::publishes_schedule_messages(pubsub_listener.is_some(), cfg.profile) {
@@ -1962,8 +1964,67 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
     }
 }
 
+fn configured_pubsub_handle(
+    handle: fireemu_adapter_pubsub::PubSubHandle,
+    cfg: &crate::config::RuntimeConfig,
+) -> fireemu_adapter_pubsub::PubSubHandle {
+    handle
+        .with_paging_policy(match cfg.profile {
+            crate::config::CompatibilityProfile::Strict => {
+                fireemu_adapter_pubsub::PagingPolicy::Strict
+            }
+            crate::config::CompatibilityProfile::Emulator => {
+                fireemu_adapter_pubsub::PagingPolicy::Emulator
+            }
+        })
+        .with_local_bearer_token(cfg.pubsub_local_bearer_token.clone())
+}
+
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn pubsub_daemon_configuration_reaches_transport_admission() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (profile, configured, expected) in [
+            ("strict", true, "403"),
+            ("strict", false, "404"),
+            ("emulator", true, "404"),
+        ] {
+            let mut input = serde_json::json!({"schemaVersion":1,"firestore":{"edition":"standard","apiMode":"native"},"profile":profile});
+            if configured {
+                input["pubsub"] =
+                    serde_json::json!({"authentication":{"localBearerToken":"fixture-token"}});
+            }
+            let cfg = crate::config::RuntimeConfig::from_json(&input).unwrap();
+            let handle = super::configured_pubsub_handle(
+                fireemu_adapter_pubsub::PubSubHandle::new(
+                    std::sync::Arc::new(std::sync::Mutex::new(
+                        fireemu_core_pubsub::PubSubState::new(99),
+                    )),
+                    std::sync::Arc::new(std::sync::Mutex::new(
+                        fireemu_core_session::clock::VirtualClock::new(
+                            fireemu_core_types::time::LogicalInstant::from_unix_seconds(0),
+                        ),
+                    )),
+                    None,
+                ),
+                &cfg,
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let task = tokio::spawn(fireemu_adapter_pubsub::serve_pubsub(listener, handle));
+            let response = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+                stream.write_all(b"GET /v1/projects/demo-app/topics/missing HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await.unwrap();
+                let mut response = Vec::new(); stream.read_to_end(&mut response).await.unwrap(); response
+            }).await;
+            task.abort();
+            let _ = task.await;
+            let response = String::from_utf8(response.unwrap()).unwrap();
+            assert_eq!(response.split_whitespace().nth(1), Some(expected));
+        }
+    }
+
     #[test]
     fn the_strict_profile_waits_20_s_on_both_clocks_and_the_emulator_profile_15_s_on_the_wall_clock(
     ) {

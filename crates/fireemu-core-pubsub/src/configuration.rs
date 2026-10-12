@@ -42,6 +42,10 @@ pub fn validate_retention(duration: LogicalDuration) -> Result<()> {
 
 /// Validates resource labels before strict-profile mutations. Emulator admission remains permissive.
 pub fn validate_labels(labels: &std::collections::BTreeMap<String, String>) -> Result<()> {
+    static INVALID_VALUE_CHARACTER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let invalid_value_character = INVALID_VALUE_CHARACTER.get_or_init(|| {
+        regex::Regex::new(r"[^\p{Ll}\p{Lo}\p{N}_-]").expect("the label value pattern is valid")
+    });
     for (key, value) in labels {
         let first = key.chars().next();
         let letter = |ch: char| ch.is_alphabetic() && !ch.is_uppercase();
@@ -51,10 +55,15 @@ pub fn validate_labels(labels: &std::collections::BTreeMap<String, String>) -> R
                 r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels"; key "{key}" does not conform to regular expression "[\p{{Ll}}\p{{Lo}}][\p{{Ll}}\p{{Lo}}\p{{N}}_-]{{0,62}}"; first character "{first}" is not a non-uppercased letter (Unicode character class Ll or Lo))."#
             )));
         }
-        if key.chars().count() > 63
-            || !key
-                .chars()
-                .all(|ch| letter(ch) || ch.is_numeric() || matches!(ch, '_' | '-'))
+        let key_length = key.chars().count();
+        if key_length > 63 {
+            return Err(PubSubError::invalid_argument(format!(
+                r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels"; key "{key}" exceeds maximum character length 63 with a length of {key_length})."#
+            )));
+        }
+        if !key
+            .chars()
+            .all(|ch| letter(ch) || ch.is_numeric() || matches!(ch, '_' | '-'))
         {
             return Err(PubSubError::invalid_argument(format!(
                 "Invalid label key: {key}."
@@ -64,6 +73,17 @@ pub fn validate_labels(labels: &std::collections::BTreeMap<String, String>) -> R
             return Err(PubSubError::invalid_argument(format!(
                 r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels.{key}"; value "{value}" exceeds maximum value length 63 with a length of {})."#,
                 value.chars().count()
+            )));
+        }
+        if let Some(invalid) = invalid_value_character.find(value) {
+            let position = value[..invalid.start()].chars().count();
+            let character = invalid
+                .as_str()
+                .chars()
+                .next()
+                .expect("the match contains a scalar");
+            return Err(PubSubError::invalid_argument(format!(
+                r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels.{key}"; value "{value}" does not conform to regular expression "[\p{{Ll}}\p{{Lo}}\p{{N}}_-]{{0,63}}"; character "{character}" at position {position} is not a non-uppercased letter (Unicode character class Ll or Lo), digit, hyphen, or underscore)."#
             )));
         }
     }
@@ -87,6 +107,84 @@ mod tests {
     }
 
     #[test]
+    fn recorded_decomposed_label_value_reports_the_invalid_scalar() {
+        let error =
+            validate_labels(&[("env".to_owned(), "e\u{0301}".to_owned())].into()).unwrap_err();
+        assert_eq!(
+            error.message(),
+            concat!(
+                r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels.env"; value ""#,
+                "e\u{0301}",
+                r#"" does not conform to regular expression "[\p{Ll}\p{Lo}\p{N}_-]{0,63}"; character "́" at position 1 is not a non-uppercased letter (Unicode character class Ll or Lo), digit, hyphen, or underscore)."#
+            )
+        );
+    }
+
+    #[test]
+    fn recorded_overlong_label_key_reports_its_scalar_length() {
+        let key = "k".repeat(64);
+        let error = validate_labels(&[(key.clone(), String::new())].into()).unwrap_err();
+        assert_eq!(
+            error.message(),
+            format!(
+                r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels"; key "{key}" exceeds maximum character length 63 with a length of 64)."#
+            )
+        );
+    }
+
+    #[test]
+    fn label_values_follow_exact_unicode_categories_without_normalization() {
+        for (value, accepted) in [
+            ("", true),
+            ("é", true),
+            ("中", true),
+            ("١", true),
+            ("Ⅰ", true),
+            ("²", true),
+            ("_-", true),
+            ("A", false),
+            ("ǅ", false),
+            ("ʰ", false),
+            ("\u{0345}", false),
+            ("e\u{0301}", false),
+        ] {
+            assert_eq!(
+                validate_labels(&[("env".to_owned(), value.to_owned())].into()).is_ok(),
+                accepted,
+                "value {value:?}"
+            );
+        }
+        let value = "é".repeat(64);
+        let error = validate_labels(&[("env".to_owned(), value.clone())].into()).unwrap_err();
+        assert_eq!(
+            error.message(),
+            format!(
+                r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels.env"; value "{value}" exceeds maximum value length 63 with a length of 64)."#
+            )
+        );
+        assert!(validate_labels(&[("env".to_owned(), "é".repeat(63))].into()).is_ok());
+    }
+
+    proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(64))]
+        #[test]
+        fn unicode_label_value_reports_first_invalid_scalar_position(
+            prefix in proptest::collection::vec(prop::sample::select(vec!['é', '中', '١', 'Ⅰ', '²', 'a', '_', '-']), 0..12),
+            invalid in prop::sample::select(vec!['\u{0301}', 'A', 'ǅ', 'ʰ', '\u{0345}']),
+            suffix in "[a-z0-9_-]{0,12}",
+        ) {
+            let position = prefix.len();
+            let prefix: String = prefix.into_iter().collect();
+            let accepted_value = format!("{prefix}{suffix}");
+            prop_assert!(validate_labels(&[("env".to_owned(), accepted_value)].into()).is_ok());
+            let value = format!("{prefix}{invalid}{suffix}A");
+            let error = validate_labels(&[("env".to_owned(), value.clone())].into()).unwrap_err();
+            let expected = format!(r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels.env"; value "{value}" does not conform to regular expression "[\p{{Ll}}\p{{Lo}}\p{{N}}_-]{{0,63}}"; character "{invalid}" at position {position} is not a non-uppercased letter (Unicode character class Ll or Lo), digit, hyphen, or underscore)."#);
+            prop_assert_eq!(error.message(), expected);
+        }
+    }
+
+    #[test]
     fn label_key_and_value_bounds_are_exact() {
         for (key_length, value_length, accepted) in [(63, 63, true), (64, 0, false), (1, 64, false)]
         {
@@ -100,7 +198,7 @@ mod tests {
 
     #[test]
     fn unobserved_later_invalid_label_keys_keep_the_local_diagnostic() {
-        for key in ["a.b".to_owned(), "aB".to_owned(), "a".repeat(64)] {
+        for key in ["a.b".to_owned(), "aB".to_owned()] {
             let error = validate_labels(&[(key.clone(), String::new())].into()).unwrap_err();
             assert_eq!(error.message(), format!("Invalid label key: {key}."));
         }

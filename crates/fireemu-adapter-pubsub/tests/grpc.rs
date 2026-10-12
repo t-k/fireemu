@@ -107,12 +107,18 @@ async fn unobserved_larger_native_publish_retains_the_local_decoder_boundary() {
 }
 
 async fn start_with_bridge(bridge: Option<Arc<dyn TopicDelivery>>) -> Harness {
+    start_with_bridge_and_policy(bridge, fireemu_adapter_pubsub::PagingPolicy::Strict).await
+}
+
+async fn start_with_bridge_and_policy(
+    bridge: Option<Arc<dyn TopicDelivery>>,
+    policy: fireemu_adapter_pubsub::PagingPolicy,
+) -> Harness {
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_700_000_000),
     )));
     let state = Arc::new(Mutex::new(PubSubState::new(42)));
-    let handle = PubSubHandle::new(state.clone(), clock.clone(), bridge)
-        .with_paging_policy(fireemu_adapter_pubsub::PagingPolicy::Strict);
+    let handle = PubSubHandle::new(state.clone(), clock.clone(), bridge).with_paging_policy(policy);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server_handle = handle.clone();
@@ -378,6 +384,7 @@ async fn dead_letter_transfer_retries_after_destination_admission_recovers() {
         })
         .await
         .unwrap();
+    grant_managed_dead_letter_resources(&harness, source_subscription, &destination);
     publisher
         .publish(pb::PublishRequest {
             topic: source_topic.to_owned(),
@@ -1324,61 +1331,862 @@ async fn redelivery_after_ack_deadline_on_virtual_clock() {
 }
 
 #[tokio::test]
-async fn streaming_pull_delivers_and_acks() {
+#[allow(clippy::too_many_lines)]
+async fn streaming_pull_initial_zero_is_strict_only_and_does_not_lease() {
+    use fireemu_adapter_pubsub::PagingPolicy::{Emulator, Strict};
+    use prost::Message as _;
+
+    // Proto3 gives this scalar no presence: omitted and explicit zero decode alike.
+    let default = pb::StreamingPullRequest::default();
+    let explicit_zero = pb::StreamingPullRequest {
+        stream_ack_deadline_seconds: 0,
+        ..Default::default()
+    };
+    assert_eq!(default.encode_to_vec(), explicit_zero.encode_to_vec());
+
+    // Nonzero controls preserve existing local behavior, not a new production contract.
+    for (policy, deadline) in [
+        (Strict, 0),
+        (Emulator, 0),
+        (Strict, -1),
+        (Strict, 1),
+        (Strict, 10),
+        (Strict, 600),
+        (Strict, 601),
+    ] {
+        let h = start_with_bridge_and_policy(None, policy).await;
+        let mut pubc = h.publisher().await;
+        let mut subc = h.subscriber().await;
+        let topic = "projects/demo-app/topics/opening-deadline";
+        let subscription = "projects/demo-app/subscriptions/opening-deadline";
+        pubc.create_topic(pb::Topic {
+            name: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        subc.create_subscription(pb::Subscription {
+            name: subscription.to_owned(),
+            topic: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let publication = pubc
+            .publish(pb::PublishRequest {
+                topic: topic.to_owned(),
+                messages: vec![msg(b"unleased-marker")],
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        tx.send(pb::StreamingPullRequest {
+            subscription: subscription.to_owned(),
+            stream_ack_deadline_seconds: deadline,
+            max_outstanding_messages: 1,
+            max_outstanding_bytes: 1024,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let opened = subc
+            .streaming_pull(tokio_stream::wrappers::ReceiverStream::new(rx))
+            .await;
+        if policy == Strict && deadline == 0 {
+            let error = match opened {
+                Err(error) => error,
+                Ok(response) => {
+                    let mut responses = response.into_inner();
+                    tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+                        .await
+                        .expect("the server terminates naturally before the local bound")
+                        .expect_err("zero opener must refuse without delivering the queued marker")
+                }
+            };
+            assert_eq!(error.code(), tonic::Code::Internal);
+            assert_eq!(
+                error.message(),
+                "A service error has occurred. Please retry your request. If the error persists, please report it. [code=e8c0]"
+            );
+            let pulled = subc
+                .pull(pb::PullRequest {
+                    subscription: subscription.to_owned(),
+                    max_messages: 1,
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(pulled.received_messages.len(), 1);
+            let marker = pulled.received_messages[0].message.as_ref().unwrap();
+            assert_eq!(marker.data, b"unleased-marker");
+            assert_eq!(marker.message_id, publication.message_ids[0]);
+        } else {
+            let mut responses = opened.unwrap().into_inner();
+            let delivered =
+                tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+                    .await
+                    .expect("the preserved opening delivers within the local bound")
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(delivered.received_messages.len(), 1);
+            assert_eq!(
+                delivered.subscription_properties,
+                if policy == Strict {
+                    Some(pb::streaming_pull_response::SubscriptionProperties::default())
+                } else {
+                    None
+                }
+            );
+            assert_eq!(
+                delivered.received_messages[0]
+                    .message
+                    .as_ref()
+                    .unwrap()
+                    .message_id,
+                publication.message_ids[0]
+            );
+        }
+        drop(tx);
+        h.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn streaming_pull_zero_preserves_opening_validation_precedence() {
     let h = start().await;
-    let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
+    let empty = subc
+        .streaming_pull(tokio_stream::iter(Vec::<pb::StreamingPullRequest>::new()))
+        .await
+        .unwrap_err();
+    assert_eq!(empty.code(), tonic::Code::InvalidArgument);
+    assert_eq!(empty.message(), "streaming pull opened with no request");
+    for (subscription, expected) in [
+        ("", tonic::Code::InvalidArgument),
+        ("malformed", tonic::Code::InvalidArgument),
+        (
+            "projects/demo-app/subscriptions/missing",
+            tonic::Code::NotFound,
+        ),
+    ] {
+        let error = subc
+            .streaming_pull(tokio_stream::iter([pb::StreamingPullRequest {
+                subscription: subscription.to_owned(),
+                ..Default::default()
+            }]))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), expected, "{subscription}");
+    }
+    h.shutdown().await;
+}
 
+async fn setup_stream_credit(
+    h: &Harness,
+    suffix: &str,
+    count: usize,
+) -> (String, HashMap<String, Vec<u8>>) {
+    let topic = format!("projects/demo-app/topics/credit-{suffix}");
+    let subscription = format!("projects/demo-app/subscriptions/credit-{suffix}");
+    let mut pubc = h.publisher().await;
     pubc.create_topic(pb::Topic {
-        name: "projects/demo-app/topics/stream".to_owned(),
+        name: topic.clone(),
         ..Default::default()
     })
     .await
     .unwrap();
-    subc.create_subscription(pb::Subscription {
-        name: "projects/demo-app/subscriptions/stream-sub".to_owned(),
-        topic: "projects/demo-app/topics/stream".to_owned(),
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    pubc.publish(pb::PublishRequest {
-        topic: "projects/demo-app/topics/stream".to_owned(),
-        messages: vec![msg(b"streamed")],
-    })
-    .await
-    .unwrap();
+    h.subscriber()
+        .await
+        .create_subscription(pb::Subscription {
+            name: subscription.clone(),
+            topic: topic.clone(),
+            ack_deadline_seconds: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let payloads: Vec<_> = (0..count)
+        .map(|index| format!("credit-{index}").into_bytes())
+        .collect();
+    let published = pubc
+        .publish(pb::PublishRequest {
+            topic,
+            messages: payloads.iter().map(|data| msg(data)).collect(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    (
+        subscription,
+        published.message_ids.into_iter().zip(payloads).collect(),
+    )
+}
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<pb::StreamingPullRequest>(4);
+async fn open_credit_stream(
+    h: &Harness,
+    subscription: &str,
+) -> (
+    tokio::sync::mpsc::Sender<pb::StreamingPullRequest>,
+    tonic::Streaming<pb::StreamingPullResponse>,
+) {
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
     tx.send(pb::StreamingPullRequest {
-        subscription: "projects/demo-app/subscriptions/stream-sub".to_owned(),
+        subscription: subscription.to_owned(),
+        stream_ack_deadline_seconds: 10,
+        max_outstanding_messages: 1,
+        max_outstanding_bytes: 1024,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let responses = h
+        .subscriber()
+        .await
+        .streaming_pull(tokio_stream::wrappers::ReceiverStream::new(rx))
+        .await
+        .unwrap()
+        .into_inner();
+    (tx, responses)
+}
+
+async fn next_credit_delivery(
+    responses: &mut tonic::Streaming<pb::StreamingPullResponse>,
+    published: &HashMap<String, Vec<u8>>,
+) -> pb::ReceivedMessage {
+    let mut response = tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+        .await
+        .expect("one owned delivery arrives")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        response.received_messages.len(),
+        1,
+        "one outstanding credit admits one delivery"
+    );
+    let received = response.received_messages.remove(0);
+    let message = received.message.as_ref().unwrap();
+    assert_eq!(
+        published.get(&message.message_id),
+        Some(&message.data),
+        "delivery preserves an owned publication"
+    );
+    received
+}
+
+async fn assert_credit_held(responses: &mut tonic::Streaming<pb::StreamingPullResponse>) {
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(200), responses.message())
+            .await
+            .is_err(),
+        "no additional frame may arrive while the current credit is held"
+    );
+}
+
+#[tokio::test]
+async fn streaming_pull_strict_message_credit_waits_for_real_ack() {
+    use fireemu_adapter_pubsub::PagingPolicy::{Emulator, Strict};
+    for policy in [Strict, Emulator] {
+        let h = start_with_bridge_and_policy(None, policy).await;
+        let (subscription, published) = setup_stream_credit(&h, "ack", 3).await;
+        let (tx, mut responses) = open_credit_stream(&h, &subscription).await;
+        if policy == Emulator {
+            let response =
+                tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(response.received_messages.len(), 3);
+            assert!(response.subscription_properties.is_none());
+            drop(tx);
+            drop(responses);
+            h.shutdown().await;
+            continue;
+        }
+        let first = next_credit_delivery(&mut responses, &published).await;
+        let mut seen = std::collections::BTreeSet::new();
+        assert!(seen.insert(first.message.as_ref().unwrap().message_id.clone()));
+        assert_credit_held(&mut responses).await;
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec!["unknown".to_owned()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert_credit_held(&mut responses).await;
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec![first.ack_id.clone()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let second = next_credit_delivery(&mut responses, &published).await;
+        assert!(seen.insert(second.message.as_ref().unwrap().message_id.clone()));
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec![first.ack_id],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert_credit_held(&mut responses).await;
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec![second.ack_id],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let third = next_credit_delivery(&mut responses, &published).await;
+        assert!(seen.insert(third.message.as_ref().unwrap().message_id.clone()));
+        assert_eq!(seen.len(), published.len());
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec![third.ack_id],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        advance(&h, LogicalDuration::from_seconds(11));
+        let after_ack = h
+            .subscriber()
+            .await
+            .pull(pb::PullRequest {
+                subscription,
+                max_messages: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(after_ack.received_messages.is_empty());
+        drop(responses);
+        h.shutdown().await;
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn streaming_pull_credit_follows_broker_retirement() {
+    enum Release {
+        UnaryAck,
+        StreamNack,
+        UnaryNack,
+        Expire,
+        ExtendUnary,
+    }
+    for (release, suffix) in [
+        (Release::UnaryAck, "unary-ack"),
+        (Release::StreamNack, "stream-nack"),
+        (Release::UnaryNack, "unary-nack"),
+        (Release::Expire, "expire"),
+        (Release::ExtendUnary, "extend-unary"),
+    ] {
+        let h = start().await;
+        let (subscription, published) = setup_stream_credit(&h, suffix, 2).await;
+        let (tx, mut responses) = open_credit_stream(&h, &subscription).await;
+        let first = next_credit_delivery(&mut responses, &published).await;
+        assert_credit_held(&mut responses).await;
+        let mut subscriber = h.subscriber().await;
+        match release {
+            Release::UnaryAck => {
+                subscriber
+                    .acknowledge(pb::AcknowledgeRequest {
+                        subscription: subscription.clone(),
+                        ack_ids: vec![first.ack_id.clone()],
+                    })
+                    .await
+                    .unwrap();
+            }
+            Release::StreamNack => {
+                tx.send(pb::StreamingPullRequest {
+                    modify_deadline_ack_ids: vec![first.ack_id.clone()],
+                    modify_deadline_seconds: vec![0],
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            }
+            Release::UnaryNack => {
+                subscriber
+                    .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                        subscription: subscription.clone(),
+                        ack_ids: vec![first.ack_id.clone()],
+                        ack_deadline_seconds: 0,
+                    })
+                    .await
+                    .unwrap();
+            }
+            Release::Expire => advance(&h, LogicalDuration::from_seconds(10)),
+            Release::ExtendUnary => {
+                subscriber
+                    .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                        subscription: subscription.clone(),
+                        ack_ids: vec![first.ack_id.clone()],
+                        ack_deadline_seconds: 20,
+                    })
+                    .await
+                    .unwrap();
+                advance(&h, LogicalDuration::from_seconds(11));
+                assert_credit_held(&mut responses).await;
+                advance(&h, LogicalDuration::from_seconds(9));
+            }
+        }
+        let replacement = next_credit_delivery(&mut responses, &published).await;
+        assert_ne!(replacement.ack_id, first.ack_id);
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec![first.ack_id],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert_credit_held(&mut responses).await;
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec![replacement.ack_id],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        drop(responses);
+        h.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn streaming_pull_credit_is_per_stream() {
+    let h = start().await;
+    let (subscription, published) = setup_stream_credit(&h, "per-stream", 4).await;
+    let (tx_a, mut responses_a) = open_credit_stream(&h, &subscription).await;
+    let first_a = next_credit_delivery(&mut responses_a, &published).await;
+    let (tx_b, mut responses_b) = open_credit_stream(&h, &subscription).await;
+    let first_b = next_credit_delivery(&mut responses_b, &published).await;
+    assert_ne!(
+        first_a.message.as_ref().unwrap().message_id,
+        first_b.message.as_ref().unwrap().message_id
+    );
+    assert_credit_held(&mut responses_a).await;
+    assert_credit_held(&mut responses_b).await;
+    tx_b.send(pb::StreamingPullRequest {
+        ack_ids: vec![first_a.ack_id.clone()],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let second_a = next_credit_delivery(&mut responses_a, &published).await;
+    assert_credit_held(&mut responses_b).await;
+    tx_b.send(pb::StreamingPullRequest {
+        ack_ids: vec![first_a.ack_id.clone()],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_credit_held(&mut responses_b).await;
+    drop(responses_a);
+    drop(tx_a);
+    let (tx_c, mut responses_c) = open_credit_stream(&h, &subscription).await;
+    let first_c = next_credit_delivery(&mut responses_c, &published).await;
+    let mut distinct = std::collections::BTreeSet::new();
+    for received in [&first_a, &first_b, &second_a, &first_c] {
+        assert!(distinct.insert(received.message.as_ref().unwrap().message_id.clone()));
+    }
+    tx_b.send(pb::StreamingPullRequest {
+        ack_ids: vec![first_b.ack_id],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    tx_c.send(pb::StreamingPullRequest {
+        ack_ids: vec![first_c.ack_id],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    drop(tx_b);
+    drop(tx_c);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), responses_b.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), responses_c.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_none()
+    );
+    let mut subscriber = h.subscriber().await;
+    let before = subscriber
+        .pull(pb::PullRequest {
+            subscription: subscription.clone(),
+            max_messages: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(
+        before.received_messages.is_empty(),
+        "cancellation must not nack the held delivery"
+    );
+    advance(&h, LogicalDuration::from_seconds(10));
+    let after = subscriber
+        .pull(pb::PullRequest {
+            subscription,
+            max_messages: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(after.received_messages.len(), 1);
+    assert_eq!(
+        after.received_messages[0]
+            .message
+            .as_ref()
+            .unwrap()
+            .message_id,
+        second_a.message.as_ref().unwrap().message_id
+    );
+    drop(responses_b);
+    drop(responses_c);
+    h.shutdown().await;
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn streaming_pull_half_close_preserves_strict_delivery_and_emulator_eof() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(8), async {
+                use fireemu_adapter_pubsub::PagingPolicy::{Emulator, Strict};
+                for policy in [Strict, Emulator] {
+                    let h = start_with_bridge_and_policy(None, policy).await;
+                    let topic = "projects/demo-app/topics/half-close";
+                    let subscription = "projects/demo-app/subscriptions/half-close";
+                    let mut publisher = h.publisher().await;
+                    publisher
+                        .create_topic(pb::Topic {
+                            name: topic.to_owned(),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap();
+                    h.subscriber()
+                        .await
+                        .create_subscription(pb::Subscription {
+                            name: subscription.to_owned(),
+                            topic: topic.to_owned(),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap();
+                    let (tx, mut responses) = open_credit_stream(&h, subscription).await;
+                    tx.send(pb::StreamingPullRequest {
+                        ack_ids: vec!["invalid-ack-for-stream-observation".to_owned()],
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+                    drop(tx);
+                    if policy == Emulator {
+                        assert!(tokio::time::timeout(
+                            std::time::Duration::from_secs(2),
+                            responses.message()
+                        )
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .is_none());
+                    } else {
+                        let (other_subscription, other_published) =
+                            setup_stream_credit(&h, "other-half-close", 1).await;
+                        let (other_tx, mut other_responses) =
+                            open_credit_stream(&h, &other_subscription).await;
+                        next_credit_delivery(&mut other_responses, &other_published).await;
+                        drop(other_tx);
+                        assert!(tokio::time::timeout(
+                            std::time::Duration::from_secs(2),
+                            other_responses.message()
+                        )
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .is_none());
+                        drop(other_responses);
+                        // A delivery on another stream does not satisfy this stream's EOF condition.
+                        // The original native observation waits after ending both outbound frames.
+                        assert!(
+                            tokio::time::timeout(
+                                std::time::Duration::from_millis(200),
+                                responses.message()
+                            )
+                            .await
+                            .is_err(),
+                            "clean request EOF must not finish the Strict response"
+                        );
+                        let publication = publisher
+                            .publish(pb::PublishRequest {
+                                topic: topic.to_owned(),
+                                messages: vec![msg(b"after-half-close")],
+                            })
+                            .await
+                            .unwrap()
+                            .into_inner();
+                        let response = tokio::time::timeout(
+                            std::time::Duration::from_secs(2),
+                            responses.message(),
+                        )
+                        .await
+                        .expect("polling continues after request EOF")
+                        .unwrap()
+                        .unwrap();
+                        let message = response.received_messages[0].message.as_ref().unwrap();
+                        assert_eq!(message.message_id, publication.message_ids[0]);
+                        assert_eq!(message.data, b"after-half-close");
+                        assert!(
+                            tokio::time::timeout(
+                                std::time::Duration::from_millis(200),
+                                responses.message()
+                            )
+                            .await
+                            .is_err(),
+                            "delivery after a latched EOF does not create a new EOF event"
+                        );
+                    }
+                    drop(responses);
+                    drop(publisher);
+                    let state = h.state.clone();
+                    tokio::time::timeout(std::time::Duration::from_secs(2), h.shutdown())
+                        .await
+                        .expect("server shutdown is bounded");
+                    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                        while Arc::strong_count(&state) != 1 {
+                            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        }
+                    })
+                    .await
+                    .expect("dropping the receiver releases the stream task's broker handle");
+                }
+            })
+            .await
+            .expect("half-close delivery and shutdown finish within the owned bound");
+        });
+    }));
+    runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[test]
+fn streaming_pull_half_close_after_owned_delivery_finishes_naturally() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(8), async {
+                let h = start().await;
+                let (subscription, published) =
+                    setup_stream_credit(&h, "delivered-half-close", 1).await;
+                let (tx, mut responses) = open_credit_stream(&h, &subscription).await;
+                let delivery = next_credit_delivery(&mut responses, &published).await;
+                drop(tx);
+                assert!(tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    responses.message()
+                )
+                .await
+                .expect("clean EOF after an owned delivery finishes the response")
+                .expect("natural completion has no RPC error")
+                .is_none());
+                advance(&h, LogicalDuration::from_seconds(11));
+                let redelivery = h
+                    .subscriber()
+                    .await
+                    .pull(pb::PullRequest {
+                        subscription,
+                        max_messages: 1,
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner();
+                assert_eq!(redelivery.received_messages.len(), 1);
+                assert_eq!(
+                    redelivery.received_messages[0]
+                        .message
+                        .as_ref()
+                        .unwrap()
+                        .message_id,
+                    delivery.message.as_ref().unwrap().message_id,
+                    "response completion does not acknowledge the owned delivery"
+                );
+                drop(responses);
+                h.shutdown().await;
+            })
+            .await
+            .expect("delivery, natural EOF and shutdown remain bounded");
+        });
+    }));
+    runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+    if let Err(panic) = result {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[tokio::test]
+async fn streaming_pull_inbound_decode_error_terminates_the_response() {
+    let h = start().await;
+    let (subscription, _) = setup_stream_credit(&h, "decode-error", 1).await;
+    let mut subscriber = h
+        .subscriber()
+        .await
+        .max_encoding_message_size(16 * 1024 * 1024);
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    tx.send(pb::StreamingPullRequest {
+        subscription,
         stream_ack_deadline_seconds: 10,
         ..Default::default()
     })
     .await
     .unwrap();
-    let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
-    let mut responses = subc.streaming_pull(outbound).await.unwrap().into_inner();
-
-    let msg = tokio::time::timeout(std::time::Duration::from_secs(5), responses.next())
+    let mut responses = subscriber
+        .streaming_pull(tokio_stream::wrappers::ReceiverStream::new(rx))
         .await
-        .expect("a streaming response arrives")
-        .expect("stream open")
-        .expect("ok response");
-    assert_eq!(msg.received_messages.len(), 1);
-    assert_eq!(
-        msg.received_messages[0].message.as_ref().unwrap().data,
-        b"streamed"
-    );
-    // Ack it on the same stream.
-    let ack = msg.received_messages[0].ack_id.clone();
+        .unwrap()
+        .into_inner();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.received_messages.len(), 1);
+    // The genuine tonic decoder rejects this oversized follow-up before applying it.
     tx.send(pb::StreamingPullRequest {
-        ack_ids: vec![ack],
+        subscription: "x".repeat(11 * 1024 * 1024),
         ..Default::default()
     })
     .await
     .unwrap();
+    let terminal = tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+        .await
+        .expect("an inbound transport error still terminates the response");
+    assert!(
+        matches!(terminal, Ok(None) | Err(_)),
+        "no delivery may replace transport termination"
+    );
     drop(tx);
+    drop(responses);
+    drop(subscriber);
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn streaming_pull_delivers_and_acks() {
+    for ordered in [false, true] {
+        let h = start().await;
+        let mut pubc = h.publisher().await;
+        let mut subc = h.subscriber().await;
+
+        pubc.create_topic(pb::Topic {
+            name: "projects/demo-app/topics/stream".to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        subc.create_subscription(pb::Subscription {
+            name: "projects/demo-app/subscriptions/stream-sub".to_owned(),
+            topic: "projects/demo-app/topics/stream".to_owned(),
+            enable_message_ordering: ordered,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        pubc.publish(pb::PublishRequest {
+            topic: "projects/demo-app/topics/stream".to_owned(),
+            messages: vec![msg(b"streamed")],
+        })
+        .await
+        .unwrap();
+
+        let (tx, rx) = tokio::sync::mpsc::channel::<pb::StreamingPullRequest>(4);
+        tx.send(pb::StreamingPullRequest {
+            subscription: "projects/demo-app/subscriptions/stream-sub".to_owned(),
+            stream_ack_deadline_seconds: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
+        let mut responses = subc.streaming_pull(outbound).await.unwrap().into_inner();
+
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), responses.next())
+            .await
+            .expect("a streaming response arrives")
+            .expect("stream open")
+            .expect("ok response");
+        assert_eq!(msg.received_messages.len(), 1);
+        assert_eq!(
+            msg.subscription_properties,
+            Some(pb::streaming_pull_response::SubscriptionProperties {
+                exactly_once_delivery_enabled: false,
+                message_ordering_enabled: ordered,
+            }),
+            "delivery includes native subscription properties for ordering={ordered}"
+        );
+        assert_eq!(
+            msg.received_messages[0].message.as_ref().unwrap().data,
+            b"streamed"
+        );
+        // Ack it on the same stream.
+        let ack = msg.received_messages[0].ack_id.clone();
+        tx.send(pb::StreamingPullRequest {
+            ack_ids: vec![ack],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), responses.message())
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        advance(&h, LogicalDuration::from_seconds(11));
+        let after_ack = subc
+            .pull(pb::PullRequest {
+                subscription: "projects/demo-app/subscriptions/stream-sub".to_owned(),
+                max_messages: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(after_ack.received_messages.is_empty());
+        drop(responses);
+        h.shutdown().await;
+    }
 }
 
 #[tokio::test]
@@ -1796,6 +2604,7 @@ async fn ordered_push_delivers_successor_after_dead_letter_forwarding() {
     .await
     .unwrap();
 
+    grant_managed_dead_letter_resources(&h, subscription, dead_letter_topic);
     let mut first = msg(b"ordered-first");
     first.ordering_key = "same-key".to_owned();
     let mut successor = msg(b"ordered-successor");
@@ -2532,6 +3341,36 @@ async fn deleting_and_recreating_a_subscription_invalidates_the_old_push_generat
     worker_new.join().unwrap();
 }
 
+fn grant_managed_dead_letter_resources(harness: &Harness, source: &str, destination: &str) {
+    let mut state = harness.state.lock().unwrap();
+    state
+        .set_project_numbers(std::collections::BTreeMap::from([(
+            "demo-app".to_owned(),
+            "123456789".to_owned(),
+        )]))
+        .unwrap();
+    for (resource, role) in [
+        (source, "roles/pubsub.subscriber"),
+        (destination, "roles/pubsub.publisher"),
+    ] {
+        let before = state.get_resource_policy(resource).unwrap();
+        state
+            .set_resource_policy(
+                resource,
+                &before.etag,
+                Some(3),
+                vec![fireemu_core_pubsub::PolicyBinding {
+                    role: role.to_owned(),
+                    members: vec![
+                        "serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com"
+                            .to_owned(),
+                    ],
+                }],
+            )
+            .unwrap();
+    }
+}
+
 /// Creates a source topic, a destination topic and a source subscription whose dead-letter policy
 /// forwards after `max_delivery_attempts` deliveries. Returns the source subscription name.
 async fn setup_dead_letter_source(
@@ -2576,6 +3415,7 @@ async fn unary_pull_exhaustion_forwards_to_an_idle_destination_push_subscriber()
     let h = start().await;
     let (source_topic, destination_topic, subscription) =
         setup_dead_letter_source(&h, "dlq-unary", None).await;
+    grant_managed_dead_letter_resources(&h, &subscription, &destination_topic);
     let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
 
@@ -2668,6 +3508,7 @@ async fn streaming_pull_exhaustion_forwards_to_the_destination_exactly_once() {
     let h = start().await;
     let (source_topic, destination_topic, subscription) =
         setup_dead_letter_source(&h, "dlq-stream", None).await;
+    grant_managed_dead_letter_resources(&h, &subscription, &destination_topic);
     let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
     subc.create_subscription(pb::Subscription {
@@ -2745,13 +3586,15 @@ async fn streaming_pull_exhaustion_forwards_to_the_destination_exactly_once() {
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn push_exhaustion_forwards_to_the_destination_exactly_once() {
     let h = start().await;
     // Every source delivery fails, so the delivery budget is exhausted by push alone.
     let (source_endpoint, _source_bodies, source_stop, source_worker) =
         push_sink_sequence(vec![500; 200]);
-    let (source_topic, destination_topic, _subscription) =
+    let (source_topic, destination_topic, subscription) =
         setup_dead_letter_source(&h, "dlq-push", Some(source_endpoint)).await;
+    grant_managed_dead_letter_resources(&h, &subscription, &destination_topic);
     let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
     subc.create_subscription(pb::Subscription {
@@ -2775,7 +3618,7 @@ async fn push_exhaustion_forwards_to_the_destination_exactly_once() {
                 .pull(pb::PullRequest {
                     subscription: "projects/demo-app/subscriptions/dlq-push-destination".to_owned(),
                     max_messages: 10,
-                    ..Default::default()
+                    return_immediately: true,
                 })
                 .await
                 .unwrap()
@@ -2797,11 +3640,15 @@ async fn push_exhaustion_forwards_to_the_destination_exactly_once() {
 }
 
 #[tokio::test]
-async fn a_deleted_destination_topic_retains_the_forward_until_it_is_created_again() {
+async fn emulator_deleted_destination_retains_legacy_forward_until_recreation() {
     // The bridge records every committed publication, so the transfer is observable even though a
     // destination subscription cannot outlive the deleted topic.
     let recorder = Arc::new(RecordingTopicDelivery::default());
-    let h = start_with_bridge(Some(recorder.clone())).await;
+    let h = start_with_bridge_and_policy(
+        Some(recorder.clone()),
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    )
+    .await;
     let (source_topic, destination_topic, subscription) =
         setup_dead_letter_source(&h, "dlq-missing", None).await;
     let mut pubc = h.publisher().await;
@@ -2898,6 +3745,164 @@ async fn a_deleted_destination_topic_retains_the_forward_until_it_is_created_aga
 }
 
 #[tokio::test]
+#[allow(deprecated)]
+#[allow(clippy::too_many_lines)] // Keep deletion, recreation and fresh authority in one lifecycle scenario.
+async fn strict_deleted_destination_requires_a_fresh_grant_before_transfer() {
+    let recorder = Arc::new(RecordingTopicDelivery::default());
+    let h = start_with_bridge(Some(recorder.clone())).await;
+    let (source_topic, destination, source) =
+        setup_dead_letter_source(&h, "dlq-strict-recreate", None).await;
+    grant_managed_dead_letter_resources(&h, &source, &destination);
+    let original_policy = h
+        .state
+        .lock()
+        .unwrap()
+        .get_resource_policy(&destination)
+        .unwrap();
+    let mut publisher = h.publisher().await;
+    let mut subscriber = h.subscriber().await;
+    publisher
+        .publish(pb::PublishRequest {
+            topic: source_topic,
+            messages: vec![msg(b"poison")],
+        })
+        .await
+        .unwrap();
+    publisher
+        .delete_topic(pb::DeleteTopicRequest {
+            topic: destination.clone(),
+        })
+        .await
+        .unwrap();
+    for attempt in 1..=6 {
+        let received = subscriber
+            .pull(pb::PullRequest {
+                subscription: source.clone(),
+                max_messages: 1,
+                return_immediately: true,
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .received_messages;
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].delivery_attempt, attempt);
+        subscriber
+            .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                subscription: source.clone(),
+                ack_ids: vec![received[0].ack_id.clone()],
+                ack_deadline_seconds: 0,
+            })
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|topic| **topic == destination)
+            .count(),
+        0
+    );
+    publisher
+        .create_topic(pb::Topic {
+            name: destination.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let fresh = h
+        .state
+        .lock()
+        .unwrap()
+        .get_resource_policy(&destination)
+        .unwrap();
+    assert!(fresh.bindings.is_empty());
+    assert_ne!(fresh.etag, original_policy.etag);
+    assert_eq!(
+        recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|topic| **topic == destination)
+            .count(),
+        0,
+        "recreation alone cannot authorize a transfer"
+    );
+    let received = subscriber
+        .pull(pb::PullRequest {
+            subscription: source.clone(),
+            max_messages: 1,
+            return_immediately: true,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert_eq!(received[0].delivery_attempt, 7);
+    subscriber
+        .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+            subscription: source.clone(),
+            ack_ids: vec![received[0].ack_id.clone()],
+            ack_deadline_seconds: 0,
+        })
+        .await
+        .unwrap();
+    h.state
+        .lock()
+        .unwrap()
+        .set_resource_policy(
+            &destination,
+            &fresh.etag,
+            Some(3),
+            vec![fireemu_core_pubsub::PolicyBinding {
+                role: "roles/pubsub.publisher".to_owned(),
+                members: vec![
+                    "serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com"
+                        .to_owned(),
+                ],
+            }],
+        )
+        .unwrap();
+    assert!(subscriber
+        .pull(pb::PullRequest {
+            subscription: source.clone(),
+            max_messages: 1,
+            return_immediately: true
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages
+        .is_empty());
+    assert_eq!(
+        recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|topic| **topic == destination)
+            .count(),
+        1
+    );
+    assert!(subscriber
+        .pull(pb::PullRequest {
+            subscription: source,
+            max_messages: 1,
+            return_immediately: true
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages
+        .is_empty());
+    h.shutdown().await;
+}
+
+#[tokio::test]
 async fn seeking_to_a_snapshot_replays_the_backlog_to_an_idle_push_subscriber() {
     let h = start().await;
     let mut pubc = h.publisher().await;
@@ -2969,12 +3974,14 @@ async fn seeking_to_a_snapshot_replays_the_backlog_to_an_idle_push_subscriber() 
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn a_failed_push_delivery_counts_one_delivery_attempt_against_the_dead_letter_budget() {
     let h = start().await;
     // More failures than the budget allows: only the budget may decide when forwarding happens.
     let (endpoint, bodies, stop, worker) = push_sink_sequence(vec![500; 50]);
-    let (source_topic, destination_topic, _subscription) =
+    let (source_topic, destination_topic, subscription) =
         setup_dead_letter_source(&h, "dlq-attempts", Some(endpoint)).await;
+    grant_managed_dead_letter_resources(&h, &subscription, &destination_topic);
     let mut pubc = h.publisher().await;
     let mut subc = h.subscriber().await;
     subc.create_subscription(pb::Subscription {
@@ -2999,7 +4006,7 @@ async fn a_failed_push_delivery_counts_one_delivery_attempt_against_the_dead_let
                     subscription: "projects/demo-app/subscriptions/dlq-attempts-destination"
                         .to_owned(),
                     max_messages: 10,
-                    ..Default::default()
+                    return_immediately: true,
                 })
                 .await
                 .unwrap()
@@ -3516,4 +4523,535 @@ async fn a_publish_during_an_in_flight_failing_push_sends_nothing_before_the_bac
     h.shutdown().await;
     stop.store(true, Ordering::Release);
     worker.join().unwrap();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn issued_deleted_cursors_continue_on_all_native_list_routes() {
+    let h = start_with_bridge(None).await;
+    let mut publisher = h.publisher().await;
+    let mut subscriber = h.subscriber().await;
+    let topic = "projects/demo-app/topics/cursor-parent";
+    publisher
+        .create_topic(pb::Topic {
+            name: topic.into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    for id in ["a", "b", "c"] {
+        let name = format!("projects/demo-app/subscriptions/cursor-{id}");
+        subscriber
+            .create_subscription(pb::Subscription {
+                name: name.clone(),
+                topic: topic.into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        subscriber
+            .create_snapshot(pb::CreateSnapshotRequest {
+                name: format!("projects/demo-app/snapshots/cursor-{id}"),
+                subscription: name,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+    let subscriptions = subscriber
+        .list_subscriptions(pb::ListSubscriptionsRequest {
+            project: "projects/demo-app".into(),
+            page_size: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let attached = publisher
+        .list_topic_subscriptions(pb::ListTopicSubscriptionsRequest {
+            topic: topic.into(),
+            page_size: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let snapshots = subscriber
+        .list_snapshots(pb::ListSnapshotsRequest {
+            project: "projects/demo-app".into(),
+            page_size: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let attached_snapshots = publisher
+        .list_topic_snapshots(pb::ListTopicSnapshotsRequest {
+            topic: topic.into(),
+            page_size: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    subscriber
+        .delete_subscription(pb::DeleteSubscriptionRequest {
+            subscription: subscriptions.subscriptions[0].name.clone(),
+        })
+        .await
+        .unwrap();
+    subscriber
+        .delete_snapshot(pb::DeleteSnapshotRequest {
+            snapshot: snapshots.snapshots[0].name.clone(),
+        })
+        .await
+        .unwrap();
+    let continued = subscriber
+        .list_subscriptions(pb::ListSubscriptionsRequest {
+            project: "projects/demo-app".into(),
+            page_token: subscriptions.next_page_token,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        continued
+            .subscriptions
+            .iter()
+            .map(|s| s.name.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            "projects/demo-app/subscriptions/cursor-b",
+            "projects/demo-app/subscriptions/cursor-c"
+        ]
+    );
+    let continued = publisher
+        .list_topic_subscriptions(pb::ListTopicSubscriptionsRequest {
+            topic: topic.into(),
+            page_token: attached.next_page_token,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        continued.subscriptions,
+        vec![
+            "projects/demo-app/subscriptions/cursor-b",
+            "projects/demo-app/subscriptions/cursor-c"
+        ]
+    );
+    let continued = subscriber
+        .list_snapshots(pb::ListSnapshotsRequest {
+            project: "projects/demo-app".into(),
+            page_token: snapshots.next_page_token,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        continued
+            .snapshots
+            .iter()
+            .map(|s| s.name.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            "projects/demo-app/snapshots/cursor-b",
+            "projects/demo-app/snapshots/cursor-c"
+        ]
+    );
+    let continued = publisher
+        .list_topic_snapshots(pb::ListTopicSnapshotsRequest {
+            topic: topic.into(),
+            page_token: attached_snapshots.next_page_token,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        continued.snapshots,
+        vec![
+            "projects/demo-app/snapshots/cursor-b",
+            "projects/demo-app/snapshots/cursor-c"
+        ]
+    );
+    for id in ["a", "b"] {
+        publisher
+            .create_topic(pb::Topic {
+                name: format!("projects/demo-app/topics/cursor-{id}"),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+    let topics = publisher
+        .list_topics(pb::ListTopicsRequest {
+            project: "projects/demo-app".into(),
+            page_size: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    publisher
+        .delete_topic(pb::DeleteTopicRequest {
+            topic: topics.topics[0].name.clone(),
+        })
+        .await
+        .unwrap();
+    let continued = publisher
+        .list_topics(pb::ListTopicsRequest {
+            project: "projects/demo-app".into(),
+            page_token: topics.next_page_token,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        continued
+            .topics
+            .iter()
+            .map(|t| t.name.clone())
+            .collect::<Vec<_>>(),
+        vec!["projects/demo-app/topics/cursor-b", topic]
+    );
+    h.shutdown().await;
+}
+
+#[tokio::test]
+#[allow(deprecated, clippy::too_many_lines)]
+async fn strict_pending_unary_pull_cancel_does_not_lease_or_ack_outstanding_message() {
+    let h = start().await;
+    let topic = "projects/demo-app/topics/pending-cancel";
+    let sub = "projects/demo-app/subscriptions/pending-cancel";
+    let mut publisher = h.publisher().await;
+    let mut subscriber = h.subscriber().await;
+    publisher
+        .create_topic(pb::Topic {
+            name: topic.into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    subscriber
+        .create_subscription(pb::Subscription {
+            name: sub.into(),
+            topic: topic.into(),
+            ack_deadline_seconds: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    publisher
+        .publish(pb::PublishRequest {
+            topic: topic.into(),
+            messages: vec![msg(b"outstanding"), msg(b"control")],
+        })
+        .await
+        .unwrap();
+    let initial = subscriber
+        .pull(pb::PullRequest {
+            subscription: sub.into(),
+            max_messages: 2,
+            return_immediately: true,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert_eq!(initial.len(), 2);
+    let outstanding = initial
+        .iter()
+        .find(|m| m.message.as_ref().unwrap().data == b"outstanding")
+        .unwrap();
+    let control = initial
+        .iter()
+        .find(|m| m.message.as_ref().unwrap().data == b"control")
+        .unwrap();
+    subscriber
+        .acknowledge(pb::AcknowledgeRequest {
+            subscription: sub.into(),
+            ack_ids: vec![control.ack_id.clone()],
+        })
+        .await
+        .unwrap();
+    let mut pending_client = h.subscriber().await;
+    let mut pending = tokio::spawn(async move {
+        pending_client
+            .pull(pb::PullRequest {
+                subscription: sub.into(),
+                max_messages: 2,
+                return_immediately: false,
+            })
+            .await
+    });
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(1), &mut pending)
+            .await
+            .is_err(),
+        "strict non-immediate Pull must still be pending at cancellation"
+    );
+    pending.abort();
+    assert!(pending.await.unwrap_err().is_cancelled());
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    advance(&h, LogicalDuration::from_seconds(11));
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let fresh = subscriber
+        .pull(pb::PullRequest {
+            subscription: sub.into(),
+            max_messages: 2,
+            return_immediately: true,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    assert_eq!(
+        fresh.len(),
+        1,
+        "cancelled server future must not steal redelivery"
+    );
+    assert_eq!(fresh[0].message, outstanding.message);
+    assert_ne!(fresh[0].ack_id, outstanding.ack_id);
+    subscriber
+        .acknowledge(pb::AcknowledgeRequest {
+            subscription: sub.into(),
+            ack_ids: vec![fresh[0].ack_id.clone()],
+        })
+        .await
+        .unwrap();
+    let mut wake_client = h.subscriber().await;
+    let mut wake = tokio::spawn(async move {
+        wake_client
+            .pull(pb::PullRequest {
+                subscription: sub.into(),
+                max_messages: 2,
+                return_immediately: false,
+            })
+            .await
+    });
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut wake)
+            .await
+            .is_err()
+    );
+    publisher
+        .publish(pb::PublishRequest {
+            topic: topic.into(),
+            messages: vec![msg(b"wake")],
+        })
+        .await
+        .unwrap();
+    let response = tokio::time::timeout(std::time::Duration::from_secs(1), wake)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.received_messages.len(), 1);
+    assert_eq!(
+        response.received_messages[0].message.as_ref().unwrap().data,
+        b"wake"
+    );
+    h.shutdown().await;
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn strict_unary_pull_earlier_grpc_deadline_drops_waiter() {
+    let h = start().await;
+    let topic = "projects/demo-app/topics/pull-deadline";
+    let sub = "projects/demo-app/subscriptions/pull-deadline";
+    let mut publisher = h.publisher().await;
+    let mut subscriber = h.subscriber().await;
+    publisher
+        .create_topic(pb::Topic {
+            name: topic.into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    subscriber
+        .create_subscription(pb::Subscription {
+            name: sub.into(),
+            topic: topic.into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut request = tonic::Request::new(pb::PullRequest {
+        subscription: sub.into(),
+        max_messages: 1,
+        return_immediately: false,
+    });
+    request.set_timeout(std::time::Duration::from_millis(100));
+    let error = tokio::time::timeout(std::time::Duration::from_secs(1), subscriber.pull(request))
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        matches!(
+            error.code(),
+            tonic::Code::Cancelled | tonic::Code::DeadlineExceeded
+        ),
+        "{error}"
+    );
+    publisher
+        .publish(pb::PublishRequest {
+            topic: topic.into(),
+            messages: vec![msg(b"after deadline")],
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let fresh = subscriber
+        .pull(pb::PullRequest {
+            subscription: sub.into(),
+            max_messages: 1,
+            return_immediately: true,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(fresh.received_messages.len(), 1);
+    assert_eq!(
+        fresh.received_messages[0].message.as_ref().unwrap().data,
+        b"after deadline"
+    );
+    h.shutdown().await;
+}
+
+/// Runs the recorded N13 sequence over native gRPC (ordered subscription, seven unkeyed then one
+/// keyed message, Pull, Acknowledge, Pull) and returns both Pull responses.
+#[allow(deprecated)] // `return_immediately` is the recorded N13 request field.
+async fn n13_ordered_pulls(
+    policy: fireemu_adapter_pubsub::PagingPolicy,
+    return_immediately: bool,
+) -> (Vec<pb::ReceivedMessage>, Vec<pb::ReceivedMessage>) {
+    let h = start_with_bridge_and_policy(None, policy).await;
+    let mut pubc = h.publisher().await;
+    let mut subc = h.subscriber().await;
+    let topic = "projects/demo-app/topics/n13-topic";
+    let sub = "projects/demo-app/subscriptions/n13-sub";
+    pubc.create_topic(pb::Topic {
+        name: topic.to_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    subc.create_subscription(pb::Subscription {
+        name: sub.to_owned(),
+        topic: topic.to_owned(),
+        ack_deadline_seconds: 10,
+        enable_message_ordering: true,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let attrs = |pairs: &[(&str, &str)]| {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect::<HashMap<_, _>>()
+    };
+    let unkeyed = vec![
+        msg(b"one"),
+        pb::PubsubMessage {
+            data: b"two".to_vec(),
+            attributes: attrs(&[("color", "red"), ("n", "1")]),
+            ..Default::default()
+        },
+        pb::PubsubMessage {
+            attributes: attrs(&[("only", "attributes")]),
+            ..Default::default()
+        },
+        pb::PubsubMessage {
+            attributes: attrs(&[("k", "empty data")]),
+            ..Default::default()
+        },
+        msg(&[0x00, 0xff, 0x80]),
+        msg("ünïcödé ✓".as_bytes()),
+        msg(b"x"),
+    ];
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: unkeyed,
+    })
+    .await
+    .unwrap();
+    pubc.publish(pb::PublishRequest {
+        topic: topic.to_owned(),
+        messages: vec![pb::PubsubMessage {
+            data: b"keyed".to_vec(),
+            ordering_key: "k1".to_owned(),
+            ..Default::default()
+        }],
+    })
+    .await
+    .unwrap();
+    let first = subc
+        .pull(pb::PullRequest {
+            subscription: sub.to_owned(),
+            max_messages: 16,
+            return_immediately,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    subc.acknowledge(pb::AcknowledgeRequest {
+        subscription: sub.to_owned(),
+        ack_ids: first.iter().map(|m| m.ack_id.clone()).collect(),
+    })
+    .await
+    .unwrap();
+    let second = subc
+        .pull(pb::PullRequest {
+            subscription: sub.to_owned(),
+            max_messages: 16,
+            return_immediately: true,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages;
+    h.shutdown().await;
+    (first, second)
+}
+
+#[tokio::test]
+async fn strict_ordered_pull_returns_unkeyed_before_keyed_recorded_n13() {
+    for return_immediately in [true, false] {
+        let (first, second) = n13_ordered_pulls(
+            fireemu_adapter_pubsub::PagingPolicy::Strict,
+            return_immediately,
+        )
+        .await;
+        assert_eq!(first.len(), 7, "return_immediately={return_immediately}");
+        assert!(first
+            .iter()
+            .all(|m| m.message.as_ref().unwrap().ordering_key.is_empty()));
+        assert_eq!(second.len(), 1, "return_immediately={return_immediately}");
+        let keyed = second[0].message.as_ref().unwrap();
+        assert_eq!(keyed.ordering_key, "k1");
+        assert_eq!(keyed.data, b"keyed");
+    }
+}
+
+#[tokio::test]
+async fn emulator_ordered_pull_keeps_mixed_n13_response() {
+    for return_immediately in [true, false] {
+        let (first, second) = n13_ordered_pulls(
+            fireemu_adapter_pubsub::PagingPolicy::Emulator,
+            return_immediately,
+        )
+        .await;
+        assert_eq!(first.len(), 8, "return_immediately={return_immediately}");
+        assert_eq!(first[7].message.as_ref().unwrap().ordering_key, "k1");
+        assert!(second.is_empty());
+    }
 }

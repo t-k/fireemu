@@ -1,0 +1,233 @@
+{
+  "schema": 1,
+  "records": [
+    {
+      "runId": "148026092d56",
+      "n": 2,
+      "route": "PUT topics",
+      "originalCaptureSha256": "3223cdb44dc32ab866377f9532cf4c917cb45f73cfaa9f53a162e4466ac9f57d",
+      "response": {
+        "status": 200,
+        "body": {
+          "name": "projects/redacted-project/topics/fe100000000d56-lc-r-t"
+        }
+      }
+    },
+    {
+      "runId": "148026092d56",
+      "n": 4,
+      "route": "GET topics",
+      "originalCaptureSha256": "3223cdb44dc32ab866377f9532cf4c917cb45f73cfaa9f53a162e4466ac9f57d",
+      "response": {
+        "status": 200,
+        "body": {
+          "name": "projects/redacted-project/topics/fe100000000d56-lc-r-t"
+        }
+      }
+    },
+    {
+      "runId": "148026092d56",
+      "n": 8,
+      "route": "PUT subscriptions",
+      "originalCaptureSha256": "3223cdb44dc32ab866377f9532cf4c917cb45f73cfaa9f53a162e4466ac9f57d",
+      "response": {
+        "status": 200,
+        "body": {
+          "name": "projects/redacted-project/subscriptions/fe100000000d56-lc-r-s",
+          "topic": "projects/redacted-project/topics/fe100000000d56-lc-r-t",
+          "pushConfig": {},
+          "ackDeadlineSeconds": 10,
+          "messageRetentionDuration": "100000s",
+          "expirationPolicy": {
+            "ttl": "1000000s"
+          },
+          "state": "ACTIVE"
+        }
+      }
+    },
+    {
+      "runId": "148026092d56",
+      "n": 10,
+      "route": "GET subscriptions",
+      "originalCaptureSha256": "3223cdb44dc32ab866377f9532cf4c917cb45f73cfaa9f53a162e4466ac9f57d",
+      "response": {
+        "status": 200,
+        "body": {
+          "name": "projects/redacted-project/subscriptions/fe100000000d56-lc-r-s",
+          "topic": "projects/redacted-project/topics/fe100000000d56-lc-r-t",
+          "pushConfig": {},
+          "ackDeadlineSeconds": 10,
+          "messageRetentionDuration": "100000s",
+          "expirationPolicy": {
+            "ttl": "1000000s"
+          },
+          "state": "ACTIVE"
+        }
+      }
+    },
+    {
+      "runId": "148026092d56",
+      "n": 12,
+      "route": "DELETE topics",
+      "originalCaptureSha256": "3223cdb44dc32ab866377f9532cf4c917cb45f73cfaa9f53a162e4466ac9f57d",
+      "response": {
+        "status": 200,
+        "body": {}
+      }
+    },
+    {
+      "runId": "148026092d56",
+      "n": 17,
+      "route": "DELETE subscriptions",
+      "originalCaptureSha256": "3223cdb44dc32ab866377f9532cf4c917cb45f73cfaa9f53a162e4466ac9f57d",
+      "response": {
+        "status": 200,
+        "body": {}
+      }
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 2,
+      "route": "PUT topics",
+      "originalCaptureSha256": "fc59ae358f0140e322f8fd70b2b0acdc9c1cd1ce9ebc6e41e3d318a94b64ca87",
+      "response": {
+        "status": 200,
+        "body": {
+          "name": "projects/redacted-project/topics/fea8ed1cce53f0-lc-r-t"
+        }
+      }
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 4,
+      "route": "GET topics",
+      "originalCaptureSha256": "fc59ae358f0140e322f8fd70b2b0acdc9c1cd1ce9ebc6e41e3d318a94b64ca87",
+      "response": {
+        "status": 200,
+        "body": {
+          "name": "projects/redacted-project/topics/fea8ed1cce53f0-lc-r-t"
+        }
+      }
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 8,
+      "route": "PUT subscriptions",
+      "originalCaptureSha256": "fc59ae358f0140e322f8fd70b2b0acdc9c1cd1ce9ebc6e41e3d318a94b64ca87",
+      "response": {
+        "status": 200,
+        "body": {
+          "name": "projects/redacted-project/subscriptions/fea8ed1cce53f0-lc-r-s",
+          "topic": "projects/redacted-project/topics/fea8ed1cce53f0-lc-r-t",
+          "pushConfig": {},
+          "ackDeadlineSeconds": 10,
+          "messageRetentionDuration": "100000s",
+          "expirationPolicy": {
+            "ttl": "1000000s"
+          },
+          "state": "ACTIVE"
+        }
+      }
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 12,
+      "route": "DELETE topics",
+      "originalCaptureSha256": "fc59ae358f0140e322f8fd70b2b0acdc9c1cd1ce9ebc6e41e3d318a94b64ca87",
+      "response": {
+        "status": 200,
+        "body": {}
+      }
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 14,
+      "route": "GET subscriptions",
+      "originalCaptureSha256": "fc59ae358f0140e322f8fd70b2b0acdc9c1cd1ce9ebc6e41e3d318a94b64ca87",
+      "response": {
+        "status": 200,
+        "body": {
+          "name": "projects/redacted-project/subscriptions/fea8ed1cce53f0-lc-r-s",
+          "topic": "_deleted-topic_",
+          "pushConfig": {},
+          "ackDeadlineSeconds": 10,
+          "messageRetentionDuration": "100000s",
+          "expirationPolicy": {
+            "ttl": "1000000s"
+          },
+          "state": "ACTIVE"
+        }
+      }
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 17,
+      "route": "DELETE subscriptions",
+      "originalCaptureSha256": "fc59ae358f0140e322f8fd70b2b0acdc9c1cd1ce9ebc6e41e3d318a94b64ca87",
+      "response": {
+        "status": 200,
+        "body": {}
+      }
+    },
+    {
+      "runId": "148026092d56",
+      "n": 1,
+      "route": "GET404 topics",
+      "response": {
+        "status": 404,
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Resource not found (resource=fe100000000d56-lc-r-t).",
+            "status": "NOT_FOUND"
+          }
+        }
+      }
+    },
+    {
+      "runId": "148026092d56",
+      "n": 6,
+      "route": "GET404 subscriptions",
+      "response": {
+        "status": 404,
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Resource not found (resource=fe100000000d56-lc-r-s).",
+            "status": "NOT_FOUND"
+          }
+        }
+      }
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 1,
+      "route": "GET404 topics",
+      "response": {
+        "status": 404,
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Resource not found (resource=fea8ed1cce53f0-lc-r-t).",
+            "status": "NOT_FOUND"
+          }
+        }
+      }
+    },
+    {
+      "runId": "a8ed1cce53f0",
+      "n": 6,
+      "route": "GET404 subscriptions",
+      "response": {
+        "status": 404,
+        "body": {
+          "error": {
+            "code": 404,
+            "message": "Resource not found (resource=fea8ed1cce53f0-lc-r-s).",
+            "status": "NOT_FOUND"
+          }
+        }
+      }
+    }
+  ]
+}

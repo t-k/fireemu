@@ -295,6 +295,20 @@ pub struct PullOutcome {
     pub dead_lettered: Vec<Arc<StoredMessage>>,
 }
 
+/// How one pull on an ordering-enabled subscription batches messages with and without an
+/// ordering key. Subscriptions without message ordering ignore it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OrderedPullBatching {
+    /// One response may hold both unkeyed and keyed messages (emulator profile, `StreamingPull`
+    /// and push).
+    #[default]
+    Mixed,
+    /// One response never mixes unkeyed and keyed messages. While any unkeyed message is
+    /// deliverable, only unkeyed messages are returned, even when keyed messages were published
+    /// earlier. Recorded production unary Pull behaviour (strict profile).
+    SeparateUnkeyed,
+}
+
 /// The live state of one subscription: its configuration plus its message log.
 #[derive(Debug, Clone)]
 pub struct SubscriptionState {
@@ -568,6 +582,16 @@ impl SubscriptionState {
         self.outstanding.len()
     }
 
+    /// Retains only candidate ACK IDs whose broker lease is still outstanding.
+    pub fn retain_outstanding_ack_ids(
+        &mut self,
+        ack_ids: &mut BTreeSet<String>,
+        now: LogicalInstant,
+    ) {
+        self.expire_deadlines(now);
+        ack_ids.retain(|id| self.outstanding.contains_key(id));
+    }
+
     /// Moves every outstanding message whose ack deadline has passed back to available, so the
     /// next pull redelivers it. Call this on every clock advance.
     pub fn expire_deadlines(&mut self, now: LogicalInstant) {
@@ -599,8 +623,27 @@ impl SubscriptionState {
         &mut self,
         max: usize,
         now: LogicalInstant,
+        next_ack_id: impl FnMut() -> String,
+    ) -> PullOutcome {
+        self.pull_with_forwarding(max, now, true, OrderedPullBatching::Mixed, next_ack_id)
+    }
+
+    /// Delivers messages while separating reported attempts from authority to reserve a transfer.
+    pub(crate) fn pull_with_forwarding(
+        &mut self,
+        max: usize,
+        now: LogicalInstant,
+        forwarding_authorized: bool,
+        batching: OrderedPullBatching,
         mut next_ack_id: impl FnMut() -> String,
     ) -> PullOutcome {
+        if !forwarding_authorized {
+            for entry in &mut self.entries {
+                if entry.state == Delivery::ForwardPending {
+                    entry.state = Delivery::Available { available_at: now };
+                }
+            }
+        }
         let mut out = PullOutcome::default();
         if max == 0 {
             return out;
@@ -612,16 +655,31 @@ impl SubscriptionState {
             .config
             .dead_letter_policy
             .as_ref()
+            .filter(|_| forwarding_authorized)
             .map(|d| d.max_delivery_attempts);
         let ordered = self.config.enable_message_ordering;
         let mut blocked_keys = BTreeSet::new();
         let mut emitted_keys = BTreeSet::new();
+        // Recorded production unary Pull never mixes unkeyed and keyed messages on an ordered
+        // subscription, and returns the unkeyed ones while any is deliverable. The test matches
+        // exactly the entries the loop below would deliver.
+        let unkeyed_only = ordered
+            && batching == OrderedPullBatching::SeparateUnkeyed
+            && self.entries[self.first_unacked..].iter().any(|entry| {
+                entry.stored.message.ordering_key.is_empty()
+                    && matches!(&entry.state, Delivery::Available { available_at } if *available_at <= now)
+                    && max_attempts.is_none_or(|limit| entry.delivery_attempt < limit)
+            });
 
         for i in self.first_unacked..self.entries.len() {
             if out.received.len() >= max {
                 break;
             }
             if self.entries[i].state == Delivery::Acked {
+                continue;
+            }
+            // Skipped keyed entries keep their state: no attempt, ack id or transfer.
+            if unkeyed_only && !self.entries[i].stored.message.ordering_key.is_empty() {
                 continue;
             }
             let ordering_key = self.entries[i].stored.message.ordering_key.clone();
@@ -651,8 +709,8 @@ impl SubscriptionState {
                 }
             }
             if ordered && !ordering_key.is_empty() {
-                // Push sends one message at a time; unsent successors must not use an attempt.
-                if self.config.is_push() {
+                // Push and redelivery hold successors until the emitted predecessor is acknowledged.
+                if self.config.is_push() || self.entries[i].delivery_attempt > 0 {
                     blocked_keys.insert(ordering_key.clone());
                 }
                 emitted_keys.insert(ordering_key);
@@ -700,6 +758,25 @@ impl SubscriptionState {
         entry.state = Delivery::Acked;
         self.advance_first_unacked();
         true
+    }
+
+    /// Returns the retained delivery counter for this exact pending message instance.
+    pub(crate) fn forwarding_attempt(&self, message: &Arc<StoredMessage>) -> Option<u32> {
+        self.entries
+            .iter()
+            .find(|entry| {
+                entry.state == Delivery::ForwardPending && Arc::ptr_eq(&entry.stored, message)
+            })
+            .map(|entry| entry.delivery_attempt)
+    }
+
+    /// Restores a retained transfer to source delivery after a revoked grant.
+    pub(crate) fn resume_forward(&mut self, message: &Arc<StoredMessage>, now: LogicalInstant) {
+        for entry in &mut self.entries {
+            if entry.state == Delivery::ForwardPending && Arc::ptr_eq(&entry.stored, message) {
+                entry.state = Delivery::Available { available_at: now };
+            }
+        }
     }
 
     /// Returns exhausted messages whose dead-letter destination has not accepted them yet.
@@ -1393,6 +1470,55 @@ mod tests {
         );
     }
 
+    proptest! {
+        #[test]
+        fn redelivered_ordered_head_blocks_successors_until_current_ack(
+            ordered in any::<bool>(), expired in any::<bool>(), successors in 1usize..8,
+        ) {
+            let mut config = cfg();
+            config.enable_message_ordering = ordered;
+            let mut sub = SubscriptionState::new(config);
+            let mut now = LogicalInstant::from_unix_seconds(100);
+            let mut head = stored("head", b"head", 100);
+            head.message.ordering_key = "A".to_owned();
+            sub.enqueue(head, now).unwrap();
+            let mut ids = counter();
+            let first = sub.pull(1, now, &mut ids).received.remove(0);
+            for index in 0..successors {
+                let mut message = stored(&format!("next-{index}"), b"next", 100);
+                message.message.ordering_key = "A".to_owned();
+                sub.enqueue(message, now).unwrap();
+            }
+            let mut other = stored("other", b"other", 100);
+            other.message.ordering_key = "B".to_owned();
+            sub.enqueue(other, now).unwrap();
+            if expired {
+                now = now.checked_add(LogicalDuration::from_seconds(11)).unwrap();
+                sub.expire_deadlines(now);
+            } else {
+                sub.modify_ack_deadline(&first.ack_id, 0, now);
+            }
+            let replay = sub.pull(successors + 2, now, &mut ids).received;
+            let replay_ids: Vec<_> = replay.iter().map(|item| item.message.message_id.as_str()).collect();
+            if ordered {
+                prop_assert_eq!(replay_ids, vec!["head", "other"]);
+                prop_assert!(sub.pull(successors + 2, now, &mut ids).received.is_empty());
+                prop_assert_eq!(sub.acknowledge(&[first.ack_id]), 0);
+                prop_assert!(sub.pull(successors + 2, now, &mut ids).received.is_empty());
+                prop_assert_eq!(sub.acknowledge(&[replay[0].ack_id.clone()]), 1);
+                let released = sub.pull(successors + 2, now, &mut ids).received;
+                prop_assert_eq!(released.len(), successors);
+                for (index, item) in released.iter().enumerate() {
+                    prop_assert_eq!(&item.message.message_id, &format!("next-{index}"));
+                    prop_assert_eq!(item.delivery_attempt, 1);
+                }
+            } else {
+                prop_assert_eq!(replay.len(), successors + 2);
+            }
+            prop_assert_eq!(replay[0].delivery_attempt, 2);
+        }
+    }
+
     #[test]
     fn ordered_pull_batches_same_key_and_blocks_later_batches_until_ack() {
         let mut config = cfg();
@@ -1421,7 +1547,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn ordered_pull_traces_match_reference_model(push in any::<bool>(), keys in proptest::collection::vec(0u8..4,1..16), commands in proptest::collection::vec((0u8..4,1usize..9),1..80)) {
+        fn ordered_pull_traces_match_reference_model(push in any::<bool>(), separate in any::<bool>(), keys in proptest::collection::vec(0u8..4,1..16), commands in proptest::collection::vec((0u8..4,1usize..9),1..80)) {
             let mut config = cfg();config.enable_message_ordering = true;
             if push { config.push_config.push_endpoint = "http://127.0.0.1:8181/push".to_owned(); }
             let mut sub = SubscriptionState::new(config);
@@ -1438,7 +1564,10 @@ mod tests {
             for (kind,limit) in commands {
                 if kind==0 {
                     let mut blocked = BTreeSet::new();let mut expected = Vec::new();
+                    // SeparateUnkeyed: while any unkeyed message is available, only unkeyed ones.
+                    let unkeyed_available = separate && keys.iter().zip(&reference).any(|(key,state)|*key==0 && *state==0);
                     for (index,key) in keys.iter().enumerate() {
+                        if unkeyed_available && *key!=0 {continue;}
                         if reference[index]==2 {continue;}
                         if *key!=0 && blocked.contains(key) {continue;}
                         if reference[index]==1 {if *key!=0 {blocked.insert(*key);} continue;}
@@ -1446,7 +1575,12 @@ mod tests {
                         expected.push(index.to_string());reference[index]=1;
                         if push && *key!=0 {blocked.insert(*key);}
                     }
-                    let actual = sub.pull(limit,now,&mut ids).received;
+                    let batching = if separate {OrderedPullBatching::SeparateUnkeyed} else {OrderedPullBatching::Mixed};
+                    let actual = sub.pull_with_forwarding(limit,now,true,batching,&mut ids).received;
+                    if separate {
+                        let unkeyed = actual.iter().filter(|message|message.message.message.ordering_key.is_empty()).count();
+                        prop_assert!(unkeyed==0 || unkeyed==actual.len(), "mixed response under SeparateUnkeyed");
+                    }
                     let actual_ids: Vec<_> = actual.iter().map(|message|message.message.message_id.clone()).collect();
                     prop_assert_eq!(actual_ids,expected);
                     for message in actual {let index: usize=message.message.message_id.parse().unwrap();acknowledgements[index]=message.ack_id;}
@@ -1457,8 +1591,356 @@ mod tests {
                     for index in selected {reference[index]=2;}
                 }
                 prop_assert_eq!(sub.outstanding_count(),reference.iter().fold(0, |count, state| count + usize::from(*state == 1)));
+                let mut candidates: BTreeSet<_> = acknowledgements.iter().enumerate().filter_map(|(index,id)|(!id.is_empty() && index%2==limit%2).then_some(id.clone())).collect();
+                candidates.insert("unknown".to_owned());
+                let expected: BTreeSet<_> = reference.iter().enumerate().filter_map(|(index,state)|(*state==1 && index%2==limit%2).then_some(acknowledgements[index].clone())).collect();
+                sub.retain_outstanding_ack_ids(&mut candidates,now);
+                prop_assert_eq!(candidates,expected);
             }
         }
+    }
+
+    /// Builds an ordering-enabled subscription whose log holds one message per `(id, key)`.
+    fn ordered_log(messages: &[(&str, &str)], ordered: bool) -> SubscriptionState {
+        let mut config = cfg();
+        config.enable_message_ordering = ordered;
+        let mut sub = SubscriptionState::new(config);
+        let now = LogicalInstant::from_unix_seconds(100);
+        for (id, key) in messages {
+            let mut message = stored(id, b"data", 100);
+            message.message.ordering_key = (*key).to_owned();
+            sub.enqueue(message, now).unwrap();
+        }
+        sub
+    }
+
+    fn separate_pull(
+        sub: &mut SubscriptionState,
+        max: usize,
+        now: LogicalInstant,
+        ids: impl FnMut() -> String,
+    ) -> PullOutcome {
+        sub.pull_with_forwarding(max, now, true, OrderedPullBatching::SeparateUnkeyed, ids)
+    }
+
+    fn message_ids(received: &[ReceivedMessage]) -> Vec<&str> {
+        received
+            .iter()
+            .map(|item| item.message.message_id.as_str())
+            .collect()
+    }
+
+    fn ack_all(sub: &mut SubscriptionState, received: &[ReceivedMessage]) {
+        let ack_ids: Vec<_> = received.iter().map(|item| item.ack_id.clone()).collect();
+        assert_eq!(sub.acknowledge(&ack_ids), ack_ids.len());
+    }
+
+    /// Recorded H1 R11/N13 shape: seven unkeyed messages, then one keyed message in a later
+    /// publish. Production answered the first Pull with the seven unkeyed messages only and the
+    /// second Pull with the keyed one.
+    #[test]
+    fn separate_unkeyed_pull_withholds_keyed_until_unkeyed_drained() {
+        let log = [
+            ("u0", ""),
+            ("u1", ""),
+            ("u2", ""),
+            ("u3", ""),
+            ("u4", ""),
+            ("u5", ""),
+            ("u6", ""),
+            ("k", "k1"),
+        ];
+        let now = LogicalInstant::from_unix_seconds(100);
+        let mut sub = ordered_log(&log, true);
+        let mut ids = counter();
+        let first = separate_pull(&mut sub, 16, now, &mut ids).received;
+        assert_eq!(
+            message_ids(&first),
+            vec!["u0", "u1", "u2", "u3", "u4", "u5", "u6"]
+        );
+        ack_all(&mut sub, &first);
+        let second = separate_pull(&mut sub, 16, now, &mut ids).received;
+        assert_eq!(message_ids(&second), vec!["k"]);
+        assert_eq!(second[0].delivery_attempt, 1);
+
+        // Mixed batching (emulator profile, StreamingPull, push) still returns all eight.
+        let mut mixed = ordered_log(&log, true);
+        assert_eq!(mixed.pull(16, now, counter()).received.len(), 8);
+    }
+
+    /// Recorded r1/r2 `ordering/*` shape: k1 x5, k2 x5, then one unkeyed message in three
+    /// separate publishes. Production returned the unkeyed message alone to a three-message Pull,
+    /// then keyed messages while the unkeyed one was still outstanding.
+    #[test]
+    fn separate_unkeyed_pull_prefers_unkeyed_published_after_keyed() {
+        let mut log = Vec::new();
+        let names: Vec<String> = (0..5)
+            .map(|i| format!("a{i}"))
+            .chain((0..5).map(|i| format!("b{i}")))
+            .collect();
+        for (index, name) in names.iter().enumerate() {
+            log.push((name.as_str(), if index < 5 { "k1" } else { "k2" }));
+        }
+        log.push(("nokey", ""));
+        let now = LogicalInstant::from_unix_seconds(100);
+        let mut sub = ordered_log(&log, true);
+        let mut ids = counter();
+        let first = separate_pull(&mut sub, 3, now, &mut ids).received;
+        assert_eq!(message_ids(&first), vec!["nokey"]);
+        // Keyed delivery does not wait for the unkeyed acknowledgement.
+        let second = separate_pull(&mut sub, 2, now, &mut ids).received;
+        assert_eq!(message_ids(&second), vec!["a0", "a1"]);
+        ack_all(&mut sub, &first);
+        ack_all(&mut sub, &second);
+        // From here only keyed messages remain: every response is keyed, keys keep publish order
+        // and everything drains. Production's choice between k1 and k2 is outside the rule.
+        let mut delivered: Vec<String> = Vec::new();
+        for _ in 0..16 {
+            let batch = separate_pull(&mut sub, 3, now, &mut ids).received;
+            if batch.is_empty() {
+                break;
+            }
+            assert!(batch
+                .iter()
+                .all(|m| !m.message.message.ordering_key.is_empty()));
+            delivered.extend(batch.iter().map(|m| m.message.message_id.clone()));
+            ack_all(&mut sub, &batch);
+        }
+        let a: Vec<_> = delivered.iter().filter(|id| id.starts_with('a')).collect();
+        let b: Vec<_> = delivered.iter().filter(|id| id.starts_with('b')).collect();
+        assert_eq!(a, vec!["a2", "a3", "a4"]);
+        assert_eq!(b, vec!["b0", "b1", "b2", "b3", "b4"]);
+    }
+
+    /// Recorded observation-c R9/N9 shape: several ordering keys may share one response.
+    #[test]
+    fn separate_unkeyed_pull_allows_several_keys_in_one_response() {
+        let now = LogicalInstant::from_unix_seconds(100);
+        let mut sub = ordered_log(&[("1", "key-A"), ("2", "key-A"), ("3", "key-B")], true);
+        let first = separate_pull(&mut sub, 3, now, counter()).received;
+        assert_eq!(message_ids(&first), vec!["1", "2", "3"]);
+    }
+
+    /// Recorded plain-subscription control: without message ordering a Pull mixes freely.
+    #[test]
+    fn separate_unkeyed_is_inert_when_ordering_disabled() {
+        let log = [
+            ("a0", "k1"),
+            ("b0", "k2"),
+            ("n", ""),
+            ("a1", "k1"),
+            ("m", ""),
+        ];
+        let now = LogicalInstant::from_unix_seconds(100);
+        let mut sub = ordered_log(&log, false);
+        let first = separate_pull(&mut sub, 11, now, counter()).received;
+        assert_eq!(message_ids(&first), vec!["a0", "b0", "n", "a1", "m"]);
+    }
+
+    /// An unkeyed message that the loop would not deliver now (in backoff, outstanding, or past
+    /// its dead-letter budget) does not hold back available keyed messages.
+    #[test]
+    fn separate_unkeyed_ignores_unkeyed_in_backoff_or_exhausted() {
+        let now = LogicalInstant::from_unix_seconds(100);
+        let later = now.checked_add(LogicalDuration::from_seconds(5)).unwrap();
+
+        // Backoff: the unkeyed message becomes available only later.
+        let mut sub = ordered_log(&[("u", ""), ("k", "k1")], true);
+        sub.entries[0].state = Delivery::Available {
+            available_at: later,
+        };
+        assert_eq!(
+            message_ids(&separate_pull(&mut sub, 10, now, counter()).received),
+            vec!["k"]
+        );
+        // Available exactly at `now` counts as deliverable.
+        let mut sub = ordered_log(&[("u", ""), ("k", "k1")], true);
+        sub.entries[0].state = Delivery::Available { available_at: now };
+        assert_eq!(
+            message_ids(&separate_pull(&mut sub, 10, now, counter()).received),
+            vec!["u"]
+        );
+
+        // Dead-letter exhaustion: the unkeyed message is forwarded, the keyed one delivered.
+        let dead_letter = DeadLetterPolicy {
+            dead_letter_topic: TopicName::new("demo-app", "dead-letters").unwrap(),
+            max_delivery_attempts: MIN_DEAD_LETTER_ATTEMPTS,
+        };
+        let mut sub = ordered_log(&[("u", ""), ("k", "k1")], true);
+        sub.config.dead_letter_policy = Some(dead_letter.clone());
+        sub.entries[0].delivery_attempt = MIN_DEAD_LETTER_ATTEMPTS;
+        let out = separate_pull(&mut sub, 10, now, counter());
+        assert_eq!(message_ids(&out.received), vec!["k"]);
+        assert_eq!(out.dead_lettered.len(), 1);
+        assert_eq!(out.dead_lettered[0].message_id, "u");
+        // One attempt below the budget the unkeyed message is still deliverable and wins.
+        let mut sub = ordered_log(&[("u", ""), ("k", "k1")], true);
+        sub.config.dead_letter_policy = Some(dead_letter.clone());
+        sub.entries[0].delivery_attempt = MIN_DEAD_LETTER_ATTEMPTS - 1;
+        let out = separate_pull(&mut sub, 10, now, counter());
+        assert_eq!(message_ids(&out.received), vec!["u"]);
+        assert!(out.dead_lettered.is_empty());
+        // Without forwarding authority the budget does not apply, so the unkeyed message wins.
+        let mut sub = ordered_log(&[("u", ""), ("k", "k1")], true);
+        sub.config.dead_letter_policy = Some(dead_letter.clone());
+        sub.entries[0].delivery_attempt = MIN_DEAD_LETTER_ATTEMPTS;
+        let out = sub.pull_with_forwarding(
+            10,
+            now,
+            false,
+            OrderedPullBatching::SeparateUnkeyed,
+            counter(),
+        );
+        assert_eq!(message_ids(&out.received), vec!["u"]);
+        // A transfer awaiting destination admission is not deliverable.
+        let mut sub = ordered_log(&[("u", ""), ("k", "k1")], true);
+        sub.config.dead_letter_policy = Some(dead_letter);
+        sub.entries[0].state = Delivery::ForwardPending;
+        let out = separate_pull(&mut sub, 10, now, counter());
+        assert_eq!(message_ids(&out.received), vec!["k"]);
+        assert!(out.dead_lettered.is_empty());
+
+        // Acked and outstanding unkeyed messages do not hold keyed ones either.
+        let mut sub = ordered_log(&[("u", ""), ("v", ""), ("k", "k1")], true);
+        let mut ids = counter();
+        let first = separate_pull(&mut sub, 2, now, &mut ids).received;
+        assert_eq!(message_ids(&first), vec!["u", "v"]);
+        sub.acknowledge(&[first[0].ack_id.clone()]);
+        assert_eq!(
+            message_ids(&separate_pull(&mut sub, 10, now, &mut ids).received),
+            vec!["k"]
+        );
+    }
+
+    /// A keyed entry skipped because unkeyed messages are deliverable keeps its exact state: no
+    /// attempt is counted, no ack id is issued and its dead-letter transfer is not started.
+    #[test]
+    fn separate_unkeyed_skip_leaves_keyed_entry_state_untouched() {
+        let now = LogicalInstant::from_unix_seconds(100);
+        let later = LogicalInstant::from_unix_seconds(90);
+        let mut sub = ordered_log(&[("k", "k1"), ("u", "")], true);
+        sub.entries[0].state = Delivery::Available {
+            available_at: later,
+        };
+        let mut ids = counter();
+        let first = separate_pull(&mut sub, 10, now, &mut ids);
+        assert_eq!(message_ids(&first.received), vec!["u"]);
+        assert_eq!(first.received[0].ack_id, "ack-1");
+        assert_eq!(sub.entries[0].delivery_attempt, 0);
+        assert_eq!(
+            sub.entries[0].state,
+            Delivery::Available {
+                available_at: later
+            }
+        );
+        assert_eq!(sub.outstanding_count(), 1);
+
+        // An exhausted keyed entry is not forwarded while unkeyed messages are deliverable.
+        let mut sub = ordered_log(&[("k", "k1"), ("u", "")], true);
+        sub.config.dead_letter_policy = Some(DeadLetterPolicy {
+            dead_letter_topic: TopicName::new("demo-app", "dead-letters").unwrap(),
+            max_delivery_attempts: MIN_DEAD_LETTER_ATTEMPTS,
+        });
+        sub.entries[0].delivery_attempt = MIN_DEAD_LETTER_ATTEMPTS;
+        let mut ids = counter();
+        let first = separate_pull(&mut sub, 10, now, &mut ids);
+        assert_eq!(message_ids(&first.received), vec!["u"]);
+        assert!(first.dead_lettered.is_empty());
+        assert_eq!(sub.entries[0].delivery_attempt, MIN_DEAD_LETTER_ATTEMPTS);
+        assert!(matches!(sub.entries[0].state, Delivery::Available { .. }));
+        ack_all(&mut sub, &first.received);
+        let second = separate_pull(&mut sub, 10, now, &mut ids);
+        assert!(second.received.is_empty());
+        assert_eq!(second.dead_lettered.len(), 1);
+        assert_eq!(second.dead_lettered[0].message_id, "k");
+    }
+
+    proptest! {
+        /// Liveness and class separation: pulling and acknowledging everything drains any log,
+        /// no response mixes unkeyed and keyed messages, a keyed response only happens when no
+        /// unkeyed message is waiting, and each key keeps publish order.
+        #[test]
+        fn separate_unkeyed_drains_without_mixing_or_starvation(
+            keys in proptest::collection::vec(0u8..4, 1..24),
+            limits in proptest::collection::vec(1usize..9, 1..8),
+        ) {
+            let names: Vec<String> = (0..keys.len()).map(|i| i.to_string()).collect();
+            let key_names: Vec<String> = keys.iter().map(|k| if *k == 0 { String::new() } else { k.to_string() }).collect();
+            let log: Vec<(&str, &str)> = names.iter().zip(&key_names).map(|(n, k)| (n.as_str(), k.as_str())).collect();
+            let mut sub = ordered_log(&log, true);
+            let now = LogicalInstant::from_unix_seconds(100);
+            let mut ids = counter();
+            let mut delivered = vec![false; keys.len()];
+            let mut order: Vec<usize> = Vec::new();
+            for round in 0..=keys.len() {
+                if delivered.iter().all(|d| *d) {
+                    break;
+                }
+                let limit = limits[round % limits.len()];
+                let batch = separate_pull(&mut sub, limit, now, &mut ids).received;
+                prop_assert!(!batch.is_empty(), "round {} starved with messages left", round);
+                prop_assert!(batch.len() <= limit);
+                let unkeyed = batch.iter().filter(|m| m.message.message.ordering_key.is_empty()).count();
+                prop_assert!(unkeyed == 0 || unkeyed == batch.len(), "mixed response");
+                if unkeyed == 0 {
+                    prop_assert!(keys.iter().zip(&delivered).all(|(k, d)| *k != 0 || *d), "keyed response while unkeyed waited");
+                }
+                for m in &batch {
+                    let index: usize = m.message.message_id.parse().unwrap();
+                    prop_assert!(!delivered[index]);
+                    delivered[index] = true;
+                    order.push(index);
+                }
+                ack_all(&mut sub, &batch);
+            }
+            prop_assert!(delivered.iter().all(|d| *d), "not drained within {} rounds", keys.len() + 1);
+            for key in 1u8..4 {
+                let per_key: Vec<usize> = order.iter().copied().filter(|i| keys[*i] == key).collect();
+                let mut sorted = per_key.clone();
+                sorted.sort_unstable();
+                prop_assert_eq!(per_key, sorted);
+            }
+        }
+    }
+
+    #[test]
+    fn retained_ack_ids_follow_broker_retirement() {
+        let mut sub = SubscriptionState::new(cfg());
+        let now = LogicalInstant::from_unix_seconds(100);
+        let mut ids = counter();
+        sub.enqueue(stored("first", b"payload", 100), now).unwrap();
+        let first = sub.pull(1, now, &mut ids).received.remove(0);
+        let mut candidates = BTreeSet::from([first.ack_id.clone(), "unknown".to_owned()]);
+        sub.retain_outstanding_ack_ids(&mut candidates, now);
+        assert_eq!(candidates, BTreeSet::from([first.ack_id.clone()]));
+        sub.modify_ack_deadline(&first.ack_id, 20, now);
+        let old_deadline = now.checked_add(LogicalDuration::from_seconds(10)).unwrap();
+        sub.retain_outstanding_ack_ids(&mut candidates, old_deadline);
+        assert_eq!(candidates.len(), 1);
+        let extended_deadline = now.checked_add(LogicalDuration::from_seconds(20)).unwrap();
+        sub.retain_outstanding_ack_ids(&mut candidates, extended_deadline);
+        assert!(candidates.is_empty());
+        assert_eq!(sub.outstanding_count(), 0);
+        sub.modify_ack_deadline(&first.ack_id, 30, extended_deadline);
+        assert_eq!(
+            sub.outstanding_count(),
+            0,
+            "an expired token cannot be revived"
+        );
+        let second = sub.pull(1, extended_deadline, &mut ids).received.remove(0);
+        assert_ne!(second.ack_id, first.ack_id);
+        candidates.insert(second.ack_id.clone());
+        sub.modify_ack_deadline(&second.ack_id, 0, extended_deadline);
+        sub.retain_outstanding_ack_ids(&mut candidates, extended_deadline);
+        assert!(candidates.is_empty());
+        let third = sub.pull(1, extended_deadline, &mut ids).received.remove(0);
+        assert_eq!(sub.acknowledge(&[first.ack_id, second.ack_id]), 0);
+        candidates.insert(third.ack_id.clone());
+        sub.retain_outstanding_ack_ids(&mut candidates, extended_deadline);
+        assert_eq!(candidates, BTreeSet::from([third.ack_id.clone()]));
+        assert_eq!(sub.acknowledge(&[third.ack_id]), 1);
+        sub.retain_outstanding_ack_ids(&mut candidates, extended_deadline);
+        assert!(candidates.is_empty());
     }
 
     #[test]

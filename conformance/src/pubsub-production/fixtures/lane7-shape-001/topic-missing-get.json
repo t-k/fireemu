@@ -1,0 +1,9 @@
+{
+  "id": "topic-missing-get",
+  "method": "GET",
+  "url": "https://pubsub.googleapis.com/v1/projects/fireemu-oracle-idp/topics/fireemu-lane7-6a666e3ffa9444cc80de18944b38ae36-never-topic",
+  "status": 404,
+  "body": "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"Resource not found (resource=fireemu-lane7-6a666e3ffa9444cc80de18944b38ae36-never-topic).\",\n    \"status\": \"NOT_FOUND\"\n  }\n}\n",
+  "contentType": "application/json; charset=UTF-8",
+  "bodyBytes": 172
+}

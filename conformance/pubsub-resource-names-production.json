@@ -1,0 +1,590 @@
+{
+  "project": "demo-pubsub-release",
+  "scope": "SUPPLEMENTARY_ON_RELEASE_BINARY",
+  "programs": {
+    "O1": {
+      "harnessDigest": "cb704198cbc5603d5c2a7fac42055abad849d2fb3802c31f9a21643d62088959",
+      "captureSha256": "3223cdb44dc32ab866377f9532cf4c917cb45f73cfaa9f53a162e4466ac9f57d",
+      "sourceCapture": "capture-148026092d56.jsonl",
+      "setup": [
+        {
+          "case": "names/rest",
+          "transport": "rest",
+          "step": "01",
+          "op": "createTopic",
+          "request": {
+            "method": "PUT",
+            "path": "/v1/projects/demo-pubsub-release/topics/fe148026092d56-nm-r-n",
+            "body": {}
+          },
+          "response": {
+            "status": 200,
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/fe148026092d56-nm-r-n"
+            }
+          },
+          "sourceLine": 52,
+          "sourceN": 46
+        },
+        {
+          "case": "names/grpc",
+          "transport": "grpc",
+          "step": "01",
+          "op": "createTopic",
+          "request": {
+            "rpc": "Publisher/CreateTopic",
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/fe148026092d56-nm-g-n"
+            }
+          },
+          "response": {
+            "code": "OK",
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/fe148026092d56-nm-g-n"
+            }
+          },
+          "sourceLine": 70,
+          "sourceN": 62
+        }
+      ],
+      "rows": [
+        {
+          "case": "names/rest",
+          "transport": "rest",
+          "step": "02",
+          "op": "createTopic",
+          "request": {
+            "method": "PUT",
+            "path": "/v1/projects/demo-pubsub-release/topics/goog-probe-r",
+            "body": {}
+          },
+          "response": {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": 400,
+                "message": "Invalid resource name given (name=projects/demo-pubsub-release/topics/goog-probe-r). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          },
+          "sourceLine": 53,
+          "sourceN": 47,
+          "row": "pubsub/resource-names/O1/rest/reserved-prefix/reserved-topic",
+          "caseId": "reserved-prefix",
+          "variant": "reserved-topic",
+          "coordinate": "/conditions/1/cases/3"
+        },
+        {
+          "case": "names/rest",
+          "transport": "rest",
+          "step": "03",
+          "op": "createTopic",
+          "request": {
+            "method": "PUT",
+            "path": "/v1/projects/demo-pubsub-release/topics/ab",
+            "body": {}
+          },
+          "response": {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": 400,
+                "message": "Invalid resource name given (name=projects/demo-pubsub-release/topics/ab). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          },
+          "sourceLine": 54,
+          "sourceN": 48,
+          "row": "pubsub/resource-names/O1/rest/invalid-name/too-short",
+          "caseId": "invalid-name",
+          "variant": "too-short",
+          "coordinate": "/conditions/1/cases/1"
+        },
+        {
+          "case": "names/rest",
+          "transport": "rest",
+          "step": "06",
+          "op": "createTopic",
+          "request": {
+            "method": "PUT",
+            "path": "/v1/projects/demo-pubsub-release/topics/1-leading-digit-r",
+            "body": {}
+          },
+          "response": {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": 400,
+                "message": "Invalid resource name given (name=projects/demo-pubsub-release/topics/1-leading-digit-r). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          },
+          "sourceLine": 57,
+          "sourceN": 51,
+          "row": "pubsub/resource-names/O1/rest/invalid-name/leading-digit",
+          "caseId": "invalid-name",
+          "variant": "leading-digit",
+          "coordinate": "/conditions/1/cases/1"
+        },
+        {
+          "case": "names/rest",
+          "transport": "rest",
+          "step": "07",
+          "op": "createTopic",
+          "request": {
+            "method": "PUT",
+            "path": "/v1/projects/demo-pubsub-release/topics/bad%24character-r",
+            "body": {}
+          },
+          "response": {
+            "status": 200,
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/bad%24character-r"
+            }
+          },
+          "sourceLine": 58,
+          "sourceN": 52,
+          "row": "pubsub/resource-names/O1/rest/invalid-name/invalid-character",
+          "caseId": "invalid-name",
+          "variant": "invalid-character",
+          "coordinate": "/conditions/1/cases/1"
+        },
+        {
+          "case": "names/rest",
+          "transport": "rest",
+          "step": "09",
+          "op": "createSubscription",
+          "request": {
+            "method": "PUT",
+            "path": "/v1/projects/demo-pubsub-release/subscriptions/goog-probe-r",
+            "body": {
+              "topic": "projects/demo-pubsub-release/topics/fe148026092d56-nm-r-n"
+            }
+          },
+          "response": {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": 400,
+                "message": "Invalid resource name given (name=projects/demo-pubsub-release/subscriptions/goog-probe-r). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          },
+          "sourceLine": 60,
+          "sourceN": 54,
+          "row": "pubsub/resource-names/O1/rest/reserved-prefix/reserved-subscription",
+          "caseId": "reserved-prefix",
+          "variant": "reserved-subscription",
+          "coordinate": "/conditions/1/cases/3"
+        },
+        {
+          "case": "names/grpc",
+          "transport": "grpc",
+          "step": "02",
+          "op": "createTopic",
+          "request": {
+            "rpc": "Publisher/CreateTopic",
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/goog-probe-g"
+            }
+          },
+          "response": {
+            "code": "INVALID_ARGUMENT",
+            "message": "Invalid resource name given (name=projects/demo-pubsub-release/topics/goog-probe-g). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information."
+          },
+          "sourceLine": 71,
+          "sourceN": 63,
+          "row": "pubsub/resource-names/O1/grpc/reserved-prefix/reserved-topic",
+          "caseId": "reserved-prefix",
+          "variant": "reserved-topic",
+          "coordinate": "/conditions/1/cases/3"
+        },
+        {
+          "case": "names/grpc",
+          "transport": "grpc",
+          "step": "03",
+          "op": "createTopic",
+          "request": {
+            "rpc": "Publisher/CreateTopic",
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/ac"
+            }
+          },
+          "response": {
+            "code": "INVALID_ARGUMENT",
+            "message": "Invalid resource name given (name=projects/demo-pubsub-release/topics/ac). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information."
+          },
+          "sourceLine": 72,
+          "sourceN": 64,
+          "row": "pubsub/resource-names/O1/grpc/invalid-name/too-short",
+          "caseId": "invalid-name",
+          "variant": "too-short",
+          "coordinate": "/conditions/1/cases/1"
+        },
+        {
+          "case": "names/grpc",
+          "transport": "grpc",
+          "step": "06",
+          "op": "createTopic",
+          "request": {
+            "rpc": "Publisher/CreateTopic",
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/1-leading-digit-g"
+            }
+          },
+          "response": {
+            "code": "INVALID_ARGUMENT",
+            "message": "Invalid resource name given (name=projects/demo-pubsub-release/topics/1-leading-digit-g). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information."
+          },
+          "sourceLine": 75,
+          "sourceN": 67,
+          "row": "pubsub/resource-names/O1/grpc/invalid-name/leading-digit",
+          "caseId": "invalid-name",
+          "variant": "leading-digit",
+          "coordinate": "/conditions/1/cases/1"
+        },
+        {
+          "case": "names/grpc",
+          "transport": "grpc",
+          "step": "07",
+          "op": "createTopic",
+          "request": {
+            "rpc": "Publisher/CreateTopic",
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/bad$character-g"
+            }
+          },
+          "response": {
+            "code": "INVALID_ARGUMENT",
+            "message": "Invalid resource name given (name=projects/demo-pubsub-release/topics/bad$character-g). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information."
+          },
+          "sourceLine": 76,
+          "sourceN": 68,
+          "row": "pubsub/resource-names/O1/grpc/invalid-name/invalid-character",
+          "caseId": "invalid-name",
+          "variant": "invalid-character",
+          "coordinate": "/conditions/1/cases/1"
+        },
+        {
+          "case": "names/grpc",
+          "transport": "grpc",
+          "step": "09",
+          "op": "createSubscription",
+          "request": {
+            "rpc": "Subscriber/CreateSubscription",
+            "body": {
+              "name": "projects/demo-pubsub-release/subscriptions/goog-probe-g",
+              "topic": "projects/demo-pubsub-release/topics/fe148026092d56-nm-g-n"
+            }
+          },
+          "response": {
+            "code": "INVALID_ARGUMENT",
+            "message": "Invalid resource name given (name=projects/demo-pubsub-release/subscriptions/goog-probe-g). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information."
+          },
+          "sourceLine": 78,
+          "sourceN": 70,
+          "row": "pubsub/resource-names/O1/grpc/reserved-prefix/reserved-subscription",
+          "caseId": "reserved-prefix",
+          "variant": "reserved-subscription",
+          "coordinate": "/conditions/1/cases/3"
+        }
+      ]
+    },
+    "O2": {
+      "harnessDigest": "cb704198cbc5603d5c2a7fac42055abad849d2fb3802c31f9a21643d62088959",
+      "captureSha256": "fc59ae358f0140e322f8fd70b2b0acdc9c1cd1ce9ebc6e41e3d318a94b64ca87",
+      "sourceCapture": "capture-a8ed1cce53f0.jsonl",
+      "setup": [
+        {
+          "case": "names/rest",
+          "transport": "rest",
+          "step": "01",
+          "op": "createTopic",
+          "request": {
+            "method": "PUT",
+            "path": "/v1/projects/demo-pubsub-release/topics/fea8ed1cce53f0-nm-r-n",
+            "body": {}
+          },
+          "response": {
+            "status": 200,
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/fea8ed1cce53f0-nm-r-n"
+            }
+          },
+          "sourceLine": 49,
+          "sourceN": 43
+        },
+        {
+          "case": "names/grpc",
+          "transport": "grpc",
+          "step": "01",
+          "op": "createTopic",
+          "request": {
+            "rpc": "Publisher/CreateTopic",
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/fea8ed1cce53f0-nm-g-n"
+            }
+          },
+          "response": {
+            "code": "OK",
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/fea8ed1cce53f0-nm-g-n"
+            }
+          },
+          "sourceLine": 67,
+          "sourceN": 59
+        }
+      ],
+      "rows": [
+        {
+          "case": "names/rest",
+          "transport": "rest",
+          "step": "02",
+          "op": "createTopic",
+          "request": {
+            "method": "PUT",
+            "path": "/v1/projects/demo-pubsub-release/topics/goog-probe-r",
+            "body": {}
+          },
+          "response": {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": 400,
+                "message": "Invalid resource name given (name=projects/demo-pubsub-release/topics/goog-probe-r). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          },
+          "sourceLine": 50,
+          "sourceN": 44,
+          "row": "pubsub/resource-names/O2/rest/reserved-prefix/reserved-topic",
+          "caseId": "reserved-prefix",
+          "variant": "reserved-topic",
+          "coordinate": "/conditions/1/cases/3"
+        },
+        {
+          "case": "names/rest",
+          "transport": "rest",
+          "step": "03",
+          "op": "createTopic",
+          "request": {
+            "method": "PUT",
+            "path": "/v1/projects/demo-pubsub-release/topics/ab",
+            "body": {}
+          },
+          "response": {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": 400,
+                "message": "Invalid resource name given (name=projects/demo-pubsub-release/topics/ab). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          },
+          "sourceLine": 51,
+          "sourceN": 45,
+          "row": "pubsub/resource-names/O2/rest/invalid-name/too-short",
+          "caseId": "invalid-name",
+          "variant": "too-short",
+          "coordinate": "/conditions/1/cases/1"
+        },
+        {
+          "case": "names/rest",
+          "transport": "rest",
+          "step": "06",
+          "op": "createTopic",
+          "request": {
+            "method": "PUT",
+            "path": "/v1/projects/demo-pubsub-release/topics/1-leading-digit-r",
+            "body": {}
+          },
+          "response": {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": 400,
+                "message": "Invalid resource name given (name=projects/demo-pubsub-release/topics/1-leading-digit-r). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          },
+          "sourceLine": 54,
+          "sourceN": 48,
+          "row": "pubsub/resource-names/O2/rest/invalid-name/leading-digit",
+          "caseId": "invalid-name",
+          "variant": "leading-digit",
+          "coordinate": "/conditions/1/cases/1"
+        },
+        {
+          "case": "names/rest",
+          "transport": "rest",
+          "step": "07",
+          "op": "createTopic",
+          "request": {
+            "method": "PUT",
+            "path": "/v1/projects/demo-pubsub-release/topics/bad%24character-r",
+            "body": {}
+          },
+          "response": {
+            "status": 200,
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/bad%24character-r"
+            }
+          },
+          "sourceLine": 55,
+          "sourceN": 49,
+          "row": "pubsub/resource-names/O2/rest/invalid-name/invalid-character",
+          "caseId": "invalid-name",
+          "variant": "invalid-character",
+          "coordinate": "/conditions/1/cases/1"
+        },
+        {
+          "case": "names/rest",
+          "transport": "rest",
+          "step": "09",
+          "op": "createSubscription",
+          "request": {
+            "method": "PUT",
+            "path": "/v1/projects/demo-pubsub-release/subscriptions/goog-probe-r",
+            "body": {
+              "topic": "projects/demo-pubsub-release/topics/fea8ed1cce53f0-nm-r-n"
+            }
+          },
+          "response": {
+            "status": 400,
+            "body": {
+              "error": {
+                "code": 400,
+                "message": "Invalid resource name given (name=projects/demo-pubsub-release/subscriptions/goog-probe-r). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          },
+          "sourceLine": 57,
+          "sourceN": 51,
+          "row": "pubsub/resource-names/O2/rest/reserved-prefix/reserved-subscription",
+          "caseId": "reserved-prefix",
+          "variant": "reserved-subscription",
+          "coordinate": "/conditions/1/cases/3"
+        },
+        {
+          "case": "names/grpc",
+          "transport": "grpc",
+          "step": "02",
+          "op": "createTopic",
+          "request": {
+            "rpc": "Publisher/CreateTopic",
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/goog-probe-g"
+            }
+          },
+          "response": {
+            "code": "INVALID_ARGUMENT",
+            "message": "Invalid resource name given (name=projects/demo-pubsub-release/topics/goog-probe-g). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information."
+          },
+          "sourceLine": 68,
+          "sourceN": 60,
+          "row": "pubsub/resource-names/O2/grpc/reserved-prefix/reserved-topic",
+          "caseId": "reserved-prefix",
+          "variant": "reserved-topic",
+          "coordinate": "/conditions/1/cases/3"
+        },
+        {
+          "case": "names/grpc",
+          "transport": "grpc",
+          "step": "03",
+          "op": "createTopic",
+          "request": {
+            "rpc": "Publisher/CreateTopic",
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/ac"
+            }
+          },
+          "response": {
+            "code": "INVALID_ARGUMENT",
+            "message": "Invalid resource name given (name=projects/demo-pubsub-release/topics/ac). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information."
+          },
+          "sourceLine": 69,
+          "sourceN": 61,
+          "row": "pubsub/resource-names/O2/grpc/invalid-name/too-short",
+          "caseId": "invalid-name",
+          "variant": "too-short",
+          "coordinate": "/conditions/1/cases/1"
+        },
+        {
+          "case": "names/grpc",
+          "transport": "grpc",
+          "step": "06",
+          "op": "createTopic",
+          "request": {
+            "rpc": "Publisher/CreateTopic",
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/1-leading-digit-g"
+            }
+          },
+          "response": {
+            "code": "INVALID_ARGUMENT",
+            "message": "Invalid resource name given (name=projects/demo-pubsub-release/topics/1-leading-digit-g). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information."
+          },
+          "sourceLine": 72,
+          "sourceN": 64,
+          "row": "pubsub/resource-names/O2/grpc/invalid-name/leading-digit",
+          "caseId": "invalid-name",
+          "variant": "leading-digit",
+          "coordinate": "/conditions/1/cases/1"
+        },
+        {
+          "case": "names/grpc",
+          "transport": "grpc",
+          "step": "07",
+          "op": "createTopic",
+          "request": {
+            "rpc": "Publisher/CreateTopic",
+            "body": {
+              "name": "projects/demo-pubsub-release/topics/bad$character-g"
+            }
+          },
+          "response": {
+            "code": "INVALID_ARGUMENT",
+            "message": "Invalid resource name given (name=projects/demo-pubsub-release/topics/bad$character-g). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information."
+          },
+          "sourceLine": 73,
+          "sourceN": 65,
+          "row": "pubsub/resource-names/O2/grpc/invalid-name/invalid-character",
+          "caseId": "invalid-name",
+          "variant": "invalid-character",
+          "coordinate": "/conditions/1/cases/1"
+        },
+        {
+          "case": "names/grpc",
+          "transport": "grpc",
+          "step": "09",
+          "op": "createSubscription",
+          "request": {
+            "rpc": "Subscriber/CreateSubscription",
+            "body": {
+              "name": "projects/demo-pubsub-release/subscriptions/goog-probe-g",
+              "topic": "projects/demo-pubsub-release/topics/fea8ed1cce53f0-nm-g-n"
+            }
+          },
+          "response": {
+            "code": "INVALID_ARGUMENT",
+            "message": "Invalid resource name given (name=projects/demo-pubsub-release/subscriptions/goog-probe-g). Refer to https://cloud.google.com/pubsub/docs/pubsub-basics#resource_names for more information."
+          },
+          "sourceLine": 75,
+          "sourceN": 67,
+          "row": "pubsub/resource-names/O2/grpc/reserved-prefix/reserved-subscription",
+          "caseId": "reserved-prefix",
+          "variant": "reserved-subscription",
+          "coordinate": "/conditions/1/cases/3"
+        }
+      ]
+    }
+  }
+}

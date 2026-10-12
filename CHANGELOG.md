@@ -8,16 +8,38 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-12
+
+Cloud Pub/Sub (PUBSUB) is now `COMPAT_VERIFIED` within its frozen production scope, so all 21 parents of the compatibility inventory are `COMPAT_VERIFIED`. The development defaults below make the `strict` profile usable in CI without signing keys or Google credentials; `productionExact` restores production's refusals.
+
 ### Added
 
 - `auth.allowUnsignedIdTokens` (default `true` in both profiles, `false` under `productionExact`): Firestore and Storage Security Rules accept the unsigned mock token that `@firebase/rules-unit-testing`'s `authenticatedContext()` and the client SDKs' `mockUserToken` option send, with the `strict` profile too. Only that exact shape is accepted: the header `{"alg":"none","type":"JWT"}`, an empty signature, a `sub`, and the routed project as `aud`. Its `exp` is not read, because the SDK sets `iat: 0` and `exp: 3600` by default. `request.auth` is built from the token's claims. Every other token, including the unsigned ID tokens fireemu itself issues, is verified as before, expiry included, so a token that claims a signature that does not verify is still refused. A session with `auth.idTokenSigning: "session-rsa"` accepts no unsigned token. Set the setting to `false` to refuse the mock token as production does. Callable Functions, Identity Toolkit and App Check are not affected.
 - `fireemu --help`, `fireemu help` and `fireemu <command> --help` (also `-h` and `fireemu help <command>`) print the commands and, for each command, its synopsis and every option with its default. `emulators:start` and `emulators:exec` print the help of `up` and `exec`. `--help` after `--` in `exec` still belongs to the command, and an unknown argument now points to `fireemu <command> --help`.
+- `pubsub.authentication.localBearerToken` (strict profile only): when set, the local Pub/Sub endpoint accepts only a single `Authorization: Bearer <value>` header with exactly that value, and a request without any credential gets production's recorded 403 `PERMISSION_DENIED` (gRPC code 7) instead of the anonymous development exception. Other credentials keep the unsupported-credential 401. The emulator profile ignores the option. See docs/pubsub-authentication.md.
+- Pub/Sub topic label replacement (`UpdateTopic` whose update mask is exactly `labels`) on REST and gRPC. It replaces the whole labels map and keeps the topic's subscriptions, retention and IAM policy.
 
 ### Changed
 
 - The `strict` profile now accepts the official emulator's fixture identity-provider assertions by default (JSON and unsigned ID tokens, JSON SAML responses and the `/emulator/auth/handler` sign-in widget), for built-in, `oidc.*` and `saml.*` providers, so "Sign in with Google" and similar flows work in tests without signing keys. Set `auth.idpAssertions` to `"signed"`, or set `productionExact`, to restore the previous verification; a strict configuration that sets `auth.idpSigners` keeps it automatically. A strict configuration that declares only SAML providers (`auth.providers.saml` with certificates) now gets the fixture too, so SAML response signatures are no longer checked, unless it sets `"signed"` or `productionExact`.
 - The strict profile's Eventarc listener now admits any credential, or none, by default (`eventarc.authentication: "permissive"`), as the official emulator does. The Admin SDK's `getEventarc().channel().publish()` therefore works in CI with a fake credential, without Google credentials. Every other strict Eventarc check keeps production's order and answers. A test that expected a 401 for a missing, malformed or JWT-shaped bearer now gets the publication's normal answer. To restore production's refusals, set `"eventarc": {"authentication": "production"}` or `"productionExact": true` (strict profile). A configured `eventarc.oauthCredentials` also selects `"production"` when the key is absent. See docs/eventarc-authentication.md.
 - The documentation now recommends the `strict` profile explicitly, including when migrating from the official Firebase Local Emulator Suite: the README has a migration section covering unsigned emulator ID tokens, composite indexes and the single settings that mirror a production project, and `fireemu init`, `fireemu init --help` and the configuration schema describe `emulator` as only for checking alignment with the pinned official emulator.
+- Authentication accepts unsigned custom tokens by default in both the `strict` and `emulator` profiles. Set `auth.allowUnsignedCustomTokens` to `false` to refuse them; signed custom tokens and their claims are still verified.
+- Strict unary Pull (REST and gRPC) on a subscription with message ordering no longer returns unkeyed and keyed messages in one response: while any unkeyed message is deliverable it returns only unkeyed messages, as production did in every recorded burst. StreamingPull, push and the emulator profile keep the mixed batching.
+- Strict Publish refuses a request whose messages do not all share the same ordering key (or all have none) with production's `FAILED_PRECONDITION` message.
+- Strict Pub/Sub label validation follows production's Unicode classes for label values (`Ll`, `Lo`, `N`, `_` and `-`, without normalization) and reports production's diagnostics for an invalid character and for an over-long key.
+- Pub/Sub REST JSON responses, success and error alike, now send `Content-Type: application/json; charset=UTF-8` in both profiles, as production does (the media type previously lacked the charset parameter). The HTML route-not-found page is unchanged.
+
+### Fixed
+
+- Strict StreamingPull whose opening request has a zero `streamAckDeadlineSeconds` now sends the response headers (initial metadata) before production's `INTERNAL` terminal status, instead of failing the call without them.
+
+### Known differences
+
+- PUBSUB: production's REST negative cache for subscriptions and snapshots (a fast cached 404 for about 9.5 s after a slow 404, even after the resource was created) is not emulated; fireemu answers the steady-state 200 right after create in both profiles. Its rule is not yet established in production.
+- PUBSUB: under continuous unkeyed traffic that arrives faster than unary Pulls drain it, strict ordered unary Pull starves keyed messages until no unkeyed message is deliverable. Production under sustained unkeyed traffic was not observed.
+- PUBSUB: the closure does not compare REST response headers (production sends 10 headers, fireemu 3); the closure is bound to a binary that predates the charset change above.
+- PUBSUB: strict still accepts a request without any credential as the `PUBSUB_EMULATOR_HOST` exception unless `pubsub.authentication.localBearerToken` is set; production answers it with 403.
 
 ## [0.16.0] - 2026-10-10
 
@@ -609,7 +631,9 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/t-k/fireemu/compare/v0.16.0...v0.17.0
+[0.16.0]: https://github.com/t-k/fireemu/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/t-k/fireemu/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/t-k/fireemu/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/t-k/fireemu/compare/v0.12.0...v0.13.0

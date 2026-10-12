@@ -1,0 +1,9 @@
+{
+  "id": "topic-get",
+  "method": "GET",
+  "url": "https://pubsub.googleapis.com/v1/projects/fireemu-oracle-idp/topics/fireemu-lane7-6a666e3ffa9444cc80de18944b38ae36-topic",
+  "status": 200,
+  "body": "{\n  \"name\": \"projects/fireemu-oracle-idp/topics/fireemu-lane7-6a666e3ffa9444cc80de18944b38ae36-topic\",\n  \"labels\": {\n    \"fireemu_owner\": \"lane7\",\n    \"fireemu_run\": \"6a666e3ffa9444cc80de18944b38ae36\"\n  }\n}\n",
+  "contentType": "application/json; charset=UTF-8",
+  "bodyBytes": 207
+}

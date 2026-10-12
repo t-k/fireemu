@@ -11,10 +11,12 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Added
 
 - `auth.allowUnsignedIdTokens` (default `true` in both profiles): Firestore and Storage Security Rules accept unsigned emulator ID tokens, such as the `mockUserToken` that `@firebase/rules-unit-testing`'s `authenticatedContext()` and the client SDKs send, with the recommended `strict` profile too. `request.auth` is built from the token's claims as the official emulator builds it. An unsigned token is a three-segment JWT whose header is a JSON object with `alg` exactly `"none"` and whose signature segment is empty; every other token is verified as before, so a token that claims a signature that does not verify is still refused. A session with `auth.idTokenSigning: "session-rsa"` accepts no unsigned token. Set the setting to `false` to refuse unsigned tokens that do not verify, as production does; the `strict` profile then answers exactly as it did before this setting. Callable Functions, Identity Toolkit and App Check are not affected.
+- `fireemu --help`, `fireemu help` and `fireemu <command> --help` (also `-h` and `fireemu help <command>`) print the commands and, for each command, its synopsis and every option with its default. `emulators:start` and `emulators:exec` print the help of `up` and `exec`. `--help` after `--` in `exec` still belongs to the command, and an unknown argument now points to `fireemu <command> --help`.
 
 ### Changed
 
 - Under the `strict` profile with the default `auth.idTokenSigning: "unsigned-emulator"`, the ID tokens fireemu issues are unsigned too. With `auth.allowUnsignedIdTokens` left at `true`, such a token that no longer verifies (expired, of a deleted account or of an earlier session) is now accepted by Firestore and Storage Security Rules with its claims as given, and a Firestore Listen stream opened with it is not ended when it expires. Tests of production's expiry or revocation refusals should set `auth.allowUnsignedIdTokens` to `false` or use `auth.idTokenSigning: "session-rsa"`.
+- The documentation now recommends the `strict` profile explicitly, including when migrating from the official Firebase Local Emulator Suite: the README has a migration section covering unsigned emulator ID tokens, composite indexes and the single settings that mirror a production project, and `fireemu init`, `fireemu init --help` and the configuration schema describe `emulator` as only for checking alignment with the pinned official emulator.
 
 ## [0.16.0] - 2026-10-10
 

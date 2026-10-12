@@ -37,7 +37,7 @@
       "description": "Firebase project configuration loaded relative to this canonical file."
     },
     "profile": {
-      "description": "Compatibility profile (spec/compatibility/contract.json). strict behaves like production Firebase where the official emulators do not (composite index validation with production's rules, Standard query limits, ID-token verification); emulator reproduces the pinned official emulators, including their documented limitations. The profile decides the index validation and the ID-token semantics of the Security Rules surfaces and sets the default of firestore.enforceLimits; an explicit enforceLimits wins over it.",
+      "description": "Compatibility profile (spec/compatibility/contract.json). strict is recommended, including when migrating from the official emulator; emulator is only for checking alignment with the pinned official emulator and is not needed for a migration. strict behaves like production Firebase where the official emulators do not (composite index validation with production's rules, Standard query limits, ID-token verification); emulator reproduces the pinned official emulators, including their documented limitations. The profile decides the index validation and the ID-token semantics of the Security Rules surfaces and sets the default of firestore.enforceLimits; an explicit enforceLimits wins over it.",
       "enum": ["strict", "emulator"],
       "default": "strict"
     },

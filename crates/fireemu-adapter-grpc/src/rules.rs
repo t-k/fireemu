@@ -10,7 +10,9 @@
 //! How much of that verification a caller's token has to survive is the compatibility
 //! profile's decision, carried here as [`TokenAcceptance`]: the `emulator` profile also
 //! admits the unsigned mock tokens the official emulators admit (an unknown `sub`, an `exp`
-//! nobody reads), while `strict` keeps the full verification.
+//! nobody reads), while `strict` keeps the full verification. `auth.allowUnsignedIdTokens`
+//! ([`RulesEnforcer::with_unsigned_id_tokens`]) decides the unsigned mock tokens on its own in
+//! either profile, leaving the profile's other answers as they are.
 //!
 //! Reads are authorized against the exact snapshot that is returned; writes are authorized
 //! inside the database critical section that commits them, against the sequentially staged
@@ -38,7 +40,8 @@ use std::sync::{Arc, Mutex};
 
 use fireemu_core_auth::jwt::{
     verify_firestore_rules_token, verify_firestore_rules_token_of_removed_tenant,
-    verify_rules_token, verify_rules_token_for_project, JwtError, TokenAcceptance,
+    verify_rules_token, verify_rules_token_for_project, JwtError, RulesTokenPolicy,
+    TokenAcceptance,
 };
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::field_path::FieldPath;
@@ -392,6 +395,10 @@ pub struct RulesEnforcer {
     /// How a caller's ID token is verified: the compatibility profile decides
     /// (`firebase` admits the official emulators' mock tokens, `strict` does not).
     acceptance: TokenAcceptance,
+    /// `auth.allowUnsignedIdTokens`: whether an unsigned emulator ID token that does not
+    /// verify is admitted as a mock token. `None` keeps the profile's default (the emulator
+    /// profile admits them, `strict` does not).
+    unsigned_id_tokens: Option<bool>,
     /// Whether a client request is refused while its database has no ruleset: production
     /// refuses every client request without a `cloud.firestore` release (the `strict`
     /// profile); the official emulator allows everything (the `emulator` profile).
@@ -425,6 +432,7 @@ impl RulesEnforcer {
             clock,
             registry: None,
             acceptance: TokenAcceptance::default(),
+            unsigned_id_tokens: None,
             refuse_without_ruleset: false,
             end_user_transactions: true,
             token_semantics: TokenSemantics::default(),
@@ -573,6 +581,25 @@ impl RulesEnforcer {
         self
     }
 
+    /// Sets `auth.allowUnsignedIdTokens`: whether an unsigned emulator ID token (the
+    /// `mockUserToken` of `@firebase/rules-unit-testing`) that does not verify is admitted as a
+    /// mock token, with `request.auth` built from its claims. Without a call the profile's
+    /// default applies. Only the token's admission changes: the profile's refusal shapes and
+    /// every other check stay as [`Self::with_token_acceptance`] sets them.
+    #[must_use]
+    pub const fn with_unsigned_id_tokens(mut self, allow: bool) -> Self {
+        self.unsigned_id_tokens = Some(allow);
+        self
+    }
+
+    /// The token policy the verifiers apply.
+    fn token_policy(&self) -> RulesTokenPolicy {
+        match self.unsigned_id_tokens {
+            Some(allow) => RulesTokenPolicy::new(self.acceptance, allow),
+            None => RulesTokenPolicy::from(self.acceptance),
+        }
+    }
+
     fn now(&self) -> Result<LogicalInstant, Status> {
         let mut clock = self
             .clock
@@ -719,6 +746,7 @@ impl RulesEnforcer {
         let store = store_arc
             .lock()
             .map_err(|_| Status::internal("auth store lock poisoned"))?;
+        let policy = self.token_policy();
         let verified = match (self.token_semantics, expected_project) {
             // Firestore does not look a token's tenant up (AUTH-FS-CROSS stage 1).
             (TokenSemantics::Firestore, _) if removed_tenant => {
@@ -726,20 +754,18 @@ impl RulesEnforcer {
                     token,
                     &store,
                     now,
-                    self.acceptance,
+                    policy,
                     expected_project,
                     removed_epochs.as_ref(),
                 )
             }
             (TokenSemantics::Firestore, _) => {
-                verify_firestore_rules_token(token, &store, now, self.acceptance, expected_project)
+                verify_firestore_rules_token(token, &store, now, policy, expected_project)
             }
             (TokenSemantics::IdToken, Some(project)) => {
-                verify_rules_token_for_project(token, &store, now, self.acceptance, project)
+                verify_rules_token_for_project(token, &store, now, policy, project)
             }
-            (TokenSemantics::IdToken, None) => {
-                verify_rules_token(token, &store, now, self.acceptance)
-            }
+            (TokenSemantics::IdToken, None) => verify_rules_token(token, &store, now, policy),
         };
         let decoded = verified.map_err(|error| match error {
             JwtError::Expired if production => Status::unauthenticated(EXPIRED_CREDENTIALS_MESSAGE),

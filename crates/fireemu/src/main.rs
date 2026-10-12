@@ -1935,6 +1935,7 @@ fn storage_state(
         app_check_policy,
         admin_capability: Some(admin_capability),
         token_acceptance: cfg.token_acceptance,
+        allow_unsigned_id_tokens: cfg.auth_allow_unsigned_id_tokens,
         control_token: Some(control_token),
     });
     state

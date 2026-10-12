@@ -8,6 +8,14 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- `auth.allowUnsignedIdTokens` (default `true` in both profiles): Firestore and Storage Security Rules accept unsigned emulator ID tokens, such as the `mockUserToken` that `@firebase/rules-unit-testing`'s `authenticatedContext()` and the client SDKs send, with the recommended `strict` profile too. `request.auth` is built from the token's claims as the official emulator builds it. An unsigned token is a three-segment JWT whose header is a JSON object with `alg` exactly `"none"` and whose signature segment is empty; every other token is verified as before, so a token that claims a signature that does not verify is still refused. A session with `auth.idTokenSigning: "session-rsa"` accepts no unsigned token. Set the setting to `false` to refuse unsigned tokens that do not verify, as production does; the `strict` profile then answers exactly as it did before this setting. Callable Functions, Identity Toolkit and App Check are not affected.
+
+### Changed
+
+- Under the `strict` profile with the default `auth.idTokenSigning: "unsigned-emulator"`, the ID tokens fireemu issues are unsigned too. With `auth.allowUnsignedIdTokens` left at `true`, such a token that no longer verifies (expired, of a deleted account or of an earlier session) is now accepted by Firestore and Storage Security Rules with its claims as given. Tests of production's expiry or revocation refusals should set `auth.allowUnsignedIdTokens` to `false` or use `auth.idTokenSigning: "session-rsa"`.
+
 ## [0.16.0] - 2026-10-10
 
 ### Added

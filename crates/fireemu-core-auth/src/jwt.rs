@@ -100,6 +100,59 @@ impl TokenAcceptance {
     }
 }
 
+/// What a Security Rules surface (Firestore, Storage) admits as the caller's ID token: the
+/// profile's [`TokenAcceptance`] and whether unsigned emulator ID tokens (see
+/// [`is_unsigned_token`]) that do not verify are still admitted as mock tokens
+/// (`auth.allowUnsignedIdTokens`, owner ledger 1393).
+///
+/// With the setting, a token this store cannot verify is admitted when it is unsigned, minted
+/// for the routed project and names a subject; `request.auth` is then built from its claims as
+/// given, as the official emulators do for `@firebase/rules-unit-testing`. Every other token
+/// keeps the profile's verification: a token that claims a signature is never a mock token, and
+/// a session that signs its own tokens (`auth.idTokenSigning: session-rsa`) admits no unsigned
+/// token at all. Under [`TokenAcceptance::Verified`] a refused token keeps the verified path's
+/// error, so the response is the one the strict profile gives without the setting.
+///
+/// [`From<TokenAcceptance>`] gives each profile's behaviour before the setting existed: the
+/// emulator profile admits mock tokens and the strict profile does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RulesTokenPolicy {
+    acceptance: TokenAcceptance,
+    allow_unsigned: bool,
+}
+
+impl RulesTokenPolicy {
+    /// The policy of `acceptance` with unsigned emulator ID tokens admitted or not.
+    #[must_use]
+    pub const fn new(acceptance: TokenAcceptance, allow_unsigned: bool) -> Self {
+        Self {
+            acceptance,
+            allow_unsigned,
+        }
+    }
+
+    /// The profile's verification.
+    #[must_use]
+    pub const fn acceptance(self) -> TokenAcceptance {
+        self.acceptance
+    }
+
+    /// Whether an unsigned emulator ID token that does not verify is admitted as a mock token.
+    #[must_use]
+    pub const fn allows_unsigned(self) -> bool {
+        self.allow_unsigned
+    }
+}
+
+impl From<TokenAcceptance> for RulesTokenPolicy {
+    fn from(acceptance: TokenAcceptance) -> Self {
+        Self::new(
+            acceptance,
+            matches!(acceptance, TokenAcceptance::EmulatorMock),
+        )
+    }
+}
+
 /// Whether an ID token whose `iat` or `auth_time` is later than the verifier's now is refused
 /// (owner decision ledger 781).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -412,6 +465,42 @@ pub fn unverified_tenant_claim(token: &str) -> Option<String> {
     (!tenant.is_empty()).then(|| tenant.to_owned())
 }
 
+/// Whether `token` is an unsigned emulator ID token: exactly three `.`-separated segments, a
+/// header segment that is base64url without padding of a JSON object whose `alg` member is
+/// the string `none` (case-sensitive; other members such as `typ`, or the `type` the Firebase JS
+/// SDK's `mockUserToken` writes, are not read), and an empty signature segment. The payload is
+/// not read here. Every other value counts as signed: a non-empty signature, any other `alg`
+/// (`None`, `RS256`, a missing or non-string `alg`), a header that is not a JSON object, or a
+/// different number of segments.
+///
+/// This is the shape `@firebase/rules-unit-testing`'s `authenticatedContext()` and the client
+/// SDKs' `mockUserToken` send, and the shape fireemu itself issues under
+/// `auth.idTokenSigning: unsigned-emulator`.
+#[must_use]
+pub fn is_unsigned_token(token: &str) -> bool {
+    let mut parts = token.split('.');
+    let (Some(header_b64), Some(_payload), Some(signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    if !signature.is_empty() {
+        return false;
+    }
+    let Some(header) = base64url_decode(header_b64)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+    else {
+        return false;
+    };
+    match parse(&header) {
+        Ok(value @ JsonValue::Object(_)) => {
+            value.get("alg").and_then(JsonValue::as_str) == Some("none")
+        }
+        _ => false,
+    }
+}
+
 /// Decodes a token and checks its signature: with a `signer` the token must carry the
 /// signer's algorithm and a valid signature (an unsigned token is refused, so a session
 /// issuing RS256 tokens never accepts forged `alg: none` ones); without one only `alg: none`
@@ -630,36 +719,37 @@ pub fn verify_id_token(
     verify_id_token_decoded(token, store, now).map(|(v, _)| v)
 }
 
-/// Verifies the token a Security Rules surface received under `acceptance`, returning the
+/// Verifies the token a Security Rules surface received under `policy`, returning the
 /// claims `request.auth` is built from.
 ///
-/// [`TokenAcceptance::Verified`] is exactly [`verify_id_token_decoded`].
-/// [`TokenAcceptance::EmulatorMock`] additionally admits the mock tokens the official
-/// Firestore and Storage emulators admit: an unsigned token, minted for this project, whose
-/// `sub` names nobody and whose `exp` and `iat` are never read. A token this store *can*
-/// verify always takes the verified path, so a real session token keeps its full meaning.
+/// The verified path is exactly [`verify_id_token_decoded`], with the future-claim policy of
+/// the profile's [`TokenAcceptance`]. A policy that allows unsigned tokens
+/// ([`RulesTokenPolicy::allows_unsigned`]; the emulator profile's default, and
+/// `auth.allowUnsignedIdTokens`) additionally admits the mock tokens the official Firestore and
+/// Storage emulators admit: an unsigned token, minted for this project, whose `sub` names nobody
+/// and whose `exp` and `iat` are never read. A token this store *can* verify always takes the
+/// verified path, so a real session token keeps its full meaning.
 pub fn verify_rules_token(
     token: &str,
     store: &AuthStore,
     now: LogicalInstant,
-    acceptance: TokenAcceptance,
+    policy: impl Into<RulesTokenPolicy>,
 ) -> Result<DecodedToken, JwtError> {
-    verify_rules_token_with_expected_project(token, store, now, acceptance, store.project_id())
+    verify_rules_token_with_expected_project(token, store, now, policy.into(), store.project_id())
 }
 
 /// Verifies a token for a Security Rules request whose routed project may be an
 /// unregistered Firestore namespace owned by the default session.
 ///
 /// Verified tokens still use the selected [`AuthStore`] exactly as
-/// [`verify_rules_token`] does. Only the unsigned [`TokenAcceptance::EmulatorMock`]
-/// fallback binds its audience to `expected_project` instead of the store's configured
-/// project. Callers must still enforce the same routed-project binding on the resulting
-/// principal before evaluating rules.
+/// [`verify_rules_token`] does. Only the unsigned mock-token fallback binds its audience to
+/// `expected_project` instead of the store's configured project. Callers must still enforce
+/// the same routed-project binding on the resulting principal before evaluating rules.
 pub fn verify_rules_token_for_project(
     token: &str,
     store: &AuthStore,
     now: LogicalInstant,
-    acceptance: TokenAcceptance,
+    policy: impl Into<RulesTokenPolicy>,
     expected_project: &str,
 ) -> Result<DecodedToken, JwtError> {
     let expected_project =
@@ -668,7 +758,7 @@ pub fn verify_rules_token_for_project(
         token,
         store,
         now,
-        acceptance,
+        policy.into(),
         expected_project.as_str(),
     )
 }
@@ -680,9 +770,10 @@ pub fn verify_firestore_rules_token(
     token: &str,
     store: &AuthStore,
     now: LogicalInstant,
-    acceptance: TokenAcceptance,
+    policy: impl Into<RulesTokenPolicy>,
     expected_project: Option<&str>,
 ) -> Result<DecodedToken, JwtError> {
+    let policy = policy.into();
     let expected_project = match expected_project {
         Some(project) => ProjectId::try_new(project.to_owned())
             .map_err(|_| JwtError::Malformed)?
@@ -690,55 +781,68 @@ pub fn verify_firestore_rules_token(
             .to_owned(),
         None => store.project_id().to_owned(),
     };
-    let verified = verify_firestore_token_with(token, store, now, acceptance.future_claims());
-    mock_fallback(token, store, acceptance, &expected_project, verified)
+    let verified =
+        verify_firestore_token_with(token, store, now, policy.acceptance().future_claims());
+    mock_fallback(token, store, policy, &expected_project, verified)
 }
 
 fn verify_rules_token_with_expected_project(
     token: &str,
     store: &AuthStore,
     now: LogicalInstant,
-    acceptance: TokenAcceptance,
+    policy: RulesTokenPolicy,
     expected_project: &str,
 ) -> Result<DecodedToken, JwtError> {
-    let verified = verify_id_token_with(token, store, now, 0, acceptance.future_claims())
+    let verified = verify_id_token_with(token, store, now, 0, policy.acceptance().future_claims())
         .map(|(_, decoded)| decoded);
-    mock_fallback(token, store, acceptance, expected_project, verified)
+    mock_fallback(token, store, policy, expected_project, verified)
 }
 
-/// The emulator profile's mock-token admission after a failed verification.
+/// The mock-token admission after a failed verification, when `policy` allows unsigned
+/// tokens (the emulator profile's default, and `auth.allowUnsignedIdTokens`).
 fn mock_fallback(
     token: &str,
     store: &AuthStore,
-    acceptance: TokenAcceptance,
+    policy: RulesTokenPolicy,
     expected_project: &str,
     verified: Result<DecodedToken, JwtError>,
 ) -> Result<DecodedToken, JwtError> {
-    match verified {
-        Ok(decoded) => Ok(decoded),
-        Err(verified_error) => {
-            // A session that installed a signer issues RS256 tokens and refuses unsigned ones
-            // on every surface (`auth.idTokenSigning: session-rsa`); the mock path would undo
-            // exactly that, so it is not offered there whatever the profile says.
-            if acceptance == TokenAcceptance::Verified || store.signer().is_some() {
-                return Err(verified_error);
-            }
-            // Only an unsigned token can be a mock token: `decode_token` without a signer
-            // accepts `alg: none` with an empty signature and nothing else, so a forged
-            // `RS256` token fails here rather than becoming an identity.
-            let decoded = decode_token(token, None)?;
-            let aud = decoded.string("aud").ok_or(JwtError::Malformed)?;
-            if aud != expected_project {
-                return Err(JwtError::WrongAudience {
-                    expected: expected_project.to_owned(),
-                    actual: aud.to_owned(),
-                });
-            }
-            // `request.auth.uid` is the subject; a token without one names no caller.
-            decoded.sub().ok_or(JwtError::Malformed)?;
-            Ok(decoded)
-        }
+    let verified_error = match verified {
+        Ok(decoded) => return Ok(decoded),
+        Err(verified_error) => verified_error,
+    };
+    // A session that installed a signer issues RS256 tokens and refuses unsigned ones on
+    // every surface (`auth.idTokenSigning: session-rsa`); the mock path would undo exactly
+    // that, so it is not offered there whatever the policy says. Only an unsigned token can
+    // be a mock token, so a forged `RS256` token keeps its refusal rather than becoming an
+    // identity.
+    if !policy.allows_unsigned() || store.signer().is_some() || !is_unsigned_token(token) {
+        return Err(verified_error);
     }
+    match unsigned_mock(token, expected_project) {
+        Ok(decoded) => Ok(decoded),
+        // The strict profile answers a token it does not admit exactly as it did before the
+        // setting existed; the emulator profile keeps the mock path's own error.
+        Err(_) if policy.acceptance() == TokenAcceptance::Verified => Err(verified_error),
+        Err(mock_error) => Err(mock_error),
+    }
+}
+
+/// An unsigned token as a mock token: minted for `expected_project` and naming a subject.
+fn unsigned_mock(token: &str, expected_project: &str) -> Result<DecodedToken, JwtError> {
+    // Without a signer `decode_token` accepts `alg: none` with an empty signature and
+    // nothing else.
+    let decoded = decode_token(token, None)?;
+    let aud = decoded.string("aud").ok_or(JwtError::Malformed)?;
+    if aud != expected_project {
+        return Err(JwtError::WrongAudience {
+            expected: expected_project.to_owned(),
+            actual: aud.to_owned(),
+        });
+    }
+    // `request.auth.uid` is the subject; a token without one names no caller.
+    decoded.sub().ok_or(JwtError::Malformed)?;
+    Ok(decoded)
 }
 
 /// [`verify_id_token`] returning the decoded token as well (claims for `request.auth`).
@@ -861,10 +965,12 @@ pub fn verify_firestore_rules_token_of_removed_tenant(
     token: &str,
     store: &AuthStore,
     now: LogicalInstant,
-    acceptance: TokenAcceptance,
+    policy: impl Into<RulesTokenPolicy>,
     expected_project: Option<&str>,
     removed: Option<&crate::store::RemovedTenantEpochs>,
 ) -> Result<DecodedToken, JwtError> {
+    let policy = policy.into();
+    let future = policy.acceptance().future_claims();
     let project_epoch = store.lifecycle_epoch_claim();
     let expected_epoch = match removed {
         Some(epochs) if epochs.project == project_epoch => epochs.tenant.clone(),
@@ -884,12 +990,10 @@ pub fn verify_firestore_rules_token_of_removed_tenant(
         FIRESTORE_EXPIRY_LEEWAY_SECONDS,
         TenantRule::Removed,
         expected_epoch,
-        acceptance.future_claims(),
+        future,
     )
-    .and_then(|decoded| {
-        check_auth_time(&decoded, now, acceptance.future_claims()).map(|_| decoded)
-    });
-    mock_fallback(token, store, acceptance, &expected_project, verified)
+    .and_then(|decoded| check_auth_time(&decoded, now, future).map(|_| decoded));
+    mock_fallback(token, store, policy, &expected_project, verified)
 }
 
 /// Which tenant claim a store accepts.

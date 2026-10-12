@@ -232,7 +232,12 @@
         "allowUnsignedCustomTokens": {
           "type": "boolean",
           "default": true,
-          "description": "Accept well-formed unsigned custom JWTs from the Admin SDK in emulator mode, in both strict and emulator profiles, even when customTokenSigners is configured. Set false to require signed custom tokens verified by customTokenSigners. Strict claim validation still applies. In the emulator profile, false also disables JSON fake custom tokens. This setting does not affect ID tokens or other credentials."
+          "description": "Accept well-formed unsigned custom JWTs from the Admin SDK in emulator mode, in both strict and emulator profiles, even when customTokenSigners is configured. Set false to require signed custom tokens verified by customTokenSigners. Strict claim validation still applies. In the emulator profile, false also disables JSON fake custom tokens. This setting does not affect ID tokens or other credentials; see allowUnsignedIdTokens."
+        },
+        "allowUnsignedIdTokens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Accept unsigned emulator ID tokens when Firestore and Storage Security Rules are evaluated, in both strict and emulator profiles: the mockUserToken that @firebase/rules-unit-testing authenticatedContext() and the client SDKs send. An unsigned token is a three-segment JWT whose header is a JSON object with alg exactly \"none\" and whose signature segment is empty; it is admitted, with request.auth built from its claims, when it names a subject and its audience is the routed project. Every other token counts as signed and is verified as before, so a token that claims a signature that does not verify is still refused. A session with idTokenSigning session-rsa admits no unsigned token. Set false to refuse unsigned tokens that do not verify, as production does; the strict profile then answers exactly as without this setting. Callable Functions, Identity Toolkit and App Check are not affected."
         },
         "customTokenSigners": {
           "type": "object",

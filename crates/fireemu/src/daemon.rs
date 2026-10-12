@@ -870,6 +870,7 @@ fn firestore_profile_settings(
     enforcer
         .with_token_semantics(TokenSemantics::Firestore)
         .with_token_acceptance(cfg.token_acceptance)
+        .with_unsigned_id_tokens(cfg.auth_allow_unsigned_id_tokens)
         .with_refusal_without_ruleset(cfg.refuse_without_ruleset)
         .with_end_user_transactions(cfg.end_user_transactions)
         .with_listen_stream_lifetime(cfg.listen_stream_lifetime)

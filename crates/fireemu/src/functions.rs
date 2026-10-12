@@ -6905,6 +6905,157 @@ mod tests {
         assert_eq!(served, ConsumeAppCheckToken::Undetermined);
     }
 
+    /// The real-SDK codebase, its observation file and a configured manifest that calls both
+    /// callables task queues, for the runner-side withholding test.
+    #[cfg(unix)]
+    fn write_task_token_fixture(
+        root: &std::path::Path,
+        dir: &std::path::Path,
+    ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let sdk = std::env::var("FE_SOURCE_SDK_ROOT").map_or_else(
+            |_| root.join("conformance/node_modules/firebase-functions"),
+            std::path::PathBuf::from,
+        );
+        let node_modules = sdk
+            .parent()
+            .expect("the SDK lives in a node_modules directory");
+        assert!(
+            sdk.join("package.json").is_file(),
+            "cached real firebase-functions is required at {}",
+            sdk.display()
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        let source = dir.join("src");
+        std::fs::create_dir_all(&source).unwrap();
+        std::os::unix::fs::symlink(node_modules, source.join("node_modules")).unwrap();
+        let observed = dir.join("observed.jsonl");
+        std::fs::write(source.join("package.json"), r#"{"main":"index.js"}"#).unwrap();
+        std::fs::write(
+            source.join("index.js"),
+            format!(
+                r#"const fs = require("node:fs");
+const record = (event) => fs.appendFileSync({observed:?}, JSON.stringify(event) + "\n");
+const appCheck = require("firebase-admin/app-check");
+appCheck.getAppCheck = () => ({{
+  verifyToken: async (token, options) => {{
+    record({{ event: "verifyToken", consume: options?.consume === true }});
+    throw new Error("no production App Check in tests");
+  }},
+}});
+const {{ onCall }} = require("firebase-functions/v2/https");
+const observe = (name) => (request) => {{
+  record({{ event: "handler", name, header: request.rawRequest.headers["x-firebase-appcheck"] ?? null }});
+  return {{ ok: true }};
+}};
+exports.guarded = onCall({{ consumeAppCheckToken: true }}, observe("guarded"));
+exports.add = onCall({{}}, observe("add"));
+"#,
+                observed = observed.display().to_string()
+            ),
+        )
+        .unwrap();
+        let manifest_path = dir.join("manifest.json");
+        std::fs::write(
+            &manifest_path,
+            json!({"functions": [
+                {"name": "guarded", "generation": 2, "trigger": {"type": "tasks"}},
+                {"name": "add", "generation": 2, "trigger": {"type": "tasks"}},
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        (source, observed, manifest_path)
+    }
+
+    /// Review 3 M1 end to end with the real runner and the real firebase-functions: without
+    /// App Check, a task that carries `X-Firebase-AppCheck` to a token-consuming callable which a
+    /// configured manifest calls a task queue skips the proxy, and the runner withholds the token
+    /// from the onCall wrapper itself. The Admin SDK's `verifyToken` is stubbed to record and
+    /// throw, so even a regression never reaches production; the non-consuming near miss still
+    /// gets its token (and the stub records its non-consuming verification).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn without_app_check_the_runner_withholds_a_task_token_from_a_consuming_callable() {
+        use fireemu_adapter_grpc::gateway::Gateway;
+        use fireemu_adapter_grpc::local::LocalBackend;
+        use fireemu_core_firestore::index::{IndexSet, PlanningContext};
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let dir = std::env::temp_dir().join(format!("fireemu-consume-task-{}", std::process::id()));
+        let (source, observed, manifest_path) = write_task_token_fixture(&root, &dir);
+        let runner = root.join("tools/runner-node/index.mjs");
+        let node = std::env::var("FIREEMU_NODE").unwrap_or_else(|_| "node".to_owned());
+        let hosts = super::EmulatorHosts {
+            firestore: None,
+            auth: None,
+            storage: None,
+            functions: Some("127.0.0.1:5001".to_owned()),
+            eventarc: None,
+            tasks: None,
+            logging: None,
+            pubsub: None,
+            hub: None,
+        };
+        let mut cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1, "profile": "emulator"
+        }))
+        .unwrap();
+        cfg.functions_source = Some(source.display().to_string());
+        cfg.functions_runner = Some(vec![node, runner.display().to_string()]);
+        cfg.functions_manifest = Some(manifest_path.display().to_string());
+        let clock = Arc::new(Mutex::new(VirtualClock::new(cfg.clock_start)));
+        let backend = Arc::new(LocalBackend::new(
+            Gateway {
+                ctx: PlanningContext {
+                    edition: cfg.edition,
+                    api_mode: cfg.api_mode,
+                    policy: cfg.index_policy,
+                },
+                indexes: IndexSet::default(),
+                enforce_limits: cfg.enforce_limits,
+            },
+            clock.clone(),
+            cfg.seed,
+        ));
+        let runtime = super::start(&cfg, &clock, &backend, &hosts, "test-secret", false)
+            .await
+            .expect("the codebase loads");
+        let project = runtime.project().to_owned();
+        for queue in ["guarded", "add"] {
+            let task = json!({"task": {"httpRequest": {
+                "body": super::base64_encode(br#"{"data":{}}"#),
+                "headers": {"Content-Type": "application/json", "X-Firebase-AppCheck": "task-token"},
+            }}});
+            runtime
+                .enqueue_task(&project, "us-central1", queue, &task)
+                .expect("the task is accepted");
+        }
+        let idle = runtime.await_idle(Duration::from_secs(30)).await;
+        runtime.shutdown().await;
+        idle.unwrap();
+        let events: Vec<serde_json::Value> = std::fs::read_to_string(&observed)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let handler = |name: &str| {
+            events
+                .iter()
+                .find(|e| e["event"] == "handler" && e["name"] == name)
+                .unwrap_or_else(|| panic!("{name} ran: {events:?}"))["header"]
+                .clone()
+        };
+        assert_eq!(handler("guarded"), serde_json::Value::Null, "{events:?}");
+        assert_eq!(handler("add"), json!("task-token"), "{events:?}");
+        assert!(
+            !events
+                .iter()
+                .any(|e| e["event"] == "verifyToken" && e["consume"] == true),
+            "a consuming verifyToken ran: {events:?}"
+        );
+    }
+
     fn claims_for(
         tenant: Option<&str>,
         event: fireemu_core_functions::manifest::BlockingAuthEvent,

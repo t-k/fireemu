@@ -312,15 +312,6 @@ impl CompatibilityProfile {
     pub const fn end_user_transactions(self) -> bool {
         matches!(self, Self::Emulator)
     }
-
-    /// Whether an end user's `Listen` stream ends on its own an hour after it opened. Production
-    /// closed every held stream with `INTERNAL` 3,600 s after it opened, without waiting for a
-    /// commit (AUTH-FS-CROSS stage 2, packet v7, 2026-09-28); the official emulator never ends
-    /// one.
-    #[must_use]
-    pub const fn listen_stream_lifetime(self) -> bool {
-        matches!(self, Self::Strict)
-    }
 }
 
 /// The Emulator Hub's official default port (`firebase-tools` `Constants.getDefaultPort`).
@@ -1020,8 +1011,10 @@ pub struct RuntimeConfig {
     /// Whether an end user may open a read-write transaction
     /// (profile-derived; there is no key of its own).
     pub end_user_transactions: bool,
-    /// Whether an end user's `Listen` stream ends an hour after it opened
-    /// (profile-derived; there is no key of its own).
+    /// Whether an end user's native `Listen` stream ends an hour after it opened, as production
+    /// ends it (`firestore.listenStreamLifetime`, `"oneHour"` or `"unlimited"`). A development
+    /// default: off unless `productionExact` or the key asks for it, because a long local
+    /// session should not be cut by production's close (owner decision 2026-10-13).
     pub listen_stream_lifetime: bool,
     /// How long a document whose time-to-live field has expired stays readable before the
     /// expiry sweep deletes it (`firestore.ttlSweepIntervalSeconds`). Production deletes
@@ -1424,7 +1417,7 @@ impl Default for RuntimeConfig {
             implicit_database_creation: profile.implicit_database_creation(),
             refuse_without_ruleset: profile.refuse_without_ruleset(),
             end_user_transactions: profile.end_user_transactions(),
-            listen_stream_lifetime: profile.listen_stream_lifetime(),
+            listen_stream_lifetime: false,
             ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
             deleted_database_id_cooldown: None,
             history_max_versions_per_path: None,
@@ -3148,7 +3141,6 @@ impl RuntimeConfig {
         if !self.auth_improved_email_privacy_explicit {
             self.auth_improved_email_privacy = profile == CompatibilityProfile::Strict;
         }
-        self.listen_stream_lifetime = profile.listen_stream_lifetime();
     }
 
     /// Applies `productionExact`. fireemu is mostly run by tests in CI and on a laptop, so
@@ -3179,6 +3171,7 @@ impl RuntimeConfig {
         } else {
             MissingIndexes::Report
         };
+        self.listen_stream_lifetime = exact;
     }
 
     /// Reads `auth.idpAssertions` after `auth.idpSigners`. The keys are read only by signed
@@ -4015,6 +4008,25 @@ impl RuntimeConfig {
                 {
                     return Err(ConfigError(
                         "firestore.missingIndexes \"refuse\" requires the strict profile"
+                            .to_owned(),
+                    ));
+                }
+            }
+            if let Some(value) = fs.get("listenStreamLifetime") {
+                cfg.listen_stream_lifetime =
+                    match value.as_str() {
+                        Some("oneHour") => true,
+                        Some("unlimited") => false,
+                        _ => return Err(ConfigError(
+                            "firestore.listenStreamLifetime must be \"oneHour\" or \"unlimited\""
+                                .to_owned(),
+                        )),
+                    };
+                // The emulator profile reproduces the official emulator, which never ends a
+                // stream; the hour is production's behaviour.
+                if cfg.listen_stream_lifetime && cfg.profile != CompatibilityProfile::Strict {
+                    return Err(ConfigError(
+                        "firestore.listenStreamLifetime \"oneHour\" requires the strict profile"
                             .to_owned(),
                     ));
                 }
@@ -5108,7 +5120,8 @@ mod tests {
         assert!(!strict.implicit_database_creation);
         assert!(strict.refuse_without_ruleset);
         assert!(!strict.end_user_transactions);
-        assert!(strict.listen_stream_lifetime);
+        // The one-hour Listen lifetime is a development default (owner decision 2026-10-13).
+        assert!(!strict.listen_stream_lifetime);
     }
 
     #[test]
@@ -6866,6 +6879,56 @@ mod tests {
                 Err(ConfigError("productionExact must be a boolean".to_owned()))
             );
         }
+    }
+
+    #[test]
+    fn the_listen_stream_hour_is_a_development_default_restored_by_production_exact() {
+        // Owner decision 2026-10-13: a long local session is not cut by production's hour
+        // unless productionExact or the key asks for it.
+        let read = |profile: &str, exact: Option<bool>, key: Option<&str>| {
+            let mut firestore = json!({"edition": "standard", "apiMode": "native"});
+            if let Some(key) = key {
+                firestore["listenStreamLifetime"] = json!(key);
+            }
+            let mut extra = json!({"profile": profile, "firestore": firestore});
+            if let Some(exact) = exact {
+                extra["productionExact"] = json!(exact);
+            }
+            with_profile(extra)
+        };
+        for (profile, exact, key, expected) in [
+            ("strict", None, None, false),
+            ("strict", Some(false), None, false),
+            ("strict", Some(true), None, true),
+            ("strict", None, Some("oneHour"), true),
+            ("strict", Some(true), Some("unlimited"), false),
+            ("strict", Some(false), Some("oneHour"), true),
+            ("emulator", None, None, false),
+            ("emulator", None, Some("unlimited"), false),
+        ] {
+            assert_eq!(
+                read(profile, exact, key).unwrap().listen_stream_lifetime,
+                expected,
+                "{profile} {exact:?} {key:?}"
+            );
+        }
+        assert_eq!(
+            read("emulator", None, Some("oneHour")).unwrap_err(),
+            ConfigError(
+                "firestore.listenStreamLifetime \"oneHour\" requires the strict profile".to_owned()
+            )
+        );
+        for invalid in ["hour", "", "ONEHOUR"] {
+            assert_eq!(
+                read("strict", None, Some(invalid)).unwrap_err(),
+                ConfigError(
+                    "firestore.listenStreamLifetime must be \"oneHour\" or \"unlimited\""
+                        .to_owned()
+                ),
+                "{invalid}"
+            );
+        }
+        assert!(!RuntimeConfig::default().listen_stream_lifetime);
     }
 
     #[test]

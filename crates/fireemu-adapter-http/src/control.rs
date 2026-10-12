@@ -347,6 +347,21 @@ pub struct ControlState {
     /// The App Check registry, when App Check is enabled: the observation route reads it, and
     /// the lifecycle hooks rotate epochs through it.
     pub app_check: Option<fireemu_core_app_check::AppCheckGate>,
+    /// Ends every end user's native gRPC `Firestore.Listen` stream now, as production ends one
+    /// at its one-hour lifetime, and answers how many streams it ended
+    /// (`POST /v1/firestore/listen:expire`). `None` when no Firestore enforcer runs.
+    pub firestore_listen_expiry: Option<Arc<dyn Fn() -> usize + Send + Sync>>,
+}
+
+/// `POST /v1/firestore/listen:expire`: ends every end user's native `Listen` stream now.
+fn expire_listen_streams(state: &ControlState) -> JsonResponse {
+    match &state.firestore_listen_expiry {
+        Some(expire) => ok(json!({"expired": expire()})),
+        None => error(
+            409,
+            "FAILED_PRECONDITION : no Firestore Security Rules enforcer runs (rules.executionMode is disabled or Firestore is not selected), so no end-user Listen stream is held",
+        ),
+    }
 }
 
 /// Where the App Check observations of one session are served.
@@ -623,6 +638,7 @@ pub fn handle_with(
                 _ => error(404, "NOT_FOUND"),
             }
         }
+        ("POST", "/v1/firestore/listen:expire") => expire_listen_streams(state),
         ("GET" | "PUT" | "DELETE", "/v1/storage/rules") => {
             let _admitted = state.barrier.as_ref().map(|b| b.admit());
             storage_rules_route(&state.storage_rules, method, body)

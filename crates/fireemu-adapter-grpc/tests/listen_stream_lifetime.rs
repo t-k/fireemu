@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
-use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
+use fireemu_adapter_grpc::rules::{ListenExpiry, Principal, RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::streams::{listen_stream, StreamContext};
 use fireemu_core_auth::jwt::{encode_unsigned, TokenAcceptance};
 use fireemu_core_auth::mfa::TotpPolicy;
@@ -56,6 +56,7 @@ enum Profile {
 
 struct Held {
     backend: Arc<LocalBackend>,
+    expiry: ListenExpiry,
     clock: Arc<Mutex<VirtualClock>>,
     input: Option<mpsc::Sender<Result<pb::ListenRequest, Status>>>,
     output: mpsc::Receiver<Result<pb::ListenResponse, Status>>,
@@ -98,6 +99,11 @@ impl Held {
     /// A stream opened `opened_after` seconds after `START` with a token issued at `START`,
     /// listening to one document.
     async fn open(profile: Profile, opened_after: i64) -> Self {
+        Self::open_with(profile, opened_after, ListenExpiry::default()).await
+    }
+
+    /// [`Self::open`] on an enforcer that shares `expiry`.
+    async fn open_with(profile: Profile, opened_after: i64, expiry: ListenExpiry) -> Self {
         let auth = Arc::new(Mutex::new(AuthStore::new(
             PROJECT,
             SplitMix64::new(5),
@@ -124,6 +130,7 @@ impl Held {
         })
         .with_token_semantics(TokenSemantics::Firestore)
         .with_listen_stream_lifetime(strict);
+        let enforcer = enforcer.with_listen_expiry(expiry.clone());
         clock
             .lock()
             .unwrap()
@@ -186,6 +193,7 @@ impl Held {
             .unwrap();
         let mut held = Self {
             backend,
+            expiry,
             clock,
             input: Some(input),
             output,
@@ -346,4 +354,53 @@ async fn an_older_token_ends_the_stream_at_the_first_commit_past_its_allowance()
     );
     assert_eq!(change.cause.unwrap().code, Code::Unauthenticated as i32);
     assert_eq!(held.end_within(NOTICE).await, Some(Code::Unauthenticated));
+}
+
+/// `POST /v1/firestore/listen:expire` ends an end user's native stream at once with the status
+/// of its hour, also where the hour itself does not apply (the development default and the
+/// emulator profile), so a client's reconnect can be tested without waiting an hour.
+#[tokio::test]
+async fn an_expired_stream_ends_with_internal_at_once_whatever_the_lifetime() {
+    for profile in [Profile::Emulator, Profile::Strict] {
+        let mut held = Held::open(profile, 0).await;
+        assert!(held.within(NOTICE).await.is_none());
+        assert_eq!(held.expiry.expire(), 1, "one held end-user stream");
+        assert_eq!(held.end_within(NOTICE).await, Some(Code::Internal));
+        assert!(matches!(held.within(NOTICE).await, Some(None)));
+        // The ended stream no longer holds the signal.
+        assert_eq!(held.expiry.expire(), 0);
+    }
+}
+
+/// A stream opened after an expiry is not ended by it, and one expiry ends every held stream.
+#[tokio::test]
+async fn an_expiry_ends_the_streams_held_then_and_not_a_later_one() {
+    let expiry = ListenExpiry::default();
+    let mut first = Held::open_with(Profile::Emulator, 0, expiry.clone()).await;
+    let mut second = Held::open_with(Profile::Emulator, 0, expiry.clone()).await;
+    assert_eq!(expiry.expire(), 2);
+    assert_eq!(first.end_within(NOTICE).await, Some(Code::Internal));
+    assert_eq!(second.end_within(NOTICE).await, Some(Code::Internal));
+    let mut later = Held::open_with(Profile::Emulator, 0, expiry.clone()).await;
+    assert!(later.within(NOTICE).await.is_none());
+    commit(&later.backend, "after");
+    later.snapshot("after").await;
+    later.input.take();
+}
+
+/// Only an end user's stream holds the signal; production's hour was observed on end users'
+/// streams only.
+#[test]
+fn only_an_end_user_holds_the_expiry_signal() {
+    let enforcer = RulesEnforcer::new(
+        Arc::new(RulesetSlot::default()),
+        Arc::new(Mutex::new(AuthStore::new(
+            PROJECT,
+            SplitMix64::new(5),
+            TotpPolicy::default(),
+        ))),
+        Arc::new(Mutex::new(VirtualClock::new(START))),
+    );
+    assert!(enforcer.listen_expiry(&Principal::Owner).is_none());
+    assert!(enforcer.listen_expiry(&Principal::Anonymous).is_none());
 }

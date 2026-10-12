@@ -33,6 +33,7 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         functions: None,
         control_token: "test-token".to_owned(),
         app_check: None,
+        firestore_listen_expiry: None,
         barrier: None,
         snapshot_hooks: Vec::new(),
         snapshots: Mutex::new(std::collections::BTreeMap::new()),
@@ -2461,4 +2462,59 @@ fn a_manual_run_refused_for_capacity_answers_resource_exhausted() {
     let ok = run("tick");
     assert_eq!(ok.status, 200);
     assert_eq!(ok.body["enqueued"], true);
+}
+
+/// `POST /v1/firestore/listen:expire` fires the Firestore enforcer's signal and answers how many
+/// end-user streams it ended; without an enforcer there is nothing to end, which is said.
+#[test]
+fn listen_expiry_is_fired_by_its_route_and_refused_without_an_enforcer() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    let r = handle(&s, "POST", "/v1/firestore/listen:expire", &json!({}));
+    assert_eq!(r.status, 409, "{}", r.body);
+    assert!(
+        r.body.to_string().contains("FAILED_PRECONDITION"),
+        "{}",
+        r.body
+    );
+
+    let fired = Arc::new(AtomicUsize::new(0));
+    let counter = fired.clone();
+    s.firestore_listen_expiry = Some(Arc::new(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+        3
+    }));
+    let r = handle(&s, "POST", "/v1/firestore/listen:expire", &json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body, json!({"expired": 3}));
+    assert_eq!(fired.load(Ordering::SeqCst), 1);
+    // Only POST fires it.
+    let r = handle(&s, "GET", "/v1/firestore/listen:expire", &json!({}));
+    assert_eq!(r.status, 404, "{}", r.body);
+    assert_eq!(fired.load(Ordering::SeqCst), 1);
+}
+
+/// A page must present the control token to fire it, like every other control mutation.
+#[test]
+fn a_page_needs_the_control_token_to_expire_listen_streams() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    let fired = Arc::new(AtomicUsize::new(0));
+    let counter = fired.clone();
+    s.firestore_listen_expiry = Some(Arc::new(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+        0
+    }));
+    let page = RequestHeaders {
+        origin: Some("http://localhost:5173".to_owned()),
+        ..RequestHeaders::default()
+    };
+    let r = handle_with(&s, "POST", "/v1/firestore/listen:expire", &page, &json!({}));
+    assert_eq!(r.status, 403, "{}", r.body);
+    assert_eq!(fired.load(Ordering::SeqCst), 0);
+    let page = RequestHeaders {
+        authorization: Some("Bearer test-token".to_owned()),
+        ..page
+    };
+    let r = handle_with(&s, "POST", "/v1/firestore/listen:expire", &page, &json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(fired.load(Ordering::SeqCst), 1);
 }

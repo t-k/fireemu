@@ -71,6 +71,7 @@ struct BoundStartup {
 }
 
 struct ServiceAssembly {
+    listen_expiry: fireemu_adapter_grpc::rules::ListenExpiry,
     cfg: RuntimeConfig,
     config_origin: String,
     only: Selection,
@@ -814,6 +815,9 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             ));
         }
     }
+    // Shared by the Firestore enforcer, whose end-user Listen streams hold it, and the control
+    // route that fires it.
+    let listen_expiry = fireemu_adapter_grpc::rules::ListenExpiry::default();
     let control = Arc::new(control_state(
         &cfg,
         &clock,
@@ -833,8 +837,10 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         &pubsub_state,
         &pubsub_handle,
         &pubsub_resources,
+        (cfg.rules_enforced && only.firestore).then(|| listen_expiry.clone()),
     ));
     Ok(ServiceAssembly {
+        listen_expiry,
         log_bus,
         cfg,
         config_origin,
@@ -963,6 +969,7 @@ fn firestore_profile_settings(
 
 fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySuite, String> {
     let ServiceAssembly {
+        listen_expiry,
         log_bus,
         cfg,
         config_origin,
@@ -1145,6 +1152,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
             None => enforcer,
         };
         let enforcer = firestore_profile_settings(enforcer, &cfg)
+            .with_listen_expiry(listen_expiry)
             .with_registry(registry.clone())
             .with_database_rules(database_rules.clone());
         // The client only sees production's denial, which does not say that nothing is loaded.
@@ -2287,10 +2295,10 @@ mod tests {
         assert!(super::firestore_wall_source(CompatibilityProfile::Strict, None).is_none());
         assert!(super::firestore_wall_source(CompatibilityProfile::Emulator, Some(wall)).is_none());
     }
-    /// Only the strict profile's Firestore ends an end user's `Listen` stream an hour after it
-    /// opened.
+    /// Firestore ends an end user's `Listen` stream an hour after it opened only when
+    /// `productionExact` or `firestore.listenStreamLifetime` asks for production's hour.
     #[test]
-    fn only_the_strict_profile_ends_a_listen_stream_after_an_hour() {
+    fn only_production_exact_or_the_key_ends_a_listen_stream_after_an_hour() {
         use fireemu_adapter_grpc::rules::{Principal, RulesEnforcer};
         use fireemu_core_rules::runtime::RulesetSlot;
         use fireemu_core_rules::value::AuthContext;
@@ -2301,17 +2309,21 @@ mod tests {
             uid: "held".to_owned(),
             token: std::collections::BTreeMap::new(),
         });
+        let hour = Some(LogicalInstant::from_unix_seconds(1_788_008_460));
         for (profile, deadline) in [
+            (json!({"profile": "strict", "productionExact": true}), hour),
             (
-                "strict",
-                Some(LogicalInstant::from_unix_seconds(1_788_008_460)),
+                json!({"profile": "strict", "firestore": {"listenStreamLifetime": "oneHour"}}),
+                hour,
             ),
-            ("emulator", None),
+            (json!({"profile": "strict"}), None),
+            (json!({"profile": "emulator"}), None),
         ] {
-            let cfg = crate::config::RuntimeConfig::from_json(
-                &json!({"schemaVersion": 1, "profile": profile}),
-            )
-            .unwrap();
+            let mut document = json!({"schemaVersion": 1});
+            for (key, value) in profile.as_object().unwrap() {
+                document[key] = value.clone();
+            }
+            let cfg = crate::config::RuntimeConfig::from_json(&document).unwrap();
             let enforcer = super::firestore_profile_settings(
                 RulesEnforcer::new(
                     Arc::new(RulesetSlot::default()),

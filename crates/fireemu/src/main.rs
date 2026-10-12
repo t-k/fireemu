@@ -2996,6 +2996,7 @@ fn control_state(
     pubsub: &Arc<Mutex<fireemu_core_pubsub::PubSubState>>,
     pubsub_handle: &fireemu_adapter_pubsub::PubSubHandle,
     pubsub_resources: &[functions::FunctionPubSubResource],
+    listen_expiry: Option<fireemu_adapter_grpc::rules::ListenExpiry>,
 ) -> fireemu_adapter_http::control::ControlState {
     let _ = auth_store;
     // Snapshot parts: what the session owns (Firestore databases and their field
@@ -3095,6 +3096,9 @@ fn control_state(
         control_token,
         barrier: Some(backend.barrier()),
         app_check,
+        firestore_listen_expiry: listen_expiry.map(|expiry| {
+            Arc::new(move || expiry.expire()) as Arc<dyn Fn() -> usize + Send + Sync>
+        }),
     }
 }
 

@@ -284,6 +284,7 @@ fn control_over(clock: Arc<Mutex<VirtualClock>>) -> ControlState {
         functions: None,
         control_token: "test-token".to_owned(),
         app_check: None,
+        firestore_listen_expiry: None,
         barrier: None,
         snapshot_hooks: Vec::new(),
         snapshots: Mutex::new(std::collections::BTreeMap::new()),

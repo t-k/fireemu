@@ -392,6 +392,27 @@ pub use fireemu_adapter_support::notice_limit::{NoticeEvent, NoticeLimit};
 /// [`NoticeLimit::LIMIT`] databases (see [`RulesEnforcer::with_no_ruleset_notice`]).
 pub type NoRulesetNotice = Arc<dyn Fn(NoticeEvent<'_>) + Send + Sync>;
 
+/// Ends every end user's native `Listen` stream at once, with the status production ends one
+/// with at its one-hour lifetime. Each such stream holds a receiver
+/// ([`RulesEnforcer::listen_expiry`]); a clone of this handle fires them all.
+#[derive(Clone, Debug)]
+pub struct ListenExpiry(Arc<tokio::sync::watch::Sender<u64>>);
+
+impl Default for ListenExpiry {
+    fn default() -> Self {
+        Self(Arc::new(tokio::sync::watch::Sender::new(0)))
+    }
+}
+
+impl ListenExpiry {
+    /// Ends every held end-user stream and answers how many were held.
+    #[must_use]
+    pub fn expire(&self) -> usize {
+        self.0.send_modify(|epoch| *epoch = epoch.wrapping_add(1));
+        self.0.receiver_count()
+    }
+}
+
 /// Rules enforcement state shared by every surface.
 pub struct RulesEnforcer {
     rules: Arc<RulesetSlot>,
@@ -424,6 +445,8 @@ pub struct RulesEnforcer {
     /// production ends it (the `strict` profile); the official emulator keeps it (the `emulator`
     /// profile).
     listen_stream_lifetime: bool,
+    /// The signal that ends every end user's native `Listen` stream now (see [`ListenExpiry`]).
+    listen_expiry: ListenExpiry,
     /// Where a refusal without a ruleset is reported, once per database: the client only sees
     /// production's denial, which does not say why.
     no_ruleset_notice: Option<NoRulesetNotice>,
@@ -452,6 +475,7 @@ impl RulesEnforcer {
             token_semantics: TokenSemantics::default(),
             wall_clock: None,
             listen_stream_lifetime: false,
+            listen_expiry: ListenExpiry::default(),
             no_ruleset_notice: None,
             noticed_without_ruleset: Mutex::new(NoticeLimit::default()),
         }
@@ -499,6 +523,25 @@ impl RulesEnforcer {
             .checked_add(fireemu_core_types::time::LogicalDuration::from_seconds(
                 LISTEN_STREAM_LIFETIME_SECONDS,
             ))
+    }
+
+    /// Shares `expiry` with the control API that fires it (`POST /v1/firestore/listen:expire`).
+    #[must_use]
+    pub fn with_listen_expiry(mut self, expiry: ListenExpiry) -> Self {
+        self.listen_expiry = expiry;
+        self
+    }
+
+    /// The signal that ends a `Listen` stream held by `principal` before its lifetime: `Some`
+    /// for an end user, whose stream production ends at its hour, and `None` for the owner and
+    /// an anonymous caller. It is handed out whether or not the lifetime itself applies, so
+    /// [`ListenExpiry::expire`] reproduces the close on demand in every configuration.
+    #[must_use]
+    pub fn listen_expiry(
+        &self,
+        principal: &Principal,
+    ) -> Option<tokio::sync::watch::Receiver<u64>> {
+        matches!(principal, Principal::User(_)).then(|| self.listen_expiry.0.subscribe())
     }
 
     /// The session time tokens are judged at (the wall's, in an unpinned `strict` session).

@@ -482,6 +482,11 @@ pub(crate) async fn listen_stream_observed(
         .as_ref()
         .filter(|_| transport == ListenTransport::Grpc)
         .and_then(|rules| rules.listen_stream_deadline(&ctx.principal));
+    let mut expiry = ctx
+        .rules
+        .as_ref()
+        .filter(|_| transport == ListenTransport::Grpc)
+        .and_then(|rules| rules.listen_expiry(&ctx.principal));
     loop {
         let mut out: Vec<pb::ListenResponse> = Vec::new();
         let mut request = None;
@@ -498,10 +503,18 @@ pub(crate) async fn listen_stream_observed(
                 None => std::future::pending().await,
             }
         };
+        // `POST /v1/firestore/listen:expire` ends the stream as its hour does.
+        let expired = async {
+            match expiry.as_mut() {
+                Some(receiver) => receiver.changed().await.is_ok(),
+                None => std::future::pending().await,
+            }
+        };
         let outcome: Result<bool, Status> = tokio::select! {
             () = tx.closed() => Ok(false),
             // Woken at the deadline or to look again: the loop's head decides.
             () = deadline => Ok(true),
+            true = expired => Err(lifetime_reached()),
             msg = inbound.next() => match msg {
                 None => Ok(false),
                 Some(Err(e)) => Err(e),

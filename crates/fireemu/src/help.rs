@@ -94,7 +94,7 @@ pub const DAEMON_OPTIONS: &[OptionSpec] = &[
     opt(
         &["--pubsub-port"],
         Value::Required("<n>"),
-        "Pub/Sub port; giving it also enables Pub/Sub, which otherwise starts only when configured or named by --only. Default: 8085.",
+        "Pub/Sub port. Without --only, giving it also starts Pub/Sub; with --only, Pub/Sub starts only when the list names pubsub. Default: 8085.",
     ),
     opt(
         &["--functions"],

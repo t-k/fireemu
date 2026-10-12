@@ -1144,6 +1144,10 @@ fn blocking_identity_exports_are_discovered_as_served_triggers() {
     assert!(!err.contains("blocking identity event"), "{err}");
 }
 
+/// The second sign-up finds the only runner slot held by the never-settling handler. That
+/// failure is not Identity Platform's elapsed deadline, so it answers the masked 503 production
+/// gives a failing blocking function (AUTH-TENANT-BLOCKING recording 2026-09-28,
+/// refusal#create-unhandled and create-resource-exhausted).
 #[test]
 #[ignore = "requires tools/sdk-smoke dependencies; CI runs this test after npm ci"]
 fn a_disconnected_never_settling_handler_is_destroyed_with_its_runner() {
@@ -1171,7 +1175,8 @@ printf 'blocking-status=%s blocking-body=' "$status"
 cat "$scratch/response.json"
 printf '\n'
 test "$status" = 503
-grep -q 'BLOCKING_FUNCTION_ERROR_RESPONSE' "$scratch/response.json"
+grep -q '"message":"Error code: 47"' "$scratch/response.json"
+grep -q '"reason":"backendError"' "$scratch/response.json"
 after=""
 attempt=0
 while [ "$attempt" -lt 100 ]; do

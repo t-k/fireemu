@@ -643,3 +643,84 @@ test("cell results add the owner 1399 verdict from published order and each side
     "MATCH",
   );
 });
+
+test("owner 1399 near misses: one-sided order, one-sided mixing, held gap, redelivery and other cells", () => {
+  const base = side([pull(["n", ""]), pull(["a0", "k1"], ["a1", "k1"])], [["n", ""]]);
+  // LOCAL alone reverses a key: same set, order broken on one side only
+  const reversed = side([pull(["n", ""]), pull(["a1", "k1"], ["a0", "k1"])], [["n", ""]]);
+  assert.equal(
+    judgeOrderingCellHeldTail(PUBLISHED, base, reversed).reason,
+    "owner 1399: key k1 delivered set is not a prefix of its publish order",
+  );
+  // the source alone mixes keyed and unkeyed messages in one Pull
+  const mixedSource = side([pull(["n", ""], ["a0", "k1"]), pull(["a1", "k1"])], [["n", ""]]);
+  assert.equal(
+    judgeOrderingCellHeldTail(PUBLISHED, mixedSource, base).reason,
+    "owner 1399: keyed and unkeyed messages mixed in one Pull",
+  );
+  // a gap on one side while the other side's last delivery is still held
+  const gapHeld = side(
+    [pull(["n", ""]), pull(["a0", "k1"]), pull(["a1", "k1"])],
+    [
+      ["n", ""],
+      ["a0", "k1"],
+    ],
+  );
+  const gap = side(
+    [pull(["n", ""]), pull(["a0", "k1"]), pull(["a2", "k1"])],
+    [
+      ["n", ""],
+      ["a0", "k1"],
+    ],
+  );
+  assert.equal(
+    judgeOrderingCellHeldTail(PUBLISHED, gapHeld, gap).reason,
+    "owner 1399: difference in key k1 is not a held tail",
+  );
+  // a redelivery of an earlier message keeps the prefix
+  const redelivered = side(
+    [pull(["n", ""]), pull(["a0", "k1"]), pull(["a1", "k1"]), pull(["a0", "k1"])],
+    [["n", ""]],
+  );
+  assert.equal(judgeOrderingCellHeldTail(PUBLISHED, base, redelivered).verdict, "MATCH");
+});
+
+test("cell results ignore Pulls of another cell on the same subscription name", () => {
+  const ordered = "projects/p/subscriptions/fe1-or-g-s";
+  const ok = (c, op, body, response) => ({
+    case: c,
+    op,
+    request: { rpc: `Subscriber/${op}`, body },
+    response: { code: 0, body: response },
+  });
+  const publish = (key, texts) => ({
+    case: "ordering/grpc",
+    op: "publish",
+    request: {
+      rpc: "Publisher/Publish",
+      body: {
+        topic: "t",
+        messages: texts.map((t) => ({ data: data(t), ...(key ? { orderingKey: key } : {}) })),
+      },
+    },
+    response: { code: 0, body: {} },
+  });
+  const success = (e) => e.response?.code === 0;
+  const cell = (extra) => [
+    ok(
+      "ordering/grpc",
+      "createSubscription",
+      { name: ordered, topic: "t", enableMessageOrdering: true },
+      {},
+    ),
+    publish("k1", ["a0", "a1"]),
+    ok("ordering/grpc", "pull", { subscription: ordered }, pull(["a0", "k1"])),
+    ...extra,
+  ];
+  const source = cell([]);
+  const local = cell([ok("other/grpc", "pull", { subscription: ordered }, pull(["zz", "k1"]))]);
+  assert.equal(
+    orderingCellResults(source, local, success)["ordering/grpc"].owner1399.verdict,
+    "MATCH",
+  );
+});

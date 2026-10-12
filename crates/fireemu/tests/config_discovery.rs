@@ -182,8 +182,12 @@ fn an_explicit_config_turns_discovery_off() {
     let banner = stdout(&output);
     let config = line(&banner, "config:");
     assert!(config.contains("other.json (--config)"), "{config}");
+    // other.json selects the emulator profile, which allows every request without rules.
     let rules = line(&banner, "firestore rules:");
-    assert!(rules.contains("none loaded"), "{rules}");
+    assert!(
+        rules.contains("none loaded, so every request is allowed"),
+        "{rules}"
+    );
     // An explicit --firebase-json wins as well.
     std::fs::write(dir.join("fireemu.json"), r#"{"schemaVersion": 1}"#).unwrap();
     std::fs::write(dir.join("empty.json"), "{}").unwrap();

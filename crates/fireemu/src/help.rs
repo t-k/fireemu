@@ -462,6 +462,8 @@ mod tests {
 
     /// Every flag spelled as a match arm of the function `name` in `source`.
     fn arm_flags(source: &str, name: &str) -> Vec<String> {
+        // A Windows checkout may have CRLF line endings.
+        let source = source.replace("\r\n", "\n");
         let start = source.find(&format!("fn {name}")).expect("parser present");
         let body = &source[start..];
         let end = body.find("\n}\n").expect("parser ends");

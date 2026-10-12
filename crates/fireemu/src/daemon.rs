@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use fireemu_adapter_grpc::gateway::Gateway;
 use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::RestState;
-use fireemu_adapter_grpc::rules::{RulesEnforcer, TokenSemantics};
+use fireemu_adapter_grpc::rules::{NoticeEvent, NoticeLimit, RulesEnforcer, TokenSemantics};
 use fireemu_adapter_grpc::serve::serve_multiplexed;
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_http::identity_toolkit::{AuthState, AuthWallClock};
@@ -568,7 +568,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         storage_rules
             .registry
             .set_no_rules_notice(fireemu_adapter_http::storage::NoRulesNotice(Arc::new(
-                |bucket| eprintln!("{}", storage_no_rules_warning(bucket)),
+                |event| eprintln!("{}", storage_no_rules_warning(event)),
             )));
     }
     // The buckets the deployed Storage triggers name exist for the strict profile, as in production.
@@ -875,17 +875,35 @@ fn firestore_wall_source(
     Some(Arc::new(move || wall_clock.now()))
 }
 
-/// The warning printed the first time a client request to `database` is refused because no
-/// Firestore Security Rules are loaded for it.
-fn firestore_no_rules_warning(database: &str) -> String {
+/// The warning printed the first time a client request to a database is refused because no
+/// Firestore Security Rules are loaded for it, and once when further ones are suppressed.
+fn firestore_no_rules_warning(event: NoticeEvent<'_>) -> String {
+    let database = match event {
+        NoticeEvent::First(database) => database,
+        NoticeEvent::Suppressed => {
+            return format!(
+                "warning: firestore: further no-rules warnings are suppressed ({} databases were reported)",
+                NoticeLimit::LIMIT
+            )
+        }
+    };
     format!(
         "warning: firestore: a client request to database {database:?} was refused with PERMISSION_DENIED because no Security Rules are loaded for it (the strict profile refuses client requests without rules, as production does); set firestore.rules in firebase.json, rules.source in fireemu.json, or PUT /v1/rules. Reported once per database."
     )
 }
 
-/// The warning printed the first time an end-user request on `bucket` is refused because no
-/// Storage Rules are loaded for it.
-fn storage_no_rules_warning(bucket: &str) -> String {
+/// The warning printed the first time an end-user request on a bucket is refused because no
+/// Storage Rules are loaded for it, and once when further ones are suppressed.
+fn storage_no_rules_warning(event: NoticeEvent<'_>) -> String {
+    let bucket = match event {
+        NoticeEvent::First(bucket) => bucket,
+        NoticeEvent::Suppressed => {
+            return format!(
+            "warning: storage: further no-rules warnings are suppressed ({} buckets were reported)",
+            NoticeLimit::LIMIT
+        )
+        }
+    };
     format!(
         "warning: storage: an end-user request on bucket {bucket:?} was refused because no Storage Rules are loaded for it; set storage.rules in firebase.json or fireemu.json. Reported once per bucket."
     )
@@ -1085,8 +1103,8 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         Arc::new(if quiet {
             enforcer
         } else {
-            enforcer.with_no_ruleset_notice(Arc::new(|database| {
-                eprintln!("{}", firestore_no_rules_warning(database));
+            enforcer.with_no_ruleset_notice(Arc::new(|event| {
+                eprintln!("{}", firestore_no_rules_warning(event));
             }))
         })
     });

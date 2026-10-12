@@ -368,3 +368,204 @@ fn the_firestore_rules_line_is_printed_only_when_firestore_is_selected() {
     assert!(!banner.contains("firestore rules:"), "{banner}");
     assert!(banner.contains("storage rules:"), "{banner}");
 }
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+#[cfg(unix)]
+fn chmod(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// Unlike firebase-tools, discovery loads only files the user controls: a candidate in a
+/// directory anyone can write, or one its group can write, is skipped and named, and the run
+/// goes on with the built-in defaults.
+#[cfg(unix)]
+#[test]
+fn a_candidate_others_can_write_is_skipped_with_a_warning() {
+    // The working directory can be written by anyone.
+    let dir = scratch("world-writable-cwd");
+    firebase_project(&dir);
+    chmod(&dir, 0o777);
+    let (output, _) = exec_in(&dir, &[]);
+    let warning = stderr(&output);
+    assert!(
+        warning.contains("warning: config discovery skipped firebase.json: is in ")
+            && warning.contains("which can be written by any user"),
+        "{warning}"
+    );
+    let banner = stdout(&output);
+    assert!(
+        line(&banner, "config:").contains("none loaded: firebase.json was skipped"),
+        "{banner}"
+    );
+    assert!(
+        line(&banner, "firestore rules:").contains("none loaded"),
+        "{banner}"
+    );
+    chmod(&dir, 0o755);
+
+    // The file can be written by its group.
+    let dir = scratch("group-writable-file");
+    firebase_project(&dir);
+    chmod(&dir.join("firebase.json"), 0o664);
+    let (output, _) = exec_in(&dir, &[]);
+    assert!(
+        stderr(&output).contains("can be written by its group or by any user"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(line(&stdout(&output), "firestore rules:").contains("none loaded"));
+    // Naming it explicitly still loads it.
+    let (output, _) = exec_in(&dir, &["--firebase-json", "firebase.json"]);
+    assert!(!stderr(&output).contains("config discovery skipped"));
+    assert!(line(&stdout(&output), "firestore rules:").contains("enforced from"));
+}
+
+/// A shared parent such as `/tmp` (sticky, anyone can write) ends the walk: a firebase.json
+/// another user may have put there is never loaded.
+#[cfg(unix)]
+#[test]
+fn the_walk_stops_at_a_sticky_shared_parent() {
+    let dir = scratch("sticky-parent");
+    let shared = dir.join("shared");
+    let project = shared.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    firebase_project(&shared);
+    chmod(&shared, 0o1777);
+    let (output, _) = exec_in(&project, &[]);
+    let warning = stderr(&output);
+    assert!(
+        warning.contains("config discovery skipped")
+            && warning.contains("shared/firebase.json")
+            && warning.contains("which can be written by any user"),
+        "{warning}"
+    );
+    assert!(line(&stdout(&output), "firestore rules:").contains("none loaded"));
+    chmod(&shared, 0o755);
+}
+
+/// The `.firebaserc` beside a discovered firebase.json follows the same rule.
+#[cfg(unix)]
+#[test]
+fn a_firebaserc_others_can_write_is_not_used_for_the_project() {
+    let dir = scratch("writable-firebaserc");
+    firebase_project(&dir);
+    let rc = dir.join(".firebaserc");
+    std::fs::write(&rc, r#"{"projects": {"default": "demo-planted"}}"#).unwrap();
+    chmod(&rc, 0o666);
+    let (output, project) = exec_in(&dir, &[]);
+    assert_ne!(project, "demo-planted");
+    assert!(
+        stderr(&output).contains("config discovery skipped")
+            && stderr(&output).contains(".firebaserc"),
+        "{}",
+        stderr(&output)
+    );
+    // The firebase.json itself is the user's, so its rules still load.
+    assert!(line(&stdout(&output), "firestore rules:").contains("enforced from"));
+}
+
+/// A broken file the search found says so, and how to choose another or none.
+#[test]
+fn an_error_in_a_discovered_file_says_it_was_discovered() {
+    let dir = scratch("broken");
+    std::fs::write(dir.join("firebase.json"), "{not json").unwrap();
+    let sub = dir.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .current_dir(&sub)
+        .args(["exec", "--only", "firestore", "--firestore-port", "0"])
+        .args(["--http-port", "0", "--hub-port", "0", "--", "true"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let error = stderr(&output);
+    assert!(
+        error.contains("does not parse")
+            && error.contains("found by searching from the working directory")
+            && error.contains("--no-config-discovery"),
+        "{error}"
+    );
+    // The same file named explicitly gets no such hint.
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .current_dir(&sub)
+        .args(["exec", "--firebase-json", "../firebase.json", "--", "true"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!stderr(&output).contains("found by searching"));
+}
+
+/// `init` in a subdirectory of a Firebase project writes a fireemu.json without a firebaseJson
+/// entry; the banner says that the parent's firebase.json is not loaded.
+#[test]
+fn a_parent_firebase_json_shadowed_by_a_canonical_file_is_named() {
+    let dir = scratch("shadowed-parent");
+    firebase_project(&dir);
+    let sub = dir.join("web");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(sub.join("fireemu.json"), r#"{"schemaVersion": 1}"#).unwrap();
+    let (output, _) = exec_in(&sub, &[]);
+    let config = stdout(&output);
+    let config = line(&config, "config:");
+    assert!(
+        config.contains("firebase.json in a parent directory is not loaded"),
+        "{config}"
+    );
+}
+
+/// `emulators:export` looks for the suite of the project `up` would take from here, the one in
+/// the `.firebaserc` beside the discovered firebase.json.
+#[test]
+fn export_resolves_the_project_the_way_up_does() {
+    let dir = scratch("export-project");
+    firebase_project(&dir);
+    std::fs::write(
+        dir.join(".firebaserc"),
+        r#"{"projects": {"default": "demo-export-discovered"}}"#,
+    )
+    .unwrap();
+    let sub = dir.join("functions");
+    std::fs::create_dir_all(&sub).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .current_dir(&sub)
+        .args(["emulators:export", "out"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("no running fireemu suite for demo-export-discovered"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+/// `capabilities` reports the profile of the configuration `up` would load.
+#[test]
+fn capabilities_follow_discovery() {
+    let dir = scratch("capabilities");
+    std::fs::write(
+        dir.join("fireemu.json"),
+        r#"{"schemaVersion": 1, "profile": "emulator"}"#,
+    )
+    .unwrap();
+    let profile = |extra: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+            .current_dir(&dir)
+            .arg("capabilities")
+            .args(extra)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let manifest: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        manifest["profile"].as_str().unwrap().to_owned()
+    };
+    assert_eq!(profile(&[]), "emulator");
+    assert_eq!(profile(&["--no-config-discovery"]), "strict");
+}

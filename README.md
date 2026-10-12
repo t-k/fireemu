@@ -184,11 +184,15 @@ An existing `fireemu.json` is not overwritten unless `--force` is supplied.
 
 `--no-config-discovery` skips steps 2 and 3. The `config:` line of the startup output names the files that were loaded.
 
+A discovered file can name Functions code to run and the rules to enforce, so on Unix the search only loads files that you control, which the Firebase CLI does not check. The search stops before a directory that another user owns or that any user can write, such as `/tmp`. A `fireemu.json`, `firebase.json` or `.firebaserc` that another user owns, or that its group or any user can write, is skipped. A skipped file is named in a warning, and the run continues as if nothing had been found. To load such a file anyway, name it with `--config` or `--firebase-json`. Errors in a discovered file say that the file was found by the search.
+
+If you relied on the old behavior, where a `firebase.json` next to your tests was ignored, pass `--no-config-discovery`. Discovery means that the project ID comes from the `.firebaserc` beside the discovered `firebase.json`, that its emulator ports, Hub, UI and single-project settings apply, and that a `functions` entry starts the Functions runtime. `fireemu capabilities` also reports the profile of a discovered `fireemu.json`.
+
 ### Security Rules that are not loaded
 
 Under the `strict` profile, a project without Security Rules behaves as a production project without a rules release: every client request to Firestore is refused with `PERMISSION_DENIED`, and every end-user request to Storage is refused with production's 400 "bucket has not been set up" answer. The Admin SDK and other owner credentials are not affected. The `emulator` profile allows every Firestore request, and every Storage request for a `demo-*` project, as the official emulator does.
 
-The answers keep production's wording, which does not mention Fireemu. The startup output therefore has a `firestore rules:` and a `storage rules:` line that say when no rules are loaded and how to load them, and the first refused request for each database and bucket prints a warning to standard error. Name the rules files in `firebase.json` (`firestore.rules`, `storage.rules`) or in `fireemu.json` (`rules.source`, `storage.rules`).
+The answers keep production's wording, which does not mention Fireemu. The startup output therefore has a `firestore rules:` and a `storage rules:` line that say when no rules are loaded and how to load them, and the first refused request for each database and bucket (up to 32 of each) prints a warning to standard error. Name the rules files in `firebase.json` (`firestore.rules`, `storage.rules`) or in `fireemu.json` (`rules.source`, `storage.rules`).
 
 ### Compatibility profiles
 

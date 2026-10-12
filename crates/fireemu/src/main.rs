@@ -375,7 +375,9 @@ fn export_command(args: &[String]) -> Result<(), CliError> {
     let project = if let Some(project) = project {
         project
     } else {
-        let rc = read_firebaserc(Path::new("."))?;
+        // The project `up` and `exec` would take from here, so a suite started from the same
+        // directory is found.
+        let rc = discovered_firebaserc(&discovered_project_dir())?;
         resolve_project(rc.as_ref(), None)?
             .unwrap_or_else(|| config::RuntimeConfig::default().auth_project)
     };
@@ -854,6 +856,43 @@ fn read_firebaserc(dir: &Path) -> Result<Option<serde_json::Value>, CliError> {
     Ok(Some(rc))
 }
 
+/// The project directory `up` and `exec` would find from the working directory: the directory
+/// of the discovered `firebase.json`, else the working directory (firebase-tools' `loadRC` reads
+/// the `.firebaserc` beside the `firebase.json` it finds).
+fn discovered_project_dir() -> PathBuf {
+    let found = std::env::current_dir().ok().map(|cwd| {
+        config_discovery::discover(
+            &cwd,
+            config_discovery::current_user(),
+            config_discovery::stat,
+        )
+        .found
+    });
+    match found {
+        Some(config_discovery::Discovered::FirebaseJson(path)) => project_dir(&path),
+        _ => PathBuf::from("."),
+    }
+}
+
+/// Reads the `.firebaserc` of a directory the search reached, unless the user does not control it
+/// (see `config_discovery`); a refused one is reported and ignored.
+fn discovered_firebaserc(dir: &Path) -> Result<Option<serde_json::Value>, CliError> {
+    let absolute = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+    if let Some(skipped) = config_discovery::untrusted_firebaserc(
+        &absolute,
+        config_discovery::current_user(),
+        config_discovery::stat,
+    ) {
+        eprintln!(
+            "warning: config discovery skipped {}: {}, so it may have been put there by someone else; the project is not taken from it (pass --project)",
+            diagnostic_path(&skipped.path),
+            diagnostic_text(&skipped.reason)
+        );
+        return Ok(None);
+    }
+    read_firebaserc(dir)
+}
+
 /// Resolves `--project` against the already-read `.firebaserc`, when there is one.
 fn resolve_project(
     rc: Option<&serde_json::Value>,
@@ -925,7 +964,7 @@ enum ConfigOrigin {
     /// `--config` or `--firebase-json` named them.
     Flags,
     /// Neither flag: the working directory was searched (see `config_discovery`).
-    Discovered(config_discovery::Discovered),
+    Discovered(config_discovery::Discovery),
     /// `--no-config-discovery`.
     DiscoveryOff,
     /// Neither flag, and the working directory could not be read.
@@ -944,13 +983,44 @@ fn discover_project_config(raw: &mut RawOptions) -> ConfigOrigin {
     let Ok(cwd) = std::env::current_dir() else {
         return ConfigOrigin::NoWorkingDirectory;
     };
-    let found = config_discovery::discover(&cwd, Path::is_file);
-    match &found {
+    let discovery = config_discovery::discover(
+        &cwd,
+        config_discovery::current_user(),
+        config_discovery::stat,
+    );
+    match &discovery.found {
         config_discovery::Discovered::Canonical(path) => raw.config_path = Some(path.clone()),
         config_discovery::Discovered::FirebaseJson(path) => raw.firebase_json = Some(path.clone()),
         config_discovery::Discovered::Nothing => {}
     }
-    ConfigOrigin::Discovered(found)
+    if let Some(skipped) = &discovery.skipped {
+        // A refused candidate never fails the run, but it must not go unnoticed either.
+        eprintln!("{}", skipped_config_warning(skipped));
+    }
+    ConfigOrigin::Discovered(discovery)
+}
+
+/// The warning for a candidate the search refused to load.
+fn skipped_config_warning(skipped: &config_discovery::Skipped) -> String {
+    format!(
+        "warning: config discovery skipped {}: {}, so it may have been put there by someone else; built-in defaults apply (name a file with --config or --firebase-json to load it anyway)",
+        diagnostic_path(&skipped.path),
+        diagnostic_text(&skipped.reason)
+    )
+}
+
+/// The suffix of an error about a file the search found rather than one the user named.
+const DISCOVERED_FILE_HINT: &str = "(this file was found by searching from the working directory, not named on the command line; pass --config or --firebase-json to choose the file, or --no-config-discovery to use none; a firebase.json in a directory you cannot enter is not seen, so a higher one may have been found)";
+
+/// Adds [`DISCOVERED_FILE_HINT`] to a failure while reading discovered configuration.
+fn note_discovered(origin: &ConfigOrigin) -> impl Fn(CliError) -> CliError + '_ {
+    move |mut error| {
+        if matches!(origin, ConfigOrigin::Discovered(d) if d.found != config_discovery::Discovered::Nothing)
+        {
+            error.message = format!("{} {DISCOVERED_FILE_HINT}", error.message);
+        }
+        error
+    }
 }
 
 /// How the loaded `firebase.json` was reached.
@@ -976,16 +1046,25 @@ fn config_origin_line(origin: &ConfigOrigin, sources: &ConfigSources) -> String 
     use config_discovery::Discovered;
     const DEFAULTS: &str = "built-in defaults apply, so no Security Rules are loaded";
     let how = match origin {
-        ConfigOrigin::Discovered(Discovered::Nothing) => {
-            return format!(
-                "none found (no fireemu.json in the working directory, no firebase.json in it or its parents); {DEFAULTS}"
-            )
+        ConfigOrigin::Discovered(discovery) if discovery.found == Discovered::Nothing => {
+            return match &discovery.skipped {
+                Some(skipped) => format!(
+                    "none loaded: {} was skipped because it {} (see the warning); {DEFAULTS}",
+                    diagnostic_path(&skipped.path),
+                    diagnostic_text(&skipped.reason)
+                ),
+                None => format!(
+                    "none found (no fireemu.json in the working directory, no firebase.json in it or the parents the search may enter); {DEFAULTS}"
+                ),
+            }
         }
         ConfigOrigin::DiscoveryOff => return format!("none (--no-config-discovery); {DEFAULTS}"),
         ConfigOrigin::NoWorkingDirectory => {
             return format!("none (the working directory cannot be read); {DEFAULTS}")
         }
-        ConfigOrigin::Discovered(Discovered::FirebaseJson(path)) if path.is_absolute() => {
+        ConfigOrigin::Discovered(discovery)
+            if matches!(&discovery.found, Discovered::FirebaseJson(path) if path.is_absolute()) =>
+        {
             "found in a parent of the working directory, as firebase-tools finds it"
         }
         ConfigOrigin::Discovered(_) => "found in the working directory",
@@ -1000,29 +1079,44 @@ fn config_origin_line(origin: &ConfigOrigin, sources: &ConfigSources) -> String 
         Some((path, via)) => {
             let how = match via {
                 FirebaseJsonVia::Reference => "its firebaseJson entry",
-                FirebaseJsonVia::ConfigFlag => "--config",
+                FirebaseJsonVia::ConfigFlag if how.is_empty() => "--config",
                 FirebaseJsonVia::FirebaseJsonFlag if how.is_empty() => "--firebase-json",
-                FirebaseJsonVia::FirebaseJsonFlag => how,
+                FirebaseJsonVia::ConfigFlag | FirebaseJsonVia::FirebaseJsonFlag => how,
             };
             parts.push(format!("{} ({how})", diagnostic_path(path)));
         }
         None => {
-            // A firebase.json next to a canonical configuration that does not reference it
-            // is easy to mistake for a loaded one.
+            // A firebase.json next to (or above) a canonical configuration that does not
+            // reference it is easy to mistake for a loaded one, for example after `init` in a
+            // subdirectory of a Firebase project.
             if let Some(canonical) = &sources.canonical {
-                if project_dir(canonical)
-                    .join(config_discovery::FIREBASE_FILE)
-                    .is_file()
-                {
-                    parts.push(
-                        "firebase.json beside it is not loaded (the canonical configuration has no firebaseJson entry)"
-                            .to_owned(),
-                    );
+                if let Some(unloaded) = unreferenced_firebase_json(canonical) {
+                    parts.push(unloaded);
                 }
             }
         }
     }
     parts.join("; ")
+}
+
+/// The nearest `firebase.json` at or above a canonical configuration that does not reference
+/// one, described for the banner.
+fn unreferenced_firebase_json(canonical: &Path) -> Option<String> {
+    let dir = std::path::absolute(project_dir(canonical)).ok()?;
+    let (depth, found) = dir
+        .ancestors()
+        .map(|d| d.join(config_discovery::FIREBASE_FILE))
+        .enumerate()
+        .find(|(_, candidate)| candidate.is_file())?;
+    Some(if depth == 0 {
+        "firebase.json beside it is not loaded (the canonical configuration has no firebaseJson entry)"
+            .to_owned()
+    } else {
+        format!(
+            "{} in a parent directory is not loaded (the canonical configuration has no firebaseJson entry)",
+            diagnostic_path(&found)
+        )
+    })
 }
 
 fn load_project_config(
@@ -1083,9 +1177,14 @@ fn parse_options(
     let positional_script = raw.positional_script.clone();
     let only = raw.only.clone().unwrap_or_default();
     let origin = discover_project_config(&mut raw);
-    let (mut cfg, project_root, sources) = load_project_config(&raw, &only)?;
+    let (mut cfg, project_root, sources) =
+        load_project_config(&raw, &only).map_err(note_discovered(&origin))?;
     let config_origin = config_origin_line(&origin, &sources);
-    let rc = read_firebaserc(&project_root)?;
+    let rc = if matches!(origin, ConfigOrigin::Discovered(_)) {
+        discovered_firebaserc(&project_root).map_err(note_discovered(&origin))?
+    } else {
+        read_firebaserc(&project_root)?
+    };
     if let Some(project) = resolve_project(rc.as_ref(), raw.project.as_deref())? {
         // The alias, when `--project` named one, is what a codebase's `.env.<alias>` file is
         // keyed by (`findEnvfiles`). A `--project` value that is already a project ID is not

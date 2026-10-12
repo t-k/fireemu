@@ -126,14 +126,18 @@ pub struct StorageRulesRegistry {
     /// Where the refusal of an end-user request for want of rules is reported, once per bucket:
     /// the client only sees production's (or the official emulator's) answer.
     no_rules_notice: std::sync::RwLock<Option<NoRulesNotice>>,
-    /// The buckets already reported to `no_rules_notice`.
-    noticed_without_rules: Mutex<std::collections::BTreeSet<String>>,
+    /// The buckets already reported to `no_rules_notice`. The bucket name comes from the
+    /// client, hence the limit.
+    noticed_without_rules: Mutex<NoticeLimit>,
 }
 
+pub use fireemu_adapter_support::notice_limit::{NoticeEvent, NoticeLimit};
+
 /// Told the bucket name the first time an end-user request on that bucket is refused because no
-/// Storage Rules are loaded for it (see [`StorageRulesRegistry::set_no_rules_notice`]).
+/// Storage Rules are loaded for it, for at most [`NoticeLimit::LIMIT`] buckets (see
+/// [`StorageRulesRegistry::set_no_rules_notice`]).
 #[derive(Clone)]
-pub struct NoRulesNotice(pub Arc<dyn Fn(&str) + Send + Sync>);
+pub struct NoRulesNotice(pub Arc<dyn Fn(NoticeEvent<'_>) + Send + Sync>);
 
 impl std::fmt::Debug for NoRulesNotice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -207,12 +211,13 @@ impl StorageRulesRegistry {
         let Some(notice) = self.no_rules_notice.read().ok().and_then(|n| n.clone()) else {
             return;
         };
-        let first = self
+        let event = self
             .noticed_without_rules
             .lock()
-            .is_ok_and(|mut noticed| noticed.insert(bucket.to_owned()));
-        if first {
-            (notice.0)(bucket);
+            .ok()
+            .and_then(|mut limit| limit.observe(bucket));
+        if let Some(event) = event {
+            (notice.0)(event);
         }
     }
 

@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use fireemu_adapter_grpc::rules::{Principal, RulesEnforcer};
+use fireemu_adapter_grpc::rules::{NoticeEvent, NoticeLimit, Principal, RulesEnforcer};
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::path::DocumentPath;
@@ -16,6 +16,7 @@ use fireemu_core_types::time::LogicalInstant;
 use proptest::prelude::*;
 
 const DATABASES: [&str; 3] = ["(default)", "staging", "archive"];
+const SUPPRESSED: &str = "<suppressed>";
 
 fn enforcer(refuse: bool, rules: Option<&str>, notices: &Arc<Mutex<Vec<String>>>) -> RulesEnforcer {
     let slot = Arc::new(rules.map_or_else(RulesetSlot::default, |source| {
@@ -32,8 +33,11 @@ fn enforcer(refuse: bool, rules: Option<&str>, notices: &Arc<Mutex<Vec<String>>>
     let sink = notices.clone();
     RulesEnforcer::new(slot, auth, clock)
         .with_refusal_without_ruleset(refuse)
-        .with_no_ruleset_notice(Arc::new(move |database| {
-            sink.lock().unwrap().push(database.to_owned());
+        .with_no_ruleset_notice(Arc::new(move |event| {
+            sink.lock().unwrap().push(match event {
+                NoticeEvent::First(database) => database.to_owned(),
+                NoticeEvent::Suppressed => SUPPRESSED.to_owned(),
+            });
         }))
 }
 
@@ -131,4 +135,33 @@ proptest! {
         }
         prop_assert_eq!(&*notices.lock().unwrap(), &expected);
     }
+}
+
+/// Database IDs reach the enforcer from requests (a strict run with implicit database creation
+/// admits new ones), so the reported set is bounded: the limit, then one suppression notice.
+#[test]
+fn reports_stop_after_the_limit_with_one_suppression_notice() {
+    let notices = Arc::new(Mutex::new(Vec::new()));
+    let enforcer = enforcer(true, None, &notices);
+    for round in 0..2 {
+        for i in 0..(NoticeLimit::LIMIT + 10) {
+            let status = enforcer
+                .authorize_get(
+                    &Principal::Anonymous,
+                    &path(&format!("db{i}")),
+                    None,
+                    &NoDocumentAccess,
+                )
+                .unwrap_err();
+            assert_eq!(
+                status.message(),
+                "Missing or insufficient permissions.",
+                "round {round}"
+            );
+        }
+    }
+    let notices = notices.lock().unwrap();
+    assert_eq!(notices.len(), NoticeLimit::LIMIT + 1);
+    assert_eq!(notices[NoticeLimit::LIMIT], SUPPRESSED);
+    assert_eq!(notices[0], "db0");
 }

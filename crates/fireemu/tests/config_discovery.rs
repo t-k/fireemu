@@ -648,3 +648,49 @@ fn a_discovered_firebase_shaped_fireemu_json_is_labelled_as_found() {
         "{banner}"
     );
 }
+
+/// With explicit flags or with discovery off, the `.firebaserc` in the working directory names
+/// the project as it did before discovery.
+#[test]
+fn explicit_flags_and_no_discovery_read_the_firebaserc_as_before() {
+    let dir = scratch("explicit-firebaserc");
+    firebase_project(&dir);
+    write(
+        &dir.join(".firebaserc"),
+        r#"{"projects": {"default": "demo-explicit-rc"}}"#,
+    );
+    for extra in [
+        &["--firebase-json", "firebase.json"][..],
+        &["--no-config-discovery"][..],
+    ] {
+        let (output, project) = exec_in(&dir, extra);
+        assert_eq!(
+            project,
+            "demo-explicit-rc",
+            "{extra:?}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+/// A FIFO named firebase.json is opened without blocking and is not a candidate, as
+/// firebase-tools' `isFile` check skips it; the search goes on to the parent.
+#[cfg(unix)]
+#[test]
+fn a_fifo_named_firebase_json_neither_blocks_nor_counts() {
+    let dir = scratch("fifo");
+    firebase_project(&dir);
+    let sub = dir.join("sub");
+    mkdir(&sub);
+    let status = Command::new("mkfifo")
+        .arg(sub.join("firebase.json"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let (output, _) = exec_in(&sub, &[]);
+    let banner = stdout(&output);
+    assert!(
+        line(&banner, "config:").contains("found in a parent"),
+        "{banner}"
+    );
+}

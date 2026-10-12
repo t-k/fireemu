@@ -894,9 +894,14 @@ fn discovered_project_dir() -> PathBuf {
 
 /// Reads the `.firebaserc` of a directory the search reached, unless the user does not control it
 /// (see `config_discovery`); a refused one is reported and ignored.
-/// `dir` is the working directory when it is `.`.
+/// Whether a project directory from `project_dir` or `discovered_project_dir` is the working
+/// directory, whose owner discovery does not check.
+fn is_working_directory(dir: &Path) -> bool {
+    dir == Path::new(".")
+}
+
 fn discovered_firebaserc(dir: &Path) -> Result<Option<serde_json::Value>, CliError> {
-    let working = dir == Path::new(".");
+    let working = is_working_directory(dir);
     let absolute = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
     match config_discovery::open_firebaserc(
         &absolute,
@@ -2998,6 +3003,60 @@ fn logical_system_time(system_time: std::time::SystemTime) -> LogicalInstant {
 #[cfg(test)]
 mod config_reload_tests {
     use super::*;
+
+    /// The project directories discovery yields: `.` for the working directory, the parent's
+    /// path otherwise.
+    #[test]
+    fn only_the_dot_project_directory_is_the_working_directory() {
+        assert!(is_working_directory(&project_dir(Path::new(
+            "firebase.json"
+        ))));
+        assert!(is_working_directory(Path::new(".")));
+        assert!(!is_working_directory(&project_dir(Path::new(
+            "/p/firebase.json"
+        ))));
+        assert!(!is_working_directory(Path::new("..")));
+    }
+
+    /// The file discovery found is parsed from the text read on the handle it was judged by,
+    /// never re-read; any other path is read from disk.
+    #[test]
+    fn a_discovered_file_is_parsed_from_the_judged_text() {
+        let dir = scratch("judged-text");
+        let found = dir.join("firebase.json");
+        let other = dir.join("other.json");
+        std::fs::write(&found, r#"{"hosting": {"public": "replaced"}}"#).unwrap();
+        std::fs::write(&other, r#"{"hosting": {"public": "other"}}"#).unwrap();
+        let raw = RawOptions {
+            discovered_text: Some((
+                found.clone(),
+                Ok(r#"{"hosting": {"public": "judged"}}"#.to_owned()),
+            )),
+            ..RawOptions::default()
+        };
+        let (json, canonical) =
+            config_document(&raw, &found).unwrap_or_else(|e| panic!("{}", e.message));
+        assert!(!canonical);
+        assert_eq!(json["hosting"]["public"], "judged");
+        let (json, _) = config_document(&raw, &other).unwrap_or_else(|e| panic!("{}", e.message));
+        assert_eq!(json["hosting"]["public"], "other");
+        // A read failure on the judged handle is reported, not retried from disk.
+        let raw = RawOptions {
+            discovered_text: Some((
+                found.clone(),
+                Err("stream did not contain valid UTF-8".to_owned()),
+            )),
+            ..RawOptions::default()
+        };
+        let Err(error) = config_document(&raw, &found) else {
+            panic!("a failed read on the judged handle must be reported");
+        };
+        assert!(
+            error.message.contains("cannot read") && error.message.contains("UTF-8"),
+            "{}",
+            error.message
+        );
+    }
     use fireemu_adapter_grpc::gateway::Gateway;
     use fireemu_core_firestore::index::IndexValidationPolicy;
     use fireemu_core_firestore::index::{IndexSet, PlanningContext};

@@ -251,13 +251,6 @@ pub(crate) fn current_trust() -> Trust {
 }
 
 /// A directory's metadata, following symbolic links.
-#[cfg(unix)]
-pub(crate) fn stat(path: &Path) -> Option<Stat> {
-    std::fs::metadata(path).ok().map(|m| stat_of(&m))
-}
-
-/// A directory's metadata; ownership is not checked off Unix.
-#[cfg(not(unix))]
 pub(crate) fn stat(path: &Path) -> Option<Stat> {
     std::fs::metadata(path).ok().map(|m| stat_of(&m))
 }

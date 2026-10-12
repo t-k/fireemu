@@ -31,7 +31,7 @@ import {
   createReplayClient,
   publishTimeAuthorized,
 } from "./replay-native.mjs";
-import { createDescriptiveDifferences } from "./descriptive.mjs";
+import { selectDescriptiveMode } from "./descriptive.mjs";
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 function pinned(path, digest, max = 1000000) {
   const stat = lstatSync(path);
@@ -128,12 +128,7 @@ function descriptiveEvidence(row, sourceCells, localCells) {
 }
 // The descriptive mode needs the explicit flag and an emulator-profile launch config.
 export function descriptiveModeFor(mode, launch) {
-  if (mode === undefined) return null;
-  if (mode !== "descriptive") throw new Error("replay mode refused");
-  if (!launch || typeof launch.config !== "string" || typeof launch.configSha256 !== "string")
-    throw new Error("descriptive replay launch config required");
-  const config = JSON.parse(pinned(launch.config, launch.configSha256));
-  return createDescriptiveDifferences({ profile: config.profile, mode });
+  return selectDescriptiveMode(mode, launch, pinned);
 }
 export async function replayA(
   input,

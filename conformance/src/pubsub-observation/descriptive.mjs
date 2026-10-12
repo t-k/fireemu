@@ -145,3 +145,15 @@ export function createDescriptiveDifferences({ profile, mode } = {}) {
     },
   };
 }
+
+// Selects the mode for a replay worker: null without the flag; otherwise the flag must be
+// "descriptive" and the pinned launch config (read with the caller's pinned reader) must carry the
+// emulator profile.
+export function selectDescriptiveMode(mode, launch, readPinned) {
+  if (mode === undefined) return null;
+  if (mode !== DESCRIPTIVE_MODE) throw new Error("replay mode refused");
+  if (!launch || typeof launch.config !== "string" || typeof launch.configSha256 !== "string")
+    throw new Error("descriptive replay launch config required");
+  const config = JSON.parse(readPinned(launch.config, launch.configSha256));
+  return createDescriptiveDifferences({ profile: config?.profile, mode });
+}

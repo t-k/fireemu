@@ -9,6 +9,7 @@ import {
   boundedMessage,
   classifyDifference,
   createDescriptiveDifferences,
+  selectDescriptiveMode,
 } from "./pubsub-observation/descriptive.mjs";
 import { descriptiveModeFor, options, replayA } from "./pubsub-observation/replay.mjs";
 import { fixture } from "./pubsub-production-observation-compare.test.mjs";
@@ -341,4 +342,34 @@ test("replay options keep every pin required and accept only an optional mode", 
   assert.throws(() => options([...base, "--mode", "a", "--mode", "b"]), /unique/);
   assert.throws(() => options([...base, "--profile", "emulator"]), /unique/);
   assert.throws(() => options([...base, "--mode"]), /unique/);
+});
+
+test("mode selection reads the launch config only through the caller's pinned reader", () => {
+  const reads = [];
+  const reader = (body) => (path, digest) => {
+    reads.push([path, digest]);
+    return Buffer.from(body);
+  };
+  const launch = { config: "/c.json", configSha256: "d".repeat(64) };
+  assert.equal(selectDescriptiveMode(undefined, launch, reader("{}")), null);
+  assert.deepEqual(reads, []);
+  assert.equal(
+    selectDescriptiveMode("descriptive", launch, reader('{"profile":"emulator"}')).profile,
+    "emulator",
+  );
+  assert.deepEqual(reads, [["/c.json", "d".repeat(64)]]);
+  for (const body of ['{"profile":"strict"}', "{}", "null", '{"profile":["emulator"]}'])
+    assert.throws(
+      () => selectDescriptiveMode("descriptive", launch, reader(body)),
+      /requires the emulator profile/,
+    );
+  for (const bad of [
+    { config: "/c.json" },
+    { configSha256: "d" },
+    { config: 1, configSha256: "d" },
+  ])
+    assert.throws(
+      () => selectDescriptiveMode("descriptive", bad, reader('{"profile":"emulator"}')),
+      /launch config required/,
+    );
 });

@@ -1702,7 +1702,7 @@ fn json_response(
     let body = crate::rest_json::encode(&value, policy, schema);
     Response::builder()
         .status(status)
-        .header("content-type", "application/json")
+        .header("content-type", "application/json; charset=UTF-8")
         .body(Body::from(body))
         .expect("valid JSON response")
 }

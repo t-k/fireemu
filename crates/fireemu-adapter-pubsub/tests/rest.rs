@@ -3640,3 +3640,129 @@ async fn recorded_snapshot_and_seek_refusals_preserve_profile_diagnostics() {
         );
     }
 }
+
+/// Returns the status and every `Content-Type` header value of one raw REST exchange.
+async fn rest_content_types(
+    address: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    extra_headers: &str,
+    body: &[u8],
+) -> (u16, Vec<String>) {
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{extra_headers}Connection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    stream.write_all(body).await.unwrap();
+    let mut response = Vec::new();
+    // A refusal may close with the request body unread, so a reset after the head is fine.
+    let _ = stream.read_to_end(&mut response).await;
+    let head_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap_or_else(|| {
+            panic!(
+                "raw HTTP response: {:?}",
+                String::from_utf8_lossy(&response)
+            )
+        });
+    let head = std::str::from_utf8(&response[..head_end]).unwrap();
+    let mut lines = head.lines();
+    let status = lines
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap();
+    let content_types = lines
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-type")
+                .then(|| value.trim().to_owned())
+        })
+        .collect();
+    (status, content_types)
+}
+
+type Case<'a> = (&'a str, &'a str, &'a str, &'a [u8], u16, bool);
+
+const PRODUCTION_JSON_CONTENT_TYPE: &str = "application/json; charset=UTF-8";
+
+#[tokio::test]
+async fn every_rest_json_response_sends_the_production_charset_content_type_in_both_profiles() {
+    use fireemu_adapter_pubsub::PagingPolicy;
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        let address = start_policy(policy).await;
+        let create = b"{}".as_slice();
+        // (method, path, extra headers, body, expected status, applies to this profile)
+        let cases: [Case; 6] = [
+            (
+                "PUT",
+                "/v1/projects/demo-app/topics/ctype",
+                "",
+                create,
+                200,
+                true,
+            ),
+            (
+                "PUT",
+                "/v1/projects/demo-app/topics/ctype",
+                "",
+                create,
+                409,
+                true,
+            ),
+            (
+                "GET",
+                "/v1/projects/demo-app/topics/missing",
+                "",
+                create,
+                404,
+                true,
+            ),
+            (
+                "PUT",
+                "/v1/projects/demo-app/topics/ctype2",
+                "",
+                b"{not json",
+                400,
+                true,
+            ),
+            ("GET", "/v1/projects/demo-app/topics", "", create, 200, true),
+            (
+                "GET",
+                "/v1/projects/demo-app/topics/ctype",
+                "Authorization: Bearer x\r\n",
+                create,
+                401,
+                policy == PagingPolicy::Strict,
+            ),
+        ];
+        for (method, path, headers, body, expected, applies) in cases {
+            if !applies {
+                continue;
+            }
+            let (status, content_types) =
+                rest_content_types(address, method, path, headers, body).await;
+            assert_eq!(status, expected, "{policy:?} {method} {path}");
+            assert_eq!(
+                content_types,
+                [PRODUCTION_JSON_CONTENT_TYPE],
+                "{policy:?} {method} {path} status {status}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_strict_route_not_found_page_keeps_its_html_content_type() {
+    let address = start_policy(fireemu_adapter_pubsub::PagingPolicy::Strict).await;
+    let (status, content_types) =
+        rest_content_types(address, "GET", "/v1/unknown-resource", "", b"{}").await;
+    assert_eq!(status, 404);
+    assert_eq!(content_types, ["text/html; charset=UTF-8"]);
+}

@@ -45,6 +45,7 @@ const CONFORMANCE = join(ROOT, "conformance");
 const RUNS_DIR = join(CONFORMANCE, ".runs");
 const CLOSURE_DIR = "spec/compatibility/closure";
 const EVENTARC_GZIP = `${CLOSURE_DIR}/evidence/EVENTARC-comparison.json.gz`;
+const PUBSUB_COMPARISON = `${CLOSURE_DIR}/evidence/PUBSUB-comparison.json`;
 
 /** Read the canonical EVENTARC gzip without changing its original JSON bytes. */
 export function readReleaseJson(root, path) {
@@ -461,9 +462,16 @@ export const EXCLUDED_PARTS = [
  * Comparison kinds a COMPAT_VERIFIED closure names that no run reproduces yet, with why and where
  * the missing run is tracked (owner decision 2026-09-29: v0.9.0 is released with these disclosed).
  * Every other comparison a verified closure names is rerun. A kind here must not also have a run,
- * and must be named by a verified closure.
+ * and must be named by a verified closure (or by the PUBSUB closure registered before its parent
+ * review).
  */
 export const EXCLUDED_KINDS = [
+  {
+    kind: "pubsub-production-comparison-v1",
+    reason:
+      "the per-case adjudication pairs LOCAL strict replays on the release binary named by the closure with private production recordings (two original passes plus targeted observation sets) through replay harnesses kept outside this tree; the recordings and the harnesses must be published and given a check and an export-comparison mode before the release job can rerun them; the closure is registered before its parent review",
+    issue: "pubsub-comparison-needs-the-recordings-in-the-release-job.md",
+  },
   {
     kind: "scheduled-functions-calendar-comparison-v1",
     reason:
@@ -634,7 +642,21 @@ export function planComparisons(
     const parent = parentName(entry);
     const comparisons = entry.closure.integratedRegression?.comparisons;
     const pendingEventarc = parent === "EVENTARC" && entry.closure.parentStatus === "IMPLEMENTING";
-    if (entry.closure.parentStatus !== "COMPAT_VERIFIED" && !pendingEventarc) continue;
+    // PUBSUB registers its per-case comparison (a disclosed exclusion) before the parent review.
+    const pendingPubsub = parent === "PUBSUB" && entry.closure.parentStatus === "IMPLEMENTING";
+    if (entry.closure.parentStatus !== "COMPAT_VERIFIED" && !pendingEventarc && !pendingPubsub)
+      continue;
+    if (
+      pendingPubsub &&
+      (!Array.isArray(comparisons) ||
+        comparisons.length !== 1 ||
+        comparisons[0]?.path !== PUBSUB_COMPARISON)
+    ) {
+      errors.push(
+        "PUBSUB: the disclosed per-case comparison requires its integratedRegression entry",
+      );
+      continue;
+    }
     if (
       pendingEventarc &&
       (!Array.isArray(comparisons) ||

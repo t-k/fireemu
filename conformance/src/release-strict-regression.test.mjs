@@ -450,12 +450,61 @@ test("the excluded kinds are exactly the ones the release discloses", () => {
     "auth-fs-cross-stage2-comparison-v1",
     "fs-listen-sdk-comparison-v1",
     "functions-events-comparison",
+    "pubsub-production-comparison-v1",
     "scheduled-functions-calendar-comparison-v1",
     "scheduled-functions-comparison-v1",
     "storage-object-comparison-v1",
     "storage-rules-comparison-v2",
     "storage-rules-management-comparison-v1",
   ]);
+});
+
+const PUBSUB_COMPARISON = "spec/compatibility/closure/evidence/PUBSUB-comparison.json";
+
+test("the PUBSUB per-case comparison is disclosed while its closure awaits review", () => {
+  const closures = committedClosures();
+  const pubsub = closures.find(({ closure }) => closure.parent === "PUBSUB");
+  assert.equal(pubsub.closure.parentStatus, "IMPLEMENTING");
+  const plan = planComparisons(closures, readJson);
+  assert.deepEqual(plan.errors, []);
+  const excluded = plan.excluded.filter(({ parents }) => parents.includes("PUBSUB"));
+  assert.deepEqual(
+    excluded.map(({ path, kind, parents }) => ({ path, kind, parents })),
+    [{ path: PUBSUB_COMPARISON, kind: "pubsub-production-comparison-v1", parents: ["PUBSUB"] }],
+  );
+  // The same disclosure serves the promoted closure.
+  pubsub.closure.parentStatus = "COMPAT_VERIFIED";
+  assert.deepEqual(planComparisons(closures, readJson).errors, []);
+});
+
+test("a pending PUBSUB closure must name exactly its per-case comparison", () => {
+  for (const change of [
+    (closure) => delete closure.integratedRegression,
+    (closure) => (closure.integratedRegression.comparisons = []),
+    (closure) => (closure.integratedRegression.comparisons[0].path = "other/comparison.json"),
+    (closure) =>
+      closure.integratedRegression.comparisons.push({ path: PUBSUB_COMPARISON, sha256: "0" }),
+  ]) {
+    const closures = committedClosures();
+    change(closures.find(({ closure }) => closure.parent === "PUBSUB").closure);
+    const read = (path) =>
+      path === "other/comparison.json"
+        ? { kind: "pubsub-production-comparison-v1" }
+        : readJson(path);
+    assert.ok(
+      planComparisons(closures, read).errors.some((error) =>
+        error.startsWith("PUBSUB: the disclosed per-case comparison"),
+      ),
+      String(change),
+    );
+  }
+});
+
+test("the PUBSUB per-case comparison without its disclosure stops the release", () => {
+  const plan = planComparisons(committedClosures(), readJson, {
+    excludedKinds: EXCLUDED_KINDS.filter(({ kind }) => kind !== "pubsub-production-comparison-v1"),
+  });
+  assert.ok(plan.errors.some((error) => error.includes("pubsub-production-comparison-v1")));
 });
 
 test("scheduled exclusions are used by a verified closure", () => {

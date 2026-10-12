@@ -494,12 +494,9 @@ pub fn is_unsigned_token(token: &str) -> bool {
     else {
         return false;
     };
-    match parse(&header) {
-        Ok(value @ JsonValue::Object(_)) => {
-            value.get("alg").and_then(JsonValue::as_str) == Some("none")
-        }
-        _ => false,
-    }
+    // `get` answers `None` for anything but an object, so a header that is no JSON object
+    // never counts as unsigned.
+    parse(&header).is_ok_and(|value| value.get("alg").and_then(JsonValue::as_str) == Some("none"))
 }
 
 /// Decodes a token and checks its signature: with a `signer` the token must carry the

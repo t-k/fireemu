@@ -558,6 +558,23 @@ Check support for the specific APIs and conditions your application uses, rather
 
 Like the official emulator, the Storage port reflects the requested object name in the HTML body of its 404 for a missing media read (`text/html`, as production answers). A web page opened on the developer's machine could therefore run script on that origin. Keep the emulator bound to localhost, which is the default, and do not expose the Storage port to other hosts or networks. The strict profile sends no `X-Content-Type-Options: nosniff` on the JSON API answers where production sends none, so it does not add that defence in depth; the emulator profile keeps the official emulator's header.
 
+### Run in a container
+
+By default every listener is on loopback, which a published container port cannot reach. To serve the emulators to the host or to other containers, opt in with `network.allowNonLoopbackHosts` in `fireemu.json` and give the product emulators a host in `firebase.json`:
+
+```json
+{ "schemaVersion": 1, "firebaseJson": "firebase.json", "network": { "allowNonLoopbackHosts": true } }
+```
+
+```json
+{ "emulators": { "firestore": { "host": "0.0.0.0", "port": 8080 }, "auth": { "host": "0.0.0.0", "port": 9099 } } }
+```
+
+- Only Firestore, Auth, Storage, Functions, Eventarc, Cloud Tasks and Pub/Sub may listen off loopback. The Hub, the UI and the Logging emulator stay on loopback.
+- The emulators serve without a credential, so the start prints a `warning:` line for each listener off loopback. Publish the ports only to a network you trust.
+- The control API (`/v1/` and `/health/` on the Auth port) answers loopback peers only and returns 403 to any other peer. Run the commands that use it (`fireemu/testing`, `fireemu exec`, the UI) inside the container. The official routes that `@firebase/rules-unit-testing` calls (loading rules, clearing Firestore data) stay reachable as on the official emulator.
+- A listener on `0.0.0.0` or `::` is advertised as `127.0.0.1` or `::1` in the environment and the Hub, as the official CLI does.
+
 ### Changes between versions
 
 Configuration and behavior may change between releases. See the [CHANGELOG](CHANGELOG.md) for release changes.

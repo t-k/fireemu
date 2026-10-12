@@ -1194,6 +1194,10 @@ pub struct RuntimeConfig {
     /// Like the Hub's and UI's, a busy default port only disables logging; a busy explicit one
     /// is an error.
     pub logging_addr_explicit: bool,
+    /// `network.allowNonLoopbackHosts`: `emulators.<name>.host` of a product emulator may name
+    /// a non-loopback address such as `0.0.0.0` (a container). The Hub, the UI and the Logging
+    /// emulator stay on loopback, and the control API answers loopback peers only.
+    pub allow_non_loopback_hosts: bool,
     /// `emulators.singleProjectMode`. fireemu isolates every project into its own session, so
     /// this is recorded and published rather than enforced separately.
     pub single_project_mode: bool,
@@ -1483,6 +1487,7 @@ impl Default for RuntimeConfig {
             logging_addr: format!("127.0.0.1:{DEFAULT_LOGGING_PORT}"),
             logging_enabled: true,
             logging_addr_explicit: false,
+            allow_non_loopback_hosts: false,
             single_project_mode: false,
             functions_source: None,
             functions_codebases: Vec::new(),
@@ -1846,8 +1851,66 @@ fn loopback_host(host: &str, key: &str) -> Result<String, ConfigError> {
     }
 }
 
+/// The emulators whose `host` may name a non-loopback address once
+/// `network.allowNonLoopbackHosts` is set. The Hub, the UI and the Logging emulator are not
+/// among them: they are fireemu's own tooling and carry the control capability.
+const NETWORK_EXPOSABLE_EMULATORS: &[&str] = &[
+    "firestore",
+    "auth",
+    "storage",
+    "functions",
+    "eventarc",
+    "tasks",
+    "pubsub",
+];
+
+/// The host of `emulators.<name>.host`: loopback always, and an IP address of any interface
+/// (`0.0.0.0`, `::`, a LAN address) when `allow_non_loopback` is set and the emulator is a
+/// product one. A host name other than `localhost` is refused either way.
+fn emulator_host(
+    host: &str,
+    name: &str,
+    key: &str,
+    allow_non_loopback: bool,
+) -> Result<String, ConfigError> {
+    let exposable = NETWORK_EXPOSABLE_EMULATORS.contains(&name);
+    let loopback = loopback_host(host, key);
+    if loopback.is_ok() || (!allow_non_loopback && !exposable) {
+        return loopback;
+    }
+    if !allow_non_loopback {
+        return loopback.map_err(|ConfigError(message)| {
+            ConfigError(format!(
+                "{message}; to serve a container or another host, set network.allowNonLoopbackHosts to true in fireemu.json (the control API stays on loopback)"
+            ))
+        });
+    }
+    if !exposable {
+        return Err(ConfigError(format!(
+            "{key} {host:?}: the {name} emulator stays on loopback even with network.allowNonLoopbackHosts; only the product emulators ({}) may listen on another address",
+            NETWORK_EXPOSABLE_EMULATORS.join(", ")
+        )));
+    }
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(host);
+    match bare.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(address)) => Ok(address.to_string()),
+        Ok(std::net::IpAddr::V6(address)) => Ok(format!("[{address}]")),
+        Err(_) => Err(ConfigError(format!(
+            "{key} {host:?}: with network.allowNonLoopbackHosts a host must be localhost or an IP address (for example 0.0.0.0 or ::)"
+        ))),
+    }
+}
+
 /// Reads `host` and `port` of one `emulators.<name>` entry onto the current address.
-fn emulator_addr(entry: &Value, name: &str, current: &str) -> Result<String, ConfigError> {
+fn emulator_addr(
+    entry: &Value,
+    name: &str,
+    current: &str,
+    allow_non_loopback: bool,
+) -> Result<String, ConfigError> {
     let obj = entry
         .as_object()
         .ok_or_else(|| ConfigError(format!("firebase.json: emulators.{name} must be an object")))?;
@@ -1862,7 +1925,12 @@ fn emulator_addr(entry: &Value, name: &str, current: &str) -> Result<String, Con
                     "firebase.json: emulators.{name}.host must be a string"
                 ))
             })?;
-            loopback_host(text, &format!("firebase.json: emulators.{name}.host"))?
+            emulator_host(
+                text,
+                name,
+                &format!("firebase.json: emulators.{name}.host"),
+                allow_non_loopback,
+            )?
         }
     };
     let port = match obj.get("port") {
@@ -2329,39 +2397,86 @@ impl RuntimeConfig {
                         })?;
                     }
                     "firestore" => {
-                        self.firestore_addr = emulator_addr(entry, name, &self.firestore_addr)?;
+                        self.firestore_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.firestore_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                     }
-                    "auth" => self.http_addr = emulator_addr(entry, name, &self.http_addr)?,
+                    "auth" => {
+                        self.http_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.http_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
+                    }
                     "storage" => {
-                        self.storage_addr = emulator_addr(entry, name, &self.storage_addr)?;
+                        self.storage_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.storage_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                     }
                     "functions" => {
-                        self.functions_addr = emulator_addr(entry, name, &self.functions_addr)?;
+                        self.functions_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.functions_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                     }
                     "eventarc" => {
-                        self.eventarc_addr = emulator_addr(entry, name, &self.eventarc_addr)?;
+                        self.eventarc_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.eventarc_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                         self.eventarc_enabled = true;
                         self.eventarc_addr_explicit = entry
                             .as_object()
                             .is_some_and(|entry| entry.contains_key("port"));
                     }
                     "tasks" => {
-                        self.tasks_addr = emulator_addr(entry, name, &self.tasks_addr)?;
+                        self.tasks_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.tasks_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                         self.tasks_enabled = true;
                         self.tasks_addr_explicit = entry
                             .as_object()
                             .is_some_and(|entry| entry.contains_key("port"));
                     }
                     "pubsub" => {
-                        self.pubsub_addr = emulator_addr(entry, name, &self.pubsub_addr)?;
+                        self.pubsub_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.pubsub_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                         self.pubsub_enabled = true;
                     }
                     "hub" => {
-                        self.hub_addr = emulator_addr(entry, name, &self.hub_addr)?;
+                        self.hub_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.hub_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                         self.hub_addr_explicit = true;
                     }
                     "ui" => {
-                        let addr = emulator_addr(entry, name, &self.ui_addr)?;
+                        let addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.ui_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                         let enabled = entry.get("enabled").map_or(Ok(true), |v| {
                             v.as_bool().ok_or_else(|| {
                                 ConfigError(
@@ -2375,7 +2490,12 @@ impl RuntimeConfig {
                         self.ui_addr_explicit = true;
                     }
                     "logging" => {
-                        self.logging_addr = emulator_addr(entry, name, &self.logging_addr)?;
+                        self.logging_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.logging_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                         self.logging_enabled = !self.logging_addr.ends_with(":0");
                         self.logging_addr_explicit = true;
                     }
@@ -2906,6 +3026,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "profile",
     "productionExact",
     "bind",
+    "network",
     "projects",
     "limits",
     "firestore",
@@ -3827,6 +3948,25 @@ impl RuntimeConfig {
         }
         if let Some(bind) = obj.get("bind").and_then(Value::as_str) {
             loopback_host(bind, "bind")?;
+        }
+        if let Some(network) = obj.get("network") {
+            let network = network
+                .as_object()
+                .ok_or_else(|| ConfigError("network must be an object".to_owned()))?;
+            for (key, value) in network {
+                match key.as_str() {
+                    "allowNonLoopbackHosts" => {
+                        cfg.allow_non_loopback_hosts = value.as_bool().ok_or_else(|| {
+                            ConfigError(
+                                "network.allowNonLoopbackHosts must be a boolean".to_owned(),
+                            )
+                        })?;
+                    }
+                    other => {
+                        return Err(ConfigError(format!("unknown config key network.{other}")))
+                    }
+                }
+            }
         }
         if let Some(fs) = obj.get("firestore").and_then(Value::as_object) {
             if let Some(value) = fs.get("location") {
@@ -5417,6 +5557,118 @@ mod tests {
                 error.0
             );
         }
+    }
+
+    fn with_hosts(allow: Option<bool>, emulators: &Value) -> Result<RuntimeConfig, ConfigError> {
+        let mut canonical = json!({"schemaVersion": 1});
+        if let Some(allow) = allow {
+            canonical["network"] = json!({"allowNonLoopbackHosts": allow});
+        }
+        let mut cfg = RuntimeConfig::from_json(&canonical)?;
+        cfg.apply_firebase_json(
+            &json!({"emulators": emulators}),
+            std::path::Path::new("/proj"),
+            &Selection::default(),
+        )?;
+        Ok(cfg)
+    }
+
+    #[test]
+    fn a_non_loopback_product_host_needs_the_network_opt_in_and_names_it() {
+        for allow in [None, Some(false)] {
+            let error = with_hosts(
+                allow,
+                &json!({"firestore": {"host": "0.0.0.0", "port": 8080}}),
+            )
+            .expect_err("refused without the opt-in");
+            assert!(
+                error.0.contains("only loopback hosts are accepted"),
+                "{}",
+                error.0
+            );
+            assert!(
+                error.0.contains("network.allowNonLoopbackHosts"),
+                "{}",
+                error.0
+            );
+        }
+        let cfg = with_hosts(
+            Some(true),
+            &json!({
+                "firestore": {"host": "0.0.0.0", "port": 8080},
+                "auth": {"host": "::", "port": 9099},
+                "storage": {"host": "[::]", "port": 9199},
+                "functions": {"host": "192.168.1.10", "port": 5001},
+                "eventarc": {"host": "0.0.0.0", "port": 9299},
+                "tasks": {"host": "0.0.0.0", "port": 9499},
+                "pubsub": {"host": "0.0.0.0", "port": 8085},
+            }),
+        )
+        .unwrap();
+        assert_eq!(cfg.firestore_addr, "0.0.0.0:8080");
+        assert_eq!(cfg.http_addr, "[::]:9099");
+        assert_eq!(cfg.storage_addr, "[::]:9199");
+        assert_eq!(cfg.functions_addr, "192.168.1.10:5001");
+        assert_eq!(cfg.eventarc_addr, "0.0.0.0:9299");
+        assert_eq!(cfg.tasks_addr, "0.0.0.0:9499");
+        assert_eq!(cfg.pubsub_addr, "0.0.0.0:8085");
+        // Loopback spellings keep their normal form with the opt-in too.
+        let cfg = with_hosts(
+            Some(true),
+            &json!({"firestore": {"host": "::1", "port": 8080}}),
+        )
+        .unwrap();
+        assert_eq!(cfg.firestore_addr, "[::1]:8080");
+    }
+
+    #[test]
+    fn the_hub_ui_and_logging_stay_on_loopback_with_the_network_opt_in() {
+        for name in ["hub", "ui", "logging"] {
+            for allow in [None, Some(true)] {
+                let error = with_hosts(allow, &json!({name: {"host": "0.0.0.0", "port": 4400}}))
+                    .expect_err("tooling stays on loopback");
+                assert!(
+                    error.0.contains(&format!("emulators.{name}.host")),
+                    "{}",
+                    error.0
+                );
+                if allow == Some(true) {
+                    assert!(error.0.contains("stays on loopback"), "{}", error.0);
+                } else {
+                    assert!(
+                        !error.0.contains("network.allowNonLoopbackHosts"),
+                        "{}",
+                        error.0
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_host_name_is_refused_with_the_network_opt_in() {
+        let error = with_hosts(
+            Some(true),
+            &json!({"firestore": {"host": "example.com", "port": 8080}}),
+        )
+        .expect_err("a host name is not an address");
+        assert!(error.0.contains("an IP address"), "{}", error.0);
+    }
+
+    #[test]
+    fn the_network_section_is_validated() {
+        let e =
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "network": true})).unwrap_err();
+        assert!(e.0.contains("network must be an object"), "{}", e.0);
+        let e = RuntimeConfig::from_json(
+            &json!({"schemaVersion": 1, "network": {"allowNonLoopbackHosts": "yes"}}),
+        )
+        .unwrap_err();
+        assert!(e.0.contains("must be a boolean"), "{}", e.0);
+        let e = RuntimeConfig::from_json(&json!({"schemaVersion": 1, "network": {"other": 1}}))
+            .unwrap_err();
+        assert!(e.0.contains("unknown config key network.other"), "{}", e.0);
+        assert!(!RuntimeConfig::default().allow_non_loopback_hosts);
     }
 
     #[test]

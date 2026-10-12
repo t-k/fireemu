@@ -1479,6 +1479,32 @@ fn apply_inspect_functions(cfg: &mut RuntimeConfig, port: Option<u16>) -> Result
     Ok(())
 }
 
+/// The address a client on this host connects to for a listener bound to `addr`: the loopback
+/// address of its family for an unspecified one (`0.0.0.0`, `::`), `addr` otherwise.
+fn connectable(addr: std::net::SocketAddr) -> std::net::SocketAddr {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    match addr.ip() {
+        IpAddr::V4(ip) if ip.is_unspecified() => (Ipv4Addr::LOCALHOST, addr.port()).into(),
+        IpAddr::V6(ip) if ip.is_unspecified() => (Ipv6Addr::LOCALHOST, addr.port()).into(),
+        _ => addr,
+    }
+}
+
+/// One warning per product listener that is reachable from other hosts: the emulators serve
+/// without a credential, so a listener off loopback is worth a line at every start.
+fn network_exposure_warnings(listeners: &[(&str, Option<std::net::SocketAddr>)]) -> Vec<String> {
+    listeners
+        .iter()
+        .filter_map(|(name, addr)| addr.map(|addr| (name, addr)))
+        .filter(|(_, addr)| !addr.ip().to_canonical().is_loopback())
+        .map(|(name, addr)| {
+            format!(
+                "{name} listens on {addr}, reachable from other hosts without a credential (network.allowNonLoopbackHosts); the control API answers loopback peers only"
+            )
+        })
+        .collect()
+}
+
 /// The addresses the daemon actually bound, per service. `None` means the service was not
 /// selected and nothing listens for it.
 #[derive(Debug, Clone, Copy)]
@@ -4308,5 +4334,45 @@ mod loopback_peer_tests {
                 Err(_) => return,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod network_exposure_tests {
+    use super::{connectable, network_exposure_warnings};
+    use std::net::SocketAddr;
+
+    fn addr(text: &str) -> SocketAddr {
+        text.parse().unwrap()
+    }
+
+    #[test]
+    fn an_unspecified_listener_is_advertised_at_the_loopback_address_of_its_family() {
+        assert_eq!(connectable(addr("0.0.0.0:8080")), addr("127.0.0.1:8080"));
+        assert_eq!(connectable(addr("[::]:9099")), addr("[::1]:9099"));
+        for kept in ["127.0.0.1:1", "[::1]:2", "192.168.1.10:3", "[fe80::1]:4"] {
+            assert_eq!(connectable(addr(kept)), addr(kept), "{kept}");
+        }
+    }
+
+    #[test]
+    fn only_listeners_off_loopback_are_warned_about() {
+        let warnings = network_exposure_warnings(&[
+            ("firestore", Some(addr("0.0.0.0:8080"))),
+            ("auth", Some(addr("127.0.0.1:9099"))),
+            ("storage", None),
+            ("pubsub", Some(addr("[::]:8085"))),
+            ("tasks", Some(addr("[::1]:9499"))),
+        ]);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(
+            warnings[0].starts_with("firestore listens on 0.0.0.0:8080"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[1].starts_with("pubsub listens on [::]:8085"),
+            "{warnings:?}"
+        );
+        assert!(warnings[0].contains("control API answers loopback peers only"));
     }
 }

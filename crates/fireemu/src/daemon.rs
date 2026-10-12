@@ -1910,14 +1910,35 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             ui::Ui::Unavailable(note) => (None, Some(note)),
         };
         let ui_addr = ui_listener.as_ref().and_then(|l| l.local_addr().ok());
+        if !quiet {
+            for warning in super::network_exposure_warnings(&[
+                ("firestore", grpc_addr),
+                ("auth", auth_selected.then_some(http_addr)),
+                ("storage", storage_addr),
+                ("functions", functions_addr),
+                ("eventarc", eventarc_addr),
+                ("tasks", tasks_addr),
+                ("pubsub", pubsub_addr),
+            ]) {
+                eprintln!("warning: {warning}");
+            }
+        }
+        // A listener on every interface is advertised (environment, Hub, banner) at the
+        // loopback address of its family, which is how the official CLI advertises it.
+        let connectable = |addr: Option<std::net::SocketAddr>| addr.map(super::connectable);
+        let (grpc_addr, http_addr, storage_addr) = (
+            connectable(grpc_addr),
+            super::connectable(http_addr),
+            connectable(storage_addr),
+        );
         let addrs = BoundAddrs {
             firestore: grpc_addr,
             auth: auth_selected.then_some(http_addr),
             storage: storage_addr,
-            functions: functions_addr,
-            eventarc: eventarc_addr,
-            tasks: tasks_addr,
-            pubsub: pubsub_addr,
+            functions: connectable(functions_addr),
+            eventarc: connectable(eventarc_addr),
+            tasks: connectable(tasks_addr),
+            pubsub: connectable(pubsub_addr),
             hub: hub_addr,
             ui: ui_addr,
             logging: logging_addr,

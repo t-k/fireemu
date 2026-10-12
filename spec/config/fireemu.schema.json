@@ -53,6 +53,17 @@
       "description": "fireemu is run mostly by tests in CI and on a developer's machine, so where production needs setup a test should not have to do (signed tokens, signing keys, Admin API calls), the default is the development behaviour, in both profiles. true restores production's behaviour for every such default; an explicit key still decides over it. Requires the strict profile. docs/compatibility-contract.md (\"Development defaults\") lists the keys it moves."
     },
     "bind": { "type": "string", "default": "127.0.0.1" },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowNonLoopbackHosts": {
+          "type": "boolean",
+          "default": false,
+          "description": "Let emulators.<name>.host in firebase.json name a non-loopback IP address such as 0.0.0.0 or :: for the product emulators (firestore, auth, storage, functions, eventarc, tasks, pubsub), for example to publish them from a container. They serve without a credential, so every such listener is warned about at start. The Hub, the UI and the Logging emulator stay on loopback, and the control API (/v1/, /health/) answers loopback peers only."
+        }
+      }
+    },
     "projects": {
       "type": "object",
       "additionalProperties": false,

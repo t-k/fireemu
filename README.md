@@ -196,6 +196,7 @@ Fireemu is mostly run by tests, in CI and on a developer's machine. Where produc
 | Development default | Key | With `productionExact` |
 |---|---|---|
 | Unsigned emulator custom tokens are accepted | `auth.allowUnsignedCustomTokens` | refused |
+| Identity-provider sign-in accepts the fixture assertions and the sign-in widget (`/emulator/auth/handler`), for built-in, `oidc.*` and `saml.*` providers | `auth.idpAssertions` (`"fixture"`) | `"signed"`: OIDC ID tokens must verify with an `auth.idpSigners` key, SAML responses with the provider's certificates, and the fixture and built-in providers are refused |
 
 The start banner and `fireemu capabilities` report whether `productionExact` is set.
 
@@ -245,6 +246,7 @@ The `auth` section of `fireemu.json` lets you configure sign-in methods, passwor
 | Blocking functions before account creation or sign-in, and credential forwarding to those functions | `auth.blockingFunctions` |
 | Initial custom OIDC and SAML provider resources | `auth.providers.oidc`, `auth.providers.saml` |
 | Accept unsigned emulator custom tokens (default `true` in both profiles, `false` with `productionExact`) | `auth.allowUnsignedCustomTokens` |
+| Accept the fixture identity-provider assertions and sign-in widget (`"fixture"`, the default in both profiles), or verify signed assertions as production does (`"signed"`, `strict` only; the default with `productionExact` or `auth.idpSigners`) | `auth.idpAssertions` |
 | Public keys for verifying custom tokens and OIDC ID tokens | `auth.customTokenSigners`, `auth.idpSigners` |
 | Sign-up quota configuration and local quota-exceeded simulation | `auth.quota`, `auth.quotaSimulation` |
 
@@ -256,7 +258,7 @@ Declare `auth.authorizedDomains`, for example `["localhost", "app.test"]`, to se
 
 An Admin update changes the live list. A session reset restores the declared list, when present, and preserves an Admin-written list when no initial list was declared. Projects created later receive the declaration word for word, independently of the default project's live list; listing a particular project's `firebaseapp.com` or `web.app` domain therefore gives later projects that same domain. Clearing accounts leaves the live list alone. Auth export/import carries accounts without the domain list or its declaration. The `emulator` profile accepts the setting and exposes the list, while continuing to allow action-link continue URLs outside it.
 
-Declare project OIDC and SAML resources with `auth.providers.oidc` and `auth.providers.saml`, using the Admin v2 resource fields and an ID-only `name` such as `oidc.fixture` or `saml.fixture`. Full resource names are refused. For example, `"providers": {"oidc": [{"name": "oidc.fixture", "enabled": true, "clientId": "local-client", "issuer": "https://issuer.test", "responseType": {"idToken": true}}]}` initializes that provider in both profiles. Strict OIDC sign-in also needs matching public issuer keys in `auth.idpSigners`; no key is fetched. Strict SAML uses the declared provider certificates and retains its existing assertion checks.
+Declare project OIDC and SAML resources with `auth.providers.oidc` and `auth.providers.saml`, using the Admin v2 resource fields and an ID-only `name` such as `oidc.fixture` or `saml.fixture`. Full resource names are refused. For example, `"providers": {"oidc": [{"name": "oidc.fixture", "enabled": true, "clientId": "local-client", "issuer": "https://issuer.test", "responseType": {"idToken": true}}]}` initializes that provider in both profiles. By default both profiles accept the fixture assertions the official emulator accepts (a JSON or unsigned ID token, a JSON SAML response, the sign-in widget), whether or not the provider is declared. With `auth.idpAssertions` set to `"signed"` (or `productionExact`, or `auth.idpSigners` present), strict OIDC sign-in needs matching public issuer keys in `auth.idpSigners`; no key is fetched. Strict SAML then uses the declared provider certificates and retains its existing assertion checks.
 
 Each declared array replaces that provider kind; `[]` explicitly starts it empty, while an absent or `null` kind declares no initial resources. Admin operations change live resources until a session reset restores the declared kinds. Later session and routed projects inherit the declaration independently of the default project's live changes. Tenant resources and built-in providers remain separate. Clearing accounts preserves live resources; snapshots and Auth export/import transfer no provider resources or declarations. The emulator profile continues to accept its unsigned fixture credentials without requiring configured or enabled provider resources. These declarations require a canonical document with `"schemaVersion": 1`; a Firebase deployment `auth.providers` section without that version remains deployment data and installs no provider seeds.
 

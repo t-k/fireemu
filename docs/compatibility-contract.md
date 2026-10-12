@@ -131,6 +131,7 @@ fireemu is run mostly by tests in CI and on a developer's machine. Where product
 | Key | Development default | `productionExact` |
 |---|---|---|
 | `auth.allowUnsignedCustomTokens` | `true`: unsigned emulator custom tokens are accepted | `false`: refused, as production refuses an unsigned custom token |
+| `auth.idpAssertions` | `"fixture"`: `signInWithIdp` parses the official emulator's fixture assertions without verifying them (a JSON or unsigned ID token, a JSON SAML response, what the sign-in widget `/emulator/auth/handler` posts), for built-in, `oidc.*` and `saml.*` providers; the strict profile's answer shapes and other checks stay as they are | `"signed"`: an `oidc.*` ID token must verify with an `auth.idpSigners` key and a `saml.*` response with the provider's certificates; the fixture and the built-in providers are refused (AUTH-FEDERATION owner decisions O4 and O5). Setting `auth.idpSigners` also selects it under `strict`, and `"signed"` is refused under `emulator` |
 
 A development default is not a parity claim. A strict comparison against production recordings whose rows depend on one of these behaviours runs with `productionExact: true` or with the key set to its production value; adding a key to this table means updating the configurations of those comparisons in the same change.
 

@@ -2171,7 +2171,7 @@ fn print_banner(
             if let Some(note) = daemon::custom_token_signer_note(cfg) {
                 println!("{note}");
             }
-            if let Some(note) = daemon::idp_signer_note(cfg) {
+            if let Some(note) = daemon::idp_assertion_note(cfg) {
                 println!("{note}");
             }
         }

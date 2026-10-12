@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   ADJUDICATION_MODE,
+  APPROVED_EXCLUDED_STEPS,
   COMPARISON_KIND,
   COMPARISON_PATH,
   NEGATIVE_CACHE_COORDINATES,
@@ -55,6 +56,123 @@ function rebind(closure, comparison) {
   for (const condition of closure.conditions) condition.evidence.comparisonSha256 = digest;
   return hashOfObject(comparison);
 }
+
+/** An explicit pre-review fixture: one named row forced PENDING, independent of the committed state. */
+function pendingFixture(coordinate = "/conditions/2/cases/1") {
+  const fixture = committed();
+  for (const row of fixture.comparison.rows)
+    if (row.coordinate === coordinate) {
+      row.status = "PENDING";
+      row.pendingReason = "awaiting the independent parent review";
+    }
+  for (const condition of fixture.closure.conditions) condition.status = "PENDING_REVIEW";
+  fixture.closure.parentStatus = "IMPLEMENTING";
+  fixture.closure.closureReview = { decision: "PENDING" };
+  fixture.hashOf = rebind(fixture.closure, fixture.comparison);
+  return fixture;
+}
+/** An explicit promoted fixture: no PENDING row, every condition VERIFIED, an approved review with a report. */
+function verifiedFixture() {
+  const fixture = committed();
+  for (const row of fixture.comparison.rows)
+    if (row.status === "PENDING") {
+      row.status = "MATCH";
+      row.rules = [];
+      delete row.pendingReason;
+    }
+  for (const condition of fixture.closure.conditions) condition.status = "VERIFIED";
+  fixture.closure.parentStatus = "COMPAT_VERIFIED";
+  fixture.closure.closureReview = {
+    decision: "APPROVED",
+    reviews: [{ reportPath: "docs.local/reviews/review.md", reportSha256: "4".repeat(64) }],
+  };
+  fixture.hashOf = rebind(fixture.closure, fixture.comparison);
+  return fixture;
+}
+const checkFixture = (fixture) => check(fixture.closure, fixture.comparison, fixture.hashOf);
+
+test("explicit pending and verified fixtures are both accepted", () => {
+  checkFixture(pendingFixture());
+  checkFixture(verifiedFixture());
+});
+
+test("a verified closure needs a review report path and digest", () => {
+  for (const change of [
+    (review) => delete review.reviews,
+    (review) => (review.reviews = []),
+    (review) => (review.reviews[0].reportSha256 = "x"),
+    (review) => delete review.reviews[0].reportPath,
+  ]) {
+    const fixture = verifiedFixture();
+    change(fixture.closure.closureReview);
+    assert.throws(() => checkFixture(fixture), /review report/, String(change));
+  }
+});
+
+test("excluded steps are exactly the approved source steps", () => {
+  const fixture = committed();
+  const row = fixture.comparison.rows.find(
+    ({ coordinate }) => coordinate === "/conditions/1/cases/4",
+  );
+  row.excludedSteps = row.excludedSteps
+    .slice(1)
+    .concat([{ recording: "966b6f3f", cell: "R2", n: 90 }]);
+  let hashOf = rebind(fixture.closure, fixture.comparison);
+  assert.throws(() => check(fixture.closure, fixture.comparison, hashOf), /approved source steps/);
+  const disclosure = committed();
+  disclosure.closure.knownDifferences.restNegativeCache.excludedSteps["/conditions/3/cases/0"] = [
+    { recording: "a8ed1cce", n: 11 },
+  ];
+  assert.throws(
+    () => check(disclosure.closure, disclosure.comparison),
+    /restNegativeCache.excludedSteps/,
+  );
+  assert.deepEqual(
+    disclosure.comparison.rows
+      .filter(({ status }) => status === "EXCLUDED_STEP")
+      .map(({ excludedSteps }) => excludedSteps.length),
+    [6, 6, 1, 1, 1, 1],
+  );
+  assert.deepEqual(
+    Object.keys(APPROVED_EXCLUDED_STEPS).toSorted(),
+    [...NEGATIVE_CACHE_COORDINATES].toSorted(),
+  );
+});
+
+test("the 1390 rule says headers were neither recorded nor compared", () => {
+  const { closure, comparison } = committed();
+  assert.match(comparison.rules["1390"], /neither recorded nor compared/);
+  assert.doesNotMatch(comparison.rules["1390"], /header semantics/);
+  assert.ok(comparison.rules["1404"]);
+  assert.doesNotMatch(comparison.method, /applied exactly/);
+  assert.match(comparison.method, /1391 and 1401 are coordinator readings/);
+  assert.match(closure.knownDifferences.judgingRules.statement, /neither recorded nor compared/);
+  for (const [name, change] of [
+    [
+      "header claim",
+      (c) =>
+        (c.comparison.rules["1390"] =
+          "status, header semantics and body content are equal; headers were neither recorded nor compared"),
+    ],
+    ["no disclosure", (c) => (c.comparison.rules["1390"] = "status and body content are equal")],
+    ["no 1404", (c) => delete c.comparison.rules["1404"]],
+  ]) {
+    const fixture = committed();
+    change(fixture);
+    const hashOf = rebind(fixture.closure, fixture.comparison);
+    assert.throws(() => check(fixture.closure, fixture.comparison, hashOf), /1390|1404/, name);
+  }
+});
+
+test("the REST Content-Type difference is disclosed", () => {
+  const fixture = committed();
+  assert.match(
+    fixture.closure.knownDifferences.restContentType.statement,
+    /application\/json; charset=UTF-8/,
+  );
+  fixture.closure.knownDifferences.restContentType.statement = "none";
+  assert.throws(() => check(fixture.closure, fixture.comparison), /Content-Type/);
+});
 
 test("the committed PUBSUB closure binds its public per-case adjudication", () => {
   const { closure, comparison } = committed();
@@ -112,33 +230,26 @@ test("the judging rules 1392, 1394, 1399, 1400, 1401 and 1402 are disclosed", ()
 });
 
 test("a COMPAT_VERIFIED PUBSUB needs every condition verified and an approved review", () => {
-  const { closure, comparison } = committed();
-  closure.parentStatus = "COMPAT_VERIFIED";
-  closure.conditions[3].status = "PENDING_REVIEW";
-  assert.throws(() => check(closure, comparison), /all required conditions must be verified/);
-  for (const condition of closure.conditions) condition.status = "VERIFIED";
-  closure.closureReview = { decision: "PENDING" };
-  assert.throws(() => check(closure, comparison), /approved independent parent review/);
+  const unverified = verifiedFixture();
+  unverified.closure.conditions[3].status = "PENDING_REVIEW";
+  assert.throws(() => checkFixture(unverified), /all required conditions must be verified/);
+  const unreviewed = verifiedFixture();
+  unreviewed.closure.closureReview = { decision: "PENDING" };
+  assert.throws(() => checkFixture(unreviewed), /approved independent parent review/);
 });
 
 test("a COMPAT_VERIFIED PUBSUB cannot keep a PENDING row", () => {
-  const { closure, comparison } = committed();
-  closure.parentStatus = "COMPAT_VERIFIED";
-  for (const condition of closure.conditions) condition.status = "VERIFIED";
-  closure.closureReview = { decision: "APPROVED" };
-  comparison.rows[0].status = "PENDING";
-  comparison.rows[0].pendingReason = "x";
-  const hashOf = rebind(closure, comparison);
-  assert.throws(() => check(closure, comparison, hashOf), /COMPAT_VERIFIED with a PENDING row/);
+  const fixture = verifiedFixture();
+  fixture.comparison.rows[0].status = "PENDING";
+  fixture.comparison.rows[0].pendingReason = "x";
+  fixture.hashOf = rebind(fixture.closure, fixture.comparison);
+  assert.throws(() => checkFixture(fixture), /COMPAT_VERIFIED with a PENDING row/);
 });
 
 test("a condition with a PENDING row cannot be VERIFIED", () => {
-  const { closure, comparison } = committed();
-  const pending = comparison.rows.find(({ status }) => status === "PENDING");
-  assert.ok(pending, "the committed adjudication still holds pending rows");
-  const index = Number(pending.coordinate.split("/")[2]);
-  closure.conditions[index].status = "VERIFIED";
-  assert.throws(() => check(closure, comparison), /VERIFIED with a PENDING row/);
+  const fixture = pendingFixture("/conditions/2/cases/1");
+  fixture.closure.conditions[2].status = "VERIFIED";
+  assert.throws(() => checkFixture(fixture), /VERIFIED with a PENDING row/);
 });
 
 test("the adjudication bytes, kind, parent and artifact are pinned", () => {
@@ -326,7 +437,7 @@ test("row checks refuse an extra row, a wrong coordinate and a PENDING row witho
     /names \/conditions\/0\/cases\/0/,
   );
 
-  const reason = committed();
+  const reason = pendingFixture();
   const pending = reason.comparison.rows.find(({ status }) => status === "PENDING");
   delete pending.pendingReason;
   hashOf = rebind(reason.closure, reason.comparison);
@@ -334,11 +445,11 @@ test("row checks refuse an extra row, a wrong coordinate and a PENDING row witho
 });
 
 test("a COMPAT_VERIFIED closure names the PENDING row it still holds", () => {
-  const { closure, comparison } = committed();
-  closure.parentStatus = "COMPAT_VERIFIED";
-  for (const condition of closure.conditions) condition.status = "VERIFIED";
-  closure.closureReview = { decision: "APPROVED" };
-  assert.throws(() => check(closure, comparison), /COMPAT_VERIFIED with a PENDING row/);
+  const fixture = pendingFixture();
+  fixture.closure.parentStatus = "COMPAT_VERIFIED";
+  for (const condition of fixture.closure.conditions) condition.status = "VERIFIED";
+  fixture.closure.closureReview = verifiedFixture().closure.closureReview;
+  assert.throws(() => checkFixture(fixture), /COMPAT_VERIFIED with a PENDING row/);
 });
 
 test("an excluded step outside the negative cache is refused even when the disclosure lists it", () => {
@@ -365,16 +476,18 @@ test("a rule the comparison does not define is refused", () => {
   assert.throws(() => check(closure, comparison, hashOf), /unknown rule 9999/);
 });
 
-test("only the independent parent review is still pending before the flip", () => {
+test("the committed record is pre-review with only 17/0 pending, or promoted with none", () => {
   const { closure, comparison } = committed();
-  assert.equal(closure.parentStatus, "IMPLEMENTING");
-  assert.ok(closure.conditions.every(({ status }) => status === "PENDING_REVIEW"));
-  const pending = new Set(
-    comparison.rows
-      .filter(({ status }) => status === "PENDING")
-      .map(({ coordinate }) => coordinate),
-  );
-  assert.deepEqual([...pending], ["/conditions/17/cases/0"]);
+  const pending = comparison.rows
+    .filter(({ status }) => status === "PENDING")
+    .map(({ coordinate }) => coordinate);
+  if (closure.parentStatus === "IMPLEMENTING") {
+    assert.ok(closure.conditions.every(({ status }) => status === "PENDING_REVIEW"));
+    assert.deepEqual([...new Set(pending)], ["/conditions/17/cases/0"]);
+  } else {
+    assert.equal(closure.parentStatus, "COMPAT_VERIFIED");
+    assert.deepEqual(pending, []);
+  }
   const limited = comparison.rows.filter(
     ({ coordinate }) => coordinate === "/conditions/6/cases/8",
   );

@@ -11,7 +11,29 @@ export const NEGATIVE_CACHE_COORDINATES = Object.freeze([
   "/conditions/3/cases/0",
   "/conditions/14/cases/2",
 ]);
+// The exact source steps 1383/1385/1391 exclude, by recording run prefix and row number.
+const r2 = (recording, n) => Object.freeze({ recording, cell: "R2", n });
+export const APPROVED_EXCLUDED_STEPS = Object.freeze({
+  "/conditions/1/cases/4": Object.freeze([
+    r2("3efb4c7c", 249),
+    r2("3efb4c7c", 253),
+    r2("966b6f3f", 88),
+    r2("966b6f3f", 92),
+    r2("de14f6d9", 93),
+    r2("de14f6d9", 97),
+  ]),
+  "/conditions/14/cases/2": Object.freeze([Object.freeze({ recording: "14802609", n: 484 })]),
+  "/conditions/3/cases/0": Object.freeze([Object.freeze({ recording: "a8ed1cce", n: 10 })]),
+});
 const EXCLUSION_RULES = new Set(["1383", "1385", "1391"]);
+const canonicalSteps = (steps) =>
+  JSON.stringify(
+    (steps ?? [])
+      .map((step) => ({ recording: step.recording, cell: step.cell, n: step.n }))
+      .toSorted((a, b) =>
+        a.recording === b.recording ? a.n - b.n : a.recording < b.recording ? -1 : 1,
+      ),
+  );
 const STATUSES = new Set(["MATCH", "MATCH_BY_RELATION", "EXCLUDED_STEP", "PENDING"]);
 const hex = /^[a-f0-9]{64}$/;
 
@@ -44,6 +66,16 @@ export function assertPubsubAdjudication(closure, comparison, sha256Of) {
     throw new Error("all required conditions must be verified");
   if (verified && closure.closureReview?.decision !== "APPROVED")
     fail("COMPAT_VERIFIED needs an approved independent parent review");
+  if (
+    verified &&
+    (!Array.isArray(closure.closureReview.reviews) ||
+      closure.closureReview.reviews.length === 0 ||
+      !closure.closureReview.reviews.every(
+        ({ reportPath, reportSha256 }) =>
+          typeof reportPath === "string" && reportPath && hex.test(reportSha256 ?? ""),
+      ))
+  )
+    fail("COMPAT_VERIFIED needs each review report path and sha256");
 
   const binding = closure.perCaseAdjudication;
   if (binding?.mode !== ADJUDICATION_MODE || binding.path !== COMPARISON_PATH)
@@ -94,6 +126,11 @@ export function assertPubsubAdjudication(closure, comparison, sha256Of) {
         fail(`row ${key} is EXCLUDED_STEP without an exclusion rule`);
       if (!Array.isArray(row.excludedSteps) || row.excludedSteps.length === 0)
         fail(`row ${key} must name its excluded steps`);
+      if (
+        canonicalSteps(row.excludedSteps) !==
+        canonicalSteps(APPROVED_EXCLUDED_STEPS[row.coordinate])
+      )
+        fail(`row ${key} excluded steps differ from the approved source steps`);
     }
     if (row.status === "PENDING") {
       if (!row.pendingReason) fail(`row ${key} is PENDING without a reason`);
@@ -118,7 +155,17 @@ export function assertPubsubAdjudication(closure, comparison, sha256Of) {
       fail(`${condition.conditionId} is VERIFIED with a PENDING row`);
   });
 
+  const rules = comparison.rules ?? {};
+  if (
+    !/neither recorded nor compared/.test(rules["1390"] ?? "") ||
+    /header semantics/.test(rules["1390"])
+  )
+    fail("rule 1390 must say the original REST headers were neither recorded nor compared");
+  if (!rules["1404"]) fail("rule 1404 (the 1390 clarification) must be defined");
+
   const known = closure.knownDifferences ?? {};
+  if (!/application\/json; charset=UTF-8/.test(known.restContentType?.statement ?? ""))
+    fail("knownDifferences.restContentType must disclose the production Content-Type");
   const cache = known.restNegativeCache;
   if (!/NOT emulated/.test(cache?.statement ?? ""))
     fail("knownDifferences.restNegativeCache must say the cache is NOT emulated");
@@ -130,4 +177,14 @@ export function assertPubsubAdjudication(closure, comparison, sha256Of) {
     JSON.stringify([...(cache.affectedCoordinates ?? [])].toSorted())
   )
     fail("knownDifferences.restNegativeCache must list exactly the excluded coordinates");
+  const disclosed = cache.excludedSteps ?? {};
+  if (
+    JSON.stringify(Object.keys(disclosed).toSorted()) !==
+      JSON.stringify([...excluded].toSorted()) ||
+    Object.entries(disclosed).some(
+      ([coordinate, steps]) =>
+        canonicalSteps(steps) !== canonicalSteps(APPROVED_EXCLUDED_STEPS[coordinate]),
+    )
+  )
+    fail("knownDifferences.restNegativeCache.excludedSteps must be the approved source steps");
 }

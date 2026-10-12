@@ -92,9 +92,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/0",
           "/cases/1",
@@ -131,9 +131,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/6",
           "/cases/7",
@@ -168,9 +168,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/12",
           "/cases/13",
@@ -204,9 +204,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/15",
           "/cases/16",
@@ -250,9 +250,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/21",
           "/cases/22",
@@ -295,9 +295,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/33",
           "/cases/34",
@@ -337,9 +337,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/39",
           "/cases/40",
@@ -379,9 +379,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/48",
           "/cases/49",
@@ -420,9 +420,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/54",
           "/cases/55",
@@ -462,9 +462,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/62",
           "/cases/63",
@@ -506,9 +506,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/68",
           "/cases/69",
@@ -549,9 +549,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/78",
           "/cases/79",
@@ -587,9 +587,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/83",
           "/cases/84",
@@ -630,9 +630,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/89",
           "/cases/90",
@@ -679,9 +679,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/100",
           "/cases/101",
@@ -724,9 +724,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/110",
           "/cases/111",
@@ -761,9 +761,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/116",
           "/cases/117",
@@ -793,9 +793,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "comparisonSha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+        "caseProofSha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
         "caseProofSelectors": [
           "/cases/121"
         ],
@@ -810,7 +810,7 @@
   "perCaseAdjudication": {
     "mode": "per-case-adjudication",
     "path": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-    "sha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633"
+    "sha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4"
   },
   "integratedRegression": {
     "integrationCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
@@ -822,7 +822,7 @@
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "sha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
+        "sha256": "ff4b42a9a91167831518520b343c94bd0ac42afc467f93cbd3bee32689151de4",
         "rows": 227,
         "summary": {
           "EXCLUDED_STEP": 6,
@@ -854,6 +854,52 @@
         "1385",
         "1391"
       ],
+      "excludedSteps": {
+        "/conditions/1/cases/4": [
+          {
+            "recording": "3efb4c7c",
+            "cell": "R2",
+            "n": 249
+          },
+          {
+            "recording": "3efb4c7c",
+            "cell": "R2",
+            "n": 253
+          },
+          {
+            "recording": "966b6f3f",
+            "cell": "R2",
+            "n": 88
+          },
+          {
+            "recording": "966b6f3f",
+            "cell": "R2",
+            "n": 92
+          },
+          {
+            "recording": "de14f6d9",
+            "cell": "R2",
+            "n": 93
+          },
+          {
+            "recording": "de14f6d9",
+            "cell": "R2",
+            "n": 97
+          }
+        ],
+        "/conditions/14/cases/2": [
+          {
+            "recording": "14802609",
+            "n": 484
+          }
+        ],
+        "/conditions/3/cases/0": [
+          {
+            "recording": "a8ed1cce",
+            "n": 10
+          }
+        ]
+      },
       "followUp": "Tracked privately (docs.local/issues/open/pubsub-rest-negative-cache-emulation.md): a small production probe to establish the rule after the release, then emulation behind an explicit off-by-default switch, including in strict (owner instruction 2026-10-12)."
     },
     "orderedUnaryPullKeyedStarvation": {
@@ -863,15 +909,23 @@
       ]
     },
     "judgingRules": {
-      "statement": "Production comparison rules applied by the per-case adjudication beyond exact equality: 1390 (original REST rows without recorded wire length MATCH on status, header semantics and body content); 1392 (original ordering cells: the next ordering key production serves varies by run and transport, so key choice is not judged; per-key order, no keyed/unkeyed mixing and the delivered set must match); 1394 (differences explained only by the delivery order of messages without an ordering guarantee and by a Pull returning fewer messages than available, including 0, MATCH when the cell delivered set, each message content and per-key order with ordering enabled match; fireemu answers immediately and does not simulate empty Pulls; cases /conditions/6/cases/4, 6/8, 9/0, 9/4, 11/2, 14/3); 1402 (for a Pull limited by maxMessages, the 1394 set condition reads: each delivered message is one of the cell published messages with equal content, its id correlates with the same-side publish reply, and the delivered counts are equal; applied to /conditions/6/cases/8); 1399 as clarified by 1400 (second-recording original ordering cells: each side holds at most one ordering key by an unacknowledged delivery at cell end and the whole-cell difference is only the tails of those held keys; per-key prefix and order and no keyed/unkeyed mixing still required; any unsuccessful Pull or Acknowledge on the ordered subscription is DIVERGES); 1401 defines a held key: that side delivered fewer of the key messages than the other side and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held. The full rule list is in the comparison file.",
+      "statement": "Production comparison rules applied by the per-case adjudication beyond exact equality: 1390 as clarified by 1404 (the original 2026-10-05 REST captures stored only status and body, so their REST rows MATCH on equal status and equal body content; response headers were neither recorded nor compared, and no later comparison judges any response header either); 1392 (original ordering cells: the next ordering key production serves varies by run and transport, so key choice is not judged; per-key order, no keyed/unkeyed mixing and the delivered set must match); 1394 (differences explained only by the delivery order of messages without an ordering guarantee and by a Pull returning fewer messages than available, including 0, MATCH when the cell delivered set, each message content and per-key order with ordering enabled match; fireemu answers immediately and does not simulate empty Pulls; cases /conditions/6/cases/4, 6/8, 9/0, 9/4, 11/2, 14/3); 1402 (for a Pull limited by maxMessages, the 1394 set condition reads: each delivered message is one of the cell published messages with equal content, its id correlates with the same-side publish reply, and the delivered counts are equal; applied to /conditions/6/cases/8); 1399 as clarified by 1400 (second-recording original ordering cells: each side holds at most one ordering key by an unacknowledged delivery at cell end and the whole-cell difference is only the tails of those held keys; per-key prefix and order and no keyed/unkeyed mixing still required; any unsuccessful Pull or Acknowledge on the ordered subscription is DIVERGES); 1401 defines a held key: that side delivered fewer of the key messages than the other side and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held. 1391 and 1401 are coordinator readings recorded in the ledger. The original-row comparator sorts topics, subscriptions and snapshots list members before comparing, a base comparator rule. The full rule list and what each recording family compares are in the comparison file.",
       "rules": [
         "1390",
+        "1404",
         "1392",
         "1394",
+        "1395",
         "1399",
         "1400",
         "1401",
         "1402"
+      ]
+    },
+    "restContentType": {
+      "statement": "REST Content-Type: the release binary a97b87c1 answers JSON with Content-Type application/json, while production sends application/json; charset=UTF-8. Found in header-bearing production captures outside the comparison set (two GET-404 cause probes); no comparison in this closure judges headers. Owner 1404 has the charset fixed as a separate change in v0.17; that fix is not part of the binary this closure is bound to.",
+      "rules": [
+        "1404"
       ]
     },
     "unauthenticatedLocalConnections": {

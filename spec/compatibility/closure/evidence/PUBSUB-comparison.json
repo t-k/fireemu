@@ -10,10 +10,10 @@
   },
   "witnessRunPrefixNote": "witnessRunPrefixes are the first 8 characters of the private recording run ids replayed for the case; the original 2026-10-05 recordings are 14802609 and a8ed1cce.",
   "productionRequests": 0,
-  "method": "Per-case adjudication of the 122 frozen cases (18 conditions) against the final strict release binary. Every witness is a LOCAL strict replay of genuine production recordings on that binary; raw physical differences are retained in the private run outputs. A row status is the case verdict for each declared transport. Rules are owner decision ledger entries applied exactly; basis text names private evidence files of the per-case proof.",
+  "method": "Per-case adjudication of the 122 frozen cases (18 conditions) against the final strict release binary. Every witness is a LOCAL strict replay of genuine production recordings on that binary; raw physical differences are retained in the private run outputs. A row status is the case verdict for each declared transport. Rules are owner decision ledger entries; 1391 and 1401 are coordinator readings recorded in the ledger. What is compared on REST rows: original r1/r2 rows status and normalized body (no headers or wire length were recorded); H1 and A status, normalized body and bodyBytes; B the semantic body; C bodyBytes and bodySha256 plus the semantic body; D raw body bytes plus the semantic body. No comparison judges any response header. The original-row comparator sorts topics, subscriptions and snapshots list members before comparing (a base comparator rule, not an owner relation). Basis text names private evidence files of the per-case proof.",
   "caseProof": {
     "path": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-    "sha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
+    "sha256": "7686fcc1c23e2547a9a2034be2ec2e7955a751d4a10aaac3601b7f3023422ca9",
     "note": "private (docs.local), not published"
   },
   "statuses": {
@@ -42,7 +42,7 @@
     "1319": "Snapshot N13: bounded post-Seek comparison (Seek window at most 90 s, equivalent sequential constructions, successful current-delivery ACK before the next Seek); only early empty responses and delivery timing may differ (2026-10-11).",
     "1383": "The production REST GET 404 right after create in /conditions/3/cases/0 and /conditions/14/cases/2 is excluded from comparison; fireemu returns the steady-state 200 (2026-10-11; description corrected by 1385).",
     "1385": "Production REST negative cache for subscriptions and snapshots (about 9.5 s after a slow 404, reproduced in some orders, counterexamples exist, rule not established) is NOT emulated; the affected GET steps of /conditions/3/cases/0, /conditions/14/cases/2 and /conditions/1/cases/4 R2 are excluded; strict unchanged; follow-up after the release (2026-10-11).",
-    "1390": "Original 2026-10-05 recordings did not store REST wire length: their REST rows MATCH when status, header semantics and body content are equal; later recordings keep wire-shape comparison (2026-10-12).",
+    "1390": "Original 2026-10-05 recordings (r1/r2) stored only REST status and body: no response headers and no wire length. As clarified by 1404, their REST rows MATCH when status and body content are equal; headers were neither recorded nor compared (2026-10-12).",
     "1391": "The /conditions/1/cases/4 R2 exclusion covers the GET right after CREATE and the same-name cleanup GET (2026-10-12, coordinator reading of 1385).",
     "1392": "Original ordering cells (/conditions/11/cases/0, 1, 4): the key production serves next on later Pulls varies by run and transport; per-key order, no keyed/unkeyed mixing in one Pull and the cell delivered set must match (2026-10-12).",
     "1394": "Differences explained only by (1) delivery order of messages without an ordering guarantee and (2) a Pull returning fewer messages than available (including 0) MATCH when the cell delivered set, each message content and, with ordering enabled, per-key order match; cases /conditions/6/cases/4, 6/8, 9/0, 9/4, 11/2, 14/3; fireemu answers immediately and does not simulate empty Pulls (2026-10-12).",
@@ -50,7 +50,8 @@
     "1399": "Original ordering cells in the second recording: MATCH when on both sides each key delivered set is a prefix of its publish order, keyed and unkeyed are never mixed in a Pull, and the whole-cell difference is only the tail of a key held by an unacknowledged delivery at cell end (2026-10-12).",
     "1400": "Clarifies 1399: MATCH when each side holds at most one ordering key by an unacknowledged delivery at cell end and the whole-cell difference is only the tails of those held keys; per-key prefix, per-key order and no unkeyed/keyed mixing still required; any unsuccessful Pull or Acknowledge on the ordered subscription on either side is DIVERGES (2026-10-12).",
     "1401": "Coordinator interpretation of 1400: a side holds an ordering key when it delivered fewer of the key messages than the other side and its last delivery of the key is unacknowledged at cell end; keys whose final batch is unacknowledged on both sides with equal counts are not held (2026-10-12).",
-    "1402": "Clarifies 1394 for a Pull limited by maxMessages: the set condition reads each delivered message is one of the cell published messages with equal content, its id correlates with the same-side publish reply, and the delivered counts are equal; which member a limited Pull returns is non-guarantee (1) of 1394; raw differences stay in the record (2026-10-12)."
+    "1402": "Clarifies 1394 for a Pull limited by maxMessages: the set condition reads each delivered message is one of the cell published messages with equal content, its id correlates with the same-side publish reply, and the delivered counts are equal; which member a limited Pull returns is non-guarantee (1) of 1394; raw differences stay in the record (2026-10-12).",
+    "1404": "Clarifies 1390 for the original REST rows: equal status and equal body content; the record says plainly that headers were neither recorded nor compared, and discloses the Content-Type difference found in header-bearing captures (production application/json; charset=UTF-8, fireemu application/json), fixed separately in v0.17; the closure evidence stays bound to the release binary (2026-10-12)."
   },
   "summary": {
     "EXCLUDED_STEP": 6,
@@ -65,7 +66,8 @@
       "coordinate": "/conditions/0/cases/0",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -79,7 +81,8 @@
       "coordinate": "/conditions/0/cases/0",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -93,7 +96,8 @@
       "coordinate": "/conditions/0/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -109,7 +113,8 @@
       "coordinate": "/conditions/0/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -125,7 +130,8 @@
       "coordinate": "/conditions/0/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -139,7 +145,8 @@
       "coordinate": "/conditions/0/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -153,7 +160,8 @@
       "coordinate": "/conditions/0/cases/3",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -167,7 +175,8 @@
       "coordinate": "/conditions/0/cases/3",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -181,7 +190,8 @@
       "coordinate": "/conditions/0/cases/4",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -195,7 +205,8 @@
       "coordinate": "/conditions/0/cases/4",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -209,7 +220,8 @@
       "coordinate": "/conditions/0/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -225,7 +237,8 @@
       "coordinate": "/conditions/0/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -241,7 +254,8 @@
       "coordinate": "/conditions/1/cases/0",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -255,7 +269,8 @@
       "coordinate": "/conditions/1/cases/0",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -269,7 +284,8 @@
       "coordinate": "/conditions/1/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -283,7 +299,8 @@
       "coordinate": "/conditions/1/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -297,7 +314,8 @@
       "coordinate": "/conditions/1/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -311,7 +329,8 @@
       "coordinate": "/conditions/1/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -325,7 +344,8 @@
       "coordinate": "/conditions/1/cases/3",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -339,7 +359,8 @@
       "coordinate": "/conditions/1/cases/3",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -367,34 +388,34 @@
       "basis": "R1 MATCH in 3efb and de14; native N11/N12 MATCH in 9f9 and b873 (native applicability decided by 651(b): routing metadata vs message name, observed in production). R2 diverges only on the two GetSubscription rows per set (966b n88/n92, de14 n93/n97, 3efb n249/n253), excluded by 1385 as clarified by 1391 (\"production REST negative cache, not emulated\"); every other R2 row MATCH.",
       "excludedSteps": [
         {
-          "unit": "h1-966",
+          "recording": "3efb4c7c",
           "cell": "R2",
-          "sourceN": [
-            88,
-            92
-          ],
-          "owner": "1385,1391",
-          "reason": "GetSubscription immediately after CreateSubscription and the same-name cleanup GET: production REST negative cache (subscription/snapshot only), not emulated"
+          "n": 249
         },
         {
-          "unit": "h1-de14",
+          "recording": "3efb4c7c",
           "cell": "R2",
-          "sourceN": [
-            93,
-            97
-          ],
-          "owner": "1385,1391",
-          "reason": "GetSubscription immediately after CreateSubscription and the same-name cleanup GET: production REST negative cache (subscription/snapshot only), not emulated"
+          "n": 253
         },
         {
-          "unit": "h1-3ef",
+          "recording": "966b6f3f",
           "cell": "R2",
-          "sourceN": [
-            249,
-            253
-          ],
-          "owner": "1385,1391",
-          "reason": "GetSubscription immediately after CreateSubscription and the same-name cleanup GET: production REST negative cache (subscription/snapshot only), not emulated"
+          "n": 88
+        },
+        {
+          "recording": "966b6f3f",
+          "cell": "R2",
+          "n": 92
+        },
+        {
+          "recording": "de14f6d9",
+          "cell": "R2",
+          "n": 93
+        },
+        {
+          "recording": "de14f6d9",
+          "cell": "R2",
+          "n": 97
         }
       ]
     },
@@ -418,34 +439,34 @@
       "basis": "R1 MATCH in 3efb and de14; native N11/N12 MATCH in 9f9 and b873 (native applicability decided by 651(b): routing metadata vs message name, observed in production). R2 diverges only on the two GetSubscription rows per set (966b n88/n92, de14 n93/n97, 3efb n249/n253), excluded by 1385 as clarified by 1391 (\"production REST negative cache, not emulated\"); every other R2 row MATCH.",
       "excludedSteps": [
         {
-          "unit": "h1-966",
+          "recording": "3efb4c7c",
           "cell": "R2",
-          "sourceN": [
-            88,
-            92
-          ],
-          "owner": "1385,1391",
-          "reason": "GetSubscription immediately after CreateSubscription and the same-name cleanup GET: production REST negative cache (subscription/snapshot only), not emulated"
+          "n": 249
         },
         {
-          "unit": "h1-de14",
+          "recording": "3efb4c7c",
           "cell": "R2",
-          "sourceN": [
-            93,
-            97
-          ],
-          "owner": "1385,1391",
-          "reason": "GetSubscription immediately after CreateSubscription and the same-name cleanup GET: production REST negative cache (subscription/snapshot only), not emulated"
+          "n": 253
         },
         {
-          "unit": "h1-3ef",
+          "recording": "966b6f3f",
           "cell": "R2",
-          "sourceN": [
-            249,
-            253
-          ],
-          "owner": "1385,1391",
-          "reason": "GetSubscription immediately after CreateSubscription and the same-name cleanup GET: production REST negative cache (subscription/snapshot only), not emulated"
+          "n": 88
+        },
+        {
+          "recording": "966b6f3f",
+          "cell": "R2",
+          "n": 92
+        },
+        {
+          "recording": "de14f6d9",
+          "cell": "R2",
+          "n": 93
+        },
+        {
+          "recording": "de14f6d9",
+          "cell": "R2",
+          "n": 97
         }
       ]
     },
@@ -455,7 +476,8 @@
       "coordinate": "/conditions/1/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -469,7 +491,8 @@
       "coordinate": "/conditions/1/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -484,7 +507,8 @@
       "status": "MATCH_BY_RELATION",
       "rules": [
         "1146",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -501,7 +525,8 @@
       "status": "MATCH_BY_RELATION",
       "rules": [
         "1146",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -518,6 +543,7 @@
       "status": "MATCH_BY_RELATION",
       "rules": [
         "1390",
+        "1404",
         "1146"
       ],
       "witnessRunPrefixes": [
@@ -535,6 +561,7 @@
       "status": "MATCH_BY_RELATION",
       "rules": [
         "1390",
+        "1404",
         "1146"
       ],
       "witnessRunPrefixes": [
@@ -581,7 +608,8 @@
       "rules": [
         "1383",
         "1385",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -590,10 +618,8 @@
       "basis": "Only r2 n10 (lifecycle/rest step 10 getSubscription, production 404 vs local 200) diverges; excluded by 1383 (description corrected by 1385: production REST negative cache, not emulated). r1 n10 (same step, production 200) MATCH/1390 and is kept. All remaining steps MATCH or MATCH/1390.",
       "excludedSteps": [
         {
-          "run": "r2",
-          "n": 10,
-          "owner": "1383",
-          "reason": "production REST GET 404 after create (3/0 getSubscription); recorded as production REST negative cache / visibility, not emulated (1383 as corrected by 1385)"
+          "recording": "a8ed1cce",
+          "n": 10
         }
       ]
     },
@@ -605,7 +631,8 @@
       "rules": [
         "1383",
         "1385",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -614,10 +641,8 @@
       "basis": "Only r2 n10 (lifecycle/rest step 10 getSubscription, production 404 vs local 200) diverges; excluded by 1383 (description corrected by 1385: production REST negative cache, not emulated). r1 n10 (same step, production 200) MATCH/1390 and is kept. All remaining steps MATCH or MATCH/1390.",
       "excludedSteps": [
         {
-          "run": "r2",
-          "n": 10,
-          "owner": "1383",
-          "reason": "production REST GET 404 after create (3/0 getSubscription); recorded as production REST negative cache / visibility, not emulated (1383 as corrected by 1385)"
+          "recording": "a8ed1cce",
+          "n": 10
         }
       ]
     },
@@ -627,7 +652,8 @@
       "coordinate": "/conditions/3/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -641,7 +667,8 @@
       "coordinate": "/conditions/3/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -655,7 +682,8 @@
       "coordinate": "/conditions/3/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -669,7 +697,8 @@
       "coordinate": "/conditions/3/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -683,7 +712,8 @@
       "coordinate": "/conditions/3/cases/3",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -697,7 +727,8 @@
       "coordinate": "/conditions/3/cases/3",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -711,7 +742,8 @@
       "coordinate": "/conditions/3/cases/4",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -725,7 +757,8 @@
       "coordinate": "/conditions/3/cases/4",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -739,7 +772,8 @@
       "coordinate": "/conditions/3/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -753,7 +787,8 @@
       "coordinate": "/conditions/3/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -767,7 +802,8 @@
       "coordinate": "/conditions/4/cases/0",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -783,7 +819,8 @@
       "coordinate": "/conditions/4/cases/0",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -799,7 +836,8 @@
       "coordinate": "/conditions/4/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -813,7 +851,8 @@
       "coordinate": "/conditions/4/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -827,7 +866,8 @@
       "coordinate": "/conditions/4/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -841,7 +881,8 @@
       "coordinate": "/conditions/4/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -855,7 +896,8 @@
       "coordinate": "/conditions/4/cases/3",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -869,7 +911,8 @@
       "coordinate": "/conditions/4/cases/3",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -883,7 +926,8 @@
       "coordinate": "/conditions/4/cases/4",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -897,7 +941,8 @@
       "coordinate": "/conditions/4/cases/4",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -911,7 +956,8 @@
       "coordinate": "/conditions/4/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -927,7 +973,8 @@
       "coordinate": "/conditions/4/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -943,7 +990,8 @@
       "coordinate": "/conditions/4/cases/6",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -959,7 +1007,8 @@
       "coordinate": "/conditions/4/cases/6",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -975,7 +1024,8 @@
       "coordinate": "/conditions/4/cases/7",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -991,7 +1041,8 @@
       "coordinate": "/conditions/4/cases/7",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1007,7 +1058,8 @@
       "coordinate": "/conditions/4/cases/8",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1021,7 +1073,8 @@
       "coordinate": "/conditions/4/cases/8",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1035,7 +1088,8 @@
       "coordinate": "/conditions/4/cases/9",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1049,7 +1103,8 @@
       "coordinate": "/conditions/4/cases/9",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1063,7 +1118,8 @@
       "coordinate": "/conditions/4/cases/10",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1077,7 +1133,8 @@
       "coordinate": "/conditions/4/cases/10",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1091,7 +1148,8 @@
       "coordinate": "/conditions/4/cases/11",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1105,7 +1163,8 @@
       "coordinate": "/conditions/4/cases/11",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1119,7 +1178,8 @@
       "coordinate": "/conditions/5/cases/0",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1133,7 +1193,8 @@
       "coordinate": "/conditions/5/cases/0",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1147,7 +1208,8 @@
       "coordinate": "/conditions/5/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1161,7 +1223,8 @@
       "coordinate": "/conditions/5/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1175,7 +1238,8 @@
       "coordinate": "/conditions/5/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1189,7 +1253,8 @@
       "coordinate": "/conditions/5/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1203,7 +1268,8 @@
       "coordinate": "/conditions/5/cases/3",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1217,7 +1283,8 @@
       "coordinate": "/conditions/5/cases/3",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1231,7 +1298,8 @@
       "coordinate": "/conditions/5/cases/4",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1245,7 +1313,8 @@
       "coordinate": "/conditions/5/cases/4",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1259,7 +1328,8 @@
       "coordinate": "/conditions/5/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1273,7 +1343,8 @@
       "coordinate": "/conditions/5/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1289,7 +1360,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1307,7 +1379,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1325,7 +1398,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1343,7 +1417,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1361,7 +1436,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1379,7 +1455,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1397,7 +1474,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1415,7 +1493,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1433,6 +1512,7 @@
       "rules": [
         "1100",
         "1390",
+        "1404",
         "1394"
       ],
       "witnessRunPrefixes": [
@@ -1451,6 +1531,7 @@
       "rules": [
         "1100",
         "1390",
+        "1404",
         "1394"
       ],
       "witnessRunPrefixes": [
@@ -1467,7 +1548,8 @@
       "coordinate": "/conditions/6/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1481,7 +1563,8 @@
       "coordinate": "/conditions/6/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1495,7 +1578,8 @@
       "coordinate": "/conditions/6/cases/6",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1509,7 +1593,8 @@
       "coordinate": "/conditions/6/cases/6",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1523,7 +1608,8 @@
       "coordinate": "/conditions/6/cases/7",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1537,7 +1623,8 @@
       "coordinate": "/conditions/6/cases/7",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1554,6 +1641,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1394",
         "1402"
       ],
@@ -1574,6 +1662,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1394",
         "1402"
       ],
@@ -1591,7 +1680,8 @@
       "coordinate": "/conditions/7/cases/0",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1605,7 +1695,8 @@
       "coordinate": "/conditions/7/cases/0",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1619,7 +1710,8 @@
       "coordinate": "/conditions/7/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1633,7 +1725,8 @@
       "coordinate": "/conditions/7/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1647,7 +1740,8 @@
       "coordinate": "/conditions/7/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1661,7 +1755,8 @@
       "coordinate": "/conditions/7/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1675,7 +1770,8 @@
       "coordinate": "/conditions/7/cases/3",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1689,7 +1785,8 @@
       "coordinate": "/conditions/7/cases/3",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1703,7 +1800,8 @@
       "coordinate": "/conditions/7/cases/4",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1717,7 +1815,8 @@
       "coordinate": "/conditions/7/cases/4",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1731,7 +1830,8 @@
       "coordinate": "/conditions/7/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1745,7 +1845,8 @@
       "coordinate": "/conditions/7/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1760,6 +1861,7 @@
       "status": "MATCH_BY_RELATION",
       "rules": [
         "1390",
+        "1404",
         "1199"
       ],
       "witnessRunPrefixes": [
@@ -1777,6 +1879,7 @@
       "status": "MATCH_BY_RELATION",
       "rules": [
         "1390",
+        "1404",
         "1199"
       ],
       "witnessRunPrefixes": [
@@ -1793,7 +1896,8 @@
       "coordinate": "/conditions/8/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1807,7 +1911,8 @@
       "coordinate": "/conditions/8/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1824,6 +1929,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1199"
       ],
       "witnessRunPrefixes": [
@@ -1845,6 +1951,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1199"
       ],
       "witnessRunPrefixes": [
@@ -1887,7 +1994,8 @@
       "coordinate": "/conditions/8/cases/4",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1903,7 +2011,8 @@
       "coordinate": "/conditions/8/cases/4",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1919,7 +2028,8 @@
       "coordinate": "/conditions/8/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1933,7 +2043,8 @@
       "coordinate": "/conditions/8/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1947,7 +2058,8 @@
       "coordinate": "/conditions/8/cases/6",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1961,7 +2073,8 @@
       "coordinate": "/conditions/8/cases/6",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2002,6 +2115,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1199",
         "1394"
       ],
@@ -2022,6 +2136,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1199",
         "1394"
       ],
@@ -2041,7 +2156,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2059,7 +2175,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2075,7 +2192,8 @@
       "coordinate": "/conditions/9/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2089,7 +2207,8 @@
       "coordinate": "/conditions/9/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2106,6 +2225,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1199"
       ],
       "witnessRunPrefixes": [
@@ -2125,6 +2245,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1199"
       ],
       "witnessRunPrefixes": [
@@ -2144,6 +2265,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1199",
         "1394"
       ],
@@ -2164,6 +2286,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1199",
         "1394"
       ],
@@ -2207,7 +2330,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2223,7 +2347,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2239,7 +2364,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2255,7 +2381,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2271,7 +2398,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2287,7 +2415,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2302,6 +2431,7 @@
       "status": "MATCH_BY_RELATION",
       "rules": [
         "1390",
+        "1404",
         "1209",
         "1210"
       ],
@@ -2320,6 +2450,7 @@
       "status": "MATCH_BY_RELATION",
       "rules": [
         "1390",
+        "1404",
         "1209",
         "1210"
       ],
@@ -2419,7 +2550,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2437,7 +2569,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2453,7 +2586,8 @@
       "coordinate": "/conditions/10/cases/8",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2467,7 +2601,8 @@
       "coordinate": "/conditions/10/cases/8",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2481,7 +2616,8 @@
       "coordinate": "/conditions/10/cases/9",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2495,7 +2631,8 @@
       "coordinate": "/conditions/10/cases/9",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2517,6 +2654,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1204",
         "1213",
         "1215"
@@ -2543,6 +2681,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1204",
         "1213",
         "1215"
@@ -2569,6 +2708,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1204",
         "1213",
         "1215"
@@ -2595,6 +2735,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1204",
         "1213",
         "1215"
@@ -2616,8 +2757,10 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1394",
         "1392",
+        "1395",
         "1399",
         "1400",
         "1401"
@@ -2628,7 +2771,7 @@
         "567e1cd8",
         "a8ed1cce"
       ],
-      "basis": "Plain (ordering omitted) subscription: drain step 17 delivers the same 11 messages with equal contents in all four arms, receipt order differs in 3 (owner 1394, cell-1394.json, rows from the 1399 runs). The step 19 rows read the ordered subscription of the same original ordering cell after the plain drain; that cell is MATCH: Original ordering cells replayed on a97b87c1 with identity acknowledgements (owner 1395; ordering-identity-1399 runs, harness 2a905f740, other cells identical to final-generation). The owner 1399 judge as fixed at 9b9b5c228 (approved in delta review 2, review file 2026-10-12-pubsub-descriptive-and-ordering-judge-review.md) re-applied to the recorded runs gives output sha256 e6615f6d..., byte-identical to the 2a905f7 control. r1 rest/grpc: delivered sets equal (10/10), MATCH under 1392 and 1399. r2 rest (9/10) and grpc (10/9): DIVERGES under 1392, MATCH under 1399 as clarified by owner 1400 (each side holds at most one ordering key by an unacknowledged delivery at cell end, the whole-cell difference is only the tails of those held keys, per-key prefix and order, no keyed/unkeyed mixing, no unsuccessful Pull or Acknowledge on the ordered subscription) with the coordinator 1401 definition of a held key (that side delivered fewer of the key messages and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held). r2 rest: k1 held on LOCAL (tail a4), k2 held on production (tail b3,b4); r2 grpc: k1 held on LOCAL (a3,a4), k2 held on production (b4). The independent re-check (check_1399.py, written without reading ordering-identity-ack.mjs) agrees on all four arms. C R9/N9 control subscription disposition MATCH (1204/1215)."
+      "basis": "Scope: the 1392/1399/1400/1401 citations cover only the step 19 rows, which are rows of the same physical original ordering cell (ordered subscription) judged for /conditions/11/cases/0, 1 and 4; they are not a separate application of 1392 to this case, whose own subscription (ordering omitted) is judged under 1394. The rows come from the identity-ACK runs (1395). Plain (ordering omitted) subscription: drain step 17 delivers the same 11 messages with equal contents in all four arms, receipt order differs in 3 (owner 1394, cell-1394.json, rows from the 1399 runs). The step 19 rows read the ordered subscription of the same original ordering cell after the plain drain; that cell is MATCH: Original ordering cells replayed on a97b87c1 with identity acknowledgements (owner 1395; ordering-identity-1399 runs, harness 2a905f740, other cells identical to final-generation). The owner 1399 judge as fixed at 9b9b5c228 (approved in delta review 2, review file 2026-10-12-pubsub-descriptive-and-ordering-judge-review.md) re-applied to the recorded runs gives output sha256 e6615f6d..., byte-identical to the 2a905f7 control. r1 rest/grpc: delivered sets equal (10/10), MATCH under 1392 and 1399. r2 rest (9/10) and grpc (10/9): DIVERGES under 1392, MATCH under 1399 as clarified by owner 1400 (each side holds at most one ordering key by an unacknowledged delivery at cell end, the whole-cell difference is only the tails of those held keys, per-key prefix and order, no keyed/unkeyed mixing, no unsuccessful Pull or Acknowledge on the ordered subscription) with the coordinator 1401 definition of a held key (that side delivered fewer of the key messages and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held). r2 rest: k1 held on LOCAL (tail a4), k2 held on production (tail b3,b4); r2 grpc: k1 held on LOCAL (a3,a4), k2 held on production (b4). The independent re-check (check_1399.py, written without reading ordering-identity-ack.mjs) agrees on all four arms. C R9/N9 control subscription disposition MATCH (1204/1215)."
     },
     {
       "row": "pubsub/delivery/ordering#ordering-disabled",
@@ -2639,8 +2782,10 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1394",
         "1392",
+        "1395",
         "1399",
         "1400",
         "1401"
@@ -2651,7 +2796,7 @@
         "567e1cd8",
         "a8ed1cce"
       ],
-      "basis": "Plain (ordering omitted) subscription: drain step 17 delivers the same 11 messages with equal contents in all four arms, receipt order differs in 3 (owner 1394, cell-1394.json, rows from the 1399 runs). The step 19 rows read the ordered subscription of the same original ordering cell after the plain drain; that cell is MATCH: Original ordering cells replayed on a97b87c1 with identity acknowledgements (owner 1395; ordering-identity-1399 runs, harness 2a905f740, other cells identical to final-generation). The owner 1399 judge as fixed at 9b9b5c228 (approved in delta review 2, review file 2026-10-12-pubsub-descriptive-and-ordering-judge-review.md) re-applied to the recorded runs gives output sha256 e6615f6d..., byte-identical to the 2a905f7 control. r1 rest/grpc: delivered sets equal (10/10), MATCH under 1392 and 1399. r2 rest (9/10) and grpc (10/9): DIVERGES under 1392, MATCH under 1399 as clarified by owner 1400 (each side holds at most one ordering key by an unacknowledged delivery at cell end, the whole-cell difference is only the tails of those held keys, per-key prefix and order, no keyed/unkeyed mixing, no unsuccessful Pull or Acknowledge on the ordered subscription) with the coordinator 1401 definition of a held key (that side delivered fewer of the key messages and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held). r2 rest: k1 held on LOCAL (tail a4), k2 held on production (tail b3,b4); r2 grpc: k1 held on LOCAL (a3,a4), k2 held on production (b4). The independent re-check (check_1399.py, written without reading ordering-identity-ack.mjs) agrees on all four arms. C R9/N9 control subscription disposition MATCH (1204/1215)."
+      "basis": "Scope: the 1392/1399/1400/1401 citations cover only the step 19 rows, which are rows of the same physical original ordering cell (ordered subscription) judged for /conditions/11/cases/0, 1 and 4; they are not a separate application of 1392 to this case, whose own subscription (ordering omitted) is judged under 1394. The rows come from the identity-ACK runs (1395). Plain (ordering omitted) subscription: drain step 17 delivers the same 11 messages with equal contents in all four arms, receipt order differs in 3 (owner 1394, cell-1394.json, rows from the 1399 runs). The step 19 rows read the ordered subscription of the same original ordering cell after the plain drain; that cell is MATCH: Original ordering cells replayed on a97b87c1 with identity acknowledgements (owner 1395; ordering-identity-1399 runs, harness 2a905f740, other cells identical to final-generation). The owner 1399 judge as fixed at 9b9b5c228 (approved in delta review 2, review file 2026-10-12-pubsub-descriptive-and-ordering-judge-review.md) re-applied to the recorded runs gives output sha256 e6615f6d..., byte-identical to the 2a905f7 control. r1 rest/grpc: delivered sets equal (10/10), MATCH under 1392 and 1399. r2 rest (9/10) and grpc (10/9): DIVERGES under 1392, MATCH under 1399 as clarified by owner 1400 (each side holds at most one ordering key by an unacknowledged delivery at cell end, the whole-cell difference is only the tails of those held keys, per-key prefix and order, no keyed/unkeyed mixing, no unsuccessful Pull or Acknowledge on the ordered subscription) with the coordinator 1401 definition of a held key (that side delivered fewer of the key messages and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held). r2 rest: k1 held on LOCAL (tail a4), k2 held on production (tail b3,b4); r2 grpc: k1 held on LOCAL (a3,a4), k2 held on production (b4). The independent re-check (check_1399.py, written without reading ordering-identity-ack.mjs) agrees on all four arms. C R9/N9 control subscription disposition MATCH (1204/1215)."
     },
     {
       "row": "pubsub/delivery/ordering#nack-blocks-key",
@@ -2695,6 +2840,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1204",
         "1213",
         "1215"
@@ -2721,6 +2867,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1204",
         "1213",
         "1215"
@@ -2739,7 +2886,8 @@
       "coordinate": "/conditions/12/cases/0",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2753,7 +2901,8 @@
       "coordinate": "/conditions/12/cases/0",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2769,7 +2918,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2785,7 +2935,8 @@
       "rules": [
         "1100",
         "1135",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2802,6 +2953,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1199",
         "1193",
         "1194"
@@ -2823,6 +2975,7 @@
         "1100",
         "1135",
         "1390",
+        "1404",
         "1199",
         "1193",
         "1194"
@@ -2901,7 +3054,8 @@
       "coordinate": "/conditions/12/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -2915,7 +3069,8 @@
       "coordinate": "/conditions/12/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3065,7 +3220,8 @@
       "status": "MATCH_BY_RELATION",
       "rules": [
         "1146",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3082,7 +3238,8 @@
       "status": "MATCH_BY_RELATION",
       "rules": [
         "1146",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3098,7 +3255,8 @@
       "coordinate": "/conditions/14/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3112,7 +3270,8 @@
       "coordinate": "/conditions/14/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3128,7 +3287,8 @@
       "rules": [
         "1383",
         "1385",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3137,10 +3297,8 @@
       "basis": "Only r1 n484 (snapshot-seek/rest step 41 getSnapshot, production 404 vs local 200) diverges; excluded by 1383/1385. All remaining steps MATCH or MATCH/1390.",
       "excludedSteps": [
         {
-          "run": "r1",
-          "n": 484,
-          "owner": "1383",
-          "reason": "production REST GET 404 (14/2 getSnapshot); recorded as production REST negative cache / visibility, not emulated (1383 as corrected by 1385)"
+          "recording": "14802609",
+          "n": 484
         }
       ]
     },
@@ -3152,7 +3310,8 @@
       "rules": [
         "1383",
         "1385",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3161,10 +3320,8 @@
       "basis": "Only r1 n484 (snapshot-seek/rest step 41 getSnapshot, production 404 vs local 200) diverges; excluded by 1383/1385. All remaining steps MATCH or MATCH/1390.",
       "excludedSteps": [
         {
-          "run": "r1",
-          "n": 484,
-          "owner": "1383",
-          "reason": "production REST GET 404 (14/2 getSnapshot); recorded as production REST negative cache / visibility, not emulated (1383 as corrected by 1385)"
+          "recording": "14802609",
+          "n": 484
         }
       ]
     },
@@ -3178,6 +3335,7 @@
         "1135",
         "1203",
         "1390",
+        "1404",
         "1394"
       ],
       "witnessRunPrefixes": [
@@ -3198,6 +3356,7 @@
         "1135",
         "1203",
         "1390",
+        "1404",
         "1394"
       ],
       "witnessRunPrefixes": [
@@ -3217,7 +3376,8 @@
         "1100",
         "1135",
         "1243",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3236,7 +3396,8 @@
         "1100",
         "1135",
         "1243",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3256,7 +3417,8 @@
         "1135",
         "1319",
         "1203",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3276,7 +3438,8 @@
         "1135",
         "1319",
         "1203",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3340,7 +3503,8 @@
       "coordinate": "/conditions/14/cases/8",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3354,7 +3518,8 @@
       "coordinate": "/conditions/14/cases/8",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3368,7 +3533,8 @@
       "coordinate": "/conditions/14/cases/9",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3382,7 +3548,8 @@
       "coordinate": "/conditions/14/cases/9",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3396,7 +3563,8 @@
       "coordinate": "/conditions/15/cases/0",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3410,7 +3578,8 @@
       "coordinate": "/conditions/15/cases/0",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3424,7 +3593,8 @@
       "coordinate": "/conditions/15/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3438,7 +3608,8 @@
       "coordinate": "/conditions/15/cases/1",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3452,7 +3623,8 @@
       "coordinate": "/conditions/15/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3466,7 +3638,8 @@
       "coordinate": "/conditions/15/cases/2",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3481,7 +3654,8 @@
       "status": "MATCH_BY_RELATION",
       "rules": [
         "897",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3496,7 +3670,8 @@
       "status": "MATCH_BY_RELATION",
       "rules": [
         "897",
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3510,7 +3685,8 @@
       "coordinate": "/conditions/15/cases/4",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3524,7 +3700,8 @@
       "coordinate": "/conditions/15/cases/4",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3538,7 +3715,8 @@
       "coordinate": "/conditions/15/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -3552,7 +3730,8 @@
       "coordinate": "/conditions/15/cases/5",
       "status": "MATCH_BY_RELATION",
       "rules": [
-        "1390"
+        "1390",
+        "1404"
       ],
       "witnessRunPrefixes": [
         "14802609",

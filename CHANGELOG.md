@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- The `strict` profile now accepts the official emulator's fixture identity-provider assertions by default (JSON and unsigned ID tokens, JSON SAML responses and the `/emulator/auth/handler` sign-in widget), for built-in, `oidc.*` and `saml.*` providers, so "Sign in with Google" and similar flows work in tests without signing keys. Set `auth.idpAssertions` to `"signed"`, or set `productionExact`, to restore the previous verification; a strict configuration that sets `auth.idpSigners` keeps it automatically. A strict configuration that declares only SAML providers (`auth.providers.saml` with certificates) now gets the fixture too, so SAML response signatures are no longer checked, unless it sets `"signed"` or `productionExact`.
+
 ## [0.16.0] - 2026-10-10
 
 ### Added

@@ -479,9 +479,15 @@
             }
           }
         },
+        "idpAssertions": {
+          "type": "string",
+          "enum": ["fixture", "signed"],
+          "default": "fixture",
+          "description": "How signInWithIdp assertions are checked. fixture (the default in both profiles) accepts the official emulator's fixture assertions without verifying them: a JSON or unsigned ID token, a JSON SAML response and what the sign-in widget (/emulator/auth/handler) posts, for built-in, oidc.* and saml.* providers; the strict profile's answer shapes and other checks are unchanged. signed (strict profile only) verifies them as production does: an oidc.* ID token only with an idpSigners key, a saml.* response only with the provider's certificates, and the fixture and the built-in providers are refused. Under the strict profile the default is signed with productionExact or when idpSigners is set, and fixture beside idpSigners is refused."
+        },
         "idpSigners": {
           "type": "object",
-          "description": "OIDC issuers whose signed ID tokens the strict profile verifies, each mapped to its public JWK set. No key is fetched from an issuer. Under the strict profile, signInWithIdp accepts only an ID token of an enabled oidc.* provider whose issuer is listed here and whose key (selected by the token's kid) verifies it; the unsigned fixture IdP and other providers are refused. The emulator profile ignores this setting.",
+          "description": "OIDC issuers whose signed ID tokens the strict profile verifies with idpAssertions signed, each mapped to its public JWK set; under the strict profile, setting it makes signed the default of idpAssertions. No key is fetched from an issuer. With signed assertions, signInWithIdp accepts only an ID token of an enabled oidc.* provider whose issuer is listed here and whose key (selected by the token's kid) verifies it; the unsigned fixture IdP and other providers are refused. The emulator profile ignores this setting.",
           "propertyNames": { "pattern": "^https://[^/?#\\s]+(/[^?#\\s]*)?$" },
           "additionalProperties": {
             "type": "object",

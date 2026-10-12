@@ -237,6 +237,20 @@ impl PasswordPolicyConfig {
     }
 }
 
+/// How `signInWithIdp` assertions are checked (`auth.idpAssertions`, owner decision 1396).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IdpAssertionMode {
+    /// The official emulator's fixture `IdP`: an assertion (a JSON or unsigned ID token, a JSON
+    /// SAML response, what the sign-in widget posts) is parsed and never verified. The
+    /// development default in both profiles.
+    #[default]
+    Fixture,
+    /// Production's verification (strict only): an `oidc.*` ID token must verify with an
+    /// `auth.idpSigners` key and a `saml.*` response with the provider's certificates; the
+    /// fixture and the built-in providers are refused.
+    Signed,
+}
+
 impl CompatibilityProfile {
     /// Parses the canonical configuration value.
     #[must_use]
@@ -1234,6 +1248,9 @@ pub struct RuntimeConfig {
     /// JWK set (`auth.idpSigners`, AUTH-FEDERATION owner decision O4). No key is fetched from
     /// an issuer; without an entry, strict refuses the issuer's sign-ins.
     pub auth_idp_signers: Option<serde_json::Map<String, Value>>,
+    /// How `signInWithIdp` assertions are checked (`auth.idpAssertions`): the fixture `IdP`
+    /// by default, signed assertions under `productionExact` or with `auth.idpSigners`.
+    pub auth_idp_assertions: IdpAssertionMode,
     /// The default project's API keys (`auth.apiKeys`). When any is declared, client requests
     /// with another key are refused as production's API front end refuses them; when none is,
     /// any key is accepted, as by the official emulator.
@@ -1473,6 +1490,7 @@ impl Default for RuntimeConfig {
             auth_allow_unsigned_custom_tokens: true,
             auth_custom_token_signers: None,
             auth_idp_signers: None,
+            auth_idp_assertions: IdpAssertionMode::Fixture,
             auth_api_keys: Vec::new(),
             app_check: AppCheckConfig::disabled(),
         }
@@ -1480,7 +1498,7 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 25] = [
+pub(crate) const AUTH_KEYS: [&str; 26] = [
     "enabled",
     "apiKeys",
     "projectIssuer",
@@ -1488,6 +1506,7 @@ pub(crate) const AUTH_KEYS: [&str; 25] = [
     "customTokenSigners",
     "allowUnsignedCustomTokens",
     "idpSigners",
+    "idpAssertions",
     "providers",
     "totp",
     "mfa",
@@ -3000,6 +3019,52 @@ impl RuntimeConfig {
     pub fn set_production_exact(&mut self, exact: bool) {
         self.production_exact = exact;
         self.auth_allow_unsigned_custom_tokens = !exact;
+        self.auth_idp_assertions = if exact {
+            IdpAssertionMode::Signed
+        } else {
+            IdpAssertionMode::Fixture
+        };
+    }
+
+    /// Reads `auth.idpAssertions` after `auth.idpSigners`. The keys are read only by signed
+    /// assertions, so under the strict profile they select them when the key is absent (the
+    /// configurations that verify signed sign-ins keep doing so), and an explicit `fixture`
+    /// beside them is refused rather than left to ignore them. `signed` refuses what the
+    /// official emulator accepts, so it requires the strict profile.
+    fn parse_idp_assertions(
+        auth: &serde_json::Map<String, Value>,
+        cfg: &mut Self,
+    ) -> Result<(), ConfigError> {
+        let strict = cfg.profile == CompatibilityProfile::Strict;
+        match auth.get("idpAssertions") {
+            Some(value) => {
+                let mode = match value.as_str() {
+                    Some("fixture") => IdpAssertionMode::Fixture,
+                    Some("signed") => IdpAssertionMode::Signed,
+                    _ => {
+                        return Err(ConfigError(
+                            "auth.idpAssertions must be \"fixture\" or \"signed\"".to_owned(),
+                        ))
+                    }
+                };
+                if mode == IdpAssertionMode::Signed && !strict {
+                    return Err(ConfigError(
+                        "auth.idpAssertions \"signed\" requires the strict profile".to_owned(),
+                    ));
+                }
+                if mode == IdpAssertionMode::Fixture && strict && cfg.auth_idp_signers.is_some() {
+                    return Err(ConfigError(
+                        "auth.idpSigners requires auth.idpAssertions \"signed\"".to_owned(),
+                    ));
+                }
+                cfg.auth_idp_assertions = mode;
+            }
+            None if strict && cfg.auth_idp_signers.is_some() => {
+                cfg.auth_idp_assertions = IdpAssertionMode::Signed;
+            }
+            None => {}
+        }
+        Ok(())
     }
 
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
@@ -3848,6 +3913,7 @@ impl RuntimeConfig {
                     .map_err(|e| ConfigError(format!("auth.idpSigners: {e}")))?;
                 cfg.auth_idp_signers = Some(signers.clone());
             }
+            Self::parse_idp_assertions(auth, &mut cfg)?;
             if let Some(providers) = auth.get("providers") {
                 cfg.auth_provider_seeds =
                     fireemu_adapter_http::identity_toolkit::provider_config_seeds(
@@ -6169,6 +6235,123 @@ mod tests {
                     "auth.allowUnsignedCustomTokens must be a boolean".to_owned()
                 ))
             );
+        }
+    }
+
+    /// The `auth.idpAssertions` the loader is expected to settle on, or its refusal: the
+    /// fixture `IdP` by default, signed assertions under `productionExact` or when
+    /// `auth.idpSigners` (read only by signed assertions) is set, and an explicit key over both.
+    fn expected_idp_assertions(
+        strict: bool,
+        exact: Option<bool>,
+        key: Option<&str>,
+        signers: bool,
+    ) -> Result<IdpAssertionMode, String> {
+        if exact == Some(true) && !strict {
+            return Err("productionExact requires the strict profile".to_owned());
+        }
+        match key {
+            Some("signed") if !strict => {
+                Err("auth.idpAssertions \"signed\" requires the strict profile".to_owned())
+            }
+            Some("fixture") if strict && signers => {
+                Err("auth.idpSigners requires auth.idpAssertions \"signed\"".to_owned())
+            }
+            Some("signed") => Ok(IdpAssertionMode::Signed),
+            Some("fixture") => Ok(IdpAssertionMode::Fixture),
+            Some(_) => Err("auth.idpAssertions must be \"fixture\" or \"signed\"".to_owned()),
+            None if strict && (exact == Some(true) || signers) => Ok(IdpAssertionMode::Signed),
+            None => Ok(IdpAssertionMode::Fixture),
+        }
+    }
+
+    fn idp_assertions_config(
+        profile: Option<&str>,
+        exact: Option<bool>,
+        key: Option<&str>,
+        signers: bool,
+    ) -> Value {
+        // A public 2048-bit modulus; the key it belongs to was discarded.
+        let modulus = "0lwNtQWMVy0QqgEvrBmoFqwky_dcMx8CgS-o2rTesEV7QbG4cvNigTcDV7b_u0twRkJdonkMPjbUs0b8NKe_0_UOZ5vE_kILFG4TtPdeZWub8xnqhETc7WifXhEfqcB8xFbRyIxU9V0d_epsuNnQ-Nd7NlnFsH-aaq6f1HKp55_BVNxudwmHwT49P6JhNDDh7FWyoYBBBFtQ0St8dky4MFQTd2swZP4pEA8xGp-q-1mxbn0g9gfbq5voYWtOaDW9a2lsC_S_d6DecsrNWn4YYJ7Qc5xcx4pI70a23zftkVBj_I-Eip2hcvNUEsZJA4LlR4BgDLsNWu3ZWQxe08fOew";
+        let mut auth = json!({});
+        if let Some(key) = key {
+            auth["idpAssertions"] = json!(key);
+        }
+        if signers {
+            auth["idpSigners"] = json!({"https://idp.example/oidc/run": {"keys": [{"kty": "RSA", "alg": "RS256", "use": "sig", "kid": "k", "n": modulus, "e": "AQAB"}]}});
+        }
+        let mut config = json!({"schemaVersion": 1, "auth": auth});
+        if let Some(profile) = profile {
+            config["profile"] = json!(profile);
+        }
+        if let Some(exact) = exact {
+            config["productionExact"] = json!(exact);
+        }
+        config
+    }
+
+    #[test]
+    fn idp_assertions_default_to_the_fixture_and_production_exact_or_signers_select_signed() {
+        // Every combination of the inputs the loader reads, against the model above; an absent
+        // profile is the strict default.
+        for profile in [None, Some("strict"), Some("emulator")] {
+            let strict = profile != Some("emulator");
+            for exact in [None, Some(false), Some(true)] {
+                for key in [None, Some("fixture"), Some("signed"), Some("Signed")] {
+                    for signers in [false, true] {
+                        let config = idp_assertions_config(profile, exact, key, signers);
+                        let parsed = RuntimeConfig::from_json(&config)
+                            .map(|cfg| cfg.auth_idp_assertions)
+                            .map_err(|e| e.0);
+                        assert_eq!(
+                            parsed,
+                            expected_idp_assertions(strict, exact, key, signers),
+                            "{config}"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            RuntimeConfig::default().auth_idp_assertions,
+            IdpAssertionMode::Fixture
+        );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn idp_assertions_accept_exactly_the_two_mode_names(
+            value in proptest::prop_oneof![
+                proptest::sample::select(vec![
+                    json!("fixture"), json!("signed"), json!("Fixture"), json!("SIGNED"),
+                    json!(" signed"), json!("signed "), json!("fixtures"), json!(""),
+                    json!("verified"), json!(null), json!(true), json!(1), json!([]),
+                    json!({}), json!(["signed"]),
+                ]),
+                proptest::strategy::Strategy::prop_map("[a-z]{0,8}", Value::String),
+            ],
+        ) {
+            let parsed = RuntimeConfig::from_json(&json!({
+                "schemaVersion": 1,
+                "profile": "strict",
+                "auth": {"idpAssertions": value.clone()},
+            }));
+            match value.as_str() {
+                Some("fixture") => proptest::prop_assert_eq!(
+                    parsed.unwrap().auth_idp_assertions,
+                    IdpAssertionMode::Fixture
+                ),
+                Some("signed") => proptest::prop_assert_eq!(
+                    parsed.unwrap().auth_idp_assertions,
+                    IdpAssertionMode::Signed
+                ),
+                _ => proptest::prop_assert_eq!(
+                    parsed.map(|cfg| cfg.auth_idp_assertions),
+                    Err(ConfigError(
+                        "auth.idpAssertions must be \"fixture\" or \"signed\"".to_owned()
+                    ))
+                ),
+            }
         }
     }
 

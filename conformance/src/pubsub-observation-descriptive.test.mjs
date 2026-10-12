@@ -541,3 +541,47 @@ test("the difference log is bounded", () => {
   assert.throws(() => d.record({ sourceN: -1 }, error), /descriptive difference bound/);
   assert.equal(d.entries.length, MAX_DIFFERENCES);
 });
+
+test("descriptive reports mark cells with a recorded difference so their row verdicts are not cell evidence (S4)", async () => {
+  const report = await replayA(unaryFixture(3), env, pin, {
+    advance: async () => {},
+    wireFactory: failingWire(new Map([[2, new Error("native terminal witness mismatch")]]), []),
+    descriptive: createDescriptiveDifferences({ profile: "emulator", mode: "descriptive" }),
+  });
+  assert.deepEqual(report.descriptive.cellsWithDifferences, ["R3"]);
+  const cell = report.cells.find((c) => c.id === "R3");
+  assert.deepEqual(cell.descriptiveDifferences, { count: 1, rowVerdictsAreCellEvidence: false });
+  assert.ok(cell.rows.length > 0);
+  assert.ok(cell.rows.every((row) => row.descriptiveCellHasDifference === true));
+  // cells without a recorded difference and strict reports carry no mark
+  for (const other of report.cells.filter((c) => c.id !== "R3")) {
+    assert.equal(Object.hasOwn(other, "descriptiveDifferences"), false);
+    assert.ok(
+      (other.rows ?? []).every((row) => !Object.hasOwn(row, "descriptiveCellHasDifference")),
+    );
+  }
+  const clean = await replayA(unaryFixture(3), env, pin, {
+    advance: async () => {},
+    wireFactory: failingWire(new Map(), []),
+    descriptive: createDescriptiveDifferences({ profile: "emulator", mode: "descriptive" }),
+  });
+  assert.deepEqual(clean.descriptive.cellsWithDifferences, []);
+  assert.equal(
+    Object.hasOwn(
+      clean.cells.find((c) => c.id === "R3"),
+      "descriptiveDifferences",
+    ),
+    false,
+  );
+  const strict = await replayA(unaryFixture(3), env, pin, {
+    advance: async () => {},
+    wireFactory: failingWire(new Map(), []),
+  });
+  assert.equal(
+    Object.hasOwn(
+      strict.cells.find((c) => c.id === "R3"),
+      "descriptiveDifferences",
+    ),
+    false,
+  );
+});

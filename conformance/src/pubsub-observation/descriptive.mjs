@@ -135,6 +135,18 @@ export function createDescriptiveDifferences({ profile, mode } = {}) {
         return record(context, error, evidence);
       }
     },
+    // Marks every report cell that has a recorded difference: its row verdicts ran on partial state
+    // and must not be read as cell evidence.
+    markCells(cells) {
+      for (const cell of cells ?? []) {
+        if (!cellsWithDifferences.has(cell.id)) continue;
+        cell.descriptiveDifferences = {
+          count: entries.filter((entry) => entry.cellId === cell.id).length,
+          rowVerdictsAreCellEvidence: false,
+        };
+        for (const row of cell.rows ?? []) row.descriptiveCellHasDifference = true;
+      }
+    },
     summary() {
       const byClassification = {};
       for (const entry of entries)
@@ -147,6 +159,7 @@ export function createDescriptiveDifferences({ profile, mode } = {}) {
           "emulator-profile replay; production remains the oracle and every difference is descriptive, not a verdict",
         differences: entries.length,
         primaryDifferences: entries.filter((entry) => !entry.followsEarlierDifferenceInCell).length,
+        cellsWithDifferences: [...cellsWithDifferences].toSorted(),
         byClassification,
         entries: structuredClone(entries),
       };

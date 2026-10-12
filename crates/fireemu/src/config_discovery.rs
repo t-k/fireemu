@@ -20,9 +20,14 @@
 //! - The working directory's owner is not checked, because the user chose to run there. A
 //!   working directory any user can write is not searched at all.
 //!
+//! - The walk also stops, silently, at a parent it cannot inspect (one it may not enter).
+//! - `.firebaserc` names only project and target aliases, never code or rules, so it is refused
+//!   only when it, or its directory, can be written by any user.
+//!
 //! A skipped file ends the search as if nothing had been found, and the caller names it. Each
-//! candidate is opened once: its owner and mode are read from the open handle and its text from
-//! the same handle, so the decision and the read see the same file. A symbolic link is judged by
+//! candidate is opened once: its owner and mode are read from the open handle and judged first,
+//! and only then is its text read from the same handle, at most 16 MiB, so the decision and the
+//! read see the same file and an untrusted file is never read. A symbolic link is judged by
 //! its target, and the directory holding the target is not checked. Off Unix nothing is checked.
 //! Files named with `--config` or `--firebase-json` are not checked either.
 
@@ -100,12 +105,37 @@ pub(crate) fn untrusted_directory(stat: &Stat, trust: &Trust, working: bool) -> 
     }
 }
 
-/// A candidate opened once: its metadata from the open handle, and its text read from the same
-/// handle (or why it could not be read).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The most a discovered file may hold. A larger one is refused rather than read, so a huge
+/// (for example sparse) file cannot exhaust memory at startup.
+pub(crate) const MAX_DISCOVERED_BYTES: u64 = 16 * 1024 * 1024;
+
+/// A candidate opened once: its metadata from the open handle, and the read of its text from the
+/// same handle, which runs only after the candidate has been judged.
 pub(crate) struct Opened {
     pub(crate) stat: Stat,
-    pub(crate) text: Result<String, String>,
+    read: Box<dyn FnOnce() -> Result<String, String>>,
+}
+
+impl Opened {
+    pub(crate) fn new(stat: Stat, read: impl FnOnce() -> Result<String, String> + 'static) -> Self {
+        Self {
+            stat,
+            read: Box::new(read),
+        }
+    }
+
+    /// Reads the text from the handle the candidate was judged by.
+    pub(crate) fn read(self) -> Result<String, String> {
+        (self.read)()
+    }
+}
+
+impl std::fmt::Debug for Opened {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Opened")
+            .field("stat", &self.stat)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What the search found. A found file carries the text it was judged by.
@@ -195,9 +225,9 @@ pub(crate) fn discover(
             }
             return Discovery {
                 found: if *name == CANONICAL_FILE {
-                    Discovered::Canonical(shown, opened.text)
+                    Discovered::Canonical(shown, opened.read())
                 } else {
-                    Discovered::FirebaseJson(shown, opened.text)
+                    Discovered::FirebaseJson(shown, opened.read())
                 },
                 skipped: None,
             };
@@ -210,29 +240,37 @@ pub(crate) fn discover(
     nothing(None)
 }
 
-/// Opens the `.firebaserc` in `dir` (the discovered project directory, or the working directory
-/// when nothing was found) under the same rules as the search: `Ok(None)` when there is none,
-/// `Err` naming why it is refused. `working` says whether `dir` is the working directory.
-pub(crate) fn open_firebaserc(
+/// Reads the `.firebaserc` in `dir` (the discovered project directory, or the working directory
+/// when nothing was found): `Ok(None)` when there is none, `Err` naming why it is refused. It
+/// names only project and target aliases, never code or rules, so its owner is not checked (a
+/// root container keeps the project of a bind-mounted checkout); a file or a directory any user
+/// can write is refused.
+pub(crate) fn read_firebaserc(
     dir: &Path,
-    working: bool,
-    trust: &Trust,
     stat: impl Fn(&Path) -> Option<Stat>,
     open: impl Fn(&Path) -> Option<Opened>,
-) -> Result<Option<Opened>, Skipped> {
+) -> Result<Option<Result<String, String>>, Skipped> {
     let path = dir.join(FIREBASERC_FILE);
     let Some(opened) = open(&path).filter(|o| o.stat.is_file) else {
         return Ok(None);
     };
-    let reason = match stat(dir).map(|d| untrusted_directory(&d, trust, working)) {
+    let reason = match stat(dir) {
         None => Some("is in a directory that cannot be inspected".to_owned()),
-        Some(Some(reason)) => Some(format!("is in {}, which {reason}", dir.display())),
-        Some(None) => untrusted_file(&opened.stat, trust),
+        Some(d) if world_writable(&d) => Some(format!(
+            "is in {}, which can be written by any user",
+            dir.display()
+        )),
+        Some(_) if world_writable(&opened.stat) => Some("can be written by any user".to_owned()),
+        Some(_) => None,
     };
     match reason {
         Some(reason) => Err(Skipped { path, reason }),
-        None => Ok(Some(opened)),
+        None => Ok(Some(opened.read())),
     }
+}
+
+fn world_writable(stat: &Stat) -> bool {
+    stat.mode & 0o002 != 0
 }
 
 /// The trust of this process.
@@ -274,8 +312,9 @@ fn stat_of(metadata: &std::fs::Metadata) -> Stat {
     }
 }
 
-/// Opens a candidate once, reads its metadata from the handle and, when it is a regular file,
-/// its text from the same handle. A FIFO or device is opened without blocking and is not read.
+/// Opens a candidate once and reads its metadata from the handle; the text is read from the same
+/// handle only when the caller asks, at most [`MAX_DISCOVERED_BYTES`]. The open neither blocks
+/// on a FIFO nor makes a terminal the controlling terminal.
 pub(crate) fn open(path: &Path) -> Option<Opened> {
     use std::io::Read as _;
     let mut options = std::fs::OpenOptions::new();
@@ -283,19 +322,26 @@ pub(crate) fn open(path: &Path) -> Option<Opened> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(libc::O_NONBLOCK);
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
     }
-    let mut file = options.open(path).ok()?;
+    let file = options.open(path).ok()?;
     let stat = stat_of(&file.metadata().ok()?);
-    let text = if stat.is_file {
-        let mut text = String::new();
-        file.read_to_string(&mut text)
-            .map(|_| text)
-            .map_err(|e| e.to_string())
-    } else {
-        Err("not a regular file".to_owned())
-    };
-    Some(Opened { stat, text })
+    Some(Opened::new(stat, move || {
+        if !stat.is_file {
+            return Err("not a regular file".to_owned());
+        }
+        let mut bytes = Vec::new();
+        file.take(MAX_DISCOVERED_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() as u64 > MAX_DISCOVERED_BYTES {
+            return Err(format!(
+                "it is larger than {} MiB, the most a discovered configuration file may hold",
+                MAX_DISCOVERED_BYTES / (1024 * 1024)
+            ));
+        }
+        String::from_utf8(bytes).map_err(|e| e.to_string())
+    }))
 }
 
 #[cfg(test)]
@@ -350,10 +396,10 @@ mod tests {
 
         fn open(&self) -> impl Fn(&Path) -> Option<Opened> + '_ {
             |path| {
-                self.0.get(path).map(|stat| Opened {
-                    stat: *stat,
-                    text: Ok(format!("text of {}", path.display())),
-                })
+                let text = format!("text of {}", path.display());
+                self.0
+                    .get(path)
+                    .map(|stat| Opened::new(*stat, move || Ok(text)))
             }
         }
 
@@ -653,10 +699,10 @@ mod tests {
         let tree = Tree::new(&[("/p/app/firebase.json", file(ME, 0o644))]);
         let discovery = discover(Path::new("/p/app"), &USER, tree.stat(), |path: &Path| {
             opens.borrow_mut().push(path.to_path_buf());
-            Some(Opened {
-                stat: file(ME, 0o644),
-                text: Ok(format!("open #{}", opens.borrow().len())),
-            })
+            let n = opens.borrow().len();
+            Some(Opened::new(file(ME, 0o644), move || {
+                Ok(format!("open #{n}"))
+            }))
             .filter(|_| path.ends_with("firebase.json"))
         });
         let candidates = opens
@@ -671,43 +717,89 @@ mod tests {
         assert_eq!(text, format!("open #{}", opens.borrow().len()));
     }
 
+    /// An untrusted candidate is judged on its metadata alone and never read, so a huge file
+    /// planted by someone else costs nothing.
     #[test]
-    fn a_firebaserc_is_read_unless_its_owner_is_untrusted_or_anyone_can_write_it() {
-        let trusted = |entries: &[(&str, Stat)], working| {
+    fn a_skipped_candidate_is_never_read() {
+        let reads = std::rc::Rc::new(std::cell::Cell::new(0));
+        for (stat, dir_stat, loaded) in [
+            (file(OTHER, 0o644), dir(ME, 0o755), false),
+            (file(ME, 0o666), dir(ME, 0o755), false),
+            (file(ME, 0o644), dir(ME, 0o777), false),
+            (file(ME, 0o644), dir(ME, 0o755), true),
+        ] {
+            reads.set(0);
+            let tree = Tree::new(&[("/p/app", dir_stat), ("/p/app/firebase.json", stat)]);
+            let counter = reads.clone();
+            let discovery = discover(Path::new("/p/app"), &USER, tree.stat(), |path: &Path| {
+                let counter = counter.clone();
+                tree.stat()(path).map(|s| {
+                    Opened::new(s, move || {
+                        counter.set(counter.get() + 1);
+                        Ok("{}".to_owned())
+                    })
+                })
+            });
+            assert_eq!(discovery.found != Discovered::Nothing, loaded, "{stat:?}");
+            assert_eq!(reads.get(), usize::from(loaded), "{stat:?} in {dir_stat:?}");
+        }
+    }
+
+    #[test]
+    fn a_firebaserc_is_read_unless_anyone_can_write_it_or_its_directory() {
+        let read = |entries: &[(&str, Stat)]| {
             let tree = Tree::new(entries);
-            open_firebaserc(
-                Path::new("/p/app"),
-                working,
-                &USER,
-                tree.stat(),
-                tree.open(),
-            )
+            read_firebaserc(Path::new("/p/app"), tree.stat(), tree.open())
         };
-        assert!(matches!(
-            trusted(&[("/p/app/.firebaserc", file(ME, 0o644))], true),
-            Ok(Some(_))
-        ));
-        // Group write is the norm under user-private groups.
-        assert!(matches!(
-            trusted(&[("/p/app/.firebaserc", file(ME, 0o664))], true),
-            Ok(Some(_))
-        ));
-        assert_eq!(trusted(&[], true), Ok(None));
-        assert!(trusted(&[("/p/app/.firebaserc", file(ME, 0o666))], true).is_err());
-        assert!(trusted(&[("/p/app/.firebaserc", file(OTHER, 0o644))], true).is_err());
+        assert_eq!(read(&[]), Ok(None));
+        for owner in [ME, 0, OTHER] {
+            for mode in [0o644, 0o664] {
+                assert_eq!(
+                    read(&[("/p/app/.firebaserc", file(owner, mode))]),
+                    Ok(Some(Ok("text of /p/app/.firebaserc".to_owned()))),
+                    "{owner} {mode:o}"
+                );
+            }
+        }
+        // A root container keeps the project of a checkout another uid owns.
+        let foreign = [
+            ("/p/app", dir(OTHER, 0o755)),
+            ("/p/app/.firebaserc", file(OTHER, 0o644)),
+        ];
+        assert!(matches!(read(&foreign), Ok(Some(_))));
+        let skipped = read(&[("/p/app/.firebaserc", file(ME, 0o666))]).unwrap_err();
+        assert!(skipped.reason.contains("any user"), "{skipped:?}");
         let shared = [
             ("/p/app", dir(0, 0o1777)),
             ("/p/app/.firebaserc", file(ME, 0o644)),
         ];
-        let skipped = trusted(&shared, true).unwrap_err();
+        let skipped = read(&shared).unwrap_err();
         assert!(skipped.reason.contains("is in /p/app"), "{skipped:?}");
-        // A parent project directory's owner is checked; the working directory's is not.
-        let foreign = [
-            ("/p/app", dir(OTHER, 0o755)),
-            ("/p/app/.firebaserc", file(ME, 0o644)),
-        ];
-        assert!(matches!(trusted(&foreign, true), Ok(Some(_))));
-        assert!(trusted(&foreign, false).is_err());
+        let hidden = Tree::new(&[("/p/app/.firebaserc", file(ME, 0o644))]);
+        let skipped = read_firebaserc(Path::new("/p/app"), |_| None, hidden.open()).unwrap_err();
+        assert!(
+            skipped.reason.contains("cannot be inspected"),
+            "{skipped:?}"
+        );
+    }
+
+    /// The real opener refuses to read past the cap, using a sparse file so the test writes
+    /// nothing, and reads a file at the cap.
+    #[test]
+    fn the_opener_reads_at_most_the_cap() {
+        let dir =
+            std::env::temp_dir().join(format!("fireemu-discovery-cap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("firebase.json");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_DISCOVERED_BYTES + 1).unwrap();
+        let error = open(&path).unwrap().read().unwrap_err();
+        assert!(error.contains("larger than 16 MiB"), "{error}");
+        file.set_len(MAX_DISCOVERED_BYTES).unwrap();
+        let text = open(&path).unwrap().read().unwrap();
+        assert_eq!(text.len() as u64, MAX_DISCOVERED_BYTES);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// One directory level of the generated trees: who owns it and its mode, and the

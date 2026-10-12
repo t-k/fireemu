@@ -892,28 +892,19 @@ fn discovered_project_dir() -> PathBuf {
     }
 }
 
-/// Reads the `.firebaserc` of a directory the search reached, unless the user does not control it
-/// (see `config_discovery`); a refused one is reported and ignored.
-/// Whether a project directory from `project_dir` or `discovered_project_dir` is the working
-/// directory, whose owner discovery does not check.
-fn is_working_directory(dir: &Path) -> bool {
-    dir == Path::new(".")
-}
-
+/// Reads the `.firebaserc` of a directory the search reached, unless any user can write it (see
+/// `config_discovery::read_firebaserc`); a refused one is reported and ignored.
 fn discovered_firebaserc(dir: &Path) -> Result<Option<serde_json::Value>, CliError> {
-    let working = is_working_directory(dir);
     let absolute = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
-    match config_discovery::open_firebaserc(
+    match config_discovery::read_firebaserc(
         &absolute,
-        working,
-        &config_discovery::current_trust(),
         config_discovery::stat,
         config_discovery::open,
     ) {
         Ok(None) => Ok(None),
-        Ok(Some(opened)) => {
+        Ok(Some(text)) => {
             let rc_path = dir.join(config_discovery::FIREBASERC_FILE);
-            let text = opened.text.map_err(|e| {
+            let text = text.map_err(|e| {
                 CliError::refused(format!("cannot read {}: {e}", diagnostic_path(&rc_path)))
             })?;
             parse_firebaserc(&rc_path, &text).map(Some)
@@ -3003,20 +2994,6 @@ fn logical_system_time(system_time: std::time::SystemTime) -> LogicalInstant {
 #[cfg(test)]
 mod config_reload_tests {
     use super::*;
-
-    /// The project directories discovery yields: `.` for the working directory, the parent's
-    /// path otherwise.
-    #[test]
-    fn only_the_dot_project_directory_is_the_working_directory() {
-        assert!(is_working_directory(&project_dir(Path::new(
-            "firebase.json"
-        ))));
-        assert!(is_working_directory(Path::new(".")));
-        assert!(!is_working_directory(&project_dir(Path::new(
-            "/p/firebase.json"
-        ))));
-        assert!(!is_working_directory(Path::new("..")));
-    }
 
     /// The file discovery found is parsed from the text read on the handle it was judged by,
     /// never re-read; any other path is read from disk.

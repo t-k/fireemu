@@ -694,3 +694,47 @@ fn a_fifo_named_firebase_json_neither_blocks_nor_counts() {
         "{banner}"
     );
 }
+
+/// A discovered file larger than 16 MiB is refused with a clear error rather than read; a sparse
+/// file keeps the test cheap.
+#[test]
+fn a_huge_discovered_file_is_refused_unread() {
+    let dir = scratch("huge");
+    let path = dir.join("firebase.json");
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_len(16 * 1024 * 1024 + 1).unwrap();
+    set_mode(&path, 0o644);
+    let output = Command::new(env!("CARGO_BIN_EXE_fireemu"))
+        .current_dir(&dir)
+        .args(["exec", "--only", "firestore", "--firestore-port", "0"])
+        .args(["--http-port", "0", "--hub-port", "0", "--", "true"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let error = stderr(&output);
+    assert!(
+        error.contains("larger than 16 MiB") && error.contains("found by searching"),
+        "{error}"
+    );
+}
+
+/// `.firebaserc` names only project aliases, so its owner is not checked; only a
+/// world-writable one is skipped.
+#[cfg(unix)]
+#[test]
+fn a_firebaserc_is_skipped_only_when_anyone_can_write_it() {
+    let dir = scratch("firebaserc-world");
+    write(
+        &dir.join(".firebaserc"),
+        r#"{"projects": {"default": "demo-rc-world"}}"#,
+    );
+    chmod(&dir.join(".firebaserc"), 0o646);
+    let (output, project) = exec_in(&dir, &[]);
+    assert_ne!(project, "demo-rc-world");
+    assert!(
+        stderr(&output).contains(".firebaserc: it can be written by any user"),
+        "{}",
+        stderr(&output)
+    );
+}

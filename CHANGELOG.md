@@ -12,12 +12,13 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 - `up`, `exec`, `emulators:start` and `emulators:exec` without `--config` or `--firebase-json` load `fireemu.json` from the current directory, or else the nearest `firebase.json` (the current directory or a parent, as the Firebase CLI finds it). Until now they used the built-in defaults, so the rules, indexes and Functions next to a project were silently ignored after `fireemu init`. `--no-config-discovery` keeps the old behavior. The startup output names the loaded files on a new `config:` line. With discovery, the project ID comes from the `.firebaserc` beside the discovered `firebase.json` (which can change `GCLOUD_PROJECT`, the Hub locator name and `demo-*` behavior). The emulator ports, Hub, UI and `singleProjectMode` settings of that file apply instead of the fixed defaults. A `functions` entry starts the Functions runtime, which needs Node.js and an installed codebase. `fireemu capabilities` reports the profile of a discovered `fireemu.json` and fails on a broken discovered file. `emulators:export` finds the project the same way.
 - Unlike the Firebase CLI, discovery on Unix checks ownership the way git does for repositories. The trusted owners are the effective user, root, and the `sudo` user in `SUDO_UID` when the effective user is root.
-  - A `fireemu.json`, `firebase.json` or `.firebaserc` owned by anyone else, or writable by any user, is skipped. Group write is allowed.
-  - The walk stops before a parent directory owned by anyone else or writable by any user, such as `/tmp`.
+  - A `fireemu.json` or `firebase.json` owned by anyone else, or writable by any user, is skipped. Group write is allowed.
+  - A `.firebaserc` names only project aliases, so it is skipped only when it or its directory can be written by any user. A root container job therefore keeps its project.
+  - The walk stops before a parent directory owned by anyone else or writable by any user, such as `/tmp`. It also stops silently at a parent it cannot inspect.
   - The current directory's owner is not checked, but a current directory that any user can write is not searched.
   - A warning names each skipped file and the remedies: `--config` or `--firebase-json` to load it, `--no-config-discovery` to silence the warning.
-  - A root container with a bind-mounted checkout owned by a host user, such as a GitHub Actions `container:` job, therefore skips the checkout's files. Use the explicit flags there.
-  - Each candidate is opened once and checked on that open file. A symbolic link is judged by its target.
+  - A root container with a bind-mounted checkout owned by a host user, such as a GitHub Actions `container:` job, therefore skips the checkout's `fireemu.json` and `firebase.json`. Use the explicit flags there.
+  - Each candidate is opened once and checked on that open file before it is read. A symbolic link is judged by its target. A discovered file larger than 16 MiB is refused.
   - Errors in a discovered file say that it was discovered.
 - The startup output reports Firestore Security Rules on a `firestore rules:` line (it was `rules:`), printed only when Firestore is selected, and the `firestore rules:` and `storage rules:` lines say how to load rules when none are loaded. The first client request refused for want of rules prints a warning to standard error, once per Firestore database and Storage bucket. After 32 databases or buckets, one further line says that the remaining warnings are suppressed. The answers to clients are unchanged.
 

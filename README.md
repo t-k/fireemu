@@ -196,6 +196,7 @@ Fireemu is mostly run by tests, in CI and on a developer's machine. Where produc
 | Development default | Key | With `productionExact` |
 |---|---|---|
 | Unsigned emulator custom tokens are accepted | `auth.allowUnsignedCustomTokens` | refused |
+| The strict Eventarc listener admits any credential or none, so the Admin SDK publishes with a fake credential (see [Eventarc authentication](docs/eventarc-authentication.md)) | `eventarc.authentication` (`"permissive"`) | `"production"`: a missing, malformed or JWT-shaped bearer is refused with production's 401 |
 
 The start banner and `fireemu capabilities` report whether `productionExact` is set.
 

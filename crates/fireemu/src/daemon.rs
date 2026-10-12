@@ -1244,7 +1244,8 @@ async fn serve_suite(
                 Arc::new(fireemu_adapter_functions::eventarc_channels::ChannelStore::default()),
                 fireemu_adapter_functions::eventarc_strict::EventarcContext {
                     project_number,
-                    oauth_credentials: cfg.eventarc_oauth_credentials.clone().map(Arc::new)
+                    oauth_credentials: cfg.eventarc_oauth_credentials.clone().map(Arc::new),
+                    authentication: cfg.eventarc_authentication,
                 },
             )
         );

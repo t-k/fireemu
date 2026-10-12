@@ -1885,7 +1885,7 @@ pub async fn serve_eventarc_with_channels_and_project_number(
         channels,
         crate::eventarc_strict::EventarcContext {
             project_number,
-            oauth_credentials: None,
+            ..crate::eventarc_strict::EventarcContext::default()
         },
     )
     .await

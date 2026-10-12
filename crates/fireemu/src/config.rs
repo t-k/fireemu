@@ -962,6 +962,10 @@ pub struct RuntimeConfig {
     /// Optional local OAuth authority for the strict Eventarc listener. An empty catalog denies every OAuth-shaped bearer.
     pub eventarc_oauth_credentials:
         Option<fireemu_adapter_functions::eventarc_strict::OAuthCredentialCatalog>,
+    /// `eventarc.authentication`: whether the strict Eventarc listener checks the credential.
+    /// Permissive (the development default) admits any credential or none, as the official emulator
+    /// does; production keeps the recorded refusals and reads [`Self::eventarc_oauth_credentials`].
+    pub eventarc_authentication: fireemu_adapter_functions::eventarc_strict::EventarcAuthentication,
     /// Compatibility profile (`profile`). It sets the defaults of [`Self::index_policy`],
     /// [`Self::enforce_limits`], [`Self::token_acceptance`] and
     /// [`Self::implicit_database_creation`]; an explicit key wins.
@@ -1372,6 +1376,8 @@ impl Default for RuntimeConfig {
         let profile = CompatibilityProfile::default();
         Self {
             eventarc_oauth_credentials: None,
+            eventarc_authentication:
+                fireemu_adapter_functions::eventarc_strict::EventarcAuthentication::Permissive,
             profile,
             firestore_addr: "127.0.0.1:8080".to_owned(),
             http_addr: "127.0.0.1:9099".to_owned(),
@@ -3000,6 +3006,11 @@ impl RuntimeConfig {
     pub fn set_production_exact(&mut self, exact: bool) {
         self.production_exact = exact;
         self.auth_allow_unsigned_custom_tokens = !exact;
+        self.eventarc_authentication = if exact {
+            fireemu_adapter_functions::eventarc_strict::EventarcAuthentication::Production
+        } else {
+            fireemu_adapter_functions::eventarc_strict::EventarcAuthentication::Permissive
+        };
     }
 
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
@@ -3158,16 +3169,51 @@ impl RuntimeConfig {
     }
 
     fn parse_eventarc(value: &Value, cfg: &mut Self) -> Result<(), ConfigError> {
+        use fireemu_adapter_functions::eventarc_strict::EventarcAuthentication;
         let invalid = || {
             ConfigError("eventarc.oauthCredentials must map lowercase SHA-256 digests to objects containing unique nonempty string scopes".to_owned())
         };
         let section = value.as_object().ok_or_else(invalid)?;
-        if section.keys().any(|key| key != "oauthCredentials") {
+        if section
+            .keys()
+            .any(|key| key != "oauthCredentials" && key != "authentication")
+        {
             return Err(invalid());
+        }
+        let explicit = section
+            .get("authentication")
+            .map(|value| match value.as_str() {
+                Some("permissive") => Ok(EventarcAuthentication::Permissive),
+                Some("production") => Ok(EventarcAuthentication::Production),
+                _ => Err(ConfigError(
+                    "eventarc.authentication must be \"permissive\" or \"production\"".to_owned(),
+                )),
+            })
+            .transpose()?;
+        let strict = cfg.profile == CompatibilityProfile::Strict;
+        if explicit == Some(EventarcAuthentication::Production) && !strict {
+            return Err(ConfigError(
+                "eventarc.authentication \"production\" requires the strict profile".to_owned(),
+            ));
+        }
+        if let Some(authentication) = explicit {
+            cfg.eventarc_authentication = authentication;
         }
         let Some(credentials) = section.get("oauthCredentials") else {
             return Ok(());
         };
+        // A catalog asks for credential checks, which only production makes: it selects production
+        // under strict unless the key says otherwise, and an explicit permissive would ignore it.
+        // The emulator profile ignores the catalog, as the official emulator checks no credential.
+        if strict {
+            if explicit == Some(EventarcAuthentication::Permissive) {
+                return Err(ConfigError(
+                    "eventarc.oauthCredentials requires eventarc.authentication \"production\""
+                        .to_owned(),
+                ));
+            }
+            cfg.eventarc_authentication = EventarcAuthentication::Production;
+        }
         let credentials = credentials.as_object().ok_or_else(invalid)?;
         let mut catalog = fireemu_adapter_functions::eventarc_strict::OAuthCredentialCatalog::new();
         for (digest, entry) in credentials {
@@ -7185,6 +7231,237 @@ mod eventarc_oauth_catalog_properties {
                     prop_assert_eq!(catalog.get(&digest).unwrap().contains("https://www.googleapis.com/auth/cloud-platform"), granted);
                     prop_assert!(catalog.get(&digest).unwrap().contains(scope));
                 }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod eventarc_authentication_tests {
+    use super::*;
+    use fireemu_adapter_functions::eventarc_strict::EventarcAuthentication::{
+        Permissive, Production,
+    };
+    use proptest::prelude::*;
+    use serde_json::json;
+
+    fn read(
+        profile: Option<&str>,
+        exact: Option<bool>,
+        eventarc: Option<Value>,
+    ) -> Result<RuntimeConfig, ConfigError> {
+        let mut config = json!({"schemaVersion": 1});
+        if let Some(profile) = profile {
+            config["profile"] = json!(profile);
+        }
+        if let Some(exact) = exact {
+            config["productionExact"] = json!(exact);
+        }
+        if let Some(eventarc) = eventarc {
+            config["eventarc"] = eventarc;
+        }
+        RuntimeConfig::from_json(&config)
+    }
+
+    #[test]
+    fn eventarc_authentication_is_permissive_by_default_and_production_under_production_exact() {
+        for profile in [None, Some("strict"), Some("emulator")] {
+            for eventarc in [None, Some(json!({}))] {
+                assert_eq!(
+                    read(profile, None, eventarc.clone())
+                        .unwrap()
+                        .eventarc_authentication,
+                    Permissive,
+                    "{profile:?} {eventarc:?}"
+                );
+                if profile != Some("emulator") {
+                    assert_eq!(
+                        read(profile, Some(false), eventarc.clone())
+                            .unwrap()
+                            .eventarc_authentication,
+                        Permissive
+                    );
+                    assert_eq!(
+                        read(profile, Some(true), eventarc)
+                            .unwrap()
+                            .eventarc_authentication,
+                        Production
+                    );
+                }
+            }
+        }
+        assert_eq!(RuntimeConfig::default().eventarc_authentication, Permissive);
+    }
+
+    #[test]
+    fn an_explicit_eventarc_authentication_decides_over_production_exact() {
+        for (value, expected) in [("permissive", Permissive), ("production", Production)] {
+            for exact in [None, Some(false), Some(true)] {
+                assert_eq!(
+                    read(
+                        Some("strict"),
+                        exact,
+                        Some(json!({"authentication": value}))
+                    )
+                    .unwrap()
+                    .eventarc_authentication,
+                    expected,
+                    "{value} {exact:?}"
+                );
+            }
+        }
+        // The emulator profile admits every credential as the official emulator does; it cannot be
+        // told to refuse more.
+        assert_eq!(
+            read(
+                Some("emulator"),
+                None,
+                Some(json!({"authentication": "permissive"}))
+            )
+            .unwrap()
+            .eventarc_authentication,
+            Permissive
+        );
+        assert_eq!(
+            read(
+                Some("emulator"),
+                None,
+                Some(json!({"authentication": "production"}))
+            ),
+            Err(ConfigError(
+                "eventarc.authentication \"production\" requires the strict profile".to_owned()
+            ))
+        );
+        for invalid in [
+            json!(null),
+            json!(true),
+            json!("Production"),
+            json!("catalog"),
+            json!(""),
+            json!(["production"]),
+        ] {
+            assert_eq!(
+                read(
+                    Some("strict"),
+                    None,
+                    Some(json!({"authentication": invalid}))
+                ),
+                Err(ConfigError(
+                    "eventarc.authentication must be \"permissive\" or \"production\"".to_owned()
+                ))
+            );
+        }
+    }
+
+    /// A local OAuth catalog is a request for credential checks: without an explicit
+    /// `authentication` it selects production, and it cannot be combined with an explicit permissive.
+    #[test]
+    fn an_oauth_catalog_selects_production_and_refuses_an_explicit_permissive() {
+        let catalog = json!({"ab".repeat(32): {"scopes": []}});
+        for exact in [None, Some(false), Some(true)] {
+            for credentials in [json!({}), catalog.clone()] {
+                assert_eq!(
+                    read(
+                        Some("strict"),
+                        exact,
+                        Some(json!({"oauthCredentials": credentials.clone()}))
+                    )
+                    .unwrap()
+                    .eventarc_authentication,
+                    Production
+                );
+                assert_eq!(
+                    read(Some("strict"), exact, Some(json!({"oauthCredentials": credentials.clone(), "authentication": "production"})))
+                        .unwrap()
+                        .eventarc_authentication,
+                    Production
+                );
+                assert_eq!(
+                    read(
+                        Some("strict"),
+                        exact,
+                        Some(
+                            json!({"oauthCredentials": credentials, "authentication": "permissive"})
+                        )
+                    ),
+                    Err(ConfigError(
+                        "eventarc.oauthCredentials requires eventarc.authentication \"production\""
+                            .to_owned()
+                    ))
+                );
+            }
+        }
+        // The emulator profile keeps ignoring the catalog, as before.
+        assert_eq!(
+            read(
+                Some("emulator"),
+                None,
+                Some(json!({"oauthCredentials": catalog}))
+            )
+            .unwrap()
+            .eventarc_authentication,
+            Permissive
+        );
+    }
+
+    /// The schema corpus `config-schema-check` validates holds the same verdicts in the loader.
+    #[test]
+    fn eventarc_authentication_schema_examples_match_the_loader() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../spec/config");
+        let mut seen = 0;
+        for (directory, valid) in [("examples", true), ("invalid-examples", false)] {
+            for path in std::fs::read_dir(root.join(directory))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("eventarc-authentication-")
+                })
+            {
+                let value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                assert_eq!(
+                    RuntimeConfig::from_json(&value).is_ok(),
+                    valid,
+                    "{}",
+                    path.display()
+                );
+                seen += 1;
+            }
+        }
+        assert_eq!(seen, 6, "the corpus must not silently shrink");
+    }
+
+    proptest! {
+        /// Every combination resolves by one rule: an explicit value wins, else a catalog under strict
+        /// selects production, else productionExact decides.
+        #[test]
+        fn eventarc_authentication_follows_explicit_then_catalog_then_production_exact(
+            strict in any::<bool>(),
+            exact in proptest::option::of(any::<bool>()),
+            explicit in proptest::option::of(any::<bool>()),
+            catalog in any::<bool>(),
+        ) {
+            let mut eventarc = serde_json::Map::new();
+            if let Some(production) = explicit {
+                eventarc.insert("authentication".to_owned(), json!(if production { "production" } else { "permissive" }));
+            }
+            if catalog {
+                eventarc.insert("oauthCredentials".to_owned(), json!({}));
+            }
+            let parsed = read(Some(if strict { "strict" } else { "emulator" }), exact, Some(Value::Object(eventarc)));
+            let exact_on = exact == Some(true);
+            let refused = if strict {
+                catalog && explicit == Some(false)
+            } else {
+                exact_on || explicit == Some(true)
+            };
+            prop_assert_eq!(parsed.is_err(), refused);
+            if let Ok(cfg) = parsed {
+                let production = explicit.unwrap_or(strict && (catalog || exact_on));
+                let expected = if production { Production } else { Permissive };
+                prop_assert_eq!(cfg.eventarc_authentication, expected);
             }
         }
     }

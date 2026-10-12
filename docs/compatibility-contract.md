@@ -131,6 +131,7 @@ fireemu is run mostly by tests in CI and on a developer's machine. Where product
 | Key | Development default | `productionExact` |
 |---|---|---|
 | `auth.allowUnsignedCustomTokens` | `true`: unsigned emulator custom tokens are accepted | `false`: refused, as production refuses an unsigned custom token |
+| `eventarc.authentication` | `"permissive"`: the strict Eventarc listener admits any credential or none, as the official emulator does; every other strict check keeps production's order and answers | `"production"`: production's recorded 401 for a missing, malformed or JWT-shaped bearer, and `eventarc.oauthCredentials` decides which `ya29.` bearers are known. A configured `eventarc.oauthCredentials` also selects `"production"` under strict when the key is absent |
 
 A development default is not a parity claim. A strict comparison against production recordings whose rows depend on one of these behaviours runs with `productionExact: true` or with the key set to its production value; adding a key to this table means updating the configurations of those comparisons in the same change.
 

@@ -1928,6 +1928,7 @@ async fn local_oauth_catalog_reaches_http_and_denies_before_delivery() {
         Some(EventarcContext {
             project_number: Some(111_111_111_111),
             oauth_credentials: Some(Arc::new(catalog)),
+            ..EventarcContext::default()
         }),
     )
     .await;
@@ -2021,8 +2022,8 @@ async fn local_oauth_catalog_empty_and_absent_and_emulator_are_distinct() {
             None,
             None,
             Some(EventarcContext {
-                project_number: None,
                 oauth_credentials: catalog,
+                ..EventarcContext::default()
             }),
         )
         .await;
@@ -2048,4 +2049,90 @@ async fn local_oauth_catalog_empty_and_absent_and_emulator_are_distinct() {
         server.stop().await;
         assert_eq!(response.status, status);
     }
+}
+
+/// The request firebase-admin 13.10.0 sends for `getEventarc().channel(...).publish()` to
+/// `CLOUD_EVENTARC_EMULATOR_HOST` (captured from the SDK on 2026-10-12): no `/v1`, no content type, the
+/// SDK's own headers and the bearer of the app's credential. `owner` is the fake credential the
+/// emulators' tooling uses; `None` stands for a client that sends no credential at all.
+async fn sdk_publish(server: &Listener, bearer: Option<&str>, id: &str) -> Exchange {
+    let mut event = event("eu");
+    event["id"] = json!(id);
+    let body = publish_body(&[event]);
+    let auth = bearer.map_or_else(String::new, |token| {
+        format!("authorization: Bearer {token}\r\n")
+    });
+    let request = format!(
+        "POST /{CUSTOM}:publishEvents HTTP/1.1\r\nx-firebase-client: fire-admin-node/13.10.0\r\n{auth}x-goog-api-client: gl-node/24.14.0 fire-admin/13.10.0\r\ncontent-length: {}\r\nhost: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len(),
+        server.addr,
+    );
+    let mut stream = TcpStream::connect(server.addr).await.expect("connect");
+    stream.write_all(request.as_bytes()).await.expect("write");
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).await.expect("read");
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
+    Exchange {
+        status: head
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .expect("a status line"),
+        head: head.to_owned(),
+        body: body.to_owned(),
+    }
+}
+
+/// `eventarc.authentication: "permissive"`, the development default: the Admin SDK's publication with
+/// the emulators' fake credential, or with none, is delivered as production delivers it with a Google
+/// credential; the production setting refuses the same requests with the recorded 401.
+#[tokio::test]
+async fn permissive_strict_listener_delivers_the_admin_sdk_publication_without_a_google_credential()
+{
+    use fireemu_adapter_functions::eventarc_strict::{EventarcAuthentication, EventarcContext};
+    let permissive = start_with_context(
+        Some(FunctionsHttpProfile::Strict),
+        PROJECT,
+        None,
+        None,
+        Some(EventarcContext {
+            authentication: EventarcAuthentication::Permissive,
+            ..EventarcContext::default()
+        }),
+    )
+    .await;
+    for (index, bearer) in [Some("owner"), None, Some("ya29.a-token")]
+        .into_iter()
+        .enumerate()
+    {
+        let exchange = sdk_publish(&permissive, bearer, &format!("sdk-{index}")).await;
+        assert_eq!(
+            (exchange.status, exchange.body.as_str()),
+            (200, "{}\n"),
+            "{bearer:?}"
+        );
+        assert!(
+            !exchange.head.contains("owner"),
+            "the credential is never echoed"
+        );
+        assert_eq!(permissive.wait_for_frames(index + 1).await, index + 1);
+    }
+    permissive.stop().await;
+
+    let production = start_with_context(
+        Some(FunctionsHttpProfile::Strict),
+        PROJECT,
+        None,
+        None,
+        Some(EventarcContext::default()),
+    )
+    .await;
+    for bearer in [Some("owner"), None] {
+        let exchange = sdk_publish(&production, bearer, "refused").await;
+        assert_eq!(exchange.status, 401, "{bearer:?}");
+        assert_eq!(error_of(&exchange.body)["status"], "UNAUTHENTICATED");
+    }
+    assert_eq!(production.frames_so_far().await, 0);
+    production.stop().await;
 }

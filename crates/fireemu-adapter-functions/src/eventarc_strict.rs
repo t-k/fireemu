@@ -355,13 +355,30 @@ fn echo(text: &str) -> String {
 pub type OAuthCredentialCatalog =
     std::collections::BTreeMap<[u8; 32], std::collections::BTreeSet<String>>;
 
+/// How the surface treats the credential of a request (`eventarc.authentication`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum EventarcAuthentication {
+    /// Production's recorded refusals: a missing, malformed or JWT-shaped bearer is refused before any
+    /// other check, and an explicit [`OAuthCredentialCatalog`] decides which `ya29.` bearers are known.
+    #[default]
+    Production,
+    /// Every request is admitted whatever its credential, or without one, as the official emulator
+    /// admits it. The credential is never read, so neither its value nor its shape reaches an answer
+    /// or a log; every other check keeps production's order and shapes. This is the development
+    /// default of the daemon (owner decision 1396): the Admin SDK in CI has no Google credential.
+    Permissive,
+}
+
 /// Immutable listener facts, separate from canonical Eventarc resource state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EventarcContext {
     /// Configured alias of the canonical project, for GET/LIST only.
     pub project_number: Option<u64>,
-    /// Local OAuth authority; absence retains legacy shape-only authentication.
+    /// Local OAuth authority; absence retains legacy shape-only authentication. Read only under
+    /// [`EventarcAuthentication::Production`].
     pub oauth_credentials: Option<std::sync::Arc<OAuthCredentialCatalog>>,
+    /// Whether the credential is checked at all.
+    pub authentication: EventarcAuthentication,
 }
 
 /// Evaluates a request using explicitly configured listener facts.
@@ -372,6 +389,9 @@ pub fn evaluate_with_context(
     context: &EventarcContext,
 ) -> Outcome {
     let route = input.route;
+    if context.authentication == EventarcAuthentication::Permissive {
+        return evaluate_admitted(input, world, context.project_number);
+    }
     let credential = classify_token(input.bearer);
     if credential != Credential::WellFormed {
         return credential_refusal(route, credential);
@@ -701,7 +721,7 @@ pub fn evaluate_with_project_number(
         world,
         &EventarcContext {
             project_number,
-            oauth_credentials: None,
+            ..EventarcContext::default()
         },
     )
 }
@@ -1735,8 +1755,8 @@ mod tests {
         };
         let mut catalog = OAuthCredentialCatalog::new();
         let mut context = EventarcContext {
-            project_number: None,
             oauth_credentials: Some(std::sync::Arc::new(catalog.clone())),
+            ..EventarcContext::default()
         };
         assert_eq!(
             status_and_message(&evaluate_with_context(&input, &state, &context)).0,
@@ -1782,7 +1802,7 @@ mod tests {
                 let scopes = if grant { ["https://www.googleapis.com/auth/cloud-platform".to_owned()].into_iter().collect() } else { std::collections::BTreeSet::new() };
                 catalog.insert(fireemu_core_types::hash::sha256(token.as_bytes()), scopes);
             }
-            let context = EventarcContext { project_number: None, oauth_credentials: Some(std::sync::Arc::new(catalog)) };
+            let context = EventarcContext { oauth_credentials: Some(std::sync::Arc::new(catalog)), ..EventarcContext::default() };
             for (token, expected) in [(&first, if grant_first { 200 } else { 403 }), (&second, if grant_first { 403 } else { 200 })] {
                 let input = Input { route: &route, query: None, bearer: Some(token), body: b"" };
                 prop_assert_eq!(status_and_message(&evaluate_with_context(&input, &state, &context)).0, expected);
@@ -3526,5 +3546,203 @@ mod tests {
             .size(),
             2 + 1 + 10
         );
+    }
+
+    /// One request against a fresh world under `context`, with the given bearer (or none).
+    fn run_in(
+        context: &EventarcContext,
+        method: &str,
+        target: &str,
+        bearer: Option<&str>,
+        body: &str,
+    ) -> Outcome {
+        // Fixed identifiers, so that two worlds given the same requests answer the same bytes.
+        struct Fixed;
+        impl crate::eventarc_channels::Entropy for Fixed {
+            fn uuid(&mut self) -> String {
+                crate::eventarc_channels::uuid_from(1, 2)
+            }
+            fn hex(&mut self, digits: usize) -> String {
+                "a".repeat(digits)
+            }
+            fn topic_suffix(&mut self) -> u16 {
+                7
+            }
+        }
+        let (path, query) = target
+            .split_once('?')
+            .map_or((target, None), |(path, query)| (path, Some(query)));
+        let route = route(method, path).expect("a route");
+        let declared = "projects/demo/locations/us-central1/channels/c";
+        let declared_channel = |name: &str| name == declared;
+        let declared_in = |project: &str, location: &str| -> Vec<String> {
+            (project == PROJECT && (location == "-" || location == "us-central1"))
+                .then(|| declared.to_owned())
+                .into_iter()
+                .collect()
+        };
+        let channels =
+            ChannelStore::new(Box::new(Fixed), crate::eventarc_channels::Timing::default());
+        evaluate_with_context(
+            &Input {
+                route: &route,
+                query,
+                bearer,
+                body: body.as_bytes(),
+            },
+            &world(&declared_channel, &declared_in, &channels),
+            context,
+        )
+    }
+
+    /// The requests the permissive tests send: every route, a valid and an invalid publication, a
+    /// channel that does not exist, a project the caller may not use and a location that does not exist.
+    fn permissive_requests() -> Vec<(&'static str, String, String)> {
+        let events = format!(r#"{{"events":[{}]}}"#, delivered_event("p1"));
+        vec![
+            ("POST", format!("{CHANNEL}:publishEvents"), events.clone()),
+            ("POST", format!("{CHANNEL}:publishEvents"), "{".to_owned()),
+            (
+                "POST",
+                "/projects/demo/locations/us-central1/channels/absent:publishEvents".to_owned(),
+                events.clone(),
+            ),
+            (
+                "POST",
+                "/v1/projects/other/locations/us-central1/channels/c:publishEvents".to_owned(),
+                events,
+            ),
+            ("GET", CHANNEL.to_owned(), String::new()),
+            (
+                "GET",
+                "/v1/projects/demo/locations/us-central1/channels".to_owned(),
+                String::new(),
+            ),
+            (
+                "GET",
+                "/v1/projects/demo/locations/nowhere/channels".to_owned(),
+                String::new(),
+            ),
+            (
+                "POST",
+                "/v1/projects/demo/locations/us-central1/channels?channelId=n".to_owned(),
+                r#"{"name":"projects/demo/locations/us-central1/channels/n"}"#.to_owned(),
+            ),
+            (
+                "DELETE",
+                "/v1/projects/demo/locations/us-central1/channels/gone".to_owned(),
+                String::new(),
+            ),
+            (
+                "GET",
+                "/v1/projects/demo/locations/us-central1/operations/never".to_owned(),
+                String::new(),
+            ),
+        ]
+    }
+
+    fn permissive() -> EventarcContext {
+        EventarcContext {
+            authentication: EventarcAuthentication::Permissive,
+            ..EventarcContext::default()
+        }
+    }
+
+    #[test]
+    fn production_is_the_default_authentication() {
+        assert_eq!(
+            EventarcContext::default().authentication,
+            EventarcAuthentication::Production
+        );
+    }
+
+    /// The Admin SDK sends `Bearer owner` with the emulators' usual fake credential, and a request
+    /// without a credential is what a hand-written client sends; permissive admits both and answers
+    /// exactly what production answers an admitted `ya29.` bearer.
+    #[test]
+    fn permissive_admits_any_credential_and_keeps_every_other_answer() {
+        let production = EventarcContext::default();
+        for (method, target, body) in permissive_requests() {
+            let admitted = run_in(&production, method, &target, Some("ya29.a-token"), &body);
+            for bearer in [
+                None,
+                Some(""),
+                Some("owner"),
+                Some("invalid-token-for-the-recording"),
+                Some("eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln"),
+                Some("ya29."),
+                Some("ya29.a-token"),
+            ] {
+                assert_eq!(
+                    run_in(&permissive(), method, &target, bearer, &body),
+                    admitted,
+                    "{method} {target} {bearer:?}"
+                );
+            }
+        }
+        // A valid publication reaches the declared channel's delivery.
+        let (method, target, body) = permissive_requests().remove(0);
+        assert!(matches!(
+            run_in(&permissive(), method, &target, None, &body),
+            Outcome::Deliver { .. }
+        ));
+    }
+
+    /// Near misses: production keeps refusing every credential permissive admits, with the recorded
+    /// answers, and an empty catalog still refuses a `ya29.` bearer under production.
+    #[test]
+    fn production_refuses_what_permissive_admits() {
+        let production = EventarcContext::default();
+        let target = format!("{CHANNEL}:publishEvents");
+        let body = format!(r#"{{"events":[{}]}}"#, delivered_event("p1"));
+        for bearer in [
+            None,
+            Some(""),
+            Some("owner"),
+            Some("eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln"),
+            Some("ya29."),
+        ] {
+            assert_eq!(
+                status_and_message(&run_in(&production, "POST", &target, bearer, &body)).0,
+                401,
+                "{bearer:?}"
+            );
+        }
+        let catalog = EventarcContext {
+            oauth_credentials: Some(std::sync::Arc::new(OAuthCredentialCatalog::new())),
+            ..EventarcContext::default()
+        };
+        assert_eq!(
+            status_and_message(&run_in(
+                &catalog,
+                "POST",
+                &target,
+                Some("ya29.a-token"),
+                &body
+            ))
+            .0,
+            401
+        );
+    }
+
+    proptest! {
+        /// Permissive never reads the credential: whatever the bearer, and whatever catalog is present,
+        /// the answer is production's answer to an admitted bearer.
+        #[test]
+        fn permissive_answers_do_not_depend_on_the_credential(
+            bearer in proptest::option::of(".{0,64}"),
+            request in 0usize..10,
+            catalog in any::<bool>(),
+        ) {
+            let (method, target, body) = permissive_requests().swap_remove(request);
+            let mut context = permissive();
+            if catalog {
+                context.oauth_credentials = Some(std::sync::Arc::new(OAuthCredentialCatalog::new()));
+            }
+            prop_assert_eq!(
+                run_in(&context, method, &target, bearer.as_deref(), &body),
+                run_in(&EventarcContext::default(), method, &target, Some("ya29.a-token"), &body)
+            );
+        }
     }
 }

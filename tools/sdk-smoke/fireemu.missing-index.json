@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "profile": "strict",
+  "productionExact": true,
   "firestore": {
     "edition": "standard",
     "apiMode": "native"

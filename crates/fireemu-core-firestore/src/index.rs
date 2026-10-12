@@ -291,11 +291,33 @@ pub enum IndexValidationPolicy {
     /// needs a configured composite index, the automatic single-field index, or a merge of
     /// configured indexes production performs itself. Nothing is assumed.
     Production,
+    /// Production's rules, except that a Standard query production would refuse for a missing
+    /// composite index is served as if the index existed (`AssumedIndex`) and reported. Every
+    /// query production serves, by one index or by a merge, is planned exactly as under
+    /// [`Self::Production`], so nothing production serves is reported. The strict profile's
+    /// development default (`firestore.missingIndexes: "report"`).
+    ProductionReport,
     /// Firebase Emulator Suite parity: every composite index a query needs is assumed to
     /// exist (`AssumedIndex`), so a project without `firestore.indexes.json` runs the same
     /// queries it runs against the Emulator. Structural validation and the Standard query
     /// limits are unchanged; it says nothing about production index conformance.
     Emulator,
+}
+
+impl IndexValidationPolicy {
+    /// Whether production's rules apply (the strict profile): index merges, production's
+    /// canonicalization and every other refusal only production makes. Only the emulator
+    /// policy drops them; whether a missing index is refused does not change this.
+    #[must_use]
+    pub const fn production_rules(self) -> bool {
+        !matches!(self, Self::Emulator)
+    }
+
+    /// Whether a Standard query without its composite index is served as if the index existed.
+    #[must_use]
+    pub const fn assumes_missing_indexes(self) -> bool {
+        !matches!(self, Self::Production)
+    }
 }
 
 /// Planning inputs.
@@ -328,8 +350,8 @@ pub enum IndexDecision {
         /// Supporting index.
         index: IndexDefinition,
     },
-    /// `IndexValidationPolicy::Production`: no single index serves the query, but production
-    /// merges these indexes (scalar equality filters, optionally ordered): each member serves
+    /// Production's rules ([`IndexValidationPolicy::production_rules`]): no single index serves
+    /// the query, but production merges these indexes (scalar equality filters, optionally ordered): each member serves
     /// some of the equality fields followed by the same order suffix.
     MergeIndexes {
         /// Indexes merged; together they cover every equality field.
@@ -345,8 +367,8 @@ pub enum IndexDecision {
         /// Required index.
         requirement: IndexDefinition,
     },
-    /// `IndexValidationPolicy::Emulator`: the required composite index is not configured but
-    /// the query is served as if it were (what the Firebase Emulator does).
+    /// [`IndexValidationPolicy::assumes_missing_indexes`]: the required composite index is not
+    /// configured but the query is served as if it were (what the Firebase Emulator does).
     AssumedIndex {
         /// The index production would require.
         requirement: IndexDefinition,
@@ -375,7 +397,7 @@ impl fmt::Display for IndexDecision {
             Self::AssumedIndex { requirement } => {
                 write!(
                     f,
-                    "assumed index {} (emulator policy)",
+                    "assumed index {} (not configured)",
                     describe(requirement)
                 )
             }
@@ -862,7 +884,8 @@ pub enum PlannedScan {
 /// The planner's answer for one DNF disjunct.
 enum DisjunctDecision {
     Scan(PlannedScan),
-    /// `IndexValidationPolicy::Emulator` on Standard: served as if the index existed.
+    /// `IndexValidationPolicy::Emulator` or `ProductionReport` on Standard: served as if the
+    /// index existed.
     Assumed(IndexDefinition),
     Missing(IndexDefinition),
 }
@@ -884,14 +907,16 @@ fn decide_disjunct(
     {
         return DisjunctDecision::Scan(PlannedScan::Index(i.clone()));
     }
-    if let Some(members) = (ctx.policy == IndexValidationPolicy::Production)
+    if let Some(members) = ctx
+        .policy
+        .production_rules()
         .then(|| merged_indexes_for(req, indexes, collection, group))
         .flatten()
     {
         return DisjunctDecision::Scan(PlannedScan::Merge(members));
     }
     let requirement = required_index(req, collection, group);
-    if ctx.policy == IndexValidationPolicy::Emulator && ctx.edition == FirestoreEdition::Standard {
+    if ctx.policy.assumes_missing_indexes() && ctx.edition == FirestoreEdition::Standard {
         DisjunctDecision::Assumed(requirement)
     } else {
         DisjunctDecision::Missing(requirement)
@@ -1050,7 +1075,7 @@ fn decide_nearest_disjunct(
     {
         return DisjunctDecision::Scan(PlannedScan::Index(index.clone()));
     }
-    if ctx.policy == IndexValidationPolicy::Emulator && ctx.edition == FirestoreEdition::Standard {
+    if ctx.policy.assumes_missing_indexes() && ctx.edition == FirestoreEdition::Standard {
         DisjunctDecision::Assumed(required)
     } else {
         DisjunctDecision::Missing(required)

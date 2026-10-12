@@ -136,6 +136,37 @@ pub const OFFICIAL_EMULATOR_REFUSES: &[&str] = &[
     "FS-QUERY-LIMIT-ARRAY-CONTAINS-PER-DISJUNCTION",
 ];
 
+/// The warning a query carries when the strict profile served it without its composite index
+/// (`firestore.missingIndexes: "report"`); production refuses the same query.
+pub const MISSING_INDEX_REPORTED: &str = "FS_MISSING_INDEX_REPORTED";
+
+/// A composite index the strict profile assumed for a query production refuses without it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingIndexReport {
+    /// `projects/<p>/databases/<d>`.
+    pub database: String,
+    /// The `firestore.indexes.json` entry that serves the query.
+    pub fragment: String,
+    /// Production's refusal of the query, with the console link that creates the index.
+    pub message: String,
+}
+
+/// Distinct missing indexes kept for [`missing_index_reports`]; later ones are only logged.
+const MAX_MISSING_INDEX_REPORTS: usize = 1000;
+
+static MISSING_INDEX_REPORTS: std::sync::Mutex<Vec<MissingIndexReport>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Every distinct (database, index) the strict profile has reported since the process
+/// started, in the order first seen, so a test run can fail on any of them.
+#[must_use]
+pub fn missing_index_reports() -> Vec<MissingIndexReport> {
+    MISSING_INDEX_REPORTS
+        .lock()
+        .map(|reports| reports.clone())
+        .unwrap_or_default()
+}
+
 /// Strict gateway configuration.
 #[derive(Debug, Clone)]
 pub struct Gateway {
@@ -151,11 +182,67 @@ pub struct Gateway {
 }
 
 impl Gateway {
-    /// Whether requests get the refusals only production makes: the strict profile's index
-    /// policy. The emulator profile may add no rejection (`spec/compatibility/contract.json`).
+    /// Whether requests get the refusals only production makes: the strict profile, whatever
+    /// `firestore.missingIndexes` says. The emulator profile may add no rejection
+    /// (`spec/compatibility/contract.json`).
     #[must_use]
     pub fn production_refusals(&self) -> bool {
-        self.ctx.policy == IndexValidationPolicy::Production
+        self.ctx.policy.production_rules()
+    }
+
+    /// Records and logs, once per database and index, a query on `database`
+    /// (`projects/<p>/databases/<d>`) that this gateway served without the composite index
+    /// production refuses it without (`firestore.missingIndexes: "report"`). Anything else,
+    /// including the emulator profile's assumptions, is left alone.
+    pub fn report_missing_index(&self, database: &str, accepted: &AcceptedQuery) {
+        use std::io::Write as _;
+        let IndexDecision::AssumedIndex { requirement } = &accepted.decision else {
+            return;
+        };
+        if self.ctx.policy != IndexValidationPolicy::ProductionReport {
+            return;
+        }
+        let report = MissingIndexReport {
+            database: database.to_owned(),
+            fragment: requirement.indexes_json_fragment(),
+            message: crate::index_messages::missing_index_message(
+                database,
+                requirement,
+                accepted.query.inequality_fields().len() > 1,
+            ),
+        };
+        let first = MISSING_INDEX_REPORTS
+            .lock()
+            .map(|mut reports| {
+                let first = !reports
+                    .iter()
+                    .any(|r| r.database == report.database && r.fragment == report.fragment);
+                if first && reports.len() < MAX_MISSING_INDEX_REPORTS {
+                    reports.push(report.clone());
+                }
+                first
+            })
+            .unwrap_or(false);
+        if first {
+            // Field paths reach the log only JSON-escaped (fragment) or with control
+            // characters escaped (production's text), each cut at the shared echo bound.
+            let mut message = String::with_capacity(report.message.len());
+            for c in report.message.chars() {
+                if c.is_control() && c != '\n' {
+                    message.extend(c.escape_default());
+                } else {
+                    message.push(c);
+                }
+            }
+            let _ = writeln!(
+                std::io::stderr(),
+                "[firestore] {database}: served a query without its composite index \
+                 (firestore.missingIndexes is \"report\"); production refuses it: {}\n\
+                 Add to firestore.indexes.json:\n{}",
+                fireemu_core_types::codec::echo(&message),
+                fireemu_core_types::codec::echo(&report.fragment),
+            );
+        }
     }
 
     /// Runs every strict check on a decoded query.
@@ -198,9 +285,10 @@ impl Gateway {
     /// The canonical query, with the refusals of the profile's policy: production's under
     /// the strict profile, the official emulator's under the emulator profile.
     fn canonicalize(&self, query: &Query) -> Result<Query, Rejection> {
-        match self.ctx.policy {
-            IndexValidationPolicy::Production => query.canonicalize(),
-            IndexValidationPolicy::Emulator => query.canonicalize_emulator(),
+        if self.production_refusals() {
+            query.canonicalize()
+        } else {
+            query.canonicalize_emulator()
         }
         .map_err(|e| Rejection::InvalidQuery(e.to_string()))
     }
@@ -213,9 +301,8 @@ impl Gateway {
     ) -> Result<AcceptedQuery, Rejection> {
         // Production refuses a cursor whose `__name__` value is not a document reference,
         // or whose reference names a document the query does not select. The compatibility
-        // contract keeps production-only refusals out of the `emulator` profile, and the
-        // production index policy is exactly what the strict profile selects.
-        if self.ctx.policy == IndexValidationPolicy::Production {
+        // contract keeps production-only refusals out of the `emulator` profile.
+        if self.production_refusals() {
             canonical
                 .check_production_cursor_constraints()
                 .map_err(|error| Rejection::InvalidQuery(error.to_string()))?;
@@ -270,6 +357,11 @@ impl Gateway {
             IndexDecision::UseIndex { .. }
             | IndexDecision::MergeIndexes { .. }
             | IndexDecision::KindlessScan => {}
+            // The strict profile reports with the database's console link, which only the
+            // caller knows ([`Self::report_missing_index`]).
+            IndexDecision::AssumedIndex { .. } if self.production_refusals() => {
+                warnings.push(MISSING_INDEX_REPORTED.to_owned());
+            }
             IndexDecision::AssumedIndex { requirement } => {
                 warnings.push("FS_EMULATOR_INDEX_ASSUMED".to_owned());
                 note_assumed_index(&requirement.indexes_json_fragment());

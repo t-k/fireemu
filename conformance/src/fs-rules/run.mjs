@@ -645,6 +645,9 @@ export async function runLocal(programs, { profile = "strict" } = {}) {
     JSON.stringify({
       schemaVersion: 1,
       profile,
+      // The production rows include missing-index refusals, which strict gives only with
+      // productionExact; the emulator profile refuses the key.
+      ...(profile === "strict" ? { productionExact: true } : {}),
       daemon: { authProjectNumbers: { [SANDBOX_PROJECT]: LOCAL_PROJECT_NUMBER } },
       auth: {
         idTokenSigning: "session-rsa",

@@ -3522,6 +3522,7 @@ impl LocalBackend {
         self.gateway
             .validate_query_with_indexes(&query, &database_indexes)
             .map_err(|rejection| self.index_rejection(parent, &rejection))
+            .inspect(|accepted| self.report_missing_index(parent, accepted))
     }
 
     /// Decodes and validates a structured aggregation query through the strict gateway.
@@ -3537,6 +3538,14 @@ impl LocalBackend {
         self.gateway
             .validate_aggregation_query_with_indexes(&query, aggregations, &database_indexes)
             .map_err(|rejection| self.index_rejection(parent, &rejection))
+            .inspect(|accepted| self.report_missing_index(parent, accepted))
+    }
+
+    /// Reports a query served without the composite index production would refuse it
+    /// without (`firestore.missingIndexes: "report"`), naming the database it ran on.
+    fn report_missing_index(&self, parent: &Parent, accepted: &AcceptedQuery) {
+        self.gateway
+            .report_missing_index(&crate::gateway::database_name(parent), accepted);
     }
 
     /// Atomically replaces the index catalog used by subsequent query plans.

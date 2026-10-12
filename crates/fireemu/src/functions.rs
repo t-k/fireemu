@@ -6402,7 +6402,7 @@ mod tests {
                     ctx: PlanningContext {
                         edition: cfg.edition,
                         api_mode: cfg.api_mode,
-                        policy: cfg.index_policy,
+                        policy: cfg.index_policy(),
                     },
                     indexes: IndexSet::default(),
                     enforce_limits: cfg.enforce_limits,

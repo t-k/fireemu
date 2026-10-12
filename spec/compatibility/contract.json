@@ -219,7 +219,7 @@
             },
             "approvalRecord": "README.md, \"Gap from the official Firebase Emulator Suite\""
           },
-          "note": "The pinned official Firestore emulator does not check composite indexes at all, so the profile that reproduces it assumes every index a query needs, answers the query as the official emulator does (conformance/fixtures/firestore/missing-composite-index.json#admin-equality-plus-inequality is a parity row) and reports each assumption as the FS_EMULATOR_INDEX_ASSUMED diagnostic. The strict profile applies production's rules instead, verified against a real project: the same query is refused with FAILED_PRECONDITION and the console link production answers with, and the index merges production performs are accepted. The policy has no configuration key; it follows the profile."
+          "note": "The pinned official Firestore emulator does not check composite indexes at all, so the profile that reproduces it assumes every index a query needs, answers the query as the official emulator does (conformance/fixtures/firestore/missing-composite-index.json#admin-equality-plus-inequality is a parity row) and reports each assumption as the FS_EMULATOR_INDEX_ASSUMED diagnostic. The strict profile applies production's rules instead, verified against a real project, and the index merges production performs are accepted; a query production refuses for a missing composite index runs and is reported by default (firestore.missingIndexes \"report\", the FS_MISSING_INDEX_REPORTED diagnostic with production's refusal text and console link) and is refused with FAILED_PRECONDITION and that console link under productionExact or firestore.missingIndexes \"refuse\". The emulator profile has no refusing value."
         },
         {
           "key": "rules.idTokenVerification",
@@ -850,10 +850,13 @@
             "tests": [
               "standard_query_without_composite_index_is_failed_precondition_with_fragment",
               "the_same_official_limitation_is_served_under_emulator_and_refused_under_strict",
-              "the_limit_switch_turns_a_refusal_into_an_observation"
+              "the_limit_switch_turns_a_refusal_into_an_observation",
+              "the_strict_profile_runs_a_query_without_its_composite_index_and_reports_it_once",
+              "the_local_backend_reports_the_query_it_serves_in_report_mode"
             ],
             "integration": [
               "crates/fireemu-adapter-grpc/tests/gateway.rs",
+              "crates/fireemu-adapter-grpc/tests/missing_index_report.rs",
               "crates/fireemu/tests/profiles.rs"
             ],
             "conformance": [
@@ -865,7 +868,7 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "the strict profile rejects a query whose composite index is not configured, as production does, and prints the firestore.indexes.json fragment production would need",
+              "behaviour": "the strict profile names a query whose composite index is not configured, with production's refusal text, console link and the firestore.indexes.json fragment; it runs the query and reports it once per database by default, and rejects it as production does under productionExact or firestore.missingIndexes \"refuse\"",
               "precision": "conservative"
             }
           ],

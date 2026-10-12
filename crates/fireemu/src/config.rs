@@ -20,10 +20,10 @@ use serde_json::{Map, Value};
 ///
 /// The two profiles are declared in `spec/compatibility/contract.json`; this enum is the
 /// half the daemon executes. The keys a profile only *declares* stay declared: what the
-/// runtime derives from it is [`Self::index_policy`], [`Self::enforce_limits`],
-/// [`Self::token_acceptance`] and [`Self::implicit_database_creation`]. The index policy has
-/// no configuration key of its own and follows the profile; `firestore.enforceLimits` may
-/// still override its default.
+/// runtime derives from it is [`RuntimeConfig::index_policy`] (with
+/// `firestore.missingIndexes`), [`Self::enforce_limits`], [`Self::token_acceptance`] and
+/// [`Self::implicit_database_creation`]; `firestore.enforceLimits` may still override its
+/// default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CompatibilityProfile {
     /// Reproduce the behaviour the pinned Local Emulator Suite ships, including its
@@ -254,21 +254,6 @@ impl CompatibilityProfile {
         match self {
             Self::Emulator => "emulator",
             Self::Strict => "strict",
-        }
-    }
-
-    /// The index validation policy; it has no configuration key of its own.
-    ///
-    /// The pinned official Firestore emulator does not check composite indexes at all, so
-    /// the profile that reproduces it assumes them and reports each one it assumed. `strict`
-    /// applies production's rules, verified against a real project: a query without a
-    /// supporting index is refused with the `firestore.indexes.json` fragment production
-    /// would need, and the index merges production performs are accepted.
-    #[must_use]
-    pub const fn index_policy(self) -> IndexValidationPolicy {
-        match self {
-            Self::Emulator => IndexValidationPolicy::Emulator,
-            Self::Strict => IndexValidationPolicy::Production,
         }
     }
 
@@ -955,6 +940,19 @@ fn parse_auth_quota_simulation(
     })
 }
 
+/// `firestore.missingIndexes`: what the strict profile does with a query whose composite index
+/// is not defined. The emulator profile always runs it, as the official emulator checks no
+/// composite index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingIndexes {
+    /// Run the query and report the index production would need, once per database and
+    /// index (development default, owner decision 1396).
+    Report,
+    /// Refuse the query with production's `FAILED_PRECONDITION` and console link
+    /// (`productionExact`).
+    Refuse,
+}
+
 /// Effective daemon configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)] // independent switches, each read on its own
@@ -962,7 +960,8 @@ pub struct RuntimeConfig {
     /// Optional local OAuth authority for the strict Eventarc listener. An empty catalog denies every OAuth-shaped bearer.
     pub eventarc_oauth_credentials:
         Option<fireemu_adapter_functions::eventarc_strict::OAuthCredentialCatalog>,
-    /// Compatibility profile (`profile`). It sets the defaults of [`Self::index_policy`],
+    /// Compatibility profile (`profile`). It decides [`Self::index_policy`] with
+    /// [`Self::firestore_missing_indexes`] and sets the defaults of
     /// [`Self::enforce_limits`], [`Self::token_acceptance`] and
     /// [`Self::implicit_database_creation`]; an explicit key wins.
     pub profile: CompatibilityProfile,
@@ -982,8 +981,10 @@ pub struct RuntimeConfig {
     pub api_mode: FirestoreApiMode,
     /// `firestore.location`: opaque database location used by strict second-generation Firestore events. Defaults to `nam5`; the emulator profile keeps `nam5`. Unknown identifiers are accepted, but whitespace and control characters are refused; this value does not control routing.
     pub firestore_location: String,
-    /// Index validation policy, derived from the profile (no key of its own).
-    pub index_policy: IndexValidationPolicy,
+    /// `firestore.missingIndexes`: whether the strict profile refuses a query whose composite
+    /// index is not defined, as production does, or runs it and reports the index
+    /// (development default; see [`Self::index_policy`]).
+    pub firestore_missing_indexes: MissingIndexes,
     /// Whether a Standard query limit violation refuses the query
     /// (`firestore.enforceLimits`; profile default). When it does not, each violation is
     /// reported as an `FS_LIMIT_OBSERVED:<id>` warning and the query runs.
@@ -1379,7 +1380,7 @@ impl Default for RuntimeConfig {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
             firestore_location: "nam5".to_owned(),
-            index_policy: profile.index_policy(),
+            firestore_missing_indexes: MissingIndexes::Report,
             enforce_limits: profile.enforce_limits(),
             production_exact: false,
             token_acceptance: profile.token_acceptance(),
@@ -2977,7 +2978,6 @@ impl RuntimeConfig {
     /// simply overwrites it.
     pub fn set_profile(&mut self, profile: CompatibilityProfile) {
         self.profile = profile;
-        self.index_policy = profile.index_policy();
         self.enforce_limits = profile.enforce_limits();
         self.token_acceptance = profile.token_acceptance();
         self.implicit_database_creation = profile.implicit_database_creation();
@@ -3000,6 +3000,30 @@ impl RuntimeConfig {
     pub fn set_production_exact(&mut self, exact: bool) {
         self.production_exact = exact;
         self.auth_allow_unsigned_custom_tokens = !exact;
+        self.firestore_missing_indexes = if exact {
+            MissingIndexes::Refuse
+        } else {
+            MissingIndexes::Report
+        };
+    }
+
+    /// The index validation policy of the profile and `firestore.missingIndexes`. The pinned
+    /// official Firestore emulator does not check composite indexes at all, so the profile
+    /// that reproduces it assumes them and reports each one it assumed. `strict` applies
+    /// production's rules, verified against a real project, including the index merges
+    /// production performs; a query production refuses for a missing composite index is
+    /// refused with the console link (`refuse`) or run and reported (`report`).
+    #[must_use]
+    pub const fn index_policy(&self) -> IndexValidationPolicy {
+        match (self.profile, self.firestore_missing_indexes) {
+            (CompatibilityProfile::Emulator, _) => IndexValidationPolicy::Emulator,
+            (CompatibilityProfile::Strict, MissingIndexes::Refuse) => {
+                IndexValidationPolicy::Production
+            }
+            (CompatibilityProfile::Strict, MissingIndexes::Report) => {
+                IndexValidationPolicy::ProductionReport
+            }
+        }
     }
 
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
@@ -3657,9 +3681,31 @@ impl RuntimeConfig {
                 return Err(ConfigError(
                     "firestore.indexValidationPolicy was removed in fireemu 0.7.0: the index \
                      policy follows the profile (strict checks composite indexes with \
-                     production's rules, emulator assumes them)"
+                     production's rules, emulator assumes them), and firestore.missingIndexes \
+                     decides whether strict refuses a missing composite index"
                         .to_owned(),
                 ));
+            }
+            if let Some(value) = fs.get("missingIndexes") {
+                cfg.firestore_missing_indexes = match value.as_str() {
+                    Some("report") => MissingIndexes::Report,
+                    Some("refuse") => MissingIndexes::Refuse,
+                    _ => {
+                        return Err(ConfigError(
+                            "firestore.missingIndexes must be \"report\" or \"refuse\"".to_owned(),
+                        ))
+                    }
+                };
+                // The emulator profile reproduces the official emulator, which checks no
+                // composite index; refusing is production's behaviour.
+                if cfg.firestore_missing_indexes == MissingIndexes::Refuse
+                    && cfg.profile != CompatibilityProfile::Strict
+                {
+                    return Err(ConfigError(
+                        "firestore.missingIndexes \"refuse\" requires the strict profile"
+                            .to_owned(),
+                    ));
+                }
             }
             if let Some(f) = fs.get("textIndexDefinitionFile").and_then(Value::as_str) {
                 cfg.text_index_file = Some(f.to_owned());
@@ -4724,7 +4770,7 @@ mod tests {
         // without a create.
         let emulator = with_profile(json!({"profile": "emulator"})).unwrap();
         assert_eq!(emulator.profile, CompatibilityProfile::Emulator);
-        assert_eq!(emulator.index_policy, IndexValidationPolicy::Emulator);
+        assert_eq!(emulator.index_policy(), IndexValidationPolicy::Emulator);
         assert!(!emulator.enforce_limits);
         assert_eq!(emulator.token_acceptance, TokenAcceptance::EmulatorMock);
         assert!(emulator.implicit_database_creation);
@@ -4732,9 +4778,13 @@ mod tests {
         assert!(emulator.end_user_transactions);
         assert!(!emulator.listen_stream_lifetime);
 
-        // strict: every one of those becomes production's refusal.
+        // strict: every one of those becomes production's refusal, except a missing composite
+        // index, which runs and is reported until productionExact asks for the refusal.
         let strict = with_profile(json!({"profile": "strict"})).unwrap();
-        assert_eq!(strict.index_policy, IndexValidationPolicy::Production);
+        assert_eq!(
+            strict.index_policy(),
+            IndexValidationPolicy::ProductionReport
+        );
         assert!(strict.enforce_limits);
         assert_eq!(strict.token_acceptance, TokenAcceptance::Verified);
         assert!(!strict.implicit_database_creation);
@@ -4952,7 +5002,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(cfg.profile, CompatibilityProfile::Emulator);
-        assert_eq!(cfg.index_policy, IndexValidationPolicy::Emulator);
+        assert_eq!(cfg.index_policy(), IndexValidationPolicy::Emulator);
         assert!(cfg.enforce_limits);
 
         let cfg = with_profile(json!({
@@ -4965,10 +5015,10 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(cfg.profile, CompatibilityProfile::Strict);
-        assert_eq!(cfg.index_policy, IndexValidationPolicy::Production);
+        assert_eq!(cfg.index_policy(), IndexValidationPolicy::ProductionReport);
         assert!(!cfg.enforce_limits);
-        // The token semantics and the index policy have no key of their own: the profile is
-        // the only way to ask for them, so an explicit limit switch never quietly loosens them.
+        // The token semantics have no key of their own: the profile is the only way to ask
+        // for them, so an explicit limit switch never quietly loosens them.
         assert_eq!(cfg.token_acceptance, TokenAcceptance::Verified);
     }
 
@@ -6221,6 +6271,111 @@ mod tests {
             assert_eq!(
                 read(json!({"productionExact": invalid})),
                 Err(ConfigError("productionExact must be a boolean".to_owned()))
+            );
+        }
+    }
+
+    #[test]
+    fn missing_indexes_are_reported_by_default_and_refused_under_production_exact() {
+        // Owner decision 1396: a query whose composite index is not defined runs and is
+        // reported in both profiles; production's refusal is opt-in, through productionExact
+        // or the key, and only the strict profile can refuse.
+        let read = |profile: &str, exact: Option<bool>, key: Option<&str>| {
+            let mut firestore = json!({"edition": "standard", "apiMode": "native"});
+            if let Some(key) = key {
+                firestore["missingIndexes"] = json!(key);
+            }
+            let mut extra = json!({"profile": profile, "firestore": firestore});
+            if let Some(exact) = exact {
+                extra["productionExact"] = json!(exact);
+            }
+            with_profile(extra)
+        };
+        let strict = |exact, key| read("strict", exact, key).unwrap();
+        for (exact, key, expected, policy) in [
+            (
+                None,
+                None,
+                MissingIndexes::Report,
+                IndexValidationPolicy::ProductionReport,
+            ),
+            (
+                Some(false),
+                None,
+                MissingIndexes::Report,
+                IndexValidationPolicy::ProductionReport,
+            ),
+            (
+                Some(true),
+                None,
+                MissingIndexes::Refuse,
+                IndexValidationPolicy::Production,
+            ),
+            (
+                None,
+                Some("refuse"),
+                MissingIndexes::Refuse,
+                IndexValidationPolicy::Production,
+            ),
+            (
+                Some(false),
+                Some("refuse"),
+                MissingIndexes::Refuse,
+                IndexValidationPolicy::Production,
+            ),
+            (
+                Some(true),
+                Some("report"),
+                MissingIndexes::Report,
+                IndexValidationPolicy::ProductionReport,
+            ),
+            (
+                Some(true),
+                Some("refuse"),
+                MissingIndexes::Refuse,
+                IndexValidationPolicy::Production,
+            ),
+            (
+                None,
+                Some("report"),
+                MissingIndexes::Report,
+                IndexValidationPolicy::ProductionReport,
+            ),
+        ] {
+            let cfg = strict(exact, key);
+            assert_eq!(cfg.firestore_missing_indexes, expected, "{exact:?} {key:?}");
+            assert_eq!(cfg.index_policy(), policy, "{exact:?} {key:?}");
+        }
+        assert_eq!(
+            RuntimeConfig::default().index_policy(),
+            IndexValidationPolicy::ProductionReport
+        );
+        // The emulator profile assumes every index, as the official emulator checks none.
+        for key in [None, Some("report")] {
+            let cfg = read("emulator", None, key).unwrap();
+            assert_eq!(cfg.firestore_missing_indexes, MissingIndexes::Report);
+            assert_eq!(cfg.index_policy(), IndexValidationPolicy::Emulator);
+        }
+        assert_eq!(
+            read("emulator", None, Some("refuse")),
+            Err(ConfigError(
+                "firestore.missingIndexes \"refuse\" requires the strict profile".to_owned()
+            ))
+        );
+        for invalid in [
+            json!("enforce"),
+            json!(true),
+            json!(null),
+            json!(["refuse"]),
+        ] {
+            let cfg = with_profile(json!({
+                "firestore": {"edition": "standard", "apiMode": "native", "missingIndexes": invalid},
+            }));
+            assert_eq!(
+                cfg,
+                Err(ConfigError(
+                    "firestore.missingIndexes must be \"report\" or \"refuse\"".to_owned()
+                ))
             );
         }
     }

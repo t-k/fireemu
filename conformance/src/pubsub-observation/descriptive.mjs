@@ -43,10 +43,18 @@ const HARNESS_CRASH_NAMES = new Set(["TypeError", "ReferenceError", "RangeError"
 const LOCAL_RUNTIME_FAILURES =
   /fetch failed|ECONNREFUSED|ECONNRESET|EPIPE|socket hang up|local clock advance refused/;
 
+const REPLACEMENT = String.fromCodePoint(0xfffd);
+export const isControl = (character) => {
+  const code = character.codePointAt(0);
+  return code < 0x20 || code === 0x7f;
+};
+
 // Bounded, printable copy of an error message (C0 controls, DEL and lone surrogates are replaced).
 export function boundedMessage(value) {
   let text = typeof value === "string" ? value : String(value);
-  text = text.replace(/[\u0000-\u001f\u007f]/g, "�").toWellFormed();
+  text = Array.from(text, (character) => (isControl(character) ? REPLACEMENT : character))
+    .join("")
+    .toWellFormed();
   if (Buffer.byteLength(text) <= MAX_DIFFERENCE_MESSAGE_BYTES) return text;
   let cut = text.slice(0, MAX_DIFFERENCE_MESSAGE_BYTES);
   while (Buffer.byteLength(cut) > MAX_DIFFERENCE_MESSAGE_BYTES - 3) cut = cut.slice(0, -1);

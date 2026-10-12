@@ -9,6 +9,7 @@ import {
   boundedMessage,
   classifyDifference,
   createDescriptiveDifferences,
+  isControl,
   selectDescriptiveMode,
 } from "./pubsub-observation/descriptive.mjs";
 import { descriptiveModeFor, options, replayA } from "./pubsub-observation/replay.mjs";
@@ -137,7 +138,7 @@ test("property: recorded messages are bounded, printable and keep short messages
     for (let j = 0; j < length; j++) text += alphabet[Math.floor(next() * alphabet.length)];
     const bounded = boundedMessage(text);
     assert.ok(Buffer.byteLength(bounded) <= MAX_DIFFERENCE_MESSAGE_BYTES);
-    assert.equal(/[\u0000-\u001f\u007f]/.test(bounded), false);
+    assert.equal(Array.from(bounded).some(isControl), false);
     assert.equal(bounded.isWellFormed(), true);
     if (/^[a ]*$/.test(text) && text.length <= MAX_DIFFERENCE_MESSAGE_BYTES)
       assert.equal(bounded, text);
@@ -270,8 +271,8 @@ test("property: strict and descriptive replays agree on everything but the recor
       const report = await strict;
       assert.equal(Object.hasOwn(report, "descriptive"), false);
       assert.equal(report.evidenceKind, "fixture");
-      const { descriptive: summary, evidenceKind, localRows, ...rest } = descriptive;
-      const { evidenceKind: strictKind, localRows: strictRows, ...strictRest } = report;
+      const { descriptive: summary, evidenceKind: _kind, localRows, ...rest } = descriptive;
+      const { evidenceKind: _strictKind, localRows: strictRows, ...strictRest } = report;
       assert.equal(summary.differences, 0);
       const stable = (rows) => rows.map(({ at: _at, ...row }) => row);
       assert.deepEqual(stable(localRows), stable(strictRows));

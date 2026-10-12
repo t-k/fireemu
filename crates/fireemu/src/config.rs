@@ -6266,7 +6266,7 @@ mod tests {
     }
 
     fn idp_assertions_config(
-        strict: bool,
+        profile: Option<&str>,
         exact: Option<bool>,
         key: Option<&str>,
         signers: bool,
@@ -6280,11 +6280,10 @@ mod tests {
         if signers {
             auth["idpSigners"] = json!({"https://idp.example/oidc/run": {"keys": [{"kty": "RSA", "alg": "RS256", "use": "sig", "kid": "k", "n": modulus, "e": "AQAB"}]}});
         }
-        let mut config = json!({
-            "schemaVersion": 1,
-            "profile": if strict { "strict" } else { "emulator" },
-            "auth": auth,
-        });
+        let mut config = json!({"schemaVersion": 1, "auth": auth});
+        if let Some(profile) = profile {
+            config["profile"] = json!(profile);
+        }
         if let Some(exact) = exact {
             config["productionExact"] = json!(exact);
         }
@@ -6293,12 +6292,14 @@ mod tests {
 
     #[test]
     fn idp_assertions_default_to_the_fixture_and_production_exact_or_signers_select_signed() {
-        // Every combination of the inputs the loader reads, against the model above.
-        for strict in [true, false] {
+        // Every combination of the inputs the loader reads, against the model above; an absent
+        // profile is the strict default.
+        for profile in [None, Some("strict"), Some("emulator")] {
+            let strict = profile != Some("emulator");
             for exact in [None, Some(false), Some(true)] {
                 for key in [None, Some("fixture"), Some("signed"), Some("Signed")] {
                     for signers in [false, true] {
-                        let config = idp_assertions_config(strict, exact, key, signers);
+                        let config = idp_assertions_config(profile, exact, key, signers);
                         let parsed = RuntimeConfig::from_json(&config)
                             .map(|cfg| cfg.auth_idp_assertions)
                             .map_err(|e| e.0);

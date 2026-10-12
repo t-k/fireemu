@@ -851,3 +851,35 @@ fn auth_idp_signed_assertions_refuse_every_fixture_shape() {
         assert_eq!(body["recordsCount"], "0", "{name}: {body}");
     }
 }
+
+#[test]
+fn auth_idp_declared_saml_provider_takes_the_fixture_unless_assertions_are_signed() {
+    // A strict configuration that declares a SAML provider (with certificates) but names no
+    // assertion mode takes the development default: the widget's JSON SAML response signs in.
+    // Production's certificate check needs "signed".
+    for (mode, expected) in [(None, 200), (Some("signed"), 400)] {
+        let mut auth = json!({"providers": {"saml": [saml("saml.seed")]}});
+        if let Some(mode) = mode {
+            auth["idpAssertions"] = json!(mode);
+        }
+        let daemon = Daemon::start(&format!("idp-saml-{expected}"), "strict", &auth);
+        let saml_response = json!({"assertion": {"subject": {"nameId": "seed@example.test"}}});
+        let request = json!({
+            "requestUri": format!(
+                "http://127.0.0.1:{}/emulator/auth/handler?providerId=saml.seed&id_token={}&SAMLResponse={}",
+                daemon.auth_port(),
+                query_value(&json!({"sub": "seed-sub", "email": "seed@example.test"}).to_string()),
+                query_value(&saml_response.to_string()),
+            ),
+            "postBody": "",
+            "returnSecureToken": true,
+        });
+        let (status, body) = sign_in_with_idp(&daemon, &request);
+        assert_eq!(status, expected, "{mode:?}: {body}");
+        assert_eq!(
+            body["idToken"].is_string(),
+            expected == 200,
+            "{mode:?}: {body}"
+        );
+    }
+}

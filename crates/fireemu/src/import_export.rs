@@ -386,10 +386,12 @@ fn directory_is_empty(dir: &Path) -> bool {
         .components()
         .filter(|component| !matches!(component, Component::CurDir))
         .collect();
-    if !matches!(components.last(), Some(Component::Normal(_))) {
-        return false;
-    }
-    let dir: std::path::PathBuf = components.iter().collect();
+    // `.` alone (the working directory) leaves no component; it is never a symlink.
+    let dir: std::path::PathBuf = if components.is_empty() {
+        std::path::PathBuf::from(".")
+    } else {
+        components.iter().collect()
+    };
     let Ok(fd) = rustix::fs::open(
         &dir,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -4407,6 +4409,12 @@ mod tests {
                 "{spelling}"
             );
         }
+        // A parent reference names a directory too.
+        let parent = root.join("parent");
+        let inside = parent.join("child");
+        std::fs::create_dir_all(&inside).unwrap();
+        assert!(super::directory_is_empty(&inside.join("..").join("child")));
+        assert!(!super::directory_is_empty(&inside.join("..")));
         let hidden = root.join("hidden");
         std::fs::create_dir(&hidden).unwrap();
         std::fs::write(hidden.join(".keep"), b"").unwrap();

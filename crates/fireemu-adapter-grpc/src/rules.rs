@@ -1332,12 +1332,16 @@ fn authorize_exact_names(
                 Decision::Deny(reason) => deny_text(reason),
                 Decision::Allow => "the rule read the resource of a missing document".into(),
             };
+            let logged = match &report.decision {
+                Decision::Deny(reason) => fireemu_core_rules::denial::deny_reason_summary(reason),
+                Decision::Allow => reason.clone(),
+            };
             report_denial(
                 sink,
                 principal,
                 Method::List,
                 &candidate.relative(),
-                &reason,
+                &logged,
                 &decided_conditions(ruleset, &coverage),
             );
             return Err(denied_quietly(
@@ -1423,7 +1427,7 @@ fn decide(
                 method: method_name(method),
                 path: path.relative(),
                 uid: uid.clone(),
-                reason: deny_text(reason),
+                reason: fireemu_core_rules::denial::deny_reason_summary(reason),
                 conditions: decided_conditions(ruleset, &coverage)
                     .iter()
                     .map(|entry| DeniedCondition::from_entry(entry, sink.source))

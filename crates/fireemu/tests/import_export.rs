@@ -2914,8 +2914,10 @@ fn a_failed_export_on_exit_fails_a_command_that_succeeded() {
 #[cfg(unix)]
 #[test]
 fn a_failed_export_on_exit_keeps_the_status_of_a_command_that_failed() {
-    let (output, _) =
-        export_on_exit_into_a_sealed_directory("export-on-exit-failure-3", &["sh", "-c", "exit 3"]);
+    let (output, _) = export_on_exit_into_a_sealed_directory(
+        "export-on-exit-failure-3",
+        &["/bin/sh", "-c", "exit 3"],
+    );
     let log = text(&output);
 
     assert_eq!(output.status.code(), Some(3), "{log}");
@@ -3302,4 +3304,23 @@ fn export_on_exit_below_an_ancestor_another_user_may_change_is_refused() {
     assert!(log.contains("extended ACL"), "{log}");
     assert!(log.contains("user:nobody allow"), "{log}");
     assert!(!out.exists(), "{log}");
+}
+
+/// IMPEMPTY-4: `--import .` in an empty working directory starts empty too (the working
+/// directory is never a symlink).
+#[test]
+fn an_empty_working_directory_imported_as_dot_starts_with_no_data() {
+    let dir = scratch("import-dot");
+    let data = dir.join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    for spelling in [".", "./"] {
+        let output = exec()
+            .current_dir(&data)
+            .args(["--import", spelling, "--", "true"])
+            .output()
+            .unwrap();
+        let log = text(&output);
+        assert!(output.status.success(), "{spelling}: {log}");
+        assert!(log.contains("starts with no data"), "{spelling}: {log}");
+    }
 }

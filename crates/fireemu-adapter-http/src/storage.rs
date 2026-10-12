@@ -2402,14 +2402,16 @@ impl StorageState {
         match report.decision {
             Decision::Allow => Ok(()),
             Decision::Deny(reason) => {
-                use fireemu_core_rules::denial::{deny_reason_text, DeniedCondition, RulesDenial};
+                use fireemu_core_rules::denial::{
+                    deny_reason_summary, DeniedCondition, RulesDenial,
+                };
                 (log.0)(&RulesDenial {
                     service: "storage",
                     location: format!("bucket {}", bucket.as_str()),
                     method: storage_method_name(method),
                     path: object_path.to_owned(),
                     uid: ctx.auth.as_ref().map(|auth| auth.uid.clone()),
-                    reason: deny_reason_text(&reason),
+                    reason: deny_reason_summary(&reason),
                     conditions: fireemu_core_rules::coverage::decided_conditions(
                         ruleset, &coverage,
                     )

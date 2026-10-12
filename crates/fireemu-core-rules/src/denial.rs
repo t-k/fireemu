@@ -120,6 +120,20 @@ pub fn deny_reason_text(reason: &DenyReason) -> String {
     }
 }
 
+/// [`deny_reason_text`] for a denial line: the same words, except that an unsupported feature
+/// is named by its kind only, because its message can quote an evaluated value (a regular
+/// expression built from a claim). The request trace keeps the full text.
+#[must_use]
+pub fn deny_reason_summary(reason: &DenyReason) -> String {
+    match reason {
+        DenyReason::Unsupported(_) => {
+            "a rules feature the evaluator does not support (the request trace has the detail)"
+                .to_owned()
+        }
+        other => deny_reason_text(other),
+    }
+}
+
 impl RulesDenial {
     /// The denial on one line, for a log.
     #[must_use]
@@ -152,7 +166,21 @@ impl RulesDenial {
 
 #[cfg(test)]
 mod tests {
-    use super::{excerpt, DeniedCondition, RulesDenial, EXCERPT_MAX_CHARS};
+    use super::{deny_reason_summary, excerpt, DeniedCondition, RulesDenial, EXCERPT_MAX_CHARS};
+    use crate::eval::DenyReason;
+
+    #[test]
+    fn an_unsupported_reason_is_named_without_its_message() {
+        let summary = deny_reason_summary(&DenyReason::Unsupported(
+            "unknown POSIX class [:s3cr3t:]".to_owned(),
+        ));
+        assert!(!summary.contains("s3cr3t"), "{summary}");
+        assert!(summary.contains("does not support"), "{summary}");
+        assert_eq!(
+            deny_reason_summary(&DenyReason::NoMatchingAllow),
+            "no allow statement evaluated to true"
+        );
+    }
     use crate::ast::Span;
     use crate::coverage::{CoverageEntry, ExprValue, UndefinedCause};
 

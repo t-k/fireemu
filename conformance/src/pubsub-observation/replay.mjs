@@ -31,6 +31,7 @@ import {
   createReplayClient,
   publishTimeAuthorized,
 } from "./replay-native.mjs";
+import { createDescriptiveDifferences } from "./descriptive.mjs";
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 function pinned(path, digest, max = 1000000) {
   const stat = lstatSync(path);
@@ -83,6 +84,57 @@ export function projectOwnedTopics(body, names, runId) {
   if (!body || !Array.isArray(body.topics)) throw new Error("LIST response topics required");
   return { topics: body.topics.filter((t) => names.includes(t?.name)) };
 }
+// Emulator-profile descriptive mode: where a replay step stopped and what each side answered.
+function descriptiveContext(row) {
+  return {
+    phase: "replay-row",
+    sourceN: row.n,
+    sourceEvent: row.event,
+    cellId: row.cellId ?? null,
+    method: row.method ?? null,
+    transport: row.transport ?? null,
+    ...(row.direction ? { direction: row.direction } : {}),
+  };
+}
+const replyShape = (reply) =>
+  reply ? { ok: reply.ok ?? null, status: reply.status ?? null, code: reply.code ?? null } : null;
+const streamEnd = (event) =>
+  event ? { event: event.event, code: event.code ?? null, sourceN: event.n ?? null } : null;
+function descriptiveEvidence(row, sourceCells, localCells) {
+  const original = sourceCells.find((c) => c.id === row.cellId),
+    actual = localCells.find((c) => c.id === row.cellId);
+  if (row.event === "request-dispatch")
+    return {
+      recorded: replyShape(original?.exchanges.find((e) => e.dispatchN === row.n)?.response),
+      local: replyShape(actual?.exchanges.find((e) => e.dispatchN === row.n)?.response),
+    };
+  if (row.event === "stream-case-observation")
+    return {
+      recorded: {
+        terminalCode: row.state?.terminal?.code ?? null,
+        inboundEnded: row.state?.inboundEnded ?? null,
+        incomplete: row.state?.incomplete ?? null,
+      },
+      local: streamEnd(
+        actual?.events.findLast((e) => ["stream-status", "stream-error"].includes(e.event)),
+      ),
+    };
+  if (row.event === "stream-frame")
+    return {
+      recorded: { receivedMessages: row.body?.receivedMessages?.length ?? 0 },
+      localFrames: actual?.frames.length ?? 0,
+    };
+  return undefined;
+}
+// The descriptive mode needs the explicit flag and an emulator-profile launch config.
+export function descriptiveModeFor(mode, launch) {
+  if (mode === undefined) return null;
+  if (mode !== "descriptive") throw new Error("replay mode refused");
+  if (!launch || typeof launch.config !== "string" || typeof launch.configSha256 !== "string")
+    throw new Error("descriptive replay launch config required");
+  const config = JSON.parse(pinned(launch.config, launch.configSha256));
+  return createDescriptiveDifferences({ profile: config.profile, mode });
+}
 export async function replayA(
   input,
   environment,
@@ -94,6 +146,7 @@ export async function replayA(
     wait,
     persist = () => {},
     publishTimeDisposition = null,
+    descriptive = null,
   } = {},
 ) {
   validateRuntime(pin, environment);
@@ -280,116 +333,125 @@ export async function replayA(
     });
     await clock.dispatch(input.rows[0]);
     for (const row of input.rows) {
-      if (row.event === "request-dispatch" || row.event === "stream-frame") {
-        if (currentCell !== row.cellId) {
-          native.closeCell(currentCell);
-          currentCell = row.cellId;
-          meter.enter(cells.find((c) => c.id === currentCell));
+      const step = async () => {
+        if (row.event === "request-dispatch" || row.event === "stream-frame") {
+          if (currentCell !== row.cellId) {
+            native.closeCell(currentCell);
+            currentCell = row.cellId;
+            meter.enter(cells.find((c) => c.id === currentCell));
+          }
         }
-      }
-      if (row.event === "request-dispatch") {
-        const cell = cells.find((c) => c.id === row.cellId),
-          local = localCells.find((c) => c.id === row.cellId);
-        const expected = source.cells
-          .find((c) => c.id === row.cellId)
-          .exchanges.find((e) => e.dispatchN === row.n);
-        if (!expected) throw new Error("source reply required for executable dispatch");
-        const request = restoreRequest(row, cell);
-        for (const value of [
-          request.name,
-          typeof request.topic === "string" ? request.topic : request.topic?.name,
-          typeof request.subscription === "string"
-            ? request.subscription
-            : request.subscription?.name,
-          row.routeName,
-        ])
-          if (value !== undefined && !owned(value, source.runId))
-            throw new Error("foreign replay resource refused");
-        expected.request.body = request;
-        const rewritten = bindings.request(expected);
-        const clockReceipt = await clock.dispatch(row);
-        dispatchN = row.n;
-        const observed = await wire.call({
-          category: row.category,
-          transport: row.transport,
-          service: /Topic|Publish/.test(row.method) ? "Publisher" : "Subscriber",
-          method: row.method,
-          request: rewritten.body,
-          ...(rewritten.routeName ? { routeName: rewritten.routeName } : {}),
-          cellId: row.cellId,
-          ...(row.ownedListNames ? { ownedListNames: row.ownedListNames } : {}),
-        });
-        const reply = observationOutcome(observed, row.method, rewritten.body);
-        if (row.method === "ListTopics" && expected.response.ok && reply.ok) {
-          expected.response = {
-            ...expected.response,
-            body: projectOwnedTopics(expected.response.body, row.ownedListNames, source.runId),
-          };
-          reply.body = projectOwnedTopics(reply.body, row.ownedListNames, source.runId);
-        }
-        if (
-          row.method === "Publish" &&
-          expected.response.ok &&
-          reply.ok &&
-          !expected.response.unknown &&
-          !reply.unknown
-        ) {
-          bindings.linkPublish(request, expected.response.body, reply.body);
-          publications.push({
-            sourceDispatchN: row.n,
-            sourceRequest: structuredClone(request),
-            localRequest: structuredClone(rewritten.body),
-            sourceReply: structuredClone(expected.response),
-            localReply: structuredClone(reply),
-            clock: clockReceipt,
+        if (row.event === "request-dispatch") {
+          const cell = cells.find((c) => c.id === row.cellId),
+            local = localCells.find((c) => c.id === row.cellId);
+          const expected = source.cells
+            .find((c) => c.id === row.cellId)
+            .exchanges.find((e) => e.dispatchN === row.n);
+          if (!expected) throw new Error("source reply required for executable dispatch");
+          const request = restoreRequest(row, cell);
+          for (const value of [
+            request.name,
+            typeof request.topic === "string" ? request.topic : request.topic?.name,
+            typeof request.subscription === "string"
+              ? request.subscription
+              : request.subscription?.name,
+            row.routeName,
+          ])
+            if (value !== undefined && !owned(value, source.runId))
+              throw new Error("foreign replay resource refused");
+          expected.request.body = request;
+          const rewritten = bindings.request(expected);
+          const clockReceipt = await clock.dispatch(row);
+          dispatchN = row.n;
+          const observed = await wire.call({
+            category: row.category,
+            transport: row.transport,
+            service: /Topic|Publish/.test(row.method) ? "Publisher" : "Subscriber",
+            method: row.method,
+            request: rewritten.body,
+            ...(rewritten.routeName ? { routeName: rewritten.routeName } : {}),
+            cellId: row.cellId,
+            ...(row.ownedListNames ? { ownedListNames: row.ownedListNames } : {}),
           });
-        }
-        if (
-          row.method === "Pull" &&
-          expected.response.body?.receivedMessages?.length &&
-          reply.body?.receivedMessages?.length
-        )
-          bindings.linkReceive(expected.response.body, reply.body);
-        local.exchanges.push({
-          ...expected,
-          request: rewritten,
-          response: reply,
-          n: raw.at(-1)?.n ?? 0,
-          dispatchN:
-            raw.findLast(
-              (entry) => entry.event === "request-dispatch" && entry.sourceDispatchN === row.n,
-            )?.n ?? null,
-          durationMs: reply.durationMs,
-        });
-        if (
-          row.cellId === "S07" &&
-          row.method === "Pull" &&
-          expected.response.body?.receivedMessages?.length
-        ) {
-          const witness = native.witnesses.get(row.cellId),
-            observed = local.exchanges.at(-1);
-          if (witness) {
-            witness.ordinaryPulls ??= [];
-            witness.ordinaryPulls.push({
+          const reply = observationOutcome(observed, row.method, rewritten.body);
+          if (row.method === "ListTopics" && expected.response.ok && reply.ok) {
+            expected.response = {
+              ...expected.response,
+              body: projectOwnedTopics(expected.response.body, row.ownedListNames, source.runId),
+            };
+            reply.body = projectOwnedTopics(reply.body, row.ownedListNames, source.runId);
+          }
+          if (
+            row.method === "Publish" &&
+            expected.response.ok &&
+            reply.ok &&
+            !expected.response.unknown &&
+            !reply.unknown
+          ) {
+            bindings.linkPublish(request, expected.response.body, reply.body);
+            publications.push({
               sourceDispatchN: row.n,
-              sourceResponseN: expected.n,
-              localDispatchN: observed.dispatchN,
-              localResponseN: observed.n,
-              sourceAck: expected.response.body.receivedMessages[0]?.ackId,
-              localAck: reply.body?.receivedMessages?.[0]?.ackId,
+              sourceRequest: structuredClone(request),
+              localRequest: structuredClone(rewritten.body),
+              sourceReply: structuredClone(expected.response),
+              localReply: structuredClone(reply),
               clock: clockReceipt,
             });
           }
-        }
-      } else if (row.event === "stream-frame") {
-        if (row.direction === "out" && !native.witnesses.has(row.cellId)) terminalDetails.clear();
-        await native.frame(row);
-      } else if (
-        ["stream-write-end", "stream-cancel", "stream-case-observation"].includes(row.event)
-      )
-        await native.action(row);
-      else if (row.event === "case-result" || row.event === "case-budget-overrun")
-        native.closeCell(row.cellId);
+          if (
+            row.method === "Pull" &&
+            expected.response.body?.receivedMessages?.length &&
+            reply.body?.receivedMessages?.length
+          )
+            bindings.linkReceive(expected.response.body, reply.body);
+          local.exchanges.push({
+            ...expected,
+            request: rewritten,
+            response: reply,
+            n: raw.at(-1)?.n ?? 0,
+            dispatchN:
+              raw.findLast(
+                (entry) => entry.event === "request-dispatch" && entry.sourceDispatchN === row.n,
+              )?.n ?? null,
+            durationMs: reply.durationMs,
+          });
+          if (
+            row.cellId === "S07" &&
+            row.method === "Pull" &&
+            expected.response.body?.receivedMessages?.length
+          ) {
+            const witness = native.witnesses.get(row.cellId),
+              observed = local.exchanges.at(-1);
+            if (witness) {
+              witness.ordinaryPulls ??= [];
+              witness.ordinaryPulls.push({
+                sourceDispatchN: row.n,
+                sourceResponseN: expected.n,
+                localDispatchN: observed.dispatchN,
+                localResponseN: observed.n,
+                sourceAck: expected.response.body.receivedMessages[0]?.ackId,
+                localAck: reply.body?.receivedMessages?.[0]?.ackId,
+                clock: clockReceipt,
+              });
+            }
+          }
+        } else if (row.event === "stream-frame") {
+          if (row.direction === "out" && !native.witnesses.has(row.cellId)) terminalDetails.clear();
+          await native.frame(row);
+        } else if (
+          ["stream-write-end", "stream-cancel", "stream-case-observation"].includes(row.event)
+        )
+          await native.action(row);
+        else if (row.event === "case-result" || row.event === "case-budget-overrun")
+          native.closeCell(row.cellId);
+      };
+      if (!descriptive) await step();
+      else {
+        const difference = await descriptive.attempt(descriptiveContext(row), step, () =>
+          descriptiveEvidence(row, source.cells, localCells),
+        );
+        if (difference) journal.write({ event: "descriptive-difference", ...difference });
+      }
     }
     for (const [cellId, witness] of native.witnesses) {
       const cell = localCells.find((c) => c.id === cellId);
@@ -429,7 +491,7 @@ export async function replayA(
       Object.fromEntries(native.witnesses),
       disposition,
     );
-    return {
+    const result = {
       ...report,
       kind: "pubsub-observation-a-executed-replay",
       evidenceKind: input.evidenceKind === "fixture" ? "fixture" : "production-vs-strict-local",
@@ -445,6 +507,11 @@ export async function replayA(
       nativeWitnesses: Object.fromEntries(native.witnesses),
       localRows: raw,
     };
+    if (descriptive) {
+      result.evidenceKind = "production-vs-emulator-descriptive-local";
+      result.descriptive = descriptive.summary();
+    }
+    return result;
   } finally {
     try {
       native?.close();
@@ -457,16 +524,17 @@ export async function replayA(
     }
   }
 }
-function options(argv) {
+export function options(argv) {
   const result = {},
-    allowed = ["input", "input-sha256", "build-pin", "build-pin-sha256", "out"];
+    required = ["input", "input-sha256", "build-pin", "build-pin-sha256", "out"],
+    allowed = new Set([...required, "mode"]);
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i]?.replace(/^--/, "");
-    if (!argv[i]?.startsWith("--") || !allowed.includes(key) || result[key] || !argv[i + 1])
+    if (!argv[i]?.startsWith("--") || !allowed.has(key) || result[key] || !argv[i + 1])
       throw new Error("replay unique input/build pins and out required");
     result[key] = argv[i + 1];
   }
-  if (allowed.some((key) => !result[key]))
+  if (required.some((key) => !result[key]))
     throw new Error("replay input/build pins and out required");
   return result;
 }
@@ -496,6 +564,7 @@ export async function main(argv = process.argv.slice(2), environment = process.e
   }
   validateRuntime(pin, environment);
   verifyStrictWorker({ pin, project: PROJECT, launch });
+  const descriptive = descriptiveModeFor(opts.mode, launch);
   pinned(pin.path, pin.sha256, 100000000);
   writeFileSync(
     resolve(opts.out, "runtime-start.json"),
@@ -591,6 +660,7 @@ export async function main(argv = process.argv.slice(2), environment = process.e
   const { appendFileSync } = await import("node:fs");
   const report = await replayA(input, environment, pin, {
     publishTimeDisposition,
+    descriptive,
     persist: (row, bytes) => {
       if (bytes)
         writeFileSync(resolve(opts.out, row.blob.path), bytes, { flag: "wx", mode: 0o600 });

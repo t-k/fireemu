@@ -504,6 +504,7 @@ export async function replayA(
     };
     if (descriptive) {
       result.evidenceKind = "production-vs-emulator-descriptive-local";
+      descriptive.markCells(result.cells);
       result.descriptive = descriptive.summary();
     }
     return result;

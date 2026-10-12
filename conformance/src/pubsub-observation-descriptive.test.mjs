@@ -541,3 +541,80 @@ test("the difference log is bounded", () => {
   assert.throws(() => d.record({ sourceN: -1 }, error), /descriptive difference bound/);
   assert.equal(d.entries.length, MAX_DIFFERENCES);
 });
+
+test("descriptive reports mark cells with a recorded difference so their row verdicts are not cell evidence (S4)", async () => {
+  const report = await replayA(unaryFixture(3), env, pin, {
+    advance: async () => {},
+    wireFactory: failingWire(new Map([[2, new Error("native terminal witness mismatch")]]), []),
+    descriptive: createDescriptiveDifferences({ profile: "emulator", mode: "descriptive" }),
+  });
+  assert.deepEqual(report.descriptive.cellsWithDifferences, ["R3"]);
+  const cell = report.cells.find((c) => c.id === "R3");
+  assert.deepEqual(cell.descriptiveDifferences, { count: 1, rowVerdictsAreCellEvidence: false });
+  assert.ok(cell.rows.length > 0);
+  assert.ok(cell.rows.every((row) => row.descriptiveCellHasDifference === true));
+  // cells without a recorded difference and strict reports carry no mark
+  for (const other of report.cells.filter((c) => c.id !== "R3")) {
+    assert.equal(Object.hasOwn(other, "descriptiveDifferences"), false);
+    assert.ok(
+      (other.rows ?? []).every((row) => !Object.hasOwn(row, "descriptiveCellHasDifference")),
+    );
+  }
+  const clean = await replayA(unaryFixture(3), env, pin, {
+    advance: async () => {},
+    wireFactory: failingWire(new Map(), []),
+    descriptive: createDescriptiveDifferences({ profile: "emulator", mode: "descriptive" }),
+  });
+  assert.deepEqual(clean.descriptive.cellsWithDifferences, []);
+  assert.equal(
+    Object.hasOwn(
+      clean.cells.find((c) => c.id === "R3"),
+      "descriptiveDifferences",
+    ),
+    false,
+  );
+  const strict = await replayA(unaryFixture(3), env, pin, {
+    advance: async () => {},
+    wireFactory: failingWire(new Map(), []),
+  });
+  assert.equal(
+    Object.hasOwn(
+      strict.cells.find((c) => c.id === "R3"),
+      "descriptiveDifferences",
+    ),
+    false,
+  );
+});
+
+test("markCells counts each cell's own differences and leaves unmarked cells alone", () => {
+  const d = createDescriptiveDifferences({ profile: "emulator", mode: "descriptive" });
+  const error = new Error("native receive semantic mismatch");
+  d.record({ sourceN: 1, cellId: "R3" }, error);
+  d.record({ sourceN: 2, cellId: "R3" }, error);
+  d.record({ sourceN: 3, cellId: "R4" }, error);
+  d.record({ sourceN: 4 }, error);
+  const cells = [{ id: "R3", rows: [{}, {}] }, { id: "R4" }, { id: "R5", rows: [{}] }];
+  d.markCells(cells);
+  assert.deepEqual(cells[0].descriptiveDifferences, {
+    count: 2,
+    rowVerdictsAreCellEvidence: false,
+  });
+  assert.deepEqual(cells[1].descriptiveDifferences, {
+    count: 1,
+    rowVerdictsAreCellEvidence: false,
+  });
+  assert.equal(Object.hasOwn(cells[2], "descriptiveDifferences"), false);
+  assert.deepEqual(cells[2].rows, [{}]);
+  assert.deepEqual(d.summary().cellsWithDifferences, ["R3", "R4"]);
+});
+
+test("differences without a cell id are counted as unattributed (S4 gap)", () => {
+  const d = createDescriptiveDifferences({ profile: "emulator", mode: "descriptive" });
+  const error = new Error("missing supplemental dispatch");
+  assert.equal(d.summary().unattributedDifferences, 0);
+  d.record({ phase: "supplement-finish" }, error);
+  d.record({ sourceN: 2, cellId: "N4" }, error);
+  d.record({ sourceN: 3, cellId: null }, error);
+  assert.equal(d.summary().unattributedDifferences, 2);
+  assert.deepEqual(d.summary().cellsWithDifferences, ["N4"]);
+});

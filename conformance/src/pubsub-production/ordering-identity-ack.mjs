@@ -196,10 +196,16 @@ export function judgeOrderingCellHeldTail(publishedOrder, source, local) {
     if (!order.has(ordering)) order.set(ordering, []);
     order.get(ordering).push(key(value));
   }
+  if (new Set(publishedOrder.map(key)).size !== publishedOrder.length)
+    return verdict("duplicate message identity in the publish order");
   const sorted = (list) => [...(list ?? [])].toSorted();
   if (!isDeepStrictEqual(sorted(a.byKey.get("")), sorted(b.byKey.get(""))))
     return verdict("unkeyed delivered set differs");
   const keys = [...new Set([...a.byKey.keys(), ...b.byKey.keys()])].filter(Boolean).toSorted();
+  const heldKeys = new Map([
+    [a, 0],
+    [b, 0],
+  ]);
   for (const k of keys) {
     const x = a.byKey.get(k) ?? [],
       y = b.byKey.get(k) ?? [];
@@ -214,6 +220,8 @@ export function judgeOrderingCellHeldTail(publishedOrder, source, local) {
     const tail = new Set((order.get(k) ?? []).slice((order.get(k) ?? []).indexOf(last) + 1));
     if (!missing.every((m) => tail.has(m)))
       return verdict(`difference in key ${k} exceeds the held tail`);
+    heldKeys.set(sideView, heldKeys.get(sideView) + 1);
+    if (heldKeys.get(sideView) > 1) return verdict("more than one held key on one side");
   }
   for (const s of [a, b])
     for (const [k, delivered] of s.byKey) {
@@ -228,10 +236,18 @@ export function judgeOrderingCellHeldTail(publishedOrder, source, local) {
   };
 }
 
-// Messages published in the cell's source exchanges, in publish order.
-function publishedOrderOf(exchanges) {
+// Topic of a publish request: the REST path or the gRPC body.
+function publishTopicOf(request) {
+  if (typeof request?.path === "string") {
+    const match = /^\/v1\/(projects\/[^/]+\/topics\/[^/:]+):publish$/.exec(request.path);
+    return match ? match[1] : null;
+  }
+  return request?.body?.topic ?? null;
+}
+// Messages of the cell's successful publishes to `topic`, in publish order.
+function publishedOrderOf(exchanges, topic, success) {
   return exchanges
-    .filter((e) => e.op === "publish")
+    .filter((e) => e.op === "publish" && success(e) && publishTopicOf(e.request) === topic)
     .flatMap((e) => (e.request?.body?.messages ?? []).map((m) => identity(m)));
 }
 // One side's successful Pulls on the ordered subscription and the identities its successful
@@ -266,13 +282,22 @@ export function orderingCellResults(sourceExchanges, localExchanges, success) {
   for (const cell of ORDERING_IDENTITY_CASES) {
     const original = sourceExchanges.filter((e) => e.case === cell);
     if (original.length === 0) continue;
-    const created = original
-      .filter((e) => e.op === "createSubscription")
-      .map((e) => orderedSubscriptionOf(e.request))
-      .filter(Boolean);
+    const created = original.filter(
+      (e) => e.op === "createSubscription" && orderedSubscriptionOf(e.request),
+    );
     if (created.length !== 1)
       throw new Error("ordering cell needs exactly one ordered subscription");
-    const [orderedSubscription] = created;
+    const orderedSubscription = orderedSubscriptionOf(created[0].request),
+      orderedTopic = created[0].request.body.topic;
+    const failedCall = [original, localExchanges].some((exchanges) =>
+      exchanges.some(
+        (e) =>
+          e.case === cell &&
+          ["pull", "acknowledge"].includes(e.op) &&
+          subscriptionOf(e.request) === orderedSubscription &&
+          !success(e),
+      ),
+    );
     const pulls = (exchanges) =>
       exchanges
         .filter(
@@ -298,11 +323,17 @@ export function orderingCellResults(sourceExchanges, localExchanges, success) {
       sourceDelivered: delivered(sourcePulls),
       localDelivered: delivered(localPulls),
       ...judgeOrderingCell(sourcePulls, localPulls),
-      owner1399: judgeOrderingCellHeldTail(
-        publishedOrderOf(original),
-        heldView(original, cell, orderedSubscription, success),
-        heldView(localExchanges, cell, orderedSubscription, success),
-      ),
+      owner1399: failedCall
+        ? {
+            verdict: "DIVERGES",
+            reason:
+              "owner 1399: a Pull or Acknowledge on the ordered subscription was not successful",
+          }
+        : judgeOrderingCellHeldTail(
+            publishedOrderOf(original, orderedTopic, success),
+            heldView(original, cell, orderedSubscription, success),
+            heldView(localExchanges, cell, orderedSubscription, success),
+          ),
     };
   }
   return results;

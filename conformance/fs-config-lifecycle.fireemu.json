@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "profile": "strict",
+  "productionExact": true,
   "projects": { "unknownProjects": "refuse" },
   "firestore": {
     "edition": "standard",

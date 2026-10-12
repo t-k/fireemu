@@ -175,7 +175,7 @@ impl std::fmt::Debug for RedactedRuntimeConfig<'_> {
             .field("production_exact", &config.production_exact)
             .field("edition", &config.edition)
             .field("api_mode", &config.api_mode)
-            .field("index_policy", &config.index_policy)
+            .field("index_policy", &config.index_policy())
             .field("enforce_limits", &config.enforce_limits)
             .field("token_acceptance", &config.token_acceptance)
             .field("require_demo_prefix", &config.require_demo_prefix)

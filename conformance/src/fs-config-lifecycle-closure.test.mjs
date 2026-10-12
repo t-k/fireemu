@@ -258,3 +258,16 @@ test("the contract lists the refusals the Admin API adds beyond production's", (
   ])
     assert.ok(text.includes(refusal), `contract names: ${refusal}`);
 });
+
+test("the local configurations keep production's missing-index refusal", () => {
+  // The production rows include missing-index refusals, which strict gives only with
+  // productionExact (firestore.missingIndexes defaults to "report").
+  for (const file of [
+    "fs-config-lifecycle.fireemu.json",
+    "fs-config-lifecycle-bisect.fireemu.json",
+  ]) {
+    const config = JSON.parse(readFileSync(new URL(`../${file}`, import.meta.url), "utf8"));
+    assert.equal(config.profile, "strict", file);
+    assert.equal(config.productionExact, true, file);
+  }
+});

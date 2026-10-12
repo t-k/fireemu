@@ -1597,7 +1597,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             ctx: PlanningContext {
                 edition: cfg.edition,
                 api_mode: cfg.api_mode,
-                policy: cfg.index_policy,
+                policy: cfg.index_policy(),
             },
             indexes: default_indexes,
         };

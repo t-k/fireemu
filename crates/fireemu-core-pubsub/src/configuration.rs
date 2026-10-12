@@ -1,4 +1,5 @@
 //! Shared configuration values and duration diagnostics; no clocks or network operations.
+use crate::label_value::is_label_value_char;
 use crate::{PubSubError, Result};
 use fireemu_core_types::time::LogicalDuration;
 use std::fmt::Write as _;
@@ -42,10 +43,6 @@ pub fn validate_retention(duration: LogicalDuration) -> Result<()> {
 
 /// Validates resource labels before strict-profile mutations. Emulator admission remains permissive.
 pub fn validate_labels(labels: &std::collections::BTreeMap<String, String>) -> Result<()> {
-    static INVALID_VALUE_CHARACTER: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let invalid_value_character = INVALID_VALUE_CHARACTER.get_or_init(|| {
-        regex::Regex::new(r"[^\p{Ll}\p{Lo}\p{N}_-]").expect("the label value pattern is valid")
-    });
     for (key, value) in labels {
         let first = key.chars().next();
         let letter = |ch: char| ch.is_alphabetic() && !ch.is_uppercase();
@@ -75,13 +72,11 @@ pub fn validate_labels(labels: &std::collections::BTreeMap<String, String>) -> R
                 value.chars().count()
             )));
         }
-        if let Some(invalid) = invalid_value_character.find(value) {
-            let position = value[..invalid.start()].chars().count();
-            let character = invalid
-                .as_str()
-                .chars()
-                .next()
-                .expect("the match contains a scalar");
+        if let Some((position, character)) = value
+            .chars()
+            .enumerate()
+            .find(|&(_, ch)| !is_label_value_char(ch))
+        {
             return Err(PubSubError::invalid_argument(format!(
                 r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels.{key}"; value "{value}" does not conform to regular expression "[\p{{Ll}}\p{{Lo}}\p{{N}}_-]{{0,63}}"; character "{character}" at position {position} is not a non-uppercased letter (Unicode character class Ll or Lo), digit, hyphen, or underscore)."#
             )));
@@ -102,6 +97,26 @@ mod tests {
                 let key = format!("{first}{suffix}");
                 let expected = first.is_alphabetic() && !first.is_uppercase();
                 prop_assert_eq!(validate_labels(&[(key, String::new())].into()).is_ok(), expected, "Unicode class {}", class);
+            }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn invalid_value_character_and_position_match_the_regex_reference(value in "\\PC{0,63}") {
+            let reference = regex::Regex::new(r"[^\p{Ll}\p{Lo}\p{N}_-]").expect("the pattern is valid");
+            let result = validate_labels(&[("env".to_owned(), value.clone())].into());
+            match reference.find(&value) {
+                None => prop_assert!(result.is_ok()),
+                Some(found) => {
+                    let position = value[..found.start()].chars().count();
+                    let message = result.unwrap_err().message().to_owned();
+                    let expected = format!(
+                        r#"character "{}" at position {position} is not"#,
+                        found.as_str()
+                    );
+                    prop_assert!(message.contains(&expected), "{message}");
+                }
             }
         }
     }

@@ -17,6 +17,7 @@ pub mod configuration;
 pub mod error;
 pub mod filter;
 pub mod iam;
+pub mod label_value;
 pub mod message;
 pub mod name;
 pub mod pagination;

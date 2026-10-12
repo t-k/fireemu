@@ -381,4 +381,8 @@ test("cell results judge the ordered subscription's successful Pulls of each ord
       ),
     /ordered subscription/,
   );
+  assert.throws(
+    () => orderingCellResults([...source, source[0]], source, success),
+    /ordered subscription/,
+  );
 });

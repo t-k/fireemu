@@ -182,7 +182,7 @@ fn complete_options(
     if options.profile.is_none() {
         writeln!(
             output,
-            "Profiles:\n  strict (recommended): behaves like production Firebase, including index and limit checks.\n  emulator: reproduces the pinned official emulator behavior, including its limitations."
+            "Profiles:\n  strict (recommended): behaves like production Firebase, including index and limit checks. Use it when migrating from the official emulator too.\n  emulator: reproduces the pinned official emulator behavior, including its limitations. Only for checking alignment with the official emulator; not needed when migrating."
         )
         .map_err(|error| output_error(&error))?;
         loop {

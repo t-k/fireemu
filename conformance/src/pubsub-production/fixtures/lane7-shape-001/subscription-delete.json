@@ -1,0 +1,9 @@
+{
+  "id": "subscription-delete",
+  "method": "DELETE",
+  "url": "https://pubsub.googleapis.com/v1/projects/fireemu-oracle-idp/subscriptions/fireemu-lane7-6a666e3ffa9444cc80de18944b38ae36-sub",
+  "status": 200,
+  "body": "{}\n",
+  "contentType": "application/json; charset=UTF-8",
+  "bodyBytes": 3
+}

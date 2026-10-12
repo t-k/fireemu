@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "PUBSUB",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "inventoryStatus": "FROZEN",
   "frozenOn": "2026-09-30",
   "freezeAuthority": "docs.local/instructions/owner-decisions.md (2026-09-30 PUBSUB and EVENTARC scope: coordinator rulings)",
@@ -11,7 +11,35 @@
     "region": "us-central1"
   },
   "closureReview": {
-    "decision": "PENDING"
+    "decision": "APPROVED",
+    "decidedOn": "2026-10-12",
+    "decisionRef": "docs.local/instructions/owner-decisions.md (ledger 1407)",
+    "reviewedCommit": "76acec2b696c3f1025b68b126d836b8d21daab20",
+    "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a",
+    "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+    "reviews": [
+      {
+        "reportPath": "docs.local/reviews/2026-10-12-pubsub-parent-closure-review.md",
+        "reportSha256": "2961038820ad8880151e80e855beaba411396c2a46724154ca20f70d32e502cb",
+        "outcome": "Opus general-purpose: initial CHANGES REQUESTED, delta 1 and delta 2 APPROVE"
+      },
+      {
+        "reportPath": "docs.local/reviews/2026-10-12-pubsub-parent-closure-review-codex.md",
+        "reportSha256": "788cf12b4b92c0133a52ea48627155039c163873a096228da855836a225d3dc5",
+        "outcome": "Codex: initial CHANGES REQUESTED"
+      },
+      {
+        "reportPath": "docs.local/reviews/2026-10-12-pubsub-parent-closure-review-codex-delta.md",
+        "reportSha256": "da88692401fa035869e7a1ffd6fabbf4e63be16cbcdd9305d32c4597b221aef6",
+        "outcome": "Codex: delta 1 CHANGES REQUESTED"
+      },
+      {
+        "reportPath": "docs.local/reviews/2026-10-12-pubsub-parent-closure-review-codex-delta2.md",
+        "reportSha256": "f97db1d1faec3b1e9342267016a861ab4eca2c6f37989a90c93cc4f0c20631b5",
+        "outcome": "Codex: delta 2 APPROVE"
+      }
+    ],
+    "note": "Two independent parent reviews approved the per-case adjudication at reviewedCommit for the bound binary a97b87c1 built from 01d284ca7 (/conditions/17/cases/0). The flip commit applies the remaining minor D wording item. Known differences and excluded steps are unchanged."
   },
   "scopeDecisions": [
     {
@@ -73,7 +101,9 @@
     {
       "conditionId": "PUBSUB/topic-lifecycle",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/topics/lifecycle"],
+      "recipeIds": [
+        "pubsub/topics/lifecycle"
+      ],
       "cases": [
         "create-get-list-delete",
         "labels",
@@ -82,13 +112,37 @@
         "list-topic-subscriptions",
         "delete-topic-with-subscription"
       ],
-      "transports": ["rest", "grpc"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest",
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/0",
+          "/cases/1",
+          "/cases/2",
+          "/cases/3",
+          "/cases/4",
+          "/cases/5"
+        ],
+        "rows": {
+          "MATCH_BY_RELATION": 12
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/resource-names",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/names"],
+      "recipeIds": [
+        "pubsub/names"
+      ],
       "cases": [
         "valid-name",
         "invalid-name",
@@ -97,21 +151,71 @@
         "path-body-mismatch",
         "invalid-resource-path"
       ],
-      "transports": ["rest", "grpc"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest",
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/6",
+          "/cases/7",
+          "/cases/8",
+          "/cases/9",
+          "/cases/10",
+          "/cases/11"
+        ],
+        "rows": {
+          "EXCLUDED_STEP": 2,
+          "MATCH_BY_RELATION": 10
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/list-pagination",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/lists"],
-      "cases": ["page-traversal", "invalid-page-token", "owned-resources-only"],
-      "transports": ["rest", "grpc"],
-      "status": "PENDING_CORPUS"
+      "recipeIds": [
+        "pubsub/lists"
+      ],
+      "cases": [
+        "page-traversal",
+        "invalid-page-token",
+        "owned-resources-only"
+      ],
+      "transports": [
+        "rest",
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/12",
+          "/cases/13",
+          "/cases/14"
+        ],
+        "rows": {
+          "MATCH_BY_RELATION": 6
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/subscription-lifecycle",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/subscriptions/lifecycle"],
+      "recipeIds": [
+        "pubsub/subscriptions/lifecycle"
+      ],
       "cases": [
         "create-get-list-delete",
         "default-ack-deadline",
@@ -120,13 +224,38 @@
         "duplicate-create",
         "missing-subscription"
       ],
-      "transports": ["rest", "grpc"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest",
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/15",
+          "/cases/16",
+          "/cases/17",
+          "/cases/18",
+          "/cases/19",
+          "/cases/20"
+        ],
+        "rows": {
+          "EXCLUDED_STEP": 2,
+          "MATCH_BY_RELATION": 10
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/subscription-configuration",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/subscriptions/config"],
+      "recipeIds": [
+        "pubsub/subscriptions/config"
+      ],
       "cases": [
         "message-retention-duration",
         "retain-acked-messages",
@@ -141,13 +270,43 @@
         "duration-boundaries",
         "ack-deadline-boundaries"
       ],
-      "transports": ["rest", "grpc"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest",
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/21",
+          "/cases/22",
+          "/cases/23",
+          "/cases/24",
+          "/cases/25",
+          "/cases/26",
+          "/cases/27",
+          "/cases/28",
+          "/cases/29",
+          "/cases/30",
+          "/cases/31",
+          "/cases/32"
+        ],
+        "rows": {
+          "MATCH_BY_RELATION": 24
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/push-configuration",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/subscriptions/push-config"],
+      "recipeIds": [
+        "pubsub/subscriptions/push-config"
+      ],
       "cases": [
         "create-push-config",
         "get-push-config",
@@ -156,13 +315,37 @@
         "invalid-push-config",
         "no-publications"
       ],
-      "transports": ["rest", "grpc"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest",
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/33",
+          "/cases/34",
+          "/cases/35",
+          "/cases/36",
+          "/cases/37",
+          "/cases/38"
+        ],
+        "rows": {
+          "MATCH_BY_RELATION": 12
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/publish-wire",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/publish/wire"],
+      "recipeIds": [
+        "pubsub/publish/wire"
+      ],
       "cases": [
         "binary-data",
         "attributes-only",
@@ -174,13 +357,40 @@
         "nonempty-unique-message-ids",
         "publish-pull-id-correlation"
       ],
-      "transports": ["rest", "grpc"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest",
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/39",
+          "/cases/40",
+          "/cases/41",
+          "/cases/42",
+          "/cases/43",
+          "/cases/44",
+          "/cases/45",
+          "/cases/46",
+          "/cases/47"
+        ],
+        "rows": {
+          "MATCH_BY_RELATION": 18
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/publish-limits",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/publish/limits"],
+      "recipeIds": [
+        "pubsub/publish/limits"
+      ],
       "cases": [
         "request-bytes-boundary",
         "batch-count-boundary",
@@ -189,13 +399,37 @@
         "attribute-size-boundary",
         "ordering-key-bytes-boundary"
       ],
-      "transports": ["rest", "grpc"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest",
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/48",
+          "/cases/49",
+          "/cases/50",
+          "/cases/51",
+          "/cases/52",
+          "/cases/53"
+        ],
+        "rows": {
+          "MATCH_BY_RELATION": 12
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/pull-ack",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/delivery/unary"],
+      "recipeIds": [
+        "pubsub/delivery/unary"
+      ],
       "cases": [
         "empty-pull",
         "max-messages-validity",
@@ -206,13 +440,40 @@
         "repeated-ack-id",
         "stale-ack-id"
       ],
-      "transports": ["rest", "grpc"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest",
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/54",
+          "/cases/55",
+          "/cases/56",
+          "/cases/57",
+          "/cases/58",
+          "/cases/59",
+          "/cases/60",
+          "/cases/61"
+        ],
+        "rows": {
+          "MATCH": 4,
+          "MATCH_BY_RELATION": 12
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/nack-deadline-redelivery",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/delivery/deadlines"],
+      "recipeIds": [
+        "pubsub/delivery/deadlines"
+      ],
       "cases": [
         "nack-zero",
         "deadline-extension",
@@ -221,13 +482,38 @@
         "redelivery-id-correlation",
         "cancel-without-ack"
       ],
-      "transports": ["rest", "grpc"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest",
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/62",
+          "/cases/63",
+          "/cases/64",
+          "/cases/65",
+          "/cases/66",
+          "/cases/67"
+        ],
+        "rows": {
+          "MATCH": 2,
+          "MATCH_BY_RELATION": 10
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/filter-evaluation",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/delivery/filters"],
+      "recipeIds": [
+        "pubsub/delivery/filters"
+      ],
       "cases": [
         "match",
         "nonmatch",
@@ -240,13 +526,42 @@
         "invalid-filter",
         "filter-update-refusal"
       ],
-      "transports": ["rest", "grpc"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest",
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/68",
+          "/cases/69",
+          "/cases/70",
+          "/cases/71",
+          "/cases/72",
+          "/cases/73",
+          "/cases/74",
+          "/cases/75",
+          "/cases/76",
+          "/cases/77"
+        ],
+        "rows": {
+          "MATCH": 2,
+          "MATCH_BY_RELATION": 18
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/ordering",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/delivery/ordering"],
+      "recipeIds": [
+        "pubsub/delivery/ordering"
+      ],
       "cases": [
         "single-key-sequence",
         "separate-keys",
@@ -254,13 +569,36 @@
         "nack-blocks-key",
         "ack-unblocks-key"
       ],
-      "transports": ["rest", "grpc"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest",
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/78",
+          "/cases/79",
+          "/cases/80",
+          "/cases/81",
+          "/cases/82"
+        ],
+        "rows": {
+          "MATCH_BY_RELATION": 10
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/retry-dead-letter",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/delivery/dead-letter"],
+      "recipeIds": [
+        "pubsub/delivery/dead-letter"
+      ],
       "cases": [
         "policy-round-trip",
         "delivery-attempt-without-policy",
@@ -269,13 +607,37 @@
         "forwarded-payload-identity",
         "invalid-policy"
       ],
-      "transports": ["rest", "grpc"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest",
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/83",
+          "/cases/84",
+          "/cases/85",
+          "/cases/86",
+          "/cases/87",
+          "/cases/88"
+        ],
+        "rows": {
+          "MATCH_BY_RELATION": 12
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/streaming-pull",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/delivery/stream"],
+      "recipeIds": [
+        "pubsub/delivery/stream"
+      ],
       "cases": [
         "opening-frame",
         "future-publications",
@@ -289,13 +651,42 @@
         "invalid-opening-frame",
         "invalid-update-frame"
       ],
-      "transports": ["grpc"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/89",
+          "/cases/90",
+          "/cases/91",
+          "/cases/92",
+          "/cases/93",
+          "/cases/94",
+          "/cases/95",
+          "/cases/96",
+          "/cases/97",
+          "/cases/98",
+          "/cases/99"
+        ],
+        "rows": {
+          "MATCH": 10,
+          "MATCH_BY_RELATION": 1
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/snapshot-seek",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/replay"],
+      "recipeIds": [
+        "pubsub/replay"
+      ],
       "cases": [
         "snapshot-lifecycle",
         "snapshot-labels",
@@ -308,13 +699,43 @@
         "missing-snapshot",
         "snapshot-lifetime-shape"
       ],
-      "transports": ["rest", "grpc"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest",
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/100",
+          "/cases/101",
+          "/cases/102",
+          "/cases/103",
+          "/cases/104",
+          "/cases/105",
+          "/cases/106",
+          "/cases/107",
+          "/cases/108",
+          "/cases/109"
+        ],
+        "rows": {
+          "EXCLUDED_STEP": 2,
+          "MATCH": 4,
+          "MATCH_BY_RELATION": 14
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/errors-authentication",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/errors"],
+      "recipeIds": [
+        "pubsub/errors"
+      ],
       "cases": [
         "missing-resource",
         "invalid-argument",
@@ -323,13 +744,37 @@
         "invalid-token",
         "canonical-error-shape"
       ],
-      "transports": ["rest", "grpc"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "rest",
+        "grpc"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/110",
+          "/cases/111",
+          "/cases/112",
+          "/cases/113",
+          "/cases/114",
+          "/cases/115"
+        ],
+        "rows": {
+          "MATCH_BY_RELATION": 12
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/final-artifact-regression",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/final"],
+      "recipeIds": [
+        "pubsub/final"
+      ],
       "cases": [
         "strict-production",
         "emulator-official",
@@ -337,16 +782,189 @@
         "clean-source-build",
         "same-final-artifact"
       ],
-      "transports": ["artifact"],
-      "status": "PENDING_CORPUS"
+      "transports": [
+        "artifact"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/116",
+          "/cases/117",
+          "/cases/118",
+          "/cases/119",
+          "/cases/120"
+        ],
+        "rows": {
+          "MATCH": 5
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     },
     {
       "conditionId": "PUBSUB/closure-review",
       "source": "spec/compatibility/contract.json#PUBSUB-CLAIM-WIRE",
-      "recipeIds": ["pubsub/closure"],
-      "cases": ["independent-approval"],
-      "transports": ["artifact"],
-      "status": "PENDING_CORPUS"
+      "recipeIds": [
+        "pubsub/closure"
+      ],
+      "cases": [
+        "independent-approval"
+      ],
+      "transports": [
+        "artifact"
+      ],
+      "status": "VERIFIED",
+      "evidence": {
+        "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "comparisonSha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
+        "caseProofSha256": "2f555f542a8565b0a8765f606cc54a70eb0668edc5b2caaac29cef9fc3921ddd",
+        "caseProofSelectors": [
+          "/cases/121"
+        ],
+        "rows": {
+          "MATCH": 1
+        },
+        "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+        "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
+      }
     }
-  ]
+  ],
+  "perCaseAdjudication": {
+    "mode": "per-case-adjudication",
+    "path": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+    "sha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739"
+  },
+  "integratedRegression": {
+    "integrationCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
+    "releaseBinarySha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a",
+    "buildReceiptPath": "docs.local/runs/coordinator-claude-20261011/final-generation/build/build-receipt.json",
+    "buildReceiptSha256": "6760f373d4e56bac6b7487e5240c72ab2a12a405521f7dfebac0b73a8e3d3941",
+    "independentRebuildPath": "docs.local/runs/claude-pubsub-closure/rebuild/rebuild-record.json",
+    "independentRebuildSha256": "d0040cb424fa8896eea851dee63f7fc5c5b0d2dd4c4a2b02727bb4ce9b744b2e",
+    "comparisons": [
+      {
+        "path": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
+        "sha256": "6927254a56c541d5d1bd66f31faf14c7aee6966a188329116fd659c7b8b39739",
+        "rows": 227,
+        "summary": {
+          "EXCLUDED_STEP": 6,
+          "MATCH": 28,
+          "MATCH_BY_RELATION": 193
+        }
+      }
+    ],
+    "productionRequests": 0,
+    "result": "COMPARED_PER_CASE",
+    "releaseBindingNote": "The comparison is the per-case adjudication of LOCAL strict replays of the private production recordings on the release binary built from integrationCommit (RUSTC_WRAPPER empty, --locked). An independent clean rebuild differs only in the Mach-O LC_UUID and the code-signature hash slot that covers it. The release job cannot rerun these replays (see the excluded kind in conformance/src/release-strict-regression.mjs)."
+  },
+  "knownDifferences": {
+    "restNegativeCache": {
+      "statement": "The production Pub/Sub REST negative cache for subscriptions and snapshots is NOT emulated. After a slow 404 for a subscription or snapshot, production answered GET (once DELETE) of the same resource with a fast cached 404 for about 9.5 s, even after the resource had been created; it reproduced only in some request orders, counterexamples exist and the rule is not established. gRPC and topics never showed it. fireemu returns the steady-state answer (200) right after create in both profiles.",
+      "affectedCoordinates": [
+        "/conditions/1/cases/4",
+        "/conditions/3/cases/0",
+        "/conditions/14/cases/2"
+      ],
+      "affectedSteps": [
+        "/conditions/3/cases/0: GetSubscription right after create (second original recording, REST step 10)",
+        "/conditions/14/cases/2: GetSnapshot (first original recording, REST step 41)",
+        "/conditions/1/cases/4 R2: GetSubscription right after create and the same-name cleanup GET (runs 966b6f3f766e, de14f6d95aca, 3efb4c7c7ae8)"
+      ],
+      "rules": [
+        "1383",
+        "1385",
+        "1391"
+      ],
+      "excludedSteps": {
+        "/conditions/1/cases/4": [
+          {
+            "recording": "3efb4c7c",
+            "cell": "R2",
+            "n": 249
+          },
+          {
+            "recording": "3efb4c7c",
+            "cell": "R2",
+            "n": 253
+          },
+          {
+            "recording": "966b6f3f",
+            "cell": "R2",
+            "n": 88
+          },
+          {
+            "recording": "966b6f3f",
+            "cell": "R2",
+            "n": 92
+          },
+          {
+            "recording": "de14f6d9",
+            "cell": "R2",
+            "n": 93
+          },
+          {
+            "recording": "de14f6d9",
+            "cell": "R2",
+            "n": 97
+          }
+        ],
+        "/conditions/14/cases/2": [
+          {
+            "recording": "14802609",
+            "n": 484
+          }
+        ],
+        "/conditions/3/cases/0": [
+          {
+            "recording": "a8ed1cce",
+            "n": 10
+          }
+        ]
+      },
+      "followUp": "Tracked privately (docs.local/issues/open/pubsub-rest-negative-cache-emulation.md): a small production probe to establish the rule after the release, then emulation behind an explicit off-by-default switch, including in strict (owner instruction 2026-10-12)."
+    },
+    "orderedUnaryPullKeyedStarvation": {
+      "statement": "Known limitation of ordered unary Pull in strict: on an ordering-enabled subscription a unary Pull response never mixes keyed and unkeyed messages and deliverable unkeyed messages are served first, as production did in every recorded finite burst (coordinator ruling 1386). Under continuous unkeyed traffic that arrives faster than unary Pulls drain it, keyed messages starve: unary Pull does not deliver them until no unkeyed message is deliverable. Production behaviour under sustained unkeyed traffic was not observed. StreamingPull, push and the emulator profile are unchanged.",
+      "rules": [
+        "1386"
+      ]
+    },
+    "judgingRules": {
+      "statement": "Production comparison rules applied by the per-case adjudication beyond exact equality: 1390 as clarified by 1404 (the original 2026-10-05 REST captures stored only status and body, so their REST rows MATCH on equal status and equal body content; response headers were neither recorded nor compared, and no later comparison judges any response header either); 1392 (original ordering cells: the next ordering key production serves varies by run and transport, so key choice is not judged; per-key order, no keyed/unkeyed mixing and the delivered set must match); 1394 (differences explained only by the delivery order of messages without an ordering guarantee and by a Pull returning fewer messages than available, including 0, MATCH when the cell delivered set, each message content and per-key order with ordering enabled match; fireemu answers immediately and does not simulate empty Pulls; cases /conditions/6/cases/4, 6/8, 9/0, 9/4, 11/2, 14/3); 1402 (for a Pull limited by maxMessages, the 1394 set condition reads: each delivered message is one of the cell published messages with equal content, its id correlates with the same-side publish reply, and the delivered counts are equal; applied to /conditions/6/cases/8); 1399 as clarified by 1400 (second-recording original ordering cells: each side holds at most one ordering key by an unacknowledged delivery at cell end and the whole-cell difference is only the tails of those held keys; per-key prefix and order and no keyed/unkeyed mixing still required; any unsuccessful Pull or Acknowledge on the ordered subscription is DIVERGES); 1401 defines a held key: that side delivered fewer of the key messages than the other side and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held. 1391 and 1401 are coordinator readings recorded in the ledger. The original-row comparator sorts topics, subscriptions and snapshots list members before comparing, a base comparator rule. The full rule list and what each recording family compares are in the comparison file.",
+      "rules": [
+        "1390",
+        "1404",
+        "1392",
+        "1394",
+        "1395",
+        "1399",
+        "1400",
+        "1401",
+        "1402"
+      ]
+    },
+    "restContentType": {
+      "statement": "REST Content-Type: the bound binary a97b87c1 answers JSON with Content-Type application/json, while production sends application/json; charset=UTF-8. Found in header-bearing production captures outside the comparison set (two GET-404 cause probes); no comparison in this closure judges headers. Owner 1404 has the charset fixed as a separate change in v0.17; that fix is not part of the binary this closure is bound to.",
+      "rules": [
+        "1404"
+      ]
+    },
+    "restResponseHeaders": {
+      "statement": "REST response headers are not compared anywhere in this closure. In the header-bearing production captures production sends 10 response headers (alt-svc, content-encoding, content-type, date, server, transfer-encoding, vary, x-content-type-options, x-frame-options, x-xss-protection); the bound binary a97b87c1 sends 3 (content-type, content-length, date).",
+      "rules": [
+        "1404"
+      ]
+    },
+    "unauthenticatedLocalConnections": {
+      "statement": "Registered divergence: strict accepts a connection without an Authorization header as the PUBSUB_EMULATOR_HOST exception; a configured credential that fails local verification answers the recorded 401/UNAUTHENTICATED shape. Production answers a headerless request with 403.",
+      "rules": [
+        "897"
+      ]
+    }
+  }
 }

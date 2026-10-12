@@ -16,10 +16,10 @@ These frozen inventories declare future production observations; they do not add
 
 | Parent | Status | Scope |
 | --- | --- | --- |
-| [PUBSUB](../../spec/compatibility/closure/PUBSUB.json) | `IMPLEMENTING` | REST v1 and native gRPC broker APIs, StreamingPull, retention configuration, ordering, filters, dead letters, snapshots and seek; push configuration without endpoint delivery. Pub/Sub-to-Functions delivery belongs to FUNCTIONS-EVENTS. Managed IAM administration and permission refusal are outside this inventory. |
-| [EVENTARC](../../spec/compatibility/closure/EVENTARC.json) | `IMPLEMENTING` | Firebase custom events on Eventarc Standard channels, Publishing API and Admin SDK publications, v2 handler envelopes and filters. Provider-less channel lifecycle is conditional on recorded production support; third-party providers and Eventarc Advanced are outside this inventory. |
+| [PUBSUB](../../spec/compatibility/closure/PUBSUB.json) | `COMPAT_VERIFIED` | REST v1 and native gRPC broker APIs, StreamingPull, retention configuration, ordering, filters, dead letters, snapshots and seek; push configuration without endpoint delivery. Pub/Sub-to-Functions delivery belongs to FUNCTIONS-EVENTS. Managed IAM administration and permission refusal are outside this inventory. |
+| [EVENTARC](../../spec/compatibility/closure/EVENTARC.json) | `COMPAT_VERIFIED` | Firebase custom events on Eventarc Standard channels, Publishing API and Admin SDK publications, v2 handler envelopes and filters. Provider-less channel lifecycle is conditional on recorded production support; third-party providers and Eventarc Advanced are outside this inventory. |
 
-Neither parent has production evidence yet. Each requires two production recordings, complete comparison on the final artifact and independent closure approval before `COMPAT_VERIFIED`.
+Both parents are now `COMPAT_VERIFIED`. Each closure record names its final artifact, its comparison, its known differences and the independent closure approval; PUBSUB carries a per-case adjudication of its 122 cases (2026-10-12).
 
 ## FS-DATA-WRITE current closure correction (2026-09-24)
 

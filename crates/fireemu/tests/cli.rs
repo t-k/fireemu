@@ -231,6 +231,16 @@ fn init_wizard_explains_profiles_and_the_live_firebase_reference() {
         "{stdout}"
     );
     assert!(
+        stdout.contains("Use it when migrating from the official emulator too."),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "Only for checking alignment with the official emulator; not needed when migrating."
+        ),
+        "{stdout}"
+    );
+    assert!(
         stdout.contains("loaded again on every fireemu start"),
         "{stdout}"
     );

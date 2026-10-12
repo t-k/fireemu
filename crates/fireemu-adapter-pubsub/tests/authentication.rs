@@ -42,6 +42,10 @@ impl Drop for Server {
 
 impl Server {
     async fn start(policy: PagingPolicy) -> Self {
+        Self::start_with_token(policy, None).await
+    }
+
+    async fn start_with_token(policy: PagingPolicy, token: Option<&str>) -> Self {
         let handle = PubSubHandle::new(
             Arc::new(Mutex::new(PubSubState::new(99))),
             Arc::new(Mutex::new(VirtualClock::new(
@@ -49,7 +53,8 @@ impl Server {
             ))),
             None,
         )
-        .with_paging_policy(policy);
+        .with_paging_policy(policy)
+        .with_local_bearer_token(token.map(str::to_owned));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move {
@@ -577,5 +582,244 @@ proptest! {
                 assert_eq!(actual, expected);
             }
         });
+    }
+}
+
+const MISSING_MESSAGE: &str = "Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API.";
+
+fn assert_missing(error: &tonic::Status) {
+    assert_eq!(error.code(), tonic::Code::PermissionDenied);
+    assert_eq!(error.code() as i32, 7);
+    assert_eq!(error.message(), MISSING_MESSAGE);
+    assert!(error.details().is_empty());
+}
+
+#[tokio::test]
+async fn configured_local_bearer_missing_credentials_match_recorded_permission_envelope() {
+    let server = Server::start_with_token(PagingPolicy::Strict, Some("fixture-token")).await;
+    for (method, suffix, body) in [
+        ("GET", "", &b""[..]),
+        ("PUT", "", &b"{"[..]),
+        ("POST", ":publish", &b"{"[..]),
+    ] {
+        let (status, body) = server
+            .rest(method, &format!("/v1/{TOPIC}{suffix}"), &[], body)
+            .await;
+        assert_eq!(status, 403);
+        assert_eq!(
+            body,
+            json!({"error":{"code":403,"status":"PERMISSION_DENIED","message":MISSING_MESSAGE}})
+        );
+    }
+    let mut publisher = PublisherClient::new(server.channel().await);
+    assert_missing(
+        &publisher
+            .get_topic(pb::GetTopicRequest {
+                topic: TOPIC.to_owned(),
+            })
+            .await
+            .unwrap_err(),
+    );
+    assert_missing(
+        &publisher
+            .create_topic(pb::Topic {
+                name: TOPIC.to_owned(),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err(),
+    );
+    assert_missing(
+        &publisher
+            .publish(pb::PublishRequest {
+                topic: TOPIC.to_owned(),
+                messages: vec![],
+            })
+            .await
+            .unwrap_err(),
+    );
+    // Successful creation proves rejected requests did not create a topic.
+    publisher
+        .create_topic(authenticated(
+            pb::Topic {
+                name: TOPIC.to_owned(),
+                ..Default::default()
+            },
+            &["Bearer fixture-token"],
+        ))
+        .await
+        .unwrap();
+    assert!(publisher
+        .get_topic(authenticated(
+            pb::GetTopicRequest {
+                topic: TOPIC.to_owned()
+            },
+            &["Bearer fixture-token"]
+        ))
+        .await
+        .is_ok());
+}
+
+#[tokio::test]
+async fn configured_local_bearer_accepts_only_single_exact_fixture_and_preserves_invalid_envelopes()
+{
+    let server = Server::start_with_token(PagingPolicy::Strict, Some("fixture-token")).await;
+    let path = format!("/v1/{TOPIC}");
+    let (status, _) = server
+        .rest("PUT", &path, &["Bearer fixture-token"], b"{}")
+        .await;
+    assert_eq!(status, 200);
+    for values in [
+        vec!["Bearer other"],
+        vec!["Bearer fixture-token-other"],
+        vec!["bearer fixture-token"],
+        vec!["Bearer  fixture-token"],
+        vec![""],
+        vec!["Bearer fixture-token", "Bearer fixture-token"],
+        vec!["Bearer other", "Bearer fixture-token"],
+    ] {
+        let (status, body) = server.rest("GET", &path, &values, b"").await;
+        assert_eq!(status, 401);
+        assert_eq!(body, expected_rest("GetTopic"));
+        let mut publisher = PublisherClient::new(server.channel().await);
+        let error = publisher
+            .get_topic(authenticated(
+                pb::GetTopicRequest {
+                    topic: TOPIC.to_owned(),
+                },
+                &values,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::Unauthenticated);
+        assert_eq!(error.message(), MESSAGE);
+    }
+}
+
+#[tokio::test]
+async fn configured_local_bearer_carrier_exclusivity_precedes_publication_mutation() {
+    let server = Server::start_with_token(PagingPolicy::Strict, Some("fixture-token")).await;
+    let path = format!("/v1/{TOPIC}");
+    let (status, _) = server
+        .rest("PUT", &path, &["Bearer fixture-token"], b"{}")
+        .await;
+    assert_eq!(status, 200);
+    for suffix in [
+        "?access_token=fixture-token",
+        "?%61ccess_token=",
+        "?key=fixture-token",
+        "?%6bey=",
+    ] {
+        let (status, body) = server
+            .rest(
+                "GET",
+                &format!("{path}{suffix}"),
+                &["Bearer fixture-token"],
+                b"",
+            )
+            .await;
+        assert_eq!(status, 401);
+        assert_eq!(body, expected_rest("GetTopic"));
+    }
+    let (status, body) = server
+        .rest_with_headers(
+            "GET",
+            &path,
+            "Authorization: Bearer fixture-token\r\nX-Goog-Api-Key: fixture-token\r\n",
+            b"",
+        )
+        .await;
+    assert_eq!(status, 401);
+    assert_eq!(body, expected_rest("GetTopic"));
+    let mut publisher = PublisherClient::new(server.channel().await);
+    let mut alternate = authenticated(
+        pb::GetTopicRequest {
+            topic: TOPIC.to_owned(),
+        },
+        &["Bearer fixture-token"],
+    );
+    alternate
+        .metadata_mut()
+        .insert("x-goog-api-key", "fixture-token".parse().unwrap());
+    assert_eq!(
+        publisher.get_topic(alternate).await.unwrap_err().code(),
+        tonic::Code::Unauthenticated
+    );
+    let publish = || pb::PublishRequest {
+        topic: TOPIC.to_owned(),
+        messages: vec![pb::PubsubMessage {
+            data: b"fixture".to_vec(),
+            ..Default::default()
+        }],
+    };
+    assert_eq!(
+        publisher
+            .publish(authenticated(publish(), &["Bearer other"]))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Unauthenticated
+    );
+    let valid = publisher
+        .publish(authenticated(publish(), &["Bearer fixture-token"]))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(valid.message_ids.len(), 1);
+    let reference = Server::start_with_token(PagingPolicy::Strict, Some("fixture-token")).await;
+    let mut reference_publisher = PublisherClient::new(reference.channel().await);
+    reference_publisher
+        .create_topic(authenticated(
+            pb::Topic {
+                name: TOPIC.to_owned(),
+                ..Default::default()
+            },
+            &["Bearer fixture-token"],
+        ))
+        .await
+        .unwrap();
+    let reference_result = reference_publisher
+        .publish(authenticated(publish(), &["Bearer fixture-token"]))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        valid.message_ids, reference_result.message_ids,
+        "rejected publications must not advance message identities"
+    );
+    let (status, _) = server
+        .rest(
+            "POST",
+            &format!("{path}:publish"),
+            &["Bearer fixture-token"],
+            br#"{"messages":[{"data":"Zml4dHVyZQ=="}]}"#,
+        )
+        .await;
+    assert_eq!(status, 200);
+}
+
+#[tokio::test]
+async fn configured_local_bearer_is_ignored_by_emulator_profile() {
+    let server = Server::start_with_token(PagingPolicy::Emulator, Some("fixture-token")).await;
+    server.bootstrap().await;
+    for values in [
+        vec![],
+        vec!["Bearer other"],
+        vec!["Bearer fixture-token", "Bearer other"],
+    ] {
+        let (status, _) = server
+            .rest("GET", &format!("/v1/{TOPIC}"), &values, b"")
+            .await;
+        assert_eq!(status, 200);
+        let mut publisher = PublisherClient::new(server.channel().await);
+        publisher
+            .get_topic(authenticated(
+                pb::GetTopicRequest {
+                    topic: TOPIC.to_owned(),
+                },
+                &values,
+            ))
+            .await
+            .unwrap();
     }
 }

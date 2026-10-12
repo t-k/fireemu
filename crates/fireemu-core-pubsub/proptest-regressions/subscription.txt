@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 48541dc4e97c40d9b3ac70ad1ad5cf74a401ec6d060c3c97127dd136fc19f7a5 # shrinks to keys = [2, 2], commands = [(0, 2)]
+cc 2eac22f14bbf024cb421c89d0f92e1b2366821c211c2057152b136da03192c48 # shrinks to push = false, separate = true, keys = [1, 0], commands = [(0, 1)]

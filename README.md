@@ -41,6 +41,8 @@ npx fireemu exec -- npm test
 
 `up` and `exec` read `fireemu.json` from the current directory, or, when there is none, the nearest `firebase.json` (see [Which configuration files are loaded](#which-configuration-files-are-loaded)). The first lines of the startup output name the files that were loaded and say, for Firestore and Storage, whether Security Rules are loaded.
 
+Every command documents its options: run `npx fireemu --help` for the commands and `npx fireemu <command> --help` (or `npx fireemu help <command>`) for the options of one, for example `npx fireemu exec --help`. After `--`, `exec` passes `--help` to your command.
+
 ### Supported platforms
 
 | OS | Architecture |
@@ -214,10 +216,10 @@ The answers keep production's wording, which does not mention Fireemu. The start
 
 | Profile | Behavior |
 |---|---|
-| `strict` | Matches production Firebase behavior and constraints as closely as possible within the supported scope. This is the default profile |
-| `emulator` | Targets the behavior of a pinned version of the official emulator. Known differences are documented in the compatibility documentation |
+| `strict` | Matches production Firebase behavior and constraints as closely as possible within the supported scope. This is the default profile. Recommended, including when migrating from the official emulator |
+| `emulator` | Targets the behavior of a pinned version of the official emulator. Known differences are documented in the compatibility documentation. Use it only to check alignment with the pinned official emulator (for example as an extra test target); it is not needed for a migration |
 
-Use `strict` when testing against production Firebase behavior. Add `emulator` to your test targets when you also need to check alignment with the official emulator.
+Use `strict` for your tests, also when you are moving a project over from the Firebase Local Emulator Suite. `strict` is recommended; `emulator` is only for checking alignment with the pinned official emulator (for example as an extra test target). It accepts behavior that production refuses, so a test can pass there and fail against production.
 
 #### Development defaults and `productionExact`
 
@@ -235,6 +237,7 @@ Fireemu is mostly run by tests, in CI and on a developer's machine. Where produc
 | Development default | Key | With `productionExact` |
 |---|---|---|
 | Unsigned emulator custom tokens are accepted | `auth.allowUnsignedCustomTokens` | refused |
+| Firestore and Storage Security Rules accept `@firebase/rules-unit-testing`'s unsigned mock ID token (`authenticatedContext()`, the client SDK's `mockUserToken`) | `auth.allowUnsignedIdTokens` | refused, as production refuses an unsigned token |
 | Identity-provider sign-in accepts the fixture assertions and the sign-in widget (`/emulator/auth/handler`), for built-in, `oidc.*` and `saml.*` providers | `auth.idpAssertions` (`"fixture"`) | `"signed"`: OIDC ID tokens must verify with an `auth.idpSigners` key, SAML responses with the provider's certificates, and the fixture and built-in providers are refused |
 | The strict Eventarc listener admits any credential or none, so the Admin SDK publishes with a fake credential (see [Eventarc authentication](docs/eventarc-authentication.md)) | `eventarc.authentication` (`"permissive"`) | `"production"`: a missing, malformed or JWT-shaped bearer is refused with production's 401 |
 | A query whose composite index is not defined (or is still building, or was deleted) runs, and each missing index is reported once per database on stderr with production's refusal text and the `firestore.indexes.json` entry | `firestore.missingIndexes` (`"report"`) | refused with `FAILED_PRECONDITION` and the console link (`"refuse"`) |
@@ -242,6 +245,22 @@ Fireemu is mostly run by tests, in CI and on a developer's machine. Where produc
 The start banner and `fireemu capabilities` report whether `productionExact` is set.
 
 Under the `emulator` profile, a request that names a tenant the project does not have creates that tenant, and the number of tenants is not limited, as in the official emulator. The `strict` profile refuses such a request, as production does. A request that Fireemu refuses (a wrong credential, a browser page without the control token on the emulator routes, App Check, an unknown API key) creates nothing. As in the official emulator, a plain `GET` without an `Origin` header to a tenant route of `127.0.0.1` creates the tenant, so any web page you visit while the emulator runs can add tenants to it (not read them); use the `strict` profile where that matters.
+
+### Migrating from the Firebase Local Emulator Suite
+
+Keep `"profile": "strict"` (the default of `fireemu init`), and point fireemu at your existing `firebase.json` with `npx fireemu init --firebase-json firebase.json` or `--firebase-json` on the command line. Replace `firebase emulators:exec` with `fireemu exec` and `firebase emulators:start` with `fireemu up`; the official command names `emulators:exec` and `emulators:start` also work.
+
+When a test fails under `strict` but passed on the official emulator, it is usually behavior the application would also meet in production. Fix the test or the application, or relax only the specific setting below instead of switching the whole profile.
+
+- **Unsigned emulator ID tokens** (`@firebase/rules-unit-testing` `authenticatedContext()`, the client SDK's `mockUserToken`) work under `strict` by default. Set `auth.allowUnsignedIdTokens` to `false` to test production's refusal of them on the Security Rules surfaces.
+- **Composite indexes** are validated as production does, and no setting changes that. Declare the index a query needs in `firestore.indexes.json`, referenced from `firebase.json`.
+- **Settings that mirror your production project.** Set them to match it instead of switching the profile:
+
+| Setting | What it does under `strict` |
+|---|---|
+| `auth.improvedEmailPrivacy` | Email enumeration protection, on for a new production project. Set `false` only if your production project turned it off; sign-ins then answer `EMAIL_NOT_FOUND` and `INVALID_PASSWORD` as the official Auth emulator does |
+| `auth.mfa` | Your project's multi-factor configuration (an object, see [Enable multi-factor authentication at start](#enable-multi-factor-authentication-at-start)). `strict` starts with multi-factor off, as a new production project does, and the official emulator has no TOTP at all |
+| `firestore.enforceLimits` | Production always enforces the Standard edition query limits. `false` lets queries pass that production refuses, so leave it on unless you have a specific reason |
 
 ### Basic configuration
 
@@ -287,11 +306,14 @@ The `auth` section of `fireemu.json` lets you configure sign-in methods, passwor
 | Blocking functions before account creation or sign-in, and credential forwarding to those functions | `auth.blockingFunctions` |
 | Initial custom OIDC and SAML provider resources | `auth.providers.oidc`, `auth.providers.saml` |
 | Accept unsigned emulator custom tokens (default `true` in both profiles, `false` with `productionExact`) | `auth.allowUnsignedCustomTokens` |
+| Accept `@firebase/rules-unit-testing`'s unsigned mock ID token in Firestore and Storage Security Rules (default `true` in both profiles, `false` with `productionExact`) | `auth.allowUnsignedIdTokens` |
 | Accept the fixture identity-provider assertions and sign-in widget (`"fixture"`, the default in both profiles), or verify signed assertions as production does (`"signed"`, `strict` only; the default with `productionExact` or `auth.idpSigners`) | `auth.idpAssertions` |
 | Public keys for verifying custom tokens and OIDC ID tokens | `auth.customTokenSigners`, `auth.idpSigners` |
 | Sign-up quota configuration and local quota-exceeded simulation | `auth.quota`, `auth.quotaSimulation` |
 
 Unsigned custom tokens minted by the Firebase Admin SDK in emulator mode are accepted by default, including with the recommended `strict` profile and with `auth.customTokenSigners` configured. To require signed custom tokens, set `auth.allowUnsignedCustomTokens` to `false` and configure `auth.customTokenSigners` with the service accounts' public JWK sets. The setting applies only to custom-token sign-in; strict claim checks and signed-token verification still apply. In the `emulator` profile, setting it to `false` also disables JSON fake custom tokens.
+
+The unsigned mock ID token of `@firebase/rules-unit-testing` is accepted by default when Firestore and Storage Security Rules are evaluated, including with the `strict` profile. This is the token `authenticatedContext()` and the client SDKs' `mockUserToken` option send (`createMockUserToken` in `@firebase/util`). Under `strict` only that exact shape is accepted: a JWT whose header is exactly `{"alg":"none","type":"JWT"}` and whose signature is empty. `request.auth` is built from the token's claims, as the official emulator builds it, when the token names a subject (`sub`) and its audience (`aud`) is the project the request goes to. Its `exp` is not checked, because the SDK sets `iat: 0` and `exp: 3600` by default. Every other token is verified as before, expiry included. That covers the unsigned ID tokens fireemu itself issues (their header carries `typ`, not `type`), and a token that claims a signature that does not verify is still refused. The `emulator` profile accepts any unsigned token, as the official emulator does, and its Storage also accepts another project's token. To refuse the mock token as production does, set `auth.allowUnsignedIdTokens` to `false` (in either profile) or set `productionExact`. A session with `auth.idTokenSigning: "session-rsa"` accepts no unsigned token. The setting does not affect callable Functions, Identity Toolkit or App Check.
 
 See the [configuration schema](spec/config/fireemu.schema.json) for the format and accepted values of each setting.  
 

@@ -5,12 +5,11 @@
 
 use std::collections::BTreeMap;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{to_bytes, Body, Bytes};
 use axum::http::{Method, Request, StatusCode};
 use axum::response::Response;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use fireemu_core_pubsub::pagination::paginate;
 use fireemu_core_pubsub::subscription::{
     DeadLetterPolicy, ExpirationPolicy, PushConfig, RetryPolicy, DEFAULT_ACK_DEADLINE_SECONDS,
     DEFAULT_RETRY_MINIMUM_BACKOFF_SECONDS, MAX_RETRY_BACKOFF_SECONDS,
@@ -21,6 +20,7 @@ use fireemu_core_pubsub::{
 };
 use fireemu_core_types::time::{LogicalDuration, LogicalInstant};
 use serde_json::{json, Map, Value};
+use tokio_stream::StreamExt;
 
 use crate::convert::{
     is_declared_subscription_field, is_declared_topic_field, validate_subscription_update_paths,
@@ -114,6 +114,18 @@ impl RestError {
     }
 }
 
+pub(crate) fn missing_credentials(policy: crate::PagingPolicy) -> Response {
+    error_response(
+        RestError {
+            status: StatusCode::FORBIDDEN,
+            code: "PERMISSION_DENIED",
+            message: crate::authentication::MISSING_CREDENTIAL_MESSAGE.to_owned(),
+            details: None,
+        },
+        policy,
+    )
+}
+
 pub(crate) fn unauthenticated(
     method: &Method,
     path: &str,
@@ -147,26 +159,57 @@ fn recorded_auth_method(method: &Method, path: &str) -> Option<&'static str> {
     }
 }
 
+async fn strict_body_bytes(body: Body) -> Result<Bytes, String> {
+    let mut stream = body.into_data_stream();
+    let mut accepted = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| format!("request body is too large: {error}"))?;
+        if chunk.len() > MAX_MESSAGE_BYTES - accepted.len() {
+            drop(accepted);
+            drop(chunk);
+            // Local resource bounds for rejected uploads, not production acceptance limits.
+            // An unfinished upload may still reset when either drain bound is exhausted.
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+            let mut remaining = MAX_MESSAGE_BYTES;
+            loop {
+                if tokio::time::Instant::now() >= deadline {
+                    break;
+                }
+                match tokio::time::timeout_at(deadline, stream.next()).await {
+                    Ok(Some(Ok(chunk))) if chunk.len() <= remaining => {
+                        remaining -= chunk.len();
+                    }
+                    _ => break,
+                }
+            }
+            return Err("Request payload size exceeds the limit: 10485760 bytes.".to_owned());
+        }
+        if accepted.capacity() - accepted.len() < chunk.len() {
+            let capacity = (accepted.capacity() * 2)
+                .max(accepted.len() + chunk.len())
+                .min(MAX_MESSAGE_BYTES);
+            accepted.reserve_exact(capacity - accepted.len());
+        }
+        accepted.extend_from_slice(&chunk);
+    }
+    Ok(Bytes::from(accepted))
+}
+
 /// Handles one HTTP/JSON request that was not matched by a gRPC service route.
 pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
     let query = request.uri().query().unwrap_or_default().to_owned();
-    let limit = if handle.paging_policy == crate::PagingPolicy::Strict {
-        MAX_MESSAGE_BYTES
+    let body_result = if handle.paging_policy == crate::PagingPolicy::Strict {
+        strict_body_bytes(request.into_body()).await
     } else {
-        MAX_JSON_BYTES
+        to_bytes(request.into_body(), MAX_JSON_BYTES)
+            .await
+            .map_err(|error| format!("request body is too large: {error}"))
     };
-    let body = match to_bytes(request.into_body(), limit).await {
+    let body = match body_result {
         Ok(body) => body,
-        Err(error) => {
-            let message = if handle.paging_policy == crate::PagingPolicy::Strict
-                && error.to_string() == "length limit exceeded"
-            {
-                "Request payload size exceeds the limit: 10485760 bytes.".to_owned()
-            } else {
-                format!("request body is too large: {error}")
-            };
+        Err(message) => {
             return error_response(RestError::invalid(message), handle.paging_policy);
         }
     };
@@ -184,7 +227,7 @@ pub(crate) async fn handle(request: Request<Body>, handle: PubSubHandle) -> Resp
         }
     };
 
-    match dispatch(&method, &path, &query, &value, &handle) {
+    match dispatch(&method, &path, &query, &value, &body, &handle).await {
         Ok((status, response, schema)) => {
             json_response(status, response, handle.paging_policy, schema)
         }
@@ -246,11 +289,12 @@ fn route_not_found_response(path: &str) -> Response {
     response
 }
 
-fn dispatch(
+async fn dispatch(
     method: &Method,
     path: &str,
     query: &str,
     body: &Value,
+    raw_body: &[u8],
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value, Schema), RestError> {
     let parts = path
@@ -261,12 +305,29 @@ fn dispatch(
     if parts.len() < 3 || parts[0] != "projects" || parts[1].is_empty() {
         return Err(RestError::not_found("invalid Pub/Sub REST resource path"));
     }
+    if parts.len() == 4 && ["topics", "subscriptions"].contains(&parts[2]) {
+        if let Some((leaf, operation)) = parts[3].split_once(':') {
+            if ["getIamPolicy", "setIamPolicy"].contains(&operation) {
+                let resource = if parts[2] == "topics" {
+                    TopicName::new(parts[1], leaf)
+                        .map_err(RestError::from_core)?
+                        .to_full()
+                } else {
+                    SubscriptionName::new(parts[1], leaf)
+                        .map_err(RestError::from_core)?
+                        .to_full()
+                };
+                return resource_policy(method, operation, &resource, query, body, handle);
+            }
+        }
+    }
     let project = parts[1];
     if parts[2] == "topics" {
         return dispatch_topic(method, &parts[3..], project, query, body, handle);
     }
     if parts[2] == "subscriptions" {
-        return dispatch_subscription(method, &parts[3..], project, query, body, handle);
+        return dispatch_subscription(method, &parts[3..], project, query, body, raw_body, handle)
+            .await;
     }
     if parts[2] == "snapshots" {
         return dispatch_snapshot(method, &parts[3..], project, query, body, handle);
@@ -274,6 +335,134 @@ fn dispatch(
     Err(RestError::not_found("unknown Pub/Sub REST resource"))
 }
 
+fn policy_json(policy: &fireemu_core_pubsub::ResourcePolicy) -> Value {
+    let mut body = Map::new();
+    if let Some(version) = policy.version {
+        body.insert("version".to_owned(), json!(version));
+    }
+    if !policy.bindings.is_empty() {
+        body.insert(
+            "bindings".to_owned(),
+            Value::Array(
+                policy
+                    .bindings
+                    .iter()
+                    .map(|b| json!({"role":b.role,"members":b.members}))
+                    .collect(),
+            ),
+        );
+    }
+    body.insert("etag".to_owned(), json!(policy.etag));
+    Value::Object(body)
+}
+
+fn resource_policy(
+    method: &Method,
+    operation: &str,
+    resource: &str,
+    query: &str,
+    body: &Value,
+    handle: &PubSubHandle,
+) -> Result<(StatusCode, Value, Schema), RestError> {
+    let policy = match (method, operation) {
+        (&Method::GET, "getIamPolicy") => {
+            for pair in query.split('&').filter(|p| !p.is_empty()) {
+                let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+                if decode_query(key)? != "options.requestedPolicyVersion"
+                    || !matches!(decode_query(value)?.as_str(), "0" | "1" | "3")
+                {
+                    return Err(RestError::invalid("unsupported resource policy options"));
+                }
+            }
+            handle
+                .state()
+                .get_resource_policy(resource)
+                .map_err(RestError::from_core)?
+        }
+        (&Method::POST, "setIamPolicy") => {
+            let request = body
+                .as_object()
+                .ok_or_else(|| RestError::invalid("policy request must be an object"))?;
+            for key in request.keys() {
+                if key != "policy" {
+                    return Err(RestError::unknown_json_field(key));
+                }
+            }
+            let policy = request
+                .get("policy")
+                .and_then(Value::as_object)
+                .ok_or_else(|| RestError::invalid("policy must be an object"))?;
+            for key in policy.keys() {
+                if !["version", "bindings", "etag"].contains(&key.as_str()) {
+                    return Err(RestError::unknown_json_field(key));
+                }
+            }
+            let etag = policy
+                .get("etag")
+                .and_then(Value::as_str)
+                .ok_or_else(|| RestError::invalid("policy.etag must be a string"))?;
+            let version = policy
+                .get("version")
+                .map(|v| {
+                    v.as_u64()
+                        .and_then(|n| u32::try_from(n).ok())
+                        .ok_or_else(|| RestError::invalid("policy.version must be an integer"))
+                })
+                .transpose()?;
+            let mut bindings = Vec::new();
+            if let Some(value) = policy.get("bindings") {
+                for binding in value
+                    .as_array()
+                    .ok_or_else(|| RestError::invalid("policy.bindings must be an array"))?
+                {
+                    let binding = binding
+                        .as_object()
+                        .ok_or_else(|| RestError::invalid("policy binding must be an object"))?;
+                    for key in binding.keys() {
+                        if !["role", "members"].contains(&key.as_str()) {
+                            return Err(RestError::unknown_json_field(key));
+                        }
+                    }
+                    let role = binding
+                        .get("role")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .ok_or_else(|| {
+                            RestError::invalid("binding.role must be a non-empty string")
+                        })?;
+                    let members = binding
+                        .get("members")
+                        .and_then(Value::as_array)
+                        .ok_or_else(|| RestError::invalid("binding.members must be an array"))?
+                        .iter()
+                        .map(|m| {
+                            m.as_str()
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_owned)
+                                .ok_or_else(|| {
+                                    RestError::invalid("binding members must be non-empty strings")
+                                })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    bindings.push(fireemu_core_pubsub::PolicyBinding {
+                        role: role.to_owned(),
+                        members,
+                    });
+                }
+            }
+            let _dead_letter = handle.lock_dead_letter();
+            let _publication = handle.lock_publication();
+            handle
+                .state()
+                .set_resource_policy(resource, etag, version, bindings)
+                .map_err(RestError::from_core)?
+        }
+        _ => return Err(RestError::method_not_allowed()),
+    };
+    Ok((StatusCode::OK, policy_json(&policy), Schema::Policy))
+}
+
+#[allow(clippy::too_many_lines)]
 fn dispatch_topic(
     method: &Method,
     parts: &[&str],
@@ -286,7 +475,7 @@ fn dispatch_topic(
         if *method != Method::GET {
             return Err(RestError::method_not_allowed());
         }
-        let state = handle.state();
+        let mut state = handle.state();
         let topics = state
             .list_topics(project)
             .into_iter()
@@ -301,7 +490,14 @@ fn dispatch_topic(
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
-            paged_collection_json("topics", topics, query, handle)?,
+            paged_collection_json(
+                "topics",
+                topics,
+                query,
+                handle,
+                &mut state,
+                &format!("projects/{project}/topics"),
+            )?,
             Schema::Topics,
         ));
     }
@@ -332,7 +528,14 @@ fn dispatch_topic(
         let resources = names.into_iter().map(Value::String).collect();
         return Ok((
             StatusCode::OK,
-            paged_collection_json(parts[1], resources, query, handle)?,
+            paged_collection_json(
+                parts[1],
+                resources,
+                query,
+                handle,
+                &mut state,
+                &format!("{}/{}", topic.to_full(), parts[1]),
+            )?,
             if parts[1] == "subscriptions" {
                 Schema::Subscriptions
             } else {
@@ -353,7 +556,7 @@ fn dispatch_topic(
     };
     match (method, operation) {
         (&Method::PUT, None) => create_topic(&topic, body, handle),
-        (&Method::PATCH, None) => update_topic(&topic, body),
+        (&Method::PATCH, None) => update_topic(&topic, body, handle),
         (&Method::GET, None) => {
             let state = handle.state();
             let labels = state
@@ -388,7 +591,11 @@ fn create_topic(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    let topic_options = topic_from_json(topic, body)?;
+    let topic_options = topic_from_json(
+        topic,
+        body,
+        handle.paging_policy == crate::PagingPolicy::Strict,
+    )?;
     validate_topic_options(&topic_options).map_err(RestError::from_core)?;
     let labels = topic_options.labels.into_iter().collect();
     if handle.paging_policy == crate::PagingPolicy::Strict {
@@ -431,6 +638,8 @@ fn paged_collection_json(
     resources: Vec<Value>,
     query: &str,
     handle: &PubSubHandle,
+    state: &mut PubSubState,
+    context: &str,
 ) -> Result<Value, RestError> {
     let mut size = 0;
     let mut token = String::new();
@@ -453,14 +662,22 @@ fn paged_collection_json(
             _ => {}
         }
     }
-    let page = paginate(resources, size, &token, handle.paging_policy, |resource| {
-        resource
-            .as_str()
-            .or_else(|| resource.get("name").and_then(Value::as_str))
-            .unwrap_or_default()
-            .to_owned()
-    })
-    .map_err(RestError::from_core)?;
+    let page = state
+        .paginate(
+            context,
+            resources,
+            size,
+            &token,
+            handle.paging_policy,
+            |resource| {
+                resource
+                    .as_str()
+                    .or_else(|| resource.get("name").and_then(Value::as_str))
+                    .unwrap_or_default()
+                    .to_owned()
+            },
+        )
+        .map_err(RestError::from_core)?;
     let mut response = collection_json(field, page.resources);
     if !page.next_page_token.is_empty() {
         response.as_object_mut().expect("collection object").insert(
@@ -482,9 +699,13 @@ pub(crate) fn decode_query(value: &str) -> Result<String, RestError> {
         .map_err(|_| RestError::invalid("query must be UTF-8"))
 }
 
-fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), RestError> {
+fn update_topic(
+    topic: &TopicName,
+    body: &Value,
+    handle: &PubSubHandle,
+) -> Result<(StatusCode, Value), RestError> {
     let topic_body = field(body, "topic").unwrap_or(body);
-    let topic_options = topic_from_json(topic, topic_body)?;
+    let topic_options = topic_from_json(topic, topic_body, false)?;
     let update_mask = field(body, "updateMask")
         .and_then(Value::as_str)
         .ok_or_else(|| RestError::invalid("updateMask must be a comma-separated string"))?;
@@ -497,24 +718,52 @@ fn update_topic(topic: &TopicName, body: &Value) -> Result<(StatusCode, Value), 
         update_mask: Some(prost_types::FieldMask { paths }),
     };
     crate::convert::validate_topic_update_options(&request).map_err(RestError::from_core)?;
-    Err(RestError::unimplemented(
-        "UpdateTopic is not supported by the Pub/Sub emulator",
+    if request
+        .update_mask
+        .as_ref()
+        .is_none_or(|mask| mask.paths != ["labels"])
+    {
+        return Err(RestError::unimplemented(
+            "UpdateTopic is not supported by the Pub/Sub emulator",
+        ));
+    }
+    let mut state = handle.state();
+    state
+        .update_topic_labels(
+            topic,
+            request
+                .topic
+                .expect("the topic was constructed above")
+                .labels
+                .into_iter()
+                .collect(),
+            handle.paging_policy == crate::PagingPolicy::Strict,
+        )
+        .map_err(RestError::from_core)?;
+    Ok((
+        StatusCode::OK,
+        topic_json(
+            topic,
+            state.topic_labels(topic).map_err(RestError::from_core)?,
+            state.topic_retention(topic).map_err(RestError::from_core)?,
+        ),
     ))
 }
 
-fn dispatch_subscription(
+async fn dispatch_subscription(
     method: &Method,
     parts: &[&str],
     project: &str,
     query: &str,
     body: &Value,
+    raw_body: &[u8],
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value, Schema), RestError> {
     if parts.is_empty() {
         if *method != Method::GET {
             return Err(RestError::method_not_allowed());
         }
-        let state = handle.state();
+        let mut state = handle.state();
         let subscriptions = state
             .list_subscriptions(project)
             .into_iter()
@@ -522,7 +771,14 @@ fn dispatch_subscription(
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
-            paged_collection_json("subscriptions", subscriptions, query, handle)?,
+            paged_collection_json(
+                "subscriptions",
+                subscriptions,
+                query,
+                handle,
+                &mut state,
+                &format!("projects/{project}/subscriptions"),
+            )?,
             Schema::Subscriptions,
         ));
     }
@@ -551,7 +807,7 @@ fn dispatch_subscription(
             handle.retry_pending_dead_letters();
             Ok((StatusCode::OK, json!({})))
         }
-        (&Method::POST, Some("pull")) => pull(subscription, body, handle),
+        (&Method::POST, Some("pull")) => pull(subscription, body, handle).await,
         (&Method::POST, Some("acknowledge")) => acknowledge(subscription, body, handle),
         (&Method::POST, Some("modifyAckDeadline")) => {
             modify_ack_deadline(subscription, body, handle)
@@ -574,7 +830,7 @@ fn dispatch_subscription(
             handle.schedule_push(&topic);
             Ok((StatusCode::OK, json!({})))
         }
-        (&Method::POST, Some("seek")) => seek(subscription, body, handle),
+        (&Method::POST, Some("seek")) => seek(subscription, body, raw_body, handle),
         _ => Err(RestError::method_not_allowed()),
     }
     .map(|(status, value)| (status, value, schema))
@@ -592,15 +848,22 @@ fn dispatch_snapshot(
         if *method != Method::GET {
             return Err(RestError::method_not_allowed());
         }
-        let snapshots = handle
-            .state()
+        let mut state = handle.state();
+        let snapshots = state
             .list_snapshots(project, handle.now())
             .into_iter()
             .map(|snapshot| snapshot_json(&snapshot))
             .collect::<Vec<_>>();
         return Ok((
             StatusCode::OK,
-            paged_collection_json("snapshots", snapshots, query, handle)?,
+            paged_collection_json(
+                "snapshots",
+                snapshots,
+                query,
+                handle,
+                &mut state,
+                &format!("projects/{project}/snapshots"),
+            )?,
             Schema::Snapshots,
         ));
     }
@@ -706,6 +969,7 @@ fn publish(
 fn validate_subscription_body(
     subscription: &SubscriptionName,
     body: &Value,
+    route_name_precedence: bool,
 ) -> Result<(), RestError> {
     let object = body
         .as_object()
@@ -727,7 +991,7 @@ fn validate_subscription_body(
         let name = name
             .as_str()
             .ok_or_else(|| RestError::invalid("subscription.name must be a string"))?;
-        if name != subscription.to_full() {
+        if !route_name_precedence && name != subscription.to_full() {
             return Err(RestError::invalid(
                 "subscription.name must match the request path",
             ));
@@ -741,7 +1005,11 @@ fn create_subscription(
     body: &Value,
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
-    validate_subscription_body(subscription, body)?;
+    validate_subscription_body(
+        subscription,
+        body,
+        handle.paging_policy == crate::PagingPolicy::Strict,
+    )?;
     let topic = TopicName::parse(string_field(body, "topic")?).map_err(RestError::from_core)?;
     let ack_deadline_seconds = parse_ack_deadline(field(body, "ackDeadlineSeconds"))?;
     let filter_source = field(body, "filter")
@@ -1148,7 +1416,7 @@ fn parse_duration(value: &Value) -> Result<LogicalDuration, RestError> {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn pull(
+async fn pull(
     subscription: SubscriptionName,
     body: &Value,
     handle: &PubSubHandle,
@@ -1183,7 +1451,14 @@ fn pull(
             .dead_letter_policy
             .is_some();
     let received = handle
-        .pull(&subscription, max)
+        .pull_unary(
+            &subscription,
+            max,
+            field(body, "returnImmediately")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        )
+        .await
         .map_err(RestError::from_core)?;
     let mut body = json!({});
     if !received.is_empty() {
@@ -1237,19 +1512,61 @@ fn modify_ack_deadline(
     Ok((StatusCode::OK, json!({})))
 }
 
+// The ordinary Value map sorts keys. Inspect only Seek's top-level target occurrence order;
+// serde_json consumes each value so nested fields and escaped strings cannot act as keys.
+fn seek_conflicting_target(raw_body: &[u8]) -> Result<&'static str, RestError> {
+    let invalid = || RestError::invalid("seek target order could not be read");
+    let mut rest = raw_body
+        .trim_ascii_start()
+        .strip_prefix(b"{")
+        .ok_or_else(invalid)?;
+    let mut conflict = None;
+    loop {
+        rest = rest.trim_ascii_start();
+        if rest.starts_with(b"}") {
+            break;
+        }
+        let mut key = serde_json::Deserializer::from_slice(rest).into_iter::<String>();
+        let key_name = key.next().ok_or_else(invalid)?.map_err(|_| invalid())?;
+        rest = rest[key.byte_offset()..]
+            .trim_ascii_start()
+            .strip_prefix(b":")
+            .ok_or_else(invalid)?;
+        let mut value = serde_json::Deserializer::from_slice(rest).into_iter::<Value>();
+        value.next().ok_or_else(invalid)?.map_err(|_| invalid())?;
+        rest = rest[value.byte_offset()..].trim_ascii_start();
+        match key_name.as_str() {
+            "time" => conflict = Some("time"),
+            "snapshot" => conflict = Some("snapshot"),
+            _ => {}
+        }
+        if let Some(tail) = rest.strip_prefix(b",") {
+            rest = tail;
+        } else {
+            break;
+        }
+    }
+    conflict.ok_or_else(invalid)
+}
+
 #[allow(clippy::needless_pass_by_value)]
 fn seek(
     subscription: SubscriptionName,
     body: &Value,
+    raw_body: &[u8],
     handle: &PubSubHandle,
 ) -> Result<(StatusCode, Value), RestError> {
     match (field(body, "snapshot"), field(body, "time")) {
         (Some(_), Some(_)) => {
             if handle.paging_policy == crate::PagingPolicy::Strict {
-                let descriptions = ["Invalid value (oneof), oneof field 'target' is already set. Cannot set 'time'", "Invalid JSON payload received. Unknown name \"subscription\": Root element must be a message."];
+                let conflict = seek_conflicting_target(raw_body)?;
+                let mut descriptions = vec![format!("Invalid value (oneof), oneof field 'target' is already set. Cannot set '{conflict}'")];
+                if conflict == "time" || field(body, "subscription").is_some() {
+                    descriptions.push("Invalid JSON payload received. Unknown name \"subscription\": Root element must be a message.".to_owned());
+                }
                 let mut error = RestError::invalid(descriptions.join("\n"));
                 error.details = Some(
-                    json!([{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":descriptions.map(|description|json!({"description":description}))}]),
+                    json!([{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":descriptions.iter().map(|description|json!({"description":description})).collect::<Vec<_>>()}]),
                 );
                 return Err(error);
             }
@@ -1393,7 +1710,11 @@ fn topic_json(
     value
 }
 
-fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestError> {
+fn topic_from_json(
+    topic: &TopicName,
+    body: &Value,
+    route_name_precedence: bool,
+) -> Result<pb::Topic, RestError> {
     let object = body
         .as_object()
         .ok_or_else(|| RestError::invalid("topic must be an object"))?;
@@ -1409,7 +1730,7 @@ fn topic_from_json(topic: &TopicName, body: &Value) -> Result<pb::Topic, RestErr
         let name = name
             .as_str()
             .ok_or_else(|| RestError::invalid("topic.name must be a string"))?;
-        if name != topic.to_full() {
+        if !route_name_precedence && name != topic.to_full() {
             return Err(RestError::invalid("topic.name must match the request path"));
         }
     }
@@ -1629,7 +1950,7 @@ fn received_json(
     report_attempt: bool,
     policy: crate::PagingPolicy,
 ) -> Value {
-    let mut value = json!({"ackId":crate::ack_token::wire(&received.ack_id,policy),"message":stored_message_json(&received.message)});
+    let mut value = json!({"ackId":crate::ack_token::rest_wire(&received.ack_id,policy),"message":stored_message_json(&received.message)});
     if report_attempt {
         value["deliveryAttempt"] = json!(received.delivery_attempt);
     }
@@ -1702,7 +2023,7 @@ fn json_response(
     let body = crate::rest_json::encode(&value, policy, schema);
     Response::builder()
         .status(status)
-        .header("content-type", "application/json")
+        .header("content-type", "application/json; charset=UTF-8")
         .body(Body::from(body))
         .expect("valid JSON response")
 }
@@ -1735,7 +2056,136 @@ mod production_shape_tests {
         .with_paging_policy(policy)
     }
 
+    #[tokio::test]
+    async fn strict_rest_body_oversize_consumes_finite_tail() {
+        use tokio_stream::StreamExt;
+        let consumed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = consumed.clone();
+        let chunks = [vec![b' '; MAX_MESSAGE_BYTES], vec![b' '; 1], vec![b' '; 32]];
+        let stream = tokio_stream::iter(chunks).map(move |chunk| {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok::<_, std::io::Error>(chunk)
+        });
+        let request = Request::builder()
+            .uri("/v1/projects/demo-app/topics")
+            .body(Body::from_stream(stream))
+            .unwrap();
+        let response = handle(request, local_handle(crate::PagingPolicy::Strict)).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(consumed.load(std::sync::atomic::Ordering::SeqCst), 3);
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        assert!(std::str::from_utf8(&body)
+            .unwrap()
+            .contains("Request payload size exceeds the limit: 10485760 bytes."));
+    }
+
+    #[tokio::test]
+    async fn strict_rest_body_exact_limit_and_byte_budget() {
+        let exact = strict_body_bytes(Body::from(vec![b' '; MAX_MESSAGE_BYTES]))
+            .await
+            .unwrap();
+        assert_eq!(exact.len(), MAX_MESSAGE_BYTES);
+        let consumed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = consumed.clone();
+        let stream = tokio_stream::iter([
+            vec![0; MAX_MESSAGE_BYTES + 1],
+            vec![0; MAX_MESSAGE_BYTES],
+            vec![0; 1],
+            vec![0; 1],
+        ])
+        .map(move |chunk| {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok::<_, std::io::Error>(chunk)
+        });
+        assert!(strict_body_bytes(Body::from_stream(stream)).await.is_err());
+        assert_eq!(consumed.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn strict_rest_body_absolute_drain_deadline() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let producer = tokio::spawn(async move {
+            if sender
+                .send(Ok::<_, std::io::Error>(vec![0; MAX_MESSAGE_BYTES + 1]))
+                .await
+                .is_err()
+            {
+                return;
+            }
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                if sender.send(Ok(vec![0; 1])).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(1800),
+            strict_body_bytes(Body::from_stream(
+                tokio_stream::wrappers::ReceiverStream::new(receiver),
+            )),
+        )
+        .await;
+        producer.abort();
+        let _ = producer.await;
+        assert!(outcome
+            .expect("draining must use one absolute deadline")
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn strict_rest_body_ready_empty_tail_obeys_deadline() {
+        struct ReadyTail {
+            first: Option<Vec<u8>>,
+            started: std::time::Instant,
+        }
+        impl tokio_stream::Stream for ReadyTail {
+            type Item = Result<Vec<u8>, std::io::Error>;
+            fn poll_next(
+                mut self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Self::Item>> {
+                assert!(
+                    self.started.elapsed() < std::time::Duration::from_millis(1800),
+                    "an always-ready empty tail must not bypass the deadline"
+                );
+                std::task::Poll::Ready(Some(Ok(self.first.take().unwrap_or_default())))
+            }
+        }
+        let stream = ReadyTail {
+            first: Some(vec![0; MAX_MESSAGE_BYTES + 1]),
+            started: std::time::Instant::now(),
+        };
+        assert!(strict_body_bytes(Body::from_stream(stream)).await.is_err());
+    }
+
     proptest! {
+        #[test]
+        fn strict_seek_extra_violation_tracks_target_order(time_first in any::<bool>(), subscription_present in any::<bool>(), spaces in 0usize..8) {
+            let (first, second) = if time_first { ("time", "snapshot") } else { ("snapshot", "time") };
+            let subscription = if subscription_present { ",\"subscription\":\"projects/demo-app/subscriptions/saved\"" } else { "" };
+            let padding = " ".repeat(spaces);
+            let raw = format!("{{{padding}\"{first}\":\"value\",\"{second}\":\"value\"{subscription}{padding}}}");
+            let body = serde_json::from_str(&raw).unwrap();
+            let name = SubscriptionName::new("demo-app", "saved").unwrap();
+            let error = seek(name, &body, raw.as_bytes(), &local_handle(crate::PagingPolicy::Strict)).unwrap_err();
+            let count = error.details.unwrap()[0]["fieldViolations"].as_array().unwrap().len();
+            prop_assert_eq!(count, if !time_first || subscription_present { 2 } else { 1 });
+            let name = SubscriptionName::new("demo-app", "saved").unwrap();
+            let error = seek(name, &body, raw.as_bytes(), &local_handle(crate::PagingPolicy::Emulator)).unwrap_err();
+            prop_assert_eq!(error.message, "seek takes either a time or a snapshot");
+            prop_assert!(error.details.is_none());
+        }
+
+        #[test]
+        fn seek_target_order_ignores_escaped_and_nested_targets(time_first in any::<bool>(), noise in ".{0,80}", spaces in 0usize..8) {
+            let nested = serde_json::to_string(&json!({"time":noise,"snapshot":[{"time":"ignored"}]})).unwrap();
+            let padding=" ".repeat(spaces);
+            let (first, second)=if time_first { ("time", "snapshot") } else { ("snapshot", "time") };
+            let request=format!("{{{padding}\"noise\":{nested},\"{first}\":\"value\",\"{second}\":\"value\"{padding}}}");
+            prop_assert_eq!(seek_conflicting_target(request.as_bytes()).unwrap(),second);
+        }
+
         #[test]
         fn authentication_method_details_match_only_recorded_route_classes(project in "[a-z]{1,20}", leaf in "[a-z]{1,30}") {
             let resource = format!("/v1/projects/{project}/topics/{leaf}");
@@ -1797,7 +2247,8 @@ mod production_shape_tests {
                 }
                 handle.state().create_subscription(config).unwrap();
                 handle.state().publish(&topic, vec![PubsubMessage {data:vec![b'x'], ..Default::default()}], LogicalInstant::from_unix_seconds(0)).unwrap();
-                let (_, response) = pull(subscription, &json!({"maxMessages":1}), &handle).unwrap();
+                let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+                let (_, response) = runtime.block_on(pull(subscription, &json!({"maxMessages":1}), &handle)).unwrap();
                 let report = policy == crate::PagingPolicy::Emulator || dead_letter;
                 prop_assert_eq!(response["receivedMessages"][0].get("deliveryAttempt").is_some(), report);
                 if report { prop_assert_eq!(&response["receivedMessages"][0]["deliveryAttempt"], &json!(1)); }
@@ -1819,9 +2270,9 @@ mod production_shape_tests {
             ).with_paging_policy(crate::PagingPolicy::Emulator);
             let resources: Vec<_> = (0..count).map(|i| json!({"name":format!("projects/p/topics/query-{i:03}")})).collect();
             let valid = format!("pageSize={size}&pageToken=projects%2Fp%2Ftopics%2Fquery-001");
-            let expected = paged_collection_json("topics", resources.clone(), &valid, &handle).unwrap();
+            let expected = paged_collection_json("topics", resources.clone(), &valid, &handle, &mut handle.state(), "projects/p/topics").unwrap();
             for query in [format!("{valid}&{invalid}"), format!("{invalid}&{valid}")] {
-                let result = paged_collection_json("topics", resources.clone(), &query, &handle);
+                let result = paged_collection_json("topics", resources.clone(), &query, &handle, &mut handle.state(), "projects/p/topics");
                 prop_assert!(result.is_ok(), "{}", query);
                 prop_assert_eq!(result.unwrap(), expected.clone());
             }

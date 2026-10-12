@@ -19,10 +19,18 @@ async fn start() -> std::net::SocketAddr {
 }
 
 async fn start_policy(policy: fireemu_adapter_pubsub::PagingPolicy) -> std::net::SocketAddr {
+    start_with_numbers(policy, std::collections::BTreeMap::new()).await
+}
+
+async fn start_with_numbers(
+    policy: fireemu_adapter_pubsub::PagingPolicy,
+    numbers: std::collections::BTreeMap<String, String>,
+) -> std::net::SocketAddr {
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_700_000_000),
     )));
     let state = Arc::new(Mutex::new(PubSubState::new(99)));
+    state.lock().unwrap().set_project_numbers(numbers).unwrap();
     let handle = PubSubHandle::new(state, clock, None).with_paging_policy(policy);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -49,14 +57,22 @@ async fn rest_request_raw(
     path: &str,
     body: Value,
 ) -> (u16, Vec<u8>) {
+    rest_request_bytes(address, method, path, &serde_json::to_vec(&body).unwrap()).await
+}
+
+async fn rest_request_bytes(
+    address: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    body: &[u8],
+) -> (u16, Vec<u8>) {
     let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
-    let body = serde_json::to_vec(&body).unwrap();
     let request = format!(
         "{method} {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream.write_all(request.as_bytes()).await.unwrap();
-    stream.write_all(&body).await.unwrap();
+    stream.write_all(body).await.unwrap();
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.unwrap();
     let separator = response
@@ -2088,9 +2104,8 @@ async fn rest_rejects_an_undeclared_topic_field_as_an_invalid_argument() {
     .await;
     assert_eq!(status, 200, "declared and output-only fields stay accepted");
 
-    // The same split applies to an update mask: an unknown path is invalid, a declared but
-    // unsupported path is an emulator limitation.
-    for (mask, expected) in [("notAField", 400), ("kmsKeyName", 501), ("labels", 501)] {
+    // Unknown update paths remain invalid; unsupported declared paths remain unimplemented.
+    for (mask, expected) in [("notAField", 400), ("kmsKeyName", 501), ("labels", 200)] {
         let (status, error) = rest_request(
             address,
             "PATCH",
@@ -3273,7 +3288,12 @@ async fn recorded_opaque_ack_ids_roundtrip_across_both_wires_and_profiles() {
         .await;
         assert_eq!(code, 200);
         let renewed = second["receivedMessages"][0]["ackId"].as_str().unwrap();
-        assert_eq!(renewed.len(), expected_length);
+        let rest_length = if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
+            195
+        } else {
+            20
+        };
+        assert_eq!(renewed.len(), rest_length);
         assert_ne!(renewed, issued);
         assert_eq!(
             second["receivedMessages"][0]["message"]["messageId"],
@@ -3311,13 +3331,18 @@ async fn recorded_opaque_ack_ids_roundtrip_across_both_wires_and_profiles() {
         );
         let current = third["receivedMessages"][0]["ackId"].as_str().unwrap();
         assert_ne!(current, renewed);
-        subscriber
-            .acknowledge(pb::AcknowledgeRequest {
-                subscription: subscription.to_owned(),
-                ack_ids: vec![current.to_owned()],
-            })
+        assert_eq!(current.len(), rest_length);
+        assert_eq!(
+            rest_request(
+                address,
+                "POST",
+                &format!("/v1/{subscription}:acknowledge"),
+                json!({"ackIds":[current]})
+            )
             .await
-            .unwrap();
+            .0,
+            200
+        );
         let (_, empty) = rest_request(
             address,
             "POST",
@@ -3615,7 +3640,8 @@ async fn recorded_snapshot_and_seek_refusals_preserve_profile_diagnostics() {
         )
         .await;
         if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
-            let descriptions = ["Invalid value (oneof), oneof field 'target' is already set. Cannot set 'time'", "Invalid JSON payload received. Unknown name \"subscription\": Root element must be a message."];
+            let descriptions =
+                ["Invalid value (oneof), oneof field 'target' is already set. Cannot set 'time'", "Invalid JSON payload received. Unknown name \"subscription\": Root element must be a message."];
             assert_eq!(body["error"]["message"], descriptions.join("\n"));
             assert_eq!(
                 body["error"]["details"],
@@ -3639,4 +3665,2221 @@ async fn recorded_snapshot_and_seek_refusals_preserve_profile_diagnostics() {
             json!({})
         );
     }
+}
+
+#[allow(clippy::too_many_lines)]
+async fn streaming_update_case(
+    policy: fireemu_adapter_pubsub::PagingPolicy,
+    deadline: Option<i32>,
+    expected_error: Option<&str>,
+) {
+    use std::time::Duration;
+    use tokio_stream::wrappers::ReceiverStream;
+    let address = start_policy(policy).await;
+    let mut publisher = PublisherClient::new(grpc_channel(address).await);
+    let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
+    let topic = "projects/demo-app/topics/stream-update";
+    let sub = "projects/demo-app/subscriptions/stream-update";
+    publisher
+        .create_topic(pb::Topic {
+            name: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    subscriber
+        .create_subscription(pb::Subscription {
+            name: sub.to_owned(),
+            topic: topic.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let initial = publisher
+        .publish(pb::PublishRequest {
+            topic: topic.to_owned(),
+            messages: vec![pb::PubsubMessage {
+                data: b"owned".to_vec(),
+                ..Default::default()
+            }],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let (requests, inbound) = tokio::sync::mpsc::channel(8);
+    requests
+        .send(pb::StreamingPullRequest {
+            subscription: sub.to_owned(),
+            stream_ack_deadline_seconds: 10,
+            max_outstanding_messages: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut outbound = subscriber
+        .streaming_pull(ReceiverStream::new(inbound))
+        .await
+        .unwrap()
+        .into_inner();
+    let received = tokio::time::timeout(Duration::from_secs(2), outbound.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(received.received_messages.len(), 1);
+    assert_eq!(
+        received.received_messages[0]
+            .message
+            .as_ref()
+            .unwrap()
+            .message_id,
+        initial.message_ids[0]
+    );
+    let mut ack = received.received_messages[0].ack_id.clone();
+    requests
+        .send(pb::StreamingPullRequest {
+            modify_deadline_ack_ids: vec![ack.clone()],
+            modify_deadline_seconds: deadline.into_iter().collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    if let Some(details) = expected_error {
+        let error = tokio::time::timeout(Duration::from_millis(500), outbound.message())
+            .await
+            .expect("invalid update must terminate without client cancellation")
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(error.message(), details);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(500), outbound.message())
+                .await
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        subscriber
+            .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                subscription: sub.to_owned(),
+                ack_ids: vec![ack],
+                ack_deadline_seconds: 0,
+            })
+            .await
+            .unwrap();
+        let retained = subscriber
+            .pull(pb::PullRequest {
+                subscription: sub.to_owned(),
+                max_messages: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(retained.received_messages.len(), 1);
+        assert_eq!(
+            retained.received_messages[0]
+                .message
+                .as_ref()
+                .unwrap()
+                .message_id,
+            initial.message_ids[0]
+        );
+    } else {
+        if deadline == Some(0) {
+            let redelivery = tokio::time::timeout(Duration::from_secs(2), outbound.message())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                redelivery.received_messages[0]
+                    .message
+                    .as_ref()
+                    .unwrap()
+                    .message_id,
+                initial.message_ids[0]
+            );
+            ack.clone_from(&redelivery.received_messages[0].ack_id);
+        } else {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), outbound.message())
+                    .await
+                    .is_err()
+            );
+        }
+        requests
+            .send(pb::StreamingPullRequest {
+                ack_ids: vec![ack],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let next = publisher
+            .publish(pb::PublishRequest {
+                topic: topic.to_owned(),
+                messages: vec![pb::PubsubMessage {
+                    data: b"next".to_vec(),
+                    ..Default::default()
+                }],
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let delivered = tokio::time::timeout(Duration::from_secs(2), outbound.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            delivered.received_messages[0]
+                .message
+                .as_ref()
+                .unwrap()
+                .message_id,
+            next.message_ids[0]
+        );
+    }
+}
+
+#[tokio::test]
+async fn recorded_streaming_update_refusals_preserve_emulator_inputs() {
+    use fireemu_adapter_pubsub::PagingPolicy;
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        streaming_update_case(policy, None, (policy == PagingPolicy::Strict).then_some(
+            "Invalid arguments provided: the number of ack ids to modify must be equal to the number of ack deadlines."
+        )).await;
+    }
+}
+
+#[tokio::test]
+async fn recorded_streaming_deadline_601_refusal_preserves_emulator_input() {
+    use fireemu_adapter_pubsub::PagingPolicy;
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        streaming_update_case(policy, Some(601), (policy == PagingPolicy::Strict).then_some(
+            "Invalid ack deadline given (ack_deadline=601). The ack deadline must be between 0 and 600 seconds."
+        )).await;
+    }
+}
+
+#[tokio::test]
+async fn valid_streaming_deadline_bounds_keep_owned_ack_delivery() {
+    use fireemu_adapter_pubsub::PagingPolicy;
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        for deadline in [0, 600] {
+            streaming_update_case(policy, Some(deadline), None).await;
+        }
+    }
+}
+#[tokio::test]
+async fn strict_create_topic_uses_route_name_and_keeps_body_name_absent() {
+    let address = start().await;
+    let route = "projects/demo-app/topics/route-topic";
+    let body_name = "projects/demo-app/topics/body-topic";
+    let (status, created) = rest_request(
+        address,
+        "PUT",
+        &format!("/v1/{route}"),
+        json!({"name": body_name}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(created, json!({"name": route}));
+    let (status, found) = rest_request(address, "GET", &format!("/v1/{route}"), json!({})).await;
+    assert_eq!(status, 200);
+    assert_eq!(found, created);
+    assert_eq!(
+        rest_request(address, "GET", &format!("/v1/{body_name}"), json!({}))
+            .await
+            .0,
+        404
+    );
+    assert_eq!(
+        rest_request(address, "DELETE", &format!("/v1/{route}"), json!({})).await,
+        (200, json!({}))
+    );
+    assert_eq!(
+        rest_request(address, "GET", &format!("/v1/{route}"), json!({}))
+            .await
+            .0,
+        404
+    );
+}
+
+#[tokio::test]
+async fn strict_create_subscription_uses_route_identity_and_existing_storage() {
+    let address = start().await;
+    let topic = "projects/demo-app/topics/route-sub-topic";
+    let route = "projects/demo-app/subscriptions/route-sub";
+    let body_name = "projects/demo-app/subscriptions/body-sub";
+    assert_eq!(
+        rest_request(address, "PUT", &format!("/v1/{topic}"), json!({}))
+            .await
+            .0,
+        200
+    );
+    let (status, created) = rest_request(
+        address,
+        "PUT",
+        &format!("/v1/{route}"),
+        json!({"name":body_name,"topic":topic}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        created,
+        json!({"name":route,"topic":topic,"pushConfig":{},"ackDeadlineSeconds":10,
+        "messageRetentionDuration":"604800s","expirationPolicy":{"ttl":"2678400s"},"state":"ACTIVE"})
+    );
+    assert_eq!(
+        rest_request(address, "GET", &format!("/v1/{body_name}"), json!({}))
+            .await
+            .0,
+        404
+    );
+    assert_eq!(
+        rest_request(address, "DELETE", &format!("/v1/{topic}"), json!({}))
+            .await
+            .0,
+        200
+    );
+    let (status, retained) = rest_request(address, "GET", &format!("/v1/{route}"), json!({})).await;
+    assert_eq!(status, 200);
+    assert_eq!(retained["name"], route);
+    assert_eq!(retained["topic"], "_deleted-topic_");
+    assert_eq!(
+        rest_request(address, "DELETE", &format!("/v1/{route}"), json!({})).await,
+        (200, json!({}))
+    );
+    assert_eq!(
+        rest_request(address, "GET", &format!("/v1/{route}"), json!({}))
+            .await
+            .0,
+        404
+    );
+}
+#[tokio::test]
+async fn create_route_precedence_keeps_type_and_field_validation() {
+    for policy in [
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    ] {
+        let address = start_policy(policy).await;
+        let topic = "projects/demo-app/topics/name-guards";
+        let subscription = "projects/demo-app/subscriptions/name-guards";
+        assert_eq!(
+            rest_request(address, "PUT", &format!("/v1/{topic}"), json!({}))
+                .await
+                .0,
+            200
+        );
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/{subscription}"),
+                json!({"topic":topic})
+            )
+            .await
+            .0,
+            200
+        );
+        for name in [Value::Null, json!(7), json!([]), json!({})] {
+            for (route, body) in [
+                (topic, json!({"name":name})),
+                (subscription, json!({"name":name,"topic":topic})),
+            ] {
+                assert_eq!(
+                    rest_request(address, "PUT", &format!("/v1/{route}"), body)
+                        .await
+                        .0,
+                    400
+                );
+            }
+        }
+        for (route, body) in [
+            (topic, json!({"unknownField":true})),
+            (subscription, json!({"topic":topic,"unknownField":true})),
+            (
+                topic,
+                json!({"messageRetentionDuration":"600s","message_retention_duration":"600s"}),
+            ),
+            (
+                subscription,
+                json!({"topic":topic,"ackDeadlineSeconds":10,"ack_deadline_seconds":10}),
+            ),
+        ] {
+            assert_eq!(
+                rest_request(address, "PUT", &format!("/v1/{route}"), body)
+                    .await
+                    .0,
+                400
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn route_name_precedence_does_not_widen_patch_or_emulator_create() {
+    for policy in [
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    ] {
+        let address = start_policy(policy).await;
+        let topic = "projects/demo-app/topics/scoped-name";
+        let subscription = "projects/demo-app/subscriptions/scoped-name";
+        assert_eq!(
+            rest_request(address, "PUT", &format!("/v1/{topic}"), json!({}))
+                .await
+                .0,
+            200
+        );
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/{subscription}"),
+                json!({"topic":topic})
+            )
+            .await
+            .0,
+            200
+        );
+        for (route, body) in [
+            (
+                topic,
+                json!({"topic":{"name":"projects/demo-app/topics/other"},"updateMask":"labels"}),
+            ),
+            (
+                subscription,
+                json!({"subscription":{"name":"projects/demo-app/subscriptions/other","ackDeadlineSeconds":20},"updateMask":"ackDeadlineSeconds"}),
+            ),
+        ] {
+            assert_eq!(
+                rest_request(address, "PATCH", &format!("/v1/{route}"), body)
+                    .await
+                    .0,
+                400
+            );
+        }
+        if policy == fireemu_adapter_pubsub::PagingPolicy::Emulator {
+            for (route, body) in [
+                (topic, json!({"name":"projects/demo-app/topics/other"})),
+                (
+                    subscription,
+                    json!({"name":"projects/demo-app/subscriptions/other","topic":topic}),
+                ),
+            ] {
+                assert_eq!(
+                    rest_request(address, "PUT", &format!("/v1/{route}"), body)
+                        .await
+                        .0,
+                    400
+                );
+            }
+        }
+    }
+}
+
+/// A cursor issued before its boundary resource is deleted still selects current names after it.
+#[tokio::test]
+async fn issued_deleted_topic_cursor_continues_over_current_names() {
+    let address = start().await;
+    for id in ["cursor-a", "cursor-c", "cursor-e"] {
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/projects/demo-app/topics/{id}"),
+                json!({})
+            )
+            .await
+            .0,
+            200
+        );
+    }
+    let (code, first) = rest_request(
+        address,
+        "GET",
+        "/v1/projects/demo-app/topics?pageSize=1",
+        json!({}),
+    )
+    .await;
+    assert_eq!(code, 200);
+    let token = first["nextPageToken"].as_str().unwrap();
+    let boundary = first["topics"][0]["name"].as_str().unwrap();
+    assert_eq!(
+        rest_request(address, "DELETE", &format!("/v1/{boundary}"), json!({}))
+            .await
+            .0,
+        200
+    );
+    assert_eq!(
+        rest_request(address, "GET", &format!("/v1/{boundary}"), json!({}))
+            .await
+            .0,
+        404
+    );
+    assert_eq!(
+        rest_request(
+            address,
+            "PUT",
+            "/v1/projects/demo-app/topics/cursor-b",
+            json!({})
+        )
+        .await
+        .0,
+        200
+    );
+    let (code, continued) = rest_request(
+        address,
+        "GET",
+        &format!("/v1/projects/demo-app/topics?pageSize=0&pageToken={token}"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(code, 200, "{continued}");
+    assert_eq!(
+        continued["topics"],
+        json!([
+            {"name":"projects/demo-app/topics/cursor-b"},
+            {"name":"projects/demo-app/topics/cursor-c"},
+            {"name":"projects/demo-app/topics/cursor-e"}
+        ])
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn strict_seek_conflicts_preserve_request_order_and_present_fields() {
+    let address = start().await;
+    let path = "/v1/projects/demo-app/subscriptions/seek-errors:seek";
+    let topic = "/v1/projects/demo-app/topics/seek-errors";
+    let sub = "projects/demo-app/subscriptions/seek-errors";
+    assert_eq!(rest_request(address, "PUT", topic, json!({})).await.0, 200);
+    assert_eq!(
+        rest_request(
+            address,
+            "PUT",
+            &format!("/v1/{sub}"),
+            json!({"topic":"projects/demo-app/topics/seek-errors"})
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("{topic}:publish"),
+            json!({"messages":[{"data":"cmVwbGF5"}]})
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        rest_request(
+            address,
+            "PUT",
+            "/v1/projects/demo-app/snapshots/saved",
+            json!({"subscription":sub})
+        )
+        .await
+        .0,
+        200
+    );
+    let (_, pulled) = rest_request(
+        address,
+        "POST",
+        &format!("/v1/{sub}:pull"),
+        json!({"maxMessages":1}),
+    )
+    .await;
+    let ack = pulled["receivedMessages"][0]["ackId"].as_str().unwrap();
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("/v1/{sub}:acknowledge"),
+            json!({"ackIds":[ack]})
+        )
+        .await
+        .0,
+        200
+    );
+    let before = rest_request(address, "GET", &format!("/v1/{sub}"), json!({})).await;
+    for (request, conflict, extra_violation) in [
+        (
+            r#"{"time":"2000-01-01T00:00:00Z","snapshot":"projects/demo-app/snapshots/saved"}"#,
+            "snapshot",
+            false,
+        ),
+        (
+            r#"{"snapshot":"projects/demo-app/snapshots/saved","time":"2000-01-01T00:00:00Z"}"#,
+            "time",
+            true,
+        ),
+        (
+            r#"{"time":"2000-01-01T00:00:00Z","snapshot":"projects/demo-app/snapshots/saved","subscription":"projects/demo-app/subscriptions/seek-errors"}"#,
+            "snapshot",
+            true,
+        ),
+        (
+            r#"{"time":"snapshot,\"time\":","snapshot":"projects/demo-app/snapshots/saved"}"#,
+            "snapshot",
+            false,
+        ),
+    ] {
+        let (status, bytes) = rest_request_bytes(address, "POST", path, request.as_bytes()).await;
+        assert_eq!(status, 400);
+        if conflict == "snapshot" && !extra_violation {
+            assert_eq!(bytes.len(), 447);
+        }
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        let mut descriptions = vec![format!(
+            "Invalid value (oneof), oneof field 'target' is already set. Cannot set '{conflict}'"
+        )];
+        if extra_violation {
+            descriptions.push("Invalid JSON payload received. Unknown name \"subscription\": Root element must be a message.".into());
+        }
+        assert_eq!(body["error"]["code"], 400);
+        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+        assert_eq!(
+            bytes.len(),
+            if extra_violation {
+                682 + usize::from(conflict == "snapshot") * 8
+            } else {
+                447
+            }
+        );
+        assert_eq!(body["error"]["message"], descriptions.join("\n"));
+        assert_eq!(
+            body,
+            json!({"error": {
+                "code":400, "status":"INVALID_ARGUMENT", "message":descriptions.join("\n"),
+                "details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":descriptions.iter().map(|description|json!({"description":description})).collect::<Vec<_>>()}]
+            }})
+        );
+    }
+    assert_eq!(
+        rest_request(address, "GET", &format!("/v1/{sub}"), json!({})).await,
+        before
+    );
+    let (_, unchanged) = rest_request(
+        address,
+        "POST",
+        &format!("/v1/{sub}:pull"),
+        json!({"maxMessages":1}),
+    )
+    .await;
+    assert!(unchanged.get("receivedMessages").is_none(), "{unchanged}");
+    for target in [
+        json!({"snapshot":"projects/demo-app/snapshots/saved"}),
+        json!({"time":"2000-01-01T00:00:00Z"}),
+    ] {
+        assert_eq!(
+            rest_request(address, "POST", path, target).await,
+            (200, json!({}))
+        );
+        let (_, replayed) = rest_request(
+            address,
+            "POST",
+            &format!("/v1/{sub}:pull"),
+            json!({"maxMessages":1}),
+        )
+        .await;
+        assert_eq!(
+            replayed["receivedMessages"][0]["message"]["data"],
+            "cmVwbGF5"
+        );
+        let ack = replayed["receivedMessages"][0]["ackId"].as_str().unwrap();
+        assert_eq!(
+            rest_request(
+                address,
+                "POST",
+                &format!("/v1/{sub}:acknowledge"),
+                json!({"ackIds":[ack]})
+            )
+            .await
+            .0,
+            200
+        );
+    }
+}
+
+#[tokio::test]
+async fn wrong_topic_seek_preserves_shared_core_message_on_both_transports() {
+    let address = start().await;
+    for topic in ["first", "second"] {
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/projects/demo-app/topics/{topic}"),
+                json!({})
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/projects/demo-app/subscriptions/{topic}"),
+                json!({"topic":format!("projects/demo-app/topics/{topic}")})
+            )
+            .await
+            .0,
+            200
+        );
+    }
+    let snapshot = "projects/demo-app/snapshots/saved";
+    assert_eq!(
+        rest_request(
+            address,
+            "PUT",
+            &format!("/v1/{snapshot}"),
+            json!({"subscription":"projects/demo-app/subscriptions/first"})
+        )
+        .await
+        .0,
+        200
+    );
+    let expected="The subscription's topic (projects/demo-app/topics/second) is different from that of the snapshot (projects/demo-app/topics/first); they must match in order for Seek work. Note that if a topic is deleted and then re-created with the same name, it is considered a distinct topic for these purposes.";
+    let (status, body) = rest_request(
+        address,
+        "POST",
+        "/v1/projects/demo-app/subscriptions/second:seek",
+        json!({"snapshot":snapshot}),
+    )
+    .await;
+    assert_eq!(status, 400);
+    assert_eq!(body["error"]["status"], "FAILED_PRECONDITION");
+    assert_eq!(body["error"]["message"], expected);
+    let mut native = SubscriberClient::new(grpc_channel(address).await);
+    let error = native
+        .seek(pb::SeekRequest {
+            subscription: "projects/demo-app/subscriptions/second".into(),
+            target: Some(pb::seek_request::Target::Snapshot(snapshot.into())),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(error.message(), expected);
+    native
+        .seek(pb::SeekRequest {
+            subscription: "projects/demo-app/subscriptions/first".into(),
+            target: Some(pb::seek_request::Target::Snapshot(snapshot.into())),
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn strict_pending_rest_pull_disconnect_does_not_lease_or_ack_outstanding_message() {
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_700_000_000),
+    )));
+    let handle = PubSubHandle::new(
+        Arc::new(Mutex::new(PubSubState::new(99))),
+        clock.clone(),
+        None,
+    )
+    .with_paging_policy(fireemu_adapter_pubsub::PagingPolicy::Strict);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        serve_pubsub(listener, handle).await.unwrap();
+    });
+    let topic = "/v1/projects/demo-app/topics/pending-cancel";
+    let sub = "/v1/projects/demo-app/subscriptions/pending-cancel";
+    assert_eq!(rest_request(address, "PUT", topic, json!({})).await.0, 200);
+    assert_eq!(
+        rest_request(
+            address,
+            "PUT",
+            sub,
+            json!({"topic":"projects/demo-app/topics/pending-cancel", "ackDeadlineSeconds":10})
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("{topic}:publish"),
+            json!({"messages":[{"data":"b3V0c3RhbmRpbmc="},{"data":"Y29udHJvbA=="}]})
+        )
+        .await
+        .0,
+        200
+    );
+    let (_, initial) = rest_request(
+        address,
+        "POST",
+        &format!("{sub}:pull"),
+        json!({"maxMessages":2,"returnImmediately":true}),
+    )
+    .await;
+    let messages = initial["receivedMessages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+    let outstanding = messages
+        .iter()
+        .find(|m| m["message"]["data"] == "b3V0c3RhbmRpbmc=")
+        .unwrap();
+    let control = messages
+        .iter()
+        .find(|m| m["message"]["data"] == "Y29udHJvbA==")
+        .unwrap();
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("{sub}:acknowledge"),
+            json!({"ackIds":[control["ackId"]]})
+        )
+        .await
+        .0,
+        200
+    );
+    let mut pending = tokio::net::TcpStream::connect(address).await.unwrap();
+    let body = br#"{"maxMessages":2,"returnImmediately":false}"#;
+    let headers = format!("POST {sub}:pull HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", body.len());
+    pending.write_all(headers.as_bytes()).await.unwrap();
+    pending.write_all(body).await.unwrap();
+    let mut byte = [0];
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(1), pending.read(&mut byte))
+            .await
+            .is_err(),
+        "strict REST Pull must still be pending at disconnect"
+    );
+    drop(pending);
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(11))
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let (_, fresh) = rest_request(
+        address,
+        "POST",
+        &format!("{sub}:pull"),
+        json!({"maxMessages":2,"returnImmediately":true}),
+    )
+    .await;
+    let fresh = fresh["receivedMessages"].as_array().unwrap();
+    assert_eq!(
+        fresh.len(),
+        1,
+        "disconnected server future must not steal redelivery"
+    );
+    assert_eq!(fresh[0]["message"], outstanding["message"]);
+    assert_ne!(fresh[0]["ackId"], outstanding["ackId"]);
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("{sub}:acknowledge"),
+            json!({"ackIds":[fresh[0]["ackId"]]})
+        )
+        .await
+        .0,
+        200
+    );
+    let path = format!("{sub}:pull");
+    let mut wake = tokio::spawn(async move {
+        rest_request(
+            address,
+            "POST",
+            &path,
+            json!({"maxMessages":2,"returnImmediately":false}),
+        )
+        .await
+    });
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut wake)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("{topic}:publish"),
+            json!({"messages":[{"data":"d2FrZQ=="}]})
+        )
+        .await
+        .0,
+        200
+    );
+    let (status, response) = tokio::time::timeout(std::time::Duration::from_secs(1), wake)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(response["receivedMessages"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        response["receivedMessages"][0]["message"]["data"],
+        "d2FrZQ=="
+    );
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+}
+
+#[tokio::test]
+async fn unary_rest_pull_immediate_invalid_and_emulator_controls_are_prompt() {
+    for policy in [
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        fireemu_adapter_pubsub::PagingPolicy::Emulator,
+    ] {
+        let address = start_policy(policy).await;
+        let sub = "/v1/projects/demo-app/subscriptions/pull-controls";
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                "/v1/projects/demo-app/topics/pull-controls",
+                json!({})
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                sub,
+                json!({"topic":"projects/demo-app/topics/pull-controls"})
+            )
+            .await
+            .0,
+            200
+        );
+        let immediate = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            rest_request(
+                address,
+                "POST",
+                &format!("{sub}:pull"),
+                json!({"maxMessages":1,"returnImmediately":true}),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(immediate, (200, json!({})));
+        let missing = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            rest_request(
+                address,
+                "POST",
+                "/v1/projects/demo-app/subscriptions/absent:pull",
+                json!({"maxMessages":1}),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(missing.0, 404);
+        if policy == fireemu_adapter_pubsub::PagingPolicy::Strict {
+            let invalid = tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                rest_request(
+                    address,
+                    "POST",
+                    &format!("{sub}:pull"),
+                    json!({"maxMessages":0}),
+                ),
+            )
+            .await
+            .unwrap();
+            assert_eq!(invalid.0, 400);
+        } else {
+            let ordinary = tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                rest_request(
+                    address,
+                    "POST",
+                    &format!("{sub}:pull"),
+                    json!({"maxMessages":1,"returnImmediately":false}),
+                ),
+            )
+            .await
+            .unwrap();
+            assert_eq!(ordinary, (200, json!({})));
+        }
+    }
+}
+
+#[tokio::test]
+async fn resource_iam_roundtrip_normalizes_version_and_restores_empty_bindings() {
+    let address = start().await;
+    let topic = "projects/demo-iam/topics/source";
+    let subscription = "projects/demo-iam/subscriptions/source";
+    for (resource, body) in [(topic, json!({})), (subscription, json!({"topic":topic}))] {
+        assert_eq!(
+            rest_request(address, "PUT", &format!("/v1/{resource}"), body)
+                .await
+                .0,
+            200
+        );
+    }
+    for (resource, role) in [
+        (topic, "roles/pubsub.publisher"),
+        (subscription, "roles/pubsub.subscriber"),
+    ] {
+        let get = format!("/v1/{resource}:getIamPolicy?options.requestedPolicyVersion=3");
+        let set = format!("/v1/{resource}:setIamPolicy");
+        let (status, baseline) = rest_request(address, "GET", &get, json!({})).await;
+        assert_eq!(status, 200);
+        assert_eq!(baseline.as_object().unwrap().len(), 1);
+        assert_eq!(baseline["etag"].as_str().unwrap().len(), 4);
+        let binding = json!({"role":role,"members":["serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com"]});
+        let (status, granted) = rest_request(
+            address,
+            "POST",
+            &set,
+            json!({"policy":{"version":3,"etag":baseline["etag"],"bindings":[binding.clone()]}}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(granted["version"], 1);
+        assert_eq!(granted["etag"].as_str().unwrap().len(), 12);
+        assert_eq!(granted["bindings"], json!([binding]));
+        assert_eq!(
+            rest_request(address, "GET", &get, json!({})).await.1,
+            granted
+        );
+        let (stale, _) = rest_request(
+            address,
+            "POST",
+            &set,
+            json!({"policy":{"etag":baseline["etag"],"bindings":[]}}),
+        )
+        .await;
+        assert_ne!(stale, 200);
+        assert_eq!(
+            rest_request(address, "GET", &get, json!({})).await.1,
+            granted
+        );
+        let (status, restored) = rest_request(
+            address,
+            "POST",
+            &set,
+            json!({"policy":{"version":1,"etag":granted["etag"],"bindings":[]}}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(restored["version"], 1);
+        assert!(restored.get("bindings").is_none());
+        assert_eq!(
+            rest_request(address, "GET", &get, json!({})).await.1,
+            restored
+        );
+    }
+}
+
+#[tokio::test]
+async fn strict_ungranted_dead_letter_keeps_positive_attempts_and_source_redelivery() {
+    let address = start().await;
+    let topic = "projects/demo-iam/topics/source";
+    let dead = "projects/demo-iam/topics/dead";
+    let source = "projects/demo-iam/subscriptions/source";
+    let sink = "projects/demo-iam/subscriptions/sink";
+    for resource in [topic, dead] {
+        assert_eq!(
+            rest_request(address, "PUT", &format!("/v1/{resource}"), json!({}))
+                .await
+                .0,
+            200
+        );
+    }
+    assert_eq!(rest_request(address,"PUT",&format!("/v1/{source}"),json!({"topic":topic,"deadLetterPolicy":{"deadLetterTopic":dead,"maxDeliveryAttempts":5}})).await.0,200);
+    assert_eq!(
+        rest_request(
+            address,
+            "PUT",
+            &format!("/v1/{sink}"),
+            json!({"topic":dead})
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("/v1/{topic}:publish"),
+            json!({"messages":[{"data":"eA=="}]})
+        )
+        .await
+        .0,
+        200
+    );
+    for attempt in 1..=6 {
+        let (_, body) = rest_request(
+            address,
+            "POST",
+            &format!("/v1/{source}:pull"),
+            json!({"maxMessages":1,"returnImmediately":true}),
+        )
+        .await;
+        assert_eq!(body["receivedMessages"][0]["deliveryAttempt"], attempt);
+        assert_eq!(
+            rest_request(
+                address,
+                "POST",
+                &format!("/v1/{source}:modifyAckDeadline"),
+                json!({"ackIds":[body["receivedMessages"][0]["ackId"]],"ackDeadlineSeconds":0})
+            )
+            .await
+            .0,
+            200
+        );
+    }
+    let (_, body) = rest_request(
+        address,
+        "POST",
+        &format!("/v1/{sink}:pull"),
+        json!({"maxMessages":1,"returnImmediately":true}),
+    )
+    .await;
+    assert!(body.get("receivedMessages").is_none());
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines, deprecated)]
+async fn actual_rest_iam_requires_both_grants_before_native_dead_letter_transfer() {
+    let address = start_with_numbers(
+        fireemu_adapter_pubsub::PagingPolicy::Strict,
+        std::collections::BTreeMap::from([("demo-iam".to_owned(), "123456789".to_owned())]),
+    )
+    .await;
+    let topic = "projects/demo-iam/topics/source";
+    let dead = "projects/demo-iam/topics/dead";
+    let source = "projects/demo-iam/subscriptions/source";
+    let sink = "projects/demo-iam/subscriptions/sink";
+    for resource in [topic, dead] {
+        assert_eq!(
+            rest_request(address, "PUT", &format!("/v1/{resource}"), json!({}))
+                .await
+                .0,
+            200
+        );
+    }
+    assert_eq!(rest_request(address,"PUT",&format!("/v1/{source}"),json!({"topic":topic,"deadLetterPolicy":{"deadLetterTopic":dead,"maxDeliveryAttempts":5}})).await.0,200);
+    assert_eq!(
+        rest_request(
+            address,
+            "PUT",
+            &format!("/v1/{sink}"),
+            json!({"topic":dead})
+        )
+        .await
+        .0,
+        200
+    );
+    assert_eq!(
+        rest_request(
+            address,
+            "POST",
+            &format!("/v1/{topic}:publish"),
+            json!({"messages":[{"data":"eA=="}]})
+        )
+        .await
+        .0,
+        200
+    );
+    let mut client = SubscriberClient::new(grpc_channel(address).await);
+    for attempt in 1..=6 {
+        let response = client
+            .pull(pb::PullRequest {
+                subscription: source.to_owned(),
+                max_messages: 1,
+                return_immediately: true,
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.received_messages.len(), 1);
+        assert_eq!(response.received_messages[0].delivery_attempt, attempt);
+        client
+            .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                subscription: source.to_owned(),
+                ack_ids: vec![response.received_messages[0].ack_id.clone()],
+                ack_deadline_seconds: 0,
+            })
+            .await
+            .unwrap();
+    }
+    let mut baselines = Vec::new();
+    for (resource, role) in [
+        (source, "roles/pubsub.subscriber"),
+        (dead, "roles/pubsub.publisher"),
+    ] {
+        let get = format!("/v1/{resource}:getIamPolicy?options.requestedPolicyVersion=3");
+        let (_, before) = rest_request(address, "GET", &get, json!({})).await;
+        let (_,after)=rest_request(address,"POST",&format!("/v1/{resource}:setIamPolicy"),json!({"policy":{"etag":before["etag"],"version":3,"bindings":[{"role":role,"members":["serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com"]}]}})).await;
+        assert_eq!(after["version"], 1);
+        assert_eq!(rest_request(address, "GET", &get, json!({})).await.1, after);
+        baselines.push((resource, after));
+        if resource == source {
+            let response = client
+                .pull(pb::PullRequest {
+                    subscription: source.to_owned(),
+                    max_messages: 1,
+                    return_immediately: true,
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(response.received_messages[0].delivery_attempt, 7);
+            client
+                .modify_ack_deadline(pb::ModifyAckDeadlineRequest {
+                    subscription: source.to_owned(),
+                    ack_ids: vec![response.received_messages[0].ack_id.clone()],
+                    ack_deadline_seconds: 0,
+                })
+                .await
+                .unwrap();
+        }
+    }
+    assert!(client
+        .pull(pb::PullRequest {
+            subscription: source.to_owned(),
+            max_messages: 1,
+            return_immediately: true
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .received_messages
+        .is_empty());
+    let (_, received) = rest_request(
+        address,
+        "POST",
+        &format!("/v1/{sink}:pull"),
+        json!({"maxMessages":1,"returnImmediately":true}),
+    )
+    .await;
+    assert_eq!(received["receivedMessages"].as_array().unwrap().len(), 1);
+    assert!(received["receivedMessages"][0]
+        .get("deliveryAttempt")
+        .is_none());
+    let attributes = &received["receivedMessages"][0]["message"]["attributes"];
+    assert_eq!(
+        attributes["CloudPubSubDeadLetterSourceSubscription"],
+        "source"
+    );
+    assert_eq!(
+        attributes["CloudPubSubDeadLetterSourceSubscriptionProject"],
+        "demo-iam"
+    );
+    assert_eq!(attributes["CloudPubSubDeadLetterSourceDeliveryCount"], "7");
+    assert_eq!(
+        attributes["CloudPubSubDeadLetterSourceTopicPublishTime"],
+        "2023-11-14T22:13:20+00:00"
+    );
+    for (resource, after) in baselines {
+        let (status, restored) = rest_request(
+            address,
+            "POST",
+            &format!("/v1/{resource}:setIamPolicy"),
+            json!({"policy":{"etag":after["etag"],"version":1,"bindings":[]}}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert!(restored.get("bindings").is_none());
+    }
+}
+
+#[tokio::test]
+async fn strict_rest_oversize_http1_delivers_complete_error() {
+    let state = Arc::new(Mutex::new(PubSubState::new(99)));
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(0),
+    )));
+    let handle = PubSubHandle::new(state, clock, None)
+        .with_paging_policy(fireemu_adapter_pubsub::PagingPolicy::Strict);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(serve_pubsub(listener, handle));
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        for length in [10 * 1024 * 1024 - 1, 10 * 1024 * 1024] {
+            let mut body = vec![b' '; length];
+            body[..2].copy_from_slice(b"{}");
+            let (status, _) =
+                rest_request_bytes(address, "GET", "/v1/projects/demo-app/topics", &body).await;
+            assert_eq!(status, 200);
+        }
+        let body = vec![b' '; 10 * 1024 * 1024 + 3_495_194];
+        rest_request_bytes(
+            address,
+            "POST",
+            "/v1/projects/demo-app/topics/missing:publish",
+            &body,
+        )
+        .await
+    })
+    .await;
+    server.abort();
+    let _ = server.await;
+    let (status, body) = result.expect("oversized upload must finish within the watchdog");
+    assert_eq!(status, 400);
+    let error: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(error["error"]["status"], "INVALID_ARGUMENT");
+    assert_eq!(
+        error["error"]["message"],
+        "Request payload size exceeds the limit: 10485760 bytes."
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn recorded_mixed_ordering_keys_are_atomic_across_rest_and_native_publish() {
+    use fireemu_adapter_pubsub::{
+        BridgeMessage, PagingPolicy, TopicDelivery, TopicDeliveryError, TopicDeliveryReservation,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct CountingBridge(Arc<AtomicUsize>);
+    impl TopicDelivery for CountingBridge {
+        fn reserve(
+            &self,
+            _: &str,
+            _: &[BridgeMessage],
+        ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(TopicDeliveryError::Capacity)
+        }
+    }
+    const MESSAGE: &str = "In a single publish request, all messages must have no ordering key or they must all have the same ordering key. [code=539b]";
+    let captured = json!([
+        {"data":"b25l"}, {"data":"dHdv","attributes":{"color":"red","n":"1"}},
+        {"attributes":{"only":"attributes"}}, {"data":"","attributes":{"k":"empty data"}},
+        {"data":"a2V5ZWQ=","orderingKey":"k1"}, {"data":"AP+A"},
+        {"data":"w7xuw69jw7Zkw6kg4pyT"}, {"data":"eA==","attributes":{}}
+    ]);
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        let state = Arc::new(Mutex::new(PubSubState::new(99)));
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_700_000_000),
+        )));
+        let reservations = Arc::new(AtomicUsize::new(0));
+        let handle = PubSubHandle::new(
+            state.clone(),
+            clock.clone(),
+            Some(Arc::new(CountingBridge(reservations.clone()))),
+        )
+        .with_paging_policy(policy);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_handle = handle.clone();
+        let server = tokio::spawn(async move {
+            let _ = serve_pubsub(listener, server_handle).await;
+        });
+        let topic = "projects/demo-app/topics/mixed-keys";
+        let subscription = "projects/demo-app/subscriptions/mixed-keys";
+        assert_eq!(
+            rest_request(address, "PUT", &format!("/v1/{topic}"), json!({}))
+                .await
+                .0,
+            200
+        );
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/{subscription}"),
+                json!({"topic":topic})
+            )
+            .await
+            .0,
+            200
+        );
+        let mut publisher = PublisherClient::new(grpc_channel(address).await);
+        for batch in [
+            captured.clone(),
+            json!([{"data":"eA==","orderingKey":"k1"},{"data":"eA==","orderingKey":"k2"}]),
+        ] {
+            let (status, body) = rest_request(
+                address,
+                "POST",
+                &format!("/v1/{topic}:publish"),
+                json!({"messages":batch}),
+            )
+            .await;
+            let messages = batch
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|message| pb::PubsubMessage {
+                    data: BASE64
+                        .decode(message["data"].as_str().unwrap_or(""))
+                        .unwrap(),
+                    attributes: message["attributes"]
+                        .as_object()
+                        .map(|attributes| {
+                            attributes
+                                .iter()
+                                .map(|(key, value)| {
+                                    (key.clone(), value.as_str().unwrap().to_owned())
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    ordering_key: message["orderingKey"].as_str().unwrap_or("").to_owned(),
+                    ..Default::default()
+                })
+                .collect();
+            let error = publisher
+                .publish(pb::PublishRequest {
+                    topic: topic.to_owned(),
+                    messages,
+                })
+                .await
+                .unwrap_err();
+            if policy == PagingPolicy::Strict {
+                assert_eq!(status, 400);
+                assert_eq!(
+                    body,
+                    json!({"error":{"code":400,"message":MESSAGE,"status":"FAILED_PRECONDITION"}})
+                );
+                assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+                assert_eq!(error.message(), MESSAGE);
+                assert_eq!(reservations.load(Ordering::SeqCst), 0);
+            } else {
+                assert_eq!(status, 429);
+                assert_eq!(error.code(), tonic::Code::ResourceExhausted);
+            }
+        }
+        assert!(rest_request(
+            address,
+            "POST",
+            &format!("/v1/{subscription}:pull"),
+            json!({"maxMessages":10,"returnImmediately":true})
+        )
+        .await
+        .1["receivedMessages"]
+            .as_array()
+            .is_none_or(Vec::is_empty));
+        handle.shutdown_push_dispatcher().await;
+        server.abort();
+        let _ = server.await;
+        // A bridge-free handle shares the rejected publication's broker and counter.
+        let handle = PubSubHandle::new(state, clock, None).with_paging_policy(policy);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_handle = handle.clone();
+        let server = tokio::spawn(async move {
+            let _ = serve_pubsub(listener, server_handle).await;
+        });
+        let mut publisher = PublisherClient::new(grpc_channel(address).await);
+        let mut next_counter = 1;
+        for key in ["", "k1"] {
+            let batch =
+                json!([{"data":"eA==","orderingKey":key},{"data":"eA==","orderingKey":key}]);
+            let (status, body) = rest_request(
+                address,
+                "POST",
+                &format!("/v1/{topic}:publish"),
+                json!({"messages":batch}),
+            )
+            .await;
+            assert_eq!(status, 200);
+            assert_eq!(
+                body["messageIds"][0],
+                fireemu_core_pubsub::pubsub_message_id(next_counter)
+            );
+            next_counter += 2;
+            let response = publisher
+                .publish(pb::PublishRequest {
+                    topic: topic.to_owned(),
+                    messages: vec![
+                        pb::PubsubMessage {
+                            data: vec![b'x'],
+                            ordering_key: key.to_owned(),
+                            ..Default::default()
+                        };
+                        2
+                    ],
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(
+                response.message_ids[0],
+                fireemu_core_pubsub::pubsub_message_id(next_counter)
+            );
+            next_counter += 2;
+        }
+        if policy == PagingPolicy::Emulator {
+            assert_eq!(
+                rest_request(
+                    address,
+                    "POST",
+                    &format!("/v1/{topic}:publish"),
+                    json!({"messages":captured})
+                )
+                .await
+                .0,
+                200
+            );
+        }
+        handle.shutdown_push_dispatcher().await;
+        server.abort();
+        let _ = server.await;
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(32))]
+    #[test]
+    fn strict_publish_ordering_key_partition_matches_batch_equality(
+        keys in proptest::collection::vec("[a-z]{0,4}", 1..12),
+        strict in proptest::bool::ANY,
+    ) {
+        use fireemu_core_pubsub::{Code, PubsubMessage, TopicName};
+        use fireemu_adapter_pubsub::PagingPolicy;
+        let topic = TopicName::parse("projects/demo-app/topics/key-property").unwrap();
+        let mut state = PubSubState::new(99);
+        state.create_topic(topic.clone(), std::collections::BTreeMap::default()).unwrap();
+        let state = Arc::new(Mutex::new(state));
+        let handle = PubSubHandle::new(state, Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_unix_seconds(1_700_000_000)))), None)
+            .with_paging_policy(if strict { PagingPolicy::Strict } else { PagingPolicy::Emulator });
+        let messages: Vec<_> = keys.iter().map(|key| PubsubMessage { data:vec![b'x'], ordering_key:key.clone(), ..Default::default() }).collect();
+        let result = handle.publish(&topic, messages.clone());
+        let mixed = keys.iter().any(|key| key != &keys[0]);
+        proptest::prop_assert_eq!(result.is_err(), strict && mixed);
+        if strict && mixed {
+            proptest::prop_assert_eq!(result.unwrap_err().code(), Code::FailedPrecondition);
+        }
+        let missing = TopicName::parse("projects/demo-app/topics/missing").unwrap();
+        proptest::prop_assert_eq!(handle.publish(&missing, messages.clone()).unwrap_err().code(), Code::NotFound);
+        let mut invalid = messages;
+        invalid[0].data.clear();
+        proptest::prop_assert_eq!(handle.publish(&topic, invalid).unwrap_err().code(), Code::InvalidArgument);
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn topic_labels_updates_replace_and_clear_get_list_views_on_both_transports() {
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_700_000_000),
+    )));
+    let handle = PubSubHandle::new(Arc::new(Mutex::new(PubSubState::new(99))), clock, None)
+        .with_paging_policy(fireemu_adapter_pubsub::PagingPolicy::Strict);
+    let port = std::env::var("PORT")
+        .ok()
+        .map_or(0, |value| value.parse::<u16>().unwrap());
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    let server_handle = handle.clone();
+    let server = tokio::spawn(async move {
+        let _ = serve_pubsub(listener, server_handle).await;
+    });
+    let topic = "projects/demo-app/topics/update-labels";
+    let other = "projects/demo-app/topics/untouched-labels";
+    for name in [topic, other] {
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/{name}"),
+                json!({"labels":{"old":"value"},"messageRetentionDuration":"3600s"})
+            )
+            .await
+            .0,
+            200
+        );
+    }
+    let mut publisher = PublisherClient::new(grpc_channel(address).await);
+    for native in [false, true] {
+        for labels in [
+            json!({}),
+            json!({"replacement":"new"}),
+            json!({"second":"next"}),
+            json!({}),
+        ] {
+            if native {
+                let result = publisher
+                    .update_topic(pb::UpdateTopicRequest {
+                        topic: Some(pb::Topic {
+                            name: topic.to_owned(),
+                            labels: serde_json::from_value(labels.clone()).unwrap(),
+                            ..Default::default()
+                        }),
+                        update_mask: Some(prost_types::FieldMask {
+                            paths: vec!["labels".to_owned()],
+                        }),
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner();
+                assert_eq!(serde_json::to_value(result.labels).unwrap(), labels);
+                assert_eq!(result.message_retention_duration.unwrap().seconds, 3600);
+            } else {
+                let (status, result) = rest_request(
+                    address,
+                    "PATCH",
+                    &format!("/v1/{topic}"),
+                    json!({"topic":{"name":topic,"labels":labels},"updateMask":"labels"}),
+                )
+                .await;
+                assert_eq!(status, 200, "{result}");
+                assert_eq!(
+                    result.get("labels").cloned().unwrap_or_else(|| json!({})),
+                    labels
+                );
+                assert_eq!(result["messageRetentionDuration"], "3600s");
+            }
+            let (status, from_get) =
+                rest_request(address, "GET", &format!("/v1/{topic}"), json!({})).await;
+            assert_eq!(status, 200);
+            let (_, from_list) =
+                rest_request(address, "GET", "/v1/projects/demo-app/topics", json!({})).await;
+            assert_eq!(
+                from_get,
+                *from_list["topics"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| item["name"] == topic)
+                    .unwrap()
+            );
+            assert_eq!(
+                from_get.get("labels").cloned().unwrap_or_else(|| json!({})),
+                labels
+            );
+            if labels == json!({}) {
+                assert!(from_get.get("labels").is_none());
+            }
+            assert_eq!(from_get["messageRetentionDuration"], "3600s");
+            let from_get = publisher
+                .get_topic(pb::GetTopicRequest {
+                    topic: topic.to_owned(),
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            let from_list = publisher
+                .list_topics(pb::ListTopicsRequest {
+                    project: "projects/demo-app".to_owned(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap()
+                .into_inner()
+                .topics
+                .into_iter()
+                .find(|item| item.name == topic)
+                .unwrap();
+            assert_eq!(from_get, from_list);
+            assert_eq!(serde_json::to_value(from_get.labels).unwrap(), labels);
+        }
+    }
+    let old = publisher
+        .get_topic(pb::GetTopicRequest {
+            topic: other.to_owned(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(old.labels.get("old").map(String::as_str), Some("value"));
+    assert_eq!(old.message_retention_duration.unwrap().seconds, 3600);
+    assert_eq!(
+        rest_request(
+            address,
+            "PATCH",
+            &format!("/v1/{topic}"),
+            json!({"topic":{"name":topic,"labels":{"prior":"value"}},"updateMask":"labels"})
+        )
+        .await
+        .0,
+        200
+    );
+    let (_, before) = rest_request(address, "GET", &format!("/v1/{topic}"), json!({})).await;
+    for (mask, labels, expected) in [
+        ("labels", json!({"Bad":"value"}), 400),
+        ("kmsKeyName", json!({"change":"no"}), 501),
+        ("notAField", json!({"change":"no"}), 400),
+        ("labels.key", json!({"change":"no"}), 501),
+        (
+            "labels,messageRetentionDuration",
+            json!({"change":"no"}),
+            501,
+        ),
+    ] {
+        let (status, _) = rest_request(
+            address,
+            "PATCH",
+            &format!("/v1/{topic}"),
+            json!({"topic":{"name":topic,"labels":labels},"updateMask":mask}),
+        )
+        .await;
+        assert_eq!(status, expected, "{mask}");
+        let (_, after) = rest_request(address, "GET", &format!("/v1/{topic}"), json!({})).await;
+        assert_eq!(after, before);
+        let error = publisher
+            .update_topic(pb::UpdateTopicRequest {
+                topic: Some(pb::Topic {
+                    name: topic.to_owned(),
+                    labels: serde_json::from_value(labels).unwrap(),
+                    ..Default::default()
+                }),
+                update_mask: Some(prost_types::FieldMask {
+                    paths: mask
+                        .split(',')
+                        .map(|path| {
+                            if path == "messageRetentionDuration" {
+                                "message_retention_duration".to_owned()
+                            } else if path == "kmsKeyName" {
+                                "kms_key_name".to_owned()
+                            } else {
+                                path.to_owned()
+                            }
+                        })
+                        .collect(),
+                }),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.code(),
+            if expected == 400 {
+                tonic::Code::InvalidArgument
+            } else {
+                tonic::Code::Unimplemented
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(
+                publisher
+                    .get_topic(pb::GetTopicRequest {
+                        topic: topic.to_owned()
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .labels
+            )
+            .unwrap(),
+            before["labels"]
+        );
+    }
+    let missing = "projects/demo-app/topics/missing-update";
+    assert_eq!(
+        rest_request(
+            address,
+            "PATCH",
+            &format!("/v1/{missing}"),
+            json!({"topic":{"name":missing,"labels":{}},"updateMask":"labels"})
+        )
+        .await
+        .0,
+        404
+    );
+    assert_eq!(
+        publisher
+            .update_topic(pb::UpdateTopicRequest {
+                topic: Some(pb::Topic {
+                    name: missing.to_owned(),
+                    ..Default::default()
+                }),
+                update_mask: Some(prost_types::FieldMask {
+                    paths: vec!["labels".to_owned()]
+                })
+            })
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+    assert_eq!(
+        rest_request(address, "GET", &format!("/v1/{missing}"), json!({}))
+            .await
+            .0,
+        404
+    );
+    drop(publisher);
+    handle.shutdown_push_dispatcher().await;
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn recorded_unicode_labels_rejections_preserve_both_wires_and_emulator_admission() {
+    use fireemu_adapter_pubsub::PagingPolicy;
+    let value_message = concat!(
+        r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels.env"; value ""#,
+        "e\u{0301}",
+        r#"" does not conform to regular expression "[\p{Ll}\p{Lo}\p{N}_-]{0,63}"; character "́" at position 1 is not a non-uppercased letter (Unicode character class Ll or Lo), digit, hyphen, or underscore)."#
+    );
+    let key = "k".repeat(64);
+    let key_message = format!(
+        r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels"; key "{key}" exceeds maximum character length 63 with a length of 64)."#
+    );
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        let clock = Arc::new(Mutex::new(VirtualClock::new(
+            LogicalInstant::from_unix_seconds(1_700_000_000),
+        )));
+        let handle = PubSubHandle::new(Arc::new(Mutex::new(PubSubState::new(99))), clock, None)
+            .with_paging_policy(policy);
+        let port = std::env::var("PORT")
+            .ok()
+            .map_or(0, |value| value.parse::<u16>().unwrap());
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_handle = handle.clone();
+        let server = tokio::spawn(async move {
+            let _ = serve_pubsub(listener, server_handle).await;
+        });
+        let topic = "projects/demo-app/topics/unicode-labels";
+        let subscription = "projects/demo-app/subscriptions/unicode-labels";
+        let prior = std::collections::HashMap::from([
+            ("env".to_owned(), "é".to_owned()),
+            ("ttl".to_owned(), "7".to_owned()),
+        ]);
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/{topic}"),
+                json!({"labels":prior})
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(
+            rest_request(
+                address,
+                "PUT",
+                &format!("/v1/{subscription}"),
+                json!({"topic":topic,"labels":prior,"messageRetentionDuration":"3600s"})
+            )
+            .await
+            .0,
+            200
+        );
+        let mut subscriber = SubscriberClient::new(grpc_channel(address).await);
+        let mut publisher = PublisherClient::new(grpc_channel(address).await);
+        let bad_value = std::collections::HashMap::from([
+            ("env".to_owned(), "e\u{0301}".to_owned()),
+            ("ttl".to_owned(), "7".to_owned()),
+        ]);
+        for (labels, message) in [
+            (bad_value.clone(), value_message.to_owned()),
+            (
+                std::collections::HashMap::from([(key.clone(), "value".to_owned())]),
+                key_message.clone(),
+            ),
+        ] {
+            subscriber
+                .update_subscription(pb::UpdateSubscriptionRequest {
+                    subscription: Some(pb::Subscription {
+                        name: subscription.to_owned(),
+                        labels: prior.clone(),
+                        ..Default::default()
+                    }),
+                    update_mask: Some(prost_types::FieldMask {
+                        paths: vec!["labels".to_owned()],
+                    }),
+                })
+                .await
+                .unwrap();
+            let before_rest =
+                rest_request(address, "GET", &format!("/v1/{subscription}"), json!({}))
+                    .await
+                    .1;
+            let before_native = subscriber
+                .get_subscription(pb::GetSubscriptionRequest {
+                    subscription: subscription.to_owned(),
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            let (code, body) = rest_request(
+                address,
+                "PATCH",
+                &format!("/v1/{subscription}"),
+                json!({"subscription":{"name":subscription,"labels":labels},"updateMask":"labels"}),
+            )
+            .await;
+            if policy == PagingPolicy::Strict {
+                assert_eq!(code, 400);
+                assert_eq!(
+                    body,
+                    json!({"error":{"code":400,"status":"INVALID_ARGUMENT","message":message}})
+                );
+            } else {
+                assert_eq!(code, 200);
+                assert_eq!(body["labels"], json!(labels));
+            }
+            let result = subscriber
+                .update_subscription(pb::UpdateSubscriptionRequest {
+                    subscription: Some(pb::Subscription {
+                        name: subscription.to_owned(),
+                        labels: labels.clone(),
+                        ..Default::default()
+                    }),
+                    update_mask: Some(prost_types::FieldMask {
+                        paths: vec!["labels".to_owned()],
+                    }),
+                })
+                .await;
+            if policy == PagingPolicy::Strict {
+                let error = result.unwrap_err();
+                assert_eq!(error.code(), tonic::Code::InvalidArgument);
+                assert_eq!(error.message(), message);
+            } else {
+                assert_eq!(result.unwrap().into_inner().labels, labels);
+            }
+            let after_rest =
+                rest_request(address, "GET", &format!("/v1/{subscription}"), json!({})).await;
+            let after_native = subscriber
+                .get_subscription(pb::GetSubscriptionRequest {
+                    subscription: subscription.to_owned(),
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(after_rest.0, 200);
+            if policy == PagingPolicy::Strict {
+                assert_eq!(after_rest.1, before_rest);
+                assert_eq!(after_native, before_native);
+            } else {
+                assert_eq!(after_rest.1["labels"], json!(labels));
+                assert_eq!(after_native.labels, labels);
+            }
+        }
+        let created = subscriber
+            .create_subscription(pb::Subscription {
+                name: "projects/demo-app/subscriptions/invalid-unicode-labels".to_owned(),
+                topic: topic.to_owned(),
+                labels: bad_value.clone(),
+                ..Default::default()
+            })
+            .await;
+        let topic_create = rest_request(
+            address,
+            "PUT",
+            "/v1/projects/demo-app/topics/invalid-unicode-labels",
+            json!({"labels":bad_value}),
+        )
+        .await;
+        let topic_update = publisher
+            .update_topic(pb::UpdateTopicRequest {
+                topic: Some(pb::Topic {
+                    name: topic.to_owned(),
+                    labels: bad_value.clone(),
+                    ..Default::default()
+                }),
+                update_mask: Some(prost_types::FieldMask {
+                    paths: vec!["labels".to_owned()],
+                }),
+            })
+            .await;
+        if policy == PagingPolicy::Strict {
+            let error = created.unwrap_err();
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+            assert_eq!(error.message(), value_message);
+            assert_eq!(
+                topic_create,
+                (
+                    400,
+                    json!({"error":{"code":400,"status":"INVALID_ARGUMENT","message":value_message}})
+                )
+            );
+            let error = topic_update.unwrap_err();
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+            assert_eq!(error.message(), value_message);
+            assert_eq!(
+                publisher
+                    .get_topic(pb::GetTopicRequest {
+                        topic: topic.to_owned()
+                    })
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .labels,
+                prior
+            );
+            assert_eq!(
+                rest_request(
+                    address,
+                    "GET",
+                    "/v1/projects/demo-app/topics/invalid-unicode-labels",
+                    json!({})
+                )
+                .await
+                .0,
+                404
+            );
+        } else {
+            assert_eq!(created.unwrap().into_inner().labels, bad_value);
+            assert_eq!(topic_create.0, 200);
+            assert_eq!(topic_update.unwrap().into_inner().labels, bad_value);
+        }
+        drop(subscriber);
+        drop(publisher);
+        handle.shutdown_push_dispatcher().await;
+        server.abort();
+        let _ = server.await;
+    }
+}
+
+/// The H1 R11 publish shape: seven unkeyed messages in one request (the keyed eighth message is
+/// published separately because production refuses a mixed-key batch).
+fn r11_unkeyed_messages() -> Value {
+    json!({"messages": [
+        {"data": BASE64.encode("one")},
+        {"data": BASE64.encode("two"), "attributes": {"color": "red", "n": "1"}},
+        {"attributes": {"only": "attributes"}},
+        {"data": "", "attributes": {"k": "empty data"}},
+        {"data": "AP+A"},
+        {"data": BASE64.encode("ünïcödé ✓")},
+        {"data": BASE64.encode("x"), "attributes": {}},
+    ]})
+}
+
+/// Runs the recorded R11 sequence (ordered subscription, seven unkeyed then one keyed message,
+/// Pull, Acknowledge, Pull) and returns both Pull bodies.
+async fn r11_ordered_pulls(
+    policy: fireemu_adapter_pubsub::PagingPolicy,
+    return_immediately: bool,
+) -> (Vec<Value>, Vec<Value>) {
+    let address = start_policy(policy).await;
+    let topic = "/v1/projects/demo-app/topics/r11-topic";
+    let sub = "/v1/projects/demo-app/subscriptions/r11-sub";
+    assert_eq!(rest_request(address, "PUT", topic, json!({})).await.0, 200);
+    let (status, created) = rest_request(
+        address,
+        "PUT",
+        sub,
+        json!({
+            "topic": "projects/demo-app/topics/r11-topic",
+            "ackDeadlineSeconds": 10,
+            "labels": {"env": "test", "ttl": "7"},
+            "enableMessageOrdering": true,
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{created}");
+    let (status, published) = rest_request(
+        address,
+        "POST",
+        &format!("{topic}:publish"),
+        r11_unkeyed_messages(),
+    )
+    .await;
+    assert_eq!(status, 200, "{published}");
+    let (status, published) = rest_request(
+        address,
+        "POST",
+        &format!("{topic}:publish"),
+        json!({"messages": [{"data": BASE64.encode("keyed"), "orderingKey": "k1"}]}),
+    )
+    .await;
+    assert_eq!(status, 200, "{published}");
+    let pull_body = json!({"maxMessages": 16, "returnImmediately": return_immediately});
+    let (status, first) =
+        rest_request(address, "POST", &format!("{sub}:pull"), pull_body.clone()).await;
+    assert_eq!(status, 200, "{first}");
+    let first = first["receivedMessages"].as_array().unwrap().clone();
+    let ack_ids: Vec<Value> = first.iter().map(|m| m["ackId"].clone()).collect();
+    let (status, acked) = rest_request(
+        address,
+        "POST",
+        &format!("{sub}:acknowledge"),
+        json!({"ackIds": ack_ids}),
+    )
+    .await;
+    assert_eq!(status, 200, "{acked}");
+    let (status, second) = rest_request(
+        address,
+        "POST",
+        &format!("{sub}:pull"),
+        json!({"maxMessages": 16, "returnImmediately": true}),
+    )
+    .await;
+    assert_eq!(status, 200, "{second}");
+    let second = second["receivedMessages"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    (first, second)
+}
+
+#[tokio::test]
+async fn strict_ordered_pull_returns_unkeyed_before_keyed_recorded_r11() {
+    for return_immediately in [true, false] {
+        let (first, second) = r11_ordered_pulls(
+            fireemu_adapter_pubsub::PagingPolicy::Strict,
+            return_immediately,
+        )
+        .await;
+        assert_eq!(first.len(), 7, "returnImmediately={return_immediately}");
+        assert!(
+            first
+                .iter()
+                .all(|m| m["message"].get("orderingKey").is_none()),
+            "{first:?}"
+        );
+        assert_eq!(second.len(), 1, "returnImmediately={return_immediately}");
+        assert_eq!(second[0]["message"]["orderingKey"], "k1");
+        assert_eq!(second[0]["message"]["data"], BASE64.encode("keyed"));
+    }
+}
+
+#[tokio::test]
+async fn emulator_ordered_pull_keeps_mixed_r11_response() {
+    for return_immediately in [true, false] {
+        let (first, second) = r11_ordered_pulls(
+            fireemu_adapter_pubsub::PagingPolicy::Emulator,
+            return_immediately,
+        )
+        .await;
+        assert_eq!(first.len(), 8, "returnImmediately={return_immediately}");
+        assert_eq!(first[7]["message"]["orderingKey"], "k1");
+        assert!(second.is_empty(), "{second:?}");
+    }
+}
+
+/// Returns the status and every `Content-Type` header value of one raw REST exchange.
+async fn rest_content_types(
+    address: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    extra_headers: &str,
+    body: &[u8],
+) -> (u16, Vec<String>) {
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{extra_headers}Connection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    stream.write_all(body).await.unwrap();
+    let mut response = Vec::new();
+    // A refusal may close with the request body unread, so a reset after the head is fine.
+    let _ = stream.read_to_end(&mut response).await;
+    let head_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap_or_else(|| {
+            panic!(
+                "raw HTTP response: {:?}",
+                String::from_utf8_lossy(&response)
+            )
+        });
+    let head = std::str::from_utf8(&response[..head_end]).unwrap();
+    let mut lines = head.lines();
+    let status = lines
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap();
+    let content_types = lines
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-type")
+                .then(|| value.trim().to_owned())
+        })
+        .collect();
+    (status, content_types)
+}
+
+type Case<'a> = (&'a str, &'a str, &'a str, &'a [u8], u16, bool);
+
+const PRODUCTION_JSON_CONTENT_TYPE: &str = "application/json; charset=UTF-8";
+
+#[tokio::test]
+async fn every_rest_json_response_sends_the_production_charset_content_type_in_both_profiles() {
+    use fireemu_adapter_pubsub::PagingPolicy;
+    for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+        let address = start_policy(policy).await;
+        let create = b"{}".as_slice();
+        // (method, path, extra headers, body, expected status, applies to this profile)
+        let cases: [Case; 6] = [
+            (
+                "PUT",
+                "/v1/projects/demo-app/topics/ctype",
+                "",
+                create,
+                200,
+                true,
+            ),
+            (
+                "PUT",
+                "/v1/projects/demo-app/topics/ctype",
+                "",
+                create,
+                409,
+                true,
+            ),
+            (
+                "GET",
+                "/v1/projects/demo-app/topics/missing",
+                "",
+                create,
+                404,
+                true,
+            ),
+            (
+                "PUT",
+                "/v1/projects/demo-app/topics/ctype2",
+                "",
+                b"{not json",
+                400,
+                true,
+            ),
+            ("GET", "/v1/projects/demo-app/topics", "", create, 200, true),
+            (
+                "GET",
+                "/v1/projects/demo-app/topics/ctype",
+                "Authorization: Bearer x\r\n",
+                create,
+                401,
+                policy == PagingPolicy::Strict,
+            ),
+        ];
+        for (method, path, headers, body, expected, applies) in cases {
+            if !applies {
+                continue;
+            }
+            let (status, content_types) =
+                rest_content_types(address, method, path, headers, body).await;
+            assert_eq!(status, expected, "{policy:?} {method} {path}");
+            assert_eq!(
+                content_types,
+                [PRODUCTION_JSON_CONTENT_TYPE],
+                "{policy:?} {method} {path} status {status}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_strict_route_not_found_page_keeps_its_html_content_type() {
+    let address = start_policy(fireemu_adapter_pubsub::PagingPolicy::Strict).await;
+    let (status, content_types) =
+        rest_content_types(address, "GET", "/v1/unknown-resource", "", b"{}").await;
+    assert_eq!(status, 404);
+    assert_eq!(content_types, ["text/html; charset=UTF-8"]);
 }

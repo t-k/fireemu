@@ -77,6 +77,7 @@ fn state_with(rules: Option<&str>, token_acceptance: TokenAcceptance) -> Storage
         app_check_policy: None,
         admin_capability: None,
         token_acceptance,
+        allow_unsigned_id_tokens: token_acceptance == TokenAcceptance::EmulatorMock,
         control_token: Some(CONTROL_TOKEN.to_owned()),
     }
 }

@@ -693,6 +693,7 @@ test("the waived fixtures are exactly these, so a new waiver is a visible edit h
     "fs-data-write-list",
     "fs-query-index",
     "fs-rules",
+    "pubsub-resource-names",
   ]);
 });
 

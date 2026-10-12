@@ -14,6 +14,7 @@ use fireemu_adapter_grpc::serve::serve_multiplexed;
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_http::identity_toolkit::{AuthState, AuthWallClock};
 use fireemu_core_auth::jwt::IdTokenSigner;
+use fireemu_core_auth::jwt::RulesTokenPolicy;
 use fireemu_core_auth::signup_quota::{
     QuotaAlgorithm, QuotaMode, SignupQuotaConfig, TemporaryQuota,
 };
@@ -620,17 +621,19 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             Arc::new(functions::PubSubBridge::new(r.clone()))
                 as Arc<dyn fireemu_adapter_pubsub::TopicDelivery>
         });
-    let pubsub_handle = fireemu_adapter_pubsub::PubSubHandle::new(
-        pubsub_state.clone(),
-        clock.clone(),
-        pubsub_bridge,
-    )
-    .with_paging_policy(match cfg.profile {
-        crate::config::CompatibilityProfile::Strict => fireemu_adapter_pubsub::PagingPolicy::Strict,
-        crate::config::CompatibilityProfile::Emulator => {
-            fireemu_adapter_pubsub::PagingPolicy::Emulator
-        }
-    });
+    pubsub_state
+        .lock()
+        .map_err(|_| "the Pub/Sub state lock is poisoned".to_owned())?
+        .set_project_numbers(cfg.pubsub_project_numbers.clone())
+        .map_err(|e| e.to_string())?;
+    let pubsub_handle = configured_pubsub_handle(
+        fireemu_adapter_pubsub::PubSubHandle::new(
+            pubsub_state.clone(),
+            clock.clone(),
+            pubsub_bridge,
+        ),
+        &cfg,
+    );
     // Under the strict profile a first-generation schedule's occurrence also puts its message on the job's topic, as Cloud
     // Scheduler does; without a Pub/Sub listener there is no topic and nothing to publish to.
     if functions::publishes_schedule_messages(pubsub_listener.is_some(), cfg.profile) {
@@ -785,14 +788,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         )));
     if let Some(runtime) = &functions_runtime {
         runtime.set_faults(faults.for_project(runtime.project()));
-        let verifier = Arc::new(
-            RulesEnforcer::new(
-                Arc::new(RulesetSlot::default()),
-                auth_store.clone(),
-                clock.clone(),
-            )
-            .with_registry(registry.clone()),
-        );
+        let verifier = Arc::new(callable_auth_verifier(&auth_store, &clock, &registry));
         runtime.set_callable_auth_verifier(verifier.clone());
         if let Some(gate) = &app_check_gate {
             // The callable baseline is `unenforced`: the daemon classifies and records
@@ -898,6 +894,23 @@ fn firestore_wall_source(
     Some(Arc::new(move || wall_clock.now()))
 }
 
+/// The enforcer that verifies a callable Function's ID token. It keeps the full ID token
+/// verification in both profiles: it never takes the profile's acceptance or
+/// `auth.allowUnsignedIdTokens`, so an unsigned mock token is not a callable identity (the
+/// setting is for the Security Rules surfaces).
+fn callable_auth_verifier(
+    auth_store: &Arc<Mutex<fireemu_core_auth::store::AuthStore>>,
+    clock: &Arc<Mutex<VirtualClock>>,
+    registry: &Arc<fireemu_core_auth::store::AuthRegistry>,
+) -> RulesEnforcer {
+    RulesEnforcer::new(
+        Arc::new(RulesetSlot::default()),
+        auth_store.clone(),
+        clock.clone(),
+    )
+    .with_registry(registry.clone())
+}
+
 /// The warning printed the first time a client request to a database is refused because no
 /// Firestore Security Rules are loaded for it, and once when further ones are suppressed.
 fn firestore_no_rules_warning(event: NoticeEvent<'_>) -> String {
@@ -939,7 +952,10 @@ fn firestore_profile_settings(
 ) -> RulesEnforcer {
     enforcer
         .with_token_semantics(TokenSemantics::Firestore)
-        .with_token_acceptance(cfg.token_acceptance)
+        .with_token_policy(RulesTokenPolicy::new(
+            cfg.token_acceptance,
+            cfg.auth_allow_unsigned_id_tokens,
+        ))
         .with_refusal_without_ruleset(cfg.refuse_without_ruleset)
         .with_end_user_transactions(cfg.end_user_transactions)
         .with_listen_stream_lifetime(cfg.listen_stream_lifetime)
@@ -2007,8 +2023,67 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
     }
 }
 
+fn configured_pubsub_handle(
+    handle: fireemu_adapter_pubsub::PubSubHandle,
+    cfg: &crate::config::RuntimeConfig,
+) -> fireemu_adapter_pubsub::PubSubHandle {
+    handle
+        .with_paging_policy(match cfg.profile {
+            crate::config::CompatibilityProfile::Strict => {
+                fireemu_adapter_pubsub::PagingPolicy::Strict
+            }
+            crate::config::CompatibilityProfile::Emulator => {
+                fireemu_adapter_pubsub::PagingPolicy::Emulator
+            }
+        })
+        .with_local_bearer_token(cfg.pubsub_local_bearer_token.clone())
+}
+
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn pubsub_daemon_configuration_reaches_transport_admission() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (profile, configured, expected) in [
+            ("strict", true, "403"),
+            ("strict", false, "404"),
+            ("emulator", true, "404"),
+        ] {
+            let mut input = serde_json::json!({"schemaVersion":1,"firestore":{"edition":"standard","apiMode":"native"},"profile":profile});
+            if configured {
+                input["pubsub"] =
+                    serde_json::json!({"authentication":{"localBearerToken":"fixture-token"}});
+            }
+            let cfg = crate::config::RuntimeConfig::from_json(&input).unwrap();
+            let handle = super::configured_pubsub_handle(
+                fireemu_adapter_pubsub::PubSubHandle::new(
+                    std::sync::Arc::new(std::sync::Mutex::new(
+                        fireemu_core_pubsub::PubSubState::new(99),
+                    )),
+                    std::sync::Arc::new(std::sync::Mutex::new(
+                        fireemu_core_session::clock::VirtualClock::new(
+                            fireemu_core_types::time::LogicalInstant::from_unix_seconds(0),
+                        ),
+                    )),
+                    None,
+                ),
+                &cfg,
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let task = tokio::spawn(fireemu_adapter_pubsub::serve_pubsub(listener, handle));
+            let response = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+                stream.write_all(b"GET /v1/projects/demo-app/topics/missing HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").await.unwrap();
+                let mut response = Vec::new(); stream.read_to_end(&mut response).await.unwrap(); response
+            }).await;
+            task.abort();
+            let _ = task.await;
+            let response = String::from_utf8(response.unwrap()).unwrap();
+            assert_eq!(response.split_whitespace().nth(1), Some(expected));
+        }
+    }
+
     /// The per-name warnings name the resource; past the limit a single line says the rest are
     /// suppressed.
     #[test]
@@ -2069,6 +2144,89 @@ mod tests {
         idp_assertion_policy, reapply_explicit_auth_config,
         reapply_explicit_auth_password_policies, reapply_explicit_auth_quota,
     };
+
+    /// The token `@firebase/rules-unit-testing`'s `authenticatedContext(sub)` sends
+    /// (`createMockUserToken`): unsigned, `iat: 0`, `exp: 3600`, an unknown subject.
+    fn mock_user_token(sub: &str, project: &str) -> String {
+        use fireemu_core_auth::jwt::base64url_encode;
+        let payload = json!({
+            "iss": format!("https://securetoken.google.com/{project}"),
+            "aud": project, "iat": 0, "exp": 3600, "auth_time": 0,
+            "sub": sub, "user_id": sub,
+            "firebase": {"sign_in_provider": "custom", "identities": {}},
+        });
+        format!(
+            "{}.{}.",
+            base64url_encode(br#"{"alg":"none","type":"JWT"}"#),
+            base64url_encode(payload.to_string().as_bytes())
+        )
+    }
+
+    fn rules_inputs() -> (
+        Arc<Mutex<AuthStore>>,
+        Arc<Mutex<fireemu_core_session::clock::VirtualClock>>,
+    ) {
+        (
+            Arc::new(Mutex::new(AuthStore::new(
+                "demo-app",
+                SplitMix64::new(1),
+                TotpPolicy::default(),
+            ))),
+            Arc::new(Mutex::new(fireemu_core_session::clock::VirtualClock::new(
+                LogicalInstant::from_unix_seconds(1_788_004_860),
+            ))),
+        )
+    }
+
+    /// The Firestore enforcer takes `auth.allowUnsignedIdTokens` explicitly in both profiles:
+    /// an explicit `false` never falls back to the emulator profile's default admission.
+    #[test]
+    fn the_firestore_enforcer_takes_the_unsigned_id_token_setting_in_both_profiles() {
+        use fireemu_adapter_grpc::rules::{Principal, RulesEnforcer};
+        use fireemu_core_rules::runtime::RulesetSlot;
+
+        let bearer = format!("Bearer {}", mock_user_token("alice", "demo-app"));
+        for profile in ["strict", "emulator"] {
+            for allow in [true, false] {
+                let cfg = crate::config::RuntimeConfig::from_json(&json!({
+                    "schemaVersion": 1, "profile": profile,
+                    "auth": {"allowUnsignedIdTokens": allow},
+                }))
+                .unwrap();
+                let (auth, clock) = rules_inputs();
+                let enforcer = super::firestore_profile_settings(
+                    RulesEnforcer::new(Arc::new(RulesetSlot::default()), auth, clock),
+                    &cfg,
+                );
+                let admitted = matches!(
+                    enforcer.principal_from_authorization_for_project(Some(&bearer), "demo-app"),
+                    Ok(Principal::User(_))
+                );
+                assert_eq!(admitted, allow, "{profile}, allowUnsignedIdTokens {allow}");
+            }
+        }
+    }
+
+    /// Callable Functions never take `auth.allowUnsignedIdTokens`: the verifier the daemon
+    /// builds for them refuses an unsigned mock token as a callable identity, in both profiles
+    /// and with the setting on (its default).
+    #[test]
+    fn the_callable_verifier_never_admits_an_unsigned_mock_token() {
+        use fireemu_adapter_grpc::rules::Principal;
+
+        let bearer = format!("Bearer {}", mock_user_token("alice", "demo-app"));
+        let (auth, clock) = rules_inputs();
+        let registry = Arc::new(AuthRegistry::new("demo-app", auth.clone()));
+        let verifier = super::callable_auth_verifier(&auth, &clock, &registry);
+        assert!(!matches!(
+            verifier.principal_from_authorization(Some(&bearer)),
+            Ok(Principal::User(_))
+        ));
+        assert!(!matches!(
+            verifier.principal_from_authorization_for_project(Some(&bearer), "demo-app"),
+            Ok(Principal::User(_))
+        ));
+    }
 
     /// Only the strict profile's unpinned daemon follows wall time on Firestore; a pinned clock
     /// and the emulator profile get no wall source.

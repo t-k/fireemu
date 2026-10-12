@@ -28,6 +28,17 @@ pub fn paginate<T>(
     policy: PagingPolicy,
     name: impl Fn(&T) -> String,
 ) -> Result<Page<T>> {
+    paginate_after(resources, page_size, page_token, policy, name, None)
+}
+
+pub(crate) fn paginate_after<T>(
+    resources: Vec<T>,
+    page_size: i32,
+    page_token: &str,
+    policy: PagingPolicy,
+    name: impl Fn(&T) -> String,
+    issued_boundary: Option<&str>,
+) -> Result<Page<T>> {
     let limit = match policy {
         PagingPolicy::Strict => {
             if !(0..=1000).contains(&page_size) {
@@ -57,6 +68,14 @@ pub fn paginate<T>(
                 .iter()
                 .position(|r| opaque_token(&name(r)) == page_token)
                 .map(|i| i + 1)
+                .or_else(|| {
+                    issued_boundary.map(|boundary| {
+                        resources
+                            .iter()
+                            .position(|resource| name(resource).as_str() > boundary)
+                            .unwrap_or(resources.len())
+                    })
+                })
                 .ok_or_else(|| {
                     crate::PubSubError::invalid_argument(format!(
                         "Invalid page token given (token={page_token})."
@@ -138,9 +157,235 @@ mod tests {
         assert_eq!(error.message(), "Invalid page token given (token=garbage).");
     }
 
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn issued_deleted_cursor_is_scoped_and_reset_owned() {
+        let mut state = crate::PubSubState::new(1);
+        let all = names(3);
+        let context = "projects/p/subscriptions";
+        let token = state
+            .paginate(
+                context,
+                all.clone(),
+                1,
+                "",
+                PagingPolicy::Strict,
+                Clone::clone,
+            )
+            .unwrap()
+            .next_page_token;
+        let remaining = all[1..].to_vec();
+        let exhausted = state
+            .paginate(
+                context,
+                Vec::<String>::new(),
+                1,
+                &token,
+                PagingPolicy::Strict,
+                Clone::clone,
+            )
+            .unwrap();
+        assert!(exhausted.resources.is_empty());
+        assert!(exhausted.next_page_token.is_empty());
+        for foreign in [
+            "projects/q/subscriptions",
+            "projects/p/topics",
+            "projects/p/topics/t/subscriptions",
+        ] {
+            assert!(state
+                .paginate(
+                    foreign,
+                    remaining.clone(),
+                    1,
+                    &token,
+                    PagingPolicy::Strict,
+                    Clone::clone
+                )
+                .is_err());
+            // Existing live-member compatibility is independent of issuing list context.
+            assert_eq!(
+                state
+                    .paginate(
+                        foreign,
+                        all.clone(),
+                        1,
+                        &token,
+                        PagingPolicy::Strict,
+                        Clone::clone
+                    )
+                    .unwrap()
+                    .resources,
+                vec![all[1].clone()]
+            );
+        }
+        assert!(state
+            .paginate(
+                context,
+                remaining.clone(),
+                1,
+                "garbage",
+                PagingPolicy::Strict,
+                Clone::clone
+            )
+            .is_err());
+        state.clear_project("q");
+        assert!(state
+            .paginate(
+                context,
+                remaining.clone(),
+                1,
+                &token,
+                PagingPolicy::Strict,
+                Clone::clone
+            )
+            .is_ok());
+        state.clear_project("p");
+        assert!(state
+            .paginate(
+                context,
+                remaining.clone(),
+                1,
+                &token,
+                PagingPolicy::Strict,
+                Clone::clone
+            )
+            .is_err());
+        let token = state
+            .paginate(
+                context,
+                all.clone(),
+                1,
+                "",
+                PagingPolicy::Strict,
+                Clone::clone,
+            )
+            .unwrap()
+            .next_page_token;
+        state.clear();
+        assert!(state
+            .paginate(
+                context,
+                remaining,
+                1,
+                &token,
+                PagingPolicy::Strict,
+                Clone::clone
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn topic_recreation_retires_related_history_and_project_predicate_reset_clears_history_only_projects(
+    ) {
+        let mut state = crate::PubSubState::new(1);
+        let topic = crate::TopicName::new("p", "parent").unwrap();
+        state
+            .create_topic(topic.clone(), std::collections::BTreeMap::new())
+            .unwrap();
+        let context = "projects/p/topics/parent/subscriptions";
+        let all = names(3);
+        let token = state
+            .paginate(
+                context,
+                all.clone(),
+                1,
+                "",
+                PagingPolicy::Strict,
+                Clone::clone,
+            )
+            .unwrap()
+            .next_page_token;
+        state.delete_topic(&topic).unwrap();
+        state
+            .create_topic(topic, std::collections::BTreeMap::new())
+            .unwrap();
+        assert!(state
+            .paginate(
+                context,
+                all[1..].to_vec(),
+                1,
+                &token,
+                PagingPolicy::Strict,
+                Clone::clone
+            )
+            .is_err());
+        let token = state
+            .paginate(
+                "projects/q/subscriptions",
+                all.clone(),
+                1,
+                "",
+                PagingPolicy::Strict,
+                Clone::clone,
+            )
+            .unwrap()
+            .next_page_token;
+        state.clear_projects_where(|project| project == "q");
+        assert!(state
+            .paginate(
+                "projects/q/subscriptions",
+                all[1..].to_vec(),
+                1,
+                &token,
+                PagingPolicy::Strict,
+                Clone::clone
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn emulator_pages_do_not_register_strict_deleted_boundaries() {
+        let mut state = crate::PubSubState::new(1);
+        let all = names(3);
+        state
+            .paginate(
+                "projects/p/subscriptions",
+                all.clone(),
+                1,
+                "",
+                PagingPolicy::Emulator,
+                Clone::clone,
+            )
+            .unwrap();
+        let token = super::opaque_token(&all[0]);
+        assert!(state
+            .paginate(
+                "projects/p/subscriptions",
+                all[1..].to_vec(),
+                1,
+                &token,
+                PagingPolicy::Strict,
+                Clone::clone
+            )
+            .is_err());
+    }
+
     proptest! {
         #[test]
-        fn unobserved_deleted_cursor_currently_refuses_strict_but_uses_emulator_name_boundary(count in 2usize..30, index in 0usize..28) {
+        fn issued_deleted_cursor_matches_current_name_reference(
+            count in 2usize..40, boundary_index in 0usize..38,
+            actions in prop::collection::vec((any::<bool>(), 0usize..60), 0..60), size in 0i32..12,
+        ) {
+            let mut state = crate::PubSubState::new(1);
+            let all = names(count);
+            let index = boundary_index.min(count - 2);
+            let boundary = all[index].clone();
+            let token = state.paginate("projects/p/subscriptions", all.clone(), i32::try_from(index + 1).unwrap(), "", PagingPolicy::Strict, Clone::clone).unwrap().next_page_token;
+            let mut live: std::collections::BTreeSet<_> = all.into_iter().collect();
+            for (insert, id) in actions {
+                let name = format!("projects/p/subscriptions/sub-{id:03}");
+                if insert {live.insert(name);} else {live.remove(&name);}
+            }
+            live.remove(&boundary);
+            let expected: Vec<_> = live.iter().filter(|name| *name > &boundary).cloned().collect();
+            let page = state.paginate("projects/p/subscriptions", live.into_iter().collect(), size, &token, PagingPolicy::Strict, Clone::clone).unwrap();
+            let limit = if size == 0 {expected.len()} else {usize::try_from(size).unwrap()};
+            prop_assert_eq!(page.resources, expected.iter().take(limit).cloned().collect::<Vec<_>>());
+            prop_assert_eq!(page.next_page_token.is_empty(), expected.len() <= limit);
+        }
+
+        #[test]
+        fn stateless_deleted_cursor_refuses_strict_but_uses_emulator_name_boundary(count in 2usize..30, index in 0usize..28) {
             let mut resources = names(count);
             let index = index.min(count - 2);
             let deleted = resources[index].clone();

@@ -1,0 +1,892 @@
+import { protectCell, checkpoint, obligations } from "./safety.mjs";
+import { kindOf } from "./ledger.mjs";
+import { normalizeOutcome } from "../pubsub-production/outcome.mjs";
+import { PROJECT } from "./plan.mjs";
+import { boundaryPayload } from "./payload.mjs";
+
+export const owned = (name, runId) =>
+  typeof name === "string" &&
+  /^[a-f0-9]{12}$/.test(runId) &&
+  new RegExp(`^projects/${PROJECT}/(topics|subscriptions)/fe${runId}-[a-z0-9-]+$`).test(name);
+export const selectOwn = (frame, published) =>
+  (frame?.receivedMessages ?? []).filter(
+    (item) =>
+      typeof item.ackId === "string" &&
+      item.ackId.length > 0 &&
+      typeof item.message?.messageId === "string" &&
+      published.has(item.message.messageId) &&
+      published.get(item.message.messageId) === item.message.data,
+  );
+const settled = (ledger, name) =>
+  (ledger.state().get(name)?.requests ?? []).every((request) =>
+    ["rejected", "gone", "gone-a2"].includes(request.resolution),
+  );
+const resourceMethod = (name, action) =>
+  `${action}${name.includes("/topics/") ? "Topic" : "Subscription"}`;
+const serviceOf = (method) => (/Topic|Publish/.test(method) ? "Publisher" : "Subscriber");
+const sleepDefault = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function runCell({ cell, meter, wire, ledger, runId, journal, sleep = sleepDefault }) {
+  const prefix = `projects/${PROJECT}/`,
+    suffix = `fe${runId}-${cell.id.toLowerCase()}`;
+  const topic = `${prefix}topics/${suffix}-topic`,
+    subscription = `${prefix}subscriptions/${suffix}-sub`;
+  const tracked = new Set(),
+    absentSeen = new Set();
+  let complete = false,
+    reason = null,
+    budgetOverrun = false,
+    stream;
+  const send = async (
+    category,
+    method,
+    request,
+    { routeName, candidates, ownedListNames } = {},
+  ) => {
+    const maintenance = category.startsWith("cleanup");
+    meter.remaining(maintenance);
+    const name =
+      request.name ??
+      request.topic?.name ??
+      request.topic ??
+      request.subscription?.name ??
+      request.subscription;
+    if (
+      (method === "ListTopics"
+        ? request.project !== `projects/${PROJECT}` ||
+          request.pageSize !== 100 ||
+          Object.keys(request).some((k) => !["project", "pageSize"].includes(k))
+        : !owned(name, runId)) ||
+      (routeName && !owned(routeName, runId)) ||
+      (method === "CreateSubscription" && !owned(request.topic, runId))
+    )
+      throw new Error("foreign resource refused");
+    const action = method.startsWith("Create")
+      ? "create"
+      : method.startsWith("Delete")
+        ? "delete"
+        : null;
+    const names = candidates ?? (method === "ListTopics" ? [] : [name]);
+    if (names.some((candidate) => !owned(candidate, runId)))
+      throw new Error("foreign candidate refused");
+    if (action === "delete" && ledger.deleting(name))
+      throw new Error("unknown delete cannot retry");
+    if (action)
+      checkpoint(
+        journal,
+        ledger,
+        tracked,
+        cell.id,
+        names.map((name) => ({ name, action, transport: cell.transport })),
+      );
+    const intents = action
+      ? names.map((candidate) => {
+          tracked.add(candidate);
+          return {
+            name: candidate,
+            action,
+            transport: cell.transport,
+            requestId: ledger.sent({ name: candidate, action, transport: cell.transport }),
+          };
+        })
+      : [];
+    let reply;
+    try {
+      reply = await wire.call({
+        category,
+        transport: cell.transport,
+        service: serviceOf(method),
+        method,
+        request,
+        cellId: cell.id,
+        ...(routeName ? { routeName } : {}),
+        ...(ownedListNames ? { ownedListNames } : {}),
+      });
+    } catch (error) {
+      for (const intent of intents) ledger.answered({ ...intent, kind: "unknown" });
+      throw error;
+    }
+    reply = normalizeOutcome(reply);
+    let kind = kindOf(reply);
+    if (
+      action === "create" &&
+      kind === "ok" &&
+      (!names.includes(reply.body?.name) || "done" in reply.body)
+    )
+      kind = "unknown";
+    if (method.startsWith("Get") && kind === "ok" && reply.body?.name !== name) kind = "unknown";
+    for (const intent of intents)
+      ledger.answered({
+        ...intent,
+        kind:
+          action === "create" && kind === "ok" && intent.name !== reply.body.name ? "error" : kind,
+      });
+    if (method.startsWith("Get")) {
+      ledger.observeRead(name, reply);
+      if (kind === "error" && reply.code === "NOT_FOUND" && !settled(ledger, name))
+        absentSeen.add(name);
+    }
+    if (kind === "unknown" || kind === "pending") throw new Error("unknown answer stops the cell");
+    if (reply.budgetOverrun) budgetOverrun = true;
+    try {
+      meter.remaining(maintenance);
+    } catch {
+      budgetOverrun = true;
+    }
+    return reply;
+  };
+  const setup = async (twoTopics = false, topicFields = {}, subscriptionFields = {}) => {
+    const a = await send("create", "CreateTopic", { name: topic, ...topicFields });
+    if (!a.ok) throw new Error("topic setup refused");
+    const second = twoTopics ? `${topic}-second` : subscription;
+    const b = await send(
+      "create",
+      twoTopics ? "CreateTopic" : "CreateSubscription",
+      twoTopics
+        ? { name: second }
+        : {
+            name: subscription,
+            topic,
+            ackDeadlineSeconds: 10,
+            labels: { env: "test", ttl: "7" },
+            ...subscriptionFields,
+          },
+    );
+    if (!b.ok) throw new Error("second setup refused");
+    for (const name of [topic, second])
+      if (!(await send("get", resourceMethod(name, "Get"), { name })).ok)
+        throw new Error("setup read missing");
+  };
+  const wait = async (ms) => {
+    if (ms >= meter.remaining()) throw new Error("wait exceeds cell time");
+    await sleep(ms);
+    meter.remaining();
+  };
+  let cleanupClosed = true;
+  const failures = await protectCell({
+    body: async () => {
+      if (cell.variant.includes("path-body")) {
+        const isSub = cell.variant.startsWith("subscription");
+        const routeName = isSub ? subscription : topic,
+          bodyName = `${routeName}-body`;
+        if (isSub && !(await send("create", "CreateTopic", { name: topic })).ok)
+          throw new Error("anchor refused");
+        for (const name of [routeName, bodyName]) {
+          const reply = await send("get", resourceMethod(name, "Get"), { name });
+          if (reply.code !== "NOT_FOUND") throw new Error("mismatch candidate not known absent");
+        }
+        journal.write({
+          event: "path-body-candidates",
+          cellId: cell.id,
+          candidates: [routeName, bodyName],
+          actualNativeAnalogue: cell.transport === "grpc",
+        });
+        await send(
+          "target",
+          isSub ? "CreateSubscription" : "CreateTopic",
+          { name: bodyName, ...(isSub ? { topic } : {}) },
+          { routeName, candidates: [routeName, bodyName] },
+        );
+        for (const name of [routeName, bodyName])
+          await send("target", resourceMethod(name, "Get"), { name });
+        complete = true;
+      } else if (cell.variant === "filter-negation") {
+        await setup(false, {}, { filter: 'NOT attributes.color = "red"' });
+        const messages = [
+          { data: Buffer.from("negation-red").toString("base64"), attributes: { color: "red" } },
+          { data: Buffer.from("negation-blue").toString("base64"), attributes: { color: "blue" } },
+          { data: Buffer.from("negation-missing").toString("base64"), attributes: {} },
+        ];
+        const published = await send("publish", "Publish", { topic, messages });
+        const ids = published.body?.messageIds;
+        if (
+          !published.ok ||
+          !Array.isArray(ids) ||
+          ids.length !== 3 ||
+          new Set(ids).size !== 3 ||
+          ids.some((id) => typeof id !== "string" || !id)
+        )
+          throw new Error("negation Publish identity missing");
+        ids.forEach((messageId, batchIndex) =>
+          journal.write({
+            event: "publication-binding",
+            cellId: cell.id,
+            messageId,
+            ...messages[batchIndex],
+            batchIndex,
+            batchCount: 3,
+          }),
+        );
+        const delivered = new Set();
+        const attributes = (value) =>
+          JSON.stringify(Object.entries(value ?? {}).toSorted(([a], [b]) => a.localeCompare(b)));
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const dispatch = meter.clock();
+          const reply = await send("target", "Pull", {
+            subscription,
+            maxMessages: 3,
+            returnImmediately: true,
+          });
+          const replied = meter.clock(),
+            received = reply.body?.receivedMessages ?? [];
+          if (!reply.ok || !Array.isArray(received)) throw new Error("negation Pull refused");
+          const tokens = [];
+          for (const item of received) {
+            const index = ids.indexOf(item.message?.messageId),
+              expected = messages[index];
+            if (
+              !expected ||
+              delivered.has(index) ||
+              typeof item.ackId !== "string" ||
+              !item.ackId ||
+              tokens.includes(item.ackId) ||
+              Buffer.from(item.message.data ?? "", "base64").compare(
+                Buffer.from(expected.data, "base64"),
+              ) !== 0 ||
+              attributes(item.message.attributes) !== attributes(expected.attributes) ||
+              (item.message.orderingKey ?? "") !== ""
+            )
+              throw new Error("negation delivery correlation mismatch");
+            delivered.add(index);
+            tokens.push(item.ackId);
+            journal.write({
+              event: "publication-delivery-binding",
+              cellId: cell.id,
+              messageId: ids[index],
+              ackId: item.ackId,
+              batchIndex: index,
+              ...expected,
+            });
+          }
+          journal.write({
+            event: "negation-pull-window",
+            cellId: cell.id,
+            attempt,
+            dispatch,
+            replied,
+          });
+          if (tokens.length) {
+            const ack = { dispatch: meter.clock() };
+            if (ack.dispatch >= dispatch + 10000)
+              throw new Error("negation current ACK token may have expired");
+            const acknowledged = await send("target", "Acknowledge", {
+              subscription,
+              ackIds: tokens,
+            });
+            ack.replied = meter.clock();
+            journal.write({
+              event: "negation-ack-window",
+              cellId: cell.id,
+              attempt,
+              pull: { dispatch, replied },
+              ack,
+            });
+            if (!acknowledged.ok || ack.replied >= dispatch + 10000)
+              throw new Error("negation current ACK refused or expiry uncertain");
+          }
+        }
+        journal.write({
+          event: "negation-bounded-witness",
+          cellId: cell.id,
+          deliveredIndices: [...delivered].toSorted((a, b) => a - b),
+          unobservedIndices: [0, 1, 2].filter((index) => !delivered.has(index)),
+          permanentExclusionClaimed: false,
+          missingRuleAssumed: false,
+        });
+        if (!delivered.has(1)) throw new Error("negation positive blue control unobserved");
+        complete = true;
+      } else if (cell.variant === "positive-deadline-extension") {
+        await setup();
+        const message = {
+          data: Buffer.from("extension-identity").toString("base64"),
+          attributes: { phase: "extension" },
+        };
+        const published = await send("publish", "Publish", { topic, messages: [message] });
+        const ids = published.body?.messageIds;
+        if (
+          !published.ok ||
+          !Array.isArray(ids) ||
+          ids.length !== 1 ||
+          typeof ids[0] !== "string" ||
+          !ids[0]
+        )
+          throw new Error("extension Publish identity missing");
+        const messageId = ids[0],
+          intervals = {};
+        journal.write({
+          event: "publication-binding",
+          cellId: cell.id,
+          messageId,
+          ...message,
+          batchIndex: 0,
+          batchCount: 1,
+        });
+        const pull = async (phase) => {
+          const dispatch = meter.clock();
+          const reply = await send("target", "Pull", {
+            subscription,
+            maxMessages: 1,
+            returnImmediately: true,
+          });
+          const interval = { dispatch, replied: meter.clock() };
+          intervals[phase] = interval;
+          journal.write({ event: "extension-pull-window", cellId: cell.id, phase, ...interval });
+          if (!reply.ok || !Array.isArray(reply.body?.receivedMessages ?? []))
+            throw new Error("extension Pull refused");
+          return reply.body?.receivedMessages ?? [];
+        };
+        const correlated = (received) => {
+          if (received.length !== 1)
+            throw new Error("extension same-publication delivery unobserved");
+          const item = received[0];
+          if (
+            item.message?.messageId !== messageId ||
+            typeof item.ackId !== "string" ||
+            !item.ackId ||
+            Buffer.from(item.message.data ?? "", "base64").compare(
+              Buffer.from(message.data, "base64"),
+            ) !== 0 ||
+            JSON.stringify(Object.entries(item.message.attributes ?? {}).toSorted()) !==
+              JSON.stringify(Object.entries(message.attributes).toSorted()) ||
+            (item.message.orderingKey ?? "") !== ""
+          )
+            throw new Error("extension delivery correlation mismatch");
+          return item;
+        };
+        const first = correlated(await pull("initial"));
+        journal.write({
+          event: "extension-initial-binding",
+          cellId: cell.id,
+          messageId,
+          ackId: first.ackId,
+          ...intervals.initial,
+        });
+        const modify = { dispatch: meter.clock() };
+        const updated = await send("target", "ModifyAckDeadline", {
+          subscription,
+          ackIds: [first.ackId],
+          ackDeadlineSeconds: 60,
+        });
+        modify.replied = meter.clock();
+        journal.write({
+          event: "extension-modify-window",
+          cellId: cell.id,
+          messageId,
+          ackId: first.ackId,
+          originalSeconds: 10,
+          extensionSeconds: 60,
+          ...modify,
+        });
+        if (!updated.ok || modify.replied >= intervals.initial.dispatch + 10000)
+          throw new Error("extension update may cross original deadline");
+        await wait(Math.max(0, intervals.initial.replied + 10000 - meter.clock()));
+        if (meter.clock() + 25000 >= modify.dispatch + 60000)
+          throw new Error("extension before-probe margin unavailable");
+        const before = await pull("before");
+        if (
+          intervals.before.dispatch < intervals.initial.replied + 10000 ||
+          intervals.before.replied >= modify.dispatch + 60000 ||
+          before.length
+        )
+          throw new Error("extension before-probe witness ambiguous");
+        await wait(Math.max(0, modify.replied + 60000 - meter.clock()));
+        const last = correlated(await pull("after"));
+        if (intervals.after.dispatch < modify.replied + 60000)
+          throw new Error("extension after-probe too early");
+        journal.write({
+          event: "extension-redelivery-binding",
+          cellId: cell.id,
+          messageId,
+          ackId: last.ackId,
+          ...intervals.after,
+        });
+        const ack = { dispatch: meter.clock() };
+        if (ack.dispatch >= intervals.after.dispatch + 10000)
+          throw new Error("extension latest current ACK token may have expired");
+        const acknowledged = await send("target", "Acknowledge", {
+          subscription,
+          ackIds: [last.ackId],
+        });
+        ack.replied = meter.clock();
+        journal.write({
+          event: "extension-ack-window",
+          cellId: cell.id,
+          messageId,
+          pull: intervals.after,
+          ack,
+        });
+        if (!acknowledged.ok || ack.replied >= intervals.after.dispatch + 10000)
+          throw new Error("extension latest current ACK refused or expiry uncertain");
+        journal.write({
+          event: "deadline-extension-witness",
+          cellId: cell.id,
+          messageId,
+          originalSeconds: 10,
+          extensionSeconds: 60,
+          applicationInstantKnown: false,
+          initial: intervals.initial,
+          modify,
+          before: intervals.before,
+          after: intervals.after,
+          ack,
+        });
+        complete = true;
+      } else if (cell.variant === "topic-labels-empty") {
+        await setup(true, { labels: { env: "test", ttl: "7" } });
+        const list = async () => {
+          const names = [topic, `${topic}-second`];
+          const reply = await send(
+            "target",
+            "ListTopics",
+            { project: `projects/${PROJECT}`, pageSize: 100 },
+            { ownedListNames: names },
+          );
+          if (
+            !reply.ok ||
+            !Array.isArray(reply.body?.topics) ||
+            names.some((n) => reply.body.topics.filter((t) => t?.name === n).length !== 1)
+          )
+            throw new Error("bounded LIST owned membership incomplete");
+          journal.write({
+            event: "owned-topic-list",
+            cellId: cell.id,
+            names,
+            topics: reply.body.topics.filter((t) => names.includes(t.name)),
+            unfollowedCursor: reply.body.nextPageToken ?? null,
+          });
+        };
+        await list();
+        await send("target", "UpdateTopic", {
+          topic: { name: topic, labels: {} },
+          updateMask: "labels",
+        });
+        await send("target", "GetTopic", { name: topic });
+        await list();
+        complete = true;
+      } else if (cell.variant === "retention-ordering") {
+        await setup(false, {}, { enableMessageOrdering: false });
+        for (const duration of ["600s", "599s"]) {
+          await send("target", "UpdateSubscription", {
+            subscription: { name: subscription, messageRetentionDuration: duration },
+            updateMask: "messageRetentionDuration",
+          });
+          await send("target", "GetSubscription", { name: subscription });
+        }
+        complete = true;
+      } else if (cell.variant === "publish-wire-eight") {
+        await setup(false, {}, { enableMessageOrdering: true });
+        const data = (s) => Buffer.from(s).toString("base64");
+        const messages = [
+          { data: data("one") },
+          { data: data("two"), attributes: { color: "red", n: "1" } },
+          { attributes: { only: "attributes" } },
+          { data: "", attributes: { k: "empty data" } },
+          { data: data("keyed"), orderingKey: "k1" },
+          { data: Buffer.from([0, 255, 128]).toString("base64") },
+          { data: data("ünïcödé ✓") },
+          { data: data("x"), attributes: {} },
+        ];
+        const expected = new Map();
+        for (const indices of [[0, 1, 2, 3, 5, 6, 7], [4]]) {
+          const publication = await send("publish", "Publish", {
+            topic,
+            messages: indices.map((index) => messages[index]),
+          });
+          const ids = publication.body?.messageIds;
+          if (
+            !publication.ok ||
+            !Array.isArray(ids) ||
+            ids.length !== indices.length ||
+            new Set(ids).size !== indices.length ||
+            ids.some((id) => typeof id !== "string" || !id || expected.has(id))
+          )
+            throw new Error("publication batch is not bijective");
+          ids.forEach((id, slot) =>
+            expected.set(id, { message: messages[indices[slot]], index: indices[slot] }),
+          );
+        }
+        const received = new Set();
+        for (const [messageId, { message, index }] of expected)
+          journal.write({
+            event: "publication-binding",
+            cellId: cell.id,
+            messageId,
+            ...message,
+            batchIndex: index,
+            batchCount: 8,
+          });
+        for (let attempt = 0; attempt < 2 && received.size < 8; attempt++) {
+          const reply = await send("target", "Pull", {
+            subscription,
+            maxMessages: 16,
+            returnImmediately: true,
+          });
+          if (!reply.ok) throw new Error("publication Pull refused");
+          const tokens = [];
+          for (const item of reply.body?.receivedMessages ?? []) {
+            const id = item.message?.messageId,
+              binding = expected.get(id);
+            if (!binding) continue;
+            const m = item.message,
+              e = binding.message;
+            const attrs = (x) =>
+              JSON.stringify(Object.entries(x ?? {}).toSorted(([a], [b]) => a.localeCompare(b)));
+            if (
+              received.has(id) ||
+              tokens.includes(item.ackId) ||
+              typeof item.ackId !== "string" ||
+              !item.ackId ||
+              Buffer.from(m.data ?? "", "base64").compare(Buffer.from(e.data ?? "", "base64")) !==
+                0 ||
+              attrs(m.attributes) !== attrs(e.attributes) ||
+              (m.orderingKey ?? "") !== (e.orderingKey ?? "")
+            )
+              throw new Error("publication delivery correlation mismatch");
+            received.add(id);
+            tokens.push(item.ackId);
+            journal.write({
+              event: "publication-delivery-binding",
+              cellId: cell.id,
+              messageId: id,
+              ackId: item.ackId,
+              batchIndex: binding.index,
+              batchCount: 8,
+              attempt,
+            });
+          }
+          if (
+            tokens.length &&
+            !(await send("target", "Acknowledge", { subscription, ackIds: tokens })).ok
+          )
+            throw new Error("publication ACK refused");
+        }
+        if (received.size !== 8) throw new Error("publication delivery incomplete");
+        complete = true;
+      } else if (cell.group === "G1") {
+        const boundary = cell.variant.startsWith("request-") || cell.variant.startsWith("message-");
+        await setup(boundary);
+        if (boundary) {
+          const kind = cell.variant.startsWith("message-") ? "message" : "request";
+          const lower = Number(cell.variant.split("-")[1]);
+          for (const target of [lower, lower + 1]) {
+            const payload = boundaryPayload({ topic, transport: cell.transport, target, kind });
+            journal.write({
+              event: "boundary-input",
+              cellId: cell.id,
+              ...payload.sizes,
+              kind,
+              target,
+              isolatedMessageLimit:
+                kind === "message" ? "NOT_COMPARABLE-if-outer-request-preempts" : null,
+            });
+            await send("target", "Publish", { topic, messages: payload.messages });
+          }
+        } else if (cell.variant === "delete-recreate") {
+          await send("target", "DeleteTopic", { name: topic });
+          await send("target", "GetSubscription", { name: subscription });
+          await send("target", "CreateTopic", { name: topic });
+          await send("target", "GetSubscription", { name: subscription });
+        } else {
+          const pairs =
+            cell.variant === "unicode-layout"
+              ? [
+                  { env: "\u00e9", ttl: "7" },
+                  { env: "e\u0301", ttl: "7" },
+                ]
+              : cell.variant === "label-key-63-64"
+                ? [{ ["k".repeat(63)]: "v" }, { ["k".repeat(64)]: "v" }]
+                : cell.variant === "label-value-63-64"
+                  ? [{ key: "v".repeat(63) }, { key: "v".repeat(64) }]
+                  : [{ atomic: "probe" }, { env: "restored", ttl: "7" }];
+          for (const [index, labels] of pairs.entries()) {
+            await send("target", "UpdateSubscription", {
+              subscription: { name: subscription, labels },
+              updateMask:
+                cell.variant === "atomic-mask" && index === 0
+                  ? "labels,fieldThatDoesNotExist"
+                  : "labels",
+            });
+            await send("target", "GetSubscription", { name: subscription });
+          }
+        }
+        complete = true;
+      } else {
+        await setup();
+        const published = new Map();
+        const publish = async (index) => {
+          const data = Buffer.from(`${runId}:${cell.id}:marker${index}`).toString("base64");
+          const reply = await send("publish", "Publish", { topic, messages: [{ data }] });
+          if (
+            !reply.ok ||
+            reply.body?.messageIds?.length !== 1 ||
+            typeof reply.body.messageIds[0] !== "string"
+          )
+            throw new Error("publication is not bound");
+          published.set(reply.body.messageIds[0], data);
+          journal.write({
+            event: "publication-binding",
+            cellId: cell.id,
+            messageId: reply.body.messageIds[0],
+            data,
+          });
+        };
+        const noMessage = [
+          "invalid-ack-silence",
+          "missing-opening-subscription",
+          "opening-deadline-601",
+          "missing-subscription",
+        ].includes(cell.variant);
+        if (!noMessage && cell.variant !== "future-publications") {
+          for (let i = 0; i < (cell.variant === "flow-control" ? 3 : 1); i++) await publish(i);
+        }
+        const opener = {
+          subscription,
+          streamAckDeadlineSeconds: 10,
+          maxOutstandingMessages: "1",
+          maxOutstandingBytes: "1024",
+        };
+        if (cell.variant === "missing-opening-subscription") delete opener.subscription;
+        if (cell.variant === "opening-deadline-601") opener.streamAckDeadlineSeconds = 601;
+        if (cell.variant === "invalid-opening-frame") opener.streamAckDeadlineSeconds = 0;
+        if (cell.variant === "missing-subscription") {
+          const missing = `${subscription}-missing`;
+          const reply = await send("target", "GetSubscription", { name: missing });
+          if (reply.code !== "NOT_FOUND") throw new Error("missing subscription not known absent");
+          opener.subscription = missing;
+        }
+        stream = await wire.open({
+          opener,
+          cellId: cell.id,
+          ...(cell.variant === "invalid-opening-frame" ? { runId } : {}),
+        });
+        if (cell.variant === "future-publications") await publish(0);
+        if (cell.variant === "invalid-ack-silence") stream.write({ ackIds: [cell.invalidAck] });
+        const invalidAckIssuedClock = meter.clock();
+        const nextOwned = async () => {
+          for (let frame = 0; frame < 6; frame++) {
+            const body = await stream.next();
+            if (!body) return [];
+            const items = selectOwn(body, published);
+            if (items.length) return items;
+          }
+          return [];
+        };
+        const first = (await nextOwned())[0];
+        journal.write({ event: "first-owned-delivery", cellId: cell.id, bound: Boolean(first) });
+        if (cell.variant === "half-close") {
+          if (!first) throw new Error("half-close has no pending owned delivery");
+          stream.end();
+        }
+        if (["in-stream-ack", "future-publications"].includes(cell.variant)) {
+          if (!first) throw new Error("missing owned token");
+          stream.write({ ackIds: [first.ackId] });
+          await stream.next(1000);
+        } else if (
+          [
+            "in-stream-nack",
+            "in-stream-deadline-update",
+            "invalid-update-frame",
+            "update-array-length",
+            "update-deadline-601",
+          ].includes(cell.variant)
+        ) {
+          if (!first) throw new Error("missing owned update token");
+          const seconds =
+            cell.variant === "in-stream-nack"
+              ? [0]
+              : cell.variant === "invalid-update-frame"
+                ? [-1]
+                : cell.variant === "update-array-length"
+                  ? []
+                  : cell.variant === "update-deadline-601"
+                    ? [601]
+                    : [20];
+          stream.write({ modifyDeadlineAckIds: [first.ackId], modifyDeadlineSeconds: seconds });
+          if (cell.variant === "in-stream-nack") {
+            const repeated = (await nextOwned()).find(
+              (item) => item.message.messageId === first.message.messageId,
+            );
+            if (!repeated) throw new Error("redelivery not observed");
+            stream.write({ ackIds: [repeated.ackId] });
+          } else if (cell.variant === "in-stream-deadline-update") {
+            journal.write({ event: "deadline-update-before", cellId: cell.id, seconds: 20 });
+            await wait(10000);
+            await stream.next(1000);
+            await wait(11000);
+            await stream.next(1000);
+            journal.write({ event: "deadline-update-after", cellId: cell.id, seconds: 20 });
+          } else await stream.next();
+        } else if (cell.variant === "flow-control") {
+          if (!first) throw new Error("first flow token missing");
+          await wait(5000);
+          const held = selectOwn(await stream.next(1000), published);
+          journal.write({
+            event: "flow-before-ack",
+            cellId: cell.id,
+            messages: held.length,
+            heldMs: 5000,
+          });
+          stream.write({ ackIds: [first.ackId] });
+          const seen = new Set([first.message.messageId]);
+          for (let attempt = 0; attempt < 2; attempt++)
+            for (const item of await nextOwned()) {
+              if (!seen.has(item.message.messageId)) {
+                seen.add(item.message.messageId);
+                stream.write({ ackIds: [item.ackId] });
+              }
+            }
+          if (seen.size < 3) throw new Error("credit resumption not fully observed");
+        } else if (cell.variant === "client-cancel") {
+          if (!first) throw new Error("cancel has no outstanding owned message");
+          stream.cancel("unacked-owned-delivery");
+          let repeated = false;
+          for (let attempt = 0; attempt < 6 && !repeated; attempt++) {
+            if (attempt > 0) await wait(3000);
+            const reply = await send("target", "Pull", {
+              subscription,
+              maxMessages: 1,
+              returnImmediately: true,
+            });
+            repeated = selectOwn(reply.body, published).some(
+              (item) => item.message.messageId === first.message.messageId,
+            );
+          }
+          if (!repeated) throw new Error("cancel redelivery not observed");
+        }
+        if (cell.variant === "half-close") {
+          for (let frame = 0; frame < 6; frame++) if (!(await stream.next())) break;
+        }
+        const state = stream.state();
+        const invalidAckObservedMs = meter.clock() - invalidAckIssuedClock;
+        if (
+          cell.variant === "invalid-ack-silence" &&
+          !state.terminal &&
+          invalidAckObservedMs < 30000
+        )
+          state.incomplete = true;
+        journal.write({
+          event: "stream-case-observation",
+          cellId: cell.id,
+          state,
+          ackSelector: "NOT_COMPARABLE-until-observed",
+          silenceBeyond30sGeneralized: false,
+          invalidAckObservedMs:
+            cell.variant === "invalid-ack-silence" ? invalidAckObservedMs : null,
+        });
+        complete =
+          !state.incomplete &&
+          (Boolean(first) ||
+            ((noMessage || cell.variant === "invalid-opening-frame") &&
+              (Boolean(state.terminal) || cell.variant === "invalid-ack-silence")));
+        if (!complete) reason = "bounded witness incomplete or clipped";
+      }
+    },
+    report: (error) => {
+      reason = error.message;
+      journal.write({ event: "case-incomplete", cellId: cell.id, reason });
+    },
+    dispose: async () => {
+      try {
+        if (cell.id === "S03") await stream?.disposeWithDiagnostics?.();
+      } finally {
+        stream?.dispose();
+      }
+    },
+    finalize: async () => {
+      for (const name of ledger.state().keys()) if (owned(name, runId)) tracked.add(name);
+      for (const name of [...tracked].sort(
+        (a, b) => Number(b.includes("/subscriptions/")) - Number(a.includes("/subscriptions/")),
+      )) {
+        if (settled(ledger, name)) continue;
+        try {
+          if (ledger.unconfirmed(name)) {
+            const reply = await send("cleanupGet", resourceMethod(name, "Get"), { name });
+            ledger.observeRead(name, reply);
+            if (ledger.unconfirmed(name)) {
+              cleanupClosed = false;
+              continue;
+            }
+          }
+          if (!ledger.deleting(name) && !absentSeen.has(name))
+            await send("cleanupDelete", resourceMethod(name, "Delete"), { name });
+          const reply = await send("cleanupGet", resourceMethod(name, "Get"), { name });
+          if (!ledger.settleAbsent(name, reply)) cleanupClosed = false;
+        } catch {
+          cleanupClosed = false;
+        }
+        if (!settled(ledger, name)) cleanupClosed = false;
+      }
+    },
+    persist: () => checkpoint(journal, ledger, tracked, cell.id),
+  });
+  if (failures.length) {
+    complete = false;
+    reason ??= failures[0].message;
+  }
+  if (
+    failures.finalizationFailed ||
+    failures.persistenceFailed ||
+    obligations(ledger, tracked).length
+  )
+    cleanupClosed = false;
+  try {
+    meter.remaining(true);
+  } catch {
+    budgetOverrun = true;
+  }
+  const result = {
+    cellId: cell.id,
+    complete: complete && !budgetOverrun,
+    reason,
+    cleanupClosed,
+    names: [...tracked],
+    outstanding: ledger.outstanding().filter((item) => tracked.has(item.name)),
+    budgetOverrun,
+  };
+  journal.write({ event: "case-result", ...result });
+  try {
+    meter.remaining(true);
+  } catch {
+    result.complete = false;
+    result.budgetOverrun = true;
+    result.reason = "cell or source budget exceeded during persistence";
+    journal.write({ event: "case-budget-overrun", ...result });
+  }
+  return result;
+}
+
+export async function recoverA2({ wire, ledger, runId, elapsedMs, meter }) {
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 600000) throw new Error("A2 minimum age required");
+  const originalIds = new Set(
+    [...ledger.state().values()].flatMap((item) => item.requests.map((request) => request.id)),
+  );
+  let resourceReads = 0,
+    unknownDeleteReads = 0;
+  for (const [name] of ledger.state()) {
+    if (!owned(name, runId)) throw new Error("foreign recovery resource refused");
+    if (settled(ledger, name)) continue;
+    const category = ledger.deleting(name) ? "unknownDeleteRead" : "resourceRead";
+    if (category === "resourceRead" ? resourceReads >= 6 : unknownDeleteReads >= 6) break;
+    if (category === "resourceRead") resourceReads++;
+    else unknownDeleteReads++;
+    const reply = await wire.call({
+      category,
+      transport: "rest",
+      service: serviceOf(resourceMethod(name, "Get")),
+      method: resourceMethod(name, "Get"),
+      request: { name },
+      cellId: "A2",
+    });
+    ledger.observeRead(name, reply);
+    ledger.settleAbsent(name, reply, { a2ElapsedMs: elapsedMs, a2EligibleRequestIds: originalIds });
+    meter?.remaining(true);
+  }
+  return {
+    closed: [...ledger.state().keys()].every((name) => settled(ledger, name)),
+    reads: resourceReads + unknownDeleteReads,
+    resourceReads,
+    unknownDeleteReads,
+    iamReads: 0,
+    outstanding: ledger.outstanding(),
+  };
+}

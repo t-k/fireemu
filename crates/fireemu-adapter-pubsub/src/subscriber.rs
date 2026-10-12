@@ -1,14 +1,13 @@
 //! The `google.pubsub.v1.Subscriber` service implementation.
 #![allow(clippy::result_large_err)] // tonic::Status is large by design
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::pin::Pin;
 use std::time::Duration;
 
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-use fireemu_core_pubsub::pagination::paginate;
 use fireemu_core_pubsub::subscription::DEFAULT_ACK_DEADLINE_SECONDS;
 use fireemu_core_pubsub::{PushConfig, SubscriptionName};
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
@@ -89,12 +88,38 @@ fn update_push_config(
         .transpose()
 }
 
+fn stream_pull_max(
+    handle: &PubSubHandle,
+    subscription: &SubscriptionName,
+    message_limit: Option<usize>,
+    outstanding_ack_ids: &mut BTreeSet<String>,
+) -> Result<usize, fireemu_core_pubsub::PubSubError> {
+    let Some(limit) = message_limit else {
+        return Ok(100);
+    };
+    let now = handle.now();
+    handle
+        .state()
+        .retain_outstanding_ack_ids(subscription, outstanding_ack_ids, now)?;
+    Ok(limit.saturating_sub(outstanding_ack_ids.len()).min(100))
+}
+
 /// Applies the acks and modify-ack-deadlines carried by one streaming-pull request.
 fn apply_stream_request(
     handle: &PubSubHandle,
     sub: &SubscriptionName,
     req: &pb::StreamingPullRequest,
-) {
+) -> Result<(), Status> {
+    if handle.paging_policy == crate::PagingPolicy::Strict {
+        if req.modify_deadline_ack_ids.len() != req.modify_deadline_seconds.len() {
+            return Err(Status::invalid_argument(
+                "Invalid arguments provided: the number of ack ids to modify must be equal to the number of ack deadlines.",
+            ));
+        }
+        for seconds in &req.modify_deadline_seconds {
+            crate::admission::ack_deadline(i64::from(*seconds)).map_err(|error| status(&error))?;
+        }
+    }
     if !req.ack_ids.is_empty() {
         let ids: Vec<_> = req
             .ack_ids
@@ -114,6 +139,7 @@ fn apply_stream_request(
         let id = crate::ack_token::internal(id, handle.paging_policy);
         let _ = state.modify_ack_deadline(sub, std::slice::from_ref(&id), s, now);
     }
+    Ok(())
 }
 
 #[tonic::async_trait]
@@ -271,7 +297,7 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<pb::ListSubscriptionsResponse>, Status> {
         let req = request.into_inner();
         let project = project_of(&req.project)?;
-        let state = self.handle.state();
+        let mut state = self.handle.state();
         let subscriptions: Vec<_> = state
             .list_subscriptions(project)
             .iter()
@@ -282,14 +308,16 @@ impl Subscriber for SubscriberService {
                 subscription_to_proto(c, &reported, self.handle.paging_policy)
             })
             .collect();
-        let page = paginate(
-            subscriptions,
-            req.page_size,
-            &req.page_token,
-            self.handle.paging_policy,
-            |subscription| subscription.name.clone(),
-        )
-        .map_err(|e| status(&e))?;
+        let page = state
+            .paginate(
+                &format!("projects/{project}/subscriptions"),
+                subscriptions,
+                req.page_size,
+                &req.page_token,
+                self.handle.paging_policy,
+                |subscription| subscription.name.clone(),
+            )
+            .map_err(|e| status(&e))?;
         Ok(Response::new(pb::ListSubscriptionsResponse {
             subscriptions: page.resources,
             next_page_token: page.next_page_token,
@@ -350,6 +378,7 @@ impl Subscriber for SubscriberService {
         Ok(Response::new(()))
     }
 
+    #[allow(deprecated)] // Pub/Sub still defines the legacy immediate-Pull request behavior.
     async fn pull(
         &self,
         request: Request<pb::PullRequest>,
@@ -382,7 +411,11 @@ impl Subscriber for SubscriberService {
                 .map_err(|error| status(&error))?
                 .dead_letter_policy
                 .is_some();
-        let received = self.handle.pull(&name, max).map_err(|e| status(&e))?;
+        let received = self
+            .handle
+            .pull_unary(&name, max, req.return_immediately)
+            .await
+            .map_err(|e| status(&e))?;
         Ok(Response::new(pb::PullResponse {
             received_messages: received
                 .iter()
@@ -396,6 +429,7 @@ impl Subscriber for SubscriberService {
     type StreamingPullStream =
         Pin<Box<dyn tokio_stream::Stream<Item = Result<pb::StreamingPullResponse, Status>> + Send>>;
 
+    #[allow(clippy::too_many_lines)]
     async fn streaming_pull(
         &self,
         request: Request<tonic::Streaming<pb::StreamingPullRequest>>,
@@ -406,20 +440,45 @@ impl Subscriber for SubscriberService {
             .await?
             .ok_or_else(|| Status::invalid_argument("streaming pull opened with no request"))?;
         let name = SubscriptionName::parse(&first.subscription).map_err(|e| status(&e))?;
-        // Fail fast if the subscription does not exist.
-        let report_attempt = self.handle.paging_policy == crate::PagingPolicy::Emulator
-            || self
-                .handle
-                .state()
-                .subscription_config(&name)
-                .map_err(|error| status(&error))?
-                .dead_letter_policy
-                .is_some();
+        // Strict responses report subscription properties even when both flags are false.
+        let (report_attempt, subscription_properties) =
+            if self.handle.paging_policy == crate::PagingPolicy::Emulator {
+                (true, None)
+            } else {
+                let state = self.handle.state();
+                let config = state
+                    .subscription_config(&name)
+                    .map_err(|error| status(&error))?;
+                (
+                    config.dead_letter_policy.is_some(),
+                    Some(pb::streaming_pull_response::SubscriptionProperties {
+                        exactly_once_delivery_enabled: false,
+                        message_ordering_enabled: config.enable_message_ordering,
+                    }),
+                )
+            };
 
+        // Proto3 has no scalar presence: omitted and explicit initial zero decode alike.
+        // ACK-only follow-up frames may omit the deadline, so validate only the opener.
+        if self.handle.paging_policy == crate::PagingPolicy::Strict
+            && first.stream_ack_deadline_seconds == 0
+        {
+            let terminal = Status::internal(
+                "A service error has occurred. Please retry your request. If the error persists, please report it. [code=e8c0]",
+            );
+            return Ok(Response::new(Box::pin(tokio_stream::once(Err(terminal)))));
+        }
+
+        let message_limit = (self.handle.paging_policy == crate::PagingPolicy::Strict
+            && first.max_outstanding_messages > 0)
+            .then(|| usize::try_from(first.max_outstanding_messages).unwrap_or(usize::MAX));
         let handle = self.handle.clone();
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<pb::StreamingPullResponse, Status>>(16);
         tokio::spawn(async move {
+            let mut outstanding_ack_ids = BTreeSet::new();
             let mut first = Some(first);
+            let mut inbound_open = true;
+            let mut delivered = false;
             // A short poll delivers messages published after the stream opened. This is a
             // delivery cadence only; ack-deadline and redelivery timing run on the virtual clock.
             let mut interval = tokio::time::interval(Duration::from_millis(25));
@@ -431,23 +490,48 @@ impl Subscriber for SubscriberService {
                             Some(f) => Ok(Some(f)),
                             None => inbound.message().await,
                         }
-                    } => {
+                    }, if inbound_open => {
                         match msg {
-                            Ok(Some(req)) => apply_stream_request(&handle, &name, &req),
+                            Ok(Some(req)) => {
+                                if let Err(error) = apply_stream_request(&handle, &name, &req) {
+                                    let _ = tx.send(Err(error)).await;
+                                    break;
+                                }
+                            },
+                            Ok(None) if handle.paging_policy == crate::PagingPolicy::Strict && !delivered => {
+                                // Before any successful delivery, a clean half-close keeps polling.
+                                inbound_open = false;
+                            }
                             Ok(None) | Err(_) => break,
                         }
                     }
+                    () = tx.closed() => break,
                     _ = interval.tick() => {
-                        let pulled = handle.pull(&name, 100);
+                        let max = match stream_pull_max(&handle, &name, message_limit, &mut outstanding_ack_ids) {
+                            Ok(max) => max,
+                            Err(error) => {
+                                let _ = tx.send(Err(status(&error))).await;
+                                break;
+                            }
+                        };
+                        if max == 0 {
+                            continue;
+                        }
+                        let pulled = handle.pull(&name, max);
                         match pulled {
                             Ok(msgs) if !msgs.is_empty() => {
+                                if message_limit.is_some() {
+                                    outstanding_ack_ids.extend(msgs.iter().map(|message| message.ack_id.clone()));
+                                }
                                 let resp = pb::StreamingPullResponse {
                                     received_messages: msgs.iter().map(|message|received_to_proto(message,report_attempt,handle.paging_policy)).collect(),
+                                    subscription_properties,
                                     ..pb::StreamingPullResponse::default()
                                 };
                                 if tx.send(Ok(resp)).await.is_err() {
                                     break;
                                 }
+                                delivered = true;
                             }
                             Ok(_) => {}
                             Err(e) => {
@@ -504,21 +588,22 @@ impl Subscriber for SubscriberService {
     ) -> Result<Response<pb::ListSnapshotsResponse>, Status> {
         let req = request.into_inner();
         let project = project_of(&req.project)?;
-        let snapshots: Vec<_> = self
-            .handle
-            .state()
+        let mut state = self.handle.state();
+        let snapshots: Vec<_> = state
             .list_snapshots(project, self.handle.now())
             .iter()
             .map(snapshot_to_proto)
             .collect();
-        let page = paginate(
-            snapshots,
-            req.page_size,
-            &req.page_token,
-            self.handle.paging_policy,
-            |snapshot| snapshot.name.clone(),
-        )
-        .map_err(|e| status(&e))?;
+        let page = state
+            .paginate(
+                &format!("projects/{project}/snapshots"),
+                snapshots,
+                req.page_size,
+                &req.page_token,
+                self.handle.paging_policy,
+                |snapshot| snapshot.name.clone(),
+            )
+            .map_err(|e| status(&e))?;
         Ok(Response::new(pb::ListSnapshotsResponse {
             snapshots: page.resources,
             next_page_token: page.next_page_token,
@@ -673,7 +758,8 @@ mod ack_wire_tests {
                 modify_deadline_seconds: vec![0],
                 ..Default::default()
             },
-        );
+        )
+        .unwrap();
         let renewed = handle.pull(&sub, 1).unwrap();
         assert_eq!(renewed.len(), 1);
         assert_eq!(renewed[0].message.message_id, first[0].message.message_id);
@@ -685,7 +771,91 @@ mod ack_wire_tests {
                 ack_ids: vec![issued, current],
                 ..Default::default()
             },
-        );
+        )
+        .unwrap();
         assert!(handle.pull(&sub, 1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn streaming_invalid_updates_leave_ack_and_deadline_state_unchanged() {
+        for deadline in [None, Some(601)] {
+            let now = LogicalInstant::from_unix_seconds(1_700_000_000);
+            let clock = Arc::new(Mutex::new(VirtualClock::new(now)));
+            let handle = PubSubHandle::new(
+                Arc::new(Mutex::new(PubSubState::new(99))),
+                Arc::clone(&clock),
+                None,
+            )
+            .with_paging_policy(crate::PagingPolicy::Strict);
+            let topic = TopicName::new("demo-app", "stream-atomic").unwrap();
+            let config = crate::convert::subscription_from_proto(&pb::Subscription {
+                name: "projects/demo-app/subscriptions/stream-atomic".to_owned(),
+                topic: topic.to_full(),
+                ..Default::default()
+            })
+            .unwrap();
+            let sub = config.name.clone();
+            handle
+                .state()
+                .create_topic(topic.clone(), BTreeMap::new())
+                .unwrap();
+            handle.state().create_subscription(config).unwrap();
+            handle
+                .state()
+                .publish(
+                    &topic,
+                    vec![
+                        PubsubMessage {
+                            data: vec![1],
+                            ..Default::default()
+                        },
+                        PubsubMessage {
+                            data: vec![2],
+                            ..Default::default()
+                        },
+                    ],
+                    now,
+                )
+                .unwrap();
+            let owned = handle.pull(&sub, 2).unwrap();
+            assert_eq!(owned.len(), 2);
+            let _result = apply_stream_request(
+                &handle,
+                &sub,
+                &pb::StreamingPullRequest {
+                    ack_ids: vec![crate::ack_token::wire(
+                        &owned[0].ack_id,
+                        handle.paging_policy,
+                    )],
+                    modify_deadline_ack_ids: vec![crate::ack_token::wire(
+                        &owned[1].ack_id,
+                        handle.paging_policy,
+                    )],
+                    modify_deadline_seconds: deadline.into_iter().collect(),
+                    ..Default::default()
+                },
+            );
+            clock
+                .lock()
+                .unwrap()
+                .advance_to(LogicalInstant::from_unix_seconds(1_700_000_011))
+                .unwrap();
+            let retained = handle.pull(&sub, 2).unwrap();
+            assert_eq!(
+                retained.len(),
+                2,
+                "invalid frame must not ACK or extend either owned lease"
+            );
+            assert_eq!(
+                retained
+                    .iter()
+                    .map(|m| &m.message.message_id)
+                    .collect::<BTreeSet<_>>(),
+                owned
+                    .iter()
+                    .map(|m| &m.message.message_id)
+                    .collect::<BTreeSet<_>>()
+            );
+        }
     }
 }

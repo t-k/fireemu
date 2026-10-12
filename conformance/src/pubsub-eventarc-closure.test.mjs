@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { readReleaseJson } from "./release-strict-regression.mjs";
 import { validateEventarcSemantics } from "./eventarc-production/run.mjs";
+import { ADJUDICATION_MODE, assertPubsubAdjudication } from "./pubsub-closure-adjudication.mjs";
 
 const root = new URL("../../", import.meta.url);
 const readRepo = (path) => JSON.parse(readFileSync(new URL(path, root), "utf8"));
@@ -154,7 +155,9 @@ function assertClosure(closure) {
   const retrospective =
     parent === "EVENTARC" &&
     closure.retrospectiveAdjudication?.mode === "reviewed-retrospective-composition";
-  if (retrospective && closure.parentStatus === "COMPAT_VERIFIED")
+  const pubsubAdjudicated =
+    parent === "PUBSUB" && closure.perCaseAdjudication?.mode === ADJUDICATION_MODE;
+  if ((retrospective || pubsubAdjudicated) && closure.parentStatus === "COMPAT_VERIFIED")
     assert.ok(
       closure.conditions.every(({ status }) => status === "VERIFIED"),
       "all required conditions must be verified",
@@ -218,7 +221,7 @@ function assertClosure(closure) {
           ? ["grpc"]
           : ["rest"];
     assert.deepEqual(condition.transports, expectedTransports, condition.conditionId);
-    if (retrospective) continue;
+    if (retrospective || pubsubAdjudicated) continue;
     if (condition.status === "OUT_OF_SCOPE_OBSERVED") {
       assert.equal(
         condition.conditionId,
@@ -264,6 +267,10 @@ function assertClosure(closure) {
       assert.equal(closure.closureReview.finalArtifactSha256, evidence.finalArtifactSha256);
       assert.equal(closure.closureReview.comparisonSha256, evidence.comparisonSha256);
     }
+  }
+  if (pubsubAdjudicated) {
+    assertPubsubAdjudication(closure, readRepo(closure.perCaseAdjudication.path), sha256);
+    return;
   }
   if (retrospective) {
     const binding = closure.retrospectiveAdjudication;

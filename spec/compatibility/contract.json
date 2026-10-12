@@ -180,6 +180,11 @@
           "status": "hand-written",
           "note": "read by the loader, defaulting to unsigned-emulator whatever the profile; strict has to name session-rsa itself"
         },
+        "auth.allowUnsignedIdTokens": {
+          "value": true,
+          "status": "hand-written",
+          "note": "read by the loader, defaulting to true whatever the profile (owner decision 2026-10-12); the emulator profile admits any unsigned token on the Rules surfaces, as before the setting existed and as the official emulator does, and false refuses them in this profile too"
+        },
         "appCheck.enabled": {
           "value": false,
           "status": "hand-written",
@@ -388,7 +393,7 @@
       ]
     },
     "strict": {
-      "intent": "Behave like production Firebase where the official emulator does not: composite indexes are checked with production's rules, Standard query limits refuse the query, and ID tokens are verified. Every key here may only refuse more than the official emulator, never less, and every refusal it adds must be published as a capability precision or a documented divergence.",
+      "intent": "Behave like production Firebase where the official emulator does not: composite indexes are checked with production's rules, Standard query limits refuse the query, and ID tokens are verified (the Firestore and Storage Security Rules surfaces still admit the unsigned mock token of @firebase/rules-unit-testing unless auth.allowUnsignedIdTokens is false or productionExact is set). Every key here may only refuse more than the official emulator, never less, and every refusal it adds must be published as a capability precision or a documented divergence.",
       "sets": {
         "firestore.enforceLimits": true
       },
@@ -417,6 +422,11 @@
           "value": "session-rsa",
           "status": "hand-written",
           "note": "read by the loader, defaulting to unsigned-emulator whatever the profile; strict has to name session-rsa itself"
+        },
+        "auth.allowUnsignedIdTokens": {
+          "value": false,
+          "status": "hand-written",
+          "note": "read by the loader, defaulting to true in both profiles and to false under productionExact (owner decisions 2026-10-12): the strict Firestore and Storage Security Rules surfaces admit only the exact createMockUserToken shape of @firebase/rules-unit-testing; strict names false itself, or sets productionExact, to refuse it as production does"
         },
         "appCheck.enabled": {
           "value": true,
@@ -1043,6 +1053,10 @@
             {
               "behaviour": "a strict-profile native gRPC Listen stream of an end user ends with INTERNAL 3,600 s after it opened, without waiting for a commit, as production closed all twelve held native streams of the AUTH-FS-CROSS stage-2 packet-v7 recordings (2026-09-28) 3,600.17-3,600.19 s after opening (0.65-2.67 s past their tokens' exp, so not at exp); production resets the HTTP/2 stream (RST_STREAM INTERNAL_ERROR), which clients report as INTERNAL with their own text; unobserved and left as they were: a WebChannel Listen held for an hour (it stays open), a stream opened with an older token (no close is added at its exp; the first commit past its allowance still ends it), owner and anonymous streams; one earlier close (packet v6, recording 2, stream t2, before exp-60 s) is an unexplained single observation not reproduced in the twelve; the emulator profile keeps the stream, as the official emulator does",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "both profiles admit the unsigned mock ID token of @firebase/rules-unit-testing on the Firestore and Storage Security Rules surfaces by default (auth.allowUnsignedIdTokens, default true, false under productionExact, an approved development exception, owner decisions 2026-10-12): under strict only the exact createMockUserToken shape (header bytes {\"alg\":\"none\",\"type\":\"JWT\"}, empty signature) naming a subject with the routed project as its audience is admitted, without reading exp, and request.auth is built from its claims; every other token, including fireemu's own unsigned ID tokens, keeps every check, expiry included, so a token that claims a signature that does not verify is refused; the emulator profile admits any unsigned token, as the official emulator does; a session with auth.idTokenSigning session-rsa admits no unsigned token; with false the strict profile answers exactly as production (an expired mock token UNAUTHENTICATED on Firestore, 401 on Storage); callable Functions, Identity Toolkit and App Check are not affected",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [],

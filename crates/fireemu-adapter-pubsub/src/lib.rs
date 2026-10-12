@@ -35,8 +35,8 @@ use std::sync::{Arc, Mutex};
 pub use fireemu_core_pubsub::pagination::PagingPolicy;
 
 use fireemu_core_pubsub::{
-    DeadLetterForward, PubSubError, PubSubState, PubsubMessage, ReceivedMessage, StoredMessage,
-    SubscriptionName, TopicName,
+    DeadLetterForward, OrderedPullBatching, PubSubError, PubSubState, PubsubMessage,
+    ReceivedMessage, StoredMessage, SubscriptionName, TopicName,
 };
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::Clock;
@@ -405,6 +405,7 @@ pub trait TopicDelivery: Send + Sync {
 #[derive(Clone)]
 pub struct PubSubHandle {
     paging_policy: PagingPolicy,
+    local_bearer_token: Option<String>,
     state: Arc<Mutex<PubSubState>>,
     clock: Arc<Mutex<VirtualClock>>,
     bridge: Option<Arc<dyn TopicDelivery>>,
@@ -429,6 +430,7 @@ impl PubSubHandle {
     ) -> Self {
         Self {
             paging_policy: PagingPolicy::Emulator,
+            local_bearer_token: None,
             state,
             clock,
             bridge,
@@ -444,10 +446,20 @@ impl PubSubHandle {
         }
     }
 
-    /// Selects the list policy. The default follows the official emulator.
+    /// Selects compatibility behavior for lists, unary delivery and dead-letter authority. The default follows the official emulator.
     #[must_use]
     pub fn with_paging_policy(mut self, policy: PagingPolicy) -> Self {
+        self.state()
+            .set_dead_letter_iam_enforcement(policy == PagingPolicy::Strict);
         self.paging_policy = policy;
+        self
+    }
+
+    /// Configures one exact local fixture Bearer for strict admission; emulator ignores it.
+    /// This does not verify Google credentials or model an IAM principal.
+    #[must_use]
+    pub fn with_local_bearer_token(mut self, token: Option<String>) -> Self {
+        self.local_bearer_token = token;
         self
     }
 
@@ -543,6 +555,25 @@ impl PubSubHandle {
     ) -> Result<Vec<Arc<StoredMessage>>, PubSubError> {
         let now = self.now();
         self.publish_prepared(topic, now, |state| {
+            if self.paging_policy == PagingPolicy::Strict
+                && messages.len() <= fireemu_core_pubsub::state::MAX_MESSAGES_PER_PUBLISH
+                && state.topic_exists(topic)
+            {
+                // Preserve topic, count, and individual-message error precedence before batch validation.
+                for message in &messages {
+                    message.validate()?;
+                }
+                if let Some(first) = messages.first() {
+                    if messages
+                        .iter()
+                        .any(|message| message.ordering_key != first.ordering_key)
+                    {
+                        return Err(PubSubError::failed_precondition(
+                            "In a single publish request, all messages must have no ordering key or they must all have the same ordering key. [code=539b]",
+                        ));
+                    }
+                }
+            }
             state.prepare_publish(topic, messages, now)
         })
     }
@@ -618,22 +649,66 @@ impl PubSubHandle {
         subscription: &SubscriptionName,
         max: usize,
     ) -> Result<Vec<ReceivedMessage>, PubSubError> {
+        self.pull_batched(subscription, max, OrderedPullBatching::Mixed)
+    }
+
+    fn pull_batched(
+        &self,
+        subscription: &SubscriptionName,
+        max: usize,
+        batching: OrderedPullBatching,
+    ) -> Result<Vec<ReceivedMessage>, PubSubError> {
         let _dead_letter = self.lock_dead_letter();
         let now = self.now();
         let outcome = {
             let mut state = self.state();
-            state.pull_with_dead_letters(subscription, max, now)?
+            state.pull_with_dead_letters_batching(subscription, max, now, batching)?
         };
         self.commit_dead_letters_locked(&outcome.dead_lettered);
         Ok(outcome.received)
     }
 
+    /// Waits within this request for strict unary delivery, without retaining a broker lock.
+    /// The twenty-second empty-response ceiling is a local bound, not a production timing claim.
+    pub(crate) async fn pull_unary(
+        &self,
+        subscription: &SubscriptionName,
+        max: usize,
+        return_immediately: bool,
+    ) -> Result<Vec<ReceivedMessage>, PubSubError> {
+        // Recorded production unary Pull separates unkeyed and keyed messages on ordered
+        // subscriptions (H1 R11/N13). StreamingPull and push have no such evidence and stay mixed.
+        let batching = if self.paging_policy == PagingPolicy::Strict {
+            OrderedPullBatching::SeparateUnkeyed
+        } else {
+            OrderedPullBatching::Mixed
+        };
+        if return_immediately || self.paging_policy == PagingPolicy::Emulator {
+            return self.pull_batched(subscription, max, batching);
+        }
+        let started = tokio::time::Instant::now();
+        let deadline = started + std::time::Duration::from_secs(20);
+        let cadence = std::time::Duration::from_millis(25);
+        let mut ticks = tokio::time::interval_at(started + cadence, cadence);
+        loop {
+            let received = self.pull_batched(subscription, max, batching)?;
+            if !received.is_empty() {
+                return Ok(received);
+            }
+            tokio::select! {
+                biased;
+                () = tokio::time::sleep_until(deadline) => return Ok(Vec::new()),
+                _ = ticks.tick() => {}
+            }
+        }
+    }
+
     fn commit_dead_letter(&self, forward: &DeadLetterForward) {
         let _publication = self.lock_publication();
-        let published = self.publish_locked(
-            &forward.dead_letter_topic,
-            vec![forward.message.message.clone()],
-        );
+        let now = self.now();
+        let published = self.publish_prepared(&forward.dead_letter_topic, now, |state| {
+            state.prepare_dead_letter_publication(forward, now)
+        });
         if published.is_ok() {
             let mut state = self.state();
             let _ = state
@@ -1196,7 +1271,7 @@ pub async fn serve_pubsub(
         async move { rest::handle(request, handle).await }
     });
     prepared_router = prepared_router.layer(axum::middleware::from_fn_with_state(
-        handle.paging_policy,
+        (handle.paging_policy, handle.local_bearer_token.clone()),
         authentication::authenticate,
     ));
     if handle.paging_policy == PagingPolicy::Strict {
@@ -2062,6 +2137,60 @@ mod dispatch_tests {
     }
 
     #[test]
+    fn strict_pending_retry_rechecks_revoked_authority_and_restores_source_delivery() {
+        let (state, destination, source, now) = pending_dead_letter_fixture();
+        let member = "serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com";
+        {
+            let mut state = state.lock().unwrap();
+            state
+                .set_project_numbers(BTreeMap::from([(
+                    "demo-project".to_owned(),
+                    "123456789".to_owned(),
+                )]))
+                .unwrap();
+            for (resource, role) in [
+                (source.to_full(), "roles/pubsub.subscriber"),
+                (destination.to_full(), "roles/pubsub.publisher"),
+            ] {
+                let policy = state.get_resource_policy(&resource).unwrap();
+                state
+                    .set_resource_policy(
+                        &resource,
+                        &policy.etag,
+                        Some(3),
+                        vec![fireemu_core_pubsub::PolicyBinding {
+                            role: role.to_owned(),
+                            members: vec![member.to_owned()],
+                        }],
+                    )
+                    .unwrap();
+            }
+        }
+        let handle = PubSubHandle::new(
+            state.clone(),
+            Arc::new(Mutex::new(VirtualClock::new(now))),
+            None,
+        )
+        .with_paging_policy(PagingPolicy::Strict);
+        let sink = SubscriptionName::new("demo-project", "sink").unwrap();
+        {
+            let mut state = state.lock().unwrap();
+            let mut config = state.subscription_config(&source).unwrap().clone();
+            config.name = sink.clone();
+            config.topic = destination.clone();
+            config.dead_letter_policy = None;
+            state.create_subscription(config).unwrap();
+            let before = state.get_resource_policy(&destination.to_full()).unwrap();
+            state
+                .set_resource_policy(&destination.to_full(), &before.etag, Some(1), Vec::new())
+                .unwrap();
+        }
+        handle.retry_pending_dead_letters();
+        assert!(handle.pull(&sink, 1).unwrap().is_empty());
+        assert_eq!(handle.pull(&source, 1).unwrap()[0].delivery_attempt, 6);
+    }
+
+    #[test]
     fn concurrent_dead_letter_retries_forward_a_pending_message_once() {
         let (state, destination_topic, _source_subscription, now) = pending_dead_letter_fixture();
 
@@ -2191,6 +2320,108 @@ mod dispatch_tests {
             assert!(lifecycle.task.is_none());
         }
         handle.shutdown_push_dispatcher().await;
+    }
+    fn unary_pull_fixture(policy: PagingPolicy) -> (PubSubHandle, SubscriptionName, TopicName) {
+        let handle = PubSubHandle::new(
+            Arc::new(Mutex::new(PubSubState::new(7))),
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
+            None,
+        )
+        .with_paging_policy(policy);
+        let topic = TopicName::new("demo-app", "unary-bound").unwrap();
+        let subscription = SubscriptionName::new("demo-app", "unary-bound").unwrap();
+        let config = crate::convert::subscription_from_proto_with_policy(
+            &fireemu_proto_pubsub::google::pubsub::v1::Subscription {
+                name: subscription.to_full(),
+                topic: topic.to_full(),
+                ..Default::default()
+            },
+            policy,
+        )
+        .unwrap();
+        handle
+            .state()
+            .create_topic(topic.clone(), BTreeMap::new())
+            .unwrap();
+        handle.state().create_subscription(config).unwrap();
+        (handle, subscription, topic)
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config::with_cases(32))]
+        #[test]
+        fn unary_pull_waits_only_for_strict_non_immediate_requests(strict in proptest::bool::ANY, immediate in proptest::bool::ANY) {
+            let policy = if strict { PagingPolicy::Strict } else { PagingPolicy::Emulator };
+            let (handle, subscription, _) = unary_pull_fixture(policy);
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+            let ready = runtime.block_on(async {
+                tokio::time::timeout(std::time::Duration::from_millis(2), handle.pull_unary(&subscription, 1, immediate)).await.is_ok()
+            });
+            proptest::prop_assert_eq!(ready, immediate || !strict);
+        }
+    }
+
+    #[tokio::test]
+    async fn strict_unary_pull_has_finite_local_empty_ceiling() {
+        let (handle, subscription, _) = unary_pull_fixture(PagingPolicy::Strict);
+        let started = tokio::time::Instant::now();
+        let received = tokio::time::timeout(
+            std::time::Duration::from_secs(25),
+            handle.pull_unary(&subscription, 1, false),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(received.is_empty());
+        assert!(started.elapsed() >= std::time::Duration::from_secs(20));
+    }
+
+    #[tokio::test]
+    async fn unary_pull_immediate_error_emulator_and_dropped_future_controls() {
+        for policy in [PagingPolicy::Strict, PagingPolicy::Emulator] {
+            let (handle, subscription, topic) = unary_pull_fixture(policy);
+            assert!(tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                handle.pull_unary(&subscription, 1, true)
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .is_empty());
+            let missing = SubscriptionName::new("demo-app", "missing").unwrap();
+            assert!(tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                handle.pull_unary(&missing, 1, false)
+            )
+            .await
+            .unwrap()
+            .is_err());
+            let mut future = Box::pin(handle.pull_unary(&subscription, 1, false));
+            let result =
+                tokio::time::timeout(std::time::Duration::from_millis(100), &mut future).await;
+            if policy == PagingPolicy::Emulator {
+                assert!(result.unwrap().unwrap().is_empty());
+            } else {
+                assert!(result.is_err());
+            }
+            // Drop the request-owned future before making delivery eligible.
+            drop(future);
+            handle
+                .state()
+                .publish(
+                    &topic,
+                    vec![PubsubMessage {
+                        data: b"available".to_vec(),
+                        ..Default::default()
+                    }],
+                    handle.now(),
+                )
+                .unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let received = handle.pull_unary(&subscription, 1, true).await.unwrap();
+            assert_eq!(received.len(), 1);
+            assert_eq!(received[0].message.message.data, b"available");
+        }
     }
 }
 
@@ -2379,6 +2610,82 @@ mod publication_gate_tests {
             )
             .is_err());
         assert_eq!(reserved.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn topic_creation_between_missing_observation_and_admission_cannot_publish_mixed_keys() {
+        use super::{
+            BridgeMessage, PagingPolicy, TopicDelivery, TopicDeliveryError,
+            TopicDeliveryReservation,
+        };
+        use fireemu_core_pubsub::{Code, PubsubMessage, TopicName};
+        use std::collections::BTreeMap;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Counting(Arc<AtomicUsize>);
+        struct Commit;
+        impl TopicDeliveryReservation for Commit {
+            fn commit(self: Box<Self>) {}
+        }
+        impl TopicDelivery for Counting {
+            fn reserve(
+                &self,
+                _: &str,
+                _: &[BridgeMessage],
+            ) -> Result<Box<dyn TopicDeliveryReservation>, TopicDeliveryError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Ok(Box::new(Commit))
+            }
+        }
+        let reserved = Arc::new(AtomicUsize::new(0));
+        let mut handle = handle().with_paging_policy(PagingPolicy::Strict);
+        handle.bridge = Some(Arc::new(Counting(reserved.clone())));
+        let topic = TopicName::new("demo-app", "created-during-publish").unwrap();
+        let publication = handle.lock_publication().unwrap();
+        // Replay the old ingress observation, then insert through the state-only CreateTopic path.
+        assert!(!handle.state().topic_exists(&topic));
+        let creator = handle.clone();
+        let created_topic = topic.clone();
+        std::thread::spawn(move || {
+            creator
+                .state()
+                .create_topic(created_topic, BTreeMap::new())
+                .unwrap();
+        })
+        .join()
+        .unwrap();
+        // This is the existing admission seam reached after the old ingress skipped validation.
+        let result = handle.publish_locked(
+            &topic,
+            vec![
+                PubsubMessage {
+                    data: b"unkeyed".to_vec(),
+                    ..PubsubMessage::default()
+                },
+                PubsubMessage {
+                    data: b"keyed".to_vec(),
+                    ordering_key: "k1".to_owned(),
+                    ..PubsubMessage::default()
+                },
+            ],
+        );
+        assert_eq!(result.unwrap_err().code(), Code::FailedPrecondition);
+        assert_eq!(reserved.load(Ordering::SeqCst), 0);
+        drop(publication);
+        let published = handle
+            .publish(
+                &topic,
+                vec![PubsubMessage {
+                    data: b"valid".to_vec(),
+                    ..PubsubMessage::default()
+                }],
+            )
+            .unwrap();
+        assert_eq!(
+            published[0].message_id,
+            fireemu_core_pubsub::pubsub_message_id(1)
+        );
+        assert_eq!(reserved.load(Ordering::SeqCst), 1);
     }
 
     /// PUBGATE-1: the publication gate is held across the control-plane transitions that

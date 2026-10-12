@@ -4,7 +4,6 @@
 use prost::Message;
 use tonic::{Request, Response, Status};
 
-use fireemu_core_pubsub::pagination::paginate;
 use fireemu_core_pubsub::TopicName;
 use fireemu_proto_pubsub::google::pubsub::v1 as pb;
 use pb::publisher_server::Publisher;
@@ -86,9 +85,35 @@ impl Publisher for PublisherService {
     ) -> Result<Response<pb::Topic>, Status> {
         let request = request.into_inner();
         validate_topic_update_options(&request).map_err(|e| status(&e))?;
-        Err(Status::unimplemented(
-            "UpdateTopic is not supported by the Pub/Sub emulator",
-        ))
+        if request
+            .update_mask
+            .as_ref()
+            .is_none_or(|mask| mask.paths != ["labels"])
+            || request.topic.is_none()
+        {
+            return Err(Status::unimplemented(
+                "UpdateTopic is not supported by the Pub/Sub emulator",
+            ));
+        }
+        let topic = request.topic.expect("the topic was checked above");
+        let name = TopicName::parse(&topic.name).map_err(|error| status(&error))?;
+        let mut state = self.handle.state();
+        state
+            .update_topic_labels(
+                &name,
+                topic.labels.into_iter().collect(),
+                self.handle.paging_policy == crate::PagingPolicy::Strict,
+            )
+            .map_err(|error| status(&error))?;
+        let mut updated = topic_to_proto(
+            &name,
+            state.topic_labels(&name).map_err(|error| status(&error))?,
+        );
+        updated.message_retention_duration = state
+            .topic_retention(&name)
+            .map_err(|error| status(&error))?
+            .map(crate::convert::duration_to_proto);
+        Ok(Response::new(updated))
     }
 
     async fn publish(
@@ -136,7 +161,7 @@ impl Publisher for PublisherService {
     ) -> Result<Response<pb::ListTopicsResponse>, Status> {
         let req = request.into_inner();
         let project = project_of(&req.project)?;
-        let state = self.handle.state();
+        let mut state = self.handle.state();
         let topics: Vec<_> = state
             .list_topics(project)
             .iter()
@@ -150,14 +175,16 @@ impl Publisher for PublisherService {
                 topic
             })
             .collect();
-        let page = paginate(
-            topics,
-            req.page_size,
-            &req.page_token,
-            self.handle.paging_policy,
-            |topic| topic.name.clone(),
-        )
-        .map_err(|e| status(&e))?;
+        let page = state
+            .paginate(
+                &format!("projects/{project}/topics"),
+                topics,
+                req.page_size,
+                &req.page_token,
+                self.handle.paging_policy,
+                |topic| topic.name.clone(),
+            )
+            .map_err(|e| status(&e))?;
         Ok(Response::new(pb::ListTopicsResponse {
             topics: page.resources,
             next_page_token: page.next_page_token,
@@ -170,21 +197,24 @@ impl Publisher for PublisherService {
     ) -> Result<Response<pb::ListTopicSubscriptionsResponse>, Status> {
         let req = request.into_inner();
         let name = TopicName::parse(&req.topic).map_err(|e| status(&e))?;
-        let state = self.handle.state();
+        let mut state = self.handle.state();
         if !state.topic_exists(&name) && self.handle.paging_policy == crate::PagingPolicy::Strict {
             return Err(Status::not_found(format!(
                 "Resource not found (resource={}).",
                 name.topic()
             )));
         }
-        let page = paginate(
-            state.topic_subscriptions(&name),
-            req.page_size,
-            &req.page_token,
-            self.handle.paging_policy,
-            Clone::clone,
-        )
-        .map_err(|e| status(&e))?;
+        let subscriptions = state.topic_subscriptions(&name);
+        let page = state
+            .paginate(
+                &format!("{}/subscriptions", name.to_full()),
+                subscriptions,
+                req.page_size,
+                &req.page_token,
+                self.handle.paging_policy,
+                Clone::clone,
+            )
+            .map_err(|e| status(&e))?;
         Ok(Response::new(pb::ListTopicSubscriptionsResponse {
             subscriptions: page.resources,
             next_page_token: page.next_page_token,
@@ -208,14 +238,16 @@ impl Publisher for PublisherService {
                 .list_topic_snapshots(&name, now)
                 .map_err(|e| status(&e))?
         };
-        let page = paginate(
-            snapshots,
-            req.page_size,
-            &req.page_token,
-            self.handle.paging_policy,
-            Clone::clone,
-        )
-        .map_err(|e| status(&e))?;
+        let page = state
+            .paginate(
+                &format!("{}/snapshots", name.to_full()),
+                snapshots,
+                req.page_size,
+                &req.page_token,
+                self.handle.paging_policy,
+                Clone::clone,
+            )
+            .map_err(|e| status(&e))?;
         Ok(Response::new(pb::ListTopicSnapshotsResponse {
             snapshots: page.resources,
             next_page_token: page.next_page_token,

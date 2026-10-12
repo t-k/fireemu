@@ -1232,6 +1232,10 @@ pub struct RuntimeConfig {
     /// a failing push endpoint with no interval at all. A retry policy always decides its own
     /// backoff.
     pub pubsub_push_minimum_redelivery_interval_millis: i64,
+    /// Explicit project-number mapping for Pub/Sub dead-letter service-agent identities.
+    pub pubsub_project_numbers: BTreeMap<String, String>,
+    /// Optional exact local fixture Bearer; ignored by the emulator profile.
+    pub pubsub_local_bearer_token: Option<String>,
     /// Schedule runs enqueued per clock change and job (`scheduler.maxCatchUpRuns`).
     pub scheduler_max_catch_up_runs: usize,
     /// Default time zone of schedules without one (`scheduler.defaultTimeZone`).
@@ -1249,6 +1253,12 @@ pub struct RuntimeConfig {
     pub auth_custom_token_signers: Option<serde_json::Map<String, Value>>,
     /// Allow unsigned emulator custom tokens in either profile (default true).
     pub auth_allow_unsigned_custom_tokens: bool,
+    /// Admit unsigned emulator ID tokens (`alg: none`, empty signature; the `mockUserToken` of
+    /// `@firebase/rules-unit-testing`) on the Firestore and Storage Security Rules surfaces in
+    /// either profile (`auth.allowUnsignedIdTokens`, default true, owner ledger 1393). Signed
+    /// tokens are verified as before, and a session that signs its own tokens
+    /// (`auth.idTokenSigning: session-rsa`) admits no unsigned token.
+    pub auth_allow_unsigned_id_tokens: bool,
     /// OIDC issuers whose signed ID tokens the strict profile verifies, each with its public
     /// JWK set (`auth.idpSigners`, AUTH-FEDERATION owner decision O4). No key is fetched from
     /// an issuer; without an entry, strict refuses the issuer's sign-ins.
@@ -1487,6 +1497,8 @@ impl Default for RuntimeConfig {
             functions_unserved_triggers: "refuse".to_owned(),
             functions_project_alias: None,
             events_max_attempts: 4,
+            pubsub_project_numbers: BTreeMap::new(),
+            pubsub_local_bearer_token: None,
             pubsub_push_minimum_redelivery_interval_millis:
                 fireemu_core_pubsub::subscription::DEFAULT_PUSH_MINIMUM_REDELIVERY_INTERVAL_MILLIS,
             scheduler_max_catch_up_runs: 1000,
@@ -1495,6 +1507,7 @@ impl Default for RuntimeConfig {
             scheduler_catch_up: "all".to_owned(),
             id_token_signing: fireemu_core_auth::jwt::SigningMode::UnsignedEmulator,
             auth_allow_unsigned_custom_tokens: true,
+            auth_allow_unsigned_id_tokens: true,
             auth_custom_token_signers: None,
             auth_idp_signers: None,
             auth_idp_assertions: IdpAssertionMode::Fixture,
@@ -1505,13 +1518,14 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 26] = [
+pub(crate) const AUTH_KEYS: [&str; 27] = [
     "enabled",
     "apiKeys",
     "projectIssuer",
     "idTokenSigning",
     "customTokenSigners",
     "allowUnsignedCustomTokens",
+    "allowUnsignedIdTokens",
     "idpSigners",
     "idpAssertions",
     "providers",
@@ -3028,6 +3042,7 @@ impl RuntimeConfig {
     pub fn set_production_exact(&mut self, exact: bool) {
         self.production_exact = exact;
         self.auth_allow_unsigned_custom_tokens = !exact;
+        self.auth_allow_unsigned_id_tokens = !exact;
         self.auth_idp_assertions = if exact {
             IdpAssertionMode::Signed
         } else {
@@ -3353,8 +3368,51 @@ impl RuntimeConfig {
 
     fn parse_pubsub(p: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
         for key in p.keys() {
-            if !["pushMinimumRedeliveryIntervalMillis"].contains(&key.as_str()) {
+            if ![
+                "pushMinimumRedeliveryIntervalMillis",
+                "projectNumbers",
+                "authentication",
+            ]
+            .contains(&key.as_str())
+            {
                 return Err(ConfigError(format!("unknown config key pubsub.{key}")));
+            }
+        }
+        if let Some(value) = p.get("authentication") {
+            let authentication = value
+                .as_object()
+                .ok_or_else(|| ConfigError("pubsub.authentication must be an object".to_owned()))?;
+            for key in authentication.keys() {
+                if key != "localBearerToken" {
+                    return Err(ConfigError(format!(
+                        "unknown config key pubsub.authentication.{key}"
+                    )));
+                }
+            }
+            let token = authentication
+                .get("localBearerToken")
+                .and_then(Value::as_str)
+                .filter(|token| !token.is_empty())
+                .ok_or_else(|| {
+                    ConfigError(
+                        "pubsub.authentication.localBearerToken must be a nonempty string"
+                            .to_owned(),
+                    )
+                })?;
+            cfg.pubsub_local_bearer_token = Some(token.to_owned());
+        }
+        if let Some(value) = p.get("projectNumbers") {
+            let numbers = value
+                .as_object()
+                .ok_or_else(|| ConfigError("pubsub.projectNumbers must be an object".to_owned()))?;
+            for (project, value) in numbers {
+                fireemu_core_pubsub::name::validate_project(project).map_err(|_| {
+                    ConfigError("pubsub.projectNumbers contains an invalid project ID".to_owned())
+                })?;
+                let number = value.as_str().filter(|n| !n.is_empty() && n.len() <= 20 && !n.starts_with('0') && n.bytes().all(|b| b.is_ascii_digit()))
+                    .ok_or_else(|| ConfigError("pubsub.projectNumbers values must be positive decimal strings of at most 20 digits".to_owned()))?;
+                cfg.pubsub_project_numbers
+                    .insert(project.clone(), number.to_owned());
             }
         }
         if let Some(value) = p.get("pushMinimumRedeliveryIntervalMillis") {
@@ -3990,6 +4048,11 @@ impl RuntimeConfig {
             if let Some(value) = auth.get("allowUnsignedCustomTokens") {
                 cfg.auth_allow_unsigned_custom_tokens = value.as_bool().ok_or_else(|| {
                     ConfigError("auth.allowUnsignedCustomTokens must be a boolean".to_owned())
+                })?;
+            }
+            if let Some(value) = auth.get("allowUnsignedIdTokens") {
+                cfg.auth_allow_unsigned_id_tokens = value.as_bool().ok_or_else(|| {
+                    ConfigError("auth.allowUnsignedIdTokens must be a boolean".to_owned())
                 })?;
             }
             if let Some(signers) = auth.get("customTokenSigners") {
@@ -5135,6 +5198,52 @@ mod tests {
         // The token semantics have no key of their own: the profile is the only way to ask
         // for them, so an explicit limit switch never quietly loosens them.
         assert_eq!(cfg.token_acceptance, TokenAcceptance::Verified);
+    }
+
+    #[test]
+    fn pubsub_local_bearer_configuration_is_explicit_and_validated() {
+        let cfg =
+            with_profile(json!({"pubsub":{"authentication":{"localBearerToken":"fixture-token"}}}))
+                .unwrap();
+        assert_eq!(
+            cfg.pubsub_local_bearer_token.as_deref(),
+            Some("fixture-token")
+        );
+        assert_eq!(
+            with_profile(json!({})).unwrap().pubsub_local_bearer_token,
+            None
+        );
+        for authentication in [
+            json!(null),
+            json!([]),
+            json!({}),
+            json!({"localBearerToken":""}),
+            json!({"localBearerToken":7}),
+            json!({"localBearerToken":"fixture-token","unknown":true}),
+        ] {
+            assert!(with_profile(json!({"pubsub":{"authentication":authentication}})).is_err());
+        }
+    }
+
+    #[test]
+    fn pubsub_project_numbers_are_explicit_positive_decimal_strings() {
+        assert!(
+            with_profile(json!({"pubsub":{"projectNumbers":{"demo-iam":"123456789"}}})).is_ok()
+        );
+        for number in [
+            json!(""),
+            json!("0"),
+            json!("01"),
+            json!("-1"),
+            json!("1x"),
+            json!(123),
+        ] {
+            assert!(
+                with_profile(json!({"pubsub":{"projectNumbers":{"demo-iam":number}}})).is_err()
+            );
+        }
+        assert!(with_profile(json!({"pubsub":{"projectNumbers":[]}})).is_err());
+        assert!(with_profile(json!({"pubsub":{"projectNumbers":{"bad/project":"123"}}})).is_err());
     }
 
     /// The minimum push redelivery interval is configurable and bounded, and it defaults to zero
@@ -6610,6 +6719,83 @@ mod tests {
                 ))
             );
         }
+    }
+
+    /// `auth.allowUnsignedIdTokens` takes the development value (true) unless `productionExact`
+    /// asks for production's (false); an explicit key decides over both.
+    #[test]
+    fn unsigned_id_tokens_follow_production_exact_and_an_explicit_key_wins() {
+        for exact in [None, Some(false), Some(true)] {
+            for key in [None, Some(true), Some(false)] {
+                let mut auth = json!({});
+                if let Some(value) = key {
+                    auth["allowUnsignedIdTokens"] = json!(value);
+                }
+                let mut config = json!({"schemaVersion": 1, "profile": "strict", "auth": auth});
+                if let Some(exact) = exact {
+                    config["productionExact"] = json!(exact);
+                }
+                let cfg = RuntimeConfig::from_json(&config).unwrap();
+                assert_eq!(
+                    cfg.auth_allow_unsigned_id_tokens,
+                    key.unwrap_or(exact != Some(true)),
+                    "productionExact {exact:?}, allowUnsignedIdTokens {key:?}"
+                );
+            }
+        }
+        let mut cfg = RuntimeConfig::default();
+        cfg.set_production_exact(true);
+        assert!(!cfg.auth_allow_unsigned_id_tokens);
+        cfg.set_production_exact(false);
+        assert!(cfg.auth_allow_unsigned_id_tokens);
+    }
+
+    #[test]
+    fn unsigned_id_token_policy_defaults_and_explicit_overrides() {
+        for profile in ["strict", "emulator"] {
+            for allowed in [None, Some(true), Some(false)] {
+                let mut auth = json!({});
+                if let Some(value) = allowed {
+                    auth["allowUnsignedIdTokens"] = json!(value);
+                }
+                let cfg = RuntimeConfig::from_json(&json!({
+                    "schemaVersion": 1, "profile": profile,
+                    "firestore": {"edition": "standard", "apiMode": "native"},
+                    "auth": auth,
+                }))
+                .unwrap();
+                assert_eq!(cfg.auth_allow_unsigned_id_tokens, allowed.unwrap_or(true));
+                // The setting is independent of the profile's verification and of the custom
+                // token setting.
+                assert_eq!(
+                    cfg.token_acceptance,
+                    if profile == "strict" {
+                        TokenAcceptance::Verified
+                    } else {
+                        TokenAcceptance::EmulatorMock
+                    }
+                );
+                assert!(cfg.auth_allow_unsigned_custom_tokens);
+            }
+        }
+        for invalid in [json!(null), json!("false"), json!(0), json!([]), json!({})] {
+            assert_eq!(
+                parse(&json!({"allowUnsignedIdTokens": invalid})),
+                Err(ConfigError(
+                    "auth.allowUnsignedIdTokens must be a boolean".to_owned()
+                ))
+            );
+        }
+        let cfg = RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1, "profile": "strict",
+            "firestore": {"edition": "standard", "apiMode": "native"},
+            "auth": {"allowUnsignedCustomTokens": false},
+        }))
+        .unwrap();
+        assert!(
+            cfg.auth_allow_unsigned_id_tokens,
+            "the custom token setting does not reach ID tokens"
+        );
     }
 
     #[test]

@@ -79,6 +79,7 @@ fn state(acceptance: TokenAcceptance) -> (StorageState, Seen) {
         app_check_policy: None,
         admin_capability: None,
         token_acceptance: acceptance,
+        allow_unsigned_id_tokens: acceptance == TokenAcceptance::EmulatorMock,
         control_token: Some("storage-test-control-token".to_owned()),
     };
     (state, seen)

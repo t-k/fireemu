@@ -99,13 +99,13 @@ test("keyed starvation under continuous unkeyed traffic is a disclosed limitatio
   assert.match(known.statement, /unary Pull/);
 });
 
-test("the judging rules 1392, 1394, 1399, 1400 and 1401 are disclosed", () => {
+test("the judging rules 1392, 1394, 1399, 1400, 1401 and 1402 are disclosed", () => {
   const { closure, comparison } = committed();
   assert.match(
     closure.knownDifferences.judgingRules.statement,
     /delivered fewer of the key messages/,
   );
-  for (const id of ["1392", "1394", "1399", "1400", "1401"]) {
+  for (const id of ["1392", "1394", "1399", "1400", "1401", "1402"]) {
     assert.ok(comparison.rules[id], id);
     assert.ok(closure.knownDifferences.judgingRules.rules.includes(id), id);
   }
@@ -363,4 +363,22 @@ test("a rule the comparison does not define is refused", () => {
   comparison.rows[index].rules = ["9999"];
   const hashOf = rebind(closure, comparison);
   assert.throws(() => check(closure, comparison, hashOf), /unknown rule 9999/);
+});
+
+test("only the independent parent review is still pending before the flip", () => {
+  const { closure, comparison } = committed();
+  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  assert.ok(closure.conditions.every(({ status }) => status === "PENDING_REVIEW"));
+  const pending = new Set(
+    comparison.rows
+      .filter(({ status }) => status === "PENDING")
+      .map(({ coordinate }) => coordinate),
+  );
+  assert.deepEqual([...pending], ["/conditions/17/cases/0"]);
+  const limited = comparison.rows.filter(
+    ({ coordinate }) => coordinate === "/conditions/6/cases/8",
+  );
+  assert.ok(
+    limited.every(({ status, rules }) => status === "MATCH_BY_RELATION" && rules.includes("1402")),
+  );
 });

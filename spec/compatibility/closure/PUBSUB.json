@@ -12,7 +12,7 @@
   },
   "closureReview": {
     "decision": "PENDING",
-    "note": "The independent parent review (/conditions/17/cases/0) is pending; the per-case proof v2 named by every condition is its input. Rows still PENDING in the adjudication: /conditions/6/cases/8 (owner 1394 condition not met, awaiting a disposition), /conditions/16/cases/2 (depends on it) and /conditions/17/cases/0."
+    "note": "The independent parent review (/conditions/17/cases/0) is pending; the per-case proof v2 named by every condition is its input. The only row still PENDING in the adjudication is /conditions/17/cases/0."
   },
   "scopeDecisions": [
     {
@@ -92,9 +92,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/0",
           "/cases/1",
@@ -131,9 +131,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/6",
           "/cases/7",
@@ -168,9 +168,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/12",
           "/cases/13",
@@ -204,9 +204,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/15",
           "/cases/16",
@@ -250,9 +250,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/21",
           "/cases/22",
@@ -295,9 +295,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/33",
           "/cases/34",
@@ -337,9 +337,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/39",
           "/cases/40",
@@ -352,8 +352,7 @@
           "/cases/47"
         ],
         "rows": {
-          "MATCH_BY_RELATION": 16,
-          "PENDING": 2
+          "MATCH_BY_RELATION": 18
         },
         "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
         "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
@@ -380,9 +379,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/48",
           "/cases/49",
@@ -421,9 +420,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/54",
           "/cases/55",
@@ -463,9 +462,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/62",
           "/cases/63",
@@ -507,9 +506,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/68",
           "/cases/69",
@@ -550,9 +549,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/78",
           "/cases/79",
@@ -588,9 +587,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/83",
           "/cases/84",
@@ -631,9 +630,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/89",
           "/cases/90",
@@ -680,9 +679,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/100",
           "/cases/101",
@@ -725,9 +724,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/110",
           "/cases/111",
@@ -762,9 +761,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/116",
           "/cases/117",
@@ -773,8 +772,7 @@
           "/cases/120"
         ],
         "rows": {
-          "MATCH": 4,
-          "PENDING": 1
+          "MATCH": 5
         },
         "sourceCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
         "finalArtifactSha256": "a97b87c1130a11fb9e14219c7e2b94b5ac044910cd933889aeee11d2d0dcfe8a"
@@ -795,9 +793,9 @@
       "status": "PENDING_REVIEW",
       "evidence": {
         "comparisonPath": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "comparisonSha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "comparisonSha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "caseProofPath": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-        "caseProofSha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+        "caseProofSha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
         "caseProofSelectors": [
           "/cases/121"
         ],
@@ -812,7 +810,7 @@
   "perCaseAdjudication": {
     "mode": "per-case-adjudication",
     "path": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-    "sha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c"
+    "sha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633"
   },
   "integratedRegression": {
     "integrationCommit": "01d284ca776f7140cfa84b88d32ee9ea2b9dbbe8",
@@ -824,13 +822,13 @@
     "comparisons": [
       {
         "path": "spec/compatibility/closure/evidence/PUBSUB-comparison.json",
-        "sha256": "4b216d54b6f4b65b66210f78b81873f263e615defbb0ef3f772aedaa5bdfc34c",
+        "sha256": "263334241e0419b2ee57a99fb1d08b094572b4536de2ce2f23a9d801b5d95633",
         "rows": 227,
         "summary": {
           "EXCLUDED_STEP": 6,
-          "MATCH": 26,
-          "MATCH_BY_RELATION": 191,
-          "PENDING": 4
+          "MATCH": 27,
+          "MATCH_BY_RELATION": 193,
+          "PENDING": 1
         }
       }
     ],
@@ -865,14 +863,15 @@
       ]
     },
     "judgingRules": {
-      "statement": "Production comparison rules applied by the per-case adjudication beyond exact equality: 1390 (original REST rows without recorded wire length MATCH on status, header semantics and body content); 1392 (original ordering cells: the next ordering key production serves varies by run and transport, so key choice is not judged; per-key order, no keyed/unkeyed mixing and the delivered set must match); 1394 (differences explained only by the delivery order of messages without an ordering guarantee and by a Pull returning fewer messages than available, including 0, MATCH when the cell delivered set, each message content and per-key order with ordering enabled match; fireemu answers immediately and does not simulate empty Pulls; cases /conditions/6/cases/4, 6/8, 9/0, 9/4, 11/2, 14/3); 1399 as clarified by 1400 (second-recording original ordering cells: each side holds at most one ordering key by an unacknowledged delivery at cell end and the whole-cell difference is only the tails of those held keys; per-key prefix and order and no keyed/unkeyed mixing still required; any unsuccessful Pull or Acknowledge on the ordered subscription is DIVERGES); 1401 defines a held key: that side delivered fewer of the key messages than the other side and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held. The full rule list is in the comparison file.",
+      "statement": "Production comparison rules applied by the per-case adjudication beyond exact equality: 1390 (original REST rows without recorded wire length MATCH on status, header semantics and body content); 1392 (original ordering cells: the next ordering key production serves varies by run and transport, so key choice is not judged; per-key order, no keyed/unkeyed mixing and the delivered set must match); 1394 (differences explained only by the delivery order of messages without an ordering guarantee and by a Pull returning fewer messages than available, including 0, MATCH when the cell delivered set, each message content and per-key order with ordering enabled match; fireemu answers immediately and does not simulate empty Pulls; cases /conditions/6/cases/4, 6/8, 9/0, 9/4, 11/2, 14/3); 1402 (for a Pull limited by maxMessages, the 1394 set condition reads: each delivered message is one of the cell published messages with equal content, its id correlates with the same-side publish reply, and the delivered counts are equal; applied to /conditions/6/cases/8); 1399 as clarified by 1400 (second-recording original ordering cells: each side holds at most one ordering key by an unacknowledged delivery at cell end and the whole-cell difference is only the tails of those held keys; per-key prefix and order and no keyed/unkeyed mixing still required; any unsuccessful Pull or Acknowledge on the ordered subscription is DIVERGES); 1401 defines a held key: that side delivered fewer of the key messages than the other side and its last delivery of the key is unacknowledged at cell end; keys unacknowledged on both sides with equal counts are not held. The full rule list is in the comparison file.",
       "rules": [
         "1390",
         "1392",
         "1394",
         "1399",
         "1400",
-        "1401"
+        "1401",
+        "1402"
       ]
     },
     "unauthenticatedLocalConnections": {

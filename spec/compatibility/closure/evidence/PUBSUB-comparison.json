@@ -13,7 +13,7 @@
   "method": "Per-case adjudication of the 122 frozen cases (18 conditions) against the final strict release binary. Every witness is a LOCAL strict replay of genuine production recordings on that binary; raw physical differences are retained in the private run outputs. A row status is the case verdict for each declared transport. Rules are owner decision ledger entries applied exactly; basis text names private evidence files of the per-case proof.",
   "caseProof": {
     "path": "docs.local/runs/coordinator-claude-20261011/per-case-proof-v2/per-case-proof.json",
-    "sha256": "515dc1e3f7c9c9ebecc74e7d1269efbaffd98d0590386d0e81ed0edf82cd6945",
+    "sha256": "ed3b9aa83ffa2bc8234c3c855d3d9ee914140c3d2e370d83647ffd29f6c2a3ef",
     "note": "private (docs.local), not published"
   },
   "statuses": {
@@ -49,13 +49,14 @@
     "1395": "Original ordering cells are replayed with identity acknowledgements (the replay acknowledges its own delivery of the message production acknowledged) on the final binary (2026-10-12).",
     "1399": "Original ordering cells in the second recording: MATCH when on both sides each key delivered set is a prefix of its publish order, keyed and unkeyed are never mixed in a Pull, and the whole-cell difference is only the tail of a key held by an unacknowledged delivery at cell end (2026-10-12).",
     "1400": "Clarifies 1399: MATCH when each side holds at most one ordering key by an unacknowledged delivery at cell end and the whole-cell difference is only the tails of those held keys; per-key prefix, per-key order and no unkeyed/keyed mixing still required; any unsuccessful Pull or Acknowledge on the ordered subscription on either side is DIVERGES (2026-10-12).",
-    "1401": "Coordinator interpretation of 1400: a side holds an ordering key when it delivered fewer of the key messages than the other side and its last delivery of the key is unacknowledged at cell end; keys whose final batch is unacknowledged on both sides with equal counts are not held (2026-10-12)."
+    "1401": "Coordinator interpretation of 1400: a side holds an ordering key when it delivered fewer of the key messages than the other side and its last delivery of the key is unacknowledged at cell end; keys whose final batch is unacknowledged on both sides with equal counts are not held (2026-10-12).",
+    "1402": "Clarifies 1394 for a Pull limited by maxMessages: the set condition reads each delivered message is one of the cell published messages with equal content, its id correlates with the same-side publish reply, and the delivered counts are equal; which member a limited Pull returns is non-guarantee (1) of 1394; raw differences stay in the record (2026-10-12)."
   },
   "summary": {
     "EXCLUDED_STEP": 6,
-    "MATCH": 26,
-    "MATCH_BY_RELATION": 191,
-    "PENDING": 4
+    "MATCH": 27,
+    "MATCH_BY_RELATION": 193,
+    "PENDING": 1
   },
   "rows": [
     {
@@ -1548,11 +1549,13 @@
       "row": "pubsub/publish/wire#publish-pull-id-correlation",
       "transport": "rest",
       "coordinate": "/conditions/6/cases/8",
-      "status": "PENDING",
+      "status": "MATCH_BY_RELATION",
       "rules": [
         "1100",
         "1135",
-        "1394"
+        "1390",
+        "1394",
+        "1402"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1560,18 +1563,19 @@
         "567e1cd8",
         "a8ed1cce"
       ],
-      "basis": "Owner 1394 names this case, but its MATCH condition fails on the original arms: each publish-wire arm has exactly one Pull (maxMessages 1) over 1011 published messages, and production and LOCAL deliver a different single message (r1 rest two vs one, r1 grpc unicode vs one, r2 rest/grpc x vs one), so the cell delivered sets differ ({1} vs {1}, different members). The difference is explained by unordered delivery order plus maxMessages, and per side the pulled message correlates exactly with its own Publish reply (messageId in the same-side publish replies, content equal: corr-6-8.json), but 1394 requires the delivered set to be equal. C R4/N4 (dedicated correlation cells) semantic MATCH in both C sets. Needs a coordinator/owner disposition.",
-      "pendingReason": "awaiting a coordinator or owner disposition"
+      "basis": "Owner 1394 as clarified by owner 1402 for maxMessages-limited Pulls. Each original publish-wire arm has one Pull with maxMessages 1 over 11 messages published to the subscription topic; production and LOCAL deliver a different single member (r1 rest two vs one, r1 grpc unicode vs one, r2 rest/grpc x vs one). In all four arms the delivered counts are equal (1/1), each delivered message is one of the cell published messages with equal content, and its messageId is in the same side publish replies (check-1402.json, corr-6-8.json); which member a limited Pull returns is non-guarantee (1) of 1394. Raw differences are retained. Original publish rows MATCH/1390. C R4/N4 (dedicated correlation cells) semantic MATCH in both C sets."
     },
     {
       "row": "pubsub/publish/wire#publish-pull-id-correlation",
       "transport": "grpc",
       "coordinate": "/conditions/6/cases/8",
-      "status": "PENDING",
+      "status": "MATCH_BY_RELATION",
       "rules": [
         "1100",
         "1135",
-        "1394"
+        "1390",
+        "1394",
+        "1402"
       ],
       "witnessRunPrefixes": [
         "14802609",
@@ -1579,8 +1583,7 @@
         "567e1cd8",
         "a8ed1cce"
       ],
-      "basis": "Owner 1394 names this case, but its MATCH condition fails on the original arms: each publish-wire arm has exactly one Pull (maxMessages 1) over 1011 published messages, and production and LOCAL deliver a different single message (r1 rest two vs one, r1 grpc unicode vs one, r2 rest/grpc x vs one), so the cell delivered sets differ ({1} vs {1}, different members). The difference is explained by unordered delivery order plus maxMessages, and per side the pulled message correlates exactly with its own Publish reply (messageId in the same-side publish replies, content equal: corr-6-8.json), but 1394 requires the delivered set to be equal. C R4/N4 (dedicated correlation cells) semantic MATCH in both C sets. Needs a coordinator/owner disposition.",
-      "pendingReason": "awaiting a coordinator or owner disposition"
+      "basis": "Owner 1394 as clarified by owner 1402 for maxMessages-limited Pulls. Each original publish-wire arm has one Pull with maxMessages 1 over 11 messages published to the subscription topic; production and LOCAL deliver a different single member (r1 rest two vs one, r1 grpc unicode vs one, r2 rest/grpc x vs one). In all four arms the delivered counts are equal (1/1), each delivered message is one of the cell published messages with equal content, and its messageId is in the same side publish replies (check-1402.json, corr-6-8.json); which member a limited Pull returns is non-guarantee (1) of 1394. Raw differences are retained. Original publish rows MATCH/1390. C R4/N4 (dedicated correlation cells) semantic MATCH in both C sets."
     },
     {
       "row": "pubsub/publish/limits#request-bytes-boundary",
@@ -3579,11 +3582,10 @@
       "row": "pubsub/final#complete-case-set",
       "transport": "artifact",
       "coordinate": "/conditions/16/cases/2",
-      "status": "PENDING",
+      "status": "MATCH",
       "rules": [],
       "witnessRunPrefixes": [],
-      "basis": "The 122-case matrix with per-case witnesses on a97b87c1 and no inherited MATCH is this file; it is complete only when 6/8 (owner 1394 condition unmet) is settled; every other case is in an allowed end state and 17/0 is the parent review itself.",
-      "pendingReason": "awaiting a coordinator or owner disposition"
+      "basis": "The 122-case matrix with per-case witnesses on a97b87c1 and no inherited MATCH is this file: every case lists its own rows or cells against its own requiredObservation, and every case other than 17/0 (the parent review itself) ends MATCH, MATCH-by-owner-relation or EXCLUDED-step."
     },
     {
       "row": "pubsub/final#clean-source-build",

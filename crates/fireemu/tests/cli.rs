@@ -203,7 +203,8 @@ fn init_noninteractive_defaults_to_strict_and_detects_firebase_json() {
     assert_eq!(generated["firebaseJson"], "firebase.json");
     assert_eq!(generated["firestore"]["edition"], "standard");
     assert_eq!(generated["firestore"]["apiMode"], "native");
-    assert!(String::from_utf8_lossy(&out.stdout).contains("fireemu up --config fireemu.json"));
+    assert!(String::from_utf8_lossy(&out.stdout)
+        .contains("next: fireemu up (fireemu.json in this directory is loaded automatically)"));
 
     let before = std::fs::read(&path).unwrap();
     let out = run_in(&dir, &["init", "--yes"], None);

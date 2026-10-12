@@ -123,6 +123,26 @@ pub struct StorageRulesRegistry {
     /// are not rules state (never snapshotted): the strict profile counts them as existing, as
     /// production does for a bucket a trigger was deployed on.
     trigger_buckets: std::sync::RwLock<std::collections::BTreeSet<String>>,
+    /// Where the refusal of an end-user request for want of rules is reported, once per bucket:
+    /// the client only sees production's (or the official emulator's) answer.
+    no_rules_notice: std::sync::RwLock<Option<NoRulesNotice>>,
+    /// The buckets already reported to `no_rules_notice`. The bucket name comes from the
+    /// client, hence the limit.
+    noticed_without_rules: Mutex<NoticeLimit>,
+}
+
+pub use fireemu_adapter_support::notice_limit::{NoticeEvent, NoticeLimit};
+
+/// Told the bucket name the first time an end-user request on that bucket is refused because no
+/// Storage Rules are loaded for it, for at most [`NoticeLimit::LIMIT`] buckets (see
+/// [`StorageRulesRegistry::set_no_rules_notice`]).
+#[derive(Clone)]
+pub struct NoRulesNotice(pub Arc<dyn Fn(NoticeEvent<'_>) + Send + Sync>);
+
+impl std::fmt::Debug for NoRulesNotice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("NoRulesNotice")
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -162,6 +182,8 @@ impl StorageRulesRegistry {
         Self {
             mode: std::sync::RwLock::new(StorageRulesMode::Global(slot)),
             trigger_buckets: std::sync::RwLock::default(),
+            no_rules_notice: std::sync::RwLock::default(),
+            noticed_without_rules: Mutex::default(),
         }
     }
 
@@ -171,6 +193,31 @@ impl StorageRulesRegistry {
         Self {
             mode: std::sync::RwLock::new(StorageRulesMode::PerBucket(slots)),
             trigger_buckets: std::sync::RwLock::default(),
+            no_rules_notice: std::sync::RwLock::default(),
+            noticed_without_rules: Mutex::default(),
+        }
+    }
+
+    /// Reports the first refusal of an end-user request on each bucket that has no rules to
+    /// `notice`. The answer to the client does not change.
+    pub fn set_no_rules_notice(&self, notice: NoRulesNotice) {
+        if let Ok(mut slot) = self.no_rules_notice.write() {
+            *slot = Some(notice);
+        }
+    }
+
+    /// Calls the notice the first time `bucket` is refused for want of rules.
+    fn notice_without_rules(&self, bucket: &str) {
+        let Some(notice) = self.no_rules_notice.read().ok().and_then(|n| n.clone()) else {
+            return;
+        };
+        let event = self
+            .noticed_without_rules
+            .lock()
+            .ok()
+            .and_then(|mut limit| limit.observe(bucket));
+        if let Some(event) = event {
+            (notice.0)(event);
         }
     }
 
@@ -2063,6 +2110,7 @@ impl StorageState {
         if !self.is_strict() && self.project_of_bucket(bucket.as_str()).starts_with("demo-") {
             return Ok(());
         }
+        self.rules.notice_without_rules(bucket.as_str());
         Err(self.no_release_refusal(bucket))
     }
 

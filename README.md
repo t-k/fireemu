@@ -39,6 +39,8 @@ npx fireemu exec -- <command>
 npx fireemu exec -- npm test
 ```
 
+`up` and `exec` read `fireemu.json` from the current directory, or, when there is none, the nearest `firebase.json` (see [Which configuration files are loaded](#which-configuration-files-are-loaded)). The first lines of the startup output name the files that were loaded and say, for Firestore and Storage, whether Security Rules are loaded.
+
 Every command documents its options: run `npx fireemu --help` for the commands and `npx fireemu <command> --help` (or `npx fireemu help <command>`) for the options of one, for example `npx fireemu exec --help`. After `--`, `exec` passes `--help` to your command.
 
 ### Supported platforms
@@ -173,6 +175,43 @@ npx fireemu init --yes
 
 An existing `fireemu.json` is not overwritten unless `--force` is supplied.
 
+### Which configuration files are loaded
+
+`up`, `exec`, `emulators:start` and `emulators:exec` choose their configuration files as follows.
+
+1. `--config <file>` and `--firebase-json <file>` load exactly the files they name, and nothing is searched for.
+2. Otherwise, `fireemu.json` in the current directory is loaded as if it were passed with `--config`. Its `firebaseJson` entry, resolved relative to `fireemu.json`, names the `firebase.json` to load. A `firebase.json` beside a `fireemu.json` without a `firebaseJson` entry is not loaded, and the startup output says so. A `fireemu.json` in a parent directory is not used, because the paths it contains are relative to the current directory.
+3. Otherwise, the nearest `firebase.json` is loaded as if it were passed with `--firebase-json`: the one in the current directory, else the first one found in a parent directory, as the Firebase CLI finds it. Its paths and the `.firebaserc` beside it are read from its directory.
+4. Otherwise, the built-in defaults apply, and no Security Rules are loaded.
+
+`--no-config-discovery` skips steps 2 and 3. The `config:` line of the startup output names the files that were loaded.
+
+A discovered file can name Functions code to run and the rules to enforce, so on Unix the search checks who owns what it finds, as git checks repository ownership. The Firebase CLI does not check this. The trusted owners are you (the effective user), root, and, when you run as root through `sudo`, the user in `SUDO_UID`.
+
+- A `fireemu.json` or `firebase.json` whose owner is not trusted, or that any user can write, is skipped. Group write is allowed, so files created under a user-private-group umask (002, the Debian and Ubuntu default) are loaded.
+- A `.firebaserc` names only project and target aliases, never code or rules, so its owner is not checked. It is skipped only when it, or its directory, can be written by any user.
+- The search stops before a parent directory whose owner is not trusted or that any user can write, such as `/tmp`. It also stops, without a warning, at a parent it cannot inspect, such as one you may not enter.
+- The owner of the current directory is not checked, because you chose to run there. A current directory that any user can write is not searched at all.
+- A symbolic link is judged by the file it points to. The directory that holds the target is not checked.
+- Each candidate is opened once. Its owner and mode are checked on the open file before anything is read, and its text is then read from the same file. A discovered file larger than 16 MiB is refused with an error.
+
+A skipped file or directory is named in a warning, and the run continues as if nothing had been found. To load a file anyway, name it with `--config` or `--firebase-json`. To silence the warning, pass `--no-config-discovery`. Errors in a discovered file say that the search found the file.
+
+Two common setups run into this rule:
+
+- A root container with a bind-mounted checkout. Examples are GitHub Actions `container:` jobs and `docker run -v "$PWD":/app` as root. The `fireemu.json` and `firebase.json` there are owned by a host user that the container's root does not trust, so they are skipped. Use the explicit flags, or `chown` the checkout. The `.firebaserc` still names the project. Rootless Podman maps your user to the container's root, so it is not affected.
+- `sudo`. Files owned by the user that `sudo` names in `SUDO_UID` are trusted.
+
+On Windows, ownership is not checked.
+
+If you relied on the old behavior, where a `firebase.json` next to your tests was ignored, pass `--no-config-discovery`. Discovery means that the project ID comes from the `.firebaserc` beside the discovered `firebase.json`, that its emulator ports, Hub, UI and single-project settings apply, and that a `functions` entry starts the Functions runtime. `fireemu capabilities` also reports the profile of a discovered `fireemu.json`.
+
+### Security Rules that are not loaded
+
+Under the `strict` profile, a project without Security Rules behaves as a production project without a rules release: every client request to Firestore is refused with `PERMISSION_DENIED`, and every end-user request to Storage is refused with production's 400 "bucket has not been set up" answer. The Admin SDK and other owner credentials are not affected. The `emulator` profile allows every Firestore request, and every Storage request for a `demo-*` project, as the official emulator does.
+
+The answers keep production's wording, which does not mention Fireemu. The startup output therefore has a `firestore rules:` and a `storage rules:` line that say when no rules are loaded and how to load them, and the first refused request for each database and bucket (up to 32 of each) prints a warning to standard error. Name the rules files in `firebase.json` (`firestore.rules`, `storage.rules`) or in `fireemu.json` (`rules.source`, `storage.rules`).
+
 ### Compatibility profiles
 
 | Profile | Behavior |
@@ -239,7 +278,7 @@ The initial configuration selects Standard edition Firestore with the Native API
 }
 ```
 
-You can specify the configuration file with `--config`.
+You can also name the configuration file with `--config`.
 
 ```sh
 npx fireemu up --config ./fireemu.json

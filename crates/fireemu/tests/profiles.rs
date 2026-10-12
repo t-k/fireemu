@@ -620,7 +620,7 @@ fn without_a_ruleset_strict_refuses_client_requests_and_the_emulator_profile_all
     // The rules line follows the readiness line; give it a moment.
     let rules_line = |daemon: &Daemon| {
         for _ in 0..100 {
-            if daemon.banner().contains("  rules: ") {
+            if daemon.banner().contains("  firestore rules: ") {
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -629,7 +629,8 @@ fn without_a_ruleset_strict_refuses_client_requests_and_the_emulator_profile_all
     };
     let strict = Daemon::start_with("unruled", "strict", "");
     assert!(
-        rules_line(&strict).contains("rules: none loaded; every client request is refused"),
+        rules_line(&strict)
+            .contains("firestore rules:  none loaded, so every client request is refused"),
         "{}",
         strict.banner()
     );
@@ -649,7 +650,8 @@ fn without_a_ruleset_strict_refuses_client_requests_and_the_emulator_profile_all
 
     let emulator = Daemon::start_with("unruled", "emulator", "");
     assert!(
-        rules_line(&emulator).contains("rules: none loaded; every request is allowed"),
+        rules_line(&emulator)
+            .contains("firestore rules:  none loaded, so every request is allowed"),
         "{}",
         emulator.banner()
     );

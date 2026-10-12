@@ -12,13 +12,13 @@
 //   node src/auth-fs-cross/run.mjs export-comparison <out.json>
 //
 // Copied from conformance/src/fs-rules/run.mjs, as it was when the local tenant setup and the
-// harness registry replaced its private digest recipe (then 7c39e63fc011cebd6cf639b6150b52f1fd1f71bf131a53848ac245233eb6c92c),
-// and changed only where this lane differs: its task, fixture, rulesets, principals and session,
-// no custom-token signer, and the other project whose ID token the foreign-project program
-// presents (X9). Last compared with fs-rules/run.mjs at file SHA-256
-// 21625ee47fd60abe212da18c14d664eed5b25eb3ccb77cefd5465d43c3aea01c: its later change, productionExact for
-// strict rows that include missing-index refusals, does not apply here, because
-// auth-fs-cross-production.json records no missing-index refusal.
+// harness registry replaced its private digest recipe, and changed only where this lane differs:
+// its task, fixture, rulesets, principals and session, no custom-token signer, and the other
+// project whose ID token the foreign-project program presents (X9). The source has since set
+// productionExact for strict local runs, because the FS-RULES rows include missing-index
+// refusals; it is not copied here, as no AUTH-FS-CROSS program reads a query that needs a
+// composite index. The source as of that change (2026-10-12) has the file SHA-256
+// 21625ee47fd60abe212da18c14d664eed5b25eb3ccb77cefd5465d43c3aea01c
 //
 // Production needs FIREEMU_AUTH_SANDBOX_WEB_CONFIG (the sandbox web app config JSON, kept outside
 // the repository), FIREEMU_AUTH_FOREIGN_PROJECT_FILE and FIREEMU_AUTH_FOREIGN_KEY_FILE (the id,

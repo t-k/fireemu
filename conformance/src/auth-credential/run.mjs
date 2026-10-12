@@ -454,6 +454,9 @@ async function runLocal(programs) {
     JSON.stringify({
       schemaVersion: 1,
       profile: "strict",
+      // The production rows include the refusal of an unsigned (alg "none") custom token, which
+      // strict gives only with productionExact (auth.allowUnsignedCustomTokens defaults to true).
+      productionExact: true,
       daemon: { authProjectNumbers: { [SANDBOX_PROJECT]: LOCAL_PROJECT_NUMBER } },
       auth: { idTokenSigning: "session-rsa", apiKeys: ["fake-api-key"], customTokenSigners: trust },
     }),

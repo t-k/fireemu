@@ -158,7 +158,30 @@ fn cross_field_problems(cfg: &Value, root: &Path) -> Vec<String> {
 
     problems.extend(app_check_problems(cfg));
     problems.extend(auth_tenant_problems(cfg));
+    problems.extend(eventarc_authentication_problems(cfg));
 
+    problems
+}
+
+/// `eventarc.authentication`: production's credential checks exist only in the strict profile (the
+/// emulator profile never refuses more than the official emulator), and a local OAuth catalog under
+/// strict is applied only by production. The Rust loader enforces the same rules.
+fn eventarc_authentication_problems(cfg: &Value) -> Vec<String> {
+    let strict = str_at(cfg, &["profile"]) != Some("emulator");
+    let authentication = str_at(cfg, &["eventarc", "authentication"]);
+    let mut problems = Vec::new();
+    if !strict && authentication == Some("production") {
+        problems
+            .push("eventarc.authentication \"production\" requires the strict profile".to_owned());
+    }
+    if strict
+        && authentication == Some("permissive")
+        && cfg.pointer("/eventarc/oauthCredentials").is_some()
+    {
+        problems.push(
+            "eventarc.oauthCredentials requires eventarc.authentication \"production\"".to_owned(),
+        );
+    }
     problems
 }
 

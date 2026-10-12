@@ -15,6 +15,16 @@ const control = `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`;
 const functionsHost = process.env.FIREEMU_FUNCTIONS_HOST || "127.0.0.1:5001";
 const eventarcHost = process.env.CLOUD_EVENTARC_EMULATOR_HOST || "http://127.0.0.1:9299";
 const app = initializeApp({ projectId: project, storageBucket: `${project}.appspot.com` });
+// The Eventarc client always sends the bearer of its app's credential, so without application
+// default credentials (as in CI) it needs a fake one; the strict listener admits it by default
+// (eventarc.authentication). Firestore refuses such a credential, so it gets its own app.
+const eventarcApp = initializeApp(
+  {
+    projectId: project,
+    credential: { getAccessToken: async () => ({ access_token: "owner", expires_in: 3600 }) },
+  },
+  "eventarc",
+);
 const db = getFirestore(app);
 const results = [];
 function check(name, ok, extra) {
@@ -173,7 +183,7 @@ try {
   check("withAuthContext carries the Admin SDK principal", audited?.authType === "service_account" && audited?.type === "google.cloud.firestore.document.v1.created.withAuthContext", audited);
   // Eventarc custom events, through the Admin SDK's own client: it reads
   // CLOUD_EVENTARC_EMULATOR_HOST, so nothing here names a port.
-  await getEventarc(app)
+  await getEventarc(eventarcApp)
     .channel("locations/us-central1/channels/firebase")
     .publish({
       type: "com.example.thing.done",
@@ -196,7 +206,7 @@ try {
   );
 
   // A filtered trigger only sees the events whose attribute matches.
-  const channel = getEventarc(app).channel("locations/us-central1/channels/firebase");
+  const channel = getEventarc(eventarcApp).channel("locations/us-central1/channels/firebase");
   await channel.publish({
     type: "com.example.thing.done",
     source: "https://example.com/things",

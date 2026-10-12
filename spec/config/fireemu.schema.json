@@ -15,8 +15,14 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "authentication": {
+          "type": "string",
+          "enum": ["permissive", "production"],
+          "default": "permissive",
+          "description": "Whether the strict Eventarc listener checks the request's credential. permissive (the development default, in both profiles) admits any credential or none, as the official emulator does, so the Admin SDK publishes with a fake credential in CI; every other strict check keeps production's order and answers. production refuses a missing, malformed or JWT-shaped bearer with production's 401 and applies oauthCredentials. Defaults to production under productionExact, and under the strict profile when oauthCredentials is configured; an explicit value wins, except that permissive with oauthCredentials under strict is an error. production requires the strict profile."
+        },
         "oauthCredentials": {
-          "description": "Optional local OAuth credential authority for strict Eventarc. Keys are SHA-256 digests of synthetic bearer bytes; absence preserves legacy shape-only admission. An empty catalog admits no OAuth-shaped credential. This does not verify Google credentials or IAM permissions.",
+          "description": "Optional local OAuth credential authority for strict Eventarc, applied when eventarc.authentication is production (which it selects when authentication is absent). Keys are SHA-256 digests of synthetic bearer bytes; absence preserves legacy shape-only admission. An empty catalog admits no OAuth-shaped credential. This does not verify Google credentials or IAM permissions.",
           "type": "object",
           "propertyNames": { "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
           "additionalProperties": {

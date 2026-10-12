@@ -197,6 +197,7 @@ Fireemu is mostly run by tests, in CI and on a developer's machine. Where produc
 |---|---|---|
 | Unsigned emulator custom tokens are accepted | `auth.allowUnsignedCustomTokens` | refused |
 | Identity-provider sign-in accepts the fixture assertions and the sign-in widget (`/emulator/auth/handler`), for built-in, `oidc.*` and `saml.*` providers | `auth.idpAssertions` (`"fixture"`) | `"signed"`: OIDC ID tokens must verify with an `auth.idpSigners` key, SAML responses with the provider's certificates, and the fixture and built-in providers are refused |
+| The strict Eventarc listener admits any credential or none, so the Admin SDK publishes with a fake credential (see [Eventarc authentication](docs/eventarc-authentication.md)) | `eventarc.authentication` (`"permissive"`) | `"production"`: a missing, malformed or JWT-shaped bearer is refused with production's 401 |
 
 The start banner and `fireemu capabilities` report whether `productionExact` is set.
 

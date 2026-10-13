@@ -247,8 +247,11 @@ setInterval(() => {}, 1000);`,
 });
 
 test("the private temp dir moves to /tmp only when the caller's is too long for the selftest's sockets", () => {
-  const macTmp = "/var/folders/jg/z7b_f7ks63qgfy62kzd3td440000gn/T";
+  // as long as macOS's per-user temp directory (49 bytes)
+  const macTmp = "/".padEnd(49, "x");
   assert.equal(privateTempBase(macTmp), "/tmp");
+  // bytes, not characters: 24 characters, 47 bytes
+  assert.equal(privateTempBase(`/${"é".repeat(23)}`), "/tmp");
   assert.equal(privateTempBase("/tmp/x"), "/tmp/x");
   const longest = "/".padEnd(46, "x");
   assert.equal(privateTempBase(longest), longest);

@@ -523,3 +523,37 @@ fn the_tenant_id_format_decides_which_ids_a_seed_may_have() {
         assert!(error.contains("auth.tenants[1]"), "{error}");
     }
 }
+
+#[test]
+fn a_default_switch_enables_tenants_only_while_the_project_has_not_decided() {
+    use fireemu_adapter_http::identity_toolkit::TenantSeeding;
+    // The strict profile's development default (owner ledger 1413): multi-tenancy is on in a
+    // project nobody configured, and an Admin API write of either value stays what it was written.
+    let by_default = TenantSeeding::default().allowing_tenants_by_default();
+    assert!(!by_default.is_empty());
+    let (state, registry) = with_registry(strict_state());
+    assert!(!state.store.lock().unwrap().allows_tenants());
+    by_default.apply(&registry, "demo-app").unwrap();
+    assert!(state.store.lock().unwrap().allows_tenants());
+    // The tenant routes then work without an `updateConfig` call.
+    let (status, created) = admin(
+        &state,
+        "POST",
+        &format!("{V2}/projects/demo-app/tenants"),
+        &json!({"displayName": "acme"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    for written in [false, true] {
+        seed_multi_tenancy(&registry, "demo-app", written).unwrap();
+        by_default.apply(&registry, "demo-app").unwrap();
+        assert_eq!(
+            state.store.lock().unwrap().allows_tenants(),
+            written,
+            "an Admin-set {written} survives the default"
+        );
+    }
+    // A declared value wins over the default, in either direction.
+    let declared_off = TenantSeeding::new(Some(false), Vec::new()).allowing_tenants_by_default();
+    declared_off.apply(&registry, "demo-app").unwrap();
+    assert!(!state.store.lock().unwrap().allows_tenants());
+}

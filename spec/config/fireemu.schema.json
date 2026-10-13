@@ -574,7 +574,7 @@
         },
         "totp": {
           "type": "object",
-          "description": "Configures fireemu's TOTP extension. Under strict, auth.totp alone does not enable enrollment: the project MFA configuration must have state ENABLED or MANDATORY and a providerConfigs entry with state ENABLED or MANDATORY and totpProviderConfig, seeded through auth.mfa or set through the Admin API. auth.totp is not required when that MFA configuration enables TOTP. Under emulator, declaring auth.totp enables the extension; an enabling project MFA configuration also enables TOTP without it. Tenants under strict require their own enabling mfaConfig. See README.md#enable-multi-factor-authentication-at-start for a minimal strict configuration.",
+          "description": "Configures fireemu's TOTP extension. Under strict, auth.totp alone does not enable enrollment: the project MFA configuration must have state ENABLED or MANDATORY and a providerConfigs entry with state ENABLED or MANDATORY and totpProviderConfig. Under the strict profile that is the development default (see auth.mfa), so auth.totp only tunes TOTP there; under productionExact, or with a declared auth.mfa that leaves TOTP off, the configuration must be seeded through auth.mfa or set through the Admin API. auth.totp is not required when that MFA configuration enables TOTP. Under emulator, declaring auth.totp enables the extension; an enabling project MFA configuration also enables TOTP without it. Tenants under strict require their own enabling mfaConfig. See README.md#enable-multi-factor-authentication-at-start for a minimal strict configuration.",
           "additionalProperties": false,
           "properties": {
             "periodSeconds": { "type": "integer", "minimum": 1 },
@@ -585,10 +585,13 @@
         },
         "mfa": {
           "type": ["object", "null"],
-          "description": "The project's initial multi-factor configuration, in the Identity Platform Config.mfa shape: it is the project's configuration when the daemon starts and for every project it creates later, and a control-plane reset (POST /v1/sessions/{s}/reset) returns to it. It is validated as the Admin API validates an update of the mfa member. Under the strict profile TOTP is enabled only by this configuration (auth.totp alone enables nothing, as in production); an Admin API update replaces the live configuration (the seed is kept, and a reset returns to it), and disabling refuses TOTP as production does. Absent or null, a project starts with multi-factor off, as a new production project does, and a reset leaves an Admin-set configuration alone.",
+          "description": "The project's initial multi-factor configuration, in the Identity Platform Config.mfa shape: it is the project's configuration when the daemon starts and for every project it creates later, and a control-plane reset (POST /v1/sessions/{s}/reset) returns to it. It is validated as the Admin API validates an update of the mfa member. Under the strict profile TOTP is enabled only by the project's multi-factor configuration (auth.totp alone enables nothing, as in production); an Admin API update replaces the live configuration (the seed is kept, and a reset returns to it), and disabling refuses TOTP as production does. Absent or null, a development default applies (owner ledger 1413): under the strict profile a project starts with multi-factor on, SMS and TOTP enabled (state ENABLED, PHONE_SMS and an enabled totpProviderConfig; the accepted TOTP window stays auth.totp's), so a test needs no console toggle or updateConfig call, and a reset returns to it. productionExact restores production's state, a new project with multi-factor off until it is enabled (a reset then leaves an Admin-set configuration alone). A declared block always decides, so {\"state\": \"DISABLED\"} turns multi-factor off whatever productionExact says. The emulator profile is unchanged. Tenants keep their own mfaConfig.",
           "additionalProperties": false,
           "properties": {
-            "state": { "enum": ["STATE_UNSPECIFIED", "DISABLED", "ENABLED", "MANDATORY"] },
+            "state": {
+              "description": "The project's multi-factor state. Under the strict profile it is ENABLED when auth.mfa is absent (a development default), and unset under productionExact; a declared auth.mfa decides.",
+              "enum": ["STATE_UNSPECIFIED", "DISABLED", "ENABLED", "MANDATORY"]
+            },
             "enabledProviders": {
               "type": ["array", "null"],
               "items": { "enum": ["PROVIDER_UNSPECIFIED", "PHONE_SMS"] }
@@ -614,10 +617,13 @@
         },
         "multiTenant": {
           "type": ["object", "null"],
-          "description": "The default project's multi-tenancy switch, as the Admin API's multiTenant.allowTenants: it is set when the daemon starts, for every session project created later, and after a control-plane reset (POST /v1/sessions/{s}/reset). Under the strict profile tenants are created only in a project that allows them, as in production, so declaring auth.tenants there requires allowTenants: true. Absent or null, the project starts with the switch unset, as a new production project does, and a reset leaves an Admin-set value alone.",
+          "description": "The default project's multi-tenancy switch, as the Admin API's multiTenant.allowTenants: it is set when the daemon starts, for every session project created later, and after a control-plane reset (POST /v1/sessions/{s}/reset). Under the strict profile tenants are created only in a project that allows them, as in production. Absent or null, a development default applies (owner ledger 1413): under the strict profile the switch is on in a project nobody has written it in, so Admin tenant creation and declaring auth.tenants need no updateConfig call or allowTenants: true. productionExact restores production's new project, the switch unset until it is enabled, and declaring auth.tenants then requires allowTenants: true. A declared value, or one written through the Admin API (false included), always decides, and a reset leaves it alone. The emulator profile is unchanged.",
           "additionalProperties": false,
           "properties": {
-            "allowTenants": { "type": "boolean" }
+            "allowTenants": {
+              "type": "boolean",
+              "description": "Whether the project allows tenants. Under the strict profile it is true when the key is absent (a development default), and unset under productionExact; a declared value decides."
+            }
           }
         },
         "tenants": {

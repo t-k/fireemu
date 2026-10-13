@@ -76,6 +76,12 @@ impl Daemon {
         Self::spawn(name, profile, auth, &[], None)
     }
 
+    /// A strict daemon with `productionExact`: a new project starts as production's does, with
+    /// multi-factor off until it is enabled.
+    fn start_exact(name: &str, auth: &Value) -> Self {
+        Self::spawn_with(name, "strict", true, auth, &[], None)
+    }
+
     /// A quiet daemon prints no banner, so it is told its port and is ready when it accepts a
     /// connection. A port taken between the choice and the bind stops the daemon early, and the
     /// start is tried again with another.
@@ -115,13 +121,24 @@ impl Daemon {
         extra: &[&str],
         fixed_port: Option<u16>,
     ) -> Self {
+        Self::spawn_with(name, profile, false, auth, extra, fixed_port)
+    }
+
+    fn spawn_with(
+        name: &str,
+        profile: &str,
+        production_exact: bool,
+        auth: &Value,
+        extra: &[&str],
+        fixed_port: Option<u16>,
+    ) -> Self {
         let dir = TrustedTempDir::new(&format!("auth-mfa-config-{name}"));
         let config = dir.join("fireemu.json");
-        std::fs::write(
-            &config,
-            json!({"schemaVersion": 1, "profile": profile, "auth": auth}).to_string(),
-        )
-        .unwrap();
+        let mut document = json!({"schemaVersion": 1, "profile": profile, "auth": auth});
+        if production_exact {
+            document["productionExact"] = json!(true);
+        }
+        std::fs::write(&config, document.to_string()).unwrap();
         let http_port = fixed_port.unwrap_or(0).to_string();
         let mut child = Command::new(env!("CARGO_BIN_EXE_fireemu"))
             .args([
@@ -369,14 +386,15 @@ fn strict_auth_mfa_with_phone_sms_enables_phone_enrollment() {
     let sms = json!({"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]});
     let daemon = Daemon::start("sms", "strict", &with_mfa(&sms));
     assert_eq!(daemon.phone_start("a@example.com"), (200, String::new()));
-    // A provider that is not on refuses, and so does a project that declares nothing.
+    // A provider that is not on refuses, and so does a project that declares nothing under
+    // productionExact (the development default turns multi-factor on).
     daemon.set_mfa(&json!({"state": "DISABLED", "enabledProviders": ["PHONE_SMS"]}));
     assert_eq!(
         daemon.phone_start("b@example.com"),
         (400, SMS_NOT_ENABLED.to_owned())
     );
     drop(daemon);
-    let daemon = Daemon::start("no-sms", "strict", &base());
+    let daemon = Daemon::start_exact("no-sms", &base());
     assert_eq!(
         daemon.phone_start("a@example.com"),
         (400, SMS_NOT_ENABLED.to_owned())
@@ -447,13 +465,55 @@ fn the_projects_seed_does_not_enable_second_factors_inside_a_tenant() {
     assert_eq!(daemon.totp_start("d@example.com"), (200, String::new()));
 }
 
+/// Multi-factor is a development default of the strict profile (owner ledger 1413, AU-3): SMS and
+/// TOTP enroll without a console toggle, an `updateConfig` call or an `auth.mfa` block, and
+/// `productionExact` brings back production's "not enabled" refusals, which a declared
+/// `auth.mfa` also gives, whatever productionExact says.
 #[test]
-fn strict_without_auth_mfa_still_refuses_totp_enrollment() {
+fn strict_enrolls_sms_and_totp_without_auth_mfa_and_production_exact_refuses_them() {
     let daemon = Daemon::start("unseeded", "strict", &base());
+    assert_eq!(daemon.totp_start("a@example.com"), (200, String::new()));
+    assert_eq!(daemon.phone_start("b@example.com"), (200, String::new()));
+    // The read-back is the document an enabled project reads back as; the TOTP window stays
+    // auth.totp's, so no adjacentIntervals is invented.
+    assert_eq!(
+        mfa_of(&daemon, PROJECT),
+        json!({
+            "state": "ENABLED",
+            "enabledProviders": ["PHONE_SMS"],
+            "providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {}}]
+        })
+    );
+    drop(daemon);
+    let daemon = Daemon::start_exact("unseeded-exact", &base());
     assert_eq!(
         daemon.totp_start("a@example.com"),
         (400, NOT_ENABLED.to_owned())
     );
+    assert_eq!(
+        daemon.phone_start("b@example.com"),
+        (400, SMS_NOT_ENABLED.to_owned())
+    );
+    assert_eq!(mfa_of(&daemon, PROJECT), json!({"state": "DISABLED"}));
+    drop(daemon);
+    for exact in [false, true] {
+        let off = with_mfa(&json!({"state": "DISABLED"}));
+        let daemon = if exact {
+            Daemon::start_exact("declared-off", &off)
+        } else {
+            Daemon::start("declared-off", "strict", &off)
+        };
+        assert_eq!(
+            daemon.totp_start("a@example.com"),
+            (400, NOT_ENABLED.to_owned()),
+            "exact {exact}"
+        );
+        assert_eq!(
+            daemon.phone_start("b@example.com"),
+            (400, SMS_NOT_ENABLED.to_owned()),
+            "exact {exact}"
+        );
+    }
 }
 
 #[test]
@@ -478,7 +538,8 @@ fn a_reset_returns_to_a_declared_seed() {
 
 #[test]
 fn a_reset_without_a_declared_seed_keeps_an_admin_set_config_as_before() {
-    let daemon = Daemon::start("reset-unseeded", "strict", &base());
+    // Under productionExact, which leaves a new project as production's, undeclared.
+    let daemon = Daemon::start_exact("reset-unseeded", &base());
     daemon.set_mfa(&totp_on());
     assert_eq!(daemon.totp_start("a@example.com").0, 200);
     daemon.reset();
@@ -546,8 +607,8 @@ fn a_project_created_later_starts_with_the_seed_not_the_default_projects_live_co
 }
 
 #[test]
-fn a_project_created_without_a_declared_seed_starts_with_mfa_off() {
-    let daemon = Daemon::start("created-plain", "strict", &base());
+fn a_project_created_without_a_declared_seed_starts_with_mfa_off_under_production_exact() {
+    let daemon = Daemon::start_exact("created-plain", &base());
     daemon.set_mfa(&totp_on());
     let (status, created) = http(
         daemon.control_port(),
@@ -558,6 +619,30 @@ fn a_project_created_without_a_declared_seed_starts_with_mfa_off() {
     );
     assert_eq!(status, 200, "{created}");
     assert_eq!(mfa_of(&daemon, "demo-second"), json!({"state": "DISABLED"}));
+}
+
+#[test]
+fn the_development_default_is_what_a_new_project_and_a_reset_return_to() {
+    let default = json!({
+        "state": "ENABLED",
+        "enabledProviders": ["PHONE_SMS"],
+        "providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {}}]
+    });
+    let daemon = Daemon::start("created-default", "strict", &base());
+    daemon.set_mfa(&json!({"state": "DISABLED"}));
+    assert_eq!(daemon.totp_start("a@example.com").0, 400);
+    let (status, created) = http(
+        daemon.control_port(),
+        "POST",
+        "/v1/sessions",
+        "",
+        &json!({"project": "demo-second"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    assert_eq!(mfa_of(&daemon, "demo-second"), default);
+    daemon.reset();
+    assert_eq!(mfa_of(&daemon, PROJECT), default);
+    assert_eq!(daemon.totp_start("b@example.com").0, 200);
 }
 
 /// The emulator profile makes a project on its first Admin request (a compatibility namespace);
@@ -621,7 +706,14 @@ fn the_emulator_profile_keeps_auth_totp_and_accepts_auth_mfa_as_well() {
 fn strict_auth_totp_without_an_mfa_enabling_it_warns_naming_auth_mfa() {
     let mut auth = base();
     auth["totp"] = json!({});
-    let warned = Daemon::start("warn", "strict", &auth);
+    // Multi-factor is on by default under the strict profile, so auth.totp alone enables TOTP
+    // there and nothing is warned; productionExact (or a declared config that leaves TOTP off)
+    // is where it enables nothing.
+    let default = Daemon::start("nowarn-default", "strict", &auth);
+    assert!(!default.stderr().contains("auth.totp does not enable"));
+    assert_eq!(default.totp_start("a@example.com").0, 200);
+    drop(default);
+    let warned = Daemon::start_exact("warn", &auth);
     let stderr = warned.stderr();
     assert!(
         stderr.contains("warning: auth.totp does not enable TOTP under the strict profile"),

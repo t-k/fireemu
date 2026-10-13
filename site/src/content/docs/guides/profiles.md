@@ -44,7 +44,7 @@ To get production's behavior for all of them at once, set `productionExact` to `
 
 The startup banner and `fireemu capabilities` report whether `productionExact` is set, and the effective value and source of each setting in the table.
 
-A query whose composite index is not defined is not among these defaults: `strict` refuses it as production does, and `firestore.missingIndexes: "report"` is an explicit opt-out that runs it and reports the missing index on standard error. `productionExact` does not change that key.
+Most projects do not need `productionExact`; it is an advanced switch for a stricter comparison with production. A query whose composite index is not defined is not among these defaults: `strict` refuses it as production does, and `firestore.missingIndexes: "report"` is an explicit opt-out that runs it and reports the missing index on standard error. `productionExact` does not change that key.
 
 ### Other development conveniences
 

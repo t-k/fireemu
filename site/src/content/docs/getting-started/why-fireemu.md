@@ -21,7 +21,7 @@ Where the official emulator and production Firebase disagree, Fireemu follows pr
 
 Each behavior is checked against recordings from real Firebase projects. The [compatibility tables](../../compatibility/) list every area that has been verified this way and how many conditions it covers.
 
-Some production behavior is costly in a test: production needs signed tokens, signing keys, or a feature enabled through an Admin API call. Reproducing these exactly would slow down development without catching more bugs, so Fireemu deliberately keeps a development default that works without setup. Each one is documented, and one setting, `productionExact`, switches them to production's behavior. See [Where Fireemu departs from production on purpose](../../guides/profiles/#where-fireemu-departs-from-production-on-purpose).
+Some production behavior is costly in a test: production needs signed tokens, signing keys, or a feature enabled through an Admin API call. Reproducing these exactly would slow down development without catching more bugs, so Fireemu deliberately keeps a development default that works without setup. Each one is documented and has its own setting; `productionExact`, an advanced switch, restores production's behavior for all of them. See [Where Fireemu departs from production on purpose](../../guides/profiles/#where-fireemu-departs-from-production-on-purpose).
 
 ## Built for tests
 

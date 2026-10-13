@@ -3667,6 +3667,17 @@ impl RuntimeConfig {
         }
     }
 
+    /// How strictly `firestore.indexes.json` is checked when it loads: the `strict` profile
+    /// refuses what `firebase deploy` refuses, the `emulator` profile only what it always did
+    /// (the official emulator never reads the file).
+    #[must_use]
+    pub const fn index_file_checks(&self) -> crate::control::IndexFileChecks {
+        match self.profile {
+            CompatibilityProfile::Strict => crate::control::IndexFileChecks::Deploy,
+            CompatibilityProfile::Emulator => crate::control::IndexFileChecks::Emulator,
+        }
+    }
+
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
         for key in d.keys() {
             if ![

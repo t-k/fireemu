@@ -55,7 +55,13 @@ fn hub_and_local_with_profile(
         ctx: PlanningContext {
             edition: FirestoreEdition::Standard,
             api_mode: FirestoreApiMode::Native,
-            policy: IndexValidationPolicy::Production,
+            // The profile decides the transport shapes and the limits on writes, not
+            // `enforce_limits` (the query limits only).
+            policy: if strict {
+                IndexValidationPolicy::Production
+            } else {
+                IndexValidationPolicy::Emulator
+            },
         },
         indexes: IndexSet::default(),
     };

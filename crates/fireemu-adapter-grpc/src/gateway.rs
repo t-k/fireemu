@@ -211,6 +211,8 @@ pub struct Gateway {
     /// which the compatibility profile defaults: `strict` enforces, `firebase` observes).
     /// When it observes, every violation is reported as an `FS_LIMIT_OBSERVED:<id>` warning
     /// and the query runs, which is what the official emulator does with the same query.
+    /// It switches the query limits and nothing else: the write, transaction, index and
+    /// transport limits follow the profile ([`Self::production_refusals`]).
     pub enforce_limits: bool,
 }
 

@@ -890,7 +890,8 @@ impl RestState {
         }
     }
 
-    /// `PUT /emulator/v1/projects/{project}:securityRules`.
+    /// `PUT /emulator/v1/projects/{project}:securityRules` and
+    /// `PUT /emulator/v1/projects/{project}/databases/{database}:securityRules`.
     ///
     /// The body is the official one, `{"rules": {"files": [{"name", "content"}]}}`, and the
     /// answer is the official one too: `200` with the compiler's `issues` (fireemu reports
@@ -900,7 +901,10 @@ impl RestState {
     /// fireemu keeps one Firestore ruleset per session rather than per project -- exactly as
     /// `PUT /v1/rules` on the control API does, and as the official emulator's
     /// `singleProjectMode` does -- so the project in the path is validated but names no
-    /// separate slot.
+    /// separate slot. The second form loads the rules of one database: a named database that
+    /// `firebase.json` declares has its own, and one created at run time has none until this
+    /// sets them, so a client request to it is refused (production governs a database by its
+    /// own release only).
     fn security_rules_route(
         &self,
         req: &RestRequest,
@@ -913,9 +917,18 @@ impl RestState {
                 req.method, req.path
             )));
         }
+        // `{project}` loads the `(default)` database's rules; `{project}/databases/{database}`
+        // loads those of one database, the way a run-time created database gets its first.
+        let (project, database) = match project.split('/').collect::<Vec<_>>().as_slice() {
+            [project] => (*project, fireemu_core_types::ids::DatabaseId::DEFAULT),
+            [project, "databases", database] if crate::admin::rest::valid_database_id(database) => {
+                (*project, *database)
+            }
+            _ => ("", ""),
+        };
         if project.is_empty() || project.contains('/') {
             return Err(Status::invalid_argument(
-                "the project of a securityRules load must be named",
+                "the project of a securityRules load must be named, and a database as projects/{project}/databases/{database}",
             ));
         }
         let Some(rules) = self.rules.as_ref() else {
@@ -937,7 +950,12 @@ impl RestState {
         })?;
         let barrier = self.local.barrier();
         let _admitted = barrier.admit();
-        match rules.replace_source(source) {
+        let replaced = if database == fireemu_core_types::ids::DatabaseId::DEFAULT {
+            rules.replace_source(source)
+        } else {
+            rules.replace_database_source(database, source)
+        };
+        match replaced {
             // No issues: `{}`, the proto3 JSON of an empty list (what the official
             // emulator answers).
             Ok(()) => Ok(ok(json!({}))),

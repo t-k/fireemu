@@ -64,8 +64,8 @@ const KEEPALIVE: Duration = Duration::from_secs(30);
 /// strict accepts everything below the refusal; the pinned official emulator accepts
 /// 16,777,216 and refuses one more byte, and the emulator profile adds no refusal to it.
 #[must_use]
-pub const fn max_form_bytes(enforce_limits: bool) -> usize {
-    if enforce_limits {
+pub const fn max_form_bytes(production_scope: bool) -> usize {
+    if production_scope {
         16_777_215
     } else {
         16 * 1024 * 1024
@@ -1503,7 +1503,7 @@ impl Hub {
     }
 
     fn session(&self, req: &ChannelRequest, sid: &str) -> Result<Arc<Session>, ChannelResponse> {
-        let strict = self.state.gateway.enforce_limits;
+        let strict = self.state.gateway.production_refusals();
         let s = self
             .sessions
             .lock()
@@ -1526,17 +1526,17 @@ impl Hub {
         }
     }
 
-    /// Whether this hub serves the strict profile.
+    /// Whether this hub serves the strict profile (production's refusals and wire shapes).
     #[must_use]
-    pub fn enforce_limits(&self) -> bool {
-        self.state.gateway.enforce_limits
+    pub fn production_scope(&self) -> bool {
+        self.state.gateway.production_refusals()
     }
 
     /// The answer to a form body over [`max_form_bytes`]. Production answers its HTML 400 page
     /// and the session is gone afterwards (its terminate answered the same page), so strict ends
     /// the named session. The official emulator answers an empty 413 and keeps the session.
     pub fn oversized_form(&self, sid: Option<&str>) -> ChannelResponse {
-        if self.enforce_limits() {
+        if self.production_scope() {
             if let Some(sid) = sid {
                 self.remove(sid);
             }
@@ -1569,7 +1569,7 @@ impl Hub {
                     Ok(_) => self.remove(&sid),
                     // Production answers the terminate of a session it no longer has with its
                     // unknown-session page (FS-DATA-WRITE follow-up recording, 2026-09-27).
-                    Err(unknown) if self.enforce_limits() => return unknown,
+                    Err(unknown) if self.production_scope() => return unknown,
                     Err(_) => {}
                 }
             }
@@ -1706,7 +1706,7 @@ impl Hub {
             },
             None => crate::rules::Principal::Owner,
         };
-        let strict = self.enforce_limits();
+        let strict = self.production_scope();
         let sid = match if strict && req.kind == StreamKind::Listen {
             sid_from_entropy(|| {
                 fireemu_adapter_support::entropy::u128_value()
@@ -2202,7 +2202,7 @@ fn spawn_stream(
 ) {
     let (out_tx, mut out_rx) = mpsc::channel::<Result<String, Status>>(256);
     let kind = session.kind;
-    let strict = ctx.gateway.enforce_limits;
+    let strict = ctx.gateway.production_refusals();
     // Pump: stream output → numbered arrays on the session.
     let pump_session = session.clone();
     tokio::spawn(async move {

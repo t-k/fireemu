@@ -2324,7 +2324,12 @@ fn start_rules_reload_supervisor(
     });
 }
 
-fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<LocalBackend>) {
+fn start_index_reload_supervisor(
+    path: String,
+    database: String,
+    backend: &Arc<LocalBackend>,
+    checks: control::IndexFileChecks,
+) {
     let weak = Arc::downgrade(backend);
     let initial = watched_file(&path).ok();
     let mut observed_stamp = initial.as_ref().map(|(stamp, _, _)| *stamp);
@@ -2374,7 +2379,7 @@ fn start_index_reload_supervisor(path: String, database: String, backend: &Arc<L
                     continue;
                 }
             };
-            match control::parse_index_file(&path, &text) {
+            match control::parse_index_file(&path, &text, checks) {
                 Ok((indexes, ttl_policies)) => {
                     if backend.replace_database_indexes(&database, indexes) {
                         backend.replace_shared_ttl_catalog(&database, ttl_policies);
@@ -2423,9 +2428,10 @@ fn start_firestore_config_reload_supervisors(
     for (path, slot) in &storage_rules.watched {
         start_rules_reload_supervisor(path.clone(), "Storage rules", slot, barrier);
     }
+    let checks = cfg.index_file_checks();
     for (database, files) in &cfg.firestore_databases {
         if let Some(path) = &files.indexes {
-            start_index_reload_supervisor(path.clone(), database.clone(), backend);
+            start_index_reload_supervisor(path.clone(), database.clone(), backend, checks);
         }
     }
     if cfg.firestore_databases.is_empty() {
@@ -2434,6 +2440,7 @@ fn start_firestore_config_reload_supervisors(
                 path.clone(),
                 fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned(),
                 backend,
+                checks,
             );
         }
     }
@@ -3384,7 +3391,7 @@ mod config_reload_tests {
         ));
         backend.replace_database_indexes(
             "staging",
-            control::parse_indexes("indexes", indexes).unwrap(),
+            control::parse_indexes("indexes", indexes, control::IndexFileChecks::Deploy).unwrap(),
         );
         backend
     }
@@ -4118,7 +4125,12 @@ mod config_reload_tests {
         std::fs::write(&path, INDEXES_ONE).unwrap();
         let original_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
         let backend = index_backend(INDEXES_ONE);
-        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+        start_index_reload_supervisor(
+            path.display().to_string(),
+            "staging".to_owned(),
+            &backend,
+            control::IndexFileChecks::Deploy,
+        );
 
         let mut malformed = INDEXES_TWO.as_bytes().to_vec();
         let array_start = malformed.iter().position(|byte| *byte == b'[').unwrap();
@@ -4146,7 +4158,12 @@ mod config_reload_tests {
         std::fs::write(&path, INDEXES_ONE).unwrap();
         let original_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
         let backend = index_backend(INDEXES_ONE);
-        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+        start_index_reload_supervisor(
+            path.display().to_string(),
+            "staging".to_owned(),
+            &backend,
+            control::IndexFileChecks::Deploy,
+        );
 
         let mut invalid_utf8 = INDEXES_TWO.as_bytes().to_vec();
         invalid_utf8[0] = 0xff;
@@ -4172,7 +4189,12 @@ mod config_reload_tests {
         let path = dir.join("firestore.indexes.json");
         std::fs::write(&path, INDEXES_ONE).unwrap();
         let backend = index_backend(INDEXES_ONE);
-        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+        start_index_reload_supervisor(
+            path.display().to_string(),
+            "staging".to_owned(),
+            &backend,
+            control::IndexFileChecks::Deploy,
+        );
 
         let mut malformed = INDEXES_TWO.as_bytes().to_vec();
         let array_start = malformed.iter().position(|byte| *byte == b'[').unwrap();
@@ -4221,7 +4243,12 @@ mod config_reload_tests {
         };
         std::fs::write(&path, declared("false")).unwrap();
         let backend = index_backend(&declared("false"));
-        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+        start_index_reload_supervisor(
+            path.display().to_string(),
+            "staging".to_owned(),
+            &backend,
+            control::IndexFileChecks::Deploy,
+        );
         wait_for_ttl(&backend, "sessions", false).await;
 
         std::fs::write(&path, declared("true")).unwrap();
@@ -4271,7 +4298,12 @@ mod config_reload_tests {
             Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH))),
             7,
         ));
-        start_index_reload_supervisor(path.display().to_string(), "staging".to_owned(), &backend);
+        start_index_reload_supervisor(
+            path.display().to_string(),
+            "staging".to_owned(),
+            &backend,
+            control::IndexFileChecks::Deploy,
+        );
         std::fs::write(
             &path,
             r#"{"indexes":[{"collectionGroup":"items","queryScope":"COLLECTION","fields":[{"fieldPath":"a","order":"ASCENDING"},{"fieldPath":"b","order":"DESCENDING"}]}],"fieldOverrides":[]}"#,

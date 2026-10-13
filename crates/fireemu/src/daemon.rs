@@ -1810,9 +1810,22 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 cfg.clock_start.to_rfc3339().unwrap_or_default()
             ));
         }
+        // A database `firebase.json` declares must have an id production could create, which
+        // only `databases.create` checked until now. The official emulator takes any name, so the
+        // `emulator` profile does not.
+        if cfg.profile == crate::config::CompatibilityProfile::Strict {
+            for database in cfg.firestore_databases.keys() {
+                if !fireemu_adapter_grpc::admin::rest::valid_database_id(database) {
+                    return Err(format!(
+                        "firebase.json: the Firestore database {database:?} cannot exist in production: {}",
+                        fireemu_adapter_grpc::admin::rest::DATABASE_ID_RULE
+                    ));
+                }
+            }
+        }
         // The index file declares the query-planning indexes and the TTL policies together.
         let (default_indexes, default_ttl_policies) = match &cfg.index_file {
-            Some(path) => control::load_index_file(path)?,
+            Some(path) => control::load_index_file(path, cfg.index_file_checks())?,
             None => Default::default(),
         };
         let gateway = Gateway {
@@ -1881,7 +1894,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         for (database, files) in &cfg.firestore_databases {
             if database != fireemu_core_types::ids::DatabaseId::DEFAULT {
                 if let Some(path) = &files.indexes {
-                    let (indexes, ttl_policies) = control::load_index_file(path)?;
+                    let (indexes, ttl_policies) =
+                        control::load_index_file(path, cfg.index_file_checks())?;
                     backend.replace_database_indexes(database, indexes);
                     backend.replace_shared_ttl_catalog(database, ttl_policies);
                 }

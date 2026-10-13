@@ -628,7 +628,7 @@ where
     let read = if declared {
         read_drained_body(
             req.into_body(),
-            crate::webchannel::max_form_bytes(hub.enforce_limits()),
+            crate::webchannel::max_form_bytes(hub.production_scope()),
             crate::webchannel::MAX_FORM_DRAIN_BYTES,
             body_deadline,
         )
@@ -804,14 +804,14 @@ fn normalize_transport_status(headers: &mut HeaderMap) {
 /// frame is normalized.
 fn shape_grpc_response(
     mut response: Response<tonic::body::Body>,
-    enforce_limits: bool,
+    production_scope: bool,
     write_stream: bool,
 ) -> Response<http_body_util::combinators::UnsyncBoxBody<Bytes, BoxError>> {
-    if enforce_limits && response.headers().contains_key(Status::GRPC_STATUS) {
+    if production_scope && response.headers().contains_key(Status::GRPC_STATUS) {
         let trailers = split_trailers_only(response.headers_mut());
         let frame = normalize_transport_frame(
             Frame::trailers(trailers),
-            enforce_limits,
+            production_scope,
             write_stream,
             false,
         );
@@ -823,7 +823,7 @@ fn shape_grpc_response(
         let mut responded = false;
         b.map_frame(move |frame| {
             responded |= frame.is_data();
-            normalize_transport_frame(frame, enforce_limits, write_stream, responded)
+            normalize_transport_frame(frame, production_scope, write_stream, responded)
         })
         .map_err(|e| Box::new(e) as BoxError)
         .boxed_unsync()
@@ -847,13 +847,13 @@ fn split_trailers_only(headers: &mut HeaderMap) -> HeaderMap {
 /// (`grpc-stream-request-bytes/*`, recorded twice).
 fn normalize_transport_frame(
     mut frame: Frame<Bytes>,
-    enforce_limits: bool,
+    production_scope: bool,
     write_stream: bool,
     responded: bool,
 ) -> Frame<Bytes> {
     if let Some(trailers) = frame.trailers_mut() {
         normalize_transport_status(trailers);
-        let write_terminal = enforce_limits
+        let write_terminal = production_scope
             && write_stream
             && Status::from_header_map(trailers).is_some_and(|status| {
                 status.code() == tonic::Code::Ok
@@ -963,7 +963,7 @@ where
                             Ok(r) => r,
                             Err(never) => match never {},
                         };
-                        let enforce_limits = rest.gateway.enforce_limits;
+                        let production_scope = rest.gateway.production_refusals();
                         normalize_transport_status(response.headers_mut());
                         if response
                             .headers()
@@ -975,7 +975,7 @@ where
                         }
                         return Ok::<_, std::io::Error>(shape_grpc_response(
                             response,
-                            enforce_limits,
+                            production_scope,
                             write_stream,
                         ));
                     }
@@ -2806,9 +2806,8 @@ mod document_not_found_layout_tests {
                 assert_eq!(actual, expected, "{path}");
                 assert!(!actual.ends_with(b"\n"));
                 if path.ends_with(":commit") {
-                    assert_eq!(actual, if production && !limits {
-                        br#"{"commitTime":"2026-08-29T12:01:00.000001Z"}"#.as_slice()
-                    } else { b"{}".as_slice() });
+                    // `limits` (the query-limit switch) changes nothing here: the profile decides.
+                    assert_eq!(actual, b"{}".as_slice());
                 }
                 let value: serde_json::Value = serde_json::from_slice(&actual).unwrap();
                 if method == "GET" { assert_eq!(value["documents"][0], document); }

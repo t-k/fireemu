@@ -80,7 +80,87 @@ pub struct IndexDefinition {
     pub fields: Vec<IndexField>,
 }
 
+/// Most fields a composite index may have (`FS-LIMIT-FIELDS-PER-COMPOSITE-INDEX`).
+pub const MAX_COMPOSITE_INDEX_FIELDS: usize = 100;
+
+/// Most composite indexes a database may have: 200, the billing-disabled plan
+/// (`FS-LIMIT-COMPOSITE-INDEXES`), which is the one fireemu models.
+pub const MAX_COMPOSITE_INDEXES: usize = 200;
+
+/// Why a composite index definition is refused, whichever way it arrives: the index file,
+/// or `collectionGroups/{g}/indexes.create`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompositeShapeError {
+    /// More than [`MAX_COMPOSITE_INDEX_FIELDS`] fields. The text is fireemu's own: no
+    /// production answer is recorded for it (UNRECORDED).
+    TooManyFields,
+    /// More than one `arrayConfig: CONTAINS` field. The text is fireemu's own: no production
+    /// answer is recorded for it (UNRECORDED).
+    MultipleArrayFields,
+    /// A single-field index, which the automatic single-field indexes already cover. The text
+    /// is production's: `conformance/fs-config-lifecycle-production.json`,
+    /// `fs-config/index/lifecycle/composite/steps/single-field`, 400 `INVALID_ARGUMENT`.
+    NotNecessary,
+}
+
+impl fmt::Display for CompositeShapeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::TooManyFields => "FS-LIMIT-FIELDS-PER-COMPOSITE-INDEX: maximum 100 fields",
+            Self::MultipleArrayFields => "a composite index may contain only one array field",
+            Self::NotNecessary => {
+                "this index is not necessary, configure using single field index controls"
+            }
+        })
+    }
+}
+
 impl IndexDefinition {
+    /// The limits on the shape of a composite index, which every profile applies: at most
+    /// [`MAX_COMPOSITE_INDEX_FIELDS`] fields and at most one array field.
+    ///
+    /// # Errors
+    ///
+    /// The limit the definition exceeds.
+    pub fn check_capacity(&self) -> Result<(), CompositeShapeError> {
+        if self.fields.len() > MAX_COMPOSITE_INDEX_FIELDS {
+            return Err(CompositeShapeError::TooManyFields);
+        }
+        if self
+            .fields
+            .iter()
+            .filter(|field| field.mode == IndexFieldMode::Contains)
+            .count()
+            > 1
+        {
+            return Err(CompositeShapeError::MultipleArrayFields);
+        }
+        Ok(())
+    }
+
+    /// Whether production would refuse the definition as unnecessary: it has fewer than two
+    /// fields and none of them is `__name__` or a vector field. Production deployed
+    /// `(n ASC, __name__ DESC)`, `(__name__ DESC)` and a one-field vector index
+    /// (`conformance/fs-query-index.indexes.json`), so those stay accepted.
+    ///
+    /// # Errors
+    ///
+    /// [`CompositeShapeError::NotNecessary`].
+    pub fn check_necessary(&self) -> Result<(), CompositeShapeError> {
+        let names_document = self
+            .fields
+            .iter()
+            .any(|field| field.path.is_document_name());
+        let vector = self
+            .fields
+            .iter()
+            .any(|field| matches!(field.mode, IndexFieldMode::Vector { .. }));
+        if self.fields.len() < 2 && !names_document && !vector {
+            return Err(CompositeShapeError::NotNecessary);
+        }
+        Ok(())
+    }
+
     /// `firestore.indexes.json` fragment.
     #[must_use]
     pub fn indexes_json_fragment(&self) -> String {
@@ -294,8 +374,9 @@ pub enum IndexValidationPolicy {
     /// Production's rules, except that a Standard query production would refuse for a missing
     /// composite index is served as if the index existed (`AssumedIndex`) and reported. Every
     /// query production serves, by one index or by a merge, is planned exactly as under
-    /// [`Self::Production`], so nothing production serves is reported. The strict profile's
-    /// development default (`firestore.missingIndexes: "report"`).
+    /// [`Self::Production`], so nothing production serves is reported. An explicit opt-out of
+    /// the strict profile (`firestore.missingIndexes: "report"`); the default there is
+    /// [`Self::Production`] (owner decision of 2026-10-13).
     ProductionReport,
     /// Firebase Emulator Suite parity: every composite index a query needs is assumed to
     /// exist (`AssumedIndex`), so a project without `firestore.indexes.json` runs the same

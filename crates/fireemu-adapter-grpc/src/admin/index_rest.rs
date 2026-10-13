@@ -2,7 +2,9 @@
 //! delete composite indexes, answered in production's shapes.
 
 use fireemu_core_firestore::field_path::FieldPath;
-use fireemu_core_firestore::index::{IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope};
+use fireemu_core_firestore::index::{
+    IndexDefinition, IndexField, IndexFieldMode, IndexQueryScope, MAX_COMPOSITE_INDEXES,
+};
 use fireemu_core_types::ids::CollectionId;
 use serde_json::{json, Value};
 
@@ -197,20 +199,6 @@ fn parse_index(group: &str, body: &Value) -> Result<IndexDefinition, RestRespons
         };
         fields.push(IndexField { path, mode });
     }
-    let vector = fields
-        .iter()
-        .any(|f| matches!(f.mode, IndexFieldMode::Vector { .. }));
-    let named: Vec<&IndexField> = fields
-        .iter()
-        .filter(|f| !f.path.is_document_name())
-        .collect();
-    if named.len() < 2 && !vector {
-        return Err(error(
-            tonic::Code::InvalidArgument,
-            "this index is not necessary, configure using single field index controls",
-            None,
-        ));
-    }
     let Ok(collection_group) = CollectionId::try_new(group) else {
         return Err(error(
             tonic::Code::InvalidArgument,
@@ -218,11 +206,24 @@ fn parse_index(group: &str, body: &Value) -> Result<IndexDefinition, RestRespons
             None,
         ));
     };
-    Ok(IndexDefinition {
+    let definition = IndexDefinition {
         collection_group,
         query_scope: scope,
         fields,
-    })
+    };
+    // The shape rules are the index file's (`firestore.indexes.json`): the field and array
+    // caps (UNRECORDED texts) and the recorded "not necessary" refusal of a single field.
+    if let Err(shape) = definition
+        .check_capacity()
+        .and_then(|()| definition.check_necessary())
+    {
+        return Err(error(
+            tonic::Code::InvalidArgument,
+            &shape.to_string(),
+            None,
+        ));
+    }
+    Ok(definition)
 }
 
 /// Routes `collectionGroups/{g}/indexes[/{id}]` of a live Standard database.
@@ -253,6 +254,15 @@ pub(crate) fn route(
                 return error(
                     tonic::Code::AlreadyExists,
                     &format!("index already exists with index ID = {}", existing.id),
+                    None,
+                );
+            }
+            // The index file's indexes and the ones created here count together. The code and
+            // text are UNRECORDED: the limit is the documented 200 of a billing-disabled plan.
+            if registry.view(project, database, &configured).len() >= MAX_COMPOSITE_INDEXES {
+                return error(
+                    tonic::Code::ResourceExhausted,
+                    "Maximum number of composite indexes for a database: 200",
                     None,
                 );
             }

@@ -157,9 +157,15 @@ fn param<'a>(params: &'a BTreeMap<String, Vec<String>>, key: &str) -> Option<&'a
     params.get(key).and_then(|v| v.first()).map(String::as_str)
 }
 
+/// Production's refusal of a database id that cannot be created
+/// (`conformance/fs-config-lifecycle-production.json`).
+pub const DATABASE_ID_RULE: &str =
+    "database_id should be 4-63 characters, and valid characters are /[a-z][0-9]-/";
+
 /// A valid database id: 4-63 characters of `[a-z0-9-]`, starting with a letter and not ending
 /// with a hyphen, or `(default)`.
-pub(crate) fn valid_database_id(id: &str) -> bool {
+#[must_use]
+pub fn valid_database_id(id: &str) -> bool {
     if id == fireemu_core_types::ids::DatabaseId::DEFAULT {
         return true;
     }
@@ -562,11 +568,7 @@ fn parse_create(
 ) -> Result<CreateRequest, RestResponse> {
     let database = param(params, "databaseId").unwrap_or("");
     if !valid_database_id(database) {
-        return Err(error(
-            tonic::Code::InvalidArgument,
-            "database_id should be 4-63 characters, and valid characters are /[a-z][0-9]-/",
-            None,
-        ));
+        return Err(error(tonic::Code::InvalidArgument, DATABASE_ID_RULE, None));
     }
     let database_type = match parse_enum(
         body,
@@ -863,6 +865,10 @@ fn delete_database(
     match admin.delete(project, database, unprompted, now) {
         Ok(tombstone) => {
             state.local.delete_database(project, database);
+            // A database created again under the id starts without the rules set for this one.
+            if let Some(rules) = &state.rules {
+                rules.forget_database_rules(database);
+            }
             admin.indexes().drop_database(project, database);
             admin.fields().forget(|p, d| p == project && d == database);
             let resource = database_json(&tombstone.record, now, Some(tombstone.delete_time));

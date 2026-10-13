@@ -38,7 +38,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_core_auth::jwt::{
     verify_firestore_rules_token, verify_firestore_rules_token_of_removed_tenant,
@@ -421,7 +421,13 @@ impl ListenExpiry {
 #[allow(clippy::struct_excessive_bools)] // independent switches, each read on its own
 pub struct RulesEnforcer {
     rules: Arc<RulesetSlot>,
+    /// The rulesets of the databases `firebase.json` declares, fixed at start.
     database_rules: BTreeMap<String, Arc<RulesetSlot>>,
+    /// The rulesets loaded at run time for databases nothing declared, such as one created
+    /// through the Admin API (see [`Self::replace_database_source`]).
+    runtime_database_rules: RwLock<BTreeMap<String, Arc<RulesetSlot>>>,
+    /// The ruleset of a database that has none: empty, so every client request is refused.
+    unruled: Arc<RulesetSlot>,
     auth: Arc<Mutex<AuthStore>>,
     clock: Arc<Mutex<VirtualClock>>,
     /// Stores of the other session projects (tokens are verified against the store of
@@ -477,6 +483,8 @@ impl RulesEnforcer {
         Self {
             rules,
             database_rules: BTreeMap::new(),
+            runtime_database_rules: RwLock::new(BTreeMap::new()),
+            unruled: Arc::new(RulesetSlot::default()),
             auth,
             clock,
             registry: None,
@@ -698,8 +706,69 @@ impl RulesEnforcer {
         self
     }
 
-    fn rules_for_database(&self, database: &str) -> &Arc<RulesetSlot> {
-        self.database_rules.get(database).unwrap_or(&self.rules)
+    /// The ruleset that governs `database`. Production governs a database only by its own
+    /// `cloud.firestore` release and refuses every client request while it has none
+    /// (`fs-rules/named-database/releases`), so where requests are refused without a ruleset
+    /// (the `strict` profile) a named database that has no ruleset of its own gets an empty one,
+    /// never the `(default)` database's. The `emulator` profile keeps the fallback.
+    fn rules_for_database(&self, database: &str) -> Arc<RulesetSlot> {
+        if let Some(declared) = self.database_rules.get(database) {
+            return Arc::clone(declared);
+        }
+        if database == fireemu_core_types::ids::DatabaseId::DEFAULT {
+            return Arc::clone(&self.rules);
+        }
+        if let Some(loaded) = self
+            .runtime_database_rules
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(database)
+        {
+            return Arc::clone(loaded);
+        }
+        if self.refuse_without_ruleset {
+            Arc::clone(&self.unruled)
+        } else {
+            Arc::clone(&self.rules)
+        }
+    }
+
+    /// Replaces the ruleset of `database`, as `PUT /emulator/v1/projects/{p}/databases/{d}:securityRules`
+    /// does: the `(default)` database's, the one `firebase.json` declared for a named
+    /// database, or the first one a database created at run time gets. The swap is atomic: a
+    /// source that does not compile leaves what was in force.
+    pub fn replace_database_source(
+        &self,
+        database: &str,
+        source: &str,
+    ) -> Result<(), RulesLoadError> {
+        let loaded = LoadedRules::from_source(source).map_err(RulesLoadError::Compile)?;
+        let slot = if database == fireemu_core_types::ids::DatabaseId::DEFAULT {
+            Arc::clone(&self.rules)
+        } else if let Some(declared) = self.database_rules.get(database) {
+            Arc::clone(declared)
+        } else {
+            Arc::clone(
+                self.runtime_database_rules
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .entry(database.to_owned())
+                    .or_default(),
+            )
+        };
+        slot.replace_loaded(loaded)
+            .map_err(RulesLoadError::Publish)?;
+        Ok(())
+    }
+
+    /// Drops the ruleset loaded at run time for `database`, as deleting the database does: a
+    /// database created again under the same id starts with none. The `(default)` database and
+    /// the databases `firebase.json` declares are not touched.
+    pub fn forget_database_rules(&self, database: &str) {
+        self.runtime_database_rules
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(database);
     }
 
     /// Sets how a caller's ID token is verified. The default is

@@ -4581,10 +4581,10 @@ impl LocalBackend {
                 database: parent.database.as_str().to_owned(),
             }));
         }
-        // A new database refuses production's limits only when the gateway enforces limits
-        // (the `strict` profile); under `emulator` it admits what the official emulator
-        // admits.
-        let scope = if self.gateway.enforce_limits {
+        // A new database refuses production's limits only under the `strict` profile (the index
+        // policy); under `emulator` it admits what the official emulator admits.
+        // `firestore.enforceLimits` switches the Standard query limits only and is not read here.
+        let scope = if self.gateway.production_refusals() {
             fireemu_core_firestore::store::LimitScope::Production
         } else {
             fireemu_core_firestore::store::LimitScope::OfficialEmulator

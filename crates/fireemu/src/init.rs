@@ -613,6 +613,8 @@ mod tests {
             "auth.allowUnsignedIdTokens",
             "auth.idpAssertions",
             "auth.tenantIdFormat",
+            "auth.multiTenant.allowTenants",
+            "auth.mfa.state",
             "firestore.listenStreamLifetime",
             "eventarc.authentication",
         ] {

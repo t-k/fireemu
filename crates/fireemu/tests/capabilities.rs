@@ -740,7 +740,9 @@ fn the_manifest_publishes_effective_development_defaults() {
             {"key":"auth.idpAssertions","value":"fixture","source":"default"},
             {"key":"eventarc.authentication","value":"permissive","source":"default"},
             {"key":"firestore.listenStreamLifetime","value":"unlimited","source":"default"},
-            {"key":"auth.tenantIdFormat","value":"readable","source":"default"}
+            {"key":"auth.tenantIdFormat","value":"readable","source":"default"},
+            {"key":"auth.multiTenant.allowTenants","value":"true","source":"default"},
+            {"key":"auth.mfa.state","value":"ENABLED","source":"default"}
         ])
     );
 }

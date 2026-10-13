@@ -40,6 +40,8 @@ To get production's behavior for all of them at once, set `productionExact` to `
 | Identity-provider sign-in accepts fixture assertions and the sign-in widget | `auth.idpAssertions` (`"fixture"`) | `"signed"`: OIDC ID tokens must verify with an `auth.idpSigners` key, SAML responses with the provider's certificates |
 | The Eventarc listener admits any credential or none | `eventarc.authentication` (`"permissive"`) | `"production"`: a missing, malformed or JWT-shaped bearer is refused with production's 401 |
 | A tenant ID can be any readable name, such as `tenant-a` | `auth.tenantIdFormat` (`"readable"`) | `"generated"`: production's generated form, such as `acme-x7k2q` |
+| Multi-tenancy is on: the Admin API creates tenants and `auth.tenants` loads without an `updateConfig` call | `auth.multiTenant.allowTenants` (`true`) | Unset until enabled, as in a new production project: tenant routes are refused and `auth.tenants` needs `allowTenants: true` |
+| Multi-factor authentication is on, SMS and TOTP, without a console toggle, an `updateConfig` call or an `auth.mfa` block | `auth.mfa` (`state: "ENABLED"`) | Off until enabled, as in a new production project: enrollment is refused with `OPERATION_NOT_ALLOWED : SMS based MFA not enabled.` or `TOTP based MFA not enabled.` |
 | An end user's Firestore `Listen` stream stays open however long it is held | `firestore.listenStreamLifetime` (`"unlimited"`) | `"oneHour"`: ended with `INTERNAL` an hour after it opened |
 
 The startup banner and `fireemu capabilities` report whether `productionExact` is set, and the effective value and source of each setting in the table.
@@ -54,6 +56,15 @@ These differ from production and are not switched by `productionExact`:
 |---|---|
 | Pub/Sub accepts requests without any credential, so clients that use `PUBSUB_EMULATOR_HOST` work | Set `pubsub.authentication.localBearerToken`; requests without a credential are then refused as production refuses them. See [Pub/Sub and Eventarc](../../products/pubsub-eventarc/#authentication). |
 | `localhost` is in the default authorized domains for action-link continue URLs; a new production project may not include it | Declare `auth.authorizedDomains`, which replaces the defaults |
+| Every sign-in method starts enabled, email-link sign-in included; a new production project enables none (`firebase deploy --only auth` only turns on the providers it lists, never off) | Declare `auth.signIn` to match your project, such as `email.passwordRequired: true` to refuse email-link sign-in |
+| Built-in identity providers such as `google.com` sign in without being enabled in the console. `oidc.*` and `saml.*` providers must still be configured and enabled, or sign-in is refused as production refuses it | `auth.idpAssertions: "signed"` (set by `productionExact`) refuses the built-in providers |
+| Any Web API key is accepted until the project declares one; production answers `API_KEY_INVALID` for a key of another project | Declare `auth.apiKeys` |
+| Phone verification sends a code to any number with no reCAPTCHA, Play Integrity or APNs proof, which production requires outside test numbers | No setting. Client SDKs run their verifier in emulator mode, so the app path is exercised; a raw REST client that omits the proof passes here |
+| A reCAPTCHA `ENFORCE` state is stored and returned but not enforced, so a sign-in without a reCAPTCHA token is accepted | No setting |
+| `accounts:batchCreate` has no row limit; the Admin SDK checks 1000 users per call before it sends | No setting |
+| Sign-up rate limits (production limits new accounts per IP) are not simulated | Set `auth.quotaSimulation` to `{"mode": "enforce"}` |
+| Firestore serves a request naming a project other than the daemon's from that project's own empty data, which keeps parallel tests apart; a typo in a `projectId` splits data instead of failing as production's `PERMISSION_DENIED` does | Set `projects.unknownProjects` to `"refuse"` |
+| The Admin SDK's `verifyIdToken` inside a function accepts an unsigned ID token, because the SDK skips signature verification while `FIREBASE_AUTH_EMULATOR_HOST` is set; production refuses it | No setting. See [Auth](../../products/auth/#tokens) |
 
 ## Choosing a setup
 

@@ -1913,8 +1913,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 .map_err(|error| format!("auth.signIn: {error:?}"))?;
             // The declared initial multi-factor configuration is the project's configuration
             // now, and what a control-plane reset returns to.
-            if let Some(mfa) = &cfg.auth_mfa {
-                store.set_mfa_seed(mfa.clone());
+            if let Some(mfa) = cfg.effective_auth_mfa() {
+                store.set_mfa_seed(mfa);
             }
             if let Some(domains) = &cfg.auth_authorized_domains {
                 store.set_authorized_domains_seed(domains.clone())
@@ -1968,7 +1968,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             ),
         );
         // A project created after start begins with the declared multi-factor configuration.
-        registry.set_new_project_mfa_seed(cfg.auth_mfa.clone());
+        registry.set_new_project_mfa_seed(cfg.effective_auth_mfa());
         registry.set_new_project_authorized_domains_seed(cfg.auth_authorized_domains.clone());
         registry.set_new_project_provider_config_seeds(cfg.auth_provider_seeds.clone());
         apply_auth_password_policy_overrides(&cfg, &registry)?;

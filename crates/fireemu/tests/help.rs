@@ -460,6 +460,12 @@ fn configuration_help_describes_show_and_reference() {
     for flag in ["--config", "--firebase-json", "--json"] {
         assert!(text.contains(flag), "{flag}");
     }
+    // It reflects the configuration files and defaults, not the command-line overrides of `up`.
+    assert!(!text.contains("exactly as up does"), "{text}");
+    assert!(
+        text.contains("without the command-line overrides"),
+        "{text}"
+    );
     let text = assert_help(&run(&["init", "--help"]), "init reference");
     for phrase in [
         "--reference",

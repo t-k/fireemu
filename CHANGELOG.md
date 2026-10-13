@@ -17,7 +17,6 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 - `fireemu config show` lists schema keys with effective values, sources and optional JSON descriptions, using the same configuration loading as `up`.
 - `fireemu init --reference` writes a commented `fireemu.reference.jsonc` without expanding the minimal runtime configuration or pinning productionExact defaults.
-
 - The startup banner and `GET /v1/capabilities` now show each effective development-default value and its source, including explicit overrides and derived settings, alongside `productionExact`.
 - The UI listener redirects `GET /` and `HEAD /` to `/ui/` with `302 Found` and an empty body.
 

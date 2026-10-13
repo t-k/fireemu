@@ -120,6 +120,9 @@ fn config_show_marks_keys_without_effect_and_loading_one_prints_a_note() {
     );
     let out = run_in(&dir, &["config", "show", "--json"], None);
     assert!(out.status.success(), "{}", stderr(&out));
+    // The notes go to standard error only; standard output stays one JSON document.
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("note:"));
+    assert!(stderr(&out).contains("note: "), "{}", stderr(&out));
     let rows: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
     for (key, value) in [
         ("bind", serde_json::json!("127.0.0.1")),
@@ -457,7 +460,7 @@ fn config_show_uses_selected_files_and_runtime_normalization() {
         (
             "daemon.authProject",
             serde_json::json!("demo-selected"),
-            "explicit",
+            ".firebaserc",
         ),
         ("events.maxAttempts", serde_json::json!(1), "explicit"),
         (
@@ -590,6 +593,77 @@ fn init_reference_combines_flags_and_refuses_unsafe_replacement() {
             "keep"
         );
     }
+}
+
+type Obstacle = fn(&Path);
+
+/// A refused `init --reference` leaves nothing behind: the reference destination is checked
+/// before `fireemu.json` is written, with and without `--force`, for each kind of obstacle.
+#[test]
+fn init_reference_refusal_leaves_no_fireemu_json_behind() {
+    let init = ["init", "--reference", "--profile", "strict", "--yes"];
+    let with_force = [
+        "init",
+        "--reference",
+        "--profile",
+        "strict",
+        "--yes",
+        "--force",
+    ];
+    let mut obstacles: Vec<(&str, Obstacle)> = vec![
+        ("an existing file", |p| std::fs::write(p, "keep").unwrap()),
+        ("a directory", |p| std::fs::create_dir(p).unwrap()),
+    ];
+    #[cfg(unix)]
+    obstacles.push(("a symbolic link", |p| {
+        std::os::unix::fs::symlink(p.with_file_name("elsewhere"), p).unwrap();
+    }));
+    for (label, make) in obstacles {
+        // Without --force every obstacle refuses, a regular file included.
+        // With --force only a regular file may be replaced.
+        for (force, args) in [(false, &init[..]), (true, &with_force[..])] {
+            let refused = !(force && label == "an existing file");
+            let dir = scratch(&format!(
+                "init-reference-atomic-{}-{force}",
+                label.replace(' ', "-")
+            ));
+            let reference = dir.join("fireemu.reference.jsonc");
+            make(&reference);
+            let out = run_in(&dir, args, None);
+            assert_eq!(
+                !out.status.success(),
+                refused,
+                "{label}, force={force}: {}",
+                stderr(&out)
+            );
+            assert_eq!(
+                dir.join("fireemu.json").exists(),
+                !refused,
+                "{label}, force={force}: fireemu.json must exist only if the command succeeded"
+            );
+        }
+    }
+    // An existing fireemu.json is left alone when the reference is what is refused.
+    let dir = scratch("init-reference-atomic-existing-config");
+    write(&dir, "fireemu.json", "keep me");
+    std::fs::create_dir(dir.join("fireemu.reference.jsonc")).unwrap();
+    let out = run_in(
+        &dir,
+        &[
+            "init",
+            "--reference",
+            "--profile",
+            "strict",
+            "--yes",
+            "--force",
+        ],
+        None,
+    );
+    assert!(!out.status.success());
+    assert_eq!(
+        std::fs::read_to_string(dir.join("fireemu.json")).unwrap(),
+        "keep me"
+    );
 }
 
 /// The port arguments every successful scenario needs.

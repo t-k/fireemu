@@ -1750,13 +1750,9 @@ impl RuntimeConfig {
             "limits.firestorePlan.compositeIndexLimitOverride" | "limits.firestorePlan.singleFieldConfigLimitOverride" | "limits.firestorePlan.enterpriseIndexLimitOverride" => Some(Value::Null),
             "firestore.pipeline.unknownStagePolicy" => Some(json!("reject")),
             "firestore.pipeline.writeStagePolicy" => Some(json!("reject-unimplemented")),
-            "rules.executionMode" => Some(json!(if !self.rules_enforced {
-                "disabled"
-            } else if input.pointer("/rules/executionMode").and_then(Value::as_str) == Some("admin-bypass") {
-                "admin-bypass"
-            } else {
-                "native"
-            })),
+            // "admin-bypass" is parsed exactly like "native" (owner requests bypass Rules in
+            // both), so the value that runs is "native".
+            "rules.executionMode" => Some(json!(if self.rules_enforced { "native" } else { "disabled" })),
             "storage.mode" => Some(json!("native")),
             "storage.objectNameNormalization" => Some(json!("preserve")),
             "events.delivery" => Some(json!("exactly-once-test")),
@@ -5401,7 +5397,7 @@ mod tests {
         }
         for (mode, shown) in [
             ("native", "native"),
-            ("admin-bypass", "admin-bypass"),
+            ("admin-bypass", "native"),
             ("disabled", "disabled"),
         ] {
             let input = json!({"schemaVersion": 1, "rules": {"executionMode": mode}});

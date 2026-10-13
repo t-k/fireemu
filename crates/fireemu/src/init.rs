@@ -97,9 +97,14 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
     let mut bytes = serde_json::to_vec_pretty(&document)
         .map_err(|e| CliError::refused(format!("cannot serialize fireemu.json: {e}")))?;
     bytes.push(b'\n');
+    let reference = cwd.join("fireemu.reference.jsonc");
+    // Both destinations are checked before either is written, so a refusal leaves nothing behind.
+    check_destination(&destination, options.force)?;
+    if options.reference {
+        check_destination(&reference, options.force)?;
+    }
     write_config(&destination, &bytes, options.force)?;
     if options.reference {
-        let reference = cwd.join("fireemu.reference.jsonc");
         write_config(&reference, reference_document().as_bytes(), options.force)?;
         writeln!(output, "created {}", crate::diagnostic_path(&reference))
             .map_err(|error| output_error(&error))?;
@@ -384,6 +389,31 @@ fn prompt(
 
 fn output_error(error: &std::io::Error) -> CliError {
     CliError::refused(format!("cannot write wizard output: {error}"))
+}
+
+/// Refuses, without writing, what [`write_config`] would refuse: an existing path unless
+/// `force`, and with `force` a symbolic link or anything that is not a regular file.
+fn check_destination(path: &Path, force: bool) -> Result<(), CliError> {
+    match std::fs::symlink_metadata(path) {
+        Err(error) if destination_is_missing(error.kind()) => Ok(()),
+        Err(error) => Err(CliError::refused(format!(
+            "cannot inspect {}: {error}",
+            crate::diagnostic_path(path)
+        ))),
+        Ok(_) if !force => Err(CliError::refused(format!(
+            "cannot create {}: already exists",
+            crate::diagnostic_path(path)
+        ))),
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(CliError::refused(format!(
+            "{} is a symbolic link and will not be replaced",
+            crate::diagnostic_path(path)
+        ))),
+        Ok(metadata) if !metadata.is_file() => Err(CliError::refused(format!(
+            "{} is not a regular file",
+            crate::diagnostic_path(path)
+        ))),
+        Ok(_) => Ok(()),
+    }
 }
 
 fn write_config(path: &Path, bytes: &[u8], force: bool) -> Result<(), CliError> {
@@ -694,6 +724,21 @@ mod tests {
         assert!(!super::automatic_interaction(true, false));
         assert!(!super::automatic_interaction(false, true));
         assert!(!super::automatic_interaction(false, false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_destination_that_cannot_be_inspected_is_refused_not_treated_as_absent() {
+        // /dev/null is not a directory, so its child fails with ENOTDIR rather than ENOENT.
+        let path = std::path::Path::new("/dev/null/fireemu.reference.jsonc");
+        for force in [false, true] {
+            let error = super::check_destination(path, force).unwrap_err();
+            assert!(
+                error.message.contains("cannot inspect"),
+                "{}",
+                error.message
+            );
+        }
     }
 
     #[test]

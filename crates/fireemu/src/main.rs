@@ -431,7 +431,8 @@ fn config_show_command(args: &[String]) -> Result<(), CliError> {
                 row["source"] = "unset".into();
             }
         } else if key == "daemon.authProject" && project.is_some() {
-            row["source"] = "explicit".into();
+            // The project resolved from .firebaserc replaces whatever the configuration said.
+            row["source"] = ".firebaserc".into();
         } else if !firebase_path.is_empty()
             && firebase
                 .as_ref()

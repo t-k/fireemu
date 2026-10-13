@@ -1,10 +1,19 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { leftovers, runStatus, TOOL_ENTRIES } from "./selftest-tmpdir.mjs";
+import { leftovers, privateTempBase, runStatus, TOOL_ENTRIES } from "./selftest-tmpdir.mjs";
 import { removeTree, tempDir } from "./test-tmpdir.mjs";
 
 const SELFTEST_TMPDIR = fileURLToPath(new URL("./selftest-tmpdir.mjs", import.meta.url));
@@ -101,8 +110,10 @@ test("the selftest wrapper fails a passing run that leaves entries, and names th
   assert.deepEqual(readdirSync(dir), [], "the private directory is removed");
 });
 
-test("the selftest wrapper gives the command a private TMPDIR and keeps its exit status", () => {
-  const dir = emptyDir("wrapper-status");
+test("the selftest wrapper gives the command a private TMPDIR and keeps its exit status", (t) => {
+  // a short TMPDIR, so the wrapper keeps it as the base (a long one moves to /tmp)
+  const dir = mkdtempSync("/tmp/st-");
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
   const seen = spawnSync(
     process.execPath,
     [SELFTEST_TMPDIR, process.execPath, "-e", "process.stdout.write(require('node:os').tmpdir())"],
@@ -233,4 +244,16 @@ setInterval(() => {}, 1000);`,
   ]).finally(() => clearTimeout(timer));
   assert.equal(code, 143);
   assert.deepEqual(readdirSync(dir), []);
+});
+
+test("the private temp dir moves to /tmp only when the caller's is too long for the selftest's sockets", () => {
+  const macTmp = "/var/folders/jg/z7b_f7ks63qgfy62kzd3td440000gn/T";
+  assert.equal(privateTempBase(macTmp), "/tmp");
+  assert.equal(privateTempBase("/tmp/x"), "/tmp/x");
+  const longest = "/".padEnd(46, "x");
+  assert.equal(privateTempBase(longest), longest);
+  assert.equal(privateTempBase(`${longest}x`), "/tmp");
+  // the longest socket path the selftest makes, below a base just within the limit
+  const socket = `${longest}/conformance-selftest-XXXXXX/fe-events-XXXXXX/events.sock`;
+  assert.ok(Buffer.byteLength(socket) < 104, socket);
 });

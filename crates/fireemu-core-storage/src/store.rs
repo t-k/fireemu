@@ -1910,6 +1910,20 @@ impl StorageState {
         true
     }
 
+    /// Takes `allUsers` read away from the live generation of an object (`makePrivate`, a patched
+    /// ACL without the entry, a deleted `allUsers` entry). `true` when it had been public.
+    pub fn clear_public_read(&mut self, bucket: &BucketName, name: &ObjectName) -> bool {
+        let Some(generation) = self
+            .objects
+            .get(&(bucket.clone(), name.clone()))
+            .map(|m| m.generation)
+        else {
+            return false;
+        };
+        self.public_read
+            .remove(&(bucket.clone(), name.clone(), generation))
+    }
+
     /// Whether the live generation of an object grants `allUsers` read.
     #[must_use]
     pub fn is_public_read(&self, bucket: &BucketName, name: &ObjectName) -> bool {

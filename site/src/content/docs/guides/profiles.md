@@ -60,6 +60,7 @@ These differ from production and are not switched by `productionExact`:
 | Storage: the JSON API serves a request that has no credential, or any credential other than a Firebase ID token, as the owner, because a local run cannot judge an access token | Not available |
 | Storage: the first write to a bucket nothing declared is served and creates the bucket, with one `note:` line on standard error; production answers 404 | List the bucket in `storage.buckets`; the 404 itself is not available |
 | Storage: a bucket-level public grant (IAM `allUsers`) cannot be made through an API | List the bucket in `storage.publicBuckets` |
+| Storage: the public URL (`GET /{bucket}/{object}`) is served without a credential to a request that sends `x-goog-api-client`, because the Go client library (and the Firebase Admin Go SDK) reads through it with no credential against an emulator host; a browser fetch is refused | Not available |
 | Storage: every `Origin` is reflected in the CORS headers, where production needs a CORS configuration on the bucket for browser downloads | Not available |
 | Storage: a Security Rule may call `firestore.get()` and `firestore.exists()` without the Firestore access grant production needs for the Storage service agent | Not available |
 | Storage: both default bucket names, `<project>.appspot.com` and `<project>.firebasestorage.app`, exist, where a production project has one of them | Set `storage.defaultBucket` to the one your project has; the other name is then noted on its first write and its bucket resource answers 404 |

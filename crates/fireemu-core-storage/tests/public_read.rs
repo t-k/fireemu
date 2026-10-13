@@ -49,6 +49,21 @@ fn making_an_absent_object_public_changes_nothing() {
 }
 
 #[test]
+fn clearing_the_bit_makes_the_live_generation_private_again() {
+    let mut store = StorageState::new(1);
+    put(&mut store, "bucket-one", "a.txt");
+    assert!(
+        !store.clear_public_read(&bucket("bucket-one"), &name("a.txt")),
+        "nothing to clear"
+    );
+    store.set_public_read(&bucket("bucket-one"), &name("a.txt"));
+    store.set_public_read(&bucket("bucket-one"), &name("b.txt"));
+    assert!(store.clear_public_read(&bucket("bucket-one"), &name("a.txt")));
+    assert!(!store.is_public_read(&bucket("bucket-one"), &name("a.txt")));
+    assert!(!store.clear_public_read(&bucket("bucket-one"), &name("missing.txt")));
+}
+
+#[test]
 fn an_overwrite_a_delete_and_a_recreate_end_the_public_bit() {
     let mut store = StorageState::new(1);
     put(&mut store, "bucket-one", "a.txt");
@@ -122,6 +137,7 @@ mod model {
         Put(u8),
         Delete(u8),
         MakePublic(u8),
+        MakePrivate(u8),
     }
 
     fn step() -> impl Strategy<Value = Step> {
@@ -129,6 +145,7 @@ mod model {
             (0u8..3).prop_map(Step::Put),
             (0u8..3).prop_map(Step::Delete),
             (0u8..3).prop_map(Step::MakePublic),
+            (0u8..3).prop_map(Step::MakePrivate),
         ]
     }
 
@@ -153,6 +170,10 @@ mod model {
                         let _ = store.delete(&b, &name(&format!("o{k}")), Precondition::default(), at);
                         live.remove(k);
                         public.remove(k);
+                    }
+                    Step::MakePrivate(k) => {
+                        let was = public.remove(k);
+                        prop_assert_eq!(store.clear_public_read(&b, &name(&format!("o{k}"))), was);
                     }
                     Step::MakePublic(k) => {
                         let done = store.set_public_read(&b, &name(&format!("o{k}")));

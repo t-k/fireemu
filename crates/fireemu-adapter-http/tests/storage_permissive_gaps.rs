@@ -1512,3 +1512,434 @@ fn both_default_bucket_names_exist_unless_one_is_chosen() {
     assert_eq!(resource(&s, DEFAULT_BUCKET), 200);
     assert_eq!(listed_first(&s), DEFAULT_BUCKET);
 }
+
+// ----------------------------------------------------------------------------------------
+// Review fixes: client libraries, credential forms, ACL paths, emulator profile, notes, names
+// ----------------------------------------------------------------------------------------
+
+#[test]
+fn a_google_client_library_read_without_credentials_is_admitted_and_a_plain_fetch_is_not() {
+    // The Go client library reads through the XML API with no Authorization header against an
+    // emulator host and sends `x-goog-api-client` on every request; a browser fetch of a public
+    // URL does not.
+    let s = strict();
+    upload_as_owner(&s, "a.txt");
+    let library = handle(
+        &s,
+        req(
+            "GET",
+            &format!("/{DEFAULT_BUCKET}/a.txt"),
+            &[(
+                "x-goog-api-client",
+                "gl-go/1.22 gccl/1.50.0 gccl-invocation-id/x",
+            )],
+            b"",
+        ),
+    );
+    assert_eq!(library.status, 200, "{}", text(&library));
+    assert_eq!(library.body.as_ref(), b"hello");
+    assert_eq!(anonymous_public_get(&s, "a.txt").status, 403);
+    let blank = handle(
+        &s,
+        req(
+            "GET",
+            &format!("/{DEFAULT_BUCKET}/a.txt"),
+            &[("x-goog-api-client", "")],
+            b"",
+        ),
+    );
+    assert_eq!(blank.status, 403, "an empty header proves nothing");
+}
+
+#[test]
+fn only_a_non_empty_bearer_counts_as_a_credential_on_the_public_url() {
+    let s = strict();
+    upload_as_owner(&s, "a.txt");
+    let status = |authorization: &str| {
+        handle(
+            &s,
+            req(
+                "GET",
+                &format!("/{DEFAULT_BUCKET}/a.txt"),
+                &[("authorization", authorization)],
+                b"",
+            ),
+        )
+        .status
+    };
+    for served in ["Bearer owner", "Bearer ya29.a0AfH6", "Bearer x"] {
+        assert_eq!(status(served), 200, "{served}");
+    }
+    for refused in [
+        "",
+        "Bearer",
+        "Bearer ",
+        "Basic dXNlcjpwdw==",
+        "Firebase abc.def.ghi",
+        "bearer x",
+    ] {
+        assert_eq!(status(refused), 403, "{refused:?}");
+    }
+}
+
+fn is_public(s: &StorageState, bucket: &str, name: &str) -> bool {
+    handle(s, req("GET", &format!("/{bucket}/{name}"), &[], b"")).status == 200
+}
+
+#[test]
+fn a_copy_or_rewrite_is_private_unless_it_asks_for_a_public_destination() {
+    for verb in ["copyTo", "rewriteTo"] {
+        let s = strict();
+        upload_as_owner(&s, "a.txt");
+        assert_eq!(make_public(&s, "a.txt", false).status, 200);
+        let copy = |dst: &str, query: &str| {
+            handle(
+                &s,
+                req(
+                    "POST",
+                    &format!(
+                        "/storage/v1/b/{DEFAULT_BUCKET}/o/a.txt/{verb}/b/{DEFAULT_BUCKET}/o/{dst}{query}"
+                    ),
+                    &[OWNER],
+                    b"",
+                ),
+            )
+        };
+        assert_eq!(copy("private.txt", "").status, 200, "{verb}");
+        assert!(
+            !is_public(&s, DEFAULT_BUCKET, "private.txt"),
+            "{verb}: a copy is private"
+        );
+        assert_eq!(
+            copy("public.txt", "?destinationPredefinedAcl=publicRead").status,
+            200
+        );
+        assert!(is_public(&s, DEFAULT_BUCKET, "public.txt"), "{verb}");
+        assert_eq!(
+            copy("other.txt", "?destinationPredefinedAcl=private").status,
+            200
+        );
+        assert!(!is_public(&s, DEFAULT_BUCKET, "other.txt"), "{verb}");
+    }
+}
+
+#[test]
+fn a_multipart_upload_whose_resource_carries_an_all_users_reader_acl_is_public() {
+    let s = strict();
+    let upload = |name: &str, resource: Value| {
+        let boundary = "fireemu-boundary";
+        let body = format!(
+            "--{boundary}\r\nContent-Type: application/json\r\n\r\n{resource}\r\n--{boundary}\r\nContent-Type: text/plain\r\n\r\nhello\r\n--{boundary}--"
+        );
+        handle(
+            &s,
+            req(
+                "POST",
+                &format!(
+                    "/upload/storage/v1/b/{DEFAULT_BUCKET}/o?uploadType=multipart&name={name}"
+                ),
+                &[
+                    OWNER,
+                    (
+                        "content-type",
+                        &format!("multipart/related; boundary={boundary}"),
+                    ),
+                ],
+                body.as_bytes(),
+            ),
+        )
+        .status
+    };
+    assert_eq!(
+        upload(
+            "public.txt",
+            json!({"acl": [{"entity": "allUsers", "role": "READER"}]})
+        ),
+        200
+    );
+    assert!(is_public(&s, DEFAULT_BUCKET, "public.txt"));
+    assert_eq!(
+        upload(
+            "owner-only.txt",
+            json!({"acl": [{"entity": "user-a@b.c", "role": "OWNER"}]})
+        ),
+        200
+    );
+    assert!(!is_public(&s, DEFAULT_BUCKET, "owner-only.txt"));
+    assert_eq!(upload("plain.txt", json!({})), 200);
+    assert!(!is_public(&s, DEFAULT_BUCKET, "plain.txt"));
+}
+
+#[test]
+fn make_private_and_a_deleted_all_users_entry_end_the_public_bit() {
+    let patch = |s: &StorageState, query: &str, body: &str| {
+        handle(
+            s,
+            req(
+                "PATCH",
+                &format!("/storage/v1/b/{DEFAULT_BUCKET}/o/a.txt{query}"),
+                &[OWNER],
+                body.as_bytes(),
+            ),
+        )
+        .status
+    };
+    for (label, undo) in [
+        ("predefinedAcl=private", ("?predefinedAcl=private", "{}")),
+        (
+            "predefinedAcl=projectPrivate",
+            ("?predefinedAcl=projectPrivate", "{}"),
+        ),
+        ("acl: []", ("", r#"{"acl":[]}"#)),
+        (
+            "acl without allUsers",
+            ("", r#"{"acl":[{"entity":"user-a@b.c","role":"OWNER"}]}"#),
+        ),
+    ] {
+        let s = strict();
+        upload_as_owner(&s, "a.txt");
+        make_public(&s, "a.txt", false);
+        assert!(is_public(&s, DEFAULT_BUCKET, "a.txt"));
+        assert_eq!(patch(&s, undo.0, undo.1), 200, "{label}");
+        assert!(!is_public(&s, DEFAULT_BUCKET, "a.txt"), "{label}");
+    }
+    // A patch that says nothing about the ACL leaves it, and one that grants it makes it public.
+    let s = strict();
+    upload_as_owner(&s, "a.txt");
+    make_public(&s, "a.txt", false);
+    assert_eq!(patch(&s, "", r#"{"contentType":"text/x"}"#), 200);
+    assert!(is_public(&s, DEFAULT_BUCKET, "a.txt"));
+    let s = strict();
+    upload_as_owner(&s, "a.txt");
+    assert_eq!(
+        patch(&s, "", r#"{"acl":[{"entity":"allUsers","role":"READER"}]}"#),
+        200
+    );
+    assert!(is_public(&s, DEFAULT_BUCKET, "a.txt"));
+    let s = strict();
+    upload_as_owner(&s, "a.txt");
+    assert_eq!(patch(&s, "?predefinedAcl=publicRead", "{}"), 200);
+    assert!(is_public(&s, DEFAULT_BUCKET, "a.txt"));
+
+    for path in [
+        format!("/b/{DEFAULT_BUCKET}/o/a.txt/acl/allUsers"),
+        format!("/storage/v1/b/{DEFAULT_BUCKET}/o/a.txt/acl/allUsers"),
+    ] {
+        let s = strict();
+        upload_as_owner(&s, "a.txt");
+        make_public(&s, "a.txt", false);
+        let other = handle(
+            &s,
+            req(
+                "DELETE",
+                &path.replace("allUsers", "user-a%40b.c"),
+                &[OWNER],
+                b"",
+            ),
+        );
+        assert_eq!(other.status, 204);
+        assert!(
+            is_public(&s, DEFAULT_BUCKET, "a.txt"),
+            "another entity's entry is not the public one"
+        );
+        let deleted = handle(&s, req("DELETE", &path, &[OWNER], b""));
+        assert_eq!(deleted.status, 204, "{path}: {}", text(&deleted));
+        assert!(!is_public(&s, DEFAULT_BUCKET, "a.txt"), "{path}");
+        let missing = handle(
+            &s,
+            req(
+                "DELETE",
+                &path.replace("a.txt", "missing.txt"),
+                &[OWNER],
+                b"",
+            ),
+        );
+        assert_eq!(missing.status, 404, "{path}");
+    }
+}
+
+#[test]
+fn the_emulator_profile_ignores_the_bucket_lists() {
+    for acceptance in [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock] {
+        let s = state(acceptance);
+        s.rules.set_configured_buckets(["listed-bucket".to_owned()]);
+        s.rules.set_public_buckets(["public-bucket".to_owned()]);
+        let status = |bucket: &str| {
+            handle(
+                &s,
+                req("GET", &format!("/storage/v1/b/{bucket}"), &[OWNER], b""),
+            )
+            .status
+        };
+        let strict_profile = acceptance == TokenAcceptance::Verified;
+        let expected = if strict_profile { 200 } else { 404 };
+        assert_eq!(status("listed-bucket"), expected, "{acceptance:?}");
+        assert_eq!(status("public-bucket"), expected, "{acceptance:?}");
+        let listed = json_body(&handle(&s, req("GET", "/b", &[OWNER], b"")));
+        let names: Vec<&str> = listed["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|i| i["name"].as_str())
+            .collect();
+        assert_eq!(
+            names.contains(&"listed-bucket"),
+            strict_profile,
+            "{acceptance:?} {names:?}"
+        );
+        assert_eq!(
+            names.contains(&"public-bucket"),
+            strict_profile,
+            "{acceptance:?} {names:?}"
+        );
+        assert!(names.contains(&DEFAULT_BUCKET));
+    }
+}
+
+#[test]
+fn a_refused_write_to_an_undeclared_bucket_is_not_noted() {
+    // A form upload against its policy.
+    let s = strict();
+    let seen = noting(&s);
+    let policy = signed_policy(
+        &json!([["content-length-range", 0, 1]]),
+        "2026-08-29T13:00:00Z",
+    );
+    let refused = form_post(
+        &s,
+        "typo-bucket",
+        &[
+            ("key", "a.txt"),
+            ("policy", &policy),
+            ("x-goog-signature", "abc"),
+        ],
+        b"too long",
+    );
+    assert_eq!(refused.status, 400);
+    // A Firebase upload the rules deny.
+    s.rules
+        .replace_loaded(
+            fireemu_core_rules::runtime::LoadedRules::from_source(
+                "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read: if true; allow write: if false; } } }",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let denied = handle(
+        &s,
+        req(
+            "POST",
+            "/v0/b/typo-bucket/o?name=a.txt&uploadType=media",
+            &[("content-type", "text/plain")],
+            b"x",
+        ),
+    );
+    assert_eq!(denied.status, 403);
+    // A copy whose source is missing.
+    let missing = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/storage/v1/b/{DEFAULT_BUCKET}/o/none.txt/copyTo/b/typo-bucket/o/b.txt"),
+            &[OWNER],
+            b"",
+        ),
+    );
+    assert_eq!(missing.status, 404);
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "{:?}",
+        seen.lock().unwrap()
+    );
+    // The same bucket is noted once a write to it succeeds.
+    let ok = handle(
+        &s,
+        req(
+            "POST",
+            "/upload/storage/v1/b/typo-bucket/o?uploadType=media&name=a.txt",
+            &[OWNER, ("content-type", "text/plain")],
+            b"x",
+        ),
+    );
+    assert_eq!(ok.status, 200);
+    assert_eq!(*seen.lock().unwrap(), ["typo-bucket"]);
+}
+
+#[test]
+fn strict_refuses_a_bucket_name_cloud_storage_never_accepts_unless_such_a_bucket_exists() {
+    for name in ["ab", "goog-x", "1.2.3.4", "a..b", "-abc", "abc-"] {
+        let s = strict();
+        let json = handle(
+            &s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{name}/o?uploadType=media&name=a.txt"),
+                &[OWNER, ("content-type", "text/plain")],
+                b"x",
+            ),
+        );
+        assert_eq!(json.status, 400, "{name}: {}", text(&json));
+        assert_eq!(
+            json_body(&json)["error"]["message"],
+            format!("Invalid bucket name: '{name}'")
+        );
+        let read = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{name}/o/a.txt"),
+                &[OWNER],
+                b"",
+            ),
+        );
+        assert_eq!(read.status, 400, "{name}");
+        let firebase = handle(
+            &s,
+            req("GET", &format!("/v0/b/{name}/o/a.txt"), &[OWNER], b""),
+        );
+        assert_eq!(firebase.status, 404, "{name}");
+        let xml = handle(&s, req("GET", &format!("/{name}/a.txt"), &[OWNER], b""));
+        assert_eq!(xml.status, 400, "{name}");
+        assert!(text(&xml).contains("InvalidBucketName"));
+        assert!(!has_bucket(&s, name), "{name}");
+
+        // The emulator profile is the official emulator's: it creates the bucket.
+        let e = emulator();
+        let created = handle(
+            &e,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{name}/o?uploadType=media&name=a.txt"),
+                &[OWNER, ("content-type", "text/plain")],
+                b"x",
+            ),
+        );
+        assert_eq!(created.status, 200, "{name}");
+
+        // A bucket that exists, imported or declared, is never refused for its name.
+        let s = strict();
+        seed(&s, name, "a.txt", b"hello");
+        let read = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{name}/o/a.txt"),
+                &[OWNER],
+                b"",
+            ),
+        );
+        assert_eq!(read.status, 200, "{name}");
+    }
+    // A valid undeclared name is still served (noted), and a resumable continuation is not rechecked.
+    let s = strict();
+    let ok = handle(
+        &s,
+        req(
+            "POST",
+            "/upload/storage/v1/b/valid-name/o?uploadType=media&name=a.txt",
+            &[OWNER, ("content-type", "text/plain")],
+            b"x",
+        ),
+    );
+    assert_eq!(ok.status, 200);
+}

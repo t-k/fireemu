@@ -13,3 +13,4 @@ pub mod signing;
 pub mod storage;
 pub mod storage_production;
 pub mod storage_server;
+pub mod storage_xml;

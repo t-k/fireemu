@@ -779,6 +779,10 @@ pub struct StorageState {
     /// Generations that are no longer live, by `(bucket, name, generation)`. Their blobs are in
     /// `blobs` and count toward `stored_bytes`.
     noncurrent: BTreeMap<(BucketName, ObjectName, u64), NoncurrentVersion>,
+    /// The generations whose ACL grants `allUsers` read, by `(bucket, name, generation)`. An ACL
+    /// belongs to one generation, so an overwrite starts again from the bucket's default (private);
+    /// entries of generations that are gone are inert and are dropped the next time one is added.
+    public_read: BTreeSet<(BucketName, ObjectName, u64)>,
 }
 
 fn blob_bytes(blobs: &BTreeMap<BlobId, Arc<Vec<u8>>>) -> u64 {
@@ -842,6 +846,7 @@ impl StorageState {
             production_order: false,
             versioning: BTreeMap::new(),
             noncurrent: BTreeMap::new(),
+            public_read: BTreeSet::new(),
         }
     }
 
@@ -973,6 +978,7 @@ impl StorageState {
         self.objects.clear();
         self.noncurrent.clear();
         self.versioning.clear();
+        self.public_read.clear();
         self.blobs.clear();
         self.stored_bytes = 0;
         self.uploads.clear();
@@ -995,6 +1001,7 @@ impl StorageState {
             }
         }
         self.versioning.retain(|b, _| !owned(b.as_str()));
+        self.public_read.retain(|(b, _, _)| !owned(b.as_str()));
     }
 
     /// Drops every object, blob and upload of one bucket (a project's session reset);
@@ -1065,6 +1072,12 @@ impl StorageState {
             .filter(|(b, _)| owned(b.as_str()))
             .map(|(b, enabled)| (b.clone(), *enabled))
             .collect();
+        let public_read = self
+            .public_read
+            .iter()
+            .filter(|(b, _, _)| owned(b.as_str()))
+            .cloned()
+            .collect();
         let uploads = self
             .uploads
             .iter()
@@ -1089,6 +1102,7 @@ impl StorageState {
             production_order: self.production_order,
             versioning,
             noncurrent,
+            public_read,
         }
     }
 
@@ -1116,6 +1130,11 @@ impl StorageState {
         for (bucket, enabled) in &captured.versioning {
             if owned(bucket.as_str()) {
                 self.versioning.insert(bucket.clone(), *enabled);
+            }
+        }
+        for entry in &captured.public_read {
+            if owned(entry.0.as_str()) {
+                self.public_read.insert(entry.clone());
             }
         }
         for (k, v) in &captured.uploads {
@@ -1867,6 +1886,39 @@ impl StorageState {
             .ok_or(StorageError::NotFound)?;
         version.object = next.clone();
         Ok((next, reservation))
+    }
+
+    /// Grants `allUsers` read on the live generation of an object (the ACL entry `makePublic` and
+    /// `predefinedAcl=publicRead` write). `false`, and nothing changes, when the object does not
+    /// exist.
+    pub fn set_public_read(&mut self, bucket: &BucketName, name: &ObjectName) -> bool {
+        let Some(generation) = self
+            .objects
+            .get(&(bucket.clone(), name.clone()))
+            .map(|m| m.generation)
+        else {
+            return false;
+        };
+        let objects = &self.objects;
+        self.public_read.retain(|(b, n, g)| {
+            objects
+                .get(&(b.clone(), n.clone()))
+                .is_some_and(|m| m.generation == *g)
+        });
+        self.public_read
+            .insert((bucket.clone(), name.clone(), generation));
+        true
+    }
+
+    /// Whether the live generation of an object grants `allUsers` read.
+    #[must_use]
+    pub fn is_public_read(&self, bucket: &BucketName, name: &ObjectName) -> bool {
+        self.objects
+            .get(&(bucket.clone(), name.clone()))
+            .is_some_and(|m| {
+                self.public_read
+                    .contains(&(bucket.clone(), name.clone(), m.generation))
+            })
     }
 
     /// Whether `bucket` is known to the store: it holds an object, live or noncurrent, or was

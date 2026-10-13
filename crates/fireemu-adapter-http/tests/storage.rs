@@ -200,8 +200,8 @@ fn targeted_storage_rules_are_isolated_by_bucket_and_unknown_buckets_fail_closed
     );
     assert_eq!(
         anonymous_multipart_upload_to(&s, "unknown.example.test", "unknown.txt").status,
-        // A bucket with no release: production's 400 under strict (see the no-ruleset test).
-        400
+        // A bucket nobody declared does not exist under strict, so there is no release to find.
+        404
     );
     let (owner_content_type, owner_body) = multipart(&json!({}), "text/plain", b"owner");
     assert_eq!(
@@ -219,7 +219,8 @@ fn targeted_storage_rules_are_isolated_by_bucket_and_unknown_buckets_fail_closed
             ),
         )
         .status,
-        200
+        // The owner credential bypasses the rules, not the bucket's existence.
+        404
     );
     let store = s.store.lock().unwrap();
     assert!(store
@@ -4652,13 +4653,22 @@ fn a_multipart_upload_carves_the_data_part_out_of_its_request_buffer() {
     );
 }
 
+/// The fields that make a form upload a signed one: a policy that is valid until 2030 and holds
+/// no condition, and a signature (not verified). Strict refuses a form without them.
+fn signed_form_fields(boundary: &str) -> String {
+    format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"policy\"\r\n\r\neyJleHBpcmF0aW9uIjoiMjAzMC0wMS0wMVQwMDowMDowMFoiLCJjb25kaXRpb25zIjpbXX0=\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"x-goog-signature\"\r\n\r\nabcdef\r\n"
+    )
+}
+
 #[test]
 fn a_form_upload_carves_the_file_part_out_of_its_request_buffer() {
     let s = state(None);
     let data = payload();
     let boundary = "form-storage-buffer";
     let mut body = format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nform.bin\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"form.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nform.bin\r\n{}--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"form.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n",
+        signed_form_fields(boundary)
     )
     .into_bytes();
     body.extend_from_slice(&data);
@@ -5210,6 +5220,7 @@ fn the_profile_decides_whether_storage_rules_admit_a_mock_token() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets() {
     let worker_0 = "demo-app-w0";
     let worker_1 = "demo-app-w1";
@@ -5245,6 +5256,10 @@ fn storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets() {
     assert_eq!(firebase.auth.projects(), auth_projects_before);
 
     let strict = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::Verified);
+    // Under strict a bucket exists only if something declared it.
+    strict
+        .rules
+        .set_configured_buckets([worker_0.to_owned(), worker_1.to_owned()]);
     assert_eq!(
         upload_to_bucket_as(&strict, worker_0, "owned/alice/x.txt", &token_0),
         403,
@@ -5404,6 +5419,7 @@ fn worker_project_resumable_uploads_reverify_the_same_mock_audience() {
 
     // Strict answers it as production does, before the session exists.
     let strict = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::Verified);
+    strict.rules.set_configured_buckets([bucket.to_owned()]);
     let strict_start = handle(
         &strict,
         req(
@@ -5459,7 +5475,7 @@ fn a_missing_media_object_answers_text_html_as_production_does() {
                 format!("/download/storage/v1/b/{BUCKET}/o/absent.txt?alt=media"),
                 true,
             ),
-            (format!("/{BUCKET}/absent.txt?alt=media"), false),
+            (format!("/{BUCKET}/absent.txt?alt=media"), true),
         ] {
             let owner = [("authorization", "Bearer owner")];
             let r = handle(
@@ -5536,6 +5552,7 @@ fn metadata_with_control_characters_is_refused_at_the_boundary() {
         format!("--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nobj.txt\r\n")
             .as_bytes(),
     );
+    body.extend_from_slice(signed_form_fields(boundary).as_bytes());
     body.extend_from_slice(
         format!("--{boundary}\r\nContent-Disposition: form-data; name=\"content-disposition\"\r\n\r\ninline\r\nX-Injected: 1\r\n").as_bytes(),
     );
@@ -6062,6 +6079,10 @@ fn refusals_without_rules_report_at_most_the_limit_and_keep_their_bytes() {
         "real-app".clone_into(&mut plain.project);
         let mut s = state_with(None, acceptance);
         "real-app".clone_into(&mut s.project);
+        // Under strict a bucket exists only if something declared it.
+        let declared = (0..100).map(|i| format!("b{i}.appspot.com"));
+        plain.rules.set_configured_buckets(declared.clone());
+        s.rules.set_configured_buckets(declared);
         let notices = Arc::new(Mutex::new(Vec::<String>::new()));
         let sink = notices.clone();
         s.rules
@@ -6698,7 +6719,8 @@ fn copies_rewrites_and_form_uploads_past_the_stored_byte_limit_are_402() {
     }
     let boundary = "stored-byte-limit";
     let body = format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nform.bin\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"form.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n6789\r\n--{boundary}--\r\n"
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nform.bin\r\n{}--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"form.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n6789\r\n--{boundary}--\r\n",
+        signed_form_fields(boundary)
     );
     let refused = handle(
         &s,

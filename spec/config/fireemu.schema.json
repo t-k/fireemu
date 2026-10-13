@@ -785,6 +785,17 @@
           "minimum": 1,
           "description": "The object data the Storage emulator retains, in bytes, a local bound production does not have. Unset, nothing is bounded. A write that would grow the total past it (upload, resumable finalize, copy) is refused with 402 and the message storage.maxStoredBytes limit exceeded, and changes nothing; a resumable session stays open. Each object counts its bytes once (a copy counts again). Import and snapshot restore are not checked against it; an import above it starts with a warning."
         },
+        "buckets": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 3, "maxLength": 222 },
+          "uniqueItems": true,
+          "description": "Cloud Storage buckets the project owns besides its two default ones (<project>.appspot.com and <project>.firebasestorage.app). Under strict an object operation on any other bucket is refused as production refuses a bucket nobody created (404, The specified bucket does not exist.), so a test that uses another bucket declares it here. A bucket named by firebase.json storage targets, by a deployed Storage trigger, or holding imported data exists without being listed. Each name must be one Cloud Storage accepts (3 to 222 lowercase letters, digits, '-', '_' and '.', starting and ending with a letter or digit). The emulator profile creates a bucket on first use, as the official emulator does, and ignores this key."
+        },
+        "defaultBucket": {
+          "enum": ["both", "firebasestorage.app", "appspot.com"],
+          "default": "both",
+          "description": "Which of the project's two default buckets exist under strict. A production project has one: <project>.firebasestorage.app when Storage was set up after 2024-10-30, <project>.appspot.com before. A local run cannot know which, so both exist by default. Name the one your project has to refuse the other (an app configuration copied from an older project); an object operation on the other name is then refused with 404, The specified bucket does not exist. The emulator profile ignores this key."
+        },
         "persistence": { "enum": ["memory", "snapshot-files", "redb"], "description": "Currently has no effect." }
       }
     },

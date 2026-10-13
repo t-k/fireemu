@@ -44,7 +44,8 @@ fn message(response: &JsonResponse) -> String {
 /// Which `tenantId` a declared tenant may have (`auth.tenantIdFormat`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TenantIdFormat {
-    /// Any id of [`readable_id`]'s form, such as `tenant-a` (the development default).
+    /// A letter, then up to 62 letters, digits and hyphens, such as `tenant-a` (the development
+    /// default).
     #[default]
     Readable,
     /// The id production would generate: the display name, a hyphen and five characters of

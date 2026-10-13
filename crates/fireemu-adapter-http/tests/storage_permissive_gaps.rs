@@ -333,6 +333,23 @@ fn reads_and_other_routes_on_an_undeclared_bucket_are_not_noted() {
         }
         let _ = handle(&s, request);
     }
+    // The upload route's other verbs create nothing: a cancel with no session is a bare 400.
+    let cancel = handle(
+        &s,
+        req(
+            "DELETE",
+            "/upload/storage/v1/b/typo-bucket/o",
+            &[OWNER],
+            b"",
+        ),
+    );
+    assert_eq!(cancel.status, 400);
+    for method in ["GET", "PATCH", "DELETE"] {
+        let _ = handle(
+            &s,
+            req(method, "/v0/b/typo-bucket/o/a.txt", &[OWNER], b"{}"),
+        );
+    }
     assert!(
         seen.lock().unwrap().is_empty(),
         "{:?}",

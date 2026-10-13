@@ -29,9 +29,21 @@ Production refuses a query whose composite index is not defined. The official em
 
 The `emulator` profile always runs the query, as the official emulator does.
 
+### Checks on `firestore.indexes.json`
+
+Under `strict`, Fireemu refuses at start-up (and keeps the previous indexes when the file changes while it runs) what `firebase deploy` refuses, and the message names the entry:
+
+- A composite index with a single field, such as `indexes[3]` with only `{"fieldPath": "n", "order": "ASCENDING"}`. Production answers "this index is not necessary, configure using single field index controls". Declare it under `fieldOverrides` instead, which is also how a collection-group query on one field is enabled. `(field, __name__ DESC)`, `(__name__ DESC)` and a single vector field are accepted, as production accepts them.
+- An entry without a `fields` array, which is what a misspelled key such as `feilds` looks like.
+- A `fieldOverrides` entry without an `indexes` array. A TTL-only override needs `"indexes": []`.
+
+A missing `queryScope` is read as `COLLECTION`, as `firebase deploy` reads it. The limits of at most 200 composite indexes, 100 fields per index and one array field per index apply under both profiles. The Admin API's `indexes.create` applies the same checks, and counts the indexes of the file and the ones created at run time together against the 200.
+
+The `emulator` profile loads the file as before, because the official emulator never reads it.
+
 ## Query limits
 
-Under the `strict` profile, the Standard edition query limits are enforced as production enforces them. Setting `firestore.enforceLimits` to `false` lets queries pass that production refuses, so leave it on unless you have a specific reason.
+Under the `strict` profile, the Standard edition query limits are enforced as production enforces them. Setting `firestore.enforceLimits` to `false` lets queries pass that production refuses, so leave it on unless you have a specific reason. The key switches only these query limits (at most 30 disjunctions, 10 `in` values, and so on): the limits on writes, transactions and indexes, and the wire shapes of the REST and WebChannel surfaces, follow the profile alone.
 
 ## Listen streams
 
@@ -70,6 +82,19 @@ Once any document has more versions than the cap, the database keeps no snapshot
 ## Security Rules
 
 Rules are read from the `firestore.rules` file named in `firebase.json`, or from `rules.source` in `fireemu.json`. Under `strict`, a project without rules refuses every client request, as a production project without a rules release does. See [Security Rules](../../guides/security-rules/).
+
+## Named databases
+
+Declare each named database in the `firestore` array of `firebase.json`, with the `rules` and `indexes` files it uses, or create it through the Admin API. Under `strict` a request to a database that is neither declared nor created gets `NOT_FOUND`, as in production, and a declared database id must be one production could create (4 to 63 characters of `[a-z0-9-]`, starting with a letter), or Fireemu does not start.
+
+Production governs a database only by its own rules release. So a database created at run time has no Security Rules, and refuses every client request, until you set some for it; the `(default)` database's rules do not apply to it. Declare the database in `firebase.json` with its `rules` file, or load them at run time:
+
+```
+PUT /emulator/v1/projects/{project}/databases/{database}:securityRules
+{"rules": {"files": [{"name": "firestore.rules", "content": "..."}]}}
+```
+
+This is the route `PUT /emulator/v1/projects/{project}:securityRules` uses for the `(default)` database, with the same body and answers. The rules set this way last until the database is deleted; they are not part of a snapshot. The `emulator` profile keeps the official emulator's behavior, where every database is served by the one ruleset.
 
 ## Production verification
 

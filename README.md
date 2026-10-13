@@ -288,7 +288,7 @@ When a test fails under `strict` but passed on the official emulator, it is usua
 |---|---|
 | `auth.improvedEmailPrivacy` | Email enumeration protection, on for a new production project. Set `false` only if your production project turned it off; sign-ins then answer `EMAIL_NOT_FOUND` and `INVALID_PASSWORD` as the official Auth emulator does |
 | `auth.mfa` | Your project's multi-factor configuration (an object, see [Enable multi-factor authentication at start](#enable-multi-factor-authentication-at-start)). `strict` starts with multi-factor off, as a new production project does, and the official emulator has no TOTP at all |
-| `firestore.enforceLimits` | Production always enforces the Standard edition query limits. `false` lets queries pass that production refuses, so leave it on unless you have a specific reason |
+| `firestore.enforceLimits` | Production always enforces the Standard edition query limits. `false` lets queries pass that production refuses, so leave it on unless you have a specific reason. It switches only the query limits |
 
 ### Basic configuration
 

@@ -8,6 +8,19 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Under the strict profile `firestore.indexes.json` is checked as `firebase deploy` checks it, and a file production's deploy refuses stops the daemon (or, on a reload, leaves the previous indexes in force) with a message that names the entry: a composite index with a single field (production answers "this index is not necessary, configure using single field index controls"; use `fieldOverrides`), an entry without a `fields` array (a misspelled key looks like this) and a `fieldOverrides` entry without an `indexes` array. Such an index used to load and then serve queries production would refuse. A missing `queryScope` is still read as `COLLECTION`, as `firebase deploy` reads it. The emulator profile loads the file as before.
+- Under the strict profile a database created at run time has no Security Rules and refuses every client request until you set some for it, as production does for a database without its own rules release; it used to be governed by the `(default)` database's rules. A database declared in `firebase.json` keeps its own `rules` file. New route `PUT /emulator/v1/projects/{project}/databases/{database}:securityRules` loads the rules of one database (same body as the project route). The emulator profile is unchanged.
+- `firestore.enforceLimits` now switches only the Standard query limits, as documented. Setting it to `false` used to turn off production's limits on writes, transactions and indexes, and some REST and WebChannel behavior, too; those now follow the profile alone.
+- Under the strict profile a `firebase.json` that declares a Firestore database whose id production could not create (not 4 to 63 characters of `[a-z0-9-]` starting with a letter) stops the daemon at start-up with production's message.
+- The Admin API's `indexes.create` shares the index file's shape checks: more than 100 fields or more than one array field is refused, and the indexes of the file and the ones created at run time count together against the 200 composite indexes of a database. It no longer refuses `(field, __name__ DESC)` or `(__name__ DESC)`, which production deploys.
+- `exportDocuments` and `importDocuments` refuse more than 100 `collectionIds` with `INVALID_ARGUMENT`, as the documented limit requires.
+
+### Added
+
+- The profiles guide lists three more development conveniences that only save waiting: indexes that become `READY` in seconds, managed export, import and bulk-delete operations that finish on the first poll, and the 60-second rollback of a contended transaction holder.
+
 ## [0.19.0] - 2026-10-13
 
 ### Changed

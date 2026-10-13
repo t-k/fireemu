@@ -54,6 +54,9 @@ These differ from production and are not switched by `productionExact`:
 |---|---|
 | Pub/Sub accepts requests without any credential, so clients that use `PUBSUB_EMULATOR_HOST` work | Set `pubsub.authentication.localBearerToken`; requests without a credential are then refused as production refuses them. See [Pub/Sub and Eventarc](../../products/pubsub-eventarc/#authentication). |
 | `localhost` is in the default authorized domains for action-link continue URLs; a new production project may not include it | Declare `auth.authorizedDomains`, which replaces the defaults |
+| Composite indexes from `firestore.indexes.json` are `READY` at once, and ones created through the Admin API after about 1.5 seconds; production builds an index for minutes. The `CREATING` state, and the "currently building" refusal of a query that needs the index, are kept | No setting. Poll the index until it is `READY`, as against production; advancing the virtual clock also finishes a build |
+| Managed export, import and bulk-delete operations are done on the first poll; production takes minutes | No setting. Poll the operation until `done`, as against production |
+| A transaction that holds a lock another writer is waiting for is rolled back after 60 seconds without activity (wall clock). Production's own idle limit is about 110 to 123 seconds, and what it does to a contended holder earlier is not recorded | No setting |
 
 ## Choosing a setup
 

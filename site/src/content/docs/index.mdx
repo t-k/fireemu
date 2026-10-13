@@ -38,8 +38,8 @@ npx fireemu exec -- npm test
 ## Why Fireemu
 
 <CardGrid>
-	<Card title="Production behavior by default" icon="approve-check">
-		The default `strict` profile follows production Firebase. It refuses a client request to a project without Security Rules or a request naming a tenant that does not exist, as production does, and reports a query whose composite index is not declared (`productionExact` refuses it).
+	<Card title="Fewer surprises after you deploy" icon="approve-check">
+		The official emulator runs a query even when its composite index is missing, so the error first appears in production. Fireemu checks every query against your `firestore.indexes.json` and tells you which index to add, or refuses the query as production does with `productionExact`.
 	</Card>
 	<Card title="Features the official emulator lacks" icon="puzzle">
 		TOTP multi-factor authentication, a local App Check implementation with debug tokens, and, under `strict`, the `beforeEmailSent` blocking function, none of which the official emulator serves.

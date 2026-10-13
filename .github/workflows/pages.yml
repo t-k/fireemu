@@ -1,0 +1,74 @@
+name: pages
+
+# Builds the documentation site in site/ on every change that can affect it.
+# Publishing is manual: run this workflow from main with "deploy" checked.
+# Nothing is published by a push or a pull request.
+
+on:
+  pull_request:
+    paths:
+      - "site/**"
+      - "spec/compatibility/contract.json"
+      - "spec/compatibility/closure/*.json"
+      - "spec/config/fireemu.schema.json"
+      - "crates/fireemu/src/capabilities.json"
+      - ".github/workflows/pages.yml"
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "spec/compatibility/contract.json"
+      - "spec/compatibility/closure/*.json"
+      - "spec/config/fireemu.schema.json"
+      - "crates/fireemu/src/capabilities.json"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Publish the built site to GitHub Pages (main only).
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: "10.32.1"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - run: pnpm -C site install --frozen-lockfile
+      - name: compatibility data mapping
+        run: pnpm -C site test
+      - run: pnpm -C site build
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: site/dist
+
+  deploy:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4

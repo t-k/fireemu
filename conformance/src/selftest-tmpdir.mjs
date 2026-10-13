@@ -35,6 +35,25 @@ export function runStatus(code, signal, left, received = null, cleanupFailed = f
   return left.length > 0 || cleanupFailed ? 1 : 0;
 }
 
+/**
+ * The longest path a test makes below the private temp directory and binds as a Unix socket:
+ * conformance-selftest-XXXXXX/fe-events-XXXXXX/events.sock, with its separators.
+ */
+const SOCKET_SUFFIX_BYTES = "/conformance-selftest-XXXXXX/fe-events-XXXXXX/events.sock".length;
+
+/** The shortest Unix socket path limit (macOS: 104 bytes including the terminating NUL). */
+const SOCKET_PATH_LIMIT = 103;
+
+/**
+ * Where the private temp directory is made: the caller's temp directory, unless it is too long
+ * for the sockets the tests make below it (macOS's per-user one is about 50 bytes, and listen
+ * then fails with EINVAL); then /tmp. mkdtemp makes the directory with mode 0700, so the shared
+ * base is safe.
+ */
+export function privateTempBase(base) {
+  return Buffer.byteLength(base) + SOCKET_SUFFIX_BYTES <= SOCKET_PATH_LIMIT ? base : "/tmp";
+}
+
 const FORWARDED = ["SIGHUP", "SIGINT", "SIGTERM"];
 
 async function main(command) {
@@ -42,7 +61,7 @@ async function main(command) {
     process.stderr.write("usage: node src/selftest-tmpdir.mjs <command> [args...]\n");
     return 2;
   }
-  const directory = mkdtempSync(join(tmpdir(), "conformance-selftest-"));
+  const directory = mkdtempSync(join(privateTempBase(tmpdir()), "conformance-selftest-"));
   const env = { ...process.env, TMPDIR: directory, TMP: directory, TEMP: directory };
   const child = spawn(command[0], command.slice(1), { env, stdio: "inherit" });
   let received = null;

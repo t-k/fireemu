@@ -1,0 +1,90 @@
+---
+title: A local Firebase emulator that follows production
+description: A local Firebase emulator for tests and CI that follows production Firebase behavior.
+template: splash
+hero:
+  title: Test against Firebase as production behaves
+  tagline: Fireemu is a local emulator for Cloud Firestore, Authentication, Cloud Storage, Cloud Functions, Pub/Sub and Eventarc. It follows production Firebase, so a test that passes locally and in CI tells you more about what will happen after you deploy.
+  actions:
+    - text: Get started
+      link: getting-started/install/
+      icon: right-arrow
+    - text: Compatibility tables
+      link: compatibility/
+      icon: list-format
+      variant: secondary
+    - text: View on GitHub
+      link: https://github.com/t-k/fireemu
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## Start in one command
+
+Node.js 20 or newer is required.
+
+```sh
+npm install --save-dev fireemu
+npx fireemu init
+
+# Run your tests against the emulators, then stop them
+npx fireemu exec -- npm test
+```
+
+`fireemu exec` starts the emulators, sets the Firebase SDK emulator environment variables for your command, and exits with its status. `fireemu up` keeps them running with the Emulator UI at `http://127.0.0.1:4000`.
+
+## Why Fireemu
+
+<CardGrid>
+	<Card title="Fewer surprises after you deploy" icon="approve-check">
+		The official emulator runs a query even when its composite index is missing, so the error first appears in production. Fireemu checks every query against your `firestore.indexes.json` and tells you which index to add, or refuses the query as production does with `productionExact`.
+	</Card>
+	<Card title="Production behavior, without the setup" icon="setting">
+		Where matching production would only add setup to a test, such as signed tokens or an Admin API call to turn a feature on, Fireemu keeps a documented development default. Set `productionExact` to switch them all to production's behavior. [See the list](guides/profiles/#where-fireemu-departs-from-production-on-purpose).
+	</Card>
+	<Card title="Features the official emulator lacks" icon="puzzle">
+		TOTP multi-factor authentication, a local App Check implementation with debug tokens, and, under `strict`, the `beforeEmailSent` blocking function, none of which the official emulator serves.
+	</Card>
+	<Card title="Control over time" icon="seti:clock">
+		Start at any time and move a virtual clock. Scheduled functions run when the clock reaches them, so you can test a nightly job without waiting for night.
+	</Card>
+	<Card title="Verified against real Firebase" icon="magnifier">
+		Behavior is compared with recordings from real Firebase projects. 21 areas, from Firestore transactions to Storage Security Rules, are verified against production: every condition matches the recordings or is a reviewed, documented known difference.
+	</Card>
+	<Card title="Explains denials" icon="information">
+		Production answers a Security Rules denial with a short message. Fireemu also prints which `allow` conditions were evaluated and what each one evaluated to.
+	</Card>
+	<Card title="Fast and light" icon="rocket">
+		A single native binary. In the project benchmark it was ready 21.6 times faster than the official Firestore emulator and used about 1/34 of its idle memory (one benchmark run, `emulator` profile; see [Performance](compatibility/performance/)).
+	</Card>
+</CardGrid>
+
+## Supported products
+
+| Product | Fireemu |
+|---|---|
+| Cloud Firestore | Supported, including Security Rules |
+| Firebase Authentication (Identity Platform) | Supported, including TOTP MFA, multi-tenancy and blocking functions |
+| Cloud Storage for Firebase | Supported, including Security Rules |
+| Cloud Functions for Firebase | Supported: HTTP, callable, event, scheduled, task queue and blocking functions |
+| Cloud Pub/Sub, Eventarc, Cloud Tasks | Supported |
+| Firebase App Check | Local implementation with debug tokens |
+| Realtime Database, Firebase Hosting, App Hosting, Data Connect | Deferred (not yet supported) |
+| Firebase Extensions | Not planned |
+
+See the [compatibility tables](compatibility/) for each product, the production verification status of each area, and the capability manifest.
+
+:::caution[Fireemu is in development]
+Fireemu does not yet reproduce every feature and behavior of production Firebase. Before relying on its results in CI, run the same tests against a dedicated Firebase test project (not your live project) for the features your application depends on, and compare the results.
+:::
+
+## Next steps
+
+<CardGrid>
+	<LinkCard title="Why Fireemu" href="getting-started/why-fireemu/" description="What Fireemu is for and how it differs from the Local Emulator Suite." />
+	<LinkCard title="Install and run" href="getting-started/install/" description="Install the package, create fireemu.json and start the emulators." />
+	<LinkCard title="Connect your app" href="getting-started/connect/" description="Point the Firebase SDKs at the emulators." />
+	<LinkCard title="Migrate from the Local Emulator Suite" href="getting-started/migrate/" description="Reuse firebase.json and replace firebase emulators:exec." />
+</CardGrid>

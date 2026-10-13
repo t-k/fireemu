@@ -10,12 +10,20 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Changed
 
-- Under the strict profile a query whose composite index is not defined (or is still building, or was deleted) is refused by default again, with production's `FAILED_PRECONDITION` and its console link to the index (owner decision of 2026-10-13), whether or not `productionExact` is set. `productionExact` no longer moves `firestore.missingIndexes`, so it is no longer listed among the development defaults in the start banner or `GET /v1/capabilities`. To keep the version 0.17 behavior of running the query and reporting the missing index once per database and index on stderr, set `"firestore": {"missingIndexes": "report"}`. The emulator profile is unchanged: it runs every query, as the official emulator does.
-- `fireemu config show` and `fireemu init --reference` now say which accepted keys the daemon does not read (`limits.catalog`, `limits.enforcement`, `firestore.explain`, `firestore.pipeline.enabled`, `firestore.textSearch.*`, `rules.staticLimitChecks`, `bind`, `auth.enabled`, `trace.*` and others, 33 in all): `config show` gives them the source `accepted, no effect` instead of echoing the value or the schema default as if it were in effect, and a configuration that sets one prints one `note:` line per key at start-up. Such configurations still load. `firebaseJson` shows the file actually selected, including one chosen with `--firebase-json`.
-
 - Under the strict profile, multi-factor authentication and multi-tenancy now work by default, without a console toggle, an Admin API call or a configuration block: SMS and TOTP second factors enroll (`auth.mfa` is on, `state: "ENABLED"`), and the Admin API creates tenants and `auth.tenants` loads without `auth.multiTenant.allowTenants: true`. `productionExact: true` brings back a new production project's behavior, multi-factor off (`OPERATION_NOT_ALLOWED : SMS based MFA not enabled.` and `TOTP based MFA not enabled.`) and tenants refused until enabled, and an explicit `auth.mfa` (such as `{"state": "DISABLED"}`) or `auth.multiTenant.allowTenants` always decides. Both appear in the start banner, `GET /v1/capabilities` and `fireemu config show` as development defaults. The emulator profile is unchanged. A tenant keeps its own `mfaConfig`.
 - Under the strict profile, signing in through an `oidc.*` or `saml.*` provider that has no configuration, is disabled, or is named in another case is now refused with production's `OPERATION_NOT_ALLOWED : The identity provider configuration is not found.` or `... is disabled.` even with the default fixture assertions, which skip only the signature check. Declare the provider in `auth.providers` or create it through the Admin API. Built-in providers such as `google.com` still sign in without a console configuration. The emulator profile still accepts every provider.
 - The profiles guide now lists the Auth conveniences that differ from production and are not switched by `productionExact`: all sign-in methods enabled, built-in identity providers without console setup, any Web API key until `auth.apiKeys` is declared, phone verification without app verification, reCAPTCHA enforcement that is stored but not enforced, no `batchCreate` row limit, no sign-up rate limit, other project ids served in their own namespace, and the Admin SDK's unsigned `verifyIdToken` inside functions.
+
+### Fixed
+
+- The `auth.totp` and `auth.multiTenant` schema descriptions now say that the strict profile turns multi-factor and multi-tenancy on by default and that `productionExact` restores production's behavior.
+
+## [0.19.0] - 2026-10-13
+
+### Changed
+
+- Under the strict profile a query whose composite index is not defined (or is still building, or was deleted) is refused by default again, with production's `FAILED_PRECONDITION` and its console link to the index (owner decision of 2026-10-13), whether or not `productionExact` is set. `productionExact` no longer moves `firestore.missingIndexes`, so it is no longer listed among the development defaults in the start banner or `GET /v1/capabilities`. To keep the version 0.17 behavior of running the query and reporting the missing index once per database and index on stderr, set `"firestore": {"missingIndexes": "report"}`. The emulator profile is unchanged: it runs every query, as the official emulator does.
+- `fireemu config show` and `fireemu init --reference` now say which accepted keys the daemon does not read (`limits.catalog`, `limits.enforcement`, `firestore.explain`, `firestore.pipeline.enabled`, `firestore.textSearch.*`, `rules.staticLimitChecks`, `bind`, `auth.enabled`, `trace.*` and others, 33 in all): `config show` gives them the source `accepted, no effect` instead of echoing the value or the schema default as if it were in effect, and a configuration that sets one prints one `note:` line per key at start-up. Such configurations still load. `firebaseJson` shows the file actually selected, including one chosen with `--firebase-json`.
 
 ### Added
 
@@ -27,7 +35,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Fixed
 
 - UI addresses in the README now include `/ui/`.
-- The `auth.totp` schema description explains the MFA configuration required under strict and links to the README example, and now says that the strict profile's default turns multi-factor on.
+- The `auth.totp` schema description explains the MFA configuration required under strict and links to the README example.
 - The README, compatibility contract and schema clarify that `auth.allowUnsignedIdTokens: false` disables only the mock-token fallback, how to test that refusal, and how `auth.idTokenSigning: "session-rsa"` refuses all unsigned ID tokens.
 - Strict Pub/Sub label keys now use the exact Unicode `Ll`/`Lo` first-character and `Ll`/`Lo`/`N` body classes from production's diagnostic (`[\p{Ll}\p{Lo}][\p{Ll}\p{Lo}\p{N}_-]{0,62}`), instead of an approximation that also admitted titlecase and modifier letters, letter numbers and combining marks. The diagnostics, their order and the emulator profile's permissive admission are unchanged.
 
@@ -688,7 +696,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/t-k/fireemu/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/t-k/fireemu/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/t-k/fireemu/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/t-k/fireemu/compare/v0.15.0...v0.16.0

@@ -24,8 +24,10 @@ Production refuses a query whose composite index is not defined. The official em
 
 | `firestore.missingIndexes` | Behavior |
 |---|---|
-| `report` (default) | The query runs. Each missing index is reported once per database on standard error, with production's refusal text and the `firestore.indexes.json` entry to add. |
-| `refuse` (default with `productionExact`) | The query is refused with `FAILED_PRECONDITION` and the console link, as production refuses it. |
+| `refuse` (default) | The query is refused with `FAILED_PRECONDITION` and the console link, as production refuses it. |
+| `report` | The query runs. Each missing index is reported once per database on standard error, with production's refusal text and the `firestore.indexes.json` entry to add. |
+
+The `emulator` profile always runs the query, as the official emulator does.
 
 ## Query limits
 

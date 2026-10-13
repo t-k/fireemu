@@ -547,6 +547,8 @@ mod tests {
             ("/network/allowNonLoopbackHosts", serde_json::json!(false)),
             ("/projects/requireDemoPrefix", serde_json::json!(true)),
             ("/firestore/location", serde_json::json!("nam5")),
+            // Not governed by productionExact: the strict default already is production's.
+            ("/firestore/missingIndexes", serde_json::json!("refuse")),
             (
                 "/firestore/history/maxBytes",
                 serde_json::json!(1_073_741_824),
@@ -567,7 +569,6 @@ mod tests {
             "/auth/client/permissions",
             "/auth/allowUnsignedIdTokens",
             "/auth/idpAssertions",
-            "/firestore/missingIndexes",
             "/firestore/indexFile",
         ] {
             assert!(parsed.pointer(pointer).is_none(), "{pointer}");
@@ -577,7 +578,6 @@ mod tests {
             "auth.allowUnsignedIdTokens",
             "auth.idpAssertions",
             "auth.tenantIdFormat",
-            "firestore.missingIndexes",
             "firestore.listenStreamLifetime",
             "eventarc.authentication",
         ] {
@@ -588,6 +588,11 @@ mod tests {
         }
         let (_, section) = reference.split_once("// firestore.location:\n").unwrap();
         let comment = section.split_once("\"location\":").unwrap().0;
+        assert!(!comment.contains("Governed by productionExact;"));
+        let (_, section) = reference
+            .split_once("// firestore.missingIndexes:\n")
+            .unwrap();
+        let comment = section.split_once("\"missingIndexes\":").unwrap().0;
         assert!(!comment.contains("Governed by productionExact;"));
     }
 

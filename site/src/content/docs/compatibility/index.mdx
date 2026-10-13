@@ -27,7 +27,7 @@ Differences that most often change a test result. Fireemu's column is the defaul
 
 | Behavior | Production | Official emulator | Fireemu |
 |---|---|---|---|
-| Query without its composite index | Refused | Runs | Runs and reports the missing index; refused with `productionExact` |
+| Query without its composite index | Refused | Runs | Refused; runs and reports the missing index with `firestore.missingIndexes: "report"` |
 | Firestore client request to a project without Security Rules | Refused | Allowed | Refused |
 | TOTP multi-factor authentication | Supported | Not available | Supported, through the project's MFA configuration |
 | Request naming a tenant that does not exist | Refused | Creates the tenant | Refused |

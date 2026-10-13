@@ -24,7 +24,7 @@ npx fireemu doctor --connect http://127.0.0.1:<port>
 | Your `firebase.json` or `fireemu.json` is not used | The `config:` line of the startup output names the files that were loaded. See [Which files are loaded](../configuration/#which-files-are-loaded), and the ownership rule if you run in a container or with `sudo`. |
 | Every Firestore or Storage request is denied | Under `strict`, a project without Security Rules refuses client requests, as production does. Check the `firestore rules:` and `storage rules:` startup lines. See [Security Rules](../security-rules/). |
 | A request is denied and you do not know why | Read the `note: firestore: Security Rules denied ...` line on standard error, or the Rules page of the UI. |
-| A query works locally but fails in production | Look for a missing-index report on standard error, or run with `productionExact` to refuse it as production does. |
+| A query works locally but fails in production | Under `emulator` a missing index is not checked; switch to `strict`, which refuses the query as production does. If `firestore.missingIndexes` is `"report"`, look for the missing-index report on standard error. |
 | The UI does not open | `up` starts without the UI when port 4000 is busy. Use `--ui-port`. `exec` starts the UI only with `--ui`. |
 | A scheduled function never runs | Schedules follow the virtual clock, not real time. Move the clock or run the function from the UI. See [Time and scheduled functions](../time/). |
 

@@ -143,15 +143,12 @@ fn config_show_defaults_cover_every_schema_leaf_without_loading_the_reference() 
                 assert_eq!(&row["value"], default, "{path}");
                 assert_eq!(
                     row["source"],
-                    if matches!(
-                        path.as_str(),
+                    match path.as_str() {
                         "bind"
-                            | "firestore.history.maxBytes"
-                            | "firestore.deletedDatabaseIdCooldownSeconds"
-                    ) {
-                        "default (schema)"
-                    } else {
-                        "default"
+                        | "firestore.history.maxBytes"
+                        | "firestore.deletedDatabaseIdCooldownSeconds" => "default (schema)",
+                        "firestore.missingIndexes" => "derived from profile",
+                        _ => "default",
                     },
                     "{path}"
                 );

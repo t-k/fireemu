@@ -2300,6 +2300,25 @@ mod tests {
     }
 
     #[test]
+    fn the_undeclared_bucket_note_names_the_bucket_and_the_way_to_silence_it() {
+        use super::{storage_unknown_bucket_note, NoticeEvent};
+        let first = storage_unknown_bucket_note(NoticeEvent::First("typo-bucket"));
+        assert!(first.starts_with("note: storage:"), "{first}");
+        assert!(first.contains("\"typo-bucket\""), "{first}");
+        assert!(
+            first.contains("404") && first.contains("storage.buckets"),
+            "{first}"
+        );
+        let suppressed = storage_unknown_bucket_note(NoticeEvent::Suppressed);
+        assert!(
+            suppressed.starts_with(
+                "note: storage: further undeclared-bucket notes are suppressed (32 buckets"
+            ),
+            "{suppressed}"
+        );
+    }
+
+    #[test]
     fn the_strict_profile_waits_20_s_on_both_clocks_and_the_emulator_profile_15_s_on_the_wall_clock(
     ) {
         use crate::config::CompatibilityProfile::{Emulator, Strict};

@@ -8,6 +8,21 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Under the strict profile a Functions parameter (`defineString`, `defineInt`, `defineBoolean`, `defineFloat`, `defineList`) that has no value in `.env`, `.env.<projectId>`, `.env.<alias>` or `.env.local` and no declared `default` now refuses to start the codebase, naming the parameter and the files a value goes in, as `firebase deploy` stops for it. A declared `default` reaches the function, also when it is read at the top of the module. Before, a missing parameter was the empty string, `0` or `false` and a default was ignored.
+- Under the strict profile an HTTP or callable function with a non-public `invoker` (`"private"` or a list of service accounts) and every task-queue function refuse a call without credentials on the public function URL with 403, as Cloud Run does; a bearer shaped like a signed JWT is let in, because Google's verification cannot run locally, and a bearer that is not a JWT gets 401. Task dispatch, the Emulator UI and the control API are not affected (they act as the project owner). The emulator profile is unchanged.
+- Under the strict profile a Cloud Tasks task enqueued with a `scheduleTime` waits until then on the native clock (with `functions.clock.tasks: "virtual"` it follows the virtual clock, as before), and a `scheduleTime` that is not RFC 3339 is refused with 400. Before, it was dispatched at once. The emulator profile still dispatches at once.
+- Exports that Fireemu cannot serve (a function whose options fail to resolve, an unrecognised event type) are reported as a `warning:` line each, followed by a summary, instead of a `note:`.
+- `--only` no longer drops a configured App Check enforcement: with `appCheck.services.<product>` set to `enforced` or `unenforced` for a selected product, the verifier is included even when `--only` names neither `appcheck` nor `functions`, and the start banner says so.
+- Under the strict profile App Check works without any configuration (new key `appCheck.debugTokens`, default `"any"`, a development default): the exchange, the JWKS and the callable trust boundary are served without an `appCheck` block, and any well-formed UUIDv4 debug token exchanges for any app with a standard app ID (registered on first use), so an `enforceAppCheck` callable works without registering apps or computing digests. A missing or malformed token is still refused. `productionExact`, the emulator profile and any `appCheck` block that does not set the key restore production's registration (`"registered"`). The App Check key is generated when first needed. Where the installed `firebase-functions` is not 6.x or 7.x, callable App Check stays off by default.
+- Under the strict profile dead-letter forwarding no longer needs `pubsub.projectNumbers` or two `SetIamPolicy` grants (new key `pubsub.deadLetterAuthorization`, default `"implicit"`, a development default). `productionExact`, `"iam"`, or naming `pubsub.projectNumbers` require production's grants, and the start banner names the service agent to grant.
+
+### Added
+
+- `POST /v1/sessions/default/functions/{queue}:run` releases the Cloud Tasks of a task-queue function that wait for their `scheduleTime` (all of them, or one with `{"task": "<id>"}`), and the Functions page of the Emulator UI lists waiting tasks with their due time, a **Run now** button for each and for all, and a schedule time field on the enqueue form.
+- The documented development conveniences now include the `.env.local` file, the 4-attempt event retry (`events.maxAttempts`), loopback `http://` Pub/Sub push endpoints, and the way a non-public function accepts a JWT-shaped bearer.
+
 ## [0.19.0] - 2026-10-13
 
 ### Changed

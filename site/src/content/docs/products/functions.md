@@ -33,13 +33,31 @@ Storage archive events never fire, because object versioning is not emulated.
 
 Triggers for products Fireemu does not serve, such as Realtime Database (deferred), Remote Config (deferred) and Data Connect (deferred), cannot run. By default discovery refuses a codebase that exports one; set `functions.unservedTriggers` to `"report"` to report each one and load the rest. The Functions page of the [Emulator UI](../../guides/ui/) and `GET /v1/sessions/default/functions` on the control API list every ignored export with the reason.
 
+## Parameters and secrets
+
+`defineString`, `defineInt`, `defineBoolean`, `defineFloat` and `defineList` resolve as a deploy resolves them: a value from `.env`, `.env.<projectId>` (or `.env.<alias>`) or `.env.local` wins, then the parameter's `default`. A parameter with neither a value nor a default refuses to start the codebase, naming the parameter and the files a value goes in, because `firebase deploy` stops for it in the same way. `.env.local` is applied by Fireemu and the official emulator but is never deployed, so a value that is only there is missing in production.
+
+Secrets (`defineSecret`) come from `.secret.local` and reach only a function that declares them.
+
+## Who can call a function
+
+A function whose `invoker` is `"private"` or a list of service accounts, and every task-queue function, refuses a call without credentials on its public URL with 403, as Cloud Run refuses it before the function runs. Fireemu cannot check an identity token with Google, so a request that carries any bearer shaped like a signed JWT is let in, and a bearer that is not a JWT is refused with 401. Task dispatch, the Emulator UI and the control API (`POST /v1/sessions/default/functions/{name}:run`, the console's invoke and enqueue) are not calls to the public URL; the UI and the control API act as the project owner. `ingressSettings` is recorded but not enforced. The `emulator` profile serves every function to every caller, as the official emulator does.
+
+## Task queues
+
+A task enqueued with a `scheduleTime` (or `scheduleDelaySeconds`) waits until then under `strict`, as it does in Cloud Tasks, and a `scheduleTime` that is not RFC 3339 is refused with 400. The `emulator` profile dispatches at once, as the official emulator does. To test a delayed task without waiting, set `functions.clock.tasks` to `"virtual"` and move the clock (see [Time and scheduled functions](../../guides/time/)), or release the waiting tasks: the Functions page of the Emulator UI lists them with their due time and a **Run now** button, and the control API takes `POST /v1/sessions/default/functions/{queue}:run` (all waiting tasks) or the same with `{"task": "<task id>"}` (one task). Rate limits and concurrency still apply to a released task.
+
+## Exports that never run
+
+An export Fireemu cannot serve (a function whose options fail to resolve, or an event type it does not recognise) is skipped, and each one is a `warning:` on standard error at start, followed by a summary line. A function that production would deploy and run never runs here, so a test that asserts "no side effect" passes for the wrong reason; read the warnings. `functions.unservedTriggers` still refuses the products Fireemu does not serve.
+
 ## Scheduled functions
 
 A schedule runs on Fireemu's virtual clock, not on real time. Set a start time with `daemon.clockStart` and move the clock to make occurrences due, or run a scheduled function immediately from the UI. See [Time and scheduled functions](../../guides/time/).
 
 ## App Check in callables
 
-`enforceAppCheck` and `consumeAppCheckToken` on callable functions are honored when App Check is enabled. See [App Check](../app-check/).
+`enforceAppCheck` on callable functions works with no configuration: get a token from the debug-token exchange with any UUIDv4 and send it in `X-Firebase-AppCheck`. A call without a token, or with a malformed one, is refused with 401. `consumeAppCheckToken` is honored when App Check is enabled. See [App Check](../app-check/).
 
 ## Debugging
 

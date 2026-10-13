@@ -547,6 +547,79 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn a_v4_date_needs_its_t_and_z_markers() {
+        for date in [
+            "20260829X120000Z",
+            "20260829T120000X",
+            "20260829t120000Z",
+            "20260829T120000z",
+        ] {
+            assert!(
+                matches!(
+                    check_signed_url(
+                        &params(&[
+                            ("X-Goog-Date", date),
+                            ("X-Goog-Expires", "60"),
+                            ("X-Goog-Signature", "abc"),
+                        ]),
+                        NOW
+                    ),
+                    SignedUrl::Invalid(_)
+                ),
+                "{date}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_three_part_condition_is_malformed_whatever_its_parts() {
+        for condition in [
+            serde_json::json!(["frobnicate", 1, 2]),
+            serde_json::json!(["between", 0, 10]),
+        ] {
+            assert!(matches!(
+                check_post_policy(
+                    &form(&policy(serde_json::json!([condition])), &[]),
+                    "bucket-one",
+                    1,
+                    NOW
+                ),
+                Err(PolicyFault::Malformed(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn a_policy_is_read_in_either_base64_alphabet_padded_or_not() {
+        // "???" encodes to "Pz8/" and ">>>" to "Pj4+": both alphabets' special characters.
+        let document = serde_json::json!({
+            "expiration": "2026-08-29T13:00:00Z",
+            "conditions": [{"x-goog-meta-note": "???>>>???>>>"}]
+        })
+        .to_string();
+        let standard = b64(&document);
+        assert!(
+            standard.contains('+') || standard.contains('/'),
+            "{standard}"
+        );
+        let url_safe = standard.replace('+', "-").replace('/', "_");
+        let unpadded = standard.trim_end_matches('=').to_owned();
+        for encoded in [standard.clone(), url_safe, unpadded] {
+            let fields = vec![
+                ("key".to_owned(), "a".to_owned()),
+                ("policy".to_owned(), encoded.clone()),
+                ("x-goog-signature".to_owned(), "abc".to_owned()),
+                ("x-goog-meta-note".to_owned(), "???>>>???>>>".to_owned()),
+            ];
+            assert_eq!(
+                check_post_policy(&fields, "bucket-one", 1, NOW),
+                Ok(()),
+                "{encoded}"
+            );
+        }
+    }
+
     proptest! {
         /// `content-length-range` admits exactly the lengths from its minimum to its maximum.
         #[test]

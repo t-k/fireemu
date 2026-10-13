@@ -925,6 +925,34 @@ fn a_bearer_that_is_not_a_firebase_id_token_is_still_served_on_the_json_api() {
 }
 
 #[test]
+fn either_claim_alone_makes_a_bearer_a_firebase_id_token() {
+    let s = strict();
+    seed(&s, DEFAULT_BUCKET, "a.txt", b"hello");
+    let only_firebase_claim =
+        jwt(&json!({"iss": "https://example.com/", "firebase": {"sign_in_provider": "custom"}}));
+    let only_issuer =
+        jwt(&json!({"iss": "https://securetoken.google.com/demo-app", "sub": "alice"}));
+    let firebase_claim_not_an_object =
+        jwt(&json!({"iss": "https://example.com/", "firebase": "yes"}));
+    for (token, refused) in [
+        (only_firebase_claim, true),
+        (only_issuer, true),
+        (firebase_claim_not_an_object, false),
+    ] {
+        let response = handle(
+            &s,
+            req(
+                "GET",
+                &format!("/storage/v1/b/{DEFAULT_BUCKET}/o/a.txt"),
+                &[("authorization", &format!("Bearer {token}"))],
+                b"",
+            ),
+        );
+        assert_eq!(response.status, if refused { 401 } else { 200 }, "{token}");
+    }
+}
+
+#[test]
 fn the_id_token_refusal_is_strict_only_and_json_api_only() {
     let token = id_token();
     let s = emulator();
@@ -1309,6 +1337,20 @@ fn both_default_bucket_names_exist_unless_one_is_chosen() {
     assert!(!has_bucket(&s, DEFAULT_BUCKET));
     let listed = handle(&s, req("GET", "/b", &[OWNER], b""));
     assert_eq!(json_body(&listed)["items"][0]["name"], NEW_DEFAULT_BUCKET);
+
+    // The listing names the default the project has: the legacy one unless the new one is chosen.
+    let listed_first = |s: &StorageState| {
+        json_body(&handle(s, req("GET", "/b", &[OWNER], b"")))["items"][0]["name"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(listed_first(&strict()), DEFAULT_BUCKET);
+    let narrowed = emulator();
+    narrowed
+        .rules
+        .set_default_buckets(DefaultBuckets::FirebaseStorageApp);
+    assert_eq!(listed_first(&narrowed), DEFAULT_BUCKET);
 
     let s = strict();
     s.rules.set_default_buckets(DefaultBuckets::AppspotCom);

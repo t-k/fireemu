@@ -21,7 +21,7 @@ For tests that need a credential, set a local fixture bearer token. The endpoint
 { "schemaVersion": 1, "pubsub": { "authentication": { "localBearerToken": "fixture-token" } } }
 ```
 
-Use a made-up value; never reuse a production credential.
+Use a made-up value; never reuse a production credential. The published configuration schema does not list `pubsub.authentication` yet, so an editor that validates against it flags this key; Fireemu accepts it.
 
 ## Eventarc
 

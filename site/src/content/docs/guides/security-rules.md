@@ -16,7 +16,7 @@ Name the rules files in `firebase.json`, as for the Firebase CLI:
 
 or in `fireemu.json` (`rules.source` for Firestore, `storage.rules` for Storage). The startup output has a `firestore rules:` and a `storage rules:` line that say whether rules are loaded.
 
-`@firebase/rules-unit-testing` can also load rules at run time with `loadFirestoreRules` and `loadStorageRules`.
+`@firebase/rules-unit-testing` can also load rules at run time: `initializeTestEnvironment` sends the `firestore.rules` and `storage.rules` you pass to the emulators, and `testEnv.clearFirestore()` is served.
 
 ## A project without rules
 

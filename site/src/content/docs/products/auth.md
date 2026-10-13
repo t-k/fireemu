@@ -119,7 +119,7 @@ Under the `emulator` profile, a request that names an unknown tenant creates it,
 
 ## Blocking functions
 
-`beforeUserCreated` and `beforeUserSignedIn` (and their v1 forms) run inside the request, as in production. Under `strict`, `beforeEmailSent` also runs before a password reset or email sign-in mail. Configure them with `auth.blockingFunctions`.
+`beforeUserCreated` and `beforeUserSignedIn` (and their v1 forms) run inside the request, as in production. Under `strict`, `beforeEmailSent` also runs before a password reset or email sign-in mail. They are registered from the loaded Functions codebase. `auth.blockingFunctions` is optional: it selects which discovered function handles `beforeCreate` and `beforeSignIn`, and which credentials are forwarded to it. Giving its `triggers` map turns `beforeEmailSent` off.
 
 ## Quota-exceeded behavior
 

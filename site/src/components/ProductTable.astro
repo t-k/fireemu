@@ -14,7 +14,7 @@ const rows = productSurfaceRows((await loadRepositoryData()).contract);
 				<td>{row.title}</td>
 				<td><span class:list={['status', `status-${row.status.split(' ')[0].toLowerCase()}`]}>{row.status}</span></td>
 				<td>{row.port ?? '—'}</td>
-				<td>{row.official ? 'Yes' : 'No'}</td>
+				<td>{row.inSuite}</td>
 			</tr>
 		))}
 	</tbody>

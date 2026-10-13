@@ -145,6 +145,7 @@ export function productSurfaceRows(contract) {
 			title: surface.title,
 			status,
 			official: surface.official === true,
+			inSuite: surface.official === true ? 'Yes' : surface.state === 'addition' ? 'No (Fireemu addition)' : '—',
 			port: surface.officialDefaultPort ?? null,
 		};
 	});
@@ -212,6 +213,11 @@ const CAPABILITY_PRODUCTS = [
 	['DATA-', 'Tooling'],
 ];
 
+// Manifest notes may point at the private issue tracker under docs.local/,
+// which is never published.
+const PRIVATE_PATH = /\s*\(docs\.local\/[^)\s]*\)|docs\.local\/\S*/g;
+const publicText = (texts) => texts.map((text) => text.replace(PRIVATE_PATH, (m) => (m.trimStart().startsWith('(') ? '' : '(private note)')));
+
 const CAPABILITY_STATUS = { implemented: 'Implemented', partial: 'Partial', unsupported: 'Not supported' };
 
 /** @param {Record<string, Record<string, any>>} manifest */
@@ -225,9 +231,9 @@ export function capabilityRows(manifest) {
 			id,
 			product: match[1],
 			status,
-			implemented: entry.implemented ?? [],
-			unimplemented: [...(entry.unimplemented ?? []), ...(entry.unsupported ?? [])],
-			notes: entry.notes ?? [],
+			implemented: publicText(entry.implemented ?? []),
+			unimplemented: publicText([...(entry.unimplemented ?? []), ...(entry.unsupported ?? [])]),
+			notes: publicText(entry.notes ?? []),
 		};
 	});
 	return rows.sort((a, b) => productRank(a.product) - productRank(b.product));

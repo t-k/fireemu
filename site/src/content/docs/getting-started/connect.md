@@ -22,7 +22,10 @@ npx fireemu exec -- node ./scripts/seed.mjs
 | `PUBSUB_EMULATOR_HOST` | Pub/Sub `host:port`, when Pub/Sub runs |
 | `CLOUD_EVENTARC_EMULATOR_HOST` | Eventarc URL, when Functions run |
 | `CLOUD_TASKS_EMULATOR_HOST` | Cloud Tasks `host:port`, when Functions run |
-| `FIREBASE_EMULATOR_HUB` | Emulator Hub `host:port` |
+| `FIREEMU_FUNCTIONS_HOST` | Functions `host:port`, when Functions run |
+| `FIREEMU_APP_CHECK_EMULATOR_HOST`, `FIREEMU_APP_CHECK_JWKS_URL` | App Check exchange host and JWKS URL, when `appCheck.enabled` |
+| `FIREBASE_EMULATOR_HUB` | Emulator Hub `host:port`, when the Hub is running |
+| `FIREBASE_LOGGING_EMULATOR_HOST` | Logging emulator `host:port` |
 | `GCLOUD_PROJECT`, `GOOGLE_CLOUD_PROJECT` | The project ID |
 | `FIREBASE_CONFIG` | Set from the project ID unless your environment already has it |
 | `FIREEMU_CONTROL_URL`, `FIREEMU_CONTROL_TOKEN` | Fireemu's control API, used by `fireemu/testing` |
@@ -49,7 +52,11 @@ import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
 import { getStorage, connectStorageEmulator } from 'firebase/storage';
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 
-const app = initializeApp({ projectId: 'demo-app', apiKey: 'fake-api-key' });
+const app = initializeApp({
+  projectId: 'demo-app',
+  apiKey: 'fake-api-key',
+  storageBucket: 'demo-app.appspot.com',
+});
 
 connectAuthEmulator(getAuth(app), 'http://127.0.0.1:9099');
 connectFirestoreEmulator(getFirestore(app), '127.0.0.1', 8080);
@@ -59,7 +66,7 @@ connectFunctionsEmulator(getFunctions(app), '127.0.0.1', 5001);
 
 ## Security Rules unit tests
 
-`@firebase/rules-unit-testing` works with Fireemu. Its unsigned mock ID tokens (`authenticatedContext()`) are accepted by default, also under the `strict` profile, and `loadFirestoreRules`, `loadStorageRules` and `clearFirestore` are served. See [Security Rules](../../guides/security-rules/).
+`@firebase/rules-unit-testing` works with Fireemu. Its unsigned mock ID tokens (`authenticatedContext()`) are accepted by default, also under the `strict` profile, and the routes it calls to load Firestore and Storage rules and to clear Firestore (`testEnv.clearFirestore()`) are served. See [Security Rules](../../guides/security-rules/).
 
 ## The project ID
 

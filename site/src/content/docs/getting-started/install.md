@@ -68,7 +68,7 @@ To run the emulators only for the duration of a command, such as your test suite
 npx fireemu exec -- npm test
 ```
 
-`exec` starts the emulators, runs the command once every listener is ready, with the Firebase SDK emulator environment variables set (see [Connect your app](../connect/)), stops everything when the command exits, and exits with the command's status. `SIGINT` and `SIGTERM` are forwarded to the command. `exec` does not start the UI unless you add `--ui`.
+`exec` starts the emulators, runs the command once every listener is ready, with the Firebase SDK emulator environment variables set (see [Connect your app](../connect/)), stops everything when the command exits, and exits with the command's status. On Unix, `SIGINT` and `SIGTERM` are forwarded to the command. `exec` does not start the UI unless you add `--ui`.
 
 The official command names are available as aliases:
 

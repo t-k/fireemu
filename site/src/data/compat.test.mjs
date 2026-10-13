@@ -135,3 +135,26 @@ test('the repository root is found from a nested directory and refused outside a
 	assert.equal(findRepoRoot(`${root}/site/src/data`), root);
 	assert.throws(() => findRepoRoot('/'), /no repository checkout/);
 });
+
+test('capability text never publishes a private docs.local path', () => {
+	const [row] = capabilityRows({
+		'PUBSUB-WIRE-1': {
+			status: 'implemented',
+			notes: ['push is unchecked (docs.local/issues/open/push-gap.md); see the matrix'],
+			implemented: ['see docs.local/notes.md'],
+		},
+	});
+	assert.deepEqual(row.notes, ['push is unchecked; see the matrix']);
+	assert.deepEqual(row.implemented, ['see (private note)']);
+});
+
+test('the suite column says what a non-emulator surface is', () => {
+	const rows = productSurfaceRows({
+		surfaces: [
+			surface({ id: 'appcheck', state: 'addition', official: false }),
+			surface({ id: 'cli', state: 'claimed', official: false }),
+			surface({ id: 'firestore' }),
+		],
+	});
+	assert.deepEqual(rows.map((r) => r.inSuite), ['No (Fireemu addition)', '—', 'Yes']);
+});

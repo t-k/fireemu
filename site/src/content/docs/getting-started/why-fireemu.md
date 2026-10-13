@@ -12,12 +12,12 @@ Passing tests against the official emulator does not always mean your applicatio
 Fireemu is being developed to close these gaps. For example:
 
 - **Validation of configuration required in production.** Fireemu detects issues that the official emulator misses, such as a Firestore query whose composite index is not declared in `firestore.indexes.json`.
-- **Features the official emulator does not serve.** TOTP multi-factor authentication, App Check with debug tokens, and the `beforeEmailSent` blocking function.
+- **Features the official emulator does not serve.** TOTP multi-factor authentication, App Check with debug tokens, and, under `strict`, the `beforeEmailSent` blocking function.
 - **Control over test execution conditions.** Set an arbitrary start time and move a virtual clock to run scheduled functions without waiting for the real schedule.
 
 ## Production first
 
-Where the official emulator and production Firebase disagree, Fireemu follows production under its default `strict` profile, and records the difference. The answers keep production's wording and status codes, so the errors your application handles in tests are the errors it will meet after you deploy.
+Where the official emulator and production Firebase disagree, Fireemu follows production under its default `strict` profile, and records the difference. The exceptions are the development defaults described below, which `productionExact` switches to production's behavior. The answers keep production's wording and status codes, so the errors your application handles in tests are the errors it will meet after you deploy.
 
 Each behavior is checked against recordings from real Firebase projects. The [compatibility tables](../../compatibility/) list every area that has been verified this way and how many conditions it covers.
 

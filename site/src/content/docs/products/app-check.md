@@ -36,11 +36,14 @@ App Check is off by default. Enable it and register the app with the SHA-256 dig
 
 Each service accepts `off`, `unenforced` (tokens are checked and recorded, requests still pass) or `enforced` (requests without a valid token are refused before Security Rules run). A project without a registered app cannot use App Check, so an enforced service refuses every request to it.
 
-Use a made-up debug token for tests. To get the digest:
+A debug token is a UUIDv4, and its digest is taken over the lowercase form. Generate a token for tests and compute its digest:
 
 ```sh
-printf %s "$DEBUG_TOKEN" | shasum -a 256
+DEBUG_TOKEN=$(uuidgen | tr 'A-F' 'a-f')
+printf %s "$DEBUG_TOKEN" | shasum -a 256 | cut -d' ' -f1
 ```
+
+Any other string never matches, and the exchange answers 403.
 
 ## Get a token from the Web SDK
 

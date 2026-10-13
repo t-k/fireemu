@@ -3727,7 +3727,7 @@ fn bucket_is_invalid_and_absent(state: &StorageState, bucket: &str) -> bool {
     };
     state
         .store()
-        .map_or(false, |store| !bucket_exists(state, &store, &parsed))
+        .is_ok_and(|store| !bucket_exists(state, &store, &parsed))
 }
 
 /// Which answer shape a refusal on a bucket takes.

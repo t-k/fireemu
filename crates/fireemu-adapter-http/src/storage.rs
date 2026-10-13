@@ -106,21 +106,6 @@ enum StorageRulesMode {
     PerBucket(BTreeMap<String, Arc<RulesetSlot>>),
 }
 
-/// Which of a project's two default bucket names exist under the strict profile. A production
-/// project has one of them: `<project>.firebasestorage.app` when Storage was set up after
-/// 2024-10-30, `<project>.appspot.com` before. A local run cannot know which, so both exist unless
-/// `storage.defaultBucket` names one.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum DefaultBuckets {
-    /// Both names exist.
-    #[default]
-    Both,
-    /// Only `<project>.firebasestorage.app` exists.
-    FirebaseStorageApp,
-    /// Only `<project>.appspot.com` exists.
-    AppspotCom,
-}
-
 /// Why [`StorageRulesRegistry::replace_source`] refused a source.
 #[derive(Debug)]
 pub enum StorageRulesSourceError {
@@ -141,8 +126,13 @@ pub struct StorageRulesRegistry {
     /// The buckets `storage.buckets` declares: extra buckets the project owns besides its default
     /// ones. Like the trigger buckets they are configuration, not rules state.
     configured_buckets: std::sync::RwLock<std::collections::BTreeSet<String>>,
-    /// Which of the project's two default bucket names exist (`storage.defaultBucket`).
-    default_buckets: std::sync::RwLock<DefaultBuckets>,
+    /// The buckets `storage.publicBuckets` lists: every object in them is readable without a
+    /// credential, as a bucket whose IAM grants `allUsers` the object viewer role is.
+    public_buckets: std::sync::RwLock<std::collections::BTreeSet<String>>,
+    /// Where the first write to a bucket nothing declared is reported, once per bucket.
+    unknown_bucket_notice: std::sync::RwLock<Option<NoRulesNotice>>,
+    /// The buckets already reported to `unknown_bucket_notice`.
+    noticed_unknown_buckets: Mutex<NoticeLimit>,
     /// Where the refusal of an end-user request for want of rules is reported, once per bucket:
     /// the client only sees production's (or the official emulator's) answer.
     no_rules_notice: std::sync::RwLock<Option<NoRulesNotice>>,
@@ -216,7 +206,9 @@ impl StorageRulesRegistry {
             mode: std::sync::RwLock::new(StorageRulesMode::Global(slot)),
             trigger_buckets: std::sync::RwLock::default(),
             configured_buckets: std::sync::RwLock::default(),
-            default_buckets: std::sync::RwLock::default(),
+            public_buckets: std::sync::RwLock::default(),
+            unknown_bucket_notice: std::sync::RwLock::default(),
+            noticed_unknown_buckets: Mutex::default(),
             no_rules_notice: std::sync::RwLock::default(),
             noticed_without_rules: Mutex::default(),
             denial_log: std::sync::RwLock::default(),
@@ -230,7 +222,9 @@ impl StorageRulesRegistry {
             mode: std::sync::RwLock::new(StorageRulesMode::PerBucket(slots)),
             trigger_buckets: std::sync::RwLock::default(),
             configured_buckets: std::sync::RwLock::default(),
-            default_buckets: std::sync::RwLock::default(),
+            public_buckets: std::sync::RwLock::default(),
+            unknown_bucket_notice: std::sync::RwLock::default(),
+            noticed_unknown_buckets: Mutex::default(),
             no_rules_notice: std::sync::RwLock::default(),
             noticed_without_rules: Mutex::default(),
             denial_log: std::sync::RwLock::default(),
@@ -286,15 +280,47 @@ impl StorageRulesRegistry {
         }
     }
 
-    /// Selects which default bucket names exist (strict profile only).
-    pub fn set_default_buckets(&self, which: DefaultBuckets) {
-        if let Ok(mut slot) = self.default_buckets.write() {
-            *slot = which;
+    /// Replaces the set of buckets `storage.publicBuckets` lists.
+    pub fn set_public_buckets(&self, buckets: impl IntoIterator<Item = String>) {
+        if let Ok(mut set) = self.public_buckets.write() {
+            *set = buckets.into_iter().collect();
         }
     }
 
-    fn default_buckets(&self) -> DefaultBuckets {
-        self.default_buckets.read().map(|d| *d).unwrap_or_default()
+    /// Whether `storage.publicBuckets` lists `bucket`.
+    #[must_use]
+    pub fn names_public_bucket(&self, bucket: &str) -> bool {
+        self.public_buckets
+            .read()
+            .is_ok_and(|set| set.contains(bucket))
+    }
+
+    /// Reports the first write to each bucket nothing declared (strict profile) to `notice`. The
+    /// write is served.
+    pub fn set_unknown_bucket_notice(&self, notice: NoRulesNotice) {
+        if let Ok(mut slot) = self.unknown_bucket_notice.write() {
+            *slot = Some(notice);
+        }
+    }
+
+    /// Calls the notice the first time a write names the undeclared `bucket`.
+    fn notice_unknown_bucket(&self, bucket: &str) {
+        let Some(notice) = self
+            .unknown_bucket_notice
+            .read()
+            .ok()
+            .and_then(|n| n.clone())
+        else {
+            return;
+        };
+        let event = self
+            .noticed_unknown_buckets
+            .lock()
+            .ok()
+            .and_then(|mut limit| limit.observe(bucket));
+        if let Some(event) = event {
+            (notice.0)(event);
+        }
     }
 
     /// Whether `storage.buckets` declares `bucket`.
@@ -3384,13 +3410,8 @@ fn handle_request(state: &StorageState, req: StorageRequest) -> StorageResponse 
     if let Some(refused) = fault_response(state, dialect, &bucket_project, operation) {
         return refused;
     }
-    // Production has no bucket that nobody created: a request on one is refused before the rules
-    // or the object are looked at. The emulator profile keeps the official emulator's implicit
-    // creation on first use.
     if state.is_strict() {
-        if let Some(refused) = missing_bucket_refusal(state, &route, &params) {
-            return refused;
-        }
+        note_unknown_bucket_write(state, &route, &req.method, &params);
     }
     let principal = match dialect {
         // The whole JSON API side is the privileged dialect: rules never run there.
@@ -3525,17 +3546,6 @@ fn looks_like_firebase_id_token(token: &str) -> bool {
             .is_some_and(|iss| iss.starts_with("https://securetoken.google.com/"))
 }
 
-/// Which answer shape a refusal on a bucket takes.
-#[derive(Clone, Copy)]
-enum BucketSurface {
-    /// The Firebase dialect (`/v0/b/{bucket}/o...`).
-    Firebase,
-    /// The JSON API.
-    Json,
-    /// The XML API (`GET /{bucket}/{object}` and the form upload).
-    Xml,
-}
-
 /// An XML API error document (`application/xml; charset=UTF-8`).
 fn xml_error(status: u16, code: &str, message: &str, details: Option<&str>) -> StorageResponse {
     let details = details.map_or_else(String::new, |d| {
@@ -3554,86 +3564,43 @@ fn xml_error(status: u16, code: &str, message: &str, details: Option<&str>) -> S
     }
 }
 
-/// The refusal of a request that names a bucket which does not exist (strict only): the JSON API's
-/// recorded `The specified bucket does not exist.` 404 (FE v5, the bucket resource; the object
-/// routes take the same answer, UNRECORDED), and for a name Cloud Storage could never have created
-/// a 400 `Invalid bucket name` (UNRECORDED). UNRECORDED: the Firebase dialect's text (production
-/// answers its Express 404 `Not Found.` envelope with the bucket named, from memory of the SDK
-/// error reports) and the XML API's `NoSuchBucket` document, which is Cloud Storage's documented
-/// one. A bucket that exists, whatever its name, is never refused here: an imported bucket or one
-/// a test declared stays reachable.
-fn missing_bucket_refusal(
+/// The first write to a bucket nothing declared is served (creating buckets would be setup a
+/// local run should not need) but reported once on standard error, so a typo in a bucket name is
+/// visible: production answers 404 for a bucket that does not exist. A bucket exists when it is a
+/// default bucket of its project, a `firebase.json` storage target, declared by a registered
+/// session, named by a deployed Storage trigger, listed in `storage.buckets` or
+/// `storage.publicBuckets`, or already holds data (an import). Only requests that can create an
+/// object count: uploads, the destination of a copy or rewrite, and form uploads. A resumable
+/// continuation belongs to a session that started with its own check. Strict profile only; the
+/// official emulator creates the bucket silently.
+fn note_unknown_bucket_write(
     state: &StorageState,
     route: &Route,
+    method: &str,
     params: &BTreeMap<String, String>,
-) -> Option<StorageResponse> {
-    // A chunk, status query or cancel of a resumable session belongs to the session, which
-    // checked its bucket when it started; the id in the URL, not the path's bucket, finds it.
-    if matches!(
-        route,
-        Route::GcsUpload { .. } | Route::FbBucket { .. } | Route::FbObject { .. }
-    ) && params.contains_key("upload_id")
-    {
-        return None;
+) {
+    if params.contains_key("upload_id") {
+        return;
     }
-    let named: Vec<(&str, BucketSurface)> = match route {
-        Route::FbBucket { bucket } | Route::FbObject { bucket, .. } => {
-            vec![(bucket, BucketSurface::Firebase)]
+    let bucket = match route {
+        Route::FbBucket { bucket } | Route::FbObject { bucket, .. }
+            if matches!(method, "POST" | "PUT") =>
+        {
+            bucket
         }
-        Route::GcsList { bucket }
-        | Route::GcsObject { bucket, .. }
-        | Route::GcsUpload { bucket }
-        | Route::GcsAcl { bucket, .. } => vec![(bucket, BucketSurface::Json)],
-        Route::GcsCopy {
-            bucket, dst_bucket, ..
-        } => vec![
-            (bucket, BucketSurface::Json),
-            (dst_bucket, BucketSurface::Json),
-        ],
-        Route::XmlStyle { bucket, .. } | Route::FormUpload { bucket } => {
-            vec![(bucket, BucketSurface::Xml)]
-        }
-        _ => return None,
+        Route::GcsUpload { bucket } if matches!(method, "POST" | "PUT") => bucket,
+        Route::GcsCopy { dst_bucket, .. } => dst_bucket,
+        Route::FormUpload { bucket } => bucket,
+        _ => return,
     };
-    for (bucket, surface) in named {
-        let Ok(parsed) = BucketName::try_new(bucket) else {
-            return Some(bucket_refusal(surface, bucket, true));
-        };
-        let exists = match state.store() {
-            Ok(store) => bucket_exists(state, &store, &parsed),
-            Err((status, message)) => return Some(StorageResponse::from((status, message))),
-        };
-        if !exists {
-            let invalid = fireemu_core_storage::name::bucket_name_violation(bucket).is_some();
-            return Some(bucket_refusal(surface, bucket, invalid));
-        }
-    }
-    None
-}
-
-fn bucket_refusal(surface: BucketSurface, bucket: &str, invalid: bool) -> StorageResponse {
-    match (surface, invalid) {
-        (BucketSurface::Firebase, _) => {
-            production_error(404, &format!("Not Found. Could not access bucket {bucket}"))
-        }
-        (BucketSurface::Json, true) => {
-            gcs_json_error(400, &format!("Invalid bucket name: '{bucket}'"), "invalid")
-        }
-        (BucketSurface::Json, false) => {
-            gcs_json_error(404, "The specified bucket does not exist.", "notFound")
-        }
-        (BucketSurface::Xml, true) => xml_error(
-            400,
-            "InvalidBucketName",
-            "The specified bucket is not valid.",
-            None,
-        ),
-        (BucketSurface::Xml, false) => xml_error(
-            404,
-            "NoSuchBucket",
-            "The specified bucket does not exist.",
-            None,
-        ),
+    let Ok(parsed) = BucketName::try_new(bucket) else {
+        return;
+    };
+    let exists = state
+        .store()
+        .map_or(true, |store| bucket_exists(state, &store, &parsed));
+    if !exists {
+        state.rules.notice_unknown_bucket(bucket);
     }
 }
 
@@ -4783,13 +4750,7 @@ fn bucket_resource(name: &str, versioning: Option<bool>, now: &str, host: &str) 
 
 fn gcs_list_buckets(state: &StorageState, host: &str) -> Outcome {
     let store = state.store()?;
-    let default = if state.is_strict()
-        && state.rules.default_buckets() == DefaultBuckets::FirebaseStorageApp
-    {
-        format!("{}.firebasestorage.app", state.project)
-    } else {
-        format!("{}.appspot.com", state.project)
-    };
+    let default = format!("{}.appspot.com", state.project);
     let mut names = vec![default];
     for bucket in store.buckets() {
         if !names.iter().any(|n| n == bucket.as_str()) {
@@ -4812,7 +4773,7 @@ fn gcs_list_buckets(state: &StorageState, host: &str) -> Outcome {
     ))
 }
 
-/// Whether `bucket` exists: the default buckets of its project do (both unless `storage.defaultBucket` names one), a bucket `storage.buckets`
+/// Whether `bucket` exists: the default buckets of its project always do, a bucket `storage.buckets` or `storage.publicBuckets`
 /// declares does, under strict a bucket a deployed Storage trigger names does too (production requires it to exist to deploy the trigger;
 /// the official emulator creates every bucket on first use and so refuses nothing here), a bucket declared in
 /// `firebase.json` (a storage target, which becomes a per-bucket rules entry, or a bucket a
@@ -4824,13 +4785,9 @@ fn gcs_list_buckets(state: &StorageState, host: &str) -> Outcome {
 fn bucket_exists(state: &StorageState, store: &ObjectStore, bucket: &BucketName) -> bool {
     let name = bucket.as_str();
     let project = state.project_of_bucket(name);
-    let which = if state.is_strict() {
-        state.rules.default_buckets()
-    } else {
-        DefaultBuckets::Both
-    };
-    (name == format!("{project}.appspot.com") && which != DefaultBuckets::FirebaseStorageApp)
-        || (name == format!("{project}.firebasestorage.app") && which != DefaultBuckets::AppspotCom)
+    name == format!("{project}.appspot.com")
+        || name == format!("{project}.firebasestorage.app")
+        || state.rules.names_public_bucket(name)
         || state.rules.declares_bucket(name)
         || state.rules.names_configured_bucket(name)
         || state
@@ -6486,9 +6443,9 @@ fn now_unix_seconds(state: &StorageState) -> i64 {
 ///   needs the signing service account's key (a documented development default), and an expired
 ///   or unreadable one is refused as production refuses it;
 /// - any other request reads the object only if its ACL made it public (`makePublic`, an `allUsers`
-///   `READER` entry, or `predefinedAcl=publicRead` on upload). A missing object is the same 403, as
-///   the permission check comes before the lookup. A bucket-level grant (IAM `allUsers`) is not
-///   modelled.
+///   `READER` entry, or `predefinedAcl=publicRead` on upload) or its bucket is listed in
+///   `storage.publicBuckets` (the local stand-in for a bucket IAM grant to `allUsers`). A missing
+///   object is the same 403, as the permission check comes before the lookup.
 ///
 /// UNRECORDED: the XML API's answers were not recorded (STORAGE-OBJECT scope decision 3); the
 /// documents are Cloud Storage's documented ones.
@@ -6521,14 +6478,18 @@ fn xml_read_admission(
         }
         SignedUrl::Absent => {}
     }
-    if req.header("authorization").is_some() || store.is_public_read(bucket, name) {
+    if req.header("authorization").is_some()
+        || store.is_public_read(bucket, name)
+        || state.rules.names_public_bucket(bucket.as_str())
+    {
         return Ok(());
     }
+    // Production's `Details` text, then the two ways to make the read succeed locally.
     Err(xml_error(
         403,
         "AccessDenied",
         "Access denied.",
-        Some("Anonymous caller does not have storage.objects.get access to the Google Cloud Storage object. Permission 'storage.objects.get' denied on resource (or it may not exist)."),
+        Some(&format!("Anonymous caller does not have storage.objects.get access to the Google Cloud Storage object. Permission 'storage.objects.get' denied on resource (or it may not exist). Fireemu: make the object public (file.makePublic(), predefinedAcl=publicRead or an allUsers READER ACL entry) or list the bucket {:?} in storage.publicBuckets, which stands for a bucket whose IAM grants allUsers the object viewer role.", bucket.as_str())),
     ))
 }
 

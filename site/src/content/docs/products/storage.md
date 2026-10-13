@@ -16,10 +16,9 @@ Under `strict`, generation and metageneration preconditions and declared checksu
 
 Storage Security Rules are read from the `storage.rules` file named in `firebase.json`, or `storage.rules` in `fireemu.json`. A Storage rule can read Firestore documents with `firestore.get()` and `firestore.exists()`. Under `strict`, a project without rules refuses every end-user request with production's 400 "bucket has not been set up" answer. See [Security Rules](../../guides/security-rules/).
 
-Under `strict` the Storage emulator also refuses what production refuses and the official emulator accepts:
+Under `strict` the Storage emulator also refuses what production refuses and the official emulator accepts (a bucket that does not exist is the exception, see below):
 
-- **A bucket nobody created.** An object operation on a bucket that does not exist (upload, read, list, delete, copy, rewrite, ACL) is refused with production's 404 `The specified bucket does not exist.` The official emulator creates a bucket on first use. Your project's two default buckets (`<project>.appspot.com` and `<project>.firebasestorage.app`), the buckets of `firebase.json` storage targets, the buckets a deployed Storage trigger names, and any bucket that holds imported data exist. Declare any other bucket in `storage.buckets`.
-- **A public URL for a private object.** `GET /{bucket}/{object}`, which is what `file.publicUrl()` builds, answers 403 `AccessDenied` unless the request carries an `Authorization` header, is a signed URL that has not expired, or the object's ACL grants `allUsers` read. `file.makePublic()` and `predefinedAcl=publicRead` on an upload grant it, for that generation of the object only: an overwrite is private again. Firebase download-token URLs are not affected.
+- **A public URL for a private object.** `GET /{bucket}/{object}`, which is what `file.publicUrl()` builds, answers 403 `AccessDenied` unless the request carries an `Authorization` header, is a signed URL that has not expired, or the object is public. An object is public when application code made it so (`file.makePublic()`, `predefinedAcl=publicRead` on an upload, or an `allUsers` `READER` ACL entry), for that generation of the object only: an overwrite is private again. A bucket whose IAM grants `allUsers` the object viewer role, which production sets in the console, is listed in `storage.publicBuckets`. The 403 names both ways. Firebase download-token URLs are not affected.
 - **An expired signed URL.** A V4 or V2 signed URL past its lifetime answers 400 `ExpiredToken`, and a V4 lifetime over seven days or an unreadable `X-Goog-Date` answers 400. The signature itself is not verified, because that needs the signing service account's key; any signature is accepted.
 - **A form upload without a signed policy.** `POST /{bucket}` with a multipart form needs a `policy` and a signature field. The policy's expiry and conditions (`bucket`, `eq`, `starts-with`, `content-length-range`) are enforced; the signature is not verified.
 - **A Firebase ID token as an OAuth bearer** on the JSON API: 401 `Invalid Credentials`. Any other credential, or none, is served as the owner, because a local run cannot judge an access token.
@@ -28,29 +27,21 @@ Under `strict` the Storage emulator also refuses what production refuses and the
 
 The `emulator` profile keeps the official emulator's behavior for all of these.
 
-### Declare extra buckets
+### Buckets that do not exist
+
+Production answers 404 `The specified bucket does not exist.` for an object operation on a bucket nobody created. The Storage emulator serves it instead, and creates the bucket on the first write, so a test needs no setup. Under `strict` it prints one `note:` line on standard error the first time an object is written to a bucket that is not a default bucket of the project (`<project>.appspot.com` or `<project>.firebasestorage.app`), a `firebase.json` storage target, imported data, a bucket a deployed Storage trigger names, or listed in the configuration. A typo in a bucket name is visible that way. To silence the note for a bucket that exists in production, list it:
 
 ```json
 {
   "schemaVersion": 1,
-  "storage": { "buckets": ["uploads-bucket", "exports.example.com"] }
+  "storage": {
+    "buckets": ["uploads-bucket", "exports.example.com"],
+    "publicBuckets": ["public-assets.example.com"]
+  }
 }
 ```
 
-Each name must be one Cloud Storage accepts. The key is ignored by the `emulator` profile, which creates a bucket on first use.
-
-### Which default bucket exists
-
-A production project has one default bucket: `<project>.firebasestorage.app` if Storage was set up after 2024-10-30, `<project>.appspot.com` before. A local run cannot know which, so both exist by default. To refuse the one your project does not have, such as an app configuration copied from an older project, set `storage.defaultBucket`:
-
-```json
-{
-  "schemaVersion": 1,
-  "storage": { "defaultBucket": "firebasestorage.app" }
-}
-```
-
-The values are `"both"` (the default), `"firebasestorage.app"` and `"appspot.com"`.
+Each name must be one Cloud Storage accepts. `storage.publicBuckets` lists buckets whose objects the public URL serves without a credential, and also counts as declaring them. Both keys are ignored by the `emulator` profile.
 
 ## Limit the stored bytes
 

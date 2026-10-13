@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_http::storage::{
-    handle, StorageRequest, StorageResponse, StorageRulesRegistry, StorageState,
+    handle, NoRulesNotice, NoticeEvent, NoticeLimit, StorageRequest, StorageResponse,
+    StorageRulesRegistry, StorageState,
 };
 use fireemu_core_auth::jwt::TokenAcceptance;
 use fireemu_core_auth::mfa::TotpPolicy;
@@ -248,231 +249,238 @@ fn object_requests(bucket: &str) -> Vec<(&'static str, StorageRequest)> {
 }
 
 // ----------------------------------------------------------------------------------------
-// ST-1: an object operation on a bucket that does not exist
+// ST-1: a write to a bucket nothing declared is served and noted once
 // ----------------------------------------------------------------------------------------
 
+/// Installs a notice sink on `s` and returns what it receives.
+fn noting(s: &StorageState) -> Arc<Mutex<Vec<String>>> {
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = seen.clone();
+    s.rules
+        .set_unknown_bucket_notice(NoRulesNotice(Arc::new(move |event| {
+            sink.lock().unwrap().push(match event {
+                NoticeEvent::First(bucket) => bucket.to_owned(),
+                NoticeEvent::Suppressed => "<suppressed>".to_owned(),
+            });
+        })));
+    seen
+}
+
+const WRITES: [&str; 4] = [
+    "firebase upload",
+    "json upload",
+    "json copy destination",
+    "json rewrite destination",
+];
+
 #[test]
-fn strict_refuses_every_object_route_on_a_bucket_that_does_not_exist() {
-    let s = strict();
-    // The copy and rewrite routes need a source that exists, so the refusal cannot be an
-    // object 404 in disguise.
-    seed(&s, DEFAULT_BUCKET, "a.txt", b"hello");
-    for (label, request) in object_requests("no-such-bucket") {
-        let response = handle(&s, request);
-        assert_eq!(response.status, 404, "{label}: {}", text(&response));
+fn an_undeclared_bucket_is_created_by_a_write_and_noted_once_under_strict() {
+    for label in WRITES {
+        let s = strict();
+        seed(&s, DEFAULT_BUCKET, "a.txt", b"hello");
+        let seen = noting(&s);
+        let request = |bucket: &str| {
+            object_requests(bucket)
+                .into_iter()
+                .find(|(l, _)| *l == label)
+                .unwrap()
+                .1
+        };
+        let first = handle(&s, request("typo-bucket"));
+        assert_eq!(first.status, 200, "{label}: {}", text(&first));
         assert!(
-            text(&response).contains("bucket"),
-            "{label} names the bucket: {}",
-            text(&response)
+            has_bucket(&s, "typo-bucket"),
+            "{label}: the write still creates it"
+        );
+        assert_eq!(*seen.lock().unwrap(), ["typo-bucket"], "{label}");
+        // The same bucket is not noted again; another one is.
+        assert_eq!(handle(&s, request("typo-bucket")).status, 200);
+        assert_eq!(handle(&s, request("other-typo")).status, 200);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            ["typo-bucket", "other-typo"],
+            "{label}"
         );
     }
-    assert!(!has_bucket(&s, "no-such-bucket"), "nothing was created");
 }
 
 #[test]
-fn the_json_api_answer_for_a_missing_bucket_is_the_recorded_bucket_404() {
+fn a_form_upload_to_an_undeclared_bucket_is_noted_too() {
     let s = strict();
-    let response = handle(
+    let seen = noting(&s);
+    let policy = signed_policy(&json!([]), "2026-08-29T13:00:00Z");
+    let response = form_post(
         &s,
-        req(
-            "POST",
-            "/upload/storage/v1/b/no-such-bucket/o?uploadType=media&name=a.txt",
-            &[OWNER, ("content-type", "text/plain")],
-            b"hello",
-        ),
+        "typo-bucket",
+        &[
+            ("key", "a.txt"),
+            ("policy", &policy),
+            ("x-goog-signature", "abc"),
+        ],
+        b"hello",
     );
-    assert_eq!(response.status, 404);
-    let body = json_body(&response);
-    assert_eq!(body["error"]["code"], 404);
-    assert_eq!(
-        body["error"]["message"],
-        "The specified bucket does not exist."
-    );
-    assert_eq!(body["error"]["errors"][0]["reason"], "notFound");
+    assert_eq!(response.status, 204, "{}", text(&response));
+    assert_eq!(*seen.lock().unwrap(), ["typo-bucket"]);
 }
 
 #[test]
-fn the_xml_style_answer_for_a_missing_bucket_is_an_xml_no_such_bucket() {
+fn reads_and_other_routes_on_an_undeclared_bucket_are_not_noted() {
     let s = strict();
-    let response = handle(&s, req("GET", "/no-such-bucket/a.txt", &[OWNER], b""));
-    assert_eq!(response.status, 404);
-    let body = text(&response);
-    assert!(body.contains("<Code>NoSuchBucket</Code>"), "{body}");
+    let seen = noting(&s);
+    for (label, request) in object_requests("typo-bucket") {
+        if WRITES.contains(&label) {
+            continue;
+        }
+        let _ = handle(&s, request);
+    }
     assert!(
-        body.contains("The specified bucket does not exist."),
-        "{body}"
+        seen.lock().unwrap().is_empty(),
+        "{:?}",
+        seen.lock().unwrap()
     );
 }
 
 #[test]
-fn both_default_buckets_a_configured_bucket_and_an_imported_bucket_exist() {
+fn a_declared_default_trigger_imported_or_public_bucket_is_not_noted() {
     let s = strict();
+    let seen = noting(&s);
     s.rules.set_configured_buckets(["extra-bucket".to_owned()]);
+    s.rules.set_public_buckets(["public-bucket".to_owned()]);
+    s.rules.set_trigger_buckets(["trigger-bucket".to_owned()]);
     seed(&s, "imported-bucket", "seed.txt", b"seed");
     for bucket in [
         DEFAULT_BUCKET,
         NEW_DEFAULT_BUCKET,
         "extra-bucket",
+        "public-bucket",
+        "trigger-bucket",
         "imported-bucket",
     ] {
-        let upload = handle(
+        for (label, request) in object_requests(bucket) {
+            if label == "json upload" || label == "firebase upload" {
+                let response = handle(&s, request);
+                assert_eq!(
+                    response.status,
+                    200,
+                    "{bucket} {label}: {}",
+                    text(&response)
+                );
+            }
+        }
+    }
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "{:?}",
+        seen.lock().unwrap()
+    );
+}
+
+#[test]
+fn the_emulator_profile_creates_a_bucket_on_first_use_without_a_note() {
+    let s = emulator();
+    seed(&s, DEFAULT_BUCKET, "a.txt", b"hello");
+    let seen = noting(&s);
+    for bucket in ["implicit-bucket", "another-implicit"] {
+        for (label, request) in object_requests(bucket) {
+            if WRITES.contains(&label) {
+                let response = handle(&s, request);
+                assert_eq!(response.status, 200, "{label}: {}", text(&response));
+            }
+        }
+        assert!(has_bucket(&s, bucket));
+    }
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_resumable_continuation_is_not_noted_and_the_start_is() {
+    let s = strict();
+    let seen = noting(&s);
+    let start = handle(
+        &s,
+        req(
+            "POST",
+            "/upload/storage/v1/b/typo-bucket/o?uploadType=resumable&name=r.txt",
+            &[OWNER],
+            b"{}",
+        ),
+    );
+    assert_eq!(start.status, 200, "{}", text(&start));
+    assert_eq!(*seen.lock().unwrap(), ["typo-bucket"]);
+    let location = start
+        .headers
+        .iter()
+        .find(|(k, _)| k == "location")
+        .map(|(_, v)| v.clone())
+        .unwrap();
+    let session = location.strip_prefix("http://127.0.0.1:9199").unwrap();
+    assert_eq!(
+        handle(&s, req("PUT", session, &[OWNER], b"hello")).status,
+        200
+    );
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn the_notes_are_bounded_then_suppressed_once() {
+    let s = strict();
+    let seen = noting(&s);
+    for i in 0..(NoticeLimit::LIMIT + 8) {
+        let response = handle(
             &s,
             req(
                 "POST",
-                &format!("/upload/storage/v1/b/{bucket}/o?uploadType=media&name=a.txt"),
+                &format!("/upload/storage/v1/b/typo-{i}-bucket/o?uploadType=media&name=a.txt"),
                 &[OWNER, ("content-type", "text/plain")],
-                b"hello",
+                b"x",
             ),
         );
-        assert_eq!(upload.status, 200, "{bucket}: {}", text(&upload));
-        let read = handle(
-            &s,
-            req(
-                "GET",
-                &format!("/v0/b/{bucket}/o/a.txt?alt=media"),
-                &[OWNER],
-                b"",
-            ),
-        );
-        assert_eq!(read.status, 200, "{bucket}");
+        assert_eq!(response.status, 200);
     }
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), NoticeLimit::LIMIT + 1);
+    assert_eq!(seen[NoticeLimit::LIMIT], "<suppressed>");
 }
 
-#[test]
-fn a_bucket_a_storage_trigger_names_exists_under_strict() {
-    let s = strict();
-    s.rules.set_trigger_buckets(["trigger-bucket".to_owned()]);
-    let upload = handle(
-        &s,
-        req(
-            "POST",
-            "/upload/storage/v1/b/trigger-bucket/o?uploadType=media&name=a.txt",
-            &[OWNER, ("content-type", "text/plain")],
-            b"hello",
-        ),
-    );
-    assert_eq!(upload.status, 200, "{}", text(&upload));
-}
-
-#[test]
-fn the_emulator_profile_creates_a_bucket_on_first_use_as_the_official_emulator_does() {
-    let s = emulator();
-    for (label, request) in object_requests("implicit-bucket").into_iter().take(1) {
-        let response = handle(&s, request);
-        assert_eq!(response.status, 200, "{label}: {}", text(&response));
-    }
-    assert!(has_bucket(&s, "implicit-bucket"));
-    let json = handle(
-        &s,
-        req(
-            "POST",
-            "/upload/storage/v1/b/another-implicit/o?uploadType=media&name=a.txt",
-            &[OWNER, ("content-type", "text/plain")],
-            b"hello",
-        ),
-    );
-    assert_eq!(json.status, 200);
-    assert!(has_bucket(&s, "another-implicit"));
-}
-
-#[test]
-fn a_refused_write_to_a_missing_bucket_leaves_the_store_unchanged() {
-    let s = strict();
-    let writes = ["firebase upload", "json upload", "json copy destination"];
-    for (label, request) in object_requests("never-created") {
-        if writes.contains(&label) {
-            assert_eq!(handle(&s, request).status, 404, "{label}");
-        }
-    }
-    assert!(s.store.lock().unwrap().buckets().is_empty());
-}
-
-mod bucket_names {
+mod bucket_notes {
     use super::*;
     use proptest::prelude::*;
-
-    fn bucket_name_strategy() -> impl Strategy<Value = String> {
-        "[a-z0-9][a-z0-9._-]{1,40}[a-z0-9]"
-    }
+    use std::collections::BTreeSet;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]
 
-        /// For a bucket name nothing declares, no write path changes the set of buckets.
+        /// A reference model: the notes are the distinct undeclared buckets written to, in order
+        /// of first write; a declared bucket is never noted.
         #[test]
-        fn no_write_path_creates_a_bucket_nothing_declares(name in bucket_name_strategy()) {
-            prop_assume!(name != DEFAULT_BUCKET && name != NEW_DEFAULT_BUCKET);
+        fn notes_follow_the_distinct_undeclared_buckets_written(
+            writes in proptest::collection::vec(0usize..6, 0..30)
+        ) {
+            let names = ["alpha-bucket", "beta-bucket", "gamma-bucket", DEFAULT_BUCKET, "declared-bucket", "delta-bucket"];
             let s = strict();
-            for (label, request) in object_requests(&name) {
-                if ["firebase upload", "json upload", "json copy destination", "json acl"]
-                    .contains(&label)
-                {
-                    let status = handle(&s, request).status;
-                    prop_assert!(
-                        status == 404 || status == 400,
-                        "{label} on {name}: {status}"
-                    );
+            s.rules.set_configured_buckets(["declared-bucket".to_owned()]);
+            let seen = noting(&s);
+            let mut expected: Vec<&str> = Vec::new();
+            let mut done = BTreeSet::new();
+            for i in writes {
+                let name = names[i];
+                let response = handle(
+                    &s,
+                    req(
+                        "POST",
+                        &format!("/upload/storage/v1/b/{name}/o?uploadType=media&name=a.txt"),
+                        &[OWNER, ("content-type", "text/plain")],
+                        b"x",
+                    ),
+                );
+                prop_assert_eq!(response.status, 200);
+                if name != DEFAULT_BUCKET && name != "declared-bucket" && done.insert(name) {
+                    expected.push(name);
                 }
             }
-            prop_assert!(s.store.lock().unwrap().buckets().is_empty());
+            prop_assert_eq!(seen.lock().unwrap().clone(), expected);
         }
     }
-
-    /// A reference of Cloud Storage's naming rules, written apart from the implementation.
-    fn reference_valid(name: &str) -> bool {
-        let bytes = name.as_bytes();
-        if bytes.len() < 3 || bytes.len() > 222 {
-            return false;
-        }
-        let edge = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
-        if !edge(bytes[0]) || !edge(bytes[bytes.len() - 1]) {
-            return false;
-        }
-        if !bytes
-            .iter()
-            .all(|b| edge(*b) || matches!(b, b'-' | b'_' | b'.'))
-        {
-            return false;
-        }
-        if name
-            .split('.')
-            .any(|part| part.is_empty() || part.len() > 63)
-        {
-            return false;
-        }
-        if name.starts_with("goog") || name.contains("google") {
-            return false;
-        }
-        let parts: Vec<&str> = name.split('.').collect();
-        let ip_shaped = parts.len() == 4 && parts.iter().all(|p| p.parse::<u8>().is_ok());
-        !ip_shaped
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(512))]
-
-        #[test]
-        fn the_naming_rules_agree_with_the_reference(name in "[a-z0-9._-]{0,80}|goog[a-z0-9.-]{0,20}|[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}") {
-            prop_assert_eq!(
-                fireemu_core_storage::name::bucket_name_violation(&name).is_none(),
-                reference_valid(&name),
-                "{}", name
-            );
-        }
-    }
-}
-
-#[test]
-fn an_invalid_bucket_name_is_a_json_api_400_and_a_firebase_404_under_strict() {
-    let s = strict();
-    let json = handle(&s, req("GET", "/storage/v1/b/ab/o/a.txt", &[OWNER], b""));
-    assert_eq!(json.status, 400);
-    assert_eq!(
-        json_body(&json)["error"]["message"],
-        "Invalid bucket name: 'ab'"
-    );
-    let firebase = handle(&s, req("GET", "/v0/b/ab/o/a.txt", &[OWNER], b""));
-    assert_eq!(firebase.status, 404);
 }
 
 // ----------------------------------------------------------------------------------------
@@ -802,6 +810,36 @@ fn a_firebase_download_token_url_does_not_need_the_public_bit() {
         ),
     );
     assert_eq!(read.status, 200);
+}
+
+#[test]
+fn a_public_bucket_serves_every_object_to_a_credential_less_read() {
+    let s = strict();
+    s.rules.set_public_buckets([DEFAULT_BUCKET.to_owned()]);
+    upload_as_owner(&s, "a.txt");
+    seed(&s, NEW_DEFAULT_BUCKET, "a.txt", b"private");
+    let read = anonymous_public_get(&s, "a.txt");
+    assert_eq!(read.status, 200);
+    assert_eq!(read.body.as_ref(), b"hello");
+    // Another bucket stays private, and a missing object in the public bucket is a 404.
+    let other = handle(
+        &s,
+        req("GET", &format!("/{NEW_DEFAULT_BUCKET}/a.txt"), &[], b""),
+    );
+    assert_eq!(other.status, 403);
+    assert_eq!(anonymous_public_get(&s, "missing.txt").status, 404);
+}
+
+#[test]
+fn the_refusal_names_both_ways_to_make_an_object_public() {
+    let s = strict();
+    upload_as_owner(&s, "a.txt");
+    let refused = anonymous_public_get(&s, "a.txt");
+    assert_eq!(refused.status, 403);
+    let body = text(&refused);
+    assert!(body.contains("makePublic"), "{body}");
+    assert!(body.contains("storage.publicBuckets"), "{body}");
+    assert!(body.contains(DEFAULT_BUCKET), "the bucket is named: {body}");
 }
 
 // ----------------------------------------------------------------------------------------
@@ -1297,76 +1335,6 @@ fn the_emulator_profile_stores_a_form_upload_with_no_policy() {
     let response = form_post(&s, DEFAULT_BUCKET, &[("key", "up/a.txt")], b"hello");
     assert_eq!(response.status, 204);
     assert!(object_exists(&s, DEFAULT_BUCKET, "up/a.txt"));
-}
-
-// ----------------------------------------------------------------------------------------
-// ST-6: which default bucket exists
-// ----------------------------------------------------------------------------------------
-
-fn bucket_status(s: &StorageState, bucket: &str) -> (u16, u16) {
-    let resource = handle(
-        s,
-        req("GET", &format!("/storage/v1/b/{bucket}"), &[OWNER], b""),
-    )
-    .status;
-    let object = handle(
-        s,
-        req(
-            "POST",
-            &format!("/upload/storage/v1/b/{bucket}/o?uploadType=media&name=a.txt"),
-            &[OWNER, ("content-type", "text/plain")],
-            b"x",
-        ),
-    )
-    .status;
-    (resource, object)
-}
-
-#[test]
-fn both_default_bucket_names_exist_unless_one_is_chosen() {
-    use fireemu_adapter_http::storage::DefaultBuckets;
-    let s = strict();
-    assert_eq!(bucket_status(&s, DEFAULT_BUCKET), (200, 200));
-    assert_eq!(bucket_status(&s, NEW_DEFAULT_BUCKET), (200, 200));
-
-    let s = strict();
-    s.rules
-        .set_default_buckets(DefaultBuckets::FirebaseStorageApp);
-    assert_eq!(bucket_status(&s, DEFAULT_BUCKET), (404, 404));
-    assert_eq!(bucket_status(&s, NEW_DEFAULT_BUCKET), (200, 200));
-    assert!(!has_bucket(&s, DEFAULT_BUCKET));
-    let listed = handle(&s, req("GET", "/b", &[OWNER], b""));
-    assert_eq!(json_body(&listed)["items"][0]["name"], NEW_DEFAULT_BUCKET);
-
-    // The listing names the default the project has: the legacy one unless the new one is chosen.
-    let listed_first = |s: &StorageState| {
-        json_body(&handle(s, req("GET", "/b", &[OWNER], b"")))["items"][0]["name"]
-            .as_str()
-            .unwrap()
-            .to_owned()
-    };
-    assert_eq!(listed_first(&strict()), DEFAULT_BUCKET);
-    let narrowed = emulator();
-    narrowed
-        .rules
-        .set_default_buckets(DefaultBuckets::FirebaseStorageApp);
-    assert_eq!(listed_first(&narrowed), DEFAULT_BUCKET);
-
-    let s = strict();
-    s.rules.set_default_buckets(DefaultBuckets::AppspotCom);
-    assert_eq!(bucket_status(&s, DEFAULT_BUCKET), (200, 200));
-    assert_eq!(bucket_status(&s, NEW_DEFAULT_BUCKET), (404, 404));
-
-    // A declared bucket of either name still exists, and the emulator profile ignores the choice.
-    let s = strict();
-    s.rules
-        .set_default_buckets(DefaultBuckets::FirebaseStorageApp);
-    s.rules.set_configured_buckets([DEFAULT_BUCKET.to_owned()]);
-    assert_eq!(bucket_status(&s, DEFAULT_BUCKET), (200, 200));
-    let s = emulator();
-    s.rules
-        .set_default_buckets(DefaultBuckets::FirebaseStorageApp);
-    assert_eq!(bucket_status(&s, DEFAULT_BUCKET), (200, 200));
 }
 
 // ----------------------------------------------------------------------------------------

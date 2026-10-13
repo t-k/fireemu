@@ -56,10 +56,11 @@ These differ from production and are not switched by `productionExact`:
 | `localhost` is in the default authorized domains for action-link continue URLs; a new production project may not include it | Declare `auth.authorizedDomains`, which replaces the defaults |
 | Storage: a signed URL or a POST policy is accepted with any signature (its expiry and conditions are checked), because verifying one needs the signing service account's key | Not available |
 | Storage: the JSON API serves a request that has no credential, or any credential other than a Firebase ID token, as the owner, because a local run cannot judge an access token | Not available |
-| Storage: the XML API's `AccessDenied` for a private object is lifted by an `allUsers` read ACL on the object only; a bucket-level public grant (IAM `allUsers`) is not modeled | Not available |
+| Storage: the first write to a bucket nothing declared is served and creates the bucket, with one `note:` line on standard error; production answers 404 | List the bucket in `storage.buckets`; the 404 itself is not available |
+| Storage: a bucket-level public grant (IAM `allUsers`) cannot be made through an API | List the bucket in `storage.publicBuckets` |
 | Storage: every `Origin` is reflected in the CORS headers, where production needs a CORS configuration on the bucket for browser downloads | Not available |
 | Storage: a Security Rule may call `firestore.get()` and `firestore.exists()` without the Firestore access grant production needs for the Storage service agent | Not available |
-| Storage: both default bucket names, `<project>.appspot.com` and `<project>.firebasestorage.app`, exist, where a production project has one of them | Set `storage.defaultBucket` to the one your project has |
+| Storage: both default bucket names, `<project>.appspot.com` and `<project>.firebasestorage.app`, exist, where a production project has one of them | Not available |
 
 ## Choosing a setup
 

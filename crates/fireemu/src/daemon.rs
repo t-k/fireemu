@@ -598,6 +598,12 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             .set_no_rules_notice(fireemu_adapter_http::storage::NoRulesNotice(Arc::new(
                 |event| eprintln!("{}", storage_no_rules_warning(event)),
             )));
+        // The adapter notes an undeclared bucket under the strict profile only.
+        storage_rules.registry.set_unknown_bucket_notice(
+            fireemu_adapter_http::storage::NoRulesNotice(Arc::new(|event| {
+                eprintln!("{}", storage_unknown_bucket_note(event));
+            })),
+        );
         // The client sees production's 403, which does not say which rule refused.
         if let Some(log) = &denial_log {
             storage_rules
@@ -963,6 +969,22 @@ fn storage_no_rules_warning(event: NoticeEvent<'_>) -> String {
     };
     format!(
         "warning: storage: an end-user request on bucket {bucket:?} was refused because no Storage Rules are loaded for it; set storage.rules in firebase.json or fireemu.json. Reported once per bucket."
+    )
+}
+
+/// The note for the first write to a bucket nothing declared (strict profile).
+fn storage_unknown_bucket_note(event: NoticeEvent<'_>) -> String {
+    let bucket = match event {
+        NoticeEvent::First(bucket) => bucket,
+        NoticeEvent::Suppressed => {
+            return format!(
+                "note: storage: further undeclared-bucket notes are suppressed ({} buckets were reported)",
+                NoticeLimit::LIMIT
+            )
+        }
+    };
+    format!(
+        "note: storage: an object was written to bucket {bucket:?}, which is not a default bucket of the project, a firebase.json storage target, imported data or listed in storage.buckets. Production would answer 404 unless that bucket exists, so check the name; list it in storage.buckets to silence this note. Reported once per bucket."
     )
 }
 

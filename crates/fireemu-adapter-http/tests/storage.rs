@@ -200,8 +200,8 @@ fn targeted_storage_rules_are_isolated_by_bucket_and_unknown_buckets_fail_closed
     );
     assert_eq!(
         anonymous_multipart_upload_to(&s, "unknown.example.test", "unknown.txt").status,
-        // A bucket nobody declared does not exist under strict, so there is no release to find.
-        404
+        // A bucket with no release: production's 400 under strict (see the no-ruleset test).
+        400
     );
     let (owner_content_type, owner_body) = multipart(&json!({}), "text/plain", b"owner");
     assert_eq!(
@@ -219,8 +219,7 @@ fn targeted_storage_rules_are_isolated_by_bucket_and_unknown_buckets_fail_closed
             ),
         )
         .status,
-        // The owner credential bypasses the rules, not the bucket's existence.
-        404
+        200
     );
     let store = s.store.lock().unwrap();
     assert!(store
@@ -5220,7 +5219,6 @@ fn the_profile_decides_whether_storage_rules_admit_a_mock_token() {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)]
 fn storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets() {
     let worker_0 = "demo-app-w0";
     let worker_1 = "demo-app-w1";
@@ -5256,10 +5254,6 @@ fn storage_rules_bind_mock_tokens_to_default_owned_bare_project_buckets() {
     assert_eq!(firebase.auth.projects(), auth_projects_before);
 
     let strict = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::Verified);
-    // Under strict a bucket exists only if something declared it.
-    strict
-        .rules
-        .set_configured_buckets([worker_0.to_owned(), worker_1.to_owned()]);
     assert_eq!(
         upload_to_bucket_as(&strict, worker_0, "owned/alice/x.txt", &token_0),
         403,
@@ -5419,7 +5413,6 @@ fn worker_project_resumable_uploads_reverify_the_same_mock_audience() {
 
     // Strict answers it as production does, before the session exists.
     let strict = state_with(Some(OWNED_STORAGE_RULES), TokenAcceptance::Verified);
-    strict.rules.set_configured_buckets([bucket.to_owned()]);
     let strict_start = handle(
         &strict,
         req(
@@ -6079,10 +6072,6 @@ fn refusals_without_rules_report_at_most_the_limit_and_keep_their_bytes() {
         "real-app".clone_into(&mut plain.project);
         let mut s = state_with(None, acceptance);
         "real-app".clone_into(&mut s.project);
-        // Under strict a bucket exists only if something declared it.
-        let declared = (0..100).map(|i| format!("b{i}.appspot.com"));
-        plain.rules.set_configured_buckets(declared.clone());
-        s.rules.set_configured_buckets(declared);
         let notices = Arc::new(Mutex::new(Vec::<String>::new()));
         let sink = notices.clone();
         s.rules

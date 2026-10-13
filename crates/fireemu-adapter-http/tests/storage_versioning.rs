@@ -17,9 +17,8 @@ use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_rules::runtime::{LoadedRules, RulesetSlot};
 use fireemu_core_session::clock::VirtualClock;
-use fireemu_core_storage::name::{BucketName, ObjectName};
+use fireemu_core_storage::store::StorageEvent;
 use fireemu_core_storage::store::StorageState as ObjectStore;
-use fireemu_core_storage::store::{NewMetadata, Precondition, StorageEvent};
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
 use serde_json::{json, Value};
@@ -705,30 +704,13 @@ fn a_bucket_that_does_not_exist_is_not_found_and_patching_it_stores_nothing() {
             call(&s, "GET", &format!("/storage/v1/b/{BUCKET}"), b"").status,
             200
         );
-        if acceptance == TokenAcceptance::Verified {
-            // Strict creates no bucket on first use: this one holds an object because data was
-            // imported into it.
-            s.store
-                .lock()
-                .unwrap()
-                .put(
-                    &BucketName::try_new("other-bucket").unwrap(),
-                    &ObjectName::try_new("a.txt").unwrap(),
-                    b"x".to_vec(),
-                    NewMetadata::default(),
-                    Precondition::default(),
-                    START,
-                )
-                .unwrap();
-        } else {
-            let r = call(
-                &s,
-                "POST",
-                "/upload/storage/v1/b/other-bucket/o?uploadType=media&name=a.txt",
-                b"x",
-            );
-            assert_eq!(r.status, 200);
-        }
+        let r = call(
+            &s,
+            "POST",
+            "/upload/storage/v1/b/other-bucket/o?uploadType=media&name=a.txt",
+            b"x",
+        );
+        assert_eq!(r.status, 200);
         assert_eq!(
             call(&s, "GET", "/storage/v1/b/other-bucket", b"").status,
             200

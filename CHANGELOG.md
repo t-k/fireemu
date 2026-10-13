@@ -13,13 +13,13 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Changed
 
 - Under the strict profile the Storage emulator now refuses what production refuses and the official emulator accepts (owner decision of 2026-10-13: a gap that hides an app bug must fail by default). The `emulator` profile is unchanged.
-  - An object operation on a bucket that does not exist (upload, read, list, delete, copy, rewrite, ACL, form upload, public URL) answers 404 `The specified bucket does not exist.` instead of creating the bucket. The project's two default buckets, the buckets of `firebase.json` storage targets, the buckets a deployed Storage trigger names, buckets that hold imported data and the new `storage.buckets` list exist. Bucket names Cloud Storage never accepts answer 400 `Invalid bucket name` on the JSON API.
-  - `GET /{bucket}/{object}` (what `file.publicUrl()` builds) answers 403 `AccessDenied` for an object that is not public, unless the request has an `Authorization` header or is a signed URL that has not expired. An object becomes public with `file.makePublic()` (an `allUsers` `READER` ACL entry) or `predefinedAcl=publicRead` on upload, for that generation only. Firebase download-token URLs are unchanged.
+  - `GET /{bucket}/{object}` (what `file.publicUrl()` builds) answers 403 `AccessDenied` for an object that is not public, unless the request has an `Authorization` header or is a signed URL that has not expired. An object becomes public with `file.makePublic()` (an `allUsers` `READER` ACL entry) or `predefinedAcl=publicRead` on upload, for that generation only, or when its bucket is listed in the new `storage.publicBuckets` (a bucket whose IAM grants `allUsers` the object viewer role). The 403 names both ways. Firebase download-token URLs are unchanged.
   - An expired signed URL answers 400 `ExpiredToken`; a V4 URL with a lifetime over seven days or an unreadable `X-Goog-Date` answers 400. The signature is still not verified.
   - A form upload (`POST /{bucket}`) needs a signed policy; the policy's expiry and conditions are enforced.
   - A Firebase ID token used as an OAuth bearer on the JSON API answers 401 `Invalid Credentials`.
   - An ACL entry with an entity or role Cloud Storage does not know answers 400.
   - A Firebase list with a `maxResults` that is no number or a `pageToken` that cannot be decoded answers 400 instead of listing from the first page.
+  - A write to a bucket nothing declared is still served and creates the bucket (owner decision of 2026-10-13), but the first write to each such bucket prints one `note:` line on standard error saying that production answers 404 unless the bucket exists, so a typo in a bucket name is visible. Bucket names listed in the configuration, default buckets, `firebase.json` storage targets, trigger buckets and imported data are not noted.
   - The error texts of the new refusals the recordings do not cover are Cloud Storage's documented ones and are marked unrecorded in the compatibility contract.
 
 - Under the strict profile a query whose composite index is not defined (or is still building, or was deleted) is refused by default again, with production's `FAILED_PRECONDITION` and its console link to the index (owner decision of 2026-10-13), whether or not `productionExact` is set. `productionExact` no longer moves `firestore.missingIndexes`, so it is no longer listed among the development defaults in the start banner or `GET /v1/capabilities`. To keep the version 0.17 behavior of running the query and reporting the missing index once per database and index on stderr, set `"firestore": {"missingIndexes": "report"}`. The emulator profile is unchanged: it runs every query, as the official emulator does.
@@ -27,8 +27,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Added
 
-- `storage.buckets`: extra Cloud Storage buckets a project owns, which exist under the strict profile.
-- `storage.defaultBucket` (`"both"` by default, or `"firebasestorage.app"` or `"appspot.com"`): refuse the default bucket name your production project does not have.
+- `storage.buckets`: extra Cloud Storage buckets a project owns; a write to a bucket listed here is not noted under the strict profile.
+- `storage.publicBuckets`: buckets whose objects the public URL (`GET /{bucket}/{object}`) serves without a credential under the strict profile, standing for a bucket IAM grant to `allUsers`.
 - `POST /storage/v1/b/{bucket}/o/{object}/acl`, the long spelling of the object ACL route, in both profiles.
 - `fireemu config show` lists schema keys with effective values, sources and optional JSON descriptions, using the same configuration loading as `up`.
 - `fireemu init --reference` writes a commented `fireemu.reference.jsonc` without expanding the minimal runtime configuration or pinning productionExact defaults.

@@ -766,7 +766,15 @@ fn auth_idp_fixture_assertions_sign_in_under_both_profiles_by_default() {
     // Owner decision 1396: the fixture IdP and the sign-in widget are a development default of
     // the strict profile too; the rest of strict Auth (its answer shapes) is unchanged.
     for profile in ["strict", "emulator"] {
-        let daemon = Daemon::start(&format!("idp-fixture-{profile}"), profile, &json!({}));
+        // Strict takes the providers a project has: production refuses an `oidc.*` or `saml.*`
+        // provider without a configuration whatever the assertion policy (ledger 1413); the
+        // emulator profile signs in through any name, as the official emulator does.
+        let auth = if profile == "strict" {
+            json!({"providers": {"oidc": [oidc("oidc.corp")], "saml": [saml("saml.corp")]}})
+        } else {
+            json!({})
+        };
+        let daemon = Daemon::start(&format!("idp-fixture-{profile}"), profile, &auth);
         let banner = daemon.banner.lock().unwrap().clone();
         assert_eq!(
             banner.contains("identity providers: fixture IdP"),
@@ -808,6 +816,68 @@ fn auth_idp_fixture_assertions_sign_in_under_both_profiles_by_default() {
                 assert!(body.get("pendingToken").is_none(), "{provider}: {body}");
             }
         }
+    }
+}
+
+#[test]
+fn auth_idp_fixture_refuses_unconfigured_and_disabled_providers_under_strict_only() {
+    // The fixture IdP skips the signature check, not the provider configuration check
+    // (ledger 1413, AU-1): record-oidc 39209e and record-saml 7789f0 refuse a provider without a
+    // configuration, or disabled, before any assertion is read.
+    const DISABLED_REFUSAL: &str =
+        "OPERATION_NOT_ALLOWED : The identity provider configuration is disabled.";
+    let mut off = oidc("oidc.off");
+    off["enabled"] = json!(false);
+    let mut saml_off = saml("saml.off");
+    saml_off["enabled"] = json!(false);
+    let auth = json!({"providers": {"oidc": [oidc("oidc.corp"), off], "saml": [saml("saml.corp"), saml_off]}});
+    for profile in ["strict", "emulator"] {
+        let daemon = Daemon::start(&format!("idp-fixture-refusals-{profile}"), profile, &auth);
+        let strict = profile == "strict";
+        // The widget's handoff for `provider`, with a subject of its own so that no two
+        // sign-ins share an email.
+        let request_for = |provider: &str| {
+            let kind = if provider.starts_with("saml.") {
+                "saml.corp"
+            } else {
+                "oidc.corp"
+            };
+            let templates = fixture_assertions(daemon.auth_port(), &provider.replace('.', "-"));
+            let (_, template) = templates.iter().find(|(name, _)| *name == kind).unwrap();
+            serde_json::from_str::<Value>(&template.to_string().replace(kind, provider)).unwrap()
+        };
+        for (provider, strict_refusal) in [
+            ("oidc.typo", Some(NOT_FOUND_REFUSAL)),
+            ("saml.typo", Some(NOT_FOUND_REFUSAL)),
+            ("oidc.off", Some(DISABLED_REFUSAL)),
+            ("saml.off", Some(DISABLED_REFUSAL)),
+            ("oidc.corp", None),
+            ("saml.corp", None),
+        ] {
+            let (status, body) = sign_in_with_idp(&daemon, &request_for(provider));
+            if let Some(message) = strict_refusal.filter(|_| strict) {
+                assert_eq!(status, 400, "{profile} {provider}: {body}");
+                assert_eq!(body["error"]["message"], message, "{profile} {provider}");
+                assert!(body["idToken"].is_null(), "{profile} {provider}: {body}");
+            } else {
+                assert_eq!(status, 200, "{profile} {provider}: {body}");
+                assert!(body["idToken"].is_string(), "{profile} {provider}: {body}");
+            }
+        }
+        // Nothing was created by a refused assertion: two sign-ins on strict, six on emulator.
+        let (status, body) = http(
+            daemon.auth_port(),
+            "POST",
+            &format!("/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:query"),
+            OWNER,
+            &json!({"returnUserInfo": false}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            body["recordsCount"],
+            if strict { "2" } else { "6" },
+            "{profile}: {body}"
+        );
     }
 }
 
@@ -1014,6 +1084,22 @@ fn reauth_google(daemon: &Daemon) -> (u16, Value) {
 #[test]
 fn auth_idp_fixture_signs_in_tenants_links_and_reauthenticates_under_strict() {
     let (daemon, tenant) = configured_idp_daemon("idp-fixture-paths", None);
+    // A tenant has none of the project's providers: production needs each configured in the
+    // tenant, so the fixture sign-in does too (ledger 1413).
+    let admin = format!("/identitytoolkit.googleapis.com/v2/projects/{PROJECT}/tenants/{tenant}");
+    for (path, body) in [
+        (
+            format!("{admin}/oauthIdpConfigs?oauthIdpConfigId=oidc.corp"),
+            oidc("oidc.corp"),
+        ),
+        (
+            format!("{admin}/inboundSamlConfigs?inboundSamlConfigId=saml.corp"),
+            saml("saml.corp"),
+        ),
+    ] {
+        let (status, made) = http(daemon.auth_port(), "POST", &path, OWNER, &body);
+        assert_eq!(status, 200, "{path}: {made}");
+    }
     // A tenant sign-in (the client SDKs send tenantId in the body) lands in the tenant.
     for (provider, request) in fixture_assertions(daemon.auth_port(), "tenant") {
         let mut request = request;

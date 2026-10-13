@@ -4885,6 +4885,17 @@ fn handle_with_policy_inner(
             Ok(trust) => trust,
             Err(response) => return response,
         },
+        // The strict profile with fixture assertions skips the signature check, which needs
+        // setup to pass, but not the configuration checks production makes first.
+        None if strict
+            && route.handler == routes::Handler::SignInWithIdp
+            && matches!(state.idp_assertions, IdpAssertionPolicy::Fixture) =>
+        {
+            if let Err(response) = strict_fixture_provider_configuration(&store, body) {
+                return response;
+            }
+            None
+        }
         None => None,
     };
     let dispatch_body = saml_body.as_ref().unwrap_or(body);
@@ -14989,6 +15000,47 @@ fn strict_idp_trust(
         client_id: config.client_id.clone(),
         jwk: jwk.clone(),
     }))
+}
+
+/// The configuration checks production makes before it reads an assertion, applied by the strict
+/// profile to the fixture `IdP` too: an `oidc.*` or `saml.*` provider with no configuration (or
+/// named in another case, which the credential parser would lowercase and production's
+/// case-sensitive lookup does not find) is `NOT_FOUND_REFUSAL`, and a disabled one is
+/// `DISABLED_REFUSAL` (record-oidc 39209e, record-saml 7789f0; the signed path answers the same).
+/// Only the signature check is left to the fixture policy. A built-in provider is not checked:
+/// production needs it enabled in the console, which a test should not have to declare
+/// (development default, profiles.md).
+///
+/// # Errors
+/// Production's refusal for the provider the request names.
+fn strict_fixture_provider_configuration(
+    store: &AuthStore,
+    body: &Value,
+) -> Result<(), JsonResponse> {
+    let Some(request_uri) = str_field(body, "requestUri").filter(|uri| uri_is_absolute(uri)) else {
+        return Ok(());
+    };
+    let params = normalized_idp_params(request_uri, str_field(body, "postBody"));
+    let Some(provider_id) = params.get("providerId").filter(|id| !id.is_empty()) else {
+        return Ok(());
+    };
+    let lowered = provider_id.to_lowercase();
+    let oidc = lowered.starts_with("oidc.");
+    if !oidc && !lowered.starts_with("saml.") {
+        return Ok(());
+    }
+    let enabled = if *provider_id != lowered {
+        None
+    } else if oidc {
+        store.oidc_config(provider_id).map(|config| config.enabled)
+    } else {
+        store.saml_config(provider_id).map(|config| config.enabled)
+    };
+    match enabled {
+        None => Err(error(400, crate::oidc::NOT_FOUND_REFUSAL)),
+        Some(false) => Err(error(400, crate::oidc::DISABLED_REFUSAL)),
+        Some(true) => Ok(()),
+    }
 }
 
 /// The `kid` of a compact JWS header, read before any verification only to select a key.

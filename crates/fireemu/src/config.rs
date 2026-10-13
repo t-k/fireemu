@@ -1696,7 +1696,9 @@ impl RuntimeConfig {
             let effective = self.effective_value(&key, input);
             let (value, source) = if let Some(entry) = governed {
                 let text = entry["value"].as_str().expect("development default value");
-                let value = if schema["type"] == "boolean" {
+                let value = if text == "unset" {
+                    Value::Null
+                } else if schema["type"] == "boolean" {
                     json!(text == "true")
                 } else {
                     json!(text)
@@ -1823,7 +1825,6 @@ impl RuntimeConfig {
             "auth.customTokenSigners" => Some(json!(self.auth_custom_token_signers)),
             "auth.idpSigners" => Some(json!(self.auth_idp_signers)),
             "auth.authorizedDomains" => Some(json!(self.auth_authorized_domains)),
-            "auth.multiTenant.allowTenants" => Some(json!(self.auth_multi_tenant_allow_tenants)),
             "auth.tenants" => Some(json!(self.auth_tenants)),
             "auth.forwardInboundCredentials" => Some(json!(self.auth_forward_inbound_credentials)),
             "auth.improvedEmailPrivacy" => Some(json!(self.auth_improved_email_privacy)),
@@ -1844,7 +1845,7 @@ impl RuntimeConfig {
             }
             "auth.quota" => Some(if self.auth_signup_quota_explicit { json!({"signUpQuotaConfig": self.auth_signup_quota.as_ref().map(|v| json!({"quota": v.quota, "startTime": v.start_time.to_rfc3339().ok(), "quotaDuration": format!("{}.{:09}s", v.quota_duration.as_seconds(), v.quota_duration.as_nanos() % 1_000_000_000)}))}) } else { Value::Null }),
             "auth.quotaSimulation" => Some(json!({"mode": match self.auth_quota_simulation.mode { AuthQuotaSimulationMode::Off => "off", AuthQuotaSimulationMode::Observe => "observe", AuthQuotaSimulationMode::Enforce => "enforce" }, "algorithm": self.auth_quota_simulation.algorithm, "defaultQuotaPerHour": self.auth_quota_simulation.default_quota_per_hour, "maxTrackedBuckets": self.auth_quota_simulation.max_tracked_buckets})),
-            "auth.mfa.state" | "auth.mfa.enabledProviders" | "auth.mfa.providerConfigs" => Some(self.auth_mfa.as_ref().map_or(Value::Null, |mfa| fireemu_adapter_http::identity_toolkit::project_mfa::mfa_config_json(mfa)[key.rsplit('.').next().expect("mfa key")].clone())),
+            "auth.mfa.state" | "auth.mfa.enabledProviders" | "auth.mfa.providerConfigs" => Some(self.effective_auth_mfa().as_ref().map_or(Value::Null, |mfa| fireemu_adapter_http::identity_toolkit::project_mfa::mfa_config_json(mfa)[key.rsplit('.').next().expect("mfa key")].clone())),
             "auth.providers.oidc" => Some(json!(self.auth_provider_seeds.oidc.as_ref().map(|providers| providers.iter().map(|v| json!({"name": v.id, "displayName": v.display_name, "enabled": v.enabled, "clientId": v.client_id, "issuer": v.issuer, "clientSecret": v.client_secret, "responseType": {"idToken": v.response_type.id_token, "code": v.response_type.code, "token": v.response_type.token}})).collect::<Vec<_>>()))),
             "auth.providers.saml" => Some(json!(self.auth_provider_seeds.saml.as_ref().map(|providers| providers.iter().map(|v| json!({"name": v.id, "displayName": v.display_name, "enabled": v.enabled, "idpConfig": {"idpEntityId": v.idp_entity_id, "ssoUrl": v.sso_url, "idpCertificates": v.idp_certificates.iter().map(|c| json!({"x509Certificate": c})).collect::<Vec<_>>(), "signRequest": v.sign_request}, "spConfig": {"spEntityId": v.sp_entity_id, "callbackUri": v.callback_uri}})).collect::<Vec<_>>() ))),
             "auth.totp.periodSeconds" => Some(json!(self.auth_totp.map(|v| v.period_seconds))),
@@ -2334,7 +2335,7 @@ impl RuntimeConfig {
         (self.profile == CompatibilityProfile::Strict
             && self.auth_totp.is_some()
             && !self
-                .auth_mfa
+                .effective_auth_mfa()
                 .as_ref()
                 .is_some_and(MfaProjectConfig::totp_enabled))
         .then_some(
@@ -2356,10 +2357,54 @@ impl RuntimeConfig {
             self.clock_start.to_rfc3339().ok().as_deref(),
             self.auth_tenant_id_format,
         )?;
-        Ok(fireemu_adapter_http::identity_toolkit::TenantSeeding::new(
+        let seeding = fireemu_adapter_http::identity_toolkit::TenantSeeding::new(
             self.auth_multi_tenant_allow_tenants,
             seeds,
-        ))
+        );
+        Ok(
+            if self.setup_free_project_enablement()
+                && self.auth_multi_tenant_allow_tenants.is_none()
+            {
+                seeding.allowing_tenants_by_default()
+            } else {
+                seeding
+            },
+        )
+    }
+
+    /// Whether the strict profile's setup-free defaults for the project's console and Admin API
+    /// enablement apply (multi-tenancy, multi-factor): the strict profile without
+    /// `productionExact` (owner ledger 1413). The emulator profile keeps the official emulator's
+    /// behaviour, which needs no separate enablement either.
+    fn setup_free_project_enablement(&self) -> bool {
+        self.profile == CompatibilityProfile::Strict && !self.production_exact
+    }
+
+    /// The multi-tenancy switch the daemon seeds: the declared `auth.multiTenant.allowTenants`,
+    /// else `true` where the development default applies, else unset (production's new project).
+    #[must_use]
+    pub fn effective_allow_tenants(&self) -> Option<bool> {
+        self.auth_multi_tenant_allow_tenants
+            .or_else(|| self.setup_free_project_enablement().then_some(true))
+    }
+
+    /// The initial multi-factor configuration the daemon seeds: the declared `auth.mfa`, else
+    /// SMS and TOTP enabled where the development default applies (the TOTP window stays
+    /// `auth.totp`'s), else none (production's new project: off).
+    #[must_use]
+    pub fn effective_auth_mfa(&self) -> Option<MfaProjectConfig> {
+        use fireemu_core_auth::mfa_config::{MfaConfigState, TotpProviderConfig};
+        self.auth_mfa.clone().or_else(|| {
+            self.setup_free_project_enablement()
+                .then_some(MfaProjectConfig {
+                    state: MfaConfigState::Enabled,
+                    phone_sms: true,
+                    totp: Some(TotpProviderConfig {
+                        state: MfaConfigState::Enabled,
+                        adjacent_intervals: None,
+                    }),
+                })
+        })
     }
 }
 
@@ -2369,8 +2414,10 @@ impl RuntimeConfig {
     /// Admin create route reads one with, under this file's profile: exactly as the route reads it
     /// under the strict profile, and under the emulator profile with production's checks added
     /// (an unknown member, a missing or invalid display name and the id shape are refused there
-    /// too). The strict profile creates tenants only in a project that allows them, so declaring
-    /// tenants there without `auth.multiTenant.allowTenants: true` is refused at load.
+    /// too). The strict profile creates tenants only in a project that allows them: that is the
+    /// development default there (owner ledger 1413), so declaring tenants is refused at load
+    /// only under `productionExact` without `auth.multiTenant.allowTenants: true`, or with the
+    /// switch declared `false`.
     fn parse_auth_tenants(
         auth: &serde_json::Map<String, Value>,
         cfg: &mut Self,
@@ -2407,13 +2454,12 @@ impl RuntimeConfig {
                     cfg.auth_tenant_id_format,
                 )
                 .map_err(ConfigError)?;
-                if !emulator
-                    && !documents.is_empty()
-                    && cfg.auth_multi_tenant_allow_tenants != Some(true)
+                if !emulator && !documents.is_empty() && cfg.effective_allow_tenants() != Some(true)
                 {
                     return Err(ConfigError(
                         "auth.tenants needs auth.multiTenant.allowTenants: true under the strict \
-                         profile: production creates tenants only in a project that allows them"
+                         profile with productionExact (or with the switch declared off): \
+                         production creates tenants only in a project that allows them"
                             .to_owned(),
                     ));
                 }
@@ -3612,14 +3658,39 @@ impl RuntimeConfig {
                     TenantIdFormat::Generated => "generated",
                 },
             ),
+            (
+                "auth.multiTenant.allowTenants",
+                match self.effective_allow_tenants() {
+                    Some(true) => "true",
+                    Some(false) => "false",
+                    None => "unset",
+                },
+            ),
+            (
+                "auth.mfa.state",
+                match self.effective_auth_mfa() {
+                    None => "unset",
+                    Some(mfa) => match mfa.state {
+                        fireemu_core_auth::mfa_config::MfaConfigState::Disabled => "DISABLED",
+                        fireemu_core_auth::mfa_config::MfaConfigState::Enabled => "ENABLED",
+                        fireemu_core_auth::mfa_config::MfaConfigState::Mandatory => "MANDATORY",
+                    },
+                },
+            ),
         ];
         self.development_defaults = values
             .into_iter()
             .map(|(key, value)| {
-                let (section, name) = key
-                    .split_once('.')
-                    .expect("a configuration key has a section");
-                let source = if input[section].get(name).is_some() {
+                // A declared `auth.mfa` is explicit whichever member it sets (`null` declares
+                // nothing); the other keys are explicit when written, `null` included.
+                let explicit = if key == "auth.mfa.state" {
+                    input.pointer("/auth/mfa").is_some_and(|mfa| !mfa.is_null())
+                } else {
+                    input
+                        .pointer(&format!("/{}", key.replace('.', "/")))
+                        .is_some()
+                };
+                let source = if explicit {
                     "explicit"
                 } else if self.profile == CompatibilityProfile::Strict
                     && key == "auth.idpAssertions"
@@ -5144,7 +5215,13 @@ mod tests {
             assert_eq!(row["source"], "explicit", "{key}");
             let row = without_file.iter().find(|row| row["key"] == *key).unwrap();
             assert_eq!(row["value"], *expected, "runtime projection: {key}");
-            assert_eq!(row["source"], "default", "runtime projection: {key}");
+            // A governed development default records its source when the file is read.
+            let governed = ["auth.multiTenant.allowTenants", "auth.mfa.state"].contains(key);
+            assert_eq!(
+                row["source"],
+                if governed { "explicit" } else { "default" },
+                "runtime projection: {key}"
+            );
         }
         let totp = config.auth_totp.unwrap();
         assert_eq!(totp.period_seconds, 45);
@@ -5219,10 +5296,15 @@ mod tests {
                 json!(null),
                 "unset",
             ),
-            ("auth.mfa.state", json!(null), "unset"),
-            ("auth.mfa.enabledProviders", json!(null), "unset"),
-            ("auth.mfa.providerConfigs", json!(null), "unset"),
-            ("auth.multiTenant.allowTenants", json!(null), "unset"),
+            // Development defaults of the strict profile (owner ledger 1413).
+            ("auth.mfa.state", json!("ENABLED"), "default"),
+            ("auth.mfa.enabledProviders", json!(["PHONE_SMS"]), "default"),
+            (
+                "auth.mfa.providerConfigs",
+                json!([{"state": "ENABLED", "totpProviderConfig": {}}]),
+                "default",
+            ),
+            ("auth.multiTenant.allowTenants", json!(true), "default"),
             ("auth.tenants", json!([]), "default"),
             ("auth.tenantIdFormat", json!("readable"), "default"),
             ("auth.forwardInboundCredentials", json!(false), "default"),
@@ -8215,14 +8297,16 @@ mod tests {
                 .zip(values)
                 .map(|(key, value)| json!({"key": key, "value": value, "source": source}))
                 .collect();
+            // The first six are the flat keys; the switch and multi-factor entries that follow
+            // are pinned by `the_switch_and_multi_factor_defaults_are_reported_with_their_source`.
             assert_eq!(
-                serde_json::to_value(&cfg.development_defaults).unwrap(),
+                serde_json::to_value(&cfg.development_defaults[..keys.len()]).unwrap(),
                 json!(expected)
             );
             if exact.is_none() {
                 assert_eq!(
                     serde_json::to_value(&RuntimeConfig::default().development_defaults).unwrap(),
-                    json!(expected)
+                    serde_json::to_value(&cfg.development_defaults).unwrap()
                 );
             }
             for (key, value) in keys.iter().zip(if exact == Some(true) {
@@ -8807,6 +8891,111 @@ mod tests {
         })
     }
 
+    mod enablement_defaults {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// What `auth.mfa` enables once parsed, as (SMS, TOTP), for the declarations below.
+        fn declared_mfa(mfa: &Value) -> (bool, bool) {
+            match mfa["state"].as_str() {
+                Some("ENABLED") => (mfa["enabledProviders"] == json!(["PHONE_SMS"]), false),
+                _ => (false, false),
+            }
+        }
+
+        fn mfa_declaration() -> impl Strategy<Value = Option<Value>> {
+            prop_oneof![
+                Just(None),
+                Just(Some(Value::Null)),
+                Just(Some(json!({"state": "DISABLED"}))),
+                Just(Some(json!({"state": "MANDATORY"}))),
+                Just(Some(
+                    json!({"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]})
+                )),
+                Just(Some(json!({"state": "ENABLED"}))),
+            ]
+        }
+
+        fn switch_declaration() -> impl Strategy<Value = Option<Value>> {
+            prop_oneof![
+                Just(None),
+                Just(Some(Value::Null)),
+                Just(Some(json!({}))),
+                Just(Some(json!({"allowTenants": true}))),
+                Just(Some(json!({"allowTenants": false}))),
+            ]
+        }
+
+        proptest! {
+            /// The switch and the multi-factor configuration the daemon seeds are: the declared
+            /// value, else the development default of the strict profile without
+            /// `productionExact`, else nothing. The banner entries say the same, with the source.
+            #[test]
+            fn the_seeded_switch_and_multi_factor_follow_the_declaration_then_the_default(
+                emulator in any::<bool>(),
+                exact in any::<bool>(),
+                mfa in mfa_declaration(),
+                switch in switch_declaration(),
+            ) {
+                let exact = exact && !emulator;
+                let mut auth = json!({});
+                if let Some(mfa) = &mfa {
+                    auth["mfa"] = mfa.clone();
+                }
+                if let Some(switch) = &switch {
+                    auth["multiTenant"] = switch.clone();
+                }
+                let cfg = RuntimeConfig::from_json(&json!({
+                    "schemaVersion": 1,
+                    "profile": if emulator { "emulator" } else { "strict" },
+                    "productionExact": exact,
+                    "auth": auth,
+                })).unwrap();
+                let default_on = !emulator && !exact;
+                let declared_switch = switch.as_ref().and_then(|s| s["allowTenants"].as_bool());
+                prop_assert_eq!(
+                    cfg.effective_allow_tenants(),
+                    declared_switch.or(default_on.then_some(true))
+                );
+                let declared_mfa_block = mfa.as_ref().filter(|mfa| !mfa.is_null());
+                let mfa_enabled = cfg
+                    .effective_auth_mfa()
+                    .map(|mfa| (mfa.sms_enabled(), mfa.totp_enabled()));
+                let expected = match declared_mfa_block {
+                    Some(block) => Some(declared_mfa(block)),
+                    None => default_on.then_some((true, true)),
+                };
+                // A declared `DISABLED`/`MANDATORY`/state-only block still is a configuration.
+                prop_assert_eq!(mfa_enabled, expected);
+                // The reported entries carry the same values and sources.
+                let entry = |key: &str| {
+                    cfg.development_defaults.iter().find(|entry| entry["key"] == key).cloned().unwrap()
+                };
+                let source = |declared: bool| {
+                    if declared { "explicit" } else if exact { "productionExact" } else { "default" }
+                };
+                prop_assert_eq!(
+                    entry("auth.multiTenant.allowTenants")["source"].as_str().map(str::to_owned),
+                    Some(source(declared_switch.is_some()).to_owned())
+                );
+                prop_assert_eq!(
+                    entry("auth.mfa.state")["source"].as_str().map(str::to_owned),
+                    Some(source(declared_mfa_block.is_some()).to_owned())
+                );
+                // Declaring tenants loads exactly when the switch ends up on, outside the
+                // emulator profile.
+                let with_tenants = RuntimeConfig::from_json(&json!({
+                    "schemaVersion": 1,
+                    "profile": if emulator { "emulator" } else { "strict" },
+                    "productionExact": exact,
+                    "auth": {"multiTenant": switch.clone(), "tenants": [acme_tenant()]},
+                }));
+                let on = declared_switch.or(default_on.then_some(true)) == Some(true);
+                prop_assert_eq!(with_tenants.is_ok(), emulator || on);
+            }
+        }
+    }
+
     #[test]
     fn auth_tenants_declare_the_default_projects_tenants_and_the_multi_tenancy_switch() {
         let none = parse(&json!({})).unwrap();
@@ -8839,31 +9028,216 @@ mod tests {
     }
 
     #[test]
-    fn the_emulator_profile_takes_tenants_without_the_switch_and_strict_needs_it() {
-        let file = |profile: &str, auth: &Value| {
-            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "profile": profile, "auth": auth}))
+    fn declared_tenants_need_the_switch_only_under_production_exact_or_when_it_is_declared_off() {
+        let file = |profile: &str, exact: bool, auth: &Value| {
+            let mut config = json!({"schemaVersion": 1, "profile": profile, "auth": auth});
+            if exact {
+                config["productionExact"] = json!(true);
+            }
+            RuntimeConfig::from_json(&config)
         };
         let tenants = json!({"tenants": [acme_tenant()]});
-        let error = file("strict", &tenants).unwrap_err();
+        // Development default (owner ledger 1413): multi-tenancy is on without the switch.
+        assert!(file("strict", false, &tenants).is_ok());
+        assert!(file("emulator", false, &tenants).is_ok());
+        // productionExact restores production's requirement, and the message names the key.
+        let error = file("strict", true, &tenants).unwrap_err();
         assert!(
             error.0.contains("auth.multiTenant.allowTenants"),
             "{error:?}"
         );
         assert!(error.0.contains("auth.tenants"), "{error:?}");
+        // A declared "off" (or an empty object under productionExact) is refused as before.
         for refused in [
-            json!({"multiTenant": {"allowTenants": false}, "tenants": [acme_tenant()]}),
-            json!({"multiTenant": {}, "tenants": [acme_tenant()]}),
+            (
+                false,
+                json!({"multiTenant": {"allowTenants": false}, "tenants": [acme_tenant()]}),
+            ),
+            (
+                true,
+                json!({"multiTenant": {"allowTenants": false}, "tenants": [acme_tenant()]}),
+            ),
+            (true, json!({"multiTenant": {}, "tenants": [acme_tenant()]})),
         ] {
-            assert!(file("strict", &refused).is_err(), "{refused}");
+            assert!(
+                file("strict", refused.0, &refused.1).is_err(),
+                "{refused:?}"
+            );
         }
-        assert!(file("emulator", &tenants).is_ok());
         assert!(file(
             "strict",
+            true,
             &json!({"multiTenant": {"allowTenants": true}, "tenants": [acme_tenant()]})
         )
         .is_ok());
+        assert!(file(
+            "strict",
+            false,
+            &json!({"multiTenant": {}, "tenants": [acme_tenant()]})
+        )
+        .is_ok());
         // No tenants declared: nothing to require.
-        assert!(file("strict", &json!({"tenants": []})).is_ok());
+        assert!(file("strict", true, &json!({"tenants": []})).is_ok());
+    }
+
+    /// The project's multi-tenancy switch and multi-factor configuration are development
+    /// defaults of the strict profile (owner ledger 1413): on without an Admin API call or a
+    /// config block, back to production's "off until enabled" under `productionExact`, and an
+    /// explicit key always decides. The emulator profile is unchanged.
+    #[test]
+    fn multi_tenancy_and_multi_factor_are_development_defaults_restored_by_production_exact() {
+        let read = |profile: &str, exact: Option<bool>, auth: Value| {
+            let mut config = json!({"schemaVersion": 1, "profile": profile, "auth": auth});
+            if let Some(exact) = exact {
+                config["productionExact"] = json!(exact);
+            }
+            RuntimeConfig::from_json(&config).unwrap()
+        };
+        for exact in [None, Some(false)] {
+            let cfg = read("strict", exact, json!({}));
+            let mfa = cfg
+                .effective_auth_mfa()
+                .expect("multi-factor is on by default");
+            assert!(mfa.sms_enabled() && mfa.totp_enabled(), "{exact:?}");
+            // The window stays the TOTP policy's (auth.totp.windowSteps), not a second default.
+            assert_eq!(mfa.totp_window(), None);
+            assert_eq!(cfg.effective_allow_tenants(), Some(true), "{exact:?}");
+            // The declaration fields keep only what the file said.
+            assert_eq!(cfg.auth_mfa, None);
+            assert_eq!(cfg.auth_multi_tenant_allow_tenants, None);
+            // auth.totp alone enables TOTP when the project's multi-factor is on by default.
+            assert!(read("strict", exact, json!({"totp": {}}))
+                .auth_totp_warning()
+                .is_none());
+            assert!(cfg
+                .tenant_seeding()
+                .is_ok_and(|seeding| !seeding.is_empty()));
+        }
+        let exact = read("strict", Some(true), json!({}));
+        assert_eq!(exact.effective_auth_mfa(), None);
+        assert_eq!(exact.effective_allow_tenants(), None);
+        assert!(exact
+            .tenant_seeding()
+            .is_ok_and(|seeding| seeding.is_empty()));
+        assert!(read("strict", Some(true), json!({"totp": {}}))
+            .auth_totp_warning()
+            .is_some());
+        // Explicit keys decide over both the default and productionExact.
+        for exact in [false, true] {
+            let off = read(
+                "strict",
+                Some(exact),
+                json!({"mfa": {"state": "DISABLED"}, "multiTenant": {"allowTenants": false}}),
+            );
+            let mfa = off.effective_auth_mfa().expect("a declared config");
+            assert!(!mfa.sms_enabled() && !mfa.totp_enabled());
+            assert_eq!(off.effective_allow_tenants(), Some(false));
+            let on = read(
+                "strict",
+                Some(exact),
+                json!({"mfa": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}, "multiTenant": {"allowTenants": true}}),
+            );
+            let mfa = on.effective_auth_mfa().expect("a declared config");
+            assert!(
+                mfa.sms_enabled() && !mfa.totp_enabled(),
+                "only what the file enabled"
+            );
+            assert_eq!(on.effective_allow_tenants(), Some(true));
+        }
+        // `null` declares nothing, so it follows the default like an absent key.
+        let null = read("strict", None, json!({"mfa": null, "multiTenant": null}));
+        assert!(null
+            .effective_auth_mfa()
+            .is_some_and(|mfa| mfa.totp_enabled()));
+        assert_eq!(null.effective_allow_tenants(), Some(true));
+        // The emulator profile keeps its behaviour: nothing is seeded.
+        let emulator = read("emulator", None, json!({}));
+        assert_eq!(emulator.effective_auth_mfa(), None);
+        assert_eq!(emulator.effective_allow_tenants(), None);
+        assert!(emulator
+            .tenant_seeding()
+            .is_ok_and(|seeding| seeding.is_empty()));
+    }
+
+    #[test]
+    fn the_switch_and_multi_factor_defaults_are_reported_with_their_source() {
+        let entries = |config: Value| {
+            let cfg = RuntimeConfig::from_json(&config).unwrap();
+            ["auth.multiTenant.allowTenants", "auth.mfa.state"].map(|key| {
+                let entry = cfg
+                    .development_defaults
+                    .iter()
+                    .find(|entry| entry["key"] == key)
+                    .unwrap_or_else(|| panic!("{key} is not reported: {config}"));
+                (entry["value"].clone(), entry["source"].clone())
+            })
+        };
+        let pair = |value: &str, source: &str| (json!(value), json!(source));
+        assert_eq!(
+            entries(json!({"schemaVersion": 1})),
+            [pair("true", "default"), pair("ENABLED", "default")]
+        );
+        assert_eq!(
+            entries(json!({"schemaVersion": 1, "productionExact": true})),
+            [
+                pair("unset", "productionExact"),
+                pair("unset", "productionExact")
+            ]
+        );
+        assert_eq!(
+            entries(json!({"schemaVersion": 1, "auth": {
+                "multiTenant": {"allowTenants": false},
+                "mfa": {"state": "MANDATORY"}
+            }})),
+            [pair("false", "explicit"), pair("MANDATORY", "explicit")]
+        );
+        // An mfa block without a state is still a declaration (state reads back DISABLED).
+        assert_eq!(
+            entries(
+                json!({"schemaVersion": 1, "auth": {"mfa": {"enabledProviders": ["PHONE_SMS"]}}})
+            )[1],
+            pair("DISABLED", "explicit")
+        );
+        assert_eq!(
+            entries(json!({"schemaVersion": 1, "profile": "emulator"})),
+            [pair("unset", "default"), pair("unset", "default")]
+        );
+        // config show prints the effective values, with null for "unset".
+        for (config, allow, state, source) in [
+            (
+                json!({"schemaVersion": 1}),
+                json!(true),
+                json!("ENABLED"),
+                "default",
+            ),
+            (
+                json!({"schemaVersion": 1, "productionExact": true}),
+                Value::Null,
+                Value::Null,
+                "productionExact",
+            ),
+        ] {
+            let cfg = RuntimeConfig::from_json(&config).unwrap();
+            let rows = cfg.config_show(&config);
+            let row = |key: &str| rows.iter().find(|row| row["key"] == key).unwrap().clone();
+            assert_eq!(row("auth.multiTenant.allowTenants")["value"], allow);
+            assert_eq!(row("auth.multiTenant.allowTenants")["source"], source);
+            assert_eq!(row("auth.mfa.state")["value"], state);
+            assert_eq!(row("auth.mfa.state")["source"], source);
+        }
+        let config = json!({"schemaVersion": 1});
+        let rows = RuntimeConfig::from_json(&config)
+            .unwrap()
+            .config_show(&config);
+        let row = |key: &str| rows.iter().find(|row| row["key"] == key).unwrap().clone();
+        assert_eq!(
+            row("auth.mfa.enabledProviders")["value"],
+            json!(["PHONE_SMS"])
+        );
+        assert_eq!(
+            row("auth.mfa.providerConfigs")["value"],
+            json!([{"state": "ENABLED", "totpProviderConfig": {}}])
+        );
     }
 
     #[test]
@@ -9111,10 +9485,13 @@ mod tests {
 
     #[test]
     fn strict_auth_totp_without_an_enabling_mfa_config_earns_a_warning_naming_the_key() {
+        // The strict development default enables multi-factor, so the warning is for the
+        // configurations that leave TOTP off: productionExact, or a declared config without it.
         let build = |profile: &str, auth: &Value| {
             RuntimeConfig::from_json(&json!({
                 "schemaVersion": 1,
                 "profile": profile,
+                "productionExact": profile == "strict",
                 "auth": auth,
             }))
             .unwrap()

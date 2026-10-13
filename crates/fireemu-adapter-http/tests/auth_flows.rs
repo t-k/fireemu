@@ -9438,6 +9438,31 @@ fn saml_fixture_state(tenant: Option<&str>, stateless_refresh: bool) -> AuthStat
         );
         assert_eq!(r.status, 200, "{}", r.body);
     }
+    // Strict refuses a provider that has no configuration, as production does, whichever
+    // assertion policy runs; the stateless (emulator) profile signs in without one.
+    if !stateless_refresh {
+        let config = fireemu_core_auth::store::InboundSamlProviderConfig {
+            id: "saml.lifecycle".to_owned(),
+            display_name: None,
+            enabled: true,
+            idp_entity_id: "https://idp.example.test".to_owned(),
+            sso_url: "https://idp.example.test/sso".to_owned(),
+            idp_certificates: Vec::new(),
+            sign_request: false,
+            sp_entity_id: "sp".to_owned(),
+            callback_uri: "https://sp.example.test/callback".to_owned(),
+        };
+        let created = match (tenant, s.registry.as_ref()) {
+            (Some(tenant), Some(registry)) => registry
+                .tenant_store("demo-app", tenant)
+                .unwrap()
+                .lock()
+                .unwrap()
+                .create_saml_config(config),
+            _ => s.store.lock().unwrap().create_saml_config(config),
+        };
+        assert!(created);
+    }
     s
 }
 

@@ -8804,6 +8804,111 @@ mod tests {
         })
     }
 
+    mod enablement_defaults {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// What `auth.mfa` enables once parsed, as (SMS, TOTP), for the declarations below.
+        fn declared_mfa(mfa: &Value) -> (bool, bool) {
+            match mfa["state"].as_str() {
+                Some("ENABLED") => (mfa["enabledProviders"] == json!(["PHONE_SMS"]), false),
+                _ => (false, false),
+            }
+        }
+
+        fn mfa_declaration() -> impl Strategy<Value = Option<Value>> {
+            prop_oneof![
+                Just(None),
+                Just(Some(Value::Null)),
+                Just(Some(json!({"state": "DISABLED"}))),
+                Just(Some(json!({"state": "MANDATORY"}))),
+                Just(Some(
+                    json!({"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]})
+                )),
+                Just(Some(json!({"state": "ENABLED"}))),
+            ]
+        }
+
+        fn switch_declaration() -> impl Strategy<Value = Option<Value>> {
+            prop_oneof![
+                Just(None),
+                Just(Some(Value::Null)),
+                Just(Some(json!({}))),
+                Just(Some(json!({"allowTenants": true}))),
+                Just(Some(json!({"allowTenants": false}))),
+            ]
+        }
+
+        proptest! {
+            /// The switch and the multi-factor configuration the daemon seeds are: the declared
+            /// value, else the development default of the strict profile without
+            /// `productionExact`, else nothing. The banner entries say the same, with the source.
+            #[test]
+            fn the_seeded_switch_and_multi_factor_follow_the_declaration_then_the_default(
+                emulator in any::<bool>(),
+                exact in any::<bool>(),
+                mfa in mfa_declaration(),
+                switch in switch_declaration(),
+            ) {
+                let exact = exact && !emulator;
+                let mut auth = json!({});
+                if let Some(mfa) = &mfa {
+                    auth["mfa"] = mfa.clone();
+                }
+                if let Some(switch) = &switch {
+                    auth["multiTenant"] = switch.clone();
+                }
+                let cfg = RuntimeConfig::from_json(&json!({
+                    "schemaVersion": 1,
+                    "profile": if emulator { "emulator" } else { "strict" },
+                    "productionExact": exact,
+                    "auth": auth,
+                })).unwrap();
+                let default_on = !emulator && !exact;
+                let declared_switch = switch.as_ref().and_then(|s| s["allowTenants"].as_bool());
+                prop_assert_eq!(
+                    cfg.effective_allow_tenants(),
+                    declared_switch.or(default_on.then_some(true))
+                );
+                let declared_mfa_block = mfa.as_ref().filter(|mfa| !mfa.is_null());
+                let mfa_enabled = cfg
+                    .effective_auth_mfa()
+                    .map(|mfa| (mfa.sms_enabled(), mfa.totp_enabled()));
+                let expected = match declared_mfa_block {
+                    Some(block) => Some(declared_mfa(block)),
+                    None => default_on.then_some((true, true)),
+                };
+                // A declared `DISABLED`/`MANDATORY`/state-only block still is a configuration.
+                prop_assert_eq!(mfa_enabled, expected);
+                // The reported entries carry the same values and sources.
+                let entry = |key: &str| {
+                    cfg.development_defaults.iter().find(|entry| entry["key"] == key).cloned().unwrap()
+                };
+                let source = |declared: bool| {
+                    if declared { "explicit" } else if exact { "productionExact" } else { "default" }
+                };
+                prop_assert_eq!(
+                    entry("auth.multiTenant.allowTenants")["source"].as_str().map(str::to_owned),
+                    Some(source(declared_switch.is_some()).to_owned())
+                );
+                prop_assert_eq!(
+                    entry("auth.mfa.state")["source"].as_str().map(str::to_owned),
+                    Some(source(declared_mfa_block.is_some()).to_owned())
+                );
+                // Declaring tenants loads exactly when the switch ends up on, outside the
+                // emulator profile.
+                let with_tenants = RuntimeConfig::from_json(&json!({
+                    "schemaVersion": 1,
+                    "profile": if emulator { "emulator" } else { "strict" },
+                    "productionExact": exact,
+                    "auth": {"multiTenant": switch.clone(), "tenants": [acme_tenant()]},
+                }));
+                let on = declared_switch.or(default_on.then_some(true)) == Some(true);
+                prop_assert_eq!(with_tenants.is_ok(), emulator || on);
+            }
+        }
+    }
+
     #[test]
     fn auth_tenants_declare_the_default_projects_tenants_and_the_multi_tenancy_switch() {
         let none = parse(&json!({})).unwrap();

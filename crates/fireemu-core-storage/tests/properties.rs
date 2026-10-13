@@ -274,6 +274,16 @@ mod reference_glob {
                     i += 2;
                     continue;
                 }
+                '[' => {
+                    // A closed set hides braces and commas, even across an apparent group end.
+                    let end = set_end(pattern, i).unwrap_or(i + 1);
+                    parts
+                        .last_mut()
+                        .unwrap()
+                        .extend_from_slice(&pattern[i..end]);
+                    i = end;
+                    continue;
+                }
                 '{' => {
                     depth += 1;
                     if depth > 1 {
@@ -490,6 +500,12 @@ fn glob_constructs_match_as_documented() {
         ("{}a", "a", true),
         ("{a}{b}", "ab", true),
         ("{{a}}", "a", true),
+        // Sets are read before braces: a brace inside a closed set cannot close a group.
+        ("{*[}[a-c]", "cc", false),
+        ("{*[}[a-c]", "{cc", true),
+        ("{a[,b}", "a[", true),
+        ("{],a}", "]", true),
+        ("{[}],{a,b}}", "}", true),
         // An escaped upper bound ends the range and nothing else: the cursor moves past it once.
         ("[Z-\\]]x", "[x", true),
         ("[Z-\\]]x", "]x", true),

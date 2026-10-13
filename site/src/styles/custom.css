@@ -35,3 +35,54 @@
 ul.conditions {
 	columns: 2;
 }
+
+/* Landing page hero on narrow screens: left-aligned copy and full-width stacked buttons. */
+@media (max-width: 49.9375rem) {
+	.hero {
+		padding-block: 1.5rem 0.5rem;
+	}
+	.hero .stack {
+		text-align: start;
+		gap: 1.75rem;
+	}
+	.hero .copy {
+		align-items: flex-start;
+		gap: 0.875rem;
+	}
+	.hero .copy > * {
+		max-width: 38ch;
+	}
+	.hero h1 {
+		font-size: clamp(1.75rem, 8vw, 2.25rem);
+		line-height: 1.15;
+		text-wrap: balance;
+	}
+	.hero .tagline {
+		font-size: var(--sl-text-base);
+		line-height: 1.6;
+	}
+	.hero .actions {
+		flex-direction: column;
+		align-items: stretch;
+		gap: 0.75rem;
+		max-width: 24rem;
+	}
+	.hero .actions .sl-link-button {
+		justify-content: center;
+		margin: 0;
+		padding: 0.8125rem 1.25rem;
+	}
+	.hero .actions .sl-link-button.minimal {
+		align-self: flex-start;
+		padding: 0.5rem 0;
+	}
+}
+
+/* Keep wide content on the landing page inside the viewport. */
+.sl-markdown-content :not(pre) > code {
+	overflow-wrap: anywhere;
+}
+.sl-markdown-content .table-wrapper,
+.sl-markdown-content table {
+	max-width: 100%;
+}

@@ -33,9 +33,11 @@ mod volume;
 static NEXT_STAGE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// The name of the manifest that marks a directory as a complete export.
+#[cfg(unix)]
 const MANIFEST_NAME: &str = "firebase-export-metadata.json";
 
 /// Where the stage lives and so how it is published.
+#[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Placement {
     /// A sibling of the target, published by one atomic rename.
@@ -718,7 +720,8 @@ mod mount_point_tests {
     /// A private directory under a trusted per-user base: staging refuses an ancestor that other
     /// users can write, such as Linux's `/tmp`. Each test removes the directory itself.
     fn scratch(name: &str) -> PathBuf {
-        let root = crate::parent::trusted_temp::TrustedTempDir::new(&format!("publication-mount-{name}"));
+        let root =
+            crate::parent::trusted_temp::TrustedTempDir::new(&format!("publication-mount-{name}"));
         let path = std::fs::canonicalize(root.path()).unwrap();
         std::mem::forget(root);
         path

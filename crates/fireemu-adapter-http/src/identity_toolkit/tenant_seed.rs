@@ -219,6 +219,8 @@ struct SeedRefusal {
 #[derive(Clone, Debug, Default)]
 pub struct TenantSeeding {
     allow_tenants: Option<bool>,
+    /// The development default: the switch is turned on in a project that has none.
+    allow_tenants_by_default: bool,
     tenants: Vec<TenantSeed>,
 }
 
@@ -228,14 +230,26 @@ impl TenantSeeding {
     pub fn new(allow_tenants: Option<bool>, tenants: Vec<TenantSeed>) -> Self {
         Self {
             allow_tenants,
+            allow_tenants_by_default: false,
             tenants,
         }
     }
 
-    /// Whether the file declared neither the switch nor a tenant.
+    /// The declaration with the strict profile's development default: a project whose
+    /// multi-tenancy switch nobody wrote (the file, the Admin API or an import) starts with it
+    /// on, so tenants work without an `updateConfig` call. Production starts a project with the
+    /// switch unset; `productionExact` leaves the declaration as it is. A written value, `false`
+    /// included, is never overridden, and a declared one is applied as before.
+    #[must_use]
+    pub fn allowing_tenants_by_default(mut self) -> Self {
+        self.allow_tenants_by_default = true;
+        self
+    }
+
+    /// Whether the file declared neither the switch nor a tenant, and no default applies.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.allow_tenants.is_none() && self.tenants.is_empty()
+        self.allow_tenants.is_none() && !self.allow_tenants_by_default && self.tenants.is_empty()
     }
 
     /// Applies the declaration to `project`. The switch is set only when declared, so an
@@ -256,6 +270,8 @@ impl TenantSeeding {
     ) -> Result<(), String> {
         if let Some(allow) = self.allow_tenants {
             seed_multi_tenancy(registry, project, allow)?;
+        } else if self.allow_tenants_by_default {
+            seed_multi_tenancy_if_unset(registry, project)?;
         }
         let mut first_error = None;
         for tenant in &self.tenants {
@@ -340,6 +356,21 @@ pub fn seed_multi_tenancy(
     project: &str,
     allow_tenants: bool,
 ) -> Result<(), String> {
+    seed_multi_tenancy_when(registry, project, allow_tenants, false)
+}
+
+/// [`seed_multi_tenancy`] with `true`, only when nothing has written the switch: the check and
+/// the write are one step under the project's gate.
+fn seed_multi_tenancy_if_unset(registry: &AuthRegistry, project: &str) -> Result<(), String> {
+    seed_multi_tenancy_when(registry, project, true, true)
+}
+
+fn seed_multi_tenancy_when(
+    registry: &AuthRegistry,
+    project: &str,
+    allow_tenants: bool,
+    only_if_unset: bool,
+) -> Result<(), String> {
     let unknown = || format!("cannot set multiTenant.allowTenants: project {project:?} is unknown");
     let store = registry
         .store_for(project)
@@ -352,6 +383,17 @@ pub fn seed_multi_tenancy(
     let mut store = store
         .lock()
         .map_err(|_| "the project store is poisoned".to_owned())?;
+    // A switch written off keeps only the public member (the private one is cleared), so both
+    // are read: either one says somebody decided.
+    let members = store.stored_config_members();
+    if only_if_unset
+        && (members
+            .get(fireemu_core_auth::config_members::ALLOW_TENANTS)
+            .is_some()
+            || members.get("multiTenant").is_some())
+    {
+        return Ok(());
+    }
     let body = json!({"multiTenant": {"allowTenants": allow_tenants}});
     let fields = ["multiTenant.allowTenants".to_owned()];
     let mut members = project_config::apply_stored_members(

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "auth": {
+    "providers": {
+      "oidc": [
+        {
+          "name": "oidc.corp",
+          "enabled": true,
+          "clientId": "local-client",
+          "issuer": "https://issuer.test"
+        }
+      ],
+      "saml": [
+        {
+          "name": "saml.myidp",
+          "enabled": true,
+          "idpConfig": {
+            "idpEntityId": "https://idp.example.test/saml",
+            "ssoUrl": "https://idp.example.test/saml/sso",
+            "idpCertificates": [{ "x509Certificate": "fixture-certificate" }]
+          },
+          "spConfig": {
+            "spEntityId": "fireemu-smoke-sp",
+            "callbackUri": "https://demo-app.firebaseapp.com/__/auth/handler"
+          }
+        }
+      ]
+    }
+  }
+}

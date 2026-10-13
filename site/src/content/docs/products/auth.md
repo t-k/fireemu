@@ -64,7 +64,7 @@ This example enables email/password and phone sign-in, disables anonymous sign-i
 
 The official emulator has no TOTP. Fireemu supports TOTP and SMS second factors.
 
-Under `strict`, TOTP is enabled only through the project's MFA configuration, as in production, and a new project starts with MFA off. Declare the configuration with `auth.mfa`, in the shape Identity Platform uses:
+Under `strict`, TOTP is enabled only through the project's MFA configuration, as in production. That configuration is on by default (SMS and TOTP enabled), so enrolling a second factor needs no console toggle, Admin API call or `auth.mfa` block. With `productionExact` a new project starts with MFA off, as production does, and enrollment answers `OPERATION_NOT_ALLOWED` until it is enabled. Declare the configuration with `auth.mfa`, in the shape Identity Platform uses, to mirror your project or to turn MFA off (`{"state": "DISABLED"}`); a declared block always decides:
 
 ```json
 {
@@ -81,11 +81,11 @@ Under `strict`, TOTP is enabled only through the project's MFA configuration, as
 }
 ```
 
-The configuration applies at startup and to every project created afterward, and is validated as the Admin API validates an update; a value production would refuse stops the daemon at startup. A session reset returns the project to it. A tenant follows its own `mfaConfig`.
+The configuration applies at startup and to every project created afterward, and is validated as the Admin API validates an update; a value production would refuse stops the daemon at startup. A session reset returns the project to it. The accepted TOTP window stays `auth.totp.windowSteps` unless the configuration sets `adjacentIntervals`. A tenant follows its own `mfaConfig`.
 
 ## Multi-tenancy
 
-Under `strict`, enable multi-tenancy before using tenants, through the Admin API or in the file. Each entry of `auth.tenants` is an Admin v2 `Tenant` document plus its `tenantId`:
+Multi-tenancy is on by default, so the Admin API creates tenants and `auth.tenants` loads without enabling anything first. With `productionExact` a new project starts as production does, with tenants refused until `multiTenant.allowTenants` is enabled through the Admin API or in the file, and `auth.multiTenant.allowTenants: false` turns it off in either case. Each entry of `auth.tenants` is an Admin v2 `Tenant` document plus its `tenantId`:
 
 ```json
 {
@@ -116,6 +116,10 @@ Under the `emulator` profile, a request that names an unknown tenant creates it,
 | Unsigned custom tokens from the Admin SDK in emulator mode are accepted | `auth.allowUnsignedCustomTokens` | Refused; configure `auth.customTokenSigners` with your service accounts' public keys |
 | `@firebase/rules-unit-testing`'s unsigned mock ID token is accepted by Firestore and Storage Security Rules | `auth.allowUnsignedIdTokens` | Refused, as production refuses an unsigned token |
 | Identity-provider sign-in accepts fixture assertions and the sign-in widget | `auth.idpAssertions` (`"fixture"`) | `"signed"`: OIDC ID tokens must verify with an `auth.idpSigners` key, and SAML responses with the provider's certificates |
+
+Fixture assertions skip only the signature check. Under `strict`, sign-in through an `oidc.*` or `saml.*` provider is still refused when the provider has no configuration (declare it in `auth.providers`, or create it through the Admin API) or is disabled, with production's `OPERATION_NOT_ALLOWED : The identity provider configuration is not found.` or `... is disabled.`. Built-in providers such as `google.com` sign in without a console configuration; see [Other development conveniences](../../guides/profiles/#other-development-conveniences).
+
+The Admin SDK's `verifyIdToken` and `verifySessionCookie` inside a function you run here skip signature verification, because the SDK accepts only unsigned tokens whenever `FIREBASE_AUTH_EMULATOR_HOST` is set (as against the official emulator). A handler that authenticates callers that way therefore accepts a hand-made unsigned token with the right claims, which production refuses, and `auth.idTokenSigning: "session-rsa"` cannot fix it because the SDK then refuses the signed tokens too. Do not rely on a local `verifyIdToken` call to prove that forged tokens are refused; test that path against a deployed function.
 
 ## Blocking functions
 

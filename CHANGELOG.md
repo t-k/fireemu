@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-13
+
 ### Changed
 
 - Under the strict profile a query whose composite index is not defined (or is still building, or was deleted) is refused by default again, with production's `FAILED_PRECONDITION` and its console link to the index (owner decision of 2026-10-13), whether or not `productionExact` is set. `productionExact` no longer moves `firestore.missingIndexes`, so it is no longer listed among the development defaults in the start banner or `GET /v1/capabilities`. To keep the version 0.17 behavior of running the query and reporting the missing index once per database and index on stderr, set `"firestore": {"missingIndexes": "report"}`. The emulator profile is unchanged: it runs every query, as the official emulator does.
@@ -684,7 +686,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/t-k/fireemu/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/t-k/fireemu/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/t-k/fireemu/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/t-k/fireemu/compare/v0.15.0...v0.16.0

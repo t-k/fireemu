@@ -2,6 +2,61 @@ name: functions-sdk-discovery
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/functions-sdk-discovery.yml
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - crates/fireemu/Cargo.toml
+      - crates/fireemu/src/main.rs
+      - crates/fireemu/src/config.rs
+      - crates/fireemu/src/config_discovery.rs
+      - crates/fireemu/src/daemon.rs
+      - crates/fireemu/src/functions*.rs
+      - crates/fireemu/tests/functions_discovery.rs
+      - crates/fireemu/tests/functions_codebases.rs
+      - crates/fireemu/tests/functions_environment.rs
+      - crates/fireemu/tests/functions_runtime_selection.rs
+      - crates/fireemu/tests/census/**
+      - crates/fireemu-adapter-functions/**
+      - crates/fireemu-adapter-http/src/identity_toolkit.rs
+      - crates/fireemu-core-functions/**
+      - tools/runner-node/**
+      - tools/sdk-smoke/**
+      - npm/fireemu/testing.mjs
+      - conformance/package.json
+      - conformance/pnpm-lock.yaml
+      - conformance/src/auth-tenant-blocking/function/package.json
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/functions-sdk-discovery.yml
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - crates/fireemu/Cargo.toml
+      - crates/fireemu/src/main.rs
+      - crates/fireemu/src/config.rs
+      - crates/fireemu/src/config_discovery.rs
+      - crates/fireemu/src/daemon.rs
+      - crates/fireemu/src/functions*.rs
+      - crates/fireemu/tests/functions_discovery.rs
+      - crates/fireemu/tests/functions_codebases.rs
+      - crates/fireemu/tests/functions_environment.rs
+      - crates/fireemu/tests/functions_runtime_selection.rs
+      - crates/fireemu/tests/census/**
+      - crates/fireemu-adapter-functions/**
+      - crates/fireemu-adapter-http/src/identity_toolkit.rs
+      - crates/fireemu-core-functions/**
+      - tools/runner-node/**
+      - tools/sdk-smoke/**
+      - npm/fireemu/testing.mjs
+      - conformance/package.json
+      - conformance/pnpm-lock.yaml
+      - conformance/src/auth-tenant-blocking/function/package.json
+  schedule:
+    - cron: '0 3 * * 1'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

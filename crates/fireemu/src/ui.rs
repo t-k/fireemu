@@ -87,8 +87,7 @@ pub struct Parts<'a> {
 /// The shared UI state.
 pub fn state(parts: Parts<'_>) -> Arc<UiState> {
     let (firestore, http, storage, functions, ui) = parts.addrs;
-    let app_check_info = parts.app_check.as_ref().map(|s| AppCheckInfo {
-        kid: s.signer.kid().to_owned(),
+    let app_check_info = parts.app_check.as_ref().map(|_| AppCheckInfo {
         modes: [
             ("auth", AppCheckService::Auth),
             ("firestore", AppCheckService::Firestore),

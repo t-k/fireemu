@@ -631,6 +631,205 @@ const fs = require('node:fs');
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A codebase that declares parameters and nothing else, in a scratch directory.
+fn params_codebase(name: &str, index: &str) -> PathBuf {
+    let dir = scratch_codebase(name);
+    write(&dir, "index.js", index);
+    dir
+}
+
+/// FN-01: a deploy resolves every parameter before it deploys and stops at one that has neither
+/// a value nor a default. The same codebase refuses to start here, naming the parameter and the
+/// files a value goes in, and starts once any file of the chain sets it.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn a_parameter_with_no_value_and_no_default_refuses_the_codebase_until_the_chain_sets_it() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = params_codebase(
+        "params-missing",
+        r#"
+const { onRequest } = require("firebase-functions/v2/https");
+const params = require("firebase-functions/params");
+const needsValue = params.defineInt("FX_NEEDS_VALUE");
+const withDefault = params.defineString("FX_WITH_DEFAULT", { default: "fallback" });
+exports.show = onRequest((_req, res) =>
+  res.json({ needsValue: needsValue.value(), withDefault: withDefault.value() }));
+"#,
+    );
+    let refused = exec(&dir, "demo-params");
+    let err = String::from_utf8_lossy(&refused.stderr).into_owned();
+    assert_ne!(refused.status.code(), Some(0), "{err}");
+    assert!(err.contains("FX_NEEDS_VALUE (int)"), "{err}");
+    assert!(!err.contains("FX_WITH_DEFAULT"), "{err}");
+    assert!(err.contains(".env.demo-params"), "{err}");
+
+    for (file, project) in [(".env", "demo-params"), (".env.local", "demo-params")] {
+        write(&dir, file, "FX_NEEDS_VALUE=3\n");
+        let out = exec_script(
+            &dir,
+            project,
+            "curl -sS http://$FIREEMU_FUNCTIONS_HOST/demo-params/us-central1/show",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{file}: {stderr}");
+        let shown: serde_json::Value = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find_map(|line| serde_json::from_str(line).ok())
+            .unwrap_or_else(|| panic!("{file}: no JSON answer\n{stderr}"));
+        assert_eq!(
+            shown,
+            serde_json::json!({"needsValue": 3, "withDefault": "fallback"}),
+            "{file}"
+        );
+        std::fs::remove_file(dir.join(file)).unwrap();
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// FN-03 / FN-04 with the real SDK: `invoker: "private"` and a task-queue function are not
+/// reachable from the public URL without a credential, a public function is, and an identity
+/// token shaped bearer enters.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn a_private_function_and_a_task_queue_refuse_a_call_without_credentials_on_the_public_url() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = params_codebase(
+        "invoker",
+        r#"
+const { onRequest } = require("firebase-functions/v2/https");
+const { onTaskDispatched } = require("firebase-functions/v2/tasks");
+exports.openFn = onRequest((_req, res) => res.send("open"));
+exports.privateFn = onRequest({ invoker: "private" }, (_req, res) => res.send("private"));
+exports.listedFn = onRequest({ invoker: ["runner@demo.iam.gserviceaccount.com"] }, (_req, res) => res.send("listed"));
+exports.jobFn = onTaskDispatched((_req) => {});
+"#,
+    );
+    let status = |name: &str, extra: &str| {
+        format!(
+            "curl -sS -o /dev/null -w '%{{http_code}}\\n' {extra} -X POST -H 'content-type: application/json' -d '{{\"data\":{{}}}}' http://$FIREEMU_FUNCTIONS_HOST/demo-invoker/us-central1/{name}"
+        )
+    };
+    let script = [
+        status("openFn", ""),
+        status("privateFn", ""),
+        status("listedFn", ""),
+        status("jobFn", ""),
+        status(
+            "privateFn",
+            "-H 'authorization: Bearer aGVhZGVy.cGF5bG9hZA.c2ln'",
+        ),
+        status("privateFn", "-H 'authorization: Bearer nonsense'"),
+    ]
+    .join("; ");
+    let out = exec_script(&dir, "demo-invoker", &script);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let codes: Vec<&str> = stdout
+        .lines()
+        .filter(|line| line.len() == 3 && line.bytes().all(|b| b.is_ascii_digit()))
+        .collect();
+    assert_eq!(
+        codes,
+        ["200", "403", "403", "403", "200", "401"],
+        "{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// FN-08 / AC-2 with the real SDK: under the strict default, with no `appCheck` block, an
+/// `enforceAppCheck` callable works with a token from the open exchange (any well-formed debug
+/// token, no registered app) and still refuses a missing or malformed token. With
+/// `productionExact` the exchange needs registration again and is not served without it.
+#[test]
+#[ignore = "requires tools/sdk-smoke dependencies; the SDK workflow runs this test"]
+fn an_enforce_app_check_callable_works_without_registering_an_app() {
+    assert!(have_sdk(), "install tools/sdk-smoke dependencies first");
+    let dir = params_codebase(
+        "appcheck",
+        r#"
+const { onCall } = require("firebase-functions/v2/https");
+exports.guarded = onCall({ enforceAppCheck: true }, (request) => ({ appId: request.app?.appId ?? null }));
+exports.open = onCall((request) => ({ appId: request.app?.appId ?? null }));
+"#,
+    );
+    let script = r#"
+const crypto = require('node:crypto');
+const appId = '1:123456789:web:local-test-app';
+const call = async (name, headers) => {
+  const r = await fetch(`http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-appcheck/us-central1/${name}`, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{"data":{}}' });
+  return { status: r.status, body: await r.json().catch(() => null) };
+};
+(async () => {
+  const out = {};
+  const exchange = await fetch(`http://${process.env.FIREEMU_APP_CHECK_EMULATOR_HOST}/v1/projects/demo-appcheck/apps/${appId}:exchangeDebugToken`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ debugToken: crypto.randomUUID() }) });
+  out.exchange = exchange.status;
+  const token = (await exchange.json()).token;
+  out.withToken = await call('guarded', { 'x-firebase-appcheck': token });
+  out.missing = (await call('guarded', {})).status;
+  out.malformed = (await call('guarded', { 'x-firebase-appcheck': 'not-a-token' })).status;
+  out.openWithToken = await call('open', { 'x-firebase-appcheck': token });
+  const bad = await fetch(`http://${process.env.FIREEMU_APP_CHECK_EMULATOR_HOST}/v1/projects/demo-appcheck/apps/${appId}:exchangeDebugToken`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ debugToken: 'not-a-uuid' }) });
+  out.badExchange = bad.status;
+  console.log('RESULT ' + JSON.stringify(out));
+})().catch((e) => { console.error(e); process.exit(1); });
+"#;
+    let run = |config: Option<&str>| {
+        let mut command = fireemu_exec(&dir, "demo-appcheck");
+        if let Some(config) = config {
+            write(&dir, "fireemu.test.json", config);
+            command.args(["--config", dir.join("fireemu.test.json").to_str().unwrap()]);
+        }
+        let out = command
+            .args(["--", "node", "-e", script])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        (out.status.code(), stdout, stderr)
+    };
+
+    let (code, stdout, stderr) = run(None);
+    assert_eq!(code, Some(0), "{stderr}");
+    let line = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("RESULT "))
+        .unwrap_or_else(|| panic!("no result:\n{stdout}\n{stderr}"));
+    let seen: serde_json::Value = serde_json::from_str(line).unwrap();
+    assert_eq!(seen["exchange"], 200, "{seen}");
+    assert_eq!(seen["withToken"]["status"], 200, "{seen}");
+    assert_eq!(
+        seen["withToken"]["body"]["result"]["appId"], "1:123456789:web:local-test-app",
+        "{seen}"
+    );
+    assert_eq!(seen["missing"], 401, "{seen}");
+    assert_eq!(seen["malformed"], 401, "{seen}");
+    assert_eq!(
+        seen["openWithToken"]["body"]["result"]["appId"], "1:123456789:web:local-test-app",
+        "{seen}"
+    );
+    assert_eq!(seen["badExchange"], 403, "{seen}");
+
+    // productionExact: registration is required again, and nothing is served without it.
+    let (code, stdout, stderr) = run(Some(
+        r#"{"schemaVersion":1,"profile":"strict","productionExact":true}"#,
+    ));
+    let line = stdout.lines().find_map(|l| l.strip_prefix("RESULT "));
+    assert!(
+        line.is_none_or(|line| {
+            let seen: serde_json::Value = serde_json::from_str(line).unwrap();
+            seen["exchange"] != 200
+        }),
+        "the exchange must not succeed without registration\n{stdout}\n{stderr} ({code:?})"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The one line the fixture prints at load, parsed.
 fn observed(out: &Output) -> serde_json::Value {
     let err = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -741,10 +940,10 @@ fn the_dotenv_chain_secret_overrides_and_runtime_config_reach_the_runtime() {
     assert_eq!(seen["paramInt"], 42);
     assert_eq!(seen["paramBoolean"], true);
     assert_eq!(seen["paramList"], serde_json::json!(["a", "b"]));
-    // The official missing-parameter behaviour: an empty string, and a `default` is a
-    // deploy-time value the runtime never sees. Neither prompts and neither fails.
-    assert_eq!(seen["paramMissing"], "");
-    assert_eq!(seen["paramMissingWithDefault"], "");
+    // A parameter nothing sets takes its declared default, even when it is read at the top of
+    // the module, as a deployed function sees it.
+    assert_eq!(seen["paramWithDefault"], "the default");
+    assert_eq!(seen["paramIntDefault"], 7);
     assert_eq!(seen["paramSecret"], "");
     // Legacy functions.config(), through CLOUD_RUNTIME_CONFIG.
     assert_eq!(seen["legacyConfig"], serde_json::json!({"key": "legacy"}));

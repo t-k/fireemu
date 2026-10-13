@@ -12,7 +12,14 @@ import {
 import { t } from "../i18n";
 import { appState } from "../state";
 import { AsyncButton, ErrorBanner, FetchState, Notice, Section } from "../components/common";
-import { awaitIdle, functionsStatus, publishMessage, runSchedule, setClock } from "../api/control";
+import {
+  awaitIdle,
+  functionsStatus,
+  publishMessage,
+  runSchedule,
+  runTasks,
+  setClock,
+} from "../api/control";
 import { errorOf, settle } from "../api/client";
 import {
   enqueueTask,
@@ -321,8 +328,9 @@ const EnqueueForm: Component<{
 }> = (props) => {
   const [data, setData] = createSignal('{"id": "1", "n": 1}');
   const [id, setId] = createSignal("");
+  const [scheduleTime, setScheduleTime] = createSignal("");
   const enqueue = async () => {
-    const built = buildEnqueue({ data: data(), id: id() });
+    const built = buildEnqueue({ data: data(), id: id(), scheduleTime: scheduleTime() });
     if (built.isErr()) {
       props.onError(built.error);
       return;
@@ -350,6 +358,16 @@ const EnqueueForm: Component<{
       <label class="mt-1 block text-sm">
         <span class="label">{t("functions.enqueueId")}</span>
         <input class="input mono" value={id()} onInput={(e) => setId(e.currentTarget.value)} />
+      </label>
+      <label class="mt-1 block text-sm">
+        <span class="label">{t("functions.enqueueScheduleTime")}</span>
+        <input
+          class="input mono"
+          data-testid={`enqueue-${props.f.name}-schedule`}
+          placeholder="2026-01-01T00:00:00Z"
+          value={scheduleTime()}
+          onInput={(e) => setScheduleTime(e.currentTarget.value)}
+        />
       </label>
       <AsyncButton
         class="btn btn-primary mt-2"
@@ -428,6 +446,56 @@ const FunctionRow: Component<{
             }}
             onError={props.onError}
           />
+        </Show>
+        <Show when={trigger().kind === "tasks" && (props.f.pendingTaskCount ?? 0) > 0}>
+          <div class="mt-1" data-testid={`pending-tasks-${props.f.name}`}>
+            <div class="text-zinc-500">
+              {t("functions.pendingTasks", { count: props.f.pendingTaskCount ?? 0 })}
+            </div>
+            <For each={props.f.pendingTasks ?? []}>
+              {(task) => (
+                <div class="flex items-center gap-2" data-testid={`pending-task-${task.id}`}>
+                  <span class="mono">{task.id}</span>
+                  <Show when={task.scheduleTime}>
+                    {(due) => (
+                      <span class="mono text-zinc-500">
+                        {t("functions.pendingTaskDue", { time: due() })}
+                      </span>
+                    )}
+                  </Show>
+                  <Show
+                    when={!task.runNow}
+                    fallback={
+                      <span class="text-zinc-500">{t("functions.pendingTaskReleased")}</span>
+                    }
+                  >
+                    <AsyncButton
+                      class="btn"
+                      disabled={!props.active}
+                      testId={`run-task-${props.f.name}-${task.id}`}
+                      onClick={async () => {
+                        const r = await runTasks(appState.session(), props.f.name, task.id);
+                        await r.match(
+                          async (released) => {
+                            props.onNotice(
+                              t("functions.ranTasks", {
+                                count: released.released,
+                                name: props.f.name,
+                              }),
+                            );
+                            await props.onRefresh();
+                          },
+                          async (e) => props.onError(e.message),
+                        );
+                      }}
+                    >
+                      {t("functions.runTask")}
+                    </AsyncButton>
+                  </Show>
+                </div>
+              )}
+            </For>
+          </div>
         </Show>
         <Show when={trigger().kind === "schedule" && props.f.nextRun}>
           {(nextRun) => (
@@ -509,6 +577,27 @@ const FunctionRow: Component<{
               {t("functions.invoke")}
             </button>
           </Show>
+        </Show>
+        <Show when={trigger().kind === "tasks" && (props.f.pendingTaskCount ?? 0) > 0}>
+          <AsyncButton
+            class="btn"
+            disabled={!props.active}
+            testId={`run-${props.f.name}`}
+            onClick={async () => {
+              const r = await runTasks(appState.session(), props.f.name);
+              await r.match(
+                async (released) => {
+                  props.onNotice(
+                    t("functions.ranTasks", { count: released.released, name: props.f.name }),
+                  );
+                  await props.onRefresh();
+                },
+                async (e) => props.onError(e.message),
+              );
+            }}
+          >
+            {t("functions.runWaitingTasks")}
+          </AsyncButton>
         </Show>
         <Show when={trigger().kind === "tasks"}>
           <button

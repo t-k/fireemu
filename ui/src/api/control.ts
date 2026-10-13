@@ -114,6 +114,21 @@ export const functionsStatus = (session: string): ResultAsync<FunctionsStatus, A
 export const runSchedule = (session: string, name: string): ResultAsync<Json, ApiError> =>
   request("POST", `${base(session)}/functions/${encodeURIComponent(name)}:run`, {});
 
+/**
+ * Releases the Cloud Tasks of a task-queue function that wait for their scheduleTime: the task
+ * named by `task` (its id), or every waiting one when it is omitted.
+ */
+export const runTasks = (
+  session: string,
+  name: string,
+  task?: string,
+): ResultAsync<{ function: string; released: number }, ApiError> =>
+  request(
+    "POST",
+    `${base(session)}/functions/${encodeURIComponent(name)}:run`,
+    task === undefined ? {} : { task },
+  );
+
 export const publishMessage = (
   session: string,
   topic: string,

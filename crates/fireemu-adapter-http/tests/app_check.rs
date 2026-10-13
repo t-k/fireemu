@@ -95,6 +95,7 @@ fn app_check_state(seed: u64) -> Arc<AppCheckState> {
         constant_time: Arc::new(SubtleConstantTimeEq),
         secrets: Arc::new(OsDebugSecrets),
         barrier: None,
+        open_debug_tokens: None,
     })
 }
 
@@ -738,4 +739,163 @@ async fn every_app_check_route_is_not_found_while_the_section_is_disabled() {
             .contains("appCheck.enabled"));
     }
     server.abort();
+}
+
+// ------------------------------------------------------------------------------------------
+// appCheck.debugTokens = "any": nothing to register, nothing to digest
+// ------------------------------------------------------------------------------------------
+
+/// A state whose registry is empty and whose exchange is open, as the strict profile's
+/// development default serves it.
+fn open_state(seed: u64) -> Arc<AppCheckState> {
+    Arc::new(AppCheckState {
+        registry: Arc::new(RwLock::new(
+            AppCheckRegistry::new(3600).expect("3600s is inside the TTL range"),
+        )),
+        signer: signer(seed),
+        clock: clock(),
+        control_token: CONTROL_TOKEN.to_owned(),
+        hasher: Arc::new(Sha256DebugTokenHasher),
+        constant_time: Arc::new(SubtleConstantTimeEq),
+        secrets: Arc::new(OsDebugSecrets),
+        barrier: None,
+        open_debug_tokens: Some("demo-app".to_owned()),
+    })
+}
+
+#[test]
+fn an_open_exchange_registers_the_app_and_issues_a_token_that_verifies() {
+    let state = open_state(1);
+    for selector in ["demo-app", "1234567890"] {
+        let path = format!("/v1/projects/{selector}/apps/{APP_ID}:exchangeDebugToken");
+        let r = call(&state, "POST", &path, &exchange_body(SECRET));
+        assert_eq!(r.status, 200, "{selector}: {}", r.body);
+        let token = r.body["token"].as_str().expect("a token");
+        let registry = state.registry.read().unwrap();
+        let identity = verify_token(
+            token,
+            &registry,
+            "demo-app",
+            state.signer.as_ref(),
+            LogicalInstant::from_unix_seconds(START),
+        )
+        .expect("the issued token verifies against the instance key");
+        assert_eq!(identity.app_id, APP_ID);
+        assert_eq!(identity.project_number, "1234567890");
+    }
+    // Registered once, however many times it exchanges.
+    assert_eq!(state.registry.read().unwrap().app_count(), 1);
+    // Any other well-formed token exchanges too; the registry holds no digest for it.
+    let again = call(&state, "POST", EXCHANGE, &exchange_body(OTHER_SECRET));
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(
+        state
+            .registry
+            .read()
+            .unwrap()
+            .app("demo-app", APP_ID)
+            .unwrap()
+            .digest_count(),
+        0
+    );
+}
+
+#[test]
+fn an_open_exchange_still_refuses_a_malformed_token_and_what_it_cannot_bind() {
+    let state = open_state(1);
+    let refused = |path: &str, body: String| {
+        let r = call(&state, "POST", path, &body);
+        assert_eq!(r.status, 403, "{path} {body}: {}", r.body);
+        assert_eq!(r.body["error"]["message"], "App attestation failed.");
+    };
+    // Not a UUIDv4: wrong version, wrong variant, not hyphenated, empty, free text.
+    for bad in [
+        "a1b2c3d4-e5f6-1a7b-8c9d-0e1f2a3b4c5d",
+        "a1b2c3d4-e5f6-4a7b-cc9d-0e1f2a3b4c5d",
+        "a1b2c3d4e5f64a7b8c9d0e1f2a3b4c5d",
+        "",
+        "my-debug-token",
+    ] {
+        refused(EXCHANGE, exchange_body(bad));
+    }
+    // An app ID that is not in the standard form names no project number.
+    refused(
+        "/v1/projects/demo-app/apps/local-test-app:exchangeDebugToken",
+        exchange_body(SECRET),
+    );
+    // A project number selector must be the number the app ID carries.
+    refused(
+        &format!("/v1/projects/999999999/apps/{APP_ID}:exchangeDebugToken"),
+        exchange_body(SECRET),
+    );
+    assert_eq!(
+        state.registry.read().unwrap().app_count(),
+        0,
+        "nothing was registered"
+    );
+    // Replay protection stays unsupported.
+    let limited = call(
+        &state,
+        "POST",
+        EXCHANGE,
+        &json!({"debugToken": SECRET, "limitedUse": true}).to_string(),
+    );
+    assert_eq!(limited.status, 501, "{}", limited.body);
+}
+
+#[test]
+fn an_open_exchange_does_not_enable_an_app_the_configuration_disabled() {
+    let state = open_state(1);
+    {
+        let mut registry = state.registry.write().unwrap();
+        registry
+            .register_app(AppRegistration {
+                project_id: "demo-app".to_owned(),
+                project_number: "1234567890".to_owned(),
+                app_id: APP_ID.to_owned(),
+                enabled: false,
+                debug_token_digests: vec![digest_of(SECRET)],
+            })
+            .unwrap();
+        registry.set_project_epoch("demo-app", ProjectEpoch::new(5));
+    }
+    let r = call(&state, "POST", EXCHANGE, &exchange_body(SECRET));
+    assert_eq!(r.status, 403, "{}", r.body);
+}
+
+#[test]
+fn the_production_rule_refuses_an_unregistered_app_and_an_unregistered_token() {
+    // The registered-only state (productionExact, or any explicit appCheck block).
+    let state = app_check_state(1);
+    let r = call(
+        &state,
+        "POST",
+        "/v1/projects/demo-app/apps/1:1234567890:web:another-app:exchangeDebugToken",
+        &exchange_body(SECRET),
+    );
+    assert_eq!(r.status, 403, "{}", r.body);
+    let unregistered_token = call(&state, "POST", EXCHANGE, &exchange_body(OTHER_SECRET));
+    assert_eq!(
+        unregistered_token.status, 403,
+        "{}",
+        unregistered_token.body
+    );
+}
+
+/// A banner shows the key ID without generating a key nobody has needed: a signer that has not
+/// generated its key says so, and names the key once something has used it.
+#[test]
+fn the_banner_names_the_key_only_after_it_exists() {
+    let state = AppCheckState {
+        signer: AppCheckRsaSigner::lazy(AppCheckKeySource::Seed(31)).unwrap(),
+        ..Arc::into_inner(open_state(1)).expect("the state is unshared")
+    };
+    assert_eq!(state.kid_for_banner(), "generated on first use");
+    assert!(state.signer.kid_if_ready().is_none());
+    let r = call(&state, "POST", EXCHANGE, &exchange_body(SECRET));
+    assert_eq!(r.status, 200, "{}", r.body);
+    let kid = state.signer.kid().to_owned();
+    assert!(kid.starts_with("fireemu-app-check-"));
+    assert_eq!(state.kid_for_banner(), kid);
+    assert!(format!("{state:?}").contains(&kid));
 }

@@ -126,6 +126,7 @@ pub fn app_check_state(seed: u64, clock: Arc<Mutex<VirtualClock>>) -> Arc<AppChe
         constant_time: Arc::new(SubtleConstantTimeEq),
         secrets: Arc::new(OsDebugSecrets),
         barrier: None,
+        open_debug_tokens: None,
     })
 }
 

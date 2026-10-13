@@ -385,6 +385,9 @@ fn record_json(r: &fireemu_adapter_functions::runtime::InvocationRecord) -> Valu
     json!({"eventId": r.event_id.to_string(), "function": r.function, "attempt": r.attempt, "outcome": r.outcome})
 }
 
+/// The most waiting tasks the overview lists per queue; the count is always exact.
+const MAX_LISTED_PENDING_TASKS: usize = 50;
+
 /// `GET functions`: the manifest with trigger details, the runtime status, the invocation
 /// history and dead letters.
 fn functions(state: &UiState) -> UiResponse {
@@ -395,6 +398,8 @@ fn functions(state: &UiState) -> UiResponse {
         );
     };
     let now = runtime.now();
+    // The tasks that wait in a queue, so the console can show when each is due and run it now.
+    let pending = runtime.pending_tasks();
     let functions: Vec<Value> = runtime
         .manifest()
         .functions
@@ -410,6 +415,27 @@ fn functions(state: &UiState) -> UiResponse {
                 "concurrency": f.effective_concurrency(),
                 "configuredConcurrency": f.concurrency,
             });
+            if matches!(f.trigger, Trigger::TaskQueue { .. }) {
+                let waiting: Vec<&fireemu_adapter_functions::runtime::PendingTaskInfo> = pending
+                    .iter()
+                    .filter(|task| task.function == f.name)
+                    .collect();
+                entry["pendingTaskCount"] = json!(waiting.len());
+                entry["pendingTasks"] = Value::Array(
+                    waiting
+                        .iter()
+                        .take(MAX_LISTED_PENDING_TASKS)
+                        .map(|task| {
+                            json!({
+                                "id": task.id,
+                                "name": task.name,
+                                "scheduleTime": task.schedule_time,
+                                "runNow": task.run_now,
+                            })
+                        })
+                        .collect(),
+                );
+            }
             // A scheduled function reports when it next runs on the virtual clock, so the
             // console can offer to advance the clock straight to it.
             if let Trigger::Schedule {
@@ -517,12 +543,26 @@ async fn invoke_function(state: &UiState, name: &str, req: &UiRequest) -> UiResp
         Ok(plan) => plan,
         Err(message) => return UiResponse::error(400, &format!("INVALID_ARGUMENT : {message}")),
     };
+    // The console acts as the project owner: it presents the control token, which the Functions
+    // port accepts in place of an invoker's identity token for a function that is not public.
+    let mut headers: Vec<(String, String)> = plan
+        .headers
+        .iter()
+        .filter(|(name, _)| {
+            !name.eq_ignore_ascii_case(fireemu_adapter_functions::invoker::OWNER_TOKEN_HEADER)
+        })
+        .cloned()
+        .collect();
+    headers.push((
+        fireemu_adapter_functions::invoker::OWNER_TOKEN_HEADER.to_owned(),
+        state.control_token.clone(),
+    ));
     let started = std::time::Instant::now();
     match fireemu_adapter_functions::http::forward(
         &addr,
         &plan.method,
         &plan.path_and_query,
-        &plan.headers,
+        &headers,
         &plan.body,
     )
     .await
@@ -580,7 +620,7 @@ fn enqueue_task(state: &UiState, name: &str, req: &UiRequest) -> UiResponse {
             )
         }
     };
-    let task_body = match crate::functions_actions::build_task_body(
+    let mut task_body = match crate::functions_actions::build_task_body(
         runtime.project(),
         &region,
         name,
@@ -591,6 +631,20 @@ fn enqueue_task(state: &UiState, name: &str, req: &UiRequest) -> UiResponse {
         Ok(body) => body,
         Err(message) => return UiResponse::error(400, &format!("INVALID_ARGUMENT : {message}")),
     };
+    // An optional `scheduleTime` (RFC 3339) holds the task back, as the Admin SDK's
+    // `scheduleTime` / `scheduleDelaySeconds` does; the runtime validates it.
+    match body.get("scheduleTime") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(at)) if !at.is_empty() => {
+            task_body["task"]["scheduleTime"] = Value::String(at.clone());
+        }
+        Some(_) => {
+            return UiResponse::error(
+                400,
+                "INVALID_ARGUMENT : scheduleTime must be an RFC 3339 string",
+            )
+        }
+    }
     // Apply the Cloud Tasks port's own request-body ceiling to the assembled task JSON (the
     // base64 body, headers and name -- not the raw `data`), so the same task is accepted or
     // refused identically whether it is enqueued here or sent to the Tasks port by the SDK.
@@ -720,7 +774,9 @@ fn app_check_config(state: &UiState, req: &UiRequest) -> UiResponse {
         200,
         &json!({
             "enabled": true,
-            "kid": info.map(|i| i.kid.as_str()),
+            // Read now rather than at start: a key generated on first use has no ID before it
+            // is first needed, and showing it must not be what generates it.
+            "kid": state.app_check.as_ref().and_then(|s| s.signer.kid_if_ready()),
             "modes": modes,
             "tokenTtlSeconds": registry.token_ttl_seconds(),
             "apps": apps,

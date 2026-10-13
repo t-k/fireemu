@@ -14,6 +14,7 @@ pub mod eventarc_channels;
 pub mod eventarc_strict;
 pub mod events;
 pub mod http;
+pub mod invoker;
 pub mod manifest_json;
 pub mod node_selection;
 pub mod ordered_json;

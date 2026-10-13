@@ -126,7 +126,6 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
             rules_enforced: true,
             clock_pinned: true,
             app_check: app_check.as_ref().map(|s| AppCheckInfo {
-                kid: s.signer.kid().to_owned(),
                 modes: vec![
                     ("auth".to_owned(), "unenforced".to_owned()),
                     ("firestore".to_owned(), "enforced".to_owned()),
@@ -787,6 +786,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         payload = json.dumps({
             "method": self.command,
             "path": self.path,
+            "headers": {k.lower(): v for k, v in self.headers.items()},
             "body": body.decode("utf-8", "replace"),
         }).encode()
         self.send_response(200)
@@ -824,6 +824,20 @@ while True:
 /// panics skips its runner shutdown, so the directory can go while the runner is alive; the runner
 /// only appends to the file, so a late write fails rather than recreating it.
 async fn state_with_http_functions() -> (
+    TaskProbe,
+    Arc<UiState>,
+    Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>,
+) {
+    state_with_http_functions_on(fireemu_adapter_functions::http::FunctionsHttpProfile::Emulator)
+        .await
+}
+
+/// The same fixture with the Functions port in `profile`. Under the strict profile it also holds
+/// `privateEcho`, an HTTP function whose `invoker` is `private`, and the runtime knows the
+/// control token as the owner's credential, as the daemon installs it.
+async fn state_with_http_functions_on(
+    profile: fireemu_adapter_functions::http::FunctionsHttpProfile,
+) -> (
     TaskProbe,
     Arc<UiState>,
     Arc<fireemu_adapter_functions::runtime::FunctionsRuntime>,
@@ -872,6 +886,13 @@ async fn state_with_http_functions() -> (
         rate_limits: TaskRateLimits::default(),
     };
     manifest.functions.push(count_job);
+    if profile == fireemu_adapter_functions::http::FunctionsHttpProfile::Strict {
+        let mut private_echo = manifest.get("echo").unwrap().clone();
+        "privateEcho".clone_into(&mut private_echo.name);
+        "privateEcho".clone_into(&mut private_echo.entry_point);
+        private_echo.platform_options.invokers = vec!["private".to_owned()];
+        manifest.functions.push(private_echo);
+    }
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();
@@ -882,18 +903,24 @@ async fn state_with_http_functions() -> (
         manifest,
         FunctionsConfig {
             functions_host: Some(addr.clone()),
+            honour_task_schedule_time: profile
+                == fireemu_adapter_functions::http::FunctionsHttpProfile::Strict,
             ..FunctionsConfig::for_tests(1000, "s".into())
         },
         clock,
         Arc::new(runner),
         None,
     );
+    runtime.set_owner_token(TOKEN.to_owned());
     tokio::spawn(runtime.clone().dispatch_loop());
-    tokio::spawn(fireemu_adapter_functions::http::serve_functions(
-        listener,
-        runtime.clone(),
-        fireemu_adapter_functions::http::HttpAdmission::new(),
-    ));
+    tokio::spawn(
+        fireemu_adapter_functions::http::serve_functions_with_profile(
+            listener,
+            runtime.clone(),
+            fireemu_adapter_functions::http::HttpAdmission::new(),
+            profile,
+        ),
+    );
 
     let mut state = Arc::try_unwrap(state())
         .ok()
@@ -997,6 +1024,109 @@ async fn invoking_an_on_request_function_forwards_through_the_port_and_returns_i
     runtime.runner().shutdown().await;
 }
 
+/// FN-03 / FN-04: the strict Functions port refuses a call without credentials to a private
+/// function and to a task-queue function, and the console, which acts as the project owner,
+/// still invokes the private function and still enqueues onto the queue.
+#[tokio::test]
+async fn the_console_still_invokes_a_private_function_and_enqueues_a_task_under_the_strict_port() {
+    let (probe, s, runtime) =
+        state_with_http_functions_on(fireemu_adapter_functions::http::FunctionsHttpProfile::Strict)
+            .await;
+    let addr = s.info.functions_addr.clone().unwrap();
+    // Direct calls to the port are refused: the function is private, the queue is its own invoker.
+    for path in [
+        "/demo-app/us-central1/privateEcho",
+        "/demo-app/us-central1/countJob",
+    ] {
+        let direct = fireemu_adapter_functions::http::forward(&addr, "POST", path, &[], b"{}")
+            .await
+            .unwrap();
+        assert_eq!(direct.status, 403, "{path}");
+    }
+    // The public function is unaffected.
+    let public = fireemu_adapter_functions::http::forward(
+        &addr,
+        "POST",
+        "/demo-app/us-central1/echo",
+        &[],
+        b"{}",
+    )
+    .await
+    .unwrap();
+    assert_eq!(public.status, 200);
+
+    // The console's invoke presents the owner's credential.
+    let (status, body) = call(
+        &s,
+        browser(
+            request(
+                "POST",
+                "/ui/api/functions/privateEcho:invoke",
+                &json!({"path": "/greet", "body": "{\"hi\":true}"}),
+            ),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["status"], 200, "{body}");
+    let echoed: Value = serde_json::from_str(body["body"].as_str().unwrap()).unwrap();
+    assert_eq!(echoed["path"], "/demo-app/us-central1/privateEcho/greet");
+    // The credential is not forwarded to the function.
+    assert!(!body["body"].as_str().unwrap().contains(TOKEN), "{body}");
+
+    // The console's enqueue reaches the task-queue function although its URL refuses callers.
+    let (status, body) = call(
+        &s,
+        browser(
+            request(
+                "POST",
+                "/ui/api/functions/countJob:enqueue",
+                &json!({"data": {"n": 1}, "id": "job-strict"}),
+            ),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let entries = wait_for_probe(&probe, 1).await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&entries[0]).unwrap(),
+        json!({"data": {"n": 1}})
+    );
+    runtime.runner().shutdown().await;
+}
+
+/// The console forwards the headers it was given, and the owner's credential it adds is the
+/// control token alone: a header of that name sent by the page is replaced, and the function
+/// never sees either.
+#[tokio::test]
+async fn invoking_forwards_the_callers_headers_and_never_a_forged_owner_credential() {
+    let (_probe, s, runtime) = state_with_http_functions().await;
+    let (status, body) = call(
+        &s,
+        browser(
+            request(
+                "POST",
+                "/ui/api/functions/echo:invoke",
+                &json!({"headers": {"x-custom": "kept", "X-Fireemu-Owner-Token": "forged"}}),
+            ),
+            Some(TOKEN),
+        ),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let echoed: Value = serde_json::from_str(body["body"].as_str().unwrap()).unwrap();
+    assert_eq!(echoed["headers"]["x-custom"], "kept", "{echoed}");
+    let seen = echoed["headers"].to_string();
+    assert!(!seen.contains("forged") && !seen.contains(TOKEN), "{seen}");
+    assert!(
+        echoed["headers"].get("x-fireemu-owner-token").is_none(),
+        "{seen}"
+    );
+    runtime.runner().shutdown().await;
+}
+
 #[tokio::test]
 async fn invoking_refuses_a_non_http_function_an_unknown_name_and_a_bad_method() {
     let (_probe, s, runtime) = state_with_http_functions().await;
@@ -1066,6 +1196,87 @@ async fn enqueuing_a_task_dispatches_it_to_the_queue_handler() {
     let entries = wait_for_probe(&probe, 1).await;
     let dispatched: Value = serde_json::from_str(&entries[0]).unwrap();
     assert_eq!(dispatched, json!({"data": {"n": 7}}));
+    runtime.runner().shutdown().await;
+}
+
+/// The console refuses a `scheduleTime` that is not a non-empty string before the runtime sees
+/// it, so the emulator profile (which does not validate the time itself) never takes an empty one.
+#[tokio::test]
+async fn enqueuing_refuses_an_empty_or_non_string_schedule_time_in_the_emulator_profile() {
+    let (_probe, s, runtime) = state_with_http_functions().await;
+    for bad in [json!(""), json!(7), json!(true)] {
+        let (status, body) = call(
+            &s,
+            browser(
+                request(
+                    "POST",
+                    "/ui/api/functions/countJob:enqueue",
+                    &json!({"data": {}, "scheduleTime": bad}),
+                ),
+                Some(TOKEN),
+            ),
+        )
+        .await;
+        assert_eq!(status, 400, "{bad}: {body}");
+    }
+    runtime.runner().shutdown().await;
+}
+
+/// A task enqueued with a `scheduleTime` waits under the strict profile: the overview lists it
+/// with the time that holds it back, `run_tasks_now` (which the control API's `:run` calls)
+/// releases it, and it then reaches the handler. An unparseable time is a 400.
+#[tokio::test]
+async fn a_scheduled_task_is_listed_and_run_now_dispatches_it() {
+    let (probe, s, runtime) =
+        state_with_http_functions_on(fireemu_adapter_functions::http::FunctionsHttpProfile::Strict)
+            .await;
+    let enqueue = |body: Value| {
+        call(
+            &s,
+            browser(
+                request("POST", "/ui/api/functions/countJob:enqueue", &body),
+                Some(TOKEN),
+            ),
+        )
+    };
+    let (status, body) = enqueue(json!({
+        "data": {"n": 9}, "id": "job-later", "scheduleTime": "2099-01-01T00:00:00Z"
+    }))
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["task"]["scheduleTime"], "2099-01-01T00:00:00Z");
+    for bad in [json!("soon"), json!(7), json!("")] {
+        let (status, body) = enqueue(json!({"data": {}, "scheduleTime": bad})).await;
+        assert_eq!(status, 400, "{bad}: {body}");
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1300)).await;
+    assert!(
+        !probe.exists() || std::fs::read_to_string(&*probe).unwrap().is_empty(),
+        "the task must still be waiting"
+    );
+
+    let (status, overview) = call(&s, request("GET", "/ui/api/functions", &Value::Null)).await;
+    assert_eq!(status, 200);
+    let queue = overview["functions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "countJob")
+        .expect("the queue is listed");
+    assert_eq!(queue["pendingTaskCount"], 1);
+    assert_eq!(queue["pendingTasks"][0]["id"], "job-later");
+    assert_eq!(
+        queue["pendingTasks"][0]["scheduleTime"],
+        "2099-01-01T00:00:00Z"
+    );
+    assert_eq!(queue["pendingTasks"][0]["runNow"], false);
+
+    assert_eq!(runtime.run_tasks_now("countJob", Some("job-later")), 1);
+    let entries = wait_for_probe(&probe, 1).await;
+    assert_eq!(
+        serde_json::from_str::<Value>(&entries[0]).unwrap(),
+        json!({"data": {"n": 9}})
+    );
     runtime.runner().shutdown().await;
 }
 
@@ -1394,6 +1605,7 @@ fn ac_state() -> Arc<AppCheckState> {
         constant_time: Arc::new(fireemu_adapter_http::signing::SubtleConstantTimeEq),
         secrets: Arc::new(fireemu_adapter_http::signing::OsDebugSecrets),
         barrier: None,
+        open_debug_tokens: None,
     })
 }
 

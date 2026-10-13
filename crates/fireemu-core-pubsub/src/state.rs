@@ -124,6 +124,7 @@ pub struct PubSubState {
     resource_policies: BTreeMap<String, crate::iam::PolicyState>,
     policy_incarnation: u32,
     enforce_dead_letter_iam: bool,
+    dead_letter_grants_required: bool,
     project_numbers: BTreeMap<String, String>,
     issued_page_boundaries: BTreeMap<String, BTreeMap<String, Option<String>>>,
     topics: BTreeMap<String, TopicEntry>,
@@ -150,6 +151,7 @@ impl PubSubState {
             resource_policies: BTreeMap::new(),
             policy_incarnation: 0,
             enforce_dead_letter_iam: false,
+            dead_letter_grants_required: false,
             project_numbers: BTreeMap::new(),
             issued_page_boundaries: BTreeMap::new(),
             topics: BTreeMap::new(),
@@ -190,8 +192,21 @@ impl PubSubState {
     }
 
     /// Strict adapters enforce forwarding authority; emulator adapters retain legacy transfers.
+    ///
+    /// Enforcement includes the resource grants production needs (the service agent as
+    /// subscriber on the source subscription and publisher on the dead-letter topic); see
+    /// [`Self::set_dead_letter_grants_required`] to forward without them.
     pub fn set_dead_letter_iam_enforcement(&mut self, enforce: bool) {
         self.enforce_dead_letter_iam = enforce;
+        self.dead_letter_grants_required = enforce;
+    }
+
+    /// Whether strict forwarding also needs the two resource grants and a configured project
+    /// number. `false` keeps the strict message shape (attributes, publish time) and forwards as
+    /// if the service agent held both roles: a test of dead lettering has nothing to learn from
+    /// granting them by hand. No effect while enforcement is off.
+    pub fn set_dead_letter_grants_required(&mut self, required: bool) {
+        self.dead_letter_grants_required = required;
     }
 
     /// Reads the current policy of a live topic or subscription.
@@ -237,7 +252,7 @@ impl PubSubState {
         source: &SubscriptionName,
         destination: &TopicName,
     ) -> bool {
-        if !self.enforce_dead_letter_iam {
+        if !self.enforce_dead_letter_iam || !self.dead_letter_grants_required {
             return true;
         }
         let Some(number) = self.project_numbers.get(source.project()) else {
@@ -2098,6 +2113,63 @@ mod tests {
                 "source publication nanoseconds: {nanos}"
             );
         }
+    }
+
+    /// PS-01: without the grants requirement a strict daemon forwards a dead letter as if the
+    /// service agent held both roles, and still stamps the strict message shape; with the
+    /// requirement (production's rule) nothing is forwarded until both grants exist.
+    #[test]
+    fn strict_forwarding_without_the_grant_requirement_keeps_the_strict_shape() {
+        for required in [false, true] {
+            let (mut state, source, dead, sink) = iam_fixture();
+            state.set_dead_letter_grants_required(required);
+            assert_eq!(state.dead_letter_authorized(&source, &dead), !required);
+            let mut now = LogicalInstant::UNIX_EPOCH;
+            for attempt in 1..=5 {
+                let received = state.pull(&source, 1, now).unwrap();
+                assert_eq!(received[0].delivery_attempt, attempt);
+                now = now.checked_add(LogicalDuration::from_seconds(11)).unwrap();
+            }
+            // Forwarded, the message leaves the source; withheld, it is delivered again.
+            assert_eq!(
+                state.pull(&source, 1, now).unwrap().is_empty(),
+                !required,
+                "required={required}"
+            );
+            let forwarded = state.pull(&sink, 1, now).unwrap();
+            assert_eq!(
+                forwarded.len(),
+                usize::from(!required),
+                "required={required}"
+            );
+            if let Some(message) = forwarded.first() {
+                // The strict shape: the source delivery attempt travels with the message.
+                assert_eq!(
+                    message.message.message.attributes["CloudPubSubDeadLetterSourceDeliveryCount"],
+                    "5"
+                );
+            }
+        }
+        // Granting both roles satisfies the requirement, as before.
+        let (mut state, source, dead, _sink) = iam_fixture();
+        state.set_dead_letter_grants_required(true);
+        assert!(!state.dead_letter_authorized(&source, &dead));
+        let member = "serviceAccount:service-123456789@gcp-sa-pubsub.iam.gserviceaccount.com";
+        write_iam(
+            &mut state,
+            &source.to_full(),
+            "roles/pubsub.subscriber",
+            true,
+            member,
+        );
+        write_iam(
+            &mut state,
+            &dead.to_full(),
+            "roles/pubsub.publisher",
+            true,
+            member,
+        );
+        assert!(state.dead_letter_authorized(&source, &dead));
     }
 
     #[test]

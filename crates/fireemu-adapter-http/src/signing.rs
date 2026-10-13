@@ -155,33 +155,16 @@ impl std::fmt::Debug for AppCheckPrivateKey {
     }
 }
 
-/// The daemon instance's App Check signer.
-pub struct AppCheckRsaSigner {
+/// The generated half of an App Check signer.
+struct AppCheckKeyMaterial {
     signing: AppCheckPrivateKey,
     verifying: VerifyingKey<Sha256>,
     kid: String,
     jwk: PublicJwk,
 }
 
-impl std::fmt::Debug for AppCheckRsaSigner {
-    // The public modulus and exponent are deliberately not rendered: the key ID identifies the
-    // key, and everything else belongs in the JWKS response, not in a debug line.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AppCheckRsaSigner")
-            .field("kid", &self.kid)
-            .field("signing", &self.signing)
-            .finish_non_exhaustive()
-    }
-}
-
-impl AppCheckRsaSigner {
-    /// Generates the instance key. Key generation is CPU-bound, so the daemon runs it on a
-    /// blocking task, concurrently with the Auth session key when both are enabled.
-    pub fn generate(source: AppCheckKeySource) -> Result<Arc<Self>, String> {
-        let seed = match source {
-            AppCheckKeySource::OperatingSystem => os_entropy()?,
-            AppCheckKeySource::Seed(seed) => derived_seed(seed),
-        };
+impl AppCheckKeyMaterial {
+    fn from_seed(seed: [u8; 32]) -> Result<Self, String> {
         let mut rng = rand_chacha::ChaCha20Rng::from_seed(seed);
         let key =
             RsaPrivateKey::new(&mut rng, 2048).map_err(|e| format!("App Check RSA key: {e}"))?;
@@ -206,18 +189,83 @@ impl AppCheckRsaSigner {
             modulus: base64url_encode(&n),
             exponent: base64url_encode(&e),
         };
-        Ok(Arc::new(Self {
+        Ok(Self {
             signing: AppCheckPrivateKey(signing),
             verifying,
             kid,
             jwk,
+        })
+    }
+}
+
+/// The daemon instance's App Check signer.
+///
+/// The entropy is drawn when the signer is made, so a machine without a random source refuses to
+/// start; the 2048-bit prime search, which is the slow part, happens when the key is first
+/// needed ([`Self::lazy`]) or at once ([`Self::generate`]).
+pub struct AppCheckRsaSigner {
+    seed: [u8; 32],
+    material: std::sync::OnceLock<Result<AppCheckKeyMaterial, String>>,
+}
+
+impl std::fmt::Debug for AppCheckRsaSigner {
+    // The public modulus and exponent are deliberately not rendered: the key ID identifies the
+    // key, and everything else belongs in the JWKS response, not in a debug line. The seed
+    // derives the private key and is never rendered.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug = f.debug_struct("AppCheckRsaSigner");
+        match self.material.get() {
+            Some(Ok(material)) => debug
+                .field("kid", &material.kid)
+                .field("signing", &material.signing),
+            _ => debug.field("kid", &"[not generated yet]"),
+        };
+        debug.finish_non_exhaustive()
+    }
+}
+
+impl AppCheckRsaSigner {
+    fn seed_from(source: AppCheckKeySource) -> Result<[u8; 32], String> {
+        match source {
+            AppCheckKeySource::OperatingSystem => os_entropy(),
+            AppCheckKeySource::Seed(seed) => Ok(derived_seed(seed)),
+        }
+    }
+
+    /// Generates the instance key. Key generation is CPU-bound, so the daemon runs it on a
+    /// blocking task, concurrently with the Auth session key when both are enabled.
+    pub fn generate(source: AppCheckKeySource) -> Result<Arc<Self>, String> {
+        let signer = Self::lazy(source)?;
+        signer.material()?;
+        Ok(signer)
+    }
+
+    /// A signer whose key is generated the first time something needs it: a token to sign or
+    /// verify, the JWKS, or its key ID. A daemon that serves App Check only as a development
+    /// default pays for the key only in a run that uses it.
+    pub fn lazy(source: AppCheckKeySource) -> Result<Arc<Self>, String> {
+        Ok(Arc::new(Self {
+            seed: Self::seed_from(source)?,
+            material: std::sync::OnceLock::new(),
         }))
+    }
+
+    fn material(&self) -> Result<&AppCheckKeyMaterial, String> {
+        self.material
+            .get_or_init(|| AppCheckKeyMaterial::from_seed(self.seed))
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
+    fn ready(&self) -> &AppCheckKeyMaterial {
+        self.material()
+            .expect("the App Check key could not be generated")
     }
 
     /// The JWKS document (`{"keys": [...]}`) served at `/v1/jwks`. Public material only.
     #[must_use]
     pub fn jwks(&self) -> serde_json::Value {
-        serde_json::json!({"keys": [jwk_value(&self.jwk)]})
+        serde_json::json!({"keys": [jwk_value(&self.ready().jwk)]})
     }
 }
 
@@ -227,25 +275,33 @@ impl fireemu_core_app_check::crypto::AppCheckSigner for AppCheckRsaSigner {
     }
 
     fn kid(&self) -> &str {
-        &self.kid
+        &self.ready().kid
+    }
+
+    fn kid_if_ready(&self) -> Option<&str> {
+        match self.material.get() {
+            Some(Ok(material)) => Some(material.kid.as_str()),
+            _ => None,
+        }
     }
 
     fn sign(&self, signing_input: &[u8]) -> Vec<u8> {
-        self.signing.0.sign(signing_input).to_vec()
+        self.ready().signing.0.sign(signing_input).to_vec()
     }
 
     fn verify(&self, signing_input: &[u8], signature: &[u8]) -> bool {
+        let material = self.ready();
         Signature::try_from(signature)
-            .map(|s| self.verifying.verify(signing_input, &s).is_ok())
+            .map(|s| material.verifying.verify(signing_input, &s).is_ok())
             .unwrap_or(false)
     }
 
     fn public_jwk_json(&self) -> String {
-        jwk_value(&self.jwk).to_string()
+        jwk_value(&self.ready().jwk).to_string()
     }
 
     fn public_jwk(&self) -> Option<&PublicJwk> {
-        Some(&self.jwk)
+        Some(&self.ready().jwk)
     }
 }
 

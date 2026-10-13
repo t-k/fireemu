@@ -652,3 +652,27 @@ fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
     let r = handle(&plain, "GET", JWKS_PATHS[0], &json!({}));
     assert_eq!(r.body, json!({"keys": []}));
 }
+
+/// A lazy signer draws its entropy at once but generates the key only when something needs it,
+/// and then yields the key a eager signer of the same seed has.
+#[test]
+fn a_lazy_app_check_signer_generates_its_key_on_first_use_and_matches_the_eager_one() {
+    use fireemu_core_app_check::crypto::AppCheckSigner as _;
+    let lazy = AppCheckRsaSigner::lazy(AppCheckKeySource::Seed(77)).unwrap();
+    assert_eq!(lazy.kid_if_ready(), None, "nothing has needed the key yet");
+    assert!(format!("{lazy:?}").contains("not generated yet"));
+    let kid = lazy.kid().to_owned();
+    assert_eq!(lazy.kid_if_ready(), Some(kid.as_str()));
+    let eager = AppCheckRsaSigner::generate(AppCheckKeySource::Seed(77)).unwrap();
+    assert_eq!(eager.kid(), kid);
+    assert_eq!(eager.sign(b"input"), lazy.sign(b"input"));
+    assert!(lazy.verify(b"input", &eager.sign(b"input")));
+    assert!(!lazy.verify(b"other", &eager.sign(b"input")));
+    assert_eq!(eager.jwks(), lazy.jwks());
+    let other = AppCheckRsaSigner::lazy(AppCheckKeySource::Seed(78)).unwrap();
+    assert_ne!(other.kid(), kid);
+    // The debug rendering names the key once it exists, and never carries the private key or its seed.
+    assert!(format!("{lazy:?}").contains(&kid));
+    assert!(!format!("{lazy:?}").contains("not generated yet"));
+    assert!(!format!("{lazy:?}").contains("seed"));
+}

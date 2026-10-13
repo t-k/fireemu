@@ -351,6 +351,74 @@ impl Products {
 // Import
 // ---------------------------------------------------------------------------------------
 
+/// Why `--import dir` installs nothing, or `None` when `dir` is to be imported (and refused by
+/// [`prepare`] if it is not an export).
+///
+/// A persisted volume starts empty, and its first run would otherwise need a separate command
+/// line: an empty directory, which no export ever is, starts the suite with no data. A missing
+/// directory is still refused, because a mistyped path must not start an empty suite, unless
+/// it is also where `--export-on-exit` writes, so the run creates it.
+pub fn nothing_to_import(dir: &Path, export_on_exit: Option<&Path>) -> Option<String> {
+    match std::fs::symlink_metadata(dir) {
+        // `directory_is_empty` refuses anything but a real directory (a symlink, a file).
+        Ok(_) => directory_is_empty(dir)
+            .then(|| "the directory is empty, so the suite starts with no data".to_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let absolute = std::path::absolute(dir).ok()?;
+            (export_on_exit == Some(absolute.as_path())).then(|| {
+                "the directory does not exist yet, so the suite starts with no data (--export-on-exit creates it)".to_owned()
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Whether `dir` is a directory with no entry. The directory is opened once, without following
+/// a symlink, and read through that descriptor, so a symlink swapped in after the caller looked
+/// is not taken for an empty import; anything unreadable is not empty (and `prepare` says why).
+#[cfg(unix)]
+fn directory_is_empty(dir: &Path) -> bool {
+    use rustix::fs::{Mode, OFlags};
+    use std::path::Component;
+    // `O_NOFOLLOW` guards the last component only as spelled: `dir/` or `dir/.` would follow a
+    // symlink named `dir`. The path is rebuilt from its components, so the one opened ends in
+    // the directory's own name.
+    let components: Vec<Component<'_>> = dir
+        .components()
+        .filter(|component| !matches!(component, Component::CurDir))
+        .collect();
+    // `.` alone (the working directory) leaves no component; it is never a symlink.
+    let dir: std::path::PathBuf = if components.is_empty() {
+        std::path::PathBuf::from(".")
+    } else {
+        components.iter().collect()
+    };
+    let Ok(fd) = rustix::fs::open(
+        &dir,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) else {
+        return false;
+    };
+    let Ok(mut entries) = rustix::fs::Dir::read_from(&fd) else {
+        return false;
+    };
+    while let Some(entry) = entries.read() {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        if !matches!(entry.file_name().to_bytes(), b"." | b"..") {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(not(unix))]
+fn directory_is_empty(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_none())
+}
+
 /// Reads every section of the selected products into memory. Nothing is installed.
 ///
 /// A section of a product `--only` did not select is skipped with a notice rather than an
@@ -3797,8 +3865,13 @@ fn export_storage(
 // Overwrite protection and permissions
 // ---------------------------------------------------------------------------------------
 
+/// Whether a top-level entry of an export directory belongs to the export (and so is not
+/// carried into the next one): an export file, or the stage and displaced tree that publication
+/// into a mount point keeps inside the directory.
 fn export_owns(name: &str) -> bool {
-    EXPORT_OWNED_ENTRIES.contains(&name) || name.ends_with(".overall_export_metadata")
+    EXPORT_OWNED_ENTRIES.contains(&name)
+        || name.ends_with(".overall_export_metadata")
+        || fireemu_export_publication::is_publication_entry(name.as_ref())
 }
 
 #[cfg(not(unix))]
@@ -4145,8 +4218,23 @@ pub fn may_overwrite(dir: &Path) -> Result<(), String> {
     if empty || manifest_is_file {
         return Ok(());
     }
+    // An export into a mount point that was interrupted leaves the previous export in a
+    // `.fireemu-displaced-*` directory and no manifest: say where it is.
+    let interrupted = std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(".fireemu-displaced-"))
+        })
+    });
+    let hint = if interrupted {
+        "; it holds a .fireemu-displaced-* directory, the previous export an interrupted export left there: move its contents back, or empty the directory"
+    } else {
+        ""
+    };
     Err(format!(
-        "{} is not empty and holds no {METADATA_FILE_NAME}, so it is not an export directory; choose an empty or dedicated directory",
+        "{} is not empty and holds no {METADATA_FILE_NAME}, so it is not an export directory; choose an empty or dedicated directory{hint}",
         dir.display()
     ))
 }
@@ -4288,6 +4376,92 @@ mod tests {
     use super::open_file_inside;
     #[cfg(unix)]
     use super::trusted_temp::TrustedTempDir;
+
+    /// An empty import directory is read through one descriptor that does not follow a symlink:
+    /// a symlink to an empty directory is not empty (the import refuses it), nor is a directory
+    /// with any entry, a hidden one included.
+    #[cfg(unix)]
+    #[test]
+    fn only_a_real_directory_without_entries_is_empty() {
+        let root = TrustedTempDir::new("import-emptiness");
+        let empty = root.join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        assert!(super::directory_is_empty(&empty));
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&empty, &link).unwrap();
+        assert!(!super::directory_is_empty(&link));
+        assert!(super::nothing_to_import(&link, None).is_none());
+        // Spelled with a trailing separator or `.`, the symlink is still not followed.
+        for spelling in [
+            format!("{}/", link.display()),
+            format!("{}/.", link.display()),
+        ] {
+            assert!(
+                !super::directory_is_empty(std::path::Path::new(&spelling)),
+                "{spelling}"
+            );
+        }
+        for spelling in [
+            format!("{}/", empty.display()),
+            format!("{}/.", empty.display()),
+        ] {
+            assert!(
+                super::directory_is_empty(std::path::Path::new(&spelling)),
+                "{spelling}"
+            );
+        }
+        // A parent reference names a directory too.
+        let parent = root.join("parent");
+        let inside = parent.join("child");
+        std::fs::create_dir_all(&inside).unwrap();
+        assert!(super::directory_is_empty(&inside.join("..").join("child")));
+        assert!(!super::directory_is_empty(&inside.join("..")));
+        let hidden = root.join("hidden");
+        std::fs::create_dir(&hidden).unwrap();
+        std::fs::write(hidden.join(".keep"), b"").unwrap();
+        assert!(!super::directory_is_empty(&hidden));
+        assert!(!super::directory_is_empty(&root.join("missing")));
+        assert!(super::nothing_to_import(&empty, None).is_some());
+    }
+
+    /// A directory an interrupted mount-point export left without a manifest is refused, and the
+    /// refusal says where the previous export is.
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_overwrite_names_the_previous_export_an_interruption_left() {
+        let root = TrustedTempDir::new("overwrite-displaced");
+        std::fs::create_dir(root.join(".fireemu-displaced-1-2")).unwrap();
+        std::fs::create_dir(root.join("auth_export")).unwrap();
+        let error = super::may_overwrite(&root).unwrap_err();
+        assert!(error.contains(".fireemu-displaced-*"), "{error}");
+        let plain = TrustedTempDir::new("overwrite-plain");
+        std::fs::write(plain.join("notes.txt"), b"").unwrap();
+        let error = super::may_overwrite(&plain).unwrap_err();
+        assert!(!error.contains("displaced"), "{error}");
+    }
+
+    /// Publication into a mount point keeps its stage inside the target, so the copy of the
+    /// target's unmanaged entries into that stage must not copy the stage (or a displaced tree
+    /// an interrupted run left) into itself.
+    #[cfg(unix)]
+    #[test]
+    fn the_unmanaged_copy_skips_publication_entries_and_keeps_the_rest() {
+        let source = TrustedTempDir::new("unmanaged-skip-source");
+        let destination = TrustedTempDir::new("unmanaged-skip-destination");
+        std::fs::write(source.join("notes.txt"), b"kept").unwrap();
+        std::fs::write(source.join("firebase-export-metadata.json"), b"{}").unwrap();
+        for name in [".fireemu-stage-1-2", ".fireemu-displaced-1-3"] {
+            std::fs::create_dir(source.join(name)).unwrap();
+            std::fs::write(source.join(name).join("x"), b"").unwrap();
+        }
+        super::copy_unmanaged_entries(&source, &destination).unwrap();
+        let mut names: Vec<_> = std::fs::read_dir(&*destination)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["notes.txt"]);
+    }
 
     #[cfg(windows)]
     #[test]

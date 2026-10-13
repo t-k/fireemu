@@ -71,6 +71,7 @@ fn rest(state: &RestState, method: &str, path: &str, body: Value) -> (u16, Value
         app_check: Vec::new(),
         body,
         origin: None,
+        remote_peer: false,
         browser_metadata: false,
         batch_field_order: Vec::new(),
     });

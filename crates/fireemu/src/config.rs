@@ -312,15 +312,6 @@ impl CompatibilityProfile {
     pub const fn end_user_transactions(self) -> bool {
         matches!(self, Self::Emulator)
     }
-
-    /// Whether an end user's `Listen` stream ends on its own an hour after it opened. Production
-    /// closed every held stream with `INTERNAL` 3,600 s after it opened, without waiting for a
-    /// commit (AUTH-FS-CROSS stage 2, packet v7, 2026-09-28); the official emulator never ends
-    /// one.
-    #[must_use]
-    pub const fn listen_stream_lifetime(self) -> bool {
-        matches!(self, Self::Strict)
-    }
 }
 
 /// The Emulator Hub's official default port (`firebase-tools` `Constants.getDefaultPort`).
@@ -1020,8 +1011,10 @@ pub struct RuntimeConfig {
     /// Whether an end user may open a read-write transaction
     /// (profile-derived; there is no key of its own).
     pub end_user_transactions: bool,
-    /// Whether an end user's `Listen` stream ends an hour after it opened
-    /// (profile-derived; there is no key of its own).
+    /// Whether an end user's native `Listen` stream ends an hour after it opened, as production
+    /// ends it (`firestore.listenStreamLifetime`, `"oneHour"` or `"unlimited"`). A development
+    /// default: off unless `productionExact` or the key asks for it, because a long local
+    /// session should not be cut by production's close (owner decision 2026-10-13).
     pub listen_stream_lifetime: bool,
     /// How long a document whose time-to-live field has expired stays readable before the
     /// expiry sweep deletes it (`firestore.ttlSweepIntervalSeconds`). Production deletes
@@ -1146,6 +1139,10 @@ pub struct RuntimeConfig {
     pub storage_buckets_by_target: BTreeMap<String, Vec<String>>,
     /// Whether Security Rules are enforced on the Firestore surface.
     pub rules_enforced: bool,
+    /// `rules.denialLog`: whether each Firestore Security Rules denial of an end-user request is
+    /// printed on stderr with the `allow` conditions it evaluated (`"summary"`, the default) or
+    /// not (`"off"`). The client's answer is production's either way.
+    pub rules_denial_log: bool,
     /// Functions HTTP bind address.
     pub functions_addr: String,
     /// Eventarc HTTP bind address. The pinned official suite starts this dependency only
@@ -1194,6 +1191,10 @@ pub struct RuntimeConfig {
     /// Like the Hub's and UI's, a busy default port only disables logging; a busy explicit one
     /// is an error.
     pub logging_addr_explicit: bool,
+    /// `network.allowNonLoopbackHosts`: `emulators.<name>.host` of a product emulator may name
+    /// a non-loopback address such as `0.0.0.0` (a container). The Hub, the UI and the Logging
+    /// emulator stay on loopback, and the control API answers loopback peers only.
+    pub allow_non_loopback_hosts: bool,
     /// `emulators.singleProjectMode`. fireemu isolates every project into its own session, so
     /// this is recorded and published rather than enforced separately.
     pub single_project_mode: bool,
@@ -1253,6 +1254,10 @@ pub struct RuntimeConfig {
     pub auth_custom_token_signers: Option<serde_json::Map<String, Value>>,
     /// Allow unsigned emulator custom tokens in either profile (default true).
     pub auth_allow_unsigned_custom_tokens: bool,
+    /// `auth.tenantIdFormat`: which `tenantId` a tenant of `auth.tenants` may have. A development
+    /// default: `"readable"` (any id such as `tenant-a`) unless `productionExact` asks for
+    /// production's generated shape, `"generated"` (owner decision 2026-10-13).
+    pub auth_tenant_id_format: fireemu_adapter_http::identity_toolkit::TenantIdFormat,
     /// Admit unsigned emulator ID tokens (`alg: none`, empty signature; the `mockUserToken` of
     /// `@firebase/rules-unit-testing`) on the Firestore and Storage Security Rules surfaces in
     /// either profile (`auth.allowUnsignedIdTokens`, default true, owner ledger 1393). Signed
@@ -1420,7 +1425,7 @@ impl Default for RuntimeConfig {
             implicit_database_creation: profile.implicit_database_creation(),
             refuse_without_ruleset: profile.refuse_without_ruleset(),
             end_user_transactions: profile.end_user_transactions(),
-            listen_stream_lifetime: profile.listen_stream_lifetime(),
+            listen_stream_lifetime: false,
             ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
             deleted_database_id_cooldown: None,
             history_max_versions_per_path: None,
@@ -1466,6 +1471,7 @@ impl Default for RuntimeConfig {
             storage_rules_by_bucket: BTreeMap::new(),
             storage_buckets_by_target: BTreeMap::new(),
             rules_enforced: true,
+            rules_denial_log: true,
             functions_addr: "127.0.0.1:5001".to_owned(),
             eventarc_addr: "127.0.0.1:9299".to_owned(),
             eventarc_enabled: false,
@@ -1483,6 +1489,7 @@ impl Default for RuntimeConfig {
             logging_addr: format!("127.0.0.1:{DEFAULT_LOGGING_PORT}"),
             logging_enabled: true,
             logging_addr_explicit: false,
+            allow_non_loopback_hosts: false,
             single_project_mode: false,
             functions_source: None,
             functions_codebases: Vec::new(),
@@ -1507,6 +1514,7 @@ impl Default for RuntimeConfig {
             scheduler_catch_up: "all".to_owned(),
             id_token_signing: fireemu_core_auth::jwt::SigningMode::UnsignedEmulator,
             auth_allow_unsigned_custom_tokens: true,
+            auth_tenant_id_format: fireemu_adapter_http::identity_toolkit::TenantIdFormat::Readable,
             auth_allow_unsigned_id_tokens: true,
             auth_custom_token_signers: None,
             auth_idp_signers: None,
@@ -1518,7 +1526,7 @@ impl Default for RuntimeConfig {
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 27] = [
+pub(crate) const AUTH_KEYS: [&str; 28] = [
     "enabled",
     "apiKeys",
     "projectIssuer",
@@ -1534,6 +1542,7 @@ pub(crate) const AUTH_KEYS: [&str; 27] = [
     "authorizedDomains",
     "multiTenant",
     "tenants",
+    "tenantIdFormat",
     "secretMaterialization",
     "forwardInboundCredentials",
     "improvedEmailPrivacy",
@@ -1846,8 +1855,71 @@ fn loopback_host(host: &str, key: &str) -> Result<String, ConfigError> {
     }
 }
 
+/// The emulators whose `host` may name a non-loopback address once
+/// `network.allowNonLoopbackHosts` is set. The Hub, the UI and the Logging emulator are not
+/// among them: they are fireemu's own tooling and carry the control capability.
+const NETWORK_EXPOSABLE_EMULATORS: &[&str] = &[
+    "firestore",
+    "auth",
+    "storage",
+    "functions",
+    "eventarc",
+    "tasks",
+    "pubsub",
+];
+
+/// The host of `emulators.<name>.host`: loopback always, and an IP address of any interface
+/// (`0.0.0.0`, `::`, a LAN address) when `allow_non_loopback` is set and the emulator is a
+/// product one. A host name other than `localhost` is refused either way.
+fn emulator_host(
+    host: &str,
+    name: &str,
+    key: &str,
+    allow_non_loopback: bool,
+) -> Result<String, ConfigError> {
+    let exposable = NETWORK_EXPOSABLE_EMULATORS.contains(&name);
+    let loopback = loopback_host(host, key);
+    if loopback.is_ok() || (!allow_non_loopback && !exposable) {
+        return loopback;
+    }
+    if !allow_non_loopback {
+        return loopback.map_err(|ConfigError(message)| {
+            ConfigError(format!(
+                "{message}; to serve a container or another host, set network.allowNonLoopbackHosts to true in fireemu.json (the control API stays on loopback)"
+            ))
+        });
+    }
+    if !exposable {
+        return Err(ConfigError(format!(
+            "{key} {host:?}: the {name} emulator stays on loopback even with network.allowNonLoopbackHosts; only the product emulators ({}) may listen on another address",
+            NETWORK_EXPOSABLE_EMULATORS.join(", ")
+        )));
+    }
+    let bare = host
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(host);
+    match bare.parse::<std::net::IpAddr>() {
+        // The control API shares the Auth port and answers loopback peers only, so Auth listens
+        // on loopback or on every interface, never on one other address alone.
+        Ok(address) if name == "auth" && !address.is_unspecified() => Err(ConfigError(format!(
+            "{key} {host:?}: the Auth port also serves the control API, which answers loopback peers only, so Auth listens on loopback or on every interface (0.0.0.0 or ::), not on one other address"
+        ))),
+        Ok(std::net::IpAddr::V4(address)) => Ok(address.to_string()),
+        Ok(std::net::IpAddr::V6(address)) => Ok(format!("[{address}]")),
+        Err(_) => Err(ConfigError(format!(
+            "{key} {host:?}: with network.allowNonLoopbackHosts a host must be localhost or an IP address (for example 0.0.0.0 or ::)"
+        ))),
+    }
+}
+
 /// Reads `host` and `port` of one `emulators.<name>` entry onto the current address.
-fn emulator_addr(entry: &Value, name: &str, current: &str) -> Result<String, ConfigError> {
+fn emulator_addr(
+    entry: &Value,
+    name: &str,
+    current: &str,
+    allow_non_loopback: bool,
+) -> Result<String, ConfigError> {
     let obj = entry
         .as_object()
         .ok_or_else(|| ConfigError(format!("firebase.json: emulators.{name} must be an object")))?;
@@ -1862,7 +1934,12 @@ fn emulator_addr(entry: &Value, name: &str, current: &str) -> Result<String, Con
                     "firebase.json: emulators.{name}.host must be a string"
                 ))
             })?;
-            loopback_host(text, &format!("firebase.json: emulators.{name}.host"))?
+            emulator_host(
+                text,
+                name,
+                &format!("firebase.json: emulators.{name}.host"),
+                allow_non_loopback,
+            )?
         }
     };
     let port = match obj.get("port") {
@@ -1907,10 +1984,11 @@ impl RuntimeConfig {
     pub fn tenant_seeding(
         &self,
     ) -> Result<fireemu_adapter_http::identity_toolkit::TenantSeeding, String> {
-        let seeds = fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds(
+        let seeds = fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds_with(
             &self.auth_tenants,
             self.profile == CompatibilityProfile::Emulator,
             self.clock_start.to_rfc3339().ok().as_deref(),
+            self.auth_tenant_id_format,
         )?;
         Ok(fireemu_adapter_http::identity_toolkit::TenantSeeding::new(
             self.auth_multi_tenant_allow_tenants,
@@ -1956,8 +2034,11 @@ impl RuntimeConfig {
             None | Some(Value::Null) => {}
             Some(Value::Array(documents)) => {
                 let emulator = cfg.profile == CompatibilityProfile::Emulator;
-                fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds(
-                    documents, emulator, None,
+                fireemu_adapter_http::identity_toolkit::prepare_tenant_seeds_with(
+                    documents,
+                    emulator,
+                    None,
+                    cfg.auth_tenant_id_format,
                 )
                 .map_err(ConfigError)?;
                 if !emulator
@@ -2329,39 +2410,86 @@ impl RuntimeConfig {
                         })?;
                     }
                     "firestore" => {
-                        self.firestore_addr = emulator_addr(entry, name, &self.firestore_addr)?;
+                        self.firestore_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.firestore_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                     }
-                    "auth" => self.http_addr = emulator_addr(entry, name, &self.http_addr)?,
+                    "auth" => {
+                        self.http_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.http_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
+                    }
                     "storage" => {
-                        self.storage_addr = emulator_addr(entry, name, &self.storage_addr)?;
+                        self.storage_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.storage_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                     }
                     "functions" => {
-                        self.functions_addr = emulator_addr(entry, name, &self.functions_addr)?;
+                        self.functions_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.functions_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                     }
                     "eventarc" => {
-                        self.eventarc_addr = emulator_addr(entry, name, &self.eventarc_addr)?;
+                        self.eventarc_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.eventarc_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                         self.eventarc_enabled = true;
                         self.eventarc_addr_explicit = entry
                             .as_object()
                             .is_some_and(|entry| entry.contains_key("port"));
                     }
                     "tasks" => {
-                        self.tasks_addr = emulator_addr(entry, name, &self.tasks_addr)?;
+                        self.tasks_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.tasks_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                         self.tasks_enabled = true;
                         self.tasks_addr_explicit = entry
                             .as_object()
                             .is_some_and(|entry| entry.contains_key("port"));
                     }
                     "pubsub" => {
-                        self.pubsub_addr = emulator_addr(entry, name, &self.pubsub_addr)?;
+                        self.pubsub_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.pubsub_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                         self.pubsub_enabled = true;
                     }
                     "hub" => {
-                        self.hub_addr = emulator_addr(entry, name, &self.hub_addr)?;
+                        self.hub_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.hub_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                         self.hub_addr_explicit = true;
                     }
                     "ui" => {
-                        let addr = emulator_addr(entry, name, &self.ui_addr)?;
+                        let addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.ui_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                         let enabled = entry.get("enabled").map_or(Ok(true), |v| {
                             v.as_bool().ok_or_else(|| {
                                 ConfigError(
@@ -2375,7 +2503,12 @@ impl RuntimeConfig {
                         self.ui_addr_explicit = true;
                     }
                     "logging" => {
-                        self.logging_addr = emulator_addr(entry, name, &self.logging_addr)?;
+                        self.logging_addr = emulator_addr(
+                            entry,
+                            name,
+                            &self.logging_addr,
+                            self.allow_non_loopback_hosts,
+                        )?;
                         self.logging_enabled = !self.logging_addr.ends_with(":0");
                         self.logging_addr_explicit = true;
                     }
@@ -2906,6 +3039,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "profile",
     "productionExact",
     "bind",
+    "network",
     "projects",
     "limits",
     "firestore",
@@ -3027,7 +3161,6 @@ impl RuntimeConfig {
         if !self.auth_improved_email_privacy_explicit {
             self.auth_improved_email_privacy = profile == CompatibilityProfile::Strict;
         }
-        self.listen_stream_lifetime = profile.listen_stream_lifetime();
     }
 
     /// Applies `productionExact`. fireemu is mostly run by tests in CI and on a laptop, so
@@ -3057,6 +3190,12 @@ impl RuntimeConfig {
             MissingIndexes::Refuse
         } else {
             MissingIndexes::Report
+        };
+        self.listen_stream_lifetime = exact;
+        self.auth_tenant_id_format = if exact {
+            fireemu_adapter_http::identity_toolkit::TenantIdFormat::Generated
+        } else {
+            fireemu_adapter_http::identity_toolkit::TenantIdFormat::Readable
         };
     }
 
@@ -3242,6 +3381,17 @@ impl RuntimeConfig {
     ) -> Result<(), ConfigError> {
         if let Some(source) = rules.get("source").and_then(Value::as_str) {
             cfg.rules_file = Some(source.to_owned());
+        }
+        if let Some(value) = rules.get("denialLog") {
+            cfg.rules_denial_log = match value.as_str() {
+                Some("summary") => true,
+                Some("off") => false,
+                _ => {
+                    return Err(ConfigError(
+                        "rules.denialLog must be \"summary\" or \"off\"".to_owned(),
+                    ))
+                }
+            };
         }
         match rules.get("executionMode").and_then(Value::as_str) {
             None | Some("native" | "admin-bypass") => Ok(()),
@@ -3828,6 +3978,25 @@ impl RuntimeConfig {
         if let Some(bind) = obj.get("bind").and_then(Value::as_str) {
             loopback_host(bind, "bind")?;
         }
+        if let Some(network) = obj.get("network") {
+            let network = network
+                .as_object()
+                .ok_or_else(|| ConfigError("network must be an object".to_owned()))?;
+            for (key, value) in network {
+                match key.as_str() {
+                    "allowNonLoopbackHosts" => {
+                        cfg.allow_non_loopback_hosts = value.as_bool().ok_or_else(|| {
+                            ConfigError(
+                                "network.allowNonLoopbackHosts must be a boolean".to_owned(),
+                            )
+                        })?;
+                    }
+                    other => {
+                        return Err(ConfigError(format!("unknown config key network.{other}")))
+                    }
+                }
+            }
+        }
         if let Some(fs) = obj.get("firestore").and_then(Value::as_object) {
             if let Some(value) = fs.get("location") {
                 value
@@ -3875,6 +4044,25 @@ impl RuntimeConfig {
                 {
                     return Err(ConfigError(
                         "firestore.missingIndexes \"refuse\" requires the strict profile"
+                            .to_owned(),
+                    ));
+                }
+            }
+            if let Some(value) = fs.get("listenStreamLifetime") {
+                cfg.listen_stream_lifetime =
+                    match value.as_str() {
+                        Some("oneHour") => true,
+                        Some("unlimited") => false,
+                        _ => return Err(ConfigError(
+                            "firestore.listenStreamLifetime must be \"oneHour\" or \"unlimited\""
+                                .to_owned(),
+                        )),
+                    };
+                // The emulator profile reproduces the official emulator, which never ends a
+                // stream; the hour is production's behaviour.
+                if cfg.listen_stream_lifetime && cfg.profile != CompatibilityProfile::Strict {
+                    return Err(ConfigError(
+                        "firestore.listenStreamLifetime \"oneHour\" requires the strict profile"
                             .to_owned(),
                     ));
                 }
@@ -4044,6 +4232,19 @@ impl RuntimeConfig {
                             })
                     })
                     .collect::<Result<_, _>>()?;
+            }
+            // Read before auth.tenants, whose ids it validates.
+            if let Some(value) = auth.get("tenantIdFormat") {
+                use fireemu_adapter_http::identity_toolkit::TenantIdFormat;
+                cfg.auth_tenant_id_format = match value.as_str() {
+                    Some("readable") => TenantIdFormat::Readable,
+                    Some("generated") => TenantIdFormat::Generated,
+                    _ => {
+                        return Err(ConfigError(
+                            "auth.tenantIdFormat must be \"readable\" or \"generated\"".to_owned(),
+                        ))
+                    }
+                };
             }
             if let Some(value) = auth.get("allowUnsignedCustomTokens") {
                 cfg.auth_allow_unsigned_custom_tokens = value.as_bool().ok_or_else(|| {
@@ -4968,7 +5169,8 @@ mod tests {
         assert!(!strict.implicit_database_creation);
         assert!(strict.refuse_without_ruleset);
         assert!(!strict.end_user_transactions);
-        assert!(strict.listen_stream_lifetime);
+        // The one-hour Listen lifetime is a development default (owner decision 2026-10-13).
+        assert!(!strict.listen_stream_lifetime);
     }
 
     #[test]
@@ -5417,6 +5619,158 @@ mod tests {
                 error.0
             );
         }
+    }
+
+    fn with_hosts(allow: Option<bool>, emulators: &Value) -> Result<RuntimeConfig, ConfigError> {
+        let mut canonical = json!({"schemaVersion": 1});
+        if let Some(allow) = allow {
+            canonical["network"] = json!({"allowNonLoopbackHosts": allow});
+        }
+        let mut cfg = RuntimeConfig::from_json(&canonical)?;
+        cfg.apply_firebase_json(
+            &json!({"emulators": emulators}),
+            std::path::Path::new("/proj"),
+            &Selection::default(),
+        )?;
+        Ok(cfg)
+    }
+
+    #[test]
+    fn a_non_loopback_product_host_needs_the_network_opt_in_and_names_it() {
+        for allow in [None, Some(false)] {
+            let error = with_hosts(
+                allow,
+                &json!({"firestore": {"host": "0.0.0.0", "port": 8080}}),
+            )
+            .expect_err("refused without the opt-in");
+            assert!(
+                error.0.contains("only loopback hosts are accepted"),
+                "{}",
+                error.0
+            );
+            assert!(
+                error.0.contains("network.allowNonLoopbackHosts"),
+                "{}",
+                error.0
+            );
+        }
+        let cfg = with_hosts(
+            Some(true),
+            &json!({
+                "firestore": {"host": "0.0.0.0", "port": 8080},
+                "auth": {"host": "::", "port": 9099},
+                "storage": {"host": "[::]", "port": 9199},
+                "functions": {"host": "192.168.1.10", "port": 5001},
+                "eventarc": {"host": "0.0.0.0", "port": 9299},
+                "tasks": {"host": "0.0.0.0", "port": 9499},
+                "pubsub": {"host": "0.0.0.0", "port": 8085},
+            }),
+        )
+        .unwrap();
+        assert_eq!(cfg.firestore_addr, "0.0.0.0:8080");
+        assert_eq!(cfg.http_addr, "[::]:9099");
+        assert_eq!(cfg.storage_addr, "[::]:9199");
+        assert_eq!(cfg.functions_addr, "192.168.1.10:5001");
+        assert_eq!(cfg.eventarc_addr, "0.0.0.0:9299");
+        assert_eq!(cfg.tasks_addr, "0.0.0.0:9499");
+        assert_eq!(cfg.pubsub_addr, "0.0.0.0:8085");
+        // Loopback spellings keep their normal form with the opt-in too.
+        let cfg = with_hosts(
+            Some(true),
+            &json!({"firestore": {"host": "::1", "port": 8080}}),
+        )
+        .unwrap();
+        assert_eq!(cfg.firestore_addr, "[::1]:8080");
+    }
+
+    #[test]
+    fn the_hub_ui_and_logging_stay_on_loopback_with_the_network_opt_in() {
+        for name in ["hub", "ui", "logging"] {
+            for allow in [None, Some(true)] {
+                let error = with_hosts(allow, &json!({name: {"host": "0.0.0.0", "port": 4400}}))
+                    .expect_err("tooling stays on loopback");
+                assert!(
+                    error.0.contains(&format!("emulators.{name}.host")),
+                    "{}",
+                    error.0
+                );
+                if allow == Some(true) {
+                    assert!(error.0.contains("stays on loopback"), "{}", error.0);
+                } else {
+                    assert!(
+                        !error.0.contains("network.allowNonLoopbackHosts"),
+                        "{}",
+                        error.0
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn auth_listens_on_loopback_or_every_interface_only() {
+        for host in ["192.168.1.10", "fe80::1", "10.0.0.2"] {
+            let error = with_hosts(Some(true), &json!({"auth": {"host": host, "port": 9099}}))
+                .expect_err("one other address would cut loopback off the control API");
+            assert!(
+                error.0.contains("also serves the control API"),
+                "{host}: {error}"
+            );
+        }
+        for host in ["0.0.0.0", "::", "127.0.0.1"] {
+            assert!(
+                with_hosts(Some(true), &json!({"auth": {"host": host, "port": 9099}})).is_ok(),
+                "{host}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_host_name_is_refused_with_the_network_opt_in() {
+        let error = with_hosts(
+            Some(true),
+            &json!({"firestore": {"host": "example.com", "port": 8080}}),
+        )
+        .expect_err("a host name is not an address");
+        assert!(error.0.contains("an IP address"), "{}", error.0);
+    }
+
+    #[test]
+    fn the_network_section_is_validated() {
+        let e =
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "network": true})).unwrap_err();
+        assert!(e.0.contains("network must be an object"), "{}", e.0);
+        let e = RuntimeConfig::from_json(
+            &json!({"schemaVersion": 1, "network": {"allowNonLoopbackHosts": "yes"}}),
+        )
+        .unwrap_err();
+        assert!(e.0.contains("must be a boolean"), "{}", e.0);
+        let e = RuntimeConfig::from_json(&json!({"schemaVersion": 1, "network": {"other": 1}}))
+            .unwrap_err();
+        assert!(e.0.contains("unknown config key network.other"), "{}", e.0);
+        assert!(!RuntimeConfig::default().allow_non_loopback_hosts);
+    }
+
+    #[test]
+    fn the_rules_denial_log_is_on_by_default_and_can_be_turned_off() {
+        assert!(RuntimeConfig::default().rules_denial_log);
+        let read = |value: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "rules": {"denialLog": value}}))
+        };
+        assert!(read(json!("summary")).unwrap().rules_denial_log);
+        assert!(!read(json!("off")).unwrap().rules_denial_log);
+        for invalid in [json!(true), json!("full"), json!(null)] {
+            assert_eq!(
+                read(invalid).unwrap_err(),
+                ConfigError("rules.denialLog must be \"summary\" or \"off\"".to_owned())
+            );
+        }
+        // productionExact does not touch it: the log changes nothing a client sees.
+        let exact = RuntimeConfig::from_json(
+            &json!({"schemaVersion": 1, "profile": "strict", "productionExact": true}),
+        )
+        .unwrap();
+        assert!(exact.rules_denial_log);
     }
 
     #[test]
@@ -6617,6 +6971,56 @@ mod tests {
     }
 
     #[test]
+    fn the_listen_stream_hour_is_a_development_default_restored_by_production_exact() {
+        // Owner decision 2026-10-13: a long local session is not cut by production's hour
+        // unless productionExact or the key asks for it.
+        let read = |profile: &str, exact: Option<bool>, key: Option<&str>| {
+            let mut firestore = json!({"edition": "standard", "apiMode": "native"});
+            if let Some(key) = key {
+                firestore["listenStreamLifetime"] = json!(key);
+            }
+            let mut extra = json!({"profile": profile, "firestore": firestore});
+            if let Some(exact) = exact {
+                extra["productionExact"] = json!(exact);
+            }
+            with_profile(extra)
+        };
+        for (profile, exact, key, expected) in [
+            ("strict", None, None, false),
+            ("strict", Some(false), None, false),
+            ("strict", Some(true), None, true),
+            ("strict", None, Some("oneHour"), true),
+            ("strict", Some(true), Some("unlimited"), false),
+            ("strict", Some(false), Some("oneHour"), true),
+            ("emulator", None, None, false),
+            ("emulator", None, Some("unlimited"), false),
+        ] {
+            assert_eq!(
+                read(profile, exact, key).unwrap().listen_stream_lifetime,
+                expected,
+                "{profile} {exact:?} {key:?}"
+            );
+        }
+        assert_eq!(
+            read("emulator", None, Some("oneHour")).unwrap_err(),
+            ConfigError(
+                "firestore.listenStreamLifetime \"oneHour\" requires the strict profile".to_owned()
+            )
+        );
+        for invalid in ["hour", "", "ONEHOUR"] {
+            assert_eq!(
+                read("strict", None, Some(invalid)).unwrap_err(),
+                ConfigError(
+                    "firestore.listenStreamLifetime must be \"oneHour\" or \"unlimited\""
+                        .to_owned()
+                ),
+                "{invalid}"
+            );
+        }
+        assert!(!RuntimeConfig::default().listen_stream_lifetime);
+    }
+
+    #[test]
     fn missing_indexes_are_reported_by_default_and_refused_under_production_exact() {
         // Owner decision 1396: a query whose composite index is not defined runs and is
         // reported in both profiles; production's refusal is opt-in, through productionExact
@@ -7153,9 +7557,14 @@ mod tests {
                 "config.mfa.state",
             ),
             (
-                json!({"tenants": [with("tenantId", json!("wrong"))]}),
+                json!({"tenantIdFormat": "generated", "tenants": [with("tenantId", json!("wrong"))]}),
                 "tenantId",
             ),
+            (
+                json!({"tenants": [with("tenantId", json!("1-starts-with-a-digit"))]}),
+                "must start with a letter",
+            ),
+            (json!({"tenantIdFormat": "short"}), "auth.tenantIdFormat"),
             (
                 json!({"tenants": [acme_tenant(), acme_tenant()]}),
                 "auth.tenants[1]:",
@@ -7174,6 +7583,104 @@ mod tests {
                 assert!(error.0.contains(expected), "{invalid}: {error:?}");
             }
         }
+    }
+
+    #[test]
+    fn a_readable_tenant_id_is_a_development_default_and_production_exact_asks_for_the_generated_one(
+    ) {
+        use fireemu_adapter_http::identity_toolkit::TenantIdFormat;
+        // Owner decision 2026-10-13: a test names its tenants freely unless productionExact (or
+        // the key) asks for the id production would generate.
+        let read = |extra: Value, id: &str| {
+            let mut document = json!({
+                "schemaVersion": 1,
+                "profile": "strict",
+                "auth": {
+                    "multiTenant": {"allowTenants": true},
+                    "tenants": [{"tenantId": id, "displayName": "acme"}],
+                },
+            });
+            for (key, value) in extra.as_object().unwrap() {
+                if key == "auth" {
+                    for (member, value) in value.as_object().unwrap() {
+                        document["auth"][member] = value.clone();
+                    }
+                } else {
+                    document[key] = value.clone();
+                }
+            }
+            RuntimeConfig::from_json(&document)
+        };
+        for id in ["tenant-a", "acme", "Acme-Test-1", "acme-x7k2q", "t"] {
+            let cfg = read(json!({}), id).unwrap_or_else(|e| panic!("{id}: {e}"));
+            assert_eq!(cfg.auth_tenant_id_format, TenantIdFormat::Readable);
+            assert_eq!(cfg.auth_tenants[0]["tenantId"], id);
+            // The daemon validates the declaration again when it seeds the tenants.
+            assert!(!cfg.tenant_seeding().unwrap().is_empty());
+        }
+        let long = format!("a{}", "b".repeat(62));
+        assert!(read(json!({}), &long).is_ok());
+        for id in [
+            "",
+            "1tenant",
+            "-tenant",
+            "tenant_a",
+            "tenant.a",
+            "テナント",
+            &format!("{long}c"),
+        ] {
+            let error = read(json!({}), id).expect_err(id);
+            assert!(
+                error.0.contains("must start with a letter"),
+                "{id}: {error}"
+            );
+        }
+        for extra in [
+            json!({"productionExact": true}),
+            json!({"auth": {"tenantIdFormat": "generated"}}),
+        ] {
+            let error = read(extra.clone(), "tenant-a").expect_err("generated shape");
+            assert!(
+                error.0.contains("as production generates one"),
+                "{extra}: {error}"
+            );
+            let cfg = read(extra.clone(), "acme-x7k2q").unwrap();
+            assert_eq!(
+                cfg.auth_tenant_id_format,
+                TenantIdFormat::Generated,
+                "{extra}"
+            );
+        }
+        // Two ids that differ only in case are one id: they would share an export file.
+        let twice = RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "profile": "strict",
+            "auth": {
+                "multiTenant": {"allowTenants": true},
+                "tenants": [
+                    {"tenantId": "tenant-a", "displayName": "acme"},
+                    {"tenantId": "Tenant-A", "displayName": "beta"},
+                ],
+            },
+        }))
+        .expect_err("a case-insensitive repeat");
+        assert!(twice.0.contains("auth.tenants[1]"), "{twice}");
+        assert!(twice.0.contains("ignoring case"), "{twice}");
+        // An explicit key decides over productionExact.
+        let cfg = read(
+            json!({"productionExact": true, "auth": {"tenantIdFormat": "readable"}}),
+            "tenant-a",
+        )
+        .unwrap();
+        assert_eq!(cfg.auth_tenant_id_format, TenantIdFormat::Readable);
+        // The emulator profile reads the key the same way.
+        let emulator = RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "profile": "emulator",
+            "auth": {"tenants": [{"tenantId": "tenant-a", "displayName": "acme"}]},
+        }))
+        .unwrap();
+        assert!(!emulator.tenant_seeding().unwrap().is_empty());
     }
 
     #[test]

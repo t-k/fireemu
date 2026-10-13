@@ -9501,6 +9501,7 @@ async fn batch_write_item_shapes_answer_identically_on_rest_and_grpc() {
                     body: serde_json::json!({"writes": writes}),
                     batch_field_order: Vec::new(),
                     origin: None,
+                    remote_peer: false,
                     browser_metadata: false,
                 });
                 if response.status == 200 {

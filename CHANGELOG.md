@@ -12,6 +12,26 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 - Strict Pub/Sub label keys now use the exact Unicode `Ll`/`Lo` first-character and `Ll`/`Lo`/`N` body classes from production's diagnostic (`[\p{Ll}\p{Lo}][\p{Ll}\p{Lo}\p{N}_-]{0,62}`), instead of an approximation that also admitted titlecase and modifier letters, letter numbers and combining marks. The diagnostics, their order and the emulator profile's permissive admission are unchanged.
 
+## [0.18.0] - 2026-10-13
+
+Changes from external feedback on running fireemu in containers and CI: the emulators can listen off loopback for containers, `--import` and `--export-on-exit` work with a fresh container volume, and Security Rules denials say which condition refused.
+
+### Added
+
+- `network.allowNonLoopbackHosts` (default `false`): Firestore, Auth, Storage, Functions, Eventarc, Cloud Tasks and Pub/Sub may listen on a non-loopback host from `firebase.json`, such as `0.0.0.0` in a container. Auth listens on loopback or on every interface only. The Hub, the UI and the Logging emulator stay on loopback. A `warning:` line names each exposed listener, and `0.0.0.0` or `::` is advertised as `127.0.0.1` or `::1`. Fireemu's own controls (the control API, App Check debug-token management, and the routes that load Security Rules or clear Firestore data) answer only loopback peers and return 403 to any other peer. With the option on, every control API request except `/health/` also needs `Authorization: Bearer <control token>`; `fireemu exec` passes the token in `FIREEMU_CONTROL_TOKEN`, and `fireemu/testing`, the UI and `fireemu doctor` send it. See README "Run in a container".
+- `firestore.listenStreamLifetime` (`"unlimited"` by default, `"oneHour"` under `productionExact`; strict profile only for `"oneHour"`): an end user's native gRPC `Listen` stream is no longer ended after an hour unless asked for. `POST /v1/firestore/listen:expire` on the control API ends every held end-user stream at once with production's status and answers `{"expired": n}`, to test a client's reconnect.
+- `auth.tenantIdFormat` (`"readable"` by default, `"generated"` under `productionExact`): a tenant of `auth.tenants` may have any readable id that starts with a letter and holds letters, digits and hyphens, up to 63 characters, such as `tenant-a`. Ids that differ only in case are refused. `"generated"` keeps production's generated form, such as `acme-x7k2q`.
+- `rules.denialLog` (`"summary"` by default, or `"off"`): each Security Rules denial of an end-user Firestore or Storage request prints a `note:` line on standard error with the operation, the path, the database or bucket, the requesting user, and every `allow` condition the request evaluated with its line, source excerpt and outcome. Evaluated values are not printed (a non-boolean value is shown by its type, an error by its position). The answer to the client is unchanged. With the UI running, the Rules page keeps the request traces from the first request.
+
+### Changed
+
+- A failed `--export-on-exit` now prints an `error:` line and the run exits 1 when the command succeeded (a failing command keeps its own exit code). The official CLI only warns and exits 0; fireemu differs so that a CI job that depends on the saved data cannot pass without it.
+- An empty `--import` directory now starts with no data instead of failing, so the first run of a new volume needs no separate command. A missing directory is still refused unless it is also where `--export-on-exit` writes.
+
+### Fixed
+
+- `--export-on-exit` into a volume mount point (for example a container volume at `/data`) failed with "Resource busy", because a mount point cannot be replaced by an atomic rename. The export is now staged inside the mount point and moved into place, the old `firebase-export-metadata.json` leaving first and the new one arriving last, so an interrupted export leaves a directory that `--import` refuses instead of loading part of it. Any other directory is still replaced atomically.
+
 ## [0.17.0] - 2026-10-12
 
 Cloud Pub/Sub (PUBSUB) is now `COMPAT_VERIFIED` within its frozen production scope, so all 21 parents of the compatibility inventory are `COMPAT_VERIFIED`. The development defaults below make the `strict` profile usable in CI without signing keys or Google credentials; `productionExact` restores production's refusals.
@@ -649,7 +669,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/t-k/fireemu/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/t-k/fireemu/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/t-k/fireemu/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/t-k/fireemu/compare/v0.14.0...v0.15.0

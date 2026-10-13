@@ -71,6 +71,9 @@ struct BoundStartup {
 }
 
 struct ServiceAssembly {
+    listen_expiry: fireemu_adapter_grpc::rules::ListenExpiry,
+    denial_log: Option<fireemu_core_rules::denial::DenialLog>,
+    denial_flush: Option<DenialFlush>,
     cfg: RuntimeConfig,
     config_origin: String,
     only: Selection,
@@ -584,12 +587,23 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     }
     // The client only sees production's (or the official emulator's) refusal, which does not
     // say how to load rules.
+    let (denial_log, denial_flush) = match (!quiet && cfg.rules_denial_log).then(denial_line_writer)
+    {
+        Some((log, flush)) => (Some(log), Some(flush)),
+        None => (None, None),
+    };
     if !quiet {
         storage_rules
             .registry
             .set_no_rules_notice(fireemu_adapter_http::storage::NoRulesNotice(Arc::new(
                 |event| eprintln!("{}", storage_no_rules_warning(event)),
             )));
+        // The client sees production's 403, which does not say which rule refused.
+        if let Some(log) = &denial_log {
+            storage_rules
+                .registry
+                .set_denial_log(fireemu_adapter_http::storage::StorageDenialLog(log.clone()));
+        }
     }
     // The buckets the deployed Storage triggers name exist for the strict profile, as in production.
     if let Some(runtime) = &functions_runtime {
@@ -814,6 +828,9 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
             ));
         }
     }
+    // Shared by the Firestore enforcer, whose end-user Listen streams hold it, and the control
+    // route that fires it.
+    let listen_expiry = fireemu_adapter_grpc::rules::ListenExpiry::default();
     let control = Arc::new(control_state(
         &cfg,
         &clock,
@@ -833,8 +850,12 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
         &pubsub_state,
         &pubsub_handle,
         &pubsub_resources,
+        (cfg.rules_enforced && only.firestore).then(|| listen_expiry.clone()),
     ));
     Ok(ServiceAssembly {
+        listen_expiry,
+        denial_log,
+        denial_flush,
         log_bus,
         cfg,
         config_origin,
@@ -945,6 +966,90 @@ fn storage_no_rules_warning(event: NoticeEvent<'_>) -> String {
     )
 }
 
+/// How many denial lines wait for stderr before further ones are dropped.
+const DENIAL_LINE_QUEUE: usize = 1024;
+
+/// Waits, for at most [`DENIAL_FLUSH_LIMIT`], until the denial lines queued so far are written.
+type DenialFlush = Arc<dyn Fn() + Send + Sync>;
+
+/// How long the shutdown waits for queued denial lines: a stderr nobody reads must not hold
+/// the exit.
+const DENIAL_FLUSH_LIMIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+enum DenialLine {
+    Line(String),
+    Flush(std::sync::mpsc::SyncSender<()>),
+}
+
+/// The line that reports `missed` dropped denial lines, if any were dropped.
+fn dropped_denials_note(missed: u64) -> Option<String> {
+    (missed > 0).then(|| {
+        format!(
+            "note: {missed} Security Rules denial line(s) were dropped while stderr was not read"
+        )
+    })
+}
+
+/// The denial log of `rules.denialLog`: each denial is formatted where it is decided, which
+/// can be under a database or store lock, and written to stderr by a thread of its own, so a
+/// stderr nobody reads never blocks a request. Past [`DENIAL_LINE_QUEUE`] waiting lines,
+/// further ones are dropped and counted, and the count is printed with the next line written.
+/// The flush is called at shutdown so the lines of a run that just ended are not lost.
+fn denial_line_writer() -> (fireemu_core_rules::denial::DenialLog, DenialFlush) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<DenialLine>(DENIAL_LINE_QUEUE);
+    let dropped = Arc::new(AtomicU64::new(0));
+    let counted = dropped.clone();
+    let spawned = std::thread::Builder::new()
+        .name("fireemu-denial-log".to_owned())
+        .spawn(move || {
+            for message in receiver {
+                match message {
+                    DenialLine::Line(line) => {
+                        if let Some(note) = dropped_denials_note(counted.swap(0, Ordering::Relaxed))
+                        {
+                            eprintln!("{note}");
+                        }
+                        eprintln!("note: {line}");
+                    }
+                    DenialLine::Flush(done) => {
+                        let _ = done.send(());
+                    }
+                }
+            }
+        });
+    if spawned.is_err() {
+        return (Arc::new(|_| {}), Arc::new(|| {}));
+    }
+    let flusher = sender.clone();
+    let log: fireemu_core_rules::denial::DenialLog = Arc::new(move |denial| {
+        if sender.try_send(DenialLine::Line(denial.summary())).is_err() {
+            dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+    let flush: DenialFlush = Arc::new(move || {
+        let deadline = std::time::Instant::now() + DENIAL_FLUSH_LIMIT;
+        let (done, written) = std::sync::mpsc::sync_channel(1);
+        let mut marker = DenialLine::Flush(done);
+        // The queue may be full while stderr drains: retry the marker until the deadline.
+        loop {
+            match flusher.try_send(marker) {
+                Ok(()) => break,
+                Err(std::sync::mpsc::TrySendError::Full(back)) => {
+                    if std::time::Instant::now() >= deadline {
+                        return;
+                    }
+                    marker = back;
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return,
+            }
+        }
+        let _ = written.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()));
+    });
+    (log, flush)
+}
+
 /// The Firestore enforcer's settings that follow from the compatibility profile.
 fn firestore_profile_settings(
     enforcer: RulesEnforcer,
@@ -963,6 +1068,9 @@ fn firestore_profile_settings(
 
 fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySuite, String> {
     let ServiceAssembly {
+        listen_expiry,
+        denial_log,
+        denial_flush,
         log_bus,
         cfg,
         config_origin,
@@ -1014,6 +1122,15 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
     });
     // The import happens before the command starts and before the banner claims the
     // suite is ready: a run that cannot install its fixture must not run at all.
+    let import = import.filter(|dir| {
+        let Some(reason) = import_export::nothing_to_import(dir, export_on_exit.as_deref()) else {
+            return true;
+        };
+        if !quiet {
+            eprintln!("note: --import {}: {reason}", dir.display());
+        }
+        false
+    });
     if let Some(dir) = &import {
         let prepared = import_export::prepare(dir, exporter.products, &cfg.auth_project)
             .map_err(|e| format!("--import {}: {e}", dir.display()))?;
@@ -1136,15 +1253,24 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
             None => enforcer,
         };
         let enforcer = firestore_profile_settings(enforcer, &cfg)
+            .with_listen_expiry(listen_expiry)
+            // The UI's Rules page lists the decided requests: with the UI on, keep them from the
+            // first request rather than from the page's first read.
+            .with_request_traces(addrs.ui.is_some())
             .with_registry(registry.clone())
             .with_database_rules(database_rules.clone());
-        // The client only sees production's denial, which does not say that nothing is loaded.
+        // The client only sees production's denial, which does not say that nothing is loaded
+        // or which rule refused.
         Arc::new(if quiet {
             enforcer
         } else {
-            enforcer.with_no_ruleset_notice(Arc::new(|event| {
+            let enforcer = enforcer.with_no_ruleset_notice(Arc::new(|event| {
                 eprintln!("{}", firestore_no_rules_warning(event));
-            }))
+            }));
+            match &denial_log {
+                Some(log) => enforcer.with_denial_log(log.clone()),
+                None => enforcer,
+            }
         })
     });
     let mut service = GatewayService::local(gateway.clone(), backend.clone());
@@ -1162,6 +1288,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
         control_token: Some(control_token.clone()),
     });
     Ok(ReadySuite {
+        denial_flush,
         log_bus,
         cfg,
         only,
@@ -1189,6 +1316,7 @@ fn assemble_suite(assembly: ServiceAssembly, exec_mode: bool) -> Result<ReadySui
 }
 
 struct ReadySuite {
+    denial_flush: Option<DenialFlush>,
     cfg: RuntimeConfig,
     only: Selection,
     quiet: bool,
@@ -1226,6 +1354,7 @@ async fn serve_suite(
         mut terminate,
     } = signals;
     let ReadySuite {
+        denial_flush,
         log_bus,
         cfg,
         only,
@@ -1532,7 +1661,7 @@ async fn serve_suite(
     if let Some(pump) = &functions_log_pump {
         pump.abort();
     }
-    let code = match (&outcome, child.as_mut(), child_pid) {
+    let mut code = match (&outcome, child.as_mut(), child_pid) {
         (Ok(Some(code)), Some(child), Some(pid)) => {
             #[cfg(not(windows))]
             super::sweep_child_tree(child, pid);
@@ -1554,14 +1683,18 @@ async fn serve_suite(
                     println!("exported to {}", dir.display());
                 }
             }
-            // The command's own status is what `exec` reports, a failed export included. The
-            // official CLI's `exportOnExit` catches the failure and logs "Automatic export to
-            // ... failed, going to exit now" as a warning, leaving the script's exit code
-            // alone, and spec/compatibility/contract.json claims that behaviour.
-            Err(e) => eprintln!(
-                "warning: automatic export to {} failed, going to exit now: {e}",
-                dir.display()
-            ),
+            // The official CLI's `exportOnExit` catches the failure, logs "Automatic export
+            // to ... failed, going to exit now" as a warning and leaves the script's exit code
+            // alone, so a CI job that depends on the export passes without it. fireemu reports
+            // it as an error instead (owner decision 2026-10-13): a command that failed keeps
+            // its own status, and any other run exits 1.
+            Err(e) => {
+                eprintln!(
+                    "error: automatic export to {} failed, going to exit now: {e}",
+                    dir.display()
+                );
+                code = export_failure_exit_code(code);
+            }
         }
     }
     if let Some(runtime) = functions_runtime {
@@ -1582,7 +1715,23 @@ async fn serve_suite(
     if let Some(note) = locator.and_then(hub::Locator::release) {
         eprintln!("warning: {note}");
     }
+    // The denial lines queued so far are written before the exit. A request still running in a
+    // detached connection task when the listeners stop can queue a line after this flush, and
+    // that line may be lost at exit: an accepted loss, bounded to the requests in flight then.
+    if let Some(flush) = &denial_flush {
+        flush();
+    }
     outcome.map(|_| code)
+}
+
+/// The exit status of a run whose `--export-on-exit` failed: a command's own failure is kept,
+/// and a status that reported success becomes 1.
+const fn export_failure_exit_code(code: i32) -> i32 {
+    if code == 0 {
+        1
+    } else {
+        code
+    }
 }
 
 fn close_functions_source_admission(
@@ -1887,14 +2036,35 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             ui::Ui::Unavailable(note) => (None, Some(note)),
         };
         let ui_addr = ui_listener.as_ref().and_then(|l| l.local_addr().ok());
+        if !quiet {
+            for warning in super::network_exposure_warnings(&[
+                ("firestore", grpc_addr),
+                ("auth", auth_selected.then_some(http_addr)),
+                ("storage", storage_addr),
+                ("functions", functions_addr),
+                ("eventarc", eventarc_addr),
+                ("tasks", tasks_addr),
+                ("pubsub", pubsub_addr),
+            ]) {
+                eprintln!("warning: {warning}");
+            }
+        }
+        // A listener on every interface is advertised (environment, Hub, banner) at the
+        // loopback address of its family, which is how the official CLI advertises it.
+        let connectable = |addr: Option<std::net::SocketAddr>| addr.map(super::connectable);
+        let (grpc_addr, http_addr, storage_addr) = (
+            connectable(grpc_addr),
+            super::connectable(http_addr),
+            connectable(storage_addr),
+        );
         let addrs = BoundAddrs {
             firestore: grpc_addr,
             auth: auth_selected.then_some(http_addr),
             storage: storage_addr,
-            functions: functions_addr,
-            eventarc: eventarc_addr,
-            tasks: tasks_addr,
-            pubsub: pubsub_addr,
+            functions: connectable(functions_addr),
+            eventarc: connectable(eventarc_addr),
+            tasks: connectable(tasks_addr),
+            pubsub: connectable(pubsub_addr),
             hub: hub_addr,
             ui: ui_addr,
             logging: logging_addr,
@@ -2243,10 +2413,43 @@ mod tests {
         assert!(super::firestore_wall_source(CompatibilityProfile::Strict, None).is_none());
         assert!(super::firestore_wall_source(CompatibilityProfile::Emulator, Some(wall)).is_none());
     }
-    /// Only the strict profile's Firestore ends an end user's `Listen` stream an hour after it
-    /// opened.
     #[test]
-    fn only_the_strict_profile_ends_a_listen_stream_after_an_hour() {
+    fn only_dropped_denial_lines_are_reported() {
+        assert_eq!(super::dropped_denials_note(0), None);
+        assert_eq!(
+            super::dropped_denials_note(3).as_deref(),
+            Some("note: 3 Security Rules denial line(s) were dropped while stderr was not read")
+        );
+    }
+
+    /// The denial log never blocks its caller, even past its queue, and the shutdown's flush
+    /// returns within its limit.
+    #[test]
+    fn the_denial_log_never_blocks_and_its_flush_is_bounded() {
+        let (log, flush) = super::denial_line_writer();
+        let denial = fireemu_core_rules::denial::RulesDenial {
+            service: "firestore",
+            location: "database (default)".to_owned(),
+            method: "get",
+            path: "notes/n1".to_owned(),
+            uid: None,
+            reason: "no allow statement evaluated to true".to_owned(),
+            conditions: Vec::new(),
+        };
+        let started = std::time::Instant::now();
+        for _ in 0..(3 * super::DENIAL_LINE_QUEUE) {
+            log(&denial);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        let started = std::time::Instant::now();
+        flush();
+        assert!(started.elapsed() <= super::DENIAL_FLUSH_LIMIT + std::time::Duration::from_secs(1));
+    }
+
+    /// Firestore ends an end user's `Listen` stream an hour after it opened only when
+    /// `productionExact` or `firestore.listenStreamLifetime` asks for production's hour.
+    #[test]
+    fn only_production_exact_or_the_key_ends_a_listen_stream_after_an_hour() {
         use fireemu_adapter_grpc::rules::{Principal, RulesEnforcer};
         use fireemu_core_rules::runtime::RulesetSlot;
         use fireemu_core_rules::value::AuthContext;
@@ -2257,17 +2460,21 @@ mod tests {
             uid: "held".to_owned(),
             token: std::collections::BTreeMap::new(),
         });
+        let hour = Some(LogicalInstant::from_unix_seconds(1_788_008_460));
         for (profile, deadline) in [
+            (json!({"profile": "strict", "productionExact": true}), hour),
             (
-                "strict",
-                Some(LogicalInstant::from_unix_seconds(1_788_008_460)),
+                json!({"profile": "strict", "firestore": {"listenStreamLifetime": "oneHour"}}),
+                hour,
             ),
-            ("emulator", None),
+            (json!({"profile": "strict"}), None),
+            (json!({"profile": "emulator"}), None),
         ] {
-            let cfg = crate::config::RuntimeConfig::from_json(
-                &json!({"schemaVersion": 1, "profile": profile}),
-            )
-            .unwrap();
+            let mut document = json!({"schemaVersion": 1});
+            for (key, value) in profile.as_object().unwrap() {
+                document[key] = value.clone();
+            }
+            let cfg = crate::config::RuntimeConfig::from_json(&document).unwrap();
             let enforcer = super::firestore_profile_settings(
                 RulesEnforcer::new(
                     Arc::new(RulesetSlot::default()),

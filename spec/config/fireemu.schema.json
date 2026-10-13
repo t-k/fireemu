@@ -53,6 +53,17 @@
       "description": "fireemu is run mostly by tests in CI and on a developer's machine, so where production needs setup a test should not have to do (signed tokens, signing keys, Admin API calls), the default is the development behaviour, in both profiles. true restores production's behaviour for every such default; an explicit key still decides over it. Requires the strict profile. docs/compatibility-contract.md (\"Development defaults\") lists the keys it moves."
     },
     "bind": { "type": "string", "default": "127.0.0.1" },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowNonLoopbackHosts": {
+          "type": "boolean",
+          "default": false,
+          "description": "Let emulators.<name>.host in firebase.json name a non-loopback IP address such as 0.0.0.0 or :: for the product emulators (firestore, auth, storage, functions, eventarc, tasks, pubsub), for example to publish them from a container. They serve without a credential, so every such listener is warned about at start. The Hub, the UI and the Logging emulator stay on loopback, and Auth, whose port serves the control API, binds loopback or every interface only. The control API (/v1/, /health/), App Check debug-token management and the routes that load Security Rules or clear Firestore data answer loopback peers only, and every control API request but /health/ then needs Authorization: Bearer <control token> (FIREEMU_CONTROL_TOKEN in a fireemu exec command). The rule-loading and data-clear routes keep their unauthenticated access for a loopback peer, so a forwarder inside the network namespace (kubectl port-forward, a sidecar proxy) still reaches them."
+        }
+      }
+    },
     "projects": {
       "type": "object",
       "additionalProperties": false,
@@ -124,6 +135,12 @@
           "enum": ["report", "refuse"],
           "default": "report",
           "description": "What the strict profile does with a query whose composite index is not defined. report (the default, and \"refuse\" under productionExact): run the query as if the index existed, but only where production would refuse it (a query production serves by merging indexes is not reported), and print once per database and index production's refusal text, with the console link, and the firestore.indexes.json entry (an index an Admin create is still building, or one that was deleted, also runs, and is reported in production's wording for that state); the query's answer carries the FS_MISSING_INDEX_REPORTED warning. refuse: production's FAILED_PRECONDITION. The emulator profile always runs the query, as the official emulator checks no composite index, and refuse requires the strict profile."
+        },
+        "listenStreamLifetime": {
+          "type": "string",
+          "enum": ["oneHour", "unlimited"],
+          "default": "unlimited",
+          "description": "Whether an end user's native gRPC Listen stream ends with INTERNAL an hour after it opened, as production ends it. unlimited (the default, and \"oneHour\" under productionExact) keeps a long local session open; oneHour, which requires the strict profile, closes it as production does. POST /v1/firestore/listen:expire on the control API ends every held end-user stream at once in either case."
         },
         "databaseCreateTime": {
           "type": "string",
@@ -213,6 +230,11 @@
       "properties": {
         "executionMode": { "enum": ["admin-bypass", "native", "oracle", "disabled"] },
         "source": { "type": "string" },
+        "denialLog": {
+          "enum": ["summary", "off"],
+          "default": "summary",
+          "description": "Whether each Security Rules denial of an end-user Firestore or Storage request is printed on standard error with every allow condition it evaluated and what it evaluated to (summary), or not (off). The client is answered with production's denial either way."
+        },
         "staticLimitChecks": { "type": "boolean" },
         "runtimeBudgets": { "type": "boolean" },
         "compiledSize": {
@@ -598,15 +620,20 @@
         },
         "tenants": {
           "type": ["array", "null"],
-          "description": "The default project's tenants, each an Admin v2 Tenant document with its tenantId (a display name, a hyphen and five characters of [a-z0-9], as production generates it). A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty in the default project when the daemon starts, in every session project created later, and again after a control-plane reset of a session (the default session's included); an --import is authoritative for a tenant of the same id. A namespace the emulator profile creates for an unknown project id is seeded when it is created (by a request that writes a tenant there, or by an Admin user, provider or project-setting write). Absent or null, no tenant is created.",
+          "description": "The default project's tenants, each an Admin v2 Tenant document with its tenantId: under auth.tenantIdFormat \"readable\" (the default) any id that starts with a letter and holds letters, digits and hyphens (at most 63 characters, such as tenant-a), under \"generated\" (productionExact) a display name, a hyphen and five characters of [a-z0-9], as production generates it. A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty in the default project when the daemon starts, in every session project created later, and again after a control-plane reset of a session (the default session's included); an --import is authoritative for a tenant of the same id. A namespace the emulator profile creates for an unknown project id is seeded when it is created (by a request that writes a tenant there, or by an Admin user, provider or project-setting write). Absent or null, no tenant is created.",
           "items": {
             "type": "object",
             "required": ["tenantId", "displayName"],
             "properties": {
-              "tenantId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{3,19}-[a-z0-9]{5}$" },
+              "tenantId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,62}$" },
               "displayName": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{3,19}$" }
             }
           }
+        },
+        "tenantIdFormat": {
+          "enum": ["readable", "generated"],
+          "default": "readable",
+          "description": "Which tenantId a tenant of auth.tenants may have. readable (the default, a development default, and \"generated\" under productionExact): any id that starts with a letter and holds letters, digits and hyphens, at most 63 characters, such as tenant-a. generated: the id production would generate, the display name, a hyphen and five characters of [a-z0-9]."
         },
         "secretMaterialization": { "enum": ["redact", "allow"] },
         "forwardInboundCredentials": {
@@ -1038,6 +1065,53 @@
                   }
                 }
               }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "required": ["auth"],
+            "properties": { "auth": { "required": ["tenantIdFormat"], "properties": { "tenantIdFormat": { "const": "generated" } } } }
+          },
+          {
+            "required": ["productionExact"],
+            "properties": {
+              "productionExact": { "const": true },
+              "auth": { "not": { "required": ["tenantIdFormat"] } }
+            }
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "auth": {
+            "properties": {
+              "tenants": {
+                "items": {
+                  "properties": {
+                    "tenantId": { "pattern": "^[A-Za-z][A-Za-z0-9-]{3,19}-[a-z0-9]{5}$" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["profile"],
+        "properties": { "profile": { "const": "emulator" } }
+      },
+      "then": {
+        "properties": {
+          "firestore": {
+            "properties": {
+              "listenStreamLifetime": { "not": { "const": "oneHour" } }
             }
           }
         }

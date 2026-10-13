@@ -1389,7 +1389,11 @@ fn parse_options(
     // export replaces what the directory holds.
     let export_on_exit = resolve_export_on_exit(raw.export_on_exit, raw.import.as_deref())?;
     if let Some(dir) = &raw.import {
-        if !dir.is_dir() {
+        // A missing directory that `--export-on-exit` writes is the first run of a persisted
+        // directory: the daemon starts it with no data (`import_export::nothing_to_import`).
+        let first_run = std::path::absolute(dir)
+            .is_ok_and(|absolute| export_on_exit.as_deref() == Some(absolute.as_path()));
+        if !dir.is_dir() && (!first_run || dir.exists()) {
             return Err(CliError::refused(format!(
                 "--import {}: no such directory",
                 dir.display()
@@ -1473,6 +1477,32 @@ fn apply_inspect_functions(cfg: &mut RuntimeConfig, port: Option<u16>) -> Result
     cfg.functions_inspect_port = port;
     cfg.functions_inspect_dynamic = port.is_none();
     Ok(())
+}
+
+/// The address a client on this host connects to for a listener bound to `addr`: the loopback
+/// address of its family for an unspecified one (`0.0.0.0`, `::`), `addr` otherwise.
+fn connectable(addr: std::net::SocketAddr) -> std::net::SocketAddr {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    match addr.ip() {
+        IpAddr::V4(ip) if ip.is_unspecified() => (Ipv4Addr::LOCALHOST, addr.port()).into(),
+        IpAddr::V6(ip) if ip.is_unspecified() => (Ipv6Addr::LOCALHOST, addr.port()).into(),
+        _ => addr,
+    }
+}
+
+/// One warning per product listener that is reachable from other hosts: the emulators serve
+/// without a credential, so a listener off loopback is worth a line at every start.
+fn network_exposure_warnings(listeners: &[(&str, Option<std::net::SocketAddr>)]) -> Vec<String> {
+    listeners
+        .iter()
+        .filter_map(|(name, addr)| addr.map(|addr| (name, addr)))
+        .filter(|(_, addr)| !addr.ip().to_canonical().is_loopback())
+        .map(|(name, addr)| {
+            format!(
+                "{name} listens on {addr}, reachable from other hosts without a credential (network.allowNonLoopbackHosts); the control API answers loopback peers only"
+            )
+        })
+        .collect()
 }
 
 /// The addresses the daemon actually bound, per service. `None` means the service was not
@@ -2966,6 +2996,7 @@ fn control_state(
     pubsub: &Arc<Mutex<fireemu_core_pubsub::PubSubState>>,
     pubsub_handle: &fireemu_adapter_pubsub::PubSubHandle,
     pubsub_resources: &[functions::FunctionPubSubResource],
+    listen_expiry: Option<fireemu_adapter_grpc::rules::ListenExpiry>,
 ) -> fireemu_adapter_http::control::ControlState {
     let _ = auth_store;
     // Snapshot parts: what the session owns (Firestore databases and their field
@@ -3065,6 +3096,12 @@ fn control_state(
         control_token,
         barrier: Some(backend.barrier()),
         app_check,
+        // Exposed listeners can sit behind a forwarder that connects from loopback, so the peer
+        // address alone does not prove a local caller: every control request needs the token.
+        require_control_token: cfg.allow_non_loopback_hosts,
+        firestore_listen_expiry: listen_expiry.map(|expiry| {
+            Arc::new(move || expiry.expire()) as Arc<dyn Fn() -> usize + Send + Sync>
+        }),
     }
 }
 
@@ -4304,5 +4341,45 @@ mod loopback_peer_tests {
                 Err(_) => return,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod network_exposure_tests {
+    use super::{connectable, network_exposure_warnings};
+    use std::net::SocketAddr;
+
+    fn addr(text: &str) -> SocketAddr {
+        text.parse().unwrap()
+    }
+
+    #[test]
+    fn an_unspecified_listener_is_advertised_at_the_loopback_address_of_its_family() {
+        assert_eq!(connectable(addr("0.0.0.0:8080")), addr("127.0.0.1:8080"));
+        assert_eq!(connectable(addr("[::]:9099")), addr("[::1]:9099"));
+        for kept in ["127.0.0.1:1", "[::1]:2", "192.168.1.10:3", "[fe80::1]:4"] {
+            assert_eq!(connectable(addr(kept)), addr(kept), "{kept}");
+        }
+    }
+
+    #[test]
+    fn only_listeners_off_loopback_are_warned_about() {
+        let warnings = network_exposure_warnings(&[
+            ("firestore", Some(addr("0.0.0.0:8080"))),
+            ("auth", Some(addr("127.0.0.1:9099"))),
+            ("storage", None),
+            ("pubsub", Some(addr("[::]:8085"))),
+            ("tasks", Some(addr("[::1]:9499"))),
+        ]);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(
+            warnings[0].starts_with("firestore listens on 0.0.0.0:8080"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[1].starts_with("pubsub listens on [::]:8085"),
+            "{warnings:?}"
+        );
+        assert!(warnings[0].contains("control API answers loopback peers only"));
     }
 }

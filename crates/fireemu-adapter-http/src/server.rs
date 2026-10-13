@@ -26,9 +26,23 @@ async fn respond(
     control: Option<Arc<ControlState>>,
     blocking_auth_slots: Option<Arc<Semaphore>>,
     peer_ip: Option<String>,
+    remote_peer: bool,
     req: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let method = req.method().as_str().to_owned();
+    // The control API answers loopback peers only. The listener is on loopback unless
+    // `network.allowNonLoopbackHosts` exposed the Auth emulator, and then a peer on another
+    // host reaches Identity Toolkit but never the control surface.
+    if refuses_remote_control(remote_peer, control.is_some(), req.uri().path()) {
+        return Ok(finish(
+            403,
+            &serde_json::json!({
+                "error": "this route answers loopback peers only: network.allowNonLoopbackHosts exposes the emulators, not the control API, rule loading, data clearing or App Check debug-token management"
+            }),
+            None,
+            false,
+        ));
+    }
     let origin = req
         .headers()
         .get("origin")
@@ -360,6 +374,25 @@ fn with_cors(
     b
 }
 
+/// Whether a request is refused because a remote peer asks for a privileged route: the control
+/// API, or App Check's debug-token management. `remote_peer` is a peer whose address is not
+/// loopback (an IPv4-mapped loopback address is loopback). App Check's token exchange and JWKS
+/// are product routes under `/v1/` and stay reachable.
+fn refuses_remote_control(remote_peer: bool, serves_control: bool, path: &str) -> bool {
+    if !remote_peer {
+        return false;
+    }
+    if crate::app_check::is_app_check_path(path) {
+        return crate::app_check::is_management_path(path);
+    }
+    serves_control && control::is_control_path(path)
+}
+
+/// Whether a connection from `peer` comes from another host.
+fn is_remote_peer(peer: std::net::IpAddr) -> bool {
+    !peer.to_canonical().is_loopback()
+}
+
 /// Serves the Identity Toolkit surface on `listener` until the task is aborted.
 pub async fn serve(listener: TcpListener, state: Arc<AuthState>) -> std::io::Result<()> {
     serve_inner(listener, state, None).await
@@ -389,6 +422,7 @@ async fn serve_inner(
     loop {
         let (stream, peer_addr) = listener.accept().await?;
         let peer_ip = Some(peer_addr.ip().to_string());
+        let remote_peer = is_remote_peer(peer_addr.ip());
         let state = state.clone();
         let control = control.clone();
         let blocking_auth_slots = blocking_auth_slots.clone();
@@ -403,11 +437,71 @@ async fn serve_inner(
                     control.clone(),
                     blocking_auth_slots.clone(),
                     peer_ip.clone(),
+                    remote_peer,
                     req,
                 )
             });
             // Connection errors are per-client; the accept loop keeps running.
             let _ = http1::Builder::new().serve_connection(io, svc).await;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_remote_peer, refuses_remote_control};
+    use std::net::IpAddr;
+
+    #[test]
+    fn only_a_remote_peer_asking_the_control_listener_for_a_control_path_is_refused() {
+        for path in [
+            "/v1/sessions",
+            "/v1/sessions/default:awaitIdle",
+            "/health/live",
+        ] {
+            assert!(refuses_remote_control(true, true, path), "{path}");
+            assert!(!refuses_remote_control(false, true, path), "{path}");
+            assert!(!refuses_remote_control(true, false, path), "{path}");
+        }
+        for path in [
+            "/identitytoolkit.googleapis.com/v1/accounts:signUp",
+            "/emulator/v1/projects/demo/accounts",
+            "/",
+            // App Check's product routes are not control routes.
+            "/v1/jwks",
+            "/v1/projects/demo/apps/1:123:web:abc:exchangeDebugToken",
+            "/v1beta/jwks",
+        ] {
+            assert!(!refuses_remote_control(true, true, path), "{path}");
+        }
+        // App Check's debug-token management is refused to a remote peer, on any listener.
+        for path in [
+            "/emulator/v1/projects/demo/apps/1:123:web:abc/debugTokens",
+            "/emulator/v1/projects/demo/apps/1:123:web:abc/debugTokens/t1",
+            "/emulator/v1/projects/demo/apps/1:123:web:abc/debugTokens?x=1",
+        ] {
+            assert!(refuses_remote_control(true, true, path), "{path}");
+            assert!(refuses_remote_control(true, false, path), "{path}");
+            assert!(!refuses_remote_control(false, true, path), "{path}");
+        }
+    }
+
+    #[test]
+    fn loopback_peers_of_either_family_are_local_and_every_other_address_is_remote() {
+        for local in ["127.0.0.1", "127.8.9.10", "::1", "::ffff:127.0.0.1"] {
+            assert!(!is_remote_peer(local.parse::<IpAddr>().unwrap()), "{local}");
+        }
+        for remote in [
+            "192.168.1.2",
+            "10.88.0.1",
+            "::ffff:10.0.0.1",
+            "fe80::1",
+            "0.0.0.0",
+        ] {
+            assert!(
+                is_remote_peer(remote.parse::<IpAddr>().unwrap()),
+                "{remote}"
+            );
+        }
     }
 }

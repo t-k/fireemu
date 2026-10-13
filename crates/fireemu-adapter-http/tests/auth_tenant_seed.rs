@@ -461,3 +461,65 @@ fn a_project_setting_a_tenant_follows_is_not_a_shadowing_difference() {
         );
     }
 }
+
+/// `auth.tenantIdFormat`: a readable id is a letter, then letters, digits and hyphens, at most
+/// 63 characters; the generated format asks for the display name, a hyphen and five
+/// characters of `[a-z0-9]`, and ids that differ only in case repeat each other in both.
+#[test]
+fn the_tenant_id_format_decides_which_ids_a_seed_may_have() {
+    use fireemu_adapter_http::identity_toolkit::{prepare_tenant_seeds_with, TenantIdFormat};
+    let seed = |id: &str, format| {
+        prepare_tenant_seeds_with(
+            &[json!({"tenantId": id, "displayName": "acme"})],
+            false,
+            None,
+            format,
+        )
+    };
+    let longest = format!("a{}", "-".repeat(62));
+    for id in ["t", "tenant-a", "Tenant-B9", "acme-x7k2q", longest.as_str()] {
+        assert!(seed(id, TenantIdFormat::Readable).is_ok(), "{id}");
+    }
+    let too_long = format!("{longest}b");
+    for id in [
+        "",
+        "1tenant",
+        "-tenant",
+        "tenant_a",
+        "tenant.a",
+        "tenant a",
+        "é",
+        too_long.as_str(),
+    ] {
+        let error = seed(id, TenantIdFormat::Readable).expect_err(id);
+        assert!(error.contains("must start with a letter"), "{id}: {error}");
+    }
+    assert!(seed("acme-x7k2q", TenantIdFormat::Generated).is_ok());
+    for id in ["tenant-a", "acme-x7k2", "acme-X7K2Q", "acme_x7k2q"] {
+        let error = seed(id, TenantIdFormat::Generated).expect_err(id);
+        assert!(
+            error.contains("as production generates one"),
+            "{id}: {error}"
+        );
+    }
+    // The default of the plain entry point is the generated format.
+    assert!(seeds(
+        &[json!({"tenantId": "tenant-a", "displayName": "acme"})],
+        false
+    )
+    .is_err());
+    assert_eq!(TenantIdFormat::default(), TenantIdFormat::Readable);
+    for format in [TenantIdFormat::Readable, TenantIdFormat::Generated] {
+        let error = prepare_tenant_seeds_with(
+            &[
+                json!({"tenantId": "acme-x7k2q", "displayName": "acme"}),
+                json!({"tenantId": "ACME-x7k2q", "displayName": "ACME"}),
+            ],
+            false,
+            None,
+            format,
+        )
+        .expect_err("a case-insensitive repeat");
+        assert!(error.contains("auth.tenants[1]"), "{error}");
+    }
+}

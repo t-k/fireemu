@@ -73,6 +73,10 @@ pub struct RestRequest {
     pub authorization: Option<String>,
     /// `Origin` header, when the transport saw one.
     pub origin: Option<String>,
+    /// Whether the connection's peer is on another host (its address is not loopback). The
+    /// privileged emulator routes refuse such a peer, which only reaches the listener when
+    /// `network.allowNonLoopbackHosts` exposed it.
+    pub remote_peer: bool,
     /// Whether the transport saw any field only a browser attaches
     /// (`fireemu_core_session::loopback::BROWSER_METADATA_HEADERS`).
     pub browser_metadata: bool,
@@ -797,7 +801,8 @@ impl RestState {
     /// `DELETE .../databases/{database}/documents` drops every document of the project, which
     /// is what `@firebase/rules-unit-testing`'s `clearFirestore()` and the Emulator UI's
     /// "clear data" button call between tests. It takes no credential, exactly as the official
-    /// emulator's route does not -- and is reachable only from the loopback listener.
+    /// emulator's route does not -- and answers loopback peers only (a listener exposed with
+    /// `network.allowNonLoopbackHosts` refuses a peer on another host).
     /// `clearFirestore()` goes through Node's built-in fetch, which attaches
     /// `sec-fetch-mode: cors` and nothing else a browser would, so it carries no browser
     /// evidence. Being loopback-only is not by itself enough:
@@ -861,6 +866,11 @@ impl RestState {
     /// surface can present no token, so no page reaches these routes at all.
     fn privileged_browser_guard(&self, req: &RestRequest) -> Result<(), Status> {
         use fireemu_core_session::loopback::{privileged_route_admission, PrivilegedAdmission};
+        if req.remote_peer {
+            return Err(Status::permission_denied(
+                "this route answers loopback peers only: network.allowNonLoopbackHosts exposes the emulators, not rule loading or data clearing",
+            ));
+        }
         let presented = req
             .authorization
             .as_deref()

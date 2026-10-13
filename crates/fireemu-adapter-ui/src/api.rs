@@ -166,6 +166,7 @@ fn firestore(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
         // crate docs), so the request reaching the REST surface is this daemon's, not the
         // page's, and re-applying the browser guard behind it would refuse the UI's own calls.
         origin: None,
+        remote_peer: false,
         browser_metadata: false,
         app_check: Vec::new(),
         body,
@@ -291,6 +292,7 @@ fn storage(state: &UiState, path: &str, req: &UiRequest) -> UiResponse {
             // specification section 12.2; it never forwards an App Check field of its own.
             app_check: Vec::new(),
             body: req.body.clone(),
+            remote_peer: false,
         },
     );
     let mut headers = response.headers;

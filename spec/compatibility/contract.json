@@ -1051,7 +1051,7 @@
               "precision": "exact-for-local-semantics"
             },
             {
-              "behaviour": "a strict-profile native gRPC Listen stream of an end user ends with INTERNAL 3,600 s after it opened, without waiting for a commit, as production closed all twelve held native streams of the AUTH-FS-CROSS stage-2 packet-v7 recordings (2026-09-28) 3,600.17-3,600.19 s after opening (0.65-2.67 s past their tokens' exp, so not at exp); production resets the HTTP/2 stream (RST_STREAM INTERNAL_ERROR), which clients report as INTERNAL with their own text; unobserved and left as they were: a WebChannel Listen held for an hour (it stays open), a stream opened with an older token (no close is added at its exp; the first commit past its allowance still ends it), owner and anonymous streams; one earlier close (packet v6, recording 2, stream t2, before exp-60 s) is an unexplained single observation not reproduced in the twelve; the emulator profile keeps the stream, as the official emulator does",
+              "behaviour": "with productionExact or firestore.listenStreamLifetime \"oneHour\" (strict profile only; by default the stream stays open, a development default, owner decision 2026-10-13, and POST /v1/firestore/listen:expire on the control API ends every held end-user stream at once with the same INTERNAL), a native gRPC Listen stream of an end user ends with INTERNAL 3,600 s after it opened, without waiting for a commit, as production closed all twelve held native streams of the AUTH-FS-CROSS stage-2 packet-v7 recordings (2026-09-28) 3,600.17-3,600.19 s after opening (0.65-2.67 s past their tokens' exp, so not at exp); production resets the HTTP/2 stream (RST_STREAM INTERNAL_ERROR), which clients report as INTERNAL with their own text; unobserved and left as they were: a WebChannel Listen held for an hour (it stays open), a stream opened with an older token (no close is added at its exp; the first commit past its allowance still ends it), owner and anonymous streams; one earlier close (packet v6, recording 2, stream t2, before exp-60 s) is an unexplained single observation not reproduced in the twelve; the emulator profile keeps the stream, as the official emulator does",
               "precision": "exact-for-local-semantics"
             },
             {
@@ -1156,7 +1156,11 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "GET /v1/sessions/{session}/rules/requests on the control API: the last 100 decided requests with their per-expression traces, behind the control token",
+              "behaviour": "GET /v1/sessions/{session}/rules/requests on the control API: the last 100 decided requests with their per-expression traces, behind the control token; with the UI running the trace is kept from the first request on",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "each Security Rules denial of an end-user Firestore or Storage request is printed on stderr with the request, the reason and every allow condition it evaluated with its line, source and value (rules.denialLog \"summary\" by default, \"off\" to silence; owner decision 2026-10-13); the client's answer stays production's denial",
               "precision": "exact-for-local-semantics"
             }
           ],
@@ -1341,7 +1345,7 @@
               "precision": "documented-divergence"
             },
             {
-              "behaviour": "auth.multiTenant.allowTenants and auth.tenants[] in the canonical configuration are a config seed of the default project's multi-tenancy switch and tenants: each entry is an Admin v2 Tenant document with its tenantId, read by the code the Admin tenant create route reads a document with (the strict profile exactly as the route reads it; the emulator profile the route's reading plus production's checks, so an unknown member, a missing or invalid displayName and an id without production's displayName-xxxxx shape are refused in both profiles), and created empty with that id when the daemon starts, in every session project created later, and again by a control-plane session reset (the default session's included), which also returns the switch to the declared value; an --import is applied first and is authoritative for a tenant of the same id (a startup warning names a declared tenant it replaced with other settings), and a declared tenant it did not carry is created as declared. The runtime gates are unchanged: the strict profile creates tenants only in a project that allows them, so declaring tenants there without allowTenants: true stops the daemon at start, and the emulator profile takes tenants without the switch. Without the keys nothing is created and a reset leaves an Admin-set switch alone, as it does the rest of the project configuration. A namespace the emulator profile creates for an unknown project id is seeded when it is created, by a request that writes a tenant there or by the requests that already created one (an Admin user create, a provider write, a project setting write), before the request's own tenant is made (a request that names a tenant waits for every seed in flight, whichever request installed the project), so a declared tenant a request names first has its declared settings; the install, the seed and the tenant the request names are one admitted step, so a reset or a session creation never sees half of it, and a tenant made while a session registration is pending does not outlive a rollback of it; the tenant list of an unknown project answers empty and creates nothing (a divergence from the official emulator, which creates the project on a read too); a session created for that project id displaces the namespace with its tenants; a declared tenant has the Admin create defaults, not the on-the-way ones; a tenant's own settings (mfaConfig, passwordPolicyConfig, ...) come from its document",
+              "behaviour": "auth.multiTenant.allowTenants and auth.tenants[] in the canonical configuration are a config seed of the default project's multi-tenancy switch and tenants: each entry is an Admin v2 Tenant document with its tenantId, read by the code the Admin tenant create route reads a document with (the strict profile exactly as the route reads it; the emulator profile the route's reading plus production's checks, so an unknown member and a missing or invalid displayName are refused in both profiles; the id must be readable, a letter then letters, digits and hyphens up to 63 characters, by default, a development default since 2026-10-13, and production's displayName-xxxxx shape under productionExact or auth.tenantIdFormat \"generated\"), and created empty with that id when the daemon starts, in every session project created later, and again by a control-plane session reset (the default session's included), which also returns the switch to the declared value; an --import is applied first and is authoritative for a tenant of the same id (a startup warning names a declared tenant it replaced with other settings), and a declared tenant it did not carry is created as declared. The runtime gates are unchanged: the strict profile creates tenants only in a project that allows them, so declaring tenants there without allowTenants: true stops the daemon at start, and the emulator profile takes tenants without the switch. Without the keys nothing is created and a reset leaves an Admin-set switch alone, as it does the rest of the project configuration. A namespace the emulator profile creates for an unknown project id is seeded when it is created, by a request that writes a tenant there or by the requests that already created one (an Admin user create, a provider write, a project setting write), before the request's own tenant is made (a request that names a tenant waits for every seed in flight, whichever request installed the project), so a declared tenant a request names first has its declared settings; the install, the seed and the tenant the request names are one admitted step, so a reset or a session creation never sees half of it, and a tenant made while a session registration is pending does not outlive a rollback of it; the tenant list of an unknown project answers empty and creates nothing (a divergence from the official emulator, which creates the project on a read too); a session created for that project id displaces the namespace with its tenants; a declared tenant has the Admin create defaults, not the on-the-way ones; a tenant's own settings (mfaConfig, passwordPolicyConfig, ...) come from its document",
               "precision": "boundary-conformance"
             },
             {
@@ -2286,6 +2290,7 @@
               "crates/fireemu/tests/cli.rs",
               "crates/fireemu/tests/exec.rs",
               "crates/fireemu/src/config.rs",
+              "crates/fireemu/tests/network_exposure.rs",
               "tools/config-schema-check/src/main.rs"
             ],
             "conformance": []
@@ -2299,7 +2304,7 @@
               "precision": "exact-for-local-semantics"
             },
             {
-              "behaviour": "emulators.<name>.host in firebase.json and bind in the canonical configuration accept only loopback (127.0.0.1, localhost, ::1); a routable host such as 0.0.0.0, :: or a LAN address, which firebase-tools 15.28.2 binds as given, exits 1 naming the key. The daemon serves without a credential on the products and its privileged control routes trust a loopback origin, so there is no routable mode; a suite that must be reached from another machine sits behind a reverse proxy that adds the credential. Runtime (crates/fireemu/src/config.rs loopback_host), corpus (spec/config/*invalid-examples) and tools/config-schema-check enforce one spelling set",
+              "behaviour": "emulators.<name>.host in firebase.json and bind in the canonical configuration accept only loopback (127.0.0.1, localhost, ::1); a routable host such as 0.0.0.0, :: or a LAN address, which firebase-tools 15.28.2 binds as given, exits 1 naming the key. The daemon serves without a credential on the products and its privileged control routes trust a loopback origin, so a routable host needs the explicit network.allowNonLoopbackHosts opt-in of the canonical configuration: with it the product emulators (firestore, auth, storage, functions, eventarc, tasks, pubsub) may bind an IP address such as 0.0.0.0 or :: (advertised at the loopback address of its family, as firebase-tools does, and warned about at start), while the Hub, the UI and the Logging emulator stay on loopback, Auth (whose port serves the control API) binds loopback or every interface only, the control API (/v1/, /health/), App Check debug-token management, the Firestore securityRules and data-clear routes and the Storage /internal/setRules route refuse every non-loopback peer with 403, and every control API request but /health/ needs the control token whatever the peer, because a forwarder in the namespace connects from loopback (owner decision 2026-10-13). Runtime (crates/fireemu/src/config.rs emulator_host and loopback_host, crates/fireemu-adapter-http/src/server.rs refuses_remote_control), corpus (spec/config/*invalid-examples) and tools/config-schema-check enforce one spelling set",
               "precision": "conservative"
             }
           ],
@@ -2308,7 +2313,7 @@
         },
         {
           "id": "CLI-CLAIM-IMPORT-EXPORT",
-          "statement": "An export directory firebase emulators:export wrote with firebase-tools 15.28.2 imports into fireemu with its Firestore documents, Auth accounts and Storage objects intact, and an export fireemu writes imports back into the official suite the same way: the firebase-export-metadata.json manifest, every Firestore managed-export output partition referenced by overall_export_metadata, the Identity Toolkit accounts and config documents and the Storage bucket, blob and metadata files are the pinned formats. --import, --export-on-exit and emulators:export behave as the official commands do, an import across products is all or nothing, and corrupt metadata, duplicate or aliased partition outputs, a partition-count overflow, and a section of a deferred product are refused before any imported state is published rather than silently dropped.",
+          "statement": "An export directory firebase emulators:export wrote with firebase-tools 15.28.2 imports into fireemu with its Firestore documents, Auth accounts and Storage objects intact, and an export fireemu writes imports back into the official suite the same way: the firebase-export-metadata.json manifest, every Firestore managed-export output partition referenced by overall_export_metadata, the Identity Toolkit accounts and config documents and the Storage bucket, blob and metadata files are the pinned formats. --import, --export-on-exit and emulators:export behave as the official commands do except for the fireemuOnly rows below (an empty or first-run --import directory, a failed --export-on-exit, a mount-point target), an import across products is all or nothing, and corrupt metadata, duplicate or aliased partition outputs, a partition-count overflow, and a section of a deferred product are refused before any imported state is published rather than silently dropped.",
           "capabilities": [
             {
               "id": "DATA-1",
@@ -2331,6 +2336,10 @@
               "every_document_the_official_emulator_wrote_survives_a_fireemu_re_encode",
               "an_official_multi_product_export_is_imported_whole",
               "an_export_on_exit_reimports_into_the_same_state",
+              "a_failed_export_on_exit_fails_a_command_that_succeeded",
+              "a_failed_export_on_exit_keeps_the_status_of_a_command_that_failed",
+              "an_empty_import_directory_starts_with_no_data",
+              "a_missing_import_directory_is_refused_unless_it_is_the_export_target",
               "a_corrupt_firestore_section_refuses_the_whole_import",
               "a_realtime_database_section_is_refused_with_the_deferred_status",
               "the_export_runs_when_the_daemon_is_interrupted",
@@ -2352,6 +2361,18 @@
             "the official CLI overwrites a non-empty target directory once --force or --export-on-exit is given, whatever it holds"
           ],
           "fireemuOnly": [
+            {
+              "behaviour": "a failed --export-on-exit is reported as an error and a run whose command succeeded exits 1 (a failing command keeps its own status); firebase-tools 15.28.2 logs a warning and keeps the script's exit code, which lets a CI job that depends on the saved data pass without it (owner decision 2026-10-13)",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "an empty --import directory, or a missing one that --export-on-exit writes, starts the suite with no data and a note, so the first run of a persisted volume needs no separate command line; a missing directory that is not the export target and a non-empty directory without firebase-export-metadata.json are still refused",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "an export target that is a mount point (a container volume), which rename(2) cannot replace, is staged inside itself and published by moving entries, the old manifest first and the new one last; that publication is not atomic, and an interrupted one leaves a directory without the manifest, which an import refuses",
+              "precision": "exact-for-local-semantics"
+            },
             {
               "behaviour": "an export directory and every file in it are created owner-only (0700 / 0600), because the Auth section carries password material",
               "precision": "exact-for-local-semantics"

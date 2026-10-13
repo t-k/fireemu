@@ -114,6 +114,13 @@ pub fn is_app_check_path(path: &str) -> bool {
     JWKS_PATHS.contains(&path) || exchange_route(path).is_some() || management_route(path).is_some()
 }
 
+/// Whether `path` is a debug-token management route (`/emulator/v1/projects/{p}/apps/{a}/debugTokens`
+/// and below), fireemu's privileged App Check surface; the exchange and JWKS routes are not.
+#[must_use]
+pub fn is_management_path(path: &str) -> bool {
+    management_route(path.split('?').next().unwrap_or(path)).is_some()
+}
+
 /// `{project}` and `{appId}` of an exchange route, still percent-encoded.
 fn exchange_route(path: &str) -> Option<(&str, &str)> {
     let rest = path

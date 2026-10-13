@@ -508,7 +508,8 @@
       "resume from a resume token or read time: the state at that version is recomputed from the retained MVCC history and only the changes since are replayed, followed by an ExistenceFilter with the current count (an undecodable or future token RESETs)",
       "resume tokens live exactly as long as the read_time retention window: a token whose version has been compacted away is refused explicitly with RESET and a full replay, never resumed against unrelated history",
       "back-pressure: bounded response channel, commits coalesced into one refresh while the client is slow, 1000 targets per stream (RESOURCE_EXHAUSTED beyond)",
-      "a target refused on its own merits (missing composite index, malformed or out-of-database query, rules denial) is answered with TargetChange REMOVE carrying that cause and the stream keeps serving its other targets; stream-level errors are reserved for session-wide or database-wide failures"
+      "a target refused on its own merits (missing composite index, malformed or out-of-database query, rules denial) is answered with TargetChange REMOVE carrying that cause and the stream keeps serving its other targets; stream-level errors are reserved for session-wide or database-wide failures",
+      "an end user's native gRPC Listen stream ends with INTERNAL an hour after it opened, as production ends it, only with productionExact or firestore.listenStreamLifetime \"oneHour\" (strict profile); by default it stays open, and POST /v1/firestore/listen:expire on the control API ends every held end-user stream at once with that status, answering {\"expired\": n}, so a client's reconnect can be tested without waiting an hour"
     ],
     "notes": [
       "existence filters carry the count only (no bloom filter): the replay is exact, so the client never has to guess",
@@ -712,7 +713,8 @@
       "GET /emulator/v1/projects/{project}:ruleCoverage on the Firestore port: the loaded rules files, then a report of one tree per allow condition and per function body, each node naming its sourcePosition (line, column, currentOffset, endOffset) and the values it took with a count each",
       "GET /emulator/v1/projects/{project}:ruleCoverage.html: the same document as a page that underlines every evaluated expression and shows its values on hover",
       "PUT /emulator/v1/projects/{project}:securityRules: the official load route, answering 200 with issues or 400 whose message names the rejected position as L<line>:<column>",
-      "GET /v1/sessions/{session}/rules/requests on the control API: the last 100 decided requests, newest first, each with its decision and what every expression evaluated to",
+      "GET /v1/sessions/{session}/rules/requests on the control API: the last 100 decided requests, newest first, each with its decision and what every expression evaluated to; with the UI running the trace is kept from the first request on, so the Rules page lists denials that happened before it was opened",
+      "each denial of an end-user Firestore or Storage request is printed on stderr with the request, the reason and every allow condition it evaluated with its line, its source and what it took (rules.denialLog \"summary\", the default; \"off\" silences it); the client's answer stays production's",
       "the Emulator UI's Rules page lists the decided requests and expands one into its per-expression trace, reading the same control route"
     ],
     "notes": [
@@ -854,7 +856,7 @@
       "--inspect-functions [port|true] binds Node's inspector to loopback, keeps its capability UUID out of stderr and Logging history, verifies /json/list after codebase loading, assigns independent dynamic ports to multiple codebases, serialises HTTP and background handlers while debugging, disables handler deadlines, and releases inspector ports at shutdown; a configured non-Node functions.runner and a fixed port with multiple codebases are refused before serving",
       "--log-verbosity quiet | silent | info | debug (case-insensitive): quiet and silent suppress the banner and the notices, debug adds the resolved configuration",
       "emulators:exec starts without the Emulator UI unless --ui is present, while emulators:start keeps the official automatic UI selection for supported services; an explicit fireemu --ui-port remains the stronger local override",
-      "exit codes: the command's own status from exec, 128 + signal when a signal ended it, 1 for a startup failure or a refused configuration, 2 for a usage error; a refusal never starts a listener and never runs the command",
+      "exit codes: the command's own status from exec, 128 + signal when a signal ended it, 1 for a startup failure or a refused configuration, 2 for a usage error, and 1 when --export-on-exit fails after a command that succeeded (a failing command keeps its own status; firebase-tools 15.28.2 only warns); a refusal never starts a listener and never runs the command",
       "SIGINT and SIGTERM are forwarded to the command with their identity and the whole process group is swept afterwards"
     ],
     "unimplemented": [

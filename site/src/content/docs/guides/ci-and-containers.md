@@ -22,7 +22,7 @@ jobs:
 
 Fireemu needs no Java and no download at startup: the npm package installs a native binary for the runner's platform.
 
-To also check what the development defaults let through, such as a missing composite index, add a job that runs with a `fireemu.json` that sets [`productionExact`](../profiles/):
+To also check what the development defaults let through, such as unsigned test tokens, add a job that runs with a `fireemu.json` that sets [`productionExact`](../profiles/):
 
 ```sh
 npx fireemu exec --config fireemu.production-exact.json -- npm test

@@ -8,8 +8,23 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Changed
+
+- Under the strict profile a query whose composite index is not defined (or is still building, or was deleted) is refused by default again, with production's `FAILED_PRECONDITION` and its console link to the index (owner decision of 2026-10-13), whether or not `productionExact` is set. `productionExact` no longer moves `firestore.missingIndexes`, so it is no longer listed among the development defaults in the start banner or `GET /v1/capabilities`. To keep the version 0.17 behavior of running the query and reporting the missing index once per database and index on stderr, set `"firestore": {"missingIndexes": "report"}`. The emulator profile is unchanged: it runs every query, as the official emulator does.
+- `fireemu config show` and `fireemu init --reference` now say which accepted keys the daemon does not read (`limits.catalog`, `limits.enforcement`, `firestore.explain`, `firestore.pipeline.enabled`, `firestore.textSearch.*`, `rules.staticLimitChecks`, `bind`, `auth.enabled`, `trace.*` and others, 33 in all): `config show` gives them the source `accepted, no effect` instead of echoing the value or the schema default as if it were in effect, and a configuration that sets one prints one `note:` line per key at start-up. Such configurations still load. `firebaseJson` shows the file actually selected, including one chosen with `--firebase-json`.
+
+### Added
+
+- `fireemu config show` lists schema keys with effective values, sources and optional JSON descriptions, using the same configuration loading as `up`.
+- `fireemu init --reference` writes a commented `fireemu.reference.jsonc` without expanding the minimal runtime configuration or pinning productionExact defaults.
+- The startup banner and `GET /v1/capabilities` now show each effective development-default value and its source, including explicit overrides and derived settings, alongside `productionExact`.
+- The UI listener redirects `GET /` and `HEAD /` to `/ui/` with `302 Found` and an empty body.
+
 ### Fixed
 
+- UI addresses in the README now include `/ui/`.
+- The `auth.totp` schema description explains the MFA configuration required under strict and links to the README example.
+- The README, compatibility contract and schema clarify that `auth.allowUnsignedIdTokens: false` disables only the mock-token fallback, how to test that refusal, and how `auth.idTokenSigning: "session-rsa"` refuses all unsigned ID tokens.
 - Strict Pub/Sub label keys now use the exact Unicode `Ll`/`Lo` first-character and `Ll`/`Lo`/`N` body classes from production's diagnostic (`[\p{Ll}\p{Lo}][\p{Ll}\p{Lo}\p{N}_-]{0,62}`), instead of an approximation that also admitted titlecase and modifier letters, letter numbers and combining marks. The diagnostics, their order and the emulator profile's permissive admission are unchanged.
 
 ## [0.18.0] - 2026-10-13

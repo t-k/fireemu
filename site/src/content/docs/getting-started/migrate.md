@@ -32,7 +32,7 @@ Fireemu reads your existing `firebase.json`, serves the same ports, and accepts 
 A test that passed on the official emulator but fails under `strict` usually shows behavior your application would also meet in production. Fix the test or the application, or relax only the specific setting below, rather than switching the whole profile to `emulator`.
 
 - **Unsigned emulator ID tokens.** `@firebase/rules-unit-testing`'s `authenticatedContext()` and the client SDK's `mockUserToken` work under `strict` by default. Set `auth.allowUnsignedIdTokens` to `false` to test production's refusal of them.
-- **Composite indexes.** Queries are checked against your declared indexes, as production checks them. Declare the index a query needs in `firestore.indexes.json`, referenced from `firebase.json`. By default a missing index is reported on standard error and the query still runs; with `productionExact` it is refused with `FAILED_PRECONDITION`.
+- **Composite indexes.** Queries are checked against your declared indexes, as production checks them. Declare the index a query needs in `firestore.indexes.json`, referenced from `firebase.json`. A query whose index is missing is refused with `FAILED_PRECONDITION` and a link to the index, as in production. To keep running such queries while you add the indexes, set `firestore.missingIndexes` to `"report"`: the query runs and the missing index is reported on standard error.
 - **Settings that mirror your production project.** Set them to match it instead of switching the profile:
 
 | Setting | What it does under `strict` |

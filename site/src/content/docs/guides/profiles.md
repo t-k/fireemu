@@ -39,11 +39,12 @@ To get production's behavior for all of them at once, set `productionExact` to `
 | Firestore and Storage Security Rules accept `@firebase/rules-unit-testing`'s unsigned mock ID token | `auth.allowUnsignedIdTokens` | Refused, as production refuses an unsigned token |
 | Identity-provider sign-in accepts fixture assertions and the sign-in widget | `auth.idpAssertions` (`"fixture"`) | `"signed"`: OIDC ID tokens must verify with an `auth.idpSigners` key, SAML responses with the provider's certificates |
 | The Eventarc listener admits any credential or none | `eventarc.authentication` (`"permissive"`) | `"production"`: a missing, malformed or JWT-shaped bearer is refused with production's 401 |
-| A query whose composite index is not defined runs, and the missing index is reported on standard error | `firestore.missingIndexes` (`"report"`) | `"refuse"`: refused with `FAILED_PRECONDITION` and the console link |
 | A tenant ID can be any readable name, such as `tenant-a` | `auth.tenantIdFormat` (`"readable"`) | `"generated"`: production's generated form, such as `acme-x7k2q` |
 | An end user's Firestore `Listen` stream stays open however long it is held | `firestore.listenStreamLifetime` (`"unlimited"`) | `"oneHour"`: ended with `INTERNAL` an hour after it opened |
 
-The startup banner and `fireemu capabilities` report whether `productionExact` is set.
+The startup banner and `fireemu capabilities` report whether `productionExact` is set, and the effective value and source of each setting in the table.
+
+Most projects do not need `productionExact`; it is an advanced switch for a stricter comparison with production. A query whose composite index is not defined is not among these defaults: `strict` refuses it as production does, and `firestore.missingIndexes: "report"` is an explicit opt-out that runs it and reports the missing index on standard error. `productionExact` does not change that key.
 
 ### Other development conveniences
 
@@ -57,5 +58,5 @@ These differ from production and are not switched by `productionExact`:
 ## Choosing a setup
 
 - **Most projects:** `strict` with the development defaults. Your tests run without keys or setup calls, and still meet production's validation, refusals and error shapes.
-- **Before a release, or in a separate CI job:** `strict` with `productionExact: true`, to catch what the development defaults let through, such as a missing index.
+- **Before a release, or in a separate CI job:** `strict` with `productionExact: true`, to catch what the development defaults let through, such as an unsigned token.
 - **Checking the official emulator:** `emulator`, as an additional target only.

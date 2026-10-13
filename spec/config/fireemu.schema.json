@@ -52,7 +52,7 @@
       "default": false,
       "description": "fireemu is run mostly by tests in CI and on a developer's machine, so where production needs setup a test should not have to do (signed tokens, signing keys, Admin API calls), the default is the development behaviour, in both profiles. true restores production's behaviour for every such default; an explicit key still decides over it. Requires the strict profile. docs/compatibility-contract.md (\"Development defaults\") lists the keys it moves."
     },
-    "bind": { "type": "string", "default": "127.0.0.1" },
+    "bind": { "type": "string", "default": "127.0.0.1", "description": "Currently has no effect. The daemon binds the loopback address; emulators.<name>.host in firebase.json sets a host per service." },
     "network": {
       "type": "object",
       "additionalProperties": false,
@@ -80,15 +80,16 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "catalog": { "type": "string", "pattern": "^firestore-(standard|enterprise-native)-[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "catalog": { "type": "string", "pattern": "^firestore-(standard|enterprise-native)-[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "Currently has no effect." },
         "queryCatalog": {
           "oneOf": [
             { "type": "null" },
             { "type": "string", "pattern": "^firestore-standard-query-[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
-          ]
+          ],
+          "description": "Currently has no effect."
         },
-        "rulesCatalog": { "type": "string", "pattern": "^firebase-rules-[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
-        "enforcement": { "enum": ["strict", "observe"] },
+        "rulesCatalog": { "type": "string", "pattern": "^firebase-rules-[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "Currently has no effect." },
+        "enforcement": { "enum": ["strict", "observe"], "description": "Currently has no effect." },
         "warningThresholds": { "$ref": "#/$defs/thresholds" },
         "perLimitWarningThresholds": {
           "type": "object",
@@ -133,8 +134,8 @@
         "missingIndexes": {
           "type": "string",
           "enum": ["report", "refuse"],
-          "default": "report",
-          "description": "What the strict profile does with a query whose composite index is not defined. report (the default, and \"refuse\" under productionExact): run the query as if the index existed, but only where production would refuse it (a query production serves by merging indexes is not reported), and print once per database and index production's refusal text, with the console link, and the firestore.indexes.json entry (an index an Admin create is still building, or one that was deleted, also runs, and is reported in production's wording for that state); the query's answer carries the FS_MISSING_INDEX_REPORTED warning. refuse: production's FAILED_PRECONDITION. The emulator profile always runs the query, as the official emulator checks no composite index, and refuse requires the strict profile."
+          "default": "refuse",
+          "description": "What the strict profile does with a query whose composite index is not defined. refuse (the default under the strict profile, as in production): production's FAILED_PRECONDITION with its console link to the index. report (an explicit opt-out for a project that wants the query to run): run the query as if the index existed, but only where production would refuse it (a query production serves by merging indexes is not reported), and print once per database and index production's refusal text, with the console link, and the firestore.indexes.json entry (an index an Admin create is still building, or one that was deleted, also runs, and is reported in production's wording for that state); the query's answer carries the FS_MISSING_INDEX_REPORTED warning. productionExact does not move this key. The emulator profile always runs the query, as the official emulator checks no composite index, and refuse requires the strict profile."
         },
         "listenStreamLifetime": {
           "type": "string",
@@ -181,13 +182,13 @@
             }
           }
         },
-        "explain": { "type": "boolean" },
+        "explain": { "type": "boolean", "description": "Currently has no effect." },
         "pipeline": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "enabled": { "type": "boolean" },
-            "executionMode": { "enum": ["strict-native", "proxy", "record-only"] },
+            "enabled": { "type": "boolean", "description": "Currently has no effect." },
+            "executionMode": { "enum": ["strict-native", "proxy", "record-only"], "description": "Currently has no effect." },
             "unknownStagePolicy": { "enum": ["reject"] },
             "writeStagePolicy": { "enum": ["reject-unimplemented"] }
           }
@@ -196,28 +197,29 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "fidelity": { "enum": ["strict-validation-only", "deterministic-basic", "external-analyzer", "upstream-proxy"] },
-            "analyzer": { "type": "string" },
-            "scorePrecision": { "enum": ["exact", "approximate", "oracle-only", "unsupported"] },
-            "multipleIndexPolicy": { "enum": ["warn-and-deterministic", "reject", "oracle"] },
-            "indexBuildPolicy": { "enum": ["synchronous", "virtual-async", "manual"] },
-            "visibilityPolicy": { "enum": ["atomic-with-commit", "virtual-lag", "oracle-defined"] },
+            "fidelity": { "enum": ["strict-validation-only", "deterministic-basic", "external-analyzer", "upstream-proxy"], "description": "Currently has no effect." },
+            "analyzer": { "type": "string", "description": "Currently has no effect." },
+            "scorePrecision": { "enum": ["exact", "approximate", "oracle-only", "unsupported"], "description": "Currently has no effect." },
+            "multipleIndexPolicy": { "enum": ["warn-and-deterministic", "reject", "oracle"], "description": "Currently has no effect." },
+            "indexBuildPolicy": { "enum": ["synchronous", "virtual-async", "manual"], "description": "Currently has no effect." },
+            "visibilityPolicy": { "enum": ["atomic-with-commit", "virtual-lag", "oracle-defined"], "description": "Currently has no effect." },
             "visibilityLag": {
               "oneOf": [
                 { "type": "null" },
                 { "type": "object", "additionalProperties": false, "required": ["maxLogicalDelayMillis"], "properties": { "maxLogicalDelayMillis": { "type": "integer", "minimum": 0 } } }
-              ]
+              ],
+              "description": "Currently has no effect."
             },
-            "queryLanguagePolicy": { "enum": ["index-default-or-autodetect", "detect-query-text", "analyze-per-indexed-language", "oracle-defined"] },
-            "backendDefaultLanguageOverride": { "enum": ["implicit-language-field", "disabled", "unresolved"] },
-            "snapshotPolicy": { "enum": ["materialized", "rebuild"] },
+            "queryLanguagePolicy": { "enum": ["index-default-or-autodetect", "detect-query-text", "analyze-per-indexed-language", "oracle-defined"], "description": "Currently has no effect." },
+            "backendDefaultLanguageOverride": { "enum": ["implicit-language-field", "disabled", "unresolved"], "description": "Currently has no effect." },
+            "snapshotPolicy": { "enum": ["materialized", "rebuild"], "description": "Currently has no effect." },
             "warnings": {
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "broadCandidateCount": { "type": "integer", "minimum": 0 },
-                "scoreCandidateCount": { "type": "integer", "minimum": 0 },
-                "warningsAsErrors": { "type": "array", "items": { "type": "string", "pattern": "^FS_[A-Z0-9_]+$" }, "uniqueItems": true }
+                "broadCandidateCount": { "type": "integer", "minimum": 0, "description": "Currently has no effect." },
+                "scoreCandidateCount": { "type": "integer", "minimum": 0, "description": "Currently has no effect." },
+                "warningsAsErrors": { "type": "array", "items": { "type": "string", "pattern": "^FS_[A-Z0-9_]+$" }, "uniqueItems": true, "description": "Currently has no effect." }
               }
             }
           }
@@ -235,22 +237,22 @@
           "default": "summary",
           "description": "Whether each Security Rules denial of an end-user Firestore or Storage request is printed on standard error with every allow condition it evaluated and what it evaluated to (summary), or not (off). The client is answered with production's denial either way."
         },
-        "staticLimitChecks": { "type": "boolean" },
-        "runtimeBudgets": { "type": "boolean" },
+        "staticLimitChecks": { "type": "boolean", "description": "Currently has no effect." },
+        "runtimeBudgets": { "type": "boolean", "description": "Currently has no effect." },
         "compiledSize": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "mode": { "enum": ["estimate", "off"] },
-            "oracle": { "enum": ["off", "projects-test", "disposable-ruleset"] }
+            "mode": { "enum": ["estimate", "off"], "description": "Currently has no effect." },
+            "oracle": { "enum": ["off", "projects-test", "disposable-ruleset"], "description": "Currently has no effect." }
           }
         },
         "diagnostics": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "format": { "enum": ["human", "json", "sarif"] },
-            "largestContributors": { "type": "integer", "minimum": 0 }
+            "format": { "enum": ["human", "json", "sarif"], "description": "Currently has no effect." },
+            "largestContributors": { "type": "integer", "minimum": 0, "description": "Currently has no effect." }
           }
         }
       }
@@ -259,8 +261,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "projectIssuer": { "type": "string", "pattern": "^https://securetoken\\.google\\.com/[a-z0-9-]+$" },
+        "enabled": { "type": "boolean", "description": "Currently has no effect." },
+        "projectIssuer": { "type": "string", "pattern": "^https://securetoken\\.google\\.com/[a-z0-9-]+$", "description": "Currently has no effect." },
         "idTokenSigning": { "enum": ["session-rsa", "unsigned-emulator"] },
         "apiKeys": {
           "type": "array",
@@ -276,7 +278,7 @@
         "allowUnsignedIdTokens": {
           "type": "boolean",
           "default": true,
-          "description": "Accept the unsigned mock ID token of @firebase/rules-unit-testing (authenticatedContext(), the client SDKs' mockUserToken) when Firestore and Storage Security Rules are evaluated. Defaults to true in both profiles, and to false under productionExact; an explicit value decides over productionExact. Under the strict profile only the exact shape createMockUserToken writes is admitted: a three-segment JWT whose header is exactly {\"alg\":\"none\",\"type\":\"JWT\"} and whose signature segment is empty, naming a subject, with the routed project as its audience; its exp is not checked. Every other token, including the unsigned ID tokens fireemu issues, keeps every check, expiry included. The emulator profile admits any unsigned token, as the official emulator does, unless this is false. A session with idTokenSigning session-rsa admits no unsigned token. Callable Functions, Identity Toolkit and App Check are not affected."
+          "description": "Allow unsigned mock ID token fallback after normal verification fails on Firestore and Storage Security Rules surfaces. Defaults to true in both profiles, and to false under productionExact; an explicit value wins. Under strict the fallback accepts only the createMockUserToken shape: exactly three JWT segments, header bytes {\"alg\":\"none\",\"type\":\"JWT\"}, an empty signature, a subject and the routed project as audience; exp is not checked by the fallback. Under emulator the fallback accepts any unsigned token with the required claims. false disables only this fallback: fireemu-issued unsigned ID tokens (header typ, not type) that pass normal verification remain accepted. Changing only an issued token's header to the SDK shape can still pass normal verification. For a refusal test, use the SDK helper's default iat 0 / exp 3600, or that exact shape and those times, with a clock after expiry including Firestore's 30-second allowance. Set auth.idTokenSigning to session-rsa to refuse all unsigned ID tokens. Callable Functions, Identity Toolkit and App Check are not affected."
         },
         "customTokenSigners": {
           "type": "object",
@@ -572,7 +574,7 @@
         },
         "totp": {
           "type": "object",
-          "description": "Explicitly enables fireemu's TOTP extension. When absent, TOTP enrollment matches the official Auth emulator and is rejected.",
+          "description": "Configures fireemu's TOTP extension. Under strict, auth.totp alone does not enable enrollment: the project MFA configuration must have state ENABLED or MANDATORY and a providerConfigs entry with state ENABLED or MANDATORY and totpProviderConfig, seeded through auth.mfa or set through the Admin API. auth.totp is not required when that MFA configuration enables TOTP. Under emulator, declaring auth.totp enables the extension; an enabling project MFA configuration also enables TOTP without it. Tenants under strict require their own enabling mfaConfig. See README.md#enable-multi-factor-authentication-at-start for a minimal strict configuration.",
           "additionalProperties": false,
           "properties": {
             "periodSeconds": { "type": "integer", "minimum": 1 },
@@ -635,7 +637,7 @@
           "default": "readable",
           "description": "Which tenantId a tenant of auth.tenants may have. readable (the default, a development default, and \"generated\" under productionExact): any id that starts with a letter and holds letters, digits and hyphens, at most 63 characters, such as tenant-a. generated: the id production would generate, the display name, a hyphen and five characters of [a-z0-9]."
         },
-        "secretMaterialization": { "enum": ["redact", "allow"] },
+        "secretMaterialization": { "enum": ["redact", "allow"], "description": "Currently has no effect." },
         "forwardInboundCredentials": {
           "type": "boolean",
           "description": "Allow blocking Auth Functions to receive caller-supplied IdP access, ID and refresh tokens. Defaults to false."
@@ -783,7 +785,7 @@
           "minimum": 1,
           "description": "The object data the Storage emulator retains, in bytes, a local bound production does not have. Unset, nothing is bounded. A write that would grow the total past it (upload, resumable finalize, copy) is refused with 402 and the message storage.maxStoredBytes limit exceeded, and changes nothing; a resumable session stays open. Each object counts its bytes once (a copy counts again). Import and snapshot restore are not checked against it; an import above it starts with a warning."
         },
-        "persistence": { "enum": ["memory", "snapshot-files", "redb"] }
+        "persistence": { "enum": ["memory", "snapshot-files", "redb"], "description": "Currently has no effect." }
       }
     },
     "events": {
@@ -839,8 +841,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "canonical": { "type": "boolean" }
+        "enabled": { "type": "boolean", "description": "Currently has no effect." },
+        "canonical": { "type": "boolean", "description": "Currently has no effect." }
       }
     }
   },

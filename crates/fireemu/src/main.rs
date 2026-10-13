@@ -282,6 +282,10 @@ fn main() -> ExitCode {
             }
             Err(e) => fail_for(command, &e),
         },
+        Some("config") => match config_show_command(&args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => fail_for(command, &e),
+        },
         Some("up" | "emulators:start") => match parse_options(&args[1..], OptionContext::Start) {
             Ok((options, None)) => daemon::run(options, None),
             Ok((_, Some(_))) => unreachable!("start does not accept a positional argument"),
@@ -314,6 +318,7 @@ fn main() -> ExitCode {
                     serde_json::to_string_pretty(&control::capabilities_manifest(
                         options.cfg.profile,
                         options.cfg.production_exact,
+                        &options.cfg.development_defaults,
                     ))
                     .unwrap_or_default()
                 );
@@ -324,6 +329,146 @@ fn main() -> ExitCode {
         },
         _ => usage(),
     }
+}
+
+#[allow(clippy::too_many_lines)]
+fn config_show_command(args: &[String]) -> Result<(), CliError> {
+    if args.first().map(String::as_str) != Some("show") {
+        return Err(CliError::usage(
+            "usage: fireemu config show [--config <path>] [--firebase-json <path>] [--json]",
+        ));
+    }
+    let mut flags = Vec::new();
+    let mut json = false;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--config" | "--firebase-json" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| CliError::usage(format!("{} needs a value", args[index])))?;
+                flags.extend([args[index].clone(), value.clone()]);
+                index += 2;
+            }
+            other => {
+                return Err(CliError::usage(format!(
+                    "unknown argument {}",
+                    diagnostic_text(other)
+                )))
+            }
+        }
+    }
+    let mut raw = parse_raw_options(&flags, OptionContext::Start)?;
+    let origin = discover_project_config(&mut raw);
+    let (mut cfg, project_root, sources) =
+        load_project_config(&raw, &Selection::default()).map_err(note_discovered(&origin))?;
+    let rc = if matches!(origin, ConfigOrigin::Discovered(_)) {
+        discovered_firebaserc(&project_root).map_err(note_discovered(&origin))?
+    } else {
+        read_firebaserc(&project_root)?
+    };
+    let project = resolve_project(rc.as_ref(), None)?;
+    if let Some(project) = &project {
+        cfg.auth_project.clone_from(project);
+    }
+    if !cfg.storage_rules_by_target.is_empty() {
+        let rc = rc.as_ref().ok_or_else(|| {
+            CliError::refused(
+                "firebase.json declares Storage targets but the project has no .firebaserc",
+            )
+        })?;
+        let project = cfg.auth_project.clone();
+        cfg.resolve_storage_rules_targets(rc, &project)?;
+    }
+    let input = match &sources.canonical {
+        Some(path) => config_document(&raw, path)?.0,
+        None => serde_json::Value::Null,
+    };
+    let firebase = sources
+        .firebase
+        .as_ref()
+        .map(|(path, _)| read_firebase_json(path).map(|(document, _)| document))
+        .transpose()?;
+    let mut rows = cfg.config_show(&input);
+    for row in &mut rows {
+        let key = row["key"].as_str().expect("key");
+        let firebase_path = match key {
+            "daemon.firestorePort" => "/emulators/firestore/port",
+            "daemon.httpPort" => "/emulators/auth/port",
+            "daemon.storagePort" => "/emulators/storage/port",
+            "daemon.functionsPort" => "/emulators/functions/port",
+            "daemon.eventarcPort" => "/emulators/eventarc/port",
+            "daemon.tasksPort" => "/emulators/tasks/port",
+            "daemon.pubsubPort" => "/emulators/pubsub/port",
+            "daemon.loggingPort" => "/emulators/logging/port",
+            "rules.source" | "firestore.indexFile" => "/firestore",
+            "storage.rules" => "/storage",
+            "functions.source" => "/functions",
+            _ => "",
+        };
+        if key == "firebaseJson" {
+            // The file the daemon would actually read, not only the entry the canonical
+            // configuration wrote (a --firebase-json, --config or discovered file wins).
+            if let Some((path, via)) = &sources.firebase {
+                row["value"] = diagnostic_path(path).to_string().into();
+                row["source"] = match via {
+                    FirebaseJsonVia::Reference => "explicit",
+                    FirebaseJsonVia::ConfigFlag => "explicit (--config)",
+                    FirebaseJsonVia::FirebaseJsonFlag
+                        if matches!(origin, ConfigOrigin::Discovered(_)) =>
+                    {
+                        "discovered"
+                    }
+                    FirebaseJsonVia::FirebaseJsonFlag => "explicit (--firebase-json)",
+                }
+                .into();
+            } else {
+                row["value"] = serde_json::Value::Null;
+                row["source"] = "unset".into();
+            }
+        } else if key == "daemon.authProject" && project.is_some() {
+            // The project resolved from .firebaserc replaces whatever the configuration said.
+            row["source"] = ".firebaserc".into();
+        } else if !firebase_path.is_empty()
+            && firebase
+                .as_ref()
+                .is_some_and(|f| f.pointer(firebase_path).is_some())
+        {
+            row["source"] = if row["value"].is_null() {
+                "unset"
+            } else {
+                "explicit"
+            }
+            .into();
+        }
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&rows).expect("configuration rows")
+        );
+    } else {
+        for row in rows {
+            let value = if row["source"] == "unset"
+                || (row["source"] == config::NO_EFFECT_SOURCE && row["value"].is_null())
+            {
+                "(unset)".to_owned()
+            } else {
+                row["value"].to_string()
+            };
+            println!(
+                "{} = {} ({})",
+                row["key"].as_str().expect("key"),
+                value,
+                row["source"].as_str().expect("source")
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Prints the failure and returns its exit code.
@@ -1260,6 +1405,11 @@ fn load_project_config(
             if canonical {
                 sources.canonical = Some(path.clone());
                 let config = RuntimeConfig::from_json(&json)?;
+                if raw.verbosity > Verbosity::Quiet {
+                    for note in config::no_effect_notes(&json) {
+                        eprintln!("note: {}: {note}", diagnostic_path(path));
+                    }
+                }
                 let firebase = if raw.firebase_json.is_none() {
                     config::firebase_json_reference(&json)?
                         .map(|reference| project_dir(path).join(reference))
@@ -2680,14 +2830,15 @@ fn print_banner(
                 "behaves like production Firebase where the official emulators do not",
         }
     );
-    println!(
-        "  development defaults: {}",
-        if cfg.production_exact {
-            "off (productionExact: production's behaviour where it needs extra setup)"
-        } else {
-            "on (unsigned test tokens and similar conveniences; set productionExact for production's behaviour)"
-        }
-    );
+    println!("  productionExact: {}", cfg.production_exact);
+    for setting in &cfg.development_defaults {
+        println!(
+            "    {}: {} ({})",
+            setting["key"].as_str().unwrap_or_default(),
+            setting["value"].as_str().unwrap_or_default(),
+            setting["source"].as_str().unwrap_or_default()
+        );
+    }
     println!(
         "  edition: {}   clock: {}{}",
         cfg.edition,
@@ -3061,7 +3212,8 @@ fn control_state(
         capabilities: fireemu_adapter_http::control::CapabilityManifest::lazy({
             let profile = cfg.profile;
             let production_exact = cfg.production_exact;
-            move || control::capabilities_manifest(profile, production_exact)
+            let development_defaults = cfg.development_defaults.clone();
+            move || control::capabilities_manifest(profile, production_exact, &development_defaults)
         }),
         rules: rules.clone(),
         storage_rules: storage_rules.clone(),

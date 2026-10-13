@@ -233,7 +233,8 @@ impl Drop for Daemon {
 
 #[test]
 fn the_strict_profile_runs_a_query_without_its_composite_index_and_reports_it_once() {
-    let strict = Daemon::start("strict");
+    // "report" is the explicit opt-out; the strict default refuses (owner decision 1412).
+    let strict = Daemon::start_with("strict-report", "strict", r#""missingIndexes": "report", "#);
     for _ in 0..2 {
         // As the owner: without a ruleset the strict profile denies every end user.
         let (status, body) = strict.unindexed_query_with(http_as_owner);
@@ -274,8 +275,9 @@ fn the_same_official_limitation_is_served_under_emulator_and_refused_under_stric
     );
     emulator.stop();
 
-    // Production's refusal is opt-in (`productionExact` or this key, owner decision 1396).
-    let strict = Daemon::start_with("strict", "strict", r#""missingIndexes": "refuse", "#);
+    // Production's refusal is the strict default, with no key and no `productionExact`
+    // (owner decision 1412).
+    let strict = Daemon::start("strict");
     let (status, body) = strict.unindexed_query();
     assert_eq!(status, 400, "{body}");
     assert!(body.contains("FAILED_PRECONDITION"), "{body}");
@@ -288,6 +290,13 @@ fn the_same_official_limitation_is_served_under_emulator_and_refused_under_stric
         "{}",
         strict.banner()
     );
+    strict.stop();
+
+    // An explicit "refuse" says the same as the default.
+    let strict = Daemon::start_with("strict-refuse", "strict", r#""missingIndexes": "refuse", "#);
+    let (status, body) = strict.unindexed_query();
+    assert_eq!(status, 400, "{body}");
+    assert!(body.contains("FAILED_PRECONDITION"), "{body}");
     strict.stop();
 }
 

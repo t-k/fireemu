@@ -318,6 +318,13 @@ pub async fn handle(state: &Arc<UiState>, req: &UiRequest) -> UiResponse {
         return refusal;
     }
     let path = req.path.as_str();
+    if path == "/" && matches!(req.method.as_str(), "GET" | "HEAD") {
+        return UiResponse {
+            status: 302,
+            headers: vec![("location".to_owned(), "/ui/".to_owned())],
+            body: UiBody::Full(bytes::Bytes::new()),
+        };
+    }
     if path == "/ui/api/config" {
         return match req.method.as_str() {
             "GET" => UiResponse::json(200, &config_json(state)),

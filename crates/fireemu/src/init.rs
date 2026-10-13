@@ -1,5 +1,6 @@
 //! Safe creation of a canonical `fireemu.json`.
 
+use std::fmt::Write as _;
 use std::io::{IsTerminal as _, Write};
 use std::path::{Path, PathBuf};
 
@@ -44,6 +45,7 @@ struct InitArgs {
     profile: Option<Profile>,
     firebase_json: Option<PathBuf>,
     force: bool,
+    reference: bool,
     interaction: Interaction,
 }
 
@@ -52,6 +54,15 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
     let options = parse_args(args)?;
     let cwd = std::env::current_dir()
         .map_err(|e| CliError::refused(format!("cannot resolve the working directory: {e}")))?;
+    if options.reference
+        && options.profile.is_none()
+        && options.firebase_json.is_none()
+        && cwd.join("fireemu.json").is_file()
+    {
+        let destination = cwd.join("fireemu.reference.jsonc");
+        write_config(&destination, reference_document().as_bytes(), options.force)?;
+        return Ok(destination);
+    }
     let terminals = automatic_interaction(
         std::io::stdin().is_terminal(),
         std::io::stdout().is_terminal(),
@@ -86,8 +97,130 @@ pub fn run(args: &[String]) -> Result<PathBuf, CliError> {
     let mut bytes = serde_json::to_vec_pretty(&document)
         .map_err(|e| CliError::refused(format!("cannot serialize fireemu.json: {e}")))?;
     bytes.push(b'\n');
+    let reference = cwd.join("fireemu.reference.jsonc");
+    // Both destinations are checked before either is written, so a refusal leaves nothing behind.
+    check_destination(&destination, options.force)?;
+    if options.reference {
+        check_destination(&reference, options.force)?;
+    }
     write_config(&destination, &bytes, options.force)?;
+    if options.reference {
+        write_config(&reference, reference_document().as_bytes(), options.force)?;
+        writeln!(output, "created {}", crate::diagnostic_path(&reference))
+            .map_err(|error| output_error(&error))?;
+    }
     Ok(destination)
+}
+
+/// The reference is documentation; commented settings must never become implicit defaults.
+#[allow(clippy::too_many_lines)]
+fn reference_document() -> String {
+    let governed = crate::config::RuntimeConfig::default().development_defaults;
+    let entries = crate::config::config_schema();
+    let mut output = String::from("// This reference file is not loaded by fireemu. Edit fireemu.json to configure it.\n// Copying a key into fireemu.json makes it explicit and stops productionExact\n// from switching that key. Commented examples are not active defaults.\n{\n");
+    let mut sections: Vec<(String, bool, bool)> = vec![(String::new(), false, false)];
+    for (path, schema) in entries {
+        let parent = path.rsplit_once('.').map_or("", |(parent, _)| parent);
+        while sections.last().expect("root section").0 != parent {
+            let (_, commented, _) = sections.pop().expect("section");
+            let _ = writeln!(
+                output,
+                "{}{} }}",
+                "  ".repeat(sections.len()),
+                if commented { "//" } else { "" }
+            );
+        }
+        let name = path.rsplit('.').next().expect("schema key");
+        let is_section = schema.get("properties").is_some();
+        let production_exact = governed.iter().any(|entry| entry["key"] == path);
+        let presence_selects_mode = matches!(
+            path.as_str(),
+            "auth.idpSigners"
+                | "eventarc.oauthCredentials"
+                | "auth.totp"
+                | "auth.mfa"
+                | "auth.providers"
+                | "auth.blockingFunctions"
+                | "auth.client.permissions"
+                | "auth.quota"
+                | "auth.quotaSimulation"
+                | "auth.signIn.allowDuplicateEmails"
+                | "auth.signIn.email.enabled"
+                | "auth.signIn.email.passwordRequired"
+                | "auth.signIn.anonymous.enabled"
+                | "auth.signIn.phoneNumber.enabled"
+        );
+        let no_effect = crate::config::NO_EFFECT_KEYS.contains(&path.as_str());
+        let inherited = sections.last().expect("section").1;
+        let commented = inherited
+            || production_exact
+            || no_effect
+            || presence_selects_mode
+            || (!is_section && schema.get("default").is_none());
+        let indent = "  ".repeat(sections.len());
+        if !commented {
+            let (_, _, active) = sections.last_mut().expect("section");
+            if *active {
+                let _ = writeln!(output, "{indent},");
+            }
+            *active = true;
+        }
+        let _ = writeln!(output, "{indent}// {path}:");
+        let description = schema["description"]
+            .as_str()
+            .unwrap_or("No description in the schema.");
+        let default = schema
+            .get("default")
+            .map_or_else(|| "no default".to_owned(), ToString::to_string);
+        let mut comment = format!("{description} Default: {default}.");
+        if production_exact {
+            comment.push_str(" Governed by productionExact; leave omitted to follow it.");
+        }
+        if no_effect {
+            comment.push_str(" Accepted for forward compatibility; currently has no effect.");
+        }
+        if presence_selects_mode {
+            comment.push_str(" Presence selects behavior; leave commented unless intended.");
+        }
+        let mut width = 0;
+        for word in comment.split_whitespace() {
+            if width == 0 {
+                let _ = write!(output, "{indent}// ");
+            } else if width + 1 + word.len() > 88_usize.saturating_sub(indent.len()) {
+                let _ = write!(output, "\n{indent}// ");
+                width = 0;
+            } else {
+                output.push(' ');
+                width += 1;
+            }
+            output.push_str(word);
+            width += word.len();
+        }
+        output.push('\n');
+        let prefix = if commented { "// " } else { "" };
+        if is_section {
+            let _ = writeln!(output, "{indent}{prefix}{name:?}: {{");
+            sections.push((path, commented, false));
+        } else {
+            let value = schema
+                .get("default")
+                .or_else(|| schema.get("examples").and_then(|v| v.get(0)))
+                .or_else(|| schema.get("const"))
+                .unwrap_or(&serde_json::Value::Null);
+            let _ = writeln!(output, "{indent}{prefix}{name:?}: {value}");
+        }
+    }
+    while sections.len() > 1 {
+        let (_, commented, _) = sections.pop().expect("section");
+        let _ = writeln!(
+            output,
+            "{}{} }}",
+            "  ".repeat(sections.len()),
+            if commented { "//" } else { "" }
+        );
+    }
+    output.push_str("}\n");
+    output
 }
 
 const fn automatic_interaction(stdin_terminal: bool, stdout_terminal: bool) -> bool {
@@ -98,6 +231,7 @@ fn parse_args(args: &[String]) -> Result<InitArgs, CliError> {
     let mut profile = None;
     let mut firebase_json = None;
     let mut force = false;
+    let mut reference = false;
     let mut interaction = Interaction::Auto;
     let mut interaction_set = false;
     let mut index = 0;
@@ -137,6 +271,13 @@ fn parse_args(args: &[String]) -> Result<InitArgs, CliError> {
                 interaction_set = true;
                 index += 1;
             }
+            "--reference" => {
+                if reference {
+                    return Err(CliError::usage("--reference may be supplied only once"));
+                }
+                reference = true;
+                index += 1;
+            }
             "--force" => {
                 if force {
                     return Err(CliError::usage("--force may be supplied only once"));
@@ -156,6 +297,7 @@ fn parse_args(args: &[String]) -> Result<InitArgs, CliError> {
         profile,
         firebase_json,
         force,
+        reference,
         interaction,
     })
 }
@@ -247,6 +389,31 @@ fn prompt(
 
 fn output_error(error: &std::io::Error) -> CliError {
     CliError::refused(format!("cannot write wizard output: {error}"))
+}
+
+/// Refuses, without writing, what [`write_config`] would refuse: an existing path unless
+/// `force`, and with `force` a symbolic link or anything that is not a regular file.
+fn check_destination(path: &Path, force: bool) -> Result<(), CliError> {
+    match std::fs::symlink_metadata(path) {
+        Err(error) if destination_is_missing(error.kind()) => Ok(()),
+        Err(error) => Err(CliError::refused(format!(
+            "cannot inspect {}: {error}",
+            crate::diagnostic_path(path)
+        ))),
+        Ok(_) if !force => Err(CliError::refused(format!(
+            "cannot create {}: already exists",
+            crate::diagnostic_path(path)
+        ))),
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(CliError::refused(format!(
+            "{} is a symbolic link and will not be replaced",
+            crate::diagnostic_path(path)
+        ))),
+        Ok(metadata) if !metadata.is_file() => Err(CliError::refused(format!(
+            "{} is not a regular file",
+            crate::diagnostic_path(path)
+        ))),
+        Ok(_) => Ok(()),
+    }
 }
 
 fn write_config(path: &Path, bytes: &[u8], force: bool) -> Result<(), CliError> {
@@ -401,12 +568,177 @@ fn replace_path(temporary: &Path, destination: &Path, existing: bool) -> Result<
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn init_reference_keeps_default_sections_active_and_governed_values_commented() {
+        let reference = super::reference_document();
+        let active = reference
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed: serde_json::Value = serde_json::from_str(&active).unwrap();
+        for (pointer, expected) in [
+            ("/network/allowNonLoopbackHosts", serde_json::json!(false)),
+            ("/projects/requireDemoPrefix", serde_json::json!(true)),
+            ("/firestore/location", serde_json::json!("nam5")),
+            // Not governed by productionExact: the strict default already is production's.
+            ("/firestore/missingIndexes", serde_json::json!("refuse")),
+            (
+                "/firestore/history/maxBytes",
+                serde_json::json!(1_073_741_824),
+            ),
+            ("/functions/clock/date", serde_json::json!("real")),
+            (
+                "/auth",
+                serde_json::json!({"signIn": {"email": {}, "anonymous": {}, "phoneNumber": {}}, "multiTenant": {}, "client": {}}),
+            ),
+        ] {
+            assert_eq!(parsed.pointer(pointer), Some(&expected), "{pointer}");
+        }
+        for pointer in [
+            "/auth/idpSigners",
+            "/auth/mfa",
+            "/auth/totp",
+            "/auth/providers",
+            "/auth/client/permissions",
+            "/auth/allowUnsignedIdTokens",
+            "/auth/idpAssertions",
+            "/firestore/indexFile",
+        ] {
+            assert!(parsed.pointer(pointer).is_none(), "{pointer}");
+        }
+        for key in [
+            "auth.allowUnsignedCustomTokens",
+            "auth.allowUnsignedIdTokens",
+            "auth.idpAssertions",
+            "auth.tenantIdFormat",
+            "firestore.listenStreamLifetime",
+            "eventarc.authentication",
+        ] {
+            let (_, section) = reference.split_once(&format!("// {key}:\n")).unwrap();
+            let name = key.rsplit('.').next().unwrap();
+            let comment = section.split_once(&format!("// \"{name}\":")).unwrap().0;
+            assert!(comment.contains("Governed by productionExact;"), "{key}");
+        }
+        let (_, section) = reference.split_once("// firestore.location:\n").unwrap();
+        let comment = section.split_once("\"location\":").unwrap().0;
+        assert!(!comment.contains("Governed by productionExact;"));
+        let (_, section) = reference
+            .split_once("// firestore.missingIndexes:\n")
+            .unwrap();
+        let comment = section.split_once("\"missingIndexes\":").unwrap().0;
+        assert!(!comment.contains("Governed by productionExact;"));
+    }
+
+    #[test]
+    fn init_reference_says_which_keys_currently_have_no_effect() {
+        let reference = super::reference_document();
+        let marker = "Accepted for forward compatibility; currently has no effect.";
+        for key in crate::config::NO_EFFECT_KEYS {
+            let (_, section) = reference.split_once(&format!("// {key}:\n")).unwrap();
+            let name = key.rsplit('.').next().unwrap();
+            let comment = section.split_once(&format!("// \"{name}\":")).unwrap().0;
+            let comment = comment
+                .lines()
+                .map(|line| line.trim_start_matches(' ').trim_start_matches("// "))
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(comment.contains(marker), "{key}: {comment}");
+        }
+        for key in [
+            "firestore.location",
+            "firestore.missingIndexes",
+            "rules.source",
+        ] {
+            let (_, section) = reference.split_once(&format!("// {key}:\n")).unwrap();
+            let name = key.rsplit('.').next().unwrap();
+            let comment = section.split_once(&format!("\"{name}\":")).unwrap().0;
+            assert!(!comment.contains("no effect"), "{key}");
+        }
+    }
+
+    #[test]
+    fn init_reference_wraps_descriptions_greedily_at_whole_word_boundaries() {
+        let reference = super::reference_document();
+        let mut wrapped = 0;
+        let mut exactly_full = 0;
+        for (key, schema) in crate::config::config_schema() {
+            let (_, section) = reference.split_once(&format!("// {key}:\n")).unwrap();
+            let name = key.rsplit('.').next().unwrap();
+            let description_lines: Vec<_> = section
+                .lines()
+                .take_while(|line| !line.contains(&format!("\"{name}\":")))
+                .collect();
+            let indent = key.split('.').count() * 2;
+            let width = 88_usize.saturating_sub(indent);
+            let content: Vec<_> = description_lines
+                .iter()
+                .map(|line| {
+                    assert!(
+                        line.starts_with(&format!("{}// ", " ".repeat(indent))),
+                        "{key}: {line}"
+                    );
+                    let text = &line[indent + 3..];
+                    // The existing width excludes the three-character comment marker.
+                    assert!(
+                        line.len() <= 91 || (!text.contains(' ') && text.len() > width),
+                        "{key}: {line}"
+                    );
+                    if text.len() == width {
+                        exactly_full += 1;
+                    }
+                    text
+                })
+                .collect();
+            if content.len() > 1 {
+                wrapped += 1;
+            }
+            for pair in content.windows(2) {
+                let next_word = pair[1].split_whitespace().next().unwrap();
+                assert!(
+                    pair[0].len() + 1 + next_word.len() > width,
+                    "premature wrap: {key}: {pair:?}"
+                );
+            }
+            let joined = content.join(" ");
+            let description = schema["description"]
+                .as_str()
+                .unwrap_or("No description in the schema.");
+            let default = schema
+                .get("default")
+                .map_or_else(|| "no default".to_owned(), ToString::to_string);
+            let expected = format!("{description} Default: {default}.")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(joined.starts_with(&expected), "split or lost word: {key}");
+        }
+        assert!(wrapped > 0, "exercise a long description");
+        assert!(exactly_full > 0, "exercise the inclusive width boundary");
+    }
+
     #[test]
     fn automatic_interaction_requires_both_terminal_streams() {
         assert!(super::automatic_interaction(true, true));
         assert!(!super::automatic_interaction(true, false));
         assert!(!super::automatic_interaction(false, true));
         assert!(!super::automatic_interaction(false, false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_destination_that_cannot_be_inspected_is_refused_not_treated_as_absent() {
+        // /dev/null is not a directory, so its child fails with ENOTDIR rather than ENOENT.
+        let path = std::path::Path::new("/dev/null/fireemu.reference.jsonc");
+        for force in [false, true] {
+            let error = super::check_destination(path, force).unwrap_err();
+            assert!(
+                error.message.contains("cannot inspect"),
+                "{}",
+                error.message
+            );
+        }
     }
 
     #[test]

@@ -5418,7 +5418,7 @@ async fn topic_labels_updates_replace_and_clear_get_list_views_on_both_transport
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn recorded_unicode_labels_rejections_preserve_both_wires_and_emulator_admission() {
+async fn unicode_labels_rejections_preserve_both_wires_and_emulator_admission() {
     use fireemu_adapter_pubsub::PagingPolicy;
     let value_message = concat!(
         r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels.env"; value ""#,
@@ -5480,13 +5480,27 @@ async fn recorded_unicode_labels_rejections_preserve_both_wires_and_emulator_adm
             ("env".to_owned(), "e\u{0301}".to_owned()),
             ("ttl".to_owned(), "7".to_owned()),
         ]);
-        for (labels, message) in [
+        let mut cases = vec![
             (bad_value.clone(), value_message.to_owned()),
             (
                 std::collections::HashMap::from([(key.clone(), "value".to_owned())]),
                 key_message.clone(),
             ),
-        ] {
+        ];
+        for first in ['\u{01c5}', '\u{02b0}', '\u{16ee}', '\u{0345}'] {
+            cases.push((
+                std::collections::HashMap::from([(first.to_string(), String::new())]),
+                format!(r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels"; key "{first}" does not conform to regular expression "[\p{{Ll}}\p{{Lo}}][\p{{Ll}}\p{{Lo}}\p{{N}}_-]{{0,62}}"; first character "{first}" is not a non-uppercased letter (Unicode character class Ll or Lo))."#),
+            ));
+        }
+        for ch in ['\u{01c5}', '\u{02b0}', '\u{0345}'] {
+            let key = format!("a{ch}");
+            cases.push((
+                std::collections::HashMap::from([(key.clone(), String::new())]),
+                format!("Invalid label key: {key}."),
+            ));
+        }
+        for (labels, message) in cases {
             subscriber
                 .update_subscription(pb::UpdateSubscriptionRequest {
                     subscription: Some(pb::Subscription {

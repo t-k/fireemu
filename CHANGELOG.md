@@ -8,8 +8,16 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- The startup banner and `GET /v1/capabilities` now show each effective development-default value and its source, including explicit overrides and derived settings, alongside `productionExact`.
+- The UI listener redirects `GET /` and `HEAD /` to `/ui/` with `302 Found` and an empty body.
+
 ### Fixed
 
+- UI addresses in the README now include `/ui/`.
+- The `auth.totp` schema description explains the MFA configuration required under strict and links to the README example.
+- The README, compatibility contract and schema clarify that `auth.allowUnsignedIdTokens: false` disables only the mock-token fallback, how to test that refusal, and how `auth.idTokenSigning: "session-rsa"` refuses all unsigned ID tokens.
 - Strict Pub/Sub label keys now use the exact Unicode `Ll`/`Lo` first-character and `Ll`/`Lo`/`N` body classes from production's diagnostic (`[\p{Ll}\p{Lo}][\p{Ll}\p{Lo}\p{N}_-]{0,62}`), instead of an approximation that also admitted titlecase and modifier letters, letter numbers and combining marks. The diagnostics, their order and the emulator profile's permissive admission are unchanged.
 
 ## [0.18.0] - 2026-10-13

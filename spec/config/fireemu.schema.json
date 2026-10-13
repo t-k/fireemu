@@ -276,7 +276,7 @@
         "allowUnsignedIdTokens": {
           "type": "boolean",
           "default": true,
-          "description": "Accept the unsigned mock ID token of @firebase/rules-unit-testing (authenticatedContext(), the client SDKs' mockUserToken) when Firestore and Storage Security Rules are evaluated. Defaults to true in both profiles, and to false under productionExact; an explicit value decides over productionExact. Under the strict profile only the exact shape createMockUserToken writes is admitted: a three-segment JWT whose header is exactly {\"alg\":\"none\",\"type\":\"JWT\"} and whose signature segment is empty, naming a subject, with the routed project as its audience; its exp is not checked. Every other token, including the unsigned ID tokens fireemu issues, keeps every check, expiry included. The emulator profile admits any unsigned token, as the official emulator does, unless this is false. A session with idTokenSigning session-rsa admits no unsigned token. Callable Functions, Identity Toolkit and App Check are not affected."
+          "description": "Allow unsigned mock ID token fallback after normal verification fails on Firestore and Storage Security Rules surfaces. Defaults to true in both profiles, and to false under productionExact; an explicit value wins. Under strict the fallback accepts only the createMockUserToken shape: exactly three JWT segments, header bytes {\"alg\":\"none\",\"type\":\"JWT\"}, an empty signature, a subject and the routed project as audience; exp is not checked by the fallback. Under emulator the fallback accepts any unsigned token with the required claims. false disables only this fallback: fireemu-issued unsigned ID tokens (header typ, not type) that pass normal verification remain accepted. Changing only an issued token's header to the SDK shape can still pass normal verification. For a refusal test, use the SDK helper's default iat 0 / exp 3600, or that exact shape and those times, with a clock after expiry including Firestore's 30-second allowance. Set auth.idTokenSigning to session-rsa to refuse all unsigned ID tokens. Callable Functions, Identity Toolkit and App Check are not affected."
         },
         "customTokenSigners": {
           "type": "object",
@@ -572,7 +572,7 @@
         },
         "totp": {
           "type": "object",
-          "description": "Explicitly enables fireemu's TOTP extension. When absent, TOTP enrollment matches the official Auth emulator and is rejected.",
+          "description": "Configures fireemu's TOTP extension. Under strict, auth.totp alone does not enable enrollment: the project MFA configuration must have state ENABLED or MANDATORY and a providerConfigs entry with state ENABLED or MANDATORY and totpProviderConfig, seeded through auth.mfa or set through the Admin API. auth.totp is not required when that MFA configuration enables TOTP. Under emulator, declaring auth.totp enables the extension; an enabling project MFA configuration also enables TOTP without it. Tenants under strict require their own enabling mfaConfig. See README.md#enable-multi-factor-authentication-at-start for a minimal strict configuration.",
           "additionalProperties": false,
           "properties": {
             "periodSeconds": { "type": "integer", "minimum": 1 },

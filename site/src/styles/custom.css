@@ -1,0 +1,37 @@
+/* Status labels in the compatibility tables. */
+.status {
+	display: inline-block;
+	padding: 0.05rem 0.5rem;
+	border-radius: 999px;
+	font-size: var(--sl-text-xs);
+	white-space: nowrap;
+	border: 1px solid currentColor;
+}
+.status-supported,
+.status-verified,
+.status-implemented {
+	color: var(--sl-color-green-high);
+	background: var(--sl-color-green-low);
+}
+.status-partially,
+.status-partial {
+	color: var(--sl-color-orange-high);
+	background: var(--sl-color-orange-low);
+}
+.status-not {
+	color: var(--sl-color-gray-2);
+	background: var(--sl-color-gray-6);
+}
+.sl-markdown-content details {
+	margin-top: 0.25rem;
+}
+.sl-markdown-content details summary {
+	cursor: pointer;
+	font-size: var(--sl-text-sm);
+}
+.sl-markdown-content details li {
+	font-size: var(--sl-text-sm);
+}
+ul.conditions {
+	columns: 2;
+}

@@ -1,0 +1,50 @@
+---
+title: Compatibility tables
+description: What Fireemu supports, which areas are verified against production Firebase, and how it compares with the official emulator.
+tableOfContents:
+  maxHeadingLevel: 2
+---
+
+import ProductTable from '../../../components/ProductTable.astro';
+import ProductionAreas from '../../../components/ProductionAreas.astro';
+import CapabilityTable from '../../../components/CapabilityTable.astro';
+
+The tables on this page are generated from the records in the repository when the site is built: the [compatibility contract](https://github.com/t-k/fireemu/blob/main/spec/compatibility/contract.json), the [production verification records](https://github.com/t-k/fireemu/tree/main/spec/compatibility/closure) and the [capability manifest](https://github.com/t-k/fireemu/blob/main/crates/fireemu/src/capabilities.json).
+
+Check support for the specific APIs and conditions your application uses, rather than relying on product names alone.
+
+## Products
+
+Every product in the Local Emulator Suite of `firebase-tools` 15.28.2, the official emulator release Fireemu is compared with, and the surfaces Fireemu adds.
+
+<ProductTable />
+
+Fireemu is compatible with the listed Local Emulator Suite products as shipped by firebase-tools 15.28.2 — Cloud Firestore, Firebase Authentication, Cloud Storage for Firebase, Cloud Functions, Cloud Pub/Sub and Eventarc, with Security Rules on the Firestore and Storage surfaces — under the `emulator` compatibility profile and the evidence recorded in [`spec/compatibility/contract.json`](https://github.com/t-k/fireemu/blob/main/spec/compatibility/contract.json); it makes no complete-suite and no unqualified superset claim while Realtime Database, Firebase Hosting, App Hosting and Data Connect are deferred and Firebase Extensions is not planned.
+
+## Fireemu, the official emulator and production
+
+Differences that most often change a test result. Fireemu's column is the default `strict` profile.
+
+| Behavior | Production | Official emulator | Fireemu |
+|---|---|---|---|
+| Query without its composite index | Refused | Runs | Runs and reports the missing index; refused with `productionExact` |
+| Firestore client request to a project without Security Rules | Refused | Allowed | Refused |
+| TOTP multi-factor authentication | Supported | Not available | Supported, through the project's MFA configuration |
+| Request naming a tenant that does not exist | Refused | Creates the tenant | Refused |
+| `beforeEmailSent` blocking function | Runs | Not run | Runs |
+| App Check | Supported | Not available | Debug tokens; no attestation providers or replay protection |
+| Scheduled functions | Run on Cloud Scheduler's schedule | Not run on a schedule | Run on a virtual clock you control |
+| Unsigned mock ID tokens in Security Rules | Refused | Accepted | Accepted by default; refused with `productionExact` |
+| Declared Storage upload checksums | Verified | Not verified | Verified |
+
+## Production verification
+
+Fireemu compares its answers with recordings taken from real Firebase projects. An area is **verified against production** when every condition in its frozen inventory matches the recordings, or differs only in a reviewed and documented way (a known difference). The counts include each area's final regression run and closure review.
+
+<ProductionAreas />
+
+## Capability manifest
+
+The capability manifest records, for each feature, what is implemented and what is not. `npx fireemu capabilities` prints it for the profile your configuration selects.
+
+<CapabilityTable />

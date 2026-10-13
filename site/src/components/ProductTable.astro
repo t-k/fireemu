@@ -1,0 +1,21 @@
+---
+import { loadRepositoryData, productSurfaceRows } from '../data/compat.mjs';
+
+const rows = productSurfaceRows((await loadRepositoryData()).contract);
+---
+
+<table>
+	<thead>
+		<tr><th>Product or surface</th><th>Fireemu</th><th>Default port</th><th>In the Local Emulator Suite</th></tr>
+	</thead>
+	<tbody>
+		{rows.map((row) => (
+			<tr>
+				<td>{row.title}</td>
+				<td><span class:list={['status', `status-${row.status.split(' ')[0].toLowerCase()}`]}>{row.status}</span></td>
+				<td>{row.port ?? '—'}</td>
+				<td>{row.inSuite}</td>
+			</tr>
+		))}
+	</tbody>
+</table>

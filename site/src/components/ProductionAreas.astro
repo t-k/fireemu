@@ -1,0 +1,43 @@
+---
+import { loadRepositoryData, productionAreaRows } from '../data/compat.mjs';
+
+const rows = productionAreaRows((await loadRepositoryData()).closures);
+const products = [...new Set(rows.map((row) => row.product))];
+---
+
+{products.map((product) => (
+	<>
+		<h3>{product}</h3>
+		<table>
+			<thead>
+				<tr><th>Area</th><th>Status</th><th>Conditions verified</th></tr>
+			</thead>
+			<tbody>
+				{rows.filter((row) => row.product === product).map((row) => (
+					<tr>
+						<td>
+							<strong>{row.title}</strong>
+							<br /><small>{row.covers}</small>
+							<details>
+								<summary>{row.total} conditions</summary>
+								<ul class="conditions">
+									{row.conditions.map((c) => (
+										<li><code>{c.id}</code>{c.status === 'KNOWN_DIFFERENCE_APPROVED' && ' — known difference'}</li>
+									))}
+								</ul>
+							</details>
+							{row.knownDifferences.length > 0 && (
+								<details>
+									<summary>Known differences ({row.knownDifferences.length})</summary>
+									<ul>{row.knownDifferences.map((text) => <li>{text}</li>)}</ul>
+								</details>
+							)}
+						</td>
+						<td><span class:list={['status', row.status === 'Verified against production' ? 'status-supported' : 'status-partially']}>{row.status}</span></td>
+						<td>{row.verified} / {row.total}</td>
+					</tr>
+				))}
+			</tbody>
+		</table>
+	</>
+))}

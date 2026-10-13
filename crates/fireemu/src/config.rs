@@ -1530,6 +1530,216 @@ impl Default for RuntimeConfig {
     }
 }
 
+/// Schema properties in source order, including fixed sections before their children.
+/// Streaming each member preserves order without changing `serde_json`'s map representation.
+pub fn config_schema() -> Vec<(String, Value)> {
+    let mut entries = Vec::new();
+    let mut pending = vec![(
+        String::new(),
+        include_str!("../../../spec/config/fireemu.schema.json"),
+    )];
+    while let Some((path, text)) = pending.pop() {
+        let schema: Value = serde_json::from_str(text).expect("embedded configuration schema");
+        if schema.get("properties").is_some() {
+            let start = text.find("\"properties\"").expect("schema properties");
+            let mut members = text[start..]
+                .split_once('{')
+                .expect("properties object")
+                .1
+                .trim_start();
+            let mut children = Vec::new();
+            while !members.starts_with('}') {
+                let mut name = serde_json::Deserializer::from_str(members).into_iter::<String>();
+                let name_value = name
+                    .next()
+                    .expect("property name")
+                    .expect("JSON property name");
+                members = members[name.byte_offset()..]
+                    .trim_start()
+                    .strip_prefix(':')
+                    .expect("property colon")
+                    .trim_start();
+                let mut value = serde_json::Deserializer::from_str(members).into_iter::<Value>();
+                value
+                    .next()
+                    .expect("property schema")
+                    .expect("JSON property schema");
+                let end = value.byte_offset();
+                let key = if path.is_empty() {
+                    name_value
+                } else {
+                    format!("{path}.{name_value}")
+                };
+                children.push((key, &members[..end]));
+                members = members[end..].trim_start();
+                if let Some(rest) = members.strip_prefix(',') {
+                    members = rest.trim_start();
+                }
+            }
+            pending.extend(children.into_iter().rev());
+        }
+        if !path.is_empty() {
+            entries.push((path, schema));
+        }
+    }
+    entries
+}
+
+impl RuntimeConfig {
+    /// Every schema leaf with its parsed effective value, provenance and description.
+    #[allow(clippy::too_many_lines)]
+    pub fn config_show(&self, input: &Value) -> Vec<Value> {
+        use serde_json::json;
+        let permissions = |v: AuthClientPermissions| json!({"disabledUserSignup": v.disabled_user_signup, "disabledUserDeletion": v.disabled_user_deletion});
+        let password = |v: &PasswordPolicyConfig| json!({"enforcementState": v.enforcement_state, "forceUpgradeOnSignin": v.force_upgrade_on_signin, "constraints": {"minLength": v.constraints.min_length, "maxLength": v.constraints.max_length, "requireUppercase": v.constraints.require_uppercase, "requireLowercase": v.constraints.require_lowercase, "requireNumeric": v.constraints.require_numeric, "requireNonAlphanumeric": v.constraints.require_non_alphanumeric}});
+        let mut rows = Vec::new();
+        for (key, schema) in config_schema() {
+            if schema.get("properties").is_some() {
+                continue;
+            }
+            let pointer = format!("/{}", key.replace('.', "/"));
+            let explicit = input.pointer(&pointer);
+            let governed = self
+                .development_defaults
+                .iter()
+                .find(|entry| entry["key"] == key);
+            let effective = match key.as_str() {
+                "profile" => Some(json!(self.profile.as_str())),
+                "productionExact" => Some(json!(self.production_exact)),
+                "network.allowNonLoopbackHosts" => Some(json!(self.allow_non_loopback_hosts)),
+                "projects.requireDemoPrefix" => Some(json!(self.require_demo_prefix)),
+                "projects.unknownProjects" => Some(json!(if self.refuse_unknown_projects { "refuse" } else { "serve" })),
+                "firestore.edition" => Some(json!(self.edition.as_config_str())),
+                "firestore.apiMode" => Some(json!(self.api_mode.as_config_str())),
+                "firestore.location" => Some(json!(self.firestore_location)),
+                "firestore.indexFile" => Some(json!(self.index_file)),
+                "firestore.textIndexDefinitionFile" => Some(json!(self.text_index_file)),
+                "firestore.enforceLimits" => Some(json!(self.enforce_limits)),
+                "firestore.databaseCreateTime" => Some(json!(self.database_create_time.and_then(|t| t.to_rfc3339().ok()))),
+                "firestore.deletedDatabaseIdCooldownSeconds" => self.deleted_database_id_cooldown.map(|v| json!(v)),
+                "firestore.ttlSweepIntervalSeconds" => Some(json!(self.ttl_sweep_interval.as_nanos() / 1_000_000_000)),
+                "firestore.history.maxVersionsPerPath" => Some(json!(self.history_max_versions_per_path)),
+                "firestore.history.maxBytes" => self.history_max_bytes.map(|v| json!(v)),
+                "rules.source" => Some(json!(self.rules_file)),
+                "rules.denialLog" => Some(json!(if self.rules_denial_log { "summary" } else { "off" })),
+                "storage.rules" => Some(json!(self.storage_rules_file)),
+                "storage.maxStoredBytes" => Some(json!(self.storage_max_stored_bytes)),
+                "daemon.clockStart" => Some(json!(self.clock_start_pinned.then(|| self.clock_start.to_rfc3339().ok()).flatten())),
+                "daemon.seed" => Some(json!(self.seed)),
+                "daemon.authProject" => Some(json!(self.auth_project)),
+                "daemon.authProjectNumbers" => Some(json!(self.auth_project_numbers)),
+                "daemon.firestorePort" | "daemon.httpPort" | "daemon.storagePort" | "daemon.functionsPort" | "daemon.eventarcPort" | "daemon.tasksPort" | "daemon.pubsubPort" | "daemon.loggingPort" => {
+                    let addr = match key.as_str() {
+                        "daemon.firestorePort" => &self.firestore_addr,
+                        "daemon.httpPort" => &self.http_addr,
+                        "daemon.storagePort" => &self.storage_addr,
+                        "daemon.functionsPort" => &self.functions_addr,
+                        "daemon.eventarcPort" => &self.eventarc_addr,
+                        "daemon.tasksPort" => &self.tasks_addr,
+                        "daemon.pubsubPort" => &self.pubsub_addr,
+                        _ => &self.logging_addr,
+                    };
+                    Some(json!(addr.rsplit_once(':').and_then(|(_, port)| port.parse::<u16>().ok())))
+                }
+                "functions.source" => Some(json!(self.functions_source)),
+                "functions.manifest" => Some(json!(self.functions_manifest)),
+                "functions.runner" => Some(json!(self.functions_runner)),
+                "functions.maxGlobalConcurrency" => Some(json!(self.functions_max_running)),
+                "functions.unservedTriggers" => Some(json!(self.functions_unserved_triggers)),
+                "functions.clock.date" => Some(json!(if self.functions_clock.date_virtual { "virtual" } else { "real" })),
+                "functions.clock.timers" => Some(json!(if self.functions_clock.timers_virtual { "virtual" } else { "real" })),
+                "functions.clock.tasks" => Some(json!(if self.functions_clock.tasks_virtual { "virtual" } else { "real" })),
+                "events.maxAttempts" => Some(json!(self.events_max_attempts)),
+                "pubsub.pushMinimumRedeliveryIntervalMillis" => Some(json!(self.pubsub_push_minimum_redelivery_interval_millis)),
+                "scheduler.defaultTimeZone" => Some(json!(self.scheduler_default_time_zone)),
+                "scheduler.catchUp" => Some(json!(self.scheduler_catch_up)),
+                "scheduler.maxCatchUpRuns" => Some(json!(self.scheduler_max_catch_up_runs)),
+                "scheduler.overlap" => Some(json!(self.scheduler_overlap)),
+                "auth.idTokenSigning" => Some(json!(match self.id_token_signing { fireemu_core_auth::jwt::SigningMode::UnsignedEmulator => "unsigned-emulator", fireemu_core_auth::jwt::SigningMode::SessionRsa => "session-rsa" })),
+                "auth.apiKeys" => Some(json!(self.auth_api_keys)),
+                "auth.customTokenSigners" => Some(json!(self.auth_custom_token_signers)),
+                "auth.idpSigners" => Some(json!(self.auth_idp_signers)),
+                "auth.authorizedDomains" => Some(json!(self.auth_authorized_domains)),
+                "auth.multiTenant.allowTenants" => Some(json!(self.auth_multi_tenant_allow_tenants)),
+                "auth.tenants" => Some(json!(self.auth_tenants)),
+                "auth.forwardInboundCredentials" => Some(json!(self.auth_forward_inbound_credentials)),
+                "auth.improvedEmailPrivacy" => Some(json!(self.auth_improved_email_privacy)),
+                "auth.logActionCodes" => Some(json!(self.auth_log_action_codes)),
+                "auth.signIn.allowDuplicateEmails" => Some(json!(self.auth_allow_duplicate_emails)),
+                "auth.signIn.email.enabled" => Some(json!(self.auth_sign_in.email_enabled.unwrap_or(true))),
+                "auth.signIn.email.passwordRequired" => Some(json!(self.auth_sign_in.password_required.unwrap_or(false))),
+                "auth.signIn.anonymous.enabled" => Some(json!(self.auth_sign_in.anonymous_enabled.unwrap_or(true))),
+                "auth.signIn.phoneNumber.enabled" => Some(json!(self.auth_sign_in.phone_enabled.unwrap_or(true))),
+                "auth.signIn.phoneNumber.testPhoneNumbers" => Some(json!(self.auth_sign_in.test_phone_numbers)),
+                "auth.client.permissions" => Some(permissions(self.auth_client_permissions)),
+                "auth.configOverrides" => Some(json!(self.auth_config_overrides.iter().map(|v| json!({"projectId": v.project_id, "tenantId": v.tenant_id, "config": {"client": v.config.client_permissions.map(|p| json!({"permissions": permissions(p)})), "improvedEmailPrivacy": v.config.improved_email_privacy}})).collect::<Vec<_>>())),
+                "auth.passwordPolicy" => Some(json!(self.auth_password_policy.as_ref().map(password))),
+                "auth.passwordPolicyOverrides" => Some(json!(self.auth_password_policy_overrides.iter().map(|v| json!({"projectId": v.project_id, "tenantId": v.tenant_id, "passwordPolicy": password(&v.password_policy)})).collect::<Vec<_>>())),
+                "auth.blockingFunctions" => {
+                    let trigger = |v: &BlockingFunctionTrigger| json!({"function": v.function, "region": v.region});
+                    Some(json!(self.auth_blocking_functions.as_ref().map(|v| json!({"triggers": v.triggers.as_ref().map(|t| json!({"beforeCreate": t.before_create.as_ref().map(trigger), "beforeSignIn": t.before_sign_in.as_ref().map(trigger)})), "forwardInboundCredentials": v.forward_inbound_credentials.map(|c| json!({"idToken": c.id_token, "accessToken": c.access_token, "refreshToken": c.refresh_token}))}))))
+                }
+                "auth.quota" => Some(if self.auth_signup_quota_explicit { json!({"signUpQuotaConfig": self.auth_signup_quota.as_ref().map(|v| json!({"quota": v.quota, "startTime": v.start_time.to_rfc3339().ok(), "quotaDuration": format!("{}.{:09}s", v.quota_duration.as_seconds(), v.quota_duration.as_nanos() % 1_000_000_000)}))}) } else { Value::Null }),
+                "auth.quotaSimulation" => Some(json!({"mode": match self.auth_quota_simulation.mode { AuthQuotaSimulationMode::Off => "off", AuthQuotaSimulationMode::Observe => "observe", AuthQuotaSimulationMode::Enforce => "enforce" }, "algorithm": self.auth_quota_simulation.algorithm, "defaultQuotaPerHour": self.auth_quota_simulation.default_quota_per_hour, "maxTrackedBuckets": self.auth_quota_simulation.max_tracked_buckets})),
+                "auth.mfa.state" | "auth.mfa.enabledProviders" | "auth.mfa.providerConfigs" => Some(self.auth_mfa.as_ref().map_or(Value::Null, |mfa| fireemu_adapter_http::identity_toolkit::project_mfa::mfa_config_json(mfa)[key.rsplit('.').next().expect("mfa key")].clone())),
+                "auth.providers.oidc" => Some(json!(self.auth_provider_seeds.oidc.as_ref().map(|providers| providers.iter().map(|v| json!({"name": v.id, "displayName": v.display_name, "enabled": v.enabled, "clientId": v.client_id, "issuer": v.issuer, "clientSecret": v.client_secret, "responseType": {"idToken": v.response_type.id_token, "code": v.response_type.code, "token": v.response_type.token}})).collect::<Vec<_>>()))),
+                "auth.providers.saml" => Some(json!(self.auth_provider_seeds.saml.as_ref().map(|providers| providers.iter().map(|v| json!({"name": v.id, "displayName": v.display_name, "enabled": v.enabled, "idpConfig": {"idpEntityId": v.idp_entity_id, "ssoUrl": v.sso_url, "idpCertificates": v.idp_certificates.iter().map(|c| json!({"x509Certificate": c})).collect::<Vec<_>>(), "signRequest": v.sign_request}, "spConfig": {"spEntityId": v.sp_entity_id, "callbackUri": v.callback_uri}})).collect::<Vec<_>>() ))),
+                "auth.totp.periodSeconds" => Some(json!(self.auth_totp.map(|v| v.period_seconds))),
+                "auth.totp.digits" => Some(json!(self.auth_totp.map(|v| v.digits))),
+                "auth.totp.windowSteps" => Some(json!(self.auth_totp.map(|v| v.window_steps))),
+                "auth.totp.enrollmentSessionTtlSeconds" => Some(json!(self.auth_totp.map(|v| v.enrollment_session_ttl.as_nanos() / 1_000_000_000))),
+                "eventarc.oauthCredentials" => Some(json!(self.eventarc_oauth_credentials.as_ref().map(|catalog| catalog.iter().map(|(digest, scopes)| (fireemu_core_types::hash::hex_lower(digest), json!({"scopes": scopes}))).collect::<Map<_, _>>()))),
+                "appCheck.enabled" => Some(json!(self.app_check.enabled)),
+                "appCheck.tokenSigning" => Some(json!(match self.app_check.token_signing { AppCheckSigning::InstanceRsa => "instance-rsa" })),
+                "appCheck.tokenTtlSeconds" => Some(json!(self.app_check.token_ttl_seconds)),
+                "appCheck.apps" => Some(json!(self.app_check.apps.iter().map(|app| json!({"projectId": app.project_id, "projectNumber": app.project_number, "appId": app.app_id, "enabled": app.enabled, "debugTokenSha256": app.debug_token_sha256})).collect::<Vec<_>>())),
+                "appCheck.services.auth" | "appCheck.services.firestore" | "appCheck.services.storage" => {
+                    use fireemu_core_app_check::verify::BaselineMode;
+                    let mode = match key.as_str() { "appCheck.services.auth" => self.app_check.auth, "appCheck.services.firestore" => self.app_check.firestore, _ => self.app_check.storage };
+                    Some(json!(match mode { BaselineMode::Off => "off", BaselineMode::Unenforced => "unenforced", BaselineMode::Enforced => "enforced" }))
+                }
+                _ => None,
+            };
+            let (value, source) = if let Some(entry) = governed {
+                let text = entry["value"].as_str().expect("development default value");
+                let value = if schema["type"] == "boolean" {
+                    json!(text == "true")
+                } else {
+                    json!(text)
+                };
+                (
+                    value,
+                    entry["source"]
+                        .as_str()
+                        .expect("development default source"),
+                )
+            } else if let Some(value) = effective {
+                let source = if explicit.is_some() {
+                    "explicit"
+                } else if value.is_null() {
+                    "unset"
+                } else if matches!(
+                    key.as_str(),
+                    "firestore.enforceLimits" | "auth.improvedEmailPrivacy"
+                ) {
+                    "derived from profile"
+                } else {
+                    "default"
+                };
+                (value, source)
+            } else if let Some(value) = explicit {
+                (value.clone(), "explicit")
+            } else if let Some(value) = schema.get("default") {
+                (value.clone(), "default (schema)")
+            } else {
+                (Value::Null, "unset")
+            };
+            rows.push(json!({"key": key, "value": value, "source": source, "description": schema["description"].as_str().unwrap_or("")}));
+        }
+        rows
+    }
+}
+
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
 pub(crate) const AUTH_KEYS: [&str; 28] = [
     "enabled",
@@ -4650,6 +4860,555 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn config_show_reports_each_explicit_runtime_value() {
+        // Public-only test key, matching the signer parser's existing fixture.
+        let modulus = "0lwNtQWMVy0QqgEvrBmoFqwky_dcMx8CgS-o2rTesEV7QbG4cvNigTcDV7b_u0twRkJdonkMPjbUs0b8NKe_0_UOZ5vE_kILFG4TtPdeZWub8xnqhETc7WifXhEfqcB8xFbRyIxU9V0d_epsuNnQ-Nd7NlnFsH-aaq6f1HKp55_BVNxudwmHwT49P6JhNDDh7FWyoYBBBFtQ0St8dky4MFQTd2swZP4pEA8xGp-q-1mxbn0g9gfbq5voYWtOaDW9a2lsC_S_d6DecsrNWn4YYJ7Qc5xcx4pI70a23zftkVBj_I-Eip2hcvNUEsZJA4LlR4BgDLsNWu3ZWQxe08fOew";
+        let jwks = json!({"keys": [{"kty": "RSA", "alg": "RS256", "use": "sig", "kid": "k", "n": modulus, "e": "AQAB"}]});
+        let permissions = json!({"disabledUserSignup": true, "disabledUserDeletion": true});
+        let password = json!({"enforcementState": "ENFORCE", "forceUpgradeOnSignin": true,
+            "constraints": {"minLength": 12, "maxLength": 64, "requireUppercase": true,
+                "requireLowercase": true, "requireNumeric": true, "requireNonAlphanumeric": true}});
+        let examples: Value = serde_json::from_str(include_str!(
+            "../../../spec/config/examples/auth-providers-both.json"
+        ))
+        .unwrap();
+        let mut oidc = examples["auth"]["providers"]["oidc"].clone();
+        oidc[0]["displayName"] = json!("Local OIDC");
+        oidc[0]["clientSecret"] = Value::Null;
+        oidc[0]["responseType"] = json!({"idToken": true, "code": false, "token": false});
+        let mut saml = examples["auth"]["providers"]["saml"].clone();
+        saml[0]["displayName"] = json!("Local SAML");
+        saml[0]["idpConfig"]["signRequest"] = json!(true);
+        let tenants: Value = serde_json::from_str(include_str!(
+            "../../../spec/config/examples/auth-tenants.json"
+        ))
+        .unwrap();
+        let app_check: Value = serde_json::from_str(include_str!(
+            "../../../spec/config/examples/app-check-enforced.json"
+        ))
+        .unwrap();
+        let eventarc: Value = serde_json::from_str(include_str!(
+            "../../../spec/config/examples/eventarc-authentication-oauth-credentials.json"
+        ))
+        .unwrap();
+        let cases = [
+            ("firestore.indexFile", json!("indexes.json")),
+            (
+                "firestore.textIndexDefinitionFile",
+                json!("text-indexes.json"),
+            ),
+            (
+                "firestore.databaseCreateTime",
+                json!("2030-01-02T03:04:05Z"),
+            ),
+            ("firestore.deletedDatabaseIdCooldownSeconds", json!(17)),
+            ("firestore.history.maxVersionsPerPath", json!(7)),
+            ("firestore.history.maxBytes", json!(268_435_456)),
+            ("storage.maxStoredBytes", json!(8192)),
+            ("daemon.clockStart", json!("2031-02-03T04:05:06Z")),
+            (
+                "daemon.authProjectNumbers",
+                json!({"demo-app": 1_234_567_890}),
+            ),
+            ("functions.manifest", json!("manifest.json")),
+            ("functions.runner", json!(["local-runner", "--fixture"])),
+            ("scheduler.defaultTimeZone", json!("Asia/Tokyo")),
+            ("scheduler.overlap", json!("queue")),
+            (
+                "auth.customTokenSigners",
+                json!({"signer@demo-app.iam.gserviceaccount.com": jwks.clone()}),
+            ),
+            ("auth.idpSigners", json!({"https://issuer.test": jwks})),
+            ("auth.multiTenant.allowTenants", json!(true)),
+            ("auth.tenants", tenants["auth"]["tenants"].clone()),
+            (
+                "auth.signIn.phoneNumber.testPhoneNumbers",
+                json!({"+16505550123": "123456"}),
+            ),
+            ("auth.client.permissions", permissions.clone()),
+            (
+                "auth.configOverrides",
+                json!([{"projectId": "demo-app", "tenantId": "tenant-a",
+                "config": {"client": {"permissions": permissions}, "improvedEmailPrivacy": false}}]),
+            ),
+            ("auth.passwordPolicy", password.clone()),
+            (
+                "auth.passwordPolicyOverrides",
+                json!([{"projectId": "demo-app", "tenantId": "tenant-a", "passwordPolicy": password}]),
+            ),
+            (
+                "auth.blockingFunctions",
+                json!({"triggers": {
+                "beforeCreate": {"function": "checkRegistration", "region": "us-central1"},
+                "beforeSignIn": {"function": "checkLogin", "region": "europe-west1"}},
+                "forwardInboundCredentials": {"idToken": true, "accessToken": false, "refreshToken": true}}),
+            ),
+            (
+                "auth.quotaSimulation",
+                json!({"mode": "enforce", "algorithm": "fixed-window-v1", "defaultQuotaPerHour": 237, "maxTrackedBuckets": 16}),
+            ),
+            ("auth.mfa.state", json!("ENABLED")),
+            ("auth.mfa.enabledProviders", json!(["PHONE_SMS"])),
+            (
+                "auth.mfa.providerConfigs",
+                json!([{"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": 2}}]),
+            ),
+            ("auth.providers.oidc", oidc),
+            ("auth.providers.saml", saml),
+            ("auth.totp.periodSeconds", json!(45)),
+            ("auth.totp.digits", json!(8)),
+            ("auth.totp.windowSteps", json!(3)),
+            ("auth.totp.enrollmentSessionTtlSeconds", json!(1234)),
+            (
+                "eventarc.oauthCredentials",
+                eventarc["eventarc"]["oauthCredentials"].clone(),
+            ),
+            ("appCheck.apps", json!([app_check["appCheck"]["apps"][0]])),
+            ("appCheck.services.auth", json!("enforced")),
+            ("appCheck.services.firestore", json!("enforced")),
+            ("appCheck.services.storage", json!("unenforced")),
+        ];
+        let mut input = json!({"schemaVersion": 1, "auth": {"forwardInboundCredentials": true}, "appCheck": {"enabled": true}});
+        for (key, value) in &cases {
+            let mut node = &mut input;
+            for part in key.split('.') {
+                if node.is_null() {
+                    *node = json!({});
+                }
+                node = &mut node[part];
+            }
+            *node = value.clone();
+        }
+        input["daemon"]["authProjectNumbers"] = json!({"demo-app": "1234567890"});
+        let config = RuntimeConfig::from_json(&input).unwrap();
+        let rows = config.config_show(&input);
+        // The input supplies provenance; the parsed runtime supplies the value, even when
+        // discovery or another runtime override makes it differ from the original file.
+        let without_file = config.config_show(&json!({}));
+        for (key, expected) in &cases {
+            let row = rows.iter().find(|row| row["key"] == *key).unwrap();
+            assert_eq!(row["value"], *expected, "{key}");
+            assert_eq!(row["source"], "explicit", "{key}");
+            let row = without_file.iter().find(|row| row["key"] == *key).unwrap();
+            assert_eq!(row["value"], *expected, "runtime projection: {key}");
+            assert_eq!(row["source"], "default", "runtime projection: {key}");
+        }
+        let totp = config.auth_totp.unwrap();
+        assert_eq!(totp.period_seconds, 45);
+        assert_eq!(totp.digits, 8);
+        assert_eq!(totp.window_steps, 3);
+        assert_eq!(totp.enrollment_session_ttl.as_seconds(), 1234);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn config_show_reports_each_empty_runtime_value_and_source() {
+        let config = RuntimeConfig::default();
+        let rows = config.config_show(&json!({}));
+        let cases = [
+            ("eventarc.authentication", json!("permissive"), "default"),
+            ("eventarc.oauthCredentials", json!(null), "unset"),
+            ("profile", json!("strict"), "default"),
+            ("productionExact", json!(false), "default"),
+            ("network.allowNonLoopbackHosts", json!(false), "default"),
+            ("projects.requireDemoPrefix", json!(true), "default"),
+            ("projects.unknownProjects", json!("serve"), "default"),
+            ("firestore.edition", json!("standard"), "default"),
+            ("firestore.apiMode", json!("native"), "default"),
+            ("firestore.location", json!("nam5"), "default"),
+            ("firestore.indexFile", json!(null), "unset"),
+            ("firestore.textIndexDefinitionFile", json!(null), "unset"),
+            (
+                "firestore.enforceLimits",
+                json!(true),
+                "derived from profile",
+            ),
+            ("firestore.missingIndexes", json!("report"), "default"),
+            (
+                "firestore.listenStreamLifetime",
+                json!("unlimited"),
+                "default",
+            ),
+            ("firestore.databaseCreateTime", json!(null), "unset"),
+            (
+                "firestore.deletedDatabaseIdCooldownSeconds",
+                json!(300),
+                "default (schema)",
+            ),
+            ("firestore.ttlSweepIntervalSeconds", json!(86400), "default"),
+            ("firestore.history.maxVersionsPerPath", json!(null), "unset"),
+            (
+                "firestore.history.maxBytes",
+                json!(1_073_741_824),
+                "default (schema)",
+            ),
+            ("rules.source", json!(null), "unset"),
+            ("rules.denialLog", json!("summary"), "default"),
+            ("auth.idTokenSigning", json!("unsigned-emulator"), "default"),
+            ("auth.apiKeys", json!([]), "default"),
+            ("auth.allowUnsignedCustomTokens", json!(true), "default"),
+            ("auth.allowUnsignedIdTokens", json!(true), "default"),
+            ("auth.customTokenSigners", json!(null), "unset"),
+            ("auth.providers.oidc", json!(null), "unset"),
+            ("auth.providers.saml", json!(null), "unset"),
+            ("auth.idpAssertions", json!("fixture"), "default"),
+            ("auth.idpSigners", json!(null), "unset"),
+            ("auth.authorizedDomains", json!(null), "unset"),
+            ("auth.totp.periodSeconds", json!(null), "unset"),
+            ("auth.totp.digits", json!(null), "unset"),
+            ("auth.totp.windowSteps", json!(null), "unset"),
+            (
+                "auth.totp.enrollmentSessionTtlSeconds",
+                json!(null),
+                "unset",
+            ),
+            ("auth.mfa.state", json!(null), "unset"),
+            ("auth.mfa.enabledProviders", json!(null), "unset"),
+            ("auth.mfa.providerConfigs", json!(null), "unset"),
+            ("auth.multiTenant.allowTenants", json!(null), "unset"),
+            ("auth.tenants", json!([]), "default"),
+            ("auth.tenantIdFormat", json!("readable"), "default"),
+            ("auth.forwardInboundCredentials", json!(false), "default"),
+            (
+                "auth.improvedEmailPrivacy",
+                json!(true),
+                "derived from profile",
+            ),
+            ("auth.signIn.allowDuplicateEmails", json!(false), "default"),
+            ("auth.signIn.email.enabled", json!(true), "default"),
+            (
+                "auth.signIn.email.passwordRequired",
+                json!(false),
+                "default",
+            ),
+            ("auth.signIn.anonymous.enabled", json!(true), "default"),
+            ("auth.signIn.phoneNumber.enabled", json!(true), "default"),
+            (
+                "auth.signIn.phoneNumber.testPhoneNumbers",
+                json!(null),
+                "unset",
+            ),
+            (
+                "auth.client.permissions",
+                json!({"disabledUserDeletion":false,"disabledUserSignup":false}),
+                "default",
+            ),
+            ("auth.configOverrides", json!([]), "default"),
+            ("auth.blockingFunctions", json!(null), "unset"),
+            ("auth.quota", json!(null), "unset"),
+            (
+                "auth.quotaSimulation",
+                json!({"algorithm":"fixed-window-v1","defaultQuotaPerHour":100,"maxTrackedBuckets":4096,"mode":"off"}),
+                "default",
+            ),
+            ("auth.logActionCodes", json!(true), "default"),
+            ("auth.passwordPolicy", json!(null), "unset"),
+            ("auth.passwordPolicyOverrides", json!([]), "default"),
+            ("appCheck.enabled", json!(false), "default"),
+            ("appCheck.tokenSigning", json!("instance-rsa"), "default"),
+            ("appCheck.tokenTtlSeconds", json!(3600), "default"),
+            ("appCheck.apps", json!([]), "default"),
+            ("appCheck.services.auth", json!("off"), "default"),
+            ("appCheck.services.firestore", json!("off"), "default"),
+            ("appCheck.services.storage", json!("off"), "default"),
+            ("daemon.firestorePort", json!(8080), "default"),
+            ("daemon.httpPort", json!(9099), "default"),
+            ("daemon.storagePort", json!(9199), "default"),
+            ("daemon.functionsPort", json!(5001), "default"),
+            ("daemon.eventarcPort", json!(9299), "default"),
+            ("daemon.tasksPort", json!(9499), "default"),
+            ("daemon.pubsubPort", json!(8085), "default"),
+            ("daemon.loggingPort", json!(4500), "default"),
+            ("daemon.clockStart", json!(null), "unset"),
+            ("daemon.seed", json!(42), "default"),
+            ("daemon.authProject", json!("demo-app"), "default"),
+            ("daemon.authProjectNumbers", json!({}), "default"),
+            ("storage.rules", json!(null), "unset"),
+            ("storage.maxStoredBytes", json!(null), "unset"),
+            ("events.maxAttempts", json!(4), "default"),
+            (
+                "pubsub.pushMinimumRedeliveryIntervalMillis",
+                json!(0),
+                "default",
+            ),
+            ("scheduler.defaultTimeZone", json!(null), "unset"),
+            ("scheduler.catchUp", json!("all"), "default"),
+            ("scheduler.maxCatchUpRuns", json!(1000), "default"),
+            ("scheduler.overlap", json!(null), "unset"),
+            ("functions.clock.date", json!("real"), "default"),
+            ("functions.clock.timers", json!("real"), "default"),
+            ("functions.clock.tasks", json!("real"), "default"),
+            ("functions.manifest", json!(null), "unset"),
+            ("functions.source", json!(null), "unset"),
+            ("functions.runner", json!(null), "unset"),
+            ("functions.maxGlobalConcurrency", json!(8), "default"),
+            ("functions.unservedTriggers", json!("refuse"), "default"),
+        ];
+        for (key, expected, source) in cases {
+            let row = rows.iter().find(|row| row["key"] == key).unwrap();
+            assert_eq!(row["value"], expected, "{key}");
+            assert_eq!(row["source"], source, "{key}");
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn config_show_schema_defaults_agree_with_runtime_in_each_mode() {
+        use fireemu_adapter_functions::eventarc_strict::EventarcAuthentication;
+        use fireemu_adapter_http::identity_toolkit::TenantIdFormat;
+        let schema = config_schema();
+        for (profile, exact) in [("strict", false), ("emulator", false), ("strict", true)] {
+            let input = json!({"schemaVersion": 1, "profile": profile, "productionExact": exact});
+            let cfg = RuntimeConfig::from_json(&input).unwrap();
+            let rows = cfg.config_show(&input);
+            // Read the fields themselves: comparing config_show with its own fallback
+            // would conceal a disagreement between the schema and the daemon.
+            let effective = [
+                ("profile", json!(cfg.profile.as_str())),
+                ("productionExact", json!(cfg.production_exact)),
+                (
+                    "network.allowNonLoopbackHosts",
+                    json!(cfg.allow_non_loopback_hosts),
+                ),
+                ("projects.requireDemoPrefix", json!(cfg.require_demo_prefix)),
+                (
+                    "projects.unknownProjects",
+                    json!(if cfg.refuse_unknown_projects {
+                        "refuse"
+                    } else {
+                        "serve"
+                    }),
+                ),
+                ("firestore.location", json!(cfg.firestore_location)),
+                (
+                    "firestore.missingIndexes",
+                    json!(match cfg.firestore_missing_indexes {
+                        MissingIndexes::Report => "report",
+                        MissingIndexes::Refuse => "refuse",
+                    }),
+                ),
+                (
+                    "firestore.listenStreamLifetime",
+                    json!(if cfg.listen_stream_lifetime {
+                        "oneHour"
+                    } else {
+                        "unlimited"
+                    }),
+                ),
+                (
+                    "firestore.deletedDatabaseIdCooldownSeconds",
+                    json!(cfg.deleted_database_id_cooldown.unwrap_or(
+                        fireemu_adapter_grpc::admin::catalog::DELETED_ID_COOLDOWN_SECONDS
+                    )),
+                ),
+                (
+                    "firestore.ttlSweepIntervalSeconds",
+                    json!(cfg.ttl_sweep_interval.as_seconds()),
+                ),
+                (
+                    "firestore.history.maxBytes",
+                    json!(cfg.history_max_bytes.unwrap_or(
+                        fireemu_core_firestore::store::HistoryLimits::default().max_bytes
+                    )),
+                ),
+                (
+                    "rules.denialLog",
+                    json!(if cfg.rules_denial_log {
+                        "summary"
+                    } else {
+                        "off"
+                    }),
+                ),
+                (
+                    "auth.allowUnsignedCustomTokens",
+                    json!(cfg.auth_allow_unsigned_custom_tokens),
+                ),
+                (
+                    "auth.allowUnsignedIdTokens",
+                    json!(cfg.auth_allow_unsigned_id_tokens),
+                ),
+                (
+                    "auth.idpAssertions",
+                    json!(match cfg.auth_idp_assertions {
+                        IdpAssertionMode::Fixture => "fixture",
+                        IdpAssertionMode::Signed => "signed",
+                    }),
+                ),
+                (
+                    "auth.tenantIdFormat",
+                    json!(match cfg.auth_tenant_id_format {
+                        TenantIdFormat::Readable => "readable",
+                        TenantIdFormat::Generated => "generated",
+                    }),
+                ),
+                (
+                    "auth.signIn.allowDuplicateEmails",
+                    json!(cfg.auth_allow_duplicate_emails),
+                ),
+                (
+                    "auth.signIn.email.enabled",
+                    json!(cfg.auth_sign_in.email_enabled.unwrap_or(true)),
+                ),
+                (
+                    "auth.signIn.email.passwordRequired",
+                    json!(cfg.auth_sign_in.password_required.unwrap_or(false)),
+                ),
+                (
+                    "auth.signIn.anonymous.enabled",
+                    json!(cfg.auth_sign_in.anonymous_enabled.unwrap_or(true)),
+                ),
+                (
+                    "auth.signIn.phoneNumber.enabled",
+                    json!(cfg.auth_sign_in.phone_enabled.unwrap_or(true)),
+                ),
+                (
+                    "eventarc.authentication",
+                    json!(match cfg.eventarc_authentication {
+                        EventarcAuthentication::Permissive => "permissive",
+                        EventarcAuthentication::Production => "production",
+                    }),
+                ),
+                ("appCheck.enabled", json!(cfg.app_check.enabled)),
+                (
+                    "appCheck.tokenSigning",
+                    json!(match cfg.app_check.token_signing {
+                        AppCheckSigning::InstanceRsa => "instance-rsa",
+                    }),
+                ),
+                (
+                    "appCheck.tokenTtlSeconds",
+                    json!(cfg.app_check.token_ttl_seconds),
+                ),
+                (
+                    "pubsub.pushMinimumRedeliveryIntervalMillis",
+                    json!(cfg.pubsub_push_minimum_redelivery_interval_millis),
+                ),
+                (
+                    "functions.clock.date",
+                    json!(if cfg.functions_clock.date_virtual {
+                        "virtual"
+                    } else {
+                        "real"
+                    }),
+                ),
+                (
+                    "functions.clock.timers",
+                    json!(if cfg.functions_clock.timers_virtual {
+                        "virtual"
+                    } else {
+                        "real"
+                    }),
+                ),
+                (
+                    "functions.clock.tasks",
+                    json!(if cfg.functions_clock.tasks_virtual {
+                        "virtual"
+                    } else {
+                        "real"
+                    }),
+                ),
+            ];
+            assert_eq!(
+                schema
+                    .iter()
+                    .filter(|(key, node)| node.get("default").is_some() && key != "bind")
+                    .count(),
+                effective.len()
+            );
+            for (key, actual) in effective {
+                let node = &schema.iter().find(|(path, _)| path == key).unwrap().1;
+                // These contextual defaults are documented in the schema description;
+                // the JSON Schema default is the unqualified strict development default.
+                let expected = match (key, exact) {
+                    ("profile", _) => json!(profile),
+                    ("productionExact", _) => json!(exact),
+                    ("auth.allowUnsignedCustomTokens" | "auth.allowUnsignedIdTokens", true) => {
+                        json!(false)
+                    }
+                    ("auth.idpAssertions", true) => json!("signed"),
+                    ("auth.tenantIdFormat", true) => json!("generated"),
+                    ("eventarc.authentication", true) => json!("production"),
+                    ("firestore.missingIndexes", true) => json!("refuse"),
+                    ("firestore.listenStreamLifetime", true) => json!("oneHour"),
+                    _ => node["default"].clone(),
+                };
+                assert_eq!(
+                    actual, expected,
+                    "schema default: {key}, {profile}, productionExact={exact}"
+                );
+                let row = rows.iter().find(|row| row["key"] == key).unwrap();
+                assert_eq!(
+                    row["value"], actual,
+                    "displayed default: {key}, {profile}, productionExact={exact}"
+                );
+            }
+            for (key, actual) in [
+                ("firestore.enforceLimits", cfg.enforce_limits),
+                ("auth.improvedEmailPrivacy", cfg.auth_improved_email_privacy),
+            ] {
+                assert_eq!(actual, profile == "strict", "{key}");
+                let row = rows.iter().find(|row| row["key"] == key).unwrap();
+                assert_eq!(row["value"], json!(actual), "{key}");
+                assert_eq!(row["source"], "derived from profile", "{key}");
+            }
+            // Defaults behind schema references also have concrete runtime values.
+            let full_schema: Value =
+                serde_json::from_str(include_str!("../../../spec/config/fireemu.schema.json"))
+                    .unwrap();
+            for (pointer, actual) in [
+                (
+                    "/$defs/authClientPermissions/properties/disabledUserSignup",
+                    json!(cfg.auth_client_permissions.disabled_user_signup),
+                ),
+                (
+                    "/$defs/authClientPermissions/properties/disabledUserDeletion",
+                    json!(cfg.auth_client_permissions.disabled_user_deletion),
+                ),
+                (
+                    "/$defs/authQuotaSimulation/properties/mode",
+                    json!(match cfg.auth_quota_simulation.mode {
+                        AuthQuotaSimulationMode::Off => "off",
+                        AuthQuotaSimulationMode::Observe => "observe",
+                        AuthQuotaSimulationMode::Enforce => "enforce",
+                    }),
+                ),
+                (
+                    "/$defs/authQuotaSimulation/properties/algorithm",
+                    json!(cfg.auth_quota_simulation.algorithm),
+                ),
+                (
+                    "/$defs/authQuotaSimulation/properties/defaultQuotaPerHour",
+                    json!(cfg.auth_quota_simulation.default_quota_per_hour),
+                ),
+                (
+                    "/$defs/authQuotaSimulation/properties/maxTrackedBuckets",
+                    json!(cfg.auth_quota_simulation.max_tracked_buckets),
+                ),
+            ] {
+                assert_eq!(
+                    actual,
+                    full_schema.pointer(pointer).unwrap()["default"],
+                    "{pointer}"
+                );
+            }
+            for service in [
+                AppCheckService::Auth,
+                AppCheckService::Firestore,
+                AppCheckService::Storage,
+            ] {
+                use fireemu_core_app_check::verify::BaselineMode;
+                let mode = match cfg.app_check.configured_mode(service) {
+                    BaselineMode::Off => "off",
+                    BaselineMode::Unenforced => "unenforced",
+                    BaselineMode::Enforced => "enforced",
+                };
+                assert_eq!(json!(mode), full_schema["$defs"]["appCheckMode"]["default"]);
+            }
+        }
+    }
 
     #[test]
     fn functions_application_clock_is_explicit_and_requires_a_pinned_start() {

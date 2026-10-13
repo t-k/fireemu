@@ -56,6 +56,385 @@ fn run_in(dir: &Path, args: &[&str], input: Option<&str>) -> Output {
     }
 }
 
+#[test]
+fn config_show_reports_effective_values_sources_and_schema_order() {
+    let dir = scratch("config-show");
+    write(
+        &dir,
+        "fireemu.json",
+        r#"{"schemaVersion":1,"productionExact":true,"auth":{"allowUnsignedIdTokens":true,"idpSigners":{}},"eventarc":{"oauthCredentials":{}}}"#,
+    );
+    let out = run_in(&dir, &["config", "show", "--json"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(rows[0]["key"], "$schema");
+    assert_eq!(rows[1]["key"], "eventarc.authentication");
+    for (key, value, source) in [
+        (
+            "auth.allowUnsignedIdTokens",
+            serde_json::json!(true),
+            "explicit",
+        ),
+        (
+            "auth.allowUnsignedCustomTokens",
+            serde_json::json!(false),
+            "productionExact",
+        ),
+        (
+            "auth.idpAssertions",
+            serde_json::json!("signed"),
+            "derived from auth.idpSigners",
+        ),
+        (
+            "eventarc.authentication",
+            serde_json::json!("production"),
+            "derived from eventarc.oauthCredentials",
+        ),
+        ("daemon.firestorePort", serde_json::json!(8080), "default"),
+        (
+            "firestore.enforceLimits",
+            serde_json::json!(true),
+            "derived from profile",
+        ),
+        ("functions.source", serde_json::Value::Null, "unset"),
+    ] {
+        let row = rows.iter().find(|row| row["key"] == key).unwrap();
+        assert_eq!(row["value"], value, "{key}");
+        assert_eq!(row["source"], source, "{key}");
+        assert!(row["description"].is_string());
+    }
+    let out = run_in(&dir, &["config", "show"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("auth.idpAssertions = \"signed\" (derived from auth.idpSigners)\n"));
+    assert!(text.contains("functions.source = (unset) (unset)\n"));
+}
+
+#[test]
+fn config_show_defaults_cover_every_schema_leaf_without_loading_the_reference() {
+    let dir = scratch("config-show-defaults");
+    write(&dir, "fireemu.reference.jsonc", "not a configuration");
+    let out = run_in(&dir, &["config", "show", "--json"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    let schema: serde_json::Value =
+        serde_json::from_str(include_str!("../../../spec/config/fireemu.schema.json")).unwrap();
+    let mut pending = vec![(String::new(), &schema)];
+    let mut leaves = std::collections::BTreeSet::new();
+    while let Some((path, node)) = pending.pop() {
+        if let Some(properties) = node["properties"].as_object() {
+            for (name, node) in properties {
+                pending.push((
+                    if path.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{path}.{name}")
+                    },
+                    node,
+                ));
+            }
+        } else {
+            let row = rows.iter().find(|row| row["key"] == path).unwrap();
+            assert_eq!(
+                row["description"],
+                node["description"].as_str().unwrap_or("")
+            );
+            if let Some(default) = node.get("default") {
+                assert_eq!(&row["value"], default, "{path}");
+                assert_eq!(
+                    row["source"],
+                    if matches!(
+                        path.as_str(),
+                        "bind"
+                            | "firestore.history.maxBytes"
+                            | "firestore.deletedDatabaseIdCooldownSeconds"
+                    ) {
+                        "default (schema)"
+                    } else {
+                        "default"
+                    },
+                    "{path}"
+                );
+            }
+            leaves.insert(path);
+        }
+    }
+    assert_eq!(rows.len(), leaves.len());
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["key"].as_str().unwrap().to_owned())
+            .collect::<std::collections::BTreeSet<_>>(),
+        leaves
+    );
+    for (key, value) in [
+        ("firestore.edition", serde_json::json!("standard")),
+        ("firestore.apiMode", serde_json::json!("native")),
+        ("daemon.seed", serde_json::json!(42)),
+        ("daemon.authProject", serde_json::json!("demo-app")),
+        ("daemon.httpPort", serde_json::json!(9099)),
+        ("daemon.storagePort", serde_json::json!(9199)),
+        ("daemon.functionsPort", serde_json::json!(5001)),
+        ("daemon.eventarcPort", serde_json::json!(9299)),
+        ("daemon.tasksPort", serde_json::json!(9499)),
+        ("daemon.pubsubPort", serde_json::json!(8085)),
+        ("daemon.loggingPort", serde_json::json!(4500)),
+        (
+            "auth.idTokenSigning",
+            serde_json::json!("unsigned-emulator"),
+        ),
+        ("auth.apiKeys", serde_json::json!([])),
+        ("auth.logActionCodes", serde_json::json!(true)),
+        ("auth.forwardInboundCredentials", serde_json::json!(false)),
+        ("events.maxAttempts", serde_json::json!(4)),
+        ("functions.maxGlobalConcurrency", serde_json::json!(8)),
+        ("functions.unservedTriggers", serde_json::json!("refuse")),
+        ("scheduler.catchUp", serde_json::json!("all")),
+        ("scheduler.maxCatchUpRuns", serde_json::json!(1000)),
+        ("appCheck.services.auth", serde_json::json!("off")),
+        ("appCheck.services.firestore", serde_json::json!("off")),
+        ("appCheck.services.storage", serde_json::json!("off")),
+    ] {
+        let row = rows.iter().find(|row| row["key"] == key).unwrap();
+        assert_eq!(row["value"], value, "{key}");
+        assert_eq!(row["source"], "default", "{key}");
+    }
+}
+
+#[test]
+fn init_reference_is_complete_valid_json_and_preserves_the_minimal_config() {
+    let dir = scratch("init-reference");
+    let out = run_in(&dir, &["init", "--yes", "--reference"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let minimal = std::fs::read(dir.join("fireemu.json")).unwrap();
+    let config: serde_json::Value = serde_json::from_slice(&minimal).unwrap();
+    assert_eq!(config.as_object().unwrap().len(), 4);
+    let reference = std::fs::read_to_string(dir.join("fireemu.reference.jsonc")).unwrap();
+    assert!(reference.contains("not loaded by fireemu"));
+    assert!(reference.contains("makes it explicit"));
+    let active = reference
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let parsed: serde_json::Value = serde_json::from_str(&active).unwrap();
+    assert!(parsed.pointer("/auth/allowUnsignedIdTokens").is_none());
+    assert!(parsed.pointer("/auth/idpSigners").is_none());
+    assert!(parsed.pointer("/eventarc/oauthCredentials").is_none());
+    assert!(parsed.pointer("/auth/totp").is_none());
+    let schema: serde_json::Value =
+        serde_json::from_str(include_str!("../../../spec/config/fireemu.schema.json")).unwrap();
+    let mut pending = vec![(String::new(), &schema)];
+    while let Some((prefix, node)) = pending.pop() {
+        if let Some(properties) = node["properties"].as_object() {
+            for (key, node) in properties {
+                let path = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                pending.push((path, node));
+            }
+        } else {
+            assert!(
+                reference.contains(&format!("// {prefix}:")),
+                "missing {prefix}"
+            );
+            let (_, section) = reference.split_once(&format!("// {prefix}:\n")).unwrap();
+            let name = prefix.rsplit('.').next().unwrap();
+            assert!(
+                section.lines().any(|line| line
+                    .trim_start()
+                    .trim_start_matches("// ")
+                    .starts_with(&format!("\"{name}\":"))),
+                "missing property {prefix}"
+            );
+            if let Some(value) = parsed.pointer(&format!("/{}", prefix.replace('.', "/"))) {
+                assert_eq!(Some(value), node.get("default"), "{prefix}");
+            }
+        }
+    }
+    let out = run_in(&dir, &["init", "--reference"], None);
+    assert!(!out.status.success());
+    assert_eq!(std::fs::read(dir.join("fireemu.json")).unwrap(), minimal);
+    std::fs::remove_file(dir.join("fireemu.reference.jsonc")).unwrap();
+    let out = run_in(&dir, &["init", "--reference"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = run_in(&dir, &["init", "--reference", "--force"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(std::fs::read(dir.join("fireemu.json")).unwrap(), minimal);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn config_show_uses_selected_files_and_runtime_normalization() {
+    let dir = scratch("config-show-files");
+    write(&dir, "fireemu.json", "invalid discovered configuration");
+    write(
+        &dir,
+        "chosen.json",
+        r#"{"schemaVersion":1,"profile":"emulator","firebaseJson":"missing.json","events":{"maxAttempts":0},"auth":{"authorizedDomains":[42,true,null],"totp":{},"providers":{"oidc":[{"name":"oidc.test","issuer":"https://issuer.example","clientId":"client","enabled":false}]},"quota":{"signUpQuotaConfig":{"quota":"1","startTime":"2026-01-01T00:00:00Z","quotaDuration":"0.5s"}}},"limits":{"enforcement":"observe"}}"#,
+    );
+    write(
+        &dir,
+        "selected.json",
+        r#"{"emulators":{"firestore":{"port":8123},"auth":{"port":9123},"storage":{"port":9223},"functions":{"port":5023},"eventarc":{"port":9323},"tasks":{"port":9523},"pubsub":{"port":8223},"logging":{"port":4523}},"firestore":{"rules":"test.rules"},"storage":{"rules":"storage.rules"},"functions":{"source":"functions"}}"#,
+    );
+    std::fs::create_dir(dir.join("functions")).unwrap();
+    write(
+        &dir,
+        ".firebaserc",
+        r#"{"projects":{"default":"demo-selected"}}"#,
+    );
+    let out = run_in(
+        &dir,
+        &[
+            "config",
+            "show",
+            "--config",
+            "chosen.json",
+            "--firebase-json",
+            "selected.json",
+            "--json",
+        ],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    for (key, value, source) in [
+        ("profile", serde_json::json!("emulator"), "explicit"),
+        ("daemon.firestorePort", serde_json::json!(8123), "explicit"),
+        ("daemon.httpPort", serde_json::json!(9123), "explicit"),
+        ("daemon.storagePort", serde_json::json!(9223), "explicit"),
+        ("daemon.functionsPort", serde_json::json!(5023), "explicit"),
+        ("daemon.eventarcPort", serde_json::json!(9323), "explicit"),
+        ("daemon.tasksPort", serde_json::json!(9523), "explicit"),
+        ("daemon.pubsubPort", serde_json::json!(8223), "explicit"),
+        ("daemon.loggingPort", serde_json::json!(4523), "explicit"),
+        (
+            "daemon.authProject",
+            serde_json::json!("demo-selected"),
+            "explicit",
+        ),
+        ("events.maxAttempts", serde_json::json!(1), "explicit"),
+        (
+            "auth.authorizedDomains",
+            serde_json::json!(["42", "true"]),
+            "explicit",
+        ),
+        (
+            "auth.improvedEmailPrivacy",
+            serde_json::json!(false),
+            "derived from profile",
+        ),
+        ("auth.totp.periodSeconds", serde_json::json!(30), "default"),
+        (
+            "limits.enforcement",
+            serde_json::json!("observe"),
+            "explicit",
+        ),
+        (
+            "firestore.history.maxBytes",
+            serde_json::json!(1_073_741_824_u64),
+            "default (schema)",
+        ),
+    ] {
+        let row = rows.iter().find(|row| row["key"] == key).unwrap();
+        assert_eq!(row["value"], value, "{key}");
+        assert_eq!(row["source"], source, "{key}");
+    }
+    let rules = rows
+        .iter()
+        .find(|row| row["key"] == "rules.source")
+        .unwrap();
+    assert!(rules["value"].as_str().unwrap().ends_with("test.rules"));
+    assert_eq!(rules["source"], "explicit");
+    for (key, suffix) in [
+        ("storage.rules", "storage.rules"),
+        ("functions.source", "functions"),
+    ] {
+        let row = rows.iter().find(|row| row["key"] == key).unwrap();
+        assert!(row["value"].as_str().unwrap().ends_with(suffix));
+        assert_eq!(row["source"], "explicit");
+    }
+    let providers = rows
+        .iter()
+        .find(|row| row["key"] == "auth.providers.oidc")
+        .unwrap();
+    assert_eq!(providers["value"][0]["name"], "oidc.test");
+    let quota = rows.iter().find(|row| row["key"] == "auth.quota").unwrap();
+    assert_eq!(
+        quota["value"]["signUpQuotaConfig"]["quotaDuration"],
+        "0.500000000s"
+    );
+    let out = run_in(
+        &dir,
+        &[
+            "config",
+            "show",
+            "--firebase-json",
+            "selected.json",
+            "--json",
+        ],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let out = run_in(&dir, &["config", "show"], None);
+    assert!(!out.status.success());
+    assert!(out.stdout.is_empty());
+    for args in [
+        vec!["config"],
+        vec!["config", "other"],
+        vec!["config", "show", "--config"],
+        vec!["config", "show", "--firebase-json"],
+        vec!["config", "show", "--nope"],
+    ] {
+        assert_eq!(run_in(&dir, &args, None).status.code(), Some(2), "{args:?}");
+    }
+}
+
+#[test]
+fn init_reference_combines_flags_and_refuses_unsafe_replacement() {
+    let dir = scratch("init-reference-options");
+    write(&dir, "project.json", "{}");
+    let out = run_in(
+        &dir,
+        &[
+            "init",
+            "--reference",
+            "--profile",
+            "emulator",
+            "--firebase-json",
+            "project.json",
+            "--yes",
+        ],
+        None,
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("fireemu.json")).unwrap()).unwrap();
+    assert_eq!(config["profile"], "emulator");
+    assert_eq!(config["firebaseJson"], "project.json");
+    let out = run_in(&dir, &["init", "--reference", "--reference"], None);
+    assert_eq!(out.status.code(), Some(2));
+    std::fs::remove_file(dir.join("fireemu.reference.jsonc")).unwrap();
+    std::fs::create_dir(dir.join("fireemu.reference.jsonc")).unwrap();
+    let out = run_in(&dir, &["init", "--reference", "--force"], None);
+    assert!(!out.status.success());
+    #[cfg(unix)]
+    {
+        std::fs::remove_dir(dir.join("fireemu.reference.jsonc")).unwrap();
+        write(&dir, "keep.json", "keep");
+        std::os::unix::fs::symlink(dir.join("keep.json"), dir.join("fireemu.reference.jsonc"))
+            .unwrap();
+        let out = run_in(&dir, &["init", "--reference", "--force"], None);
+        assert!(!out.status.success());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("keep.json")).unwrap(),
+            "keep"
+        );
+    }
+}
+
 /// The port arguments every successful scenario needs.
 const PORTS: [&str; 18] = [
     "--firestore-port",

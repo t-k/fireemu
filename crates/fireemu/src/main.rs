@@ -282,6 +282,10 @@ fn main() -> ExitCode {
             }
             Err(e) => fail_for(command, &e),
         },
+        Some("config") => match config_show_command(&args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => fail_for(command, &e),
+        },
         Some("up" | "emulators:start") => match parse_options(&args[1..], OptionContext::Start) {
             Ok((options, None)) => daemon::run(options, None),
             Ok((_, Some(_))) => unreachable!("start does not accept a positional argument"),
@@ -325,6 +329,123 @@ fn main() -> ExitCode {
         },
         _ => usage(),
     }
+}
+
+#[allow(clippy::too_many_lines)]
+fn config_show_command(args: &[String]) -> Result<(), CliError> {
+    if args.first().map(String::as_str) != Some("show") {
+        return Err(CliError::usage(
+            "usage: fireemu config show [--config <path>] [--firebase-json <path>] [--json]",
+        ));
+    }
+    let mut flags = Vec::new();
+    let mut json = false;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            "--config" | "--firebase-json" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| CliError::usage(format!("{} needs a value", args[index])))?;
+                flags.extend([args[index].clone(), value.clone()]);
+                index += 2;
+            }
+            other => {
+                return Err(CliError::usage(format!(
+                    "unknown argument {}",
+                    diagnostic_text(other)
+                )))
+            }
+        }
+    }
+    let mut raw = parse_raw_options(&flags, OptionContext::Start)?;
+    let origin = discover_project_config(&mut raw);
+    let (mut cfg, project_root, sources) =
+        load_project_config(&raw, &Selection::default()).map_err(note_discovered(&origin))?;
+    let rc = if matches!(origin, ConfigOrigin::Discovered(_)) {
+        discovered_firebaserc(&project_root).map_err(note_discovered(&origin))?
+    } else {
+        read_firebaserc(&project_root)?
+    };
+    let project = resolve_project(rc.as_ref(), None)?;
+    if let Some(project) = &project {
+        cfg.auth_project.clone_from(project);
+    }
+    if !cfg.storage_rules_by_target.is_empty() {
+        let rc = rc.as_ref().ok_or_else(|| {
+            CliError::refused(
+                "firebase.json declares Storage targets but the project has no .firebaserc",
+            )
+        })?;
+        let project = cfg.auth_project.clone();
+        cfg.resolve_storage_rules_targets(rc, &project)?;
+    }
+    let input = match &sources.canonical {
+        Some(path) => config_document(&raw, path)?.0,
+        None => serde_json::Value::Null,
+    };
+    let firebase = sources
+        .firebase
+        .as_ref()
+        .map(|(path, _)| read_firebase_json(path).map(|(document, _)| document))
+        .transpose()?;
+    let mut rows = cfg.config_show(&input);
+    for row in &mut rows {
+        let key = row["key"].as_str().expect("key");
+        let firebase_path = match key {
+            "daemon.firestorePort" => "/emulators/firestore/port",
+            "daemon.httpPort" => "/emulators/auth/port",
+            "daemon.storagePort" => "/emulators/storage/port",
+            "daemon.functionsPort" => "/emulators/functions/port",
+            "daemon.eventarcPort" => "/emulators/eventarc/port",
+            "daemon.tasksPort" => "/emulators/tasks/port",
+            "daemon.pubsubPort" => "/emulators/pubsub/port",
+            "daemon.loggingPort" => "/emulators/logging/port",
+            "rules.source" | "firestore.indexFile" => "/firestore",
+            "storage.rules" => "/storage",
+            "functions.source" => "/functions",
+            _ => "",
+        };
+        if key == "daemon.authProject" && project.is_some() {
+            row["source"] = "explicit".into();
+        } else if !firebase_path.is_empty()
+            && firebase
+                .as_ref()
+                .is_some_and(|f| f.pointer(firebase_path).is_some())
+        {
+            row["source"] = if row["value"].is_null() {
+                "unset"
+            } else {
+                "explicit"
+            }
+            .into();
+        }
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&rows).expect("configuration rows")
+        );
+    } else {
+        for row in rows {
+            let value = if row["source"] == "unset" {
+                "(unset)".to_owned()
+            } else {
+                row["value"].to_string()
+            };
+            println!(
+                "{} = {} ({})",
+                row["key"].as_str().expect("key"),
+                value,
+                row["source"].as_str().expect("source")
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Prints the failure and returns its exit code.

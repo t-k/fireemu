@@ -82,6 +82,8 @@ Realtime Database, Firebase Hosting, App Hosting, and Data Connect are not curre
 
 ## Usage
 
+`fireemu config show` prints every configuration key in schema order with its effective value and source, using the same configuration discovery as `fireemu up`. Use `--config <path>` or `--firebase-json <path>` to select files, and `--json` for records containing `key`, `value`, `source`, and the schema description. Sources distinguish explicit values, defaults, `productionExact`, derived values, and unset keys. When the runtime does not expose a value, the command uses its explicit file value, its schema default (marked `default (schema)`), or `(unset)` (`null` with source `unset` in JSON).
+
 ### Select services
 
 Use `--only` to select the services to start.
@@ -174,6 +176,8 @@ The command reports information about the Fireemu binary, UI, Functions runner, 
 ## Configuration
 
 ### Initial setup and reusing `firebase.json`
+
+`fireemu init --reference` also writes `fireemu.reference.jsonc`, a commented reference generated from the schema. Fireemu never loads this file. The normal `fireemu.json` stays minimal: copying a reference key into it makes that key explicit, which stops `productionExact` from switching it. Keys without defaults, keys whose presence selects behavior, and keys governed by `productionExact` stay commented out. Combine `--reference` with `--profile` or `--firebase-json` when initializing; with an existing `fireemu.json` and neither of those options, only the reference is written. Existing output files require `--force` to replace.
 
 `fireemu init` creates `fireemu.json` in the current directory. The interactive setup lets you choose a compatibility profile and whether to reuse an existing `firebase.json`.
 

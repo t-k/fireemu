@@ -37,17 +37,18 @@ fn assert_help(out: &Output, label: &str) -> String {
     text
 }
 
-const COMMANDS: [&str; 6] = [
+const COMMANDS: [&str; 7] = [
     "init",
     "up",
     "exec",
     "emulators:export",
     "doctor",
     "capabilities",
+    "config",
 ];
 
 /// Every spelling of a command and the canonical command whose help it must print.
-const SPELLINGS: [(&str, &str); 8] = [
+const SPELLINGS: [(&str, &str); 9] = [
     ("init", "init"),
     ("up", "up"),
     ("emulators:start", "up"),
@@ -56,6 +57,7 @@ const SPELLINGS: [(&str, &str); 8] = [
     ("emulators:export", "emulators:export"),
     ("doctor", "doctor"),
     ("capabilities", "capabilities"),
+    ("config", "config"),
 ];
 
 #[test]
@@ -449,5 +451,22 @@ fn doctor_arguments_are_checked_and_an_unknown_one_points_to_the_help() {
             message.contains("run `fireemu doctor --help` for the options"),
             "{args:?}: {message}"
         );
+    }
+}
+
+#[test]
+fn configuration_help_describes_show_and_reference() {
+    let text = assert_help(&run(&["config", "show", "--help"]), "config show");
+    for flag in ["--config", "--firebase-json", "--json"] {
+        assert!(text.contains(flag), "{flag}");
+    }
+    let text = assert_help(&run(&["init", "--help"]), "init reference");
+    for phrase in [
+        "--reference",
+        "fireemu.reference.jsonc",
+        "does not load",
+        "productionExact",
+    ] {
+        assert!(text.contains(phrase), "{phrase}");
     }
 }

@@ -163,6 +163,11 @@ const HELP_OPTION: &str = "  -h, --help\n        Print this help and exit.\n";
 
 const INIT_OPTIONS: &[OptionSpec] = &[
     opt(
+        &["--reference"],
+        Value::None,
+        "Also write fireemu.reference.jsonc, which fireemu does not load. With an existing fireemu.json and no --profile or --firebase-json, write only the reference. Copying a key into fireemu.json makes it explicit and stops productionExact from switching it.",
+    ),
+    opt(
         &["--profile"],
         Value::Required("strict|emulator"),
         "Compatibility profile. strict follows production Firebase and is recommended, including when migrating from the official emulator; emulator is only for checking alignment with the pinned official emulator and is not needed when migrating. Default: strict (asked interactively).",
@@ -185,8 +190,14 @@ const INIT_OPTIONS: &[OptionSpec] = &[
     opt(
         &["--force"],
         Value::None,
-        "Replace an existing fireemu.json. Default: an existing file is an error.",
+        "Replace existing output files. Default: an existing file is an error.",
     ),
+];
+
+const CONFIG_OPTIONS: &[OptionSpec] = &[
+    opt(&["--config"], Value::Required("<path>"), "Load this configuration, as fireemu up does. Default: discover fireemu.json or the nearest firebase.json."),
+    opt(&["--firebase-json"], Value::Required("<path>"), "Load this firebase.json, overriding a reference in the canonical configuration."),
+    opt(&["--json"], Value::None, "Print key, value, source and description records as JSON. Default: one effective value and source per line."),
 ];
 
 const EXPORT_OPTIONS: &[OptionSpec] = &[
@@ -217,16 +228,18 @@ pub enum Topic {
     Export,
     Doctor,
     Capabilities,
+    Config,
 }
 
 /// Every topic, in the order the overall help lists them.
-pub const TOPICS: [Topic; 6] = [
+pub const TOPICS: [Topic; 7] = [
     Topic::Init,
     Topic::Up,
     Topic::Exec,
     Topic::Export,
     Topic::Doctor,
     Topic::Capabilities,
+    Topic::Config,
 ];
 
 impl Topic {
@@ -234,6 +247,7 @@ impl Topic {
     pub fn for_command(name: &str) -> Option<Self> {
         match name {
             "init" => Some(Self::Init),
+            "config" => Some(Self::Config),
             "up" | "emulators:start" => Some(Self::Up),
             "exec" | "emulators:exec" => Some(Self::Exec),
             "emulators:export" => Some(Self::Export),
@@ -247,6 +261,7 @@ impl Topic {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Init => "init",
+            Self::Config => "config",
             Self::Up => "up",
             Self::Exec => "exec",
             Self::Export => "emulators:export",
@@ -258,6 +273,7 @@ impl Topic {
     const fn summary(self) -> &'static str {
         match self {
             Self::Init => "create fireemu.json in the current directory",
+            Self::Config => "show every configuration key with its effective value and source",
             Self::Up => {
                 "start the emulators and keep them running until Ctrl-C (alias: emulators:start)"
             }
@@ -271,6 +287,7 @@ impl Topic {
     const fn options(self) -> &'static [OptionSpec] {
         match self {
             Self::Init => INIT_OPTIONS,
+            Self::Config => CONFIG_OPTIONS,
             Self::Up | Self::Exec | Self::Capabilities => DAEMON_OPTIONS,
             Self::Export => EXPORT_OPTIONS,
             Self::Doctor => DOCTOR_OPTIONS,
@@ -280,6 +297,7 @@ impl Topic {
     const fn synopsis(self) -> &'static str {
         match self {
             Self::Init => "  fireemu init [options]\n",
+            Self::Config => "  fireemu config show [--config <path>] [--firebase-json <path>] [--json]\n",
             Self::Up => "  fireemu up [options]\n  fireemu emulators:start [options]\n",
             Self::Exec => "  fireemu exec [options] \"shell script\"\n  fireemu exec [options] -- <command...>\n  fireemu emulators:exec [options] \"shell script\"\n  fireemu emulators:exec [options] -- <command...>\n",
             Self::Export => "  fireemu emulators:export <dir> [options]\n",
@@ -290,6 +308,7 @@ impl Topic {
 
     const fn description(self) -> &'static str {
         match self {
+            Self::Config => "Loads configuration exactly as up does, without starting the emulators. Prints every schema leaf in schema order. Missing values are (unset), or null in JSON with source unset; values unavailable from the runtime use explicit file values or defaults marked default (schema).",
             Self::Init => "Creates fireemu.json in the current directory and prints the command to start with it. It never overwrites an existing file unless --force is given.",
             Self::Up => "Serves the selected emulators (Firestore, Auth, Storage and App Check; Functions when a codebase is configured, and with it Eventarc and Cloud Tasks; Pub/Sub when configured) plus the control API, the Emulator Hub and the UI on loopback until Ctrl-C.",
             Self::Exec => "Starts the same emulators as `up`, runs the command with the emulator host environment variables (FIRESTORE_EMULATOR_HOST, FIREBASE_AUTH_EMULATOR_HOST, and so on) once every listener is bound, stops everything when the command exits, and exits with the command's status. On Unix, a command ended by signal n gives 128 + n, and SIGINT and SIGTERM are forwarded to it.\n\nWith \"shell script\" (the official form) the script is run by the system shell. With `--` the command is run as exactly that program and argv, without a shell. Everything after `--` belongs to the command, including --help; a `--help` inside the script text is script text.",
@@ -524,6 +543,11 @@ mod tests {
 
     #[test]
     fn the_init_export_and_doctor_tables_match_their_parsers() {
+        assert_table_matches_arms(
+            "config show",
+            CONFIG_OPTIONS,
+            &arm_flags(include_str!("main.rs"), "config_show_command"),
+        );
         assert_table_matches_arms(
             "init",
             INIT_OPTIONS,

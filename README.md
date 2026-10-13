@@ -268,6 +268,8 @@ Fireemu is mostly run by tests, in CI and on a developer's machine. Where produc
 | Identity-provider sign-in accepts the fixture assertions and the sign-in widget (`/emulator/auth/handler`), for built-in, `oidc.*` and `saml.*` providers | `auth.idpAssertions` (`"fixture"`) | `"signed"`: OIDC ID tokens must verify with an `auth.idpSigners` key, SAML responses with the provider's certificates, and the fixture and built-in providers are refused |
 | The strict Eventarc listener admits any credential or none, so the Admin SDK publishes with a fake credential (see [Eventarc authentication](docs/eventarc-authentication.md)) | `eventarc.authentication` (`"permissive"`) | `"production"`: a missing, malformed or JWT-shaped bearer is refused with production's 401 |
 | A tenant of `auth.tenants` can have any readable id, such as `tenant-a` | `auth.tenantIdFormat` (`"readable"`) | the id must have production's generated form, the display name, a hyphen and five characters of `a-z0-9` (`"generated"`) |
+| Multi-tenancy is on: the Admin API creates tenants and `auth.tenants` loads without an `updateConfig` call | `auth.multiTenant.allowTenants` (`true`) | unset until it is enabled, as in a new production project: tenant routes are refused and `auth.tenants` needs `allowTenants: true` |
+| Multi-factor authentication is on, SMS and TOTP, without a console toggle, an `updateConfig` call or an `auth.mfa` block | `auth.mfa` (`state: "ENABLED"`, `PHONE_SMS` and TOTP) | off until enabled, as in a new production project: enrollment is refused with `OPERATION_NOT_ALLOWED : SMS based MFA not enabled.` or `TOTP based MFA not enabled.` |
 | An end user's native gRPC `Listen` stream stays open however long it is held. `POST /v1/firestore/listen:expire` on the control API ends every held end-user stream at once, with production's status, to test a client's reconnect | `firestore.listenStreamLifetime` (`"unlimited"`) | ended with `INTERNAL` an hour after it opened, as production ends it (`"oneHour"`) |
 
 The start banner and `fireemu capabilities` report whether `productionExact` is set.
@@ -287,7 +289,7 @@ When a test fails under `strict` but passed on the official emulator, it is usua
 | Setting | What it does under `strict` |
 |---|---|
 | `auth.improvedEmailPrivacy` | Email enumeration protection, on for a new production project. Set `false` only if your production project turned it off; sign-ins then answer `EMAIL_NOT_FOUND` and `INVALID_PASSWORD` as the official Auth emulator does |
-| `auth.mfa` | Your project's multi-factor configuration (an object, see [Enable multi-factor authentication at start](#enable-multi-factor-authentication-at-start)). `strict` starts with multi-factor off, as a new production project does, and the official emulator has no TOTP at all |
+| `auth.mfa` | Your project's multi-factor configuration (an object, see [Enable multi-factor authentication at start](#enable-multi-factor-authentication-at-start)). `strict` starts with SMS and TOTP enabled as a development default, `productionExact` starts with multi-factor off as a new production project does, and the official emulator has no TOTP at all. A declared block always decides, so `{"state": "DISABLED"}` makes enrollment fail as it does in a project that never enabled it |
 | `firestore.enforceLimits` | Production always enforces the Standard edition query limits. `false` lets queries pass that production refuses, so leave it on unless you have a specific reason |
 
 ### Basic configuration
@@ -414,7 +416,7 @@ These settings are separate from creating the project or tenant. Naming a tenant
 
 #### Enable multi-factor authentication at start
 
-Under the `strict` profile, TOTP is enabled only through the project's MFA configuration, as in production, so `auth.totp` alone enables nothing there. Use `auth.mfa` to declare that configuration in the file instead of calling the Admin API in every session. It has the shape Identity Platform uses (`state`, `enabledProviders`, and `providerConfigs` with `totpProviderConfig.adjacentIntervals`):
+Under the `strict` profile, TOTP is enabled only through the project's MFA configuration, as in production, so `auth.totp` alone enables nothing there. By default that configuration is on (SMS and TOTP enabled), so a test needs nothing to enrol a second factor; `productionExact` starts a project with multi-factor off, as production does until it is enabled. Use `auth.mfa` to declare the configuration in the file instead of calling the Admin API in every session, to turn multi-factor off (`{"state": "DISABLED"}`), or to enable only what your production project does. It has the shape Identity Platform uses (`state`, `enabledProviders`, and `providerConfigs` with `totpProviderConfig.adjacentIntervals`):
 
 ```json
 {
@@ -432,14 +434,14 @@ Under the `strict` profile, TOTP is enabled only through the project's MFA confi
 ```
 
 - The configuration applies when the daemon starts, in both profiles, and to every project created afterward (not the default project's current value). It is validated as the Admin API validates an update of `mfa`, and a value production would refuse stops the daemon at startup.
-- Nothing else changes. An Admin API update replaces the current configuration, and disabling MFA refuses TOTP as production does. A tenant follows its own `mfaConfig`, not this setting.
-- `POST /v1/sessions/{session}/reset` returns the project to the declared configuration. Without `auth.mfa`, a reset leaves a configuration set through the Admin API alone, as it does the rest of the project configuration. `DELETE /emulator/v1/projects/{project}/accounts` clears accounts only.
+- Nothing else changes. An Admin API update replaces the current configuration, and disabling MFA refuses TOTP as production does. A tenant follows its own `mfaConfig`, not this setting. The accepted TOTP window stays `auth.totp.windowSteps` unless the configuration sets `adjacentIntervals`.
+- `POST /v1/sessions/{session}/reset` returns the project to the declared configuration, or to the default (SMS and TOTP enabled) when none is declared. Under `productionExact` without `auth.mfa`, a reset leaves a configuration set through the Admin API alone, as it does the rest of the project configuration. `DELETE /emulator/v1/projects/{project}/accounts` clears accounts only.
 - An export does not carry the project's `mfa` configuration, so an imported project keeps its own `auth.mfa` or Admin-set configuration.
-- The `emulator` profile keeps `auth.totp` working. Under `strict`, `auth.totp` without an `auth.mfa` that enables TOTP prints a startup warning naming `auth.mfa`.
+- The `emulator` profile keeps `auth.totp` working. Under `strict`, `auth.totp` is enough by default; under `productionExact`, or with an `auth.mfa` that leaves TOTP off, it prints a startup warning naming `auth.mfa`.
 
 #### Enable multi-tenancy
 
-Under the `strict` profile, enable `multiTenant.allowTenants` before using multi-tenancy: through the Admin API, or with `auth.multiTenant` in the file (see "Start with tenants" below). See the [compatibility documentation](docs/compatibility-contract.md) for the supported Admin API scope. 
+Multi-tenancy works by default under both profiles: a new project allows tenants, so the Admin API creates them and `auth.tenants` loads without `multiTenant.allowTenants`. `productionExact` (`strict` only) starts a project as production does, with the switch unset until it is enabled through the Admin API, or with `auth.multiTenant` in the file (see "Start with tenants" below). A declared `allowTenants: false` always turns it off. See the [compatibility documentation](docs/compatibility-contract.md) for the supported Admin API scope. 
 
 #### Start with tenants
 
@@ -465,7 +467,7 @@ Instead of creating tenants through the Admin API in every session, declare the 
 
 - A document is read by the code the Admin tenant create route reads one with, so a value production refuses stops the daemon at startup. The tenants are created empty, in file order, and settings such as `mfaConfig` and `passwordPolicyConfig` come from the document. The file is stricter than the route in the `emulator` profile: it also refuses an unknown member and a missing or invalid `displayName`, as production does.
 - A declared tenant has what an Admin create with that document gives: an omitted `allowPasswordSignup`, `enableEmailLinkSignin` or `enableAnonymousUser` is off and multi-factor is off. A tenant the `emulator` profile creates on the way for a request that names an unknown id gets the official emulator's defaults instead (all three on, `PHONE_SMS` multi-factor), so declare what your test needs.
-- Under the `strict` profile tenants are created only in a project that allows them, as in production, so `auth.tenants` needs `auth.multiTenant.allowTenants: true` (the daemon refuses to start otherwise). The `emulator` profile takes tenants without the switch.
+- Under the `strict` profile tenants are created only in a project that allows them, as in production. A new project allows them by default; with `productionExact`, or with `allowTenants: false` declared, `auth.tenants` needs `auth.multiTenant.allowTenants: true` (the daemon refuses to start otherwise). The `emulator` profile takes tenants without the switch.
 - The default project and every session project (`POST /v1/sessions`) start with the declared switch and tenants. `POST /v1/sessions/{session}/reset` (the default session's included) creates them again, empty, and returns the switch to the declared value; without these keys a reset leaves an Admin-set switch alone. A namespace the `emulator` profile creates for an unknown project id (as the official emulator does) starts with the declared switch and tenants too: it is created by the requests that already created one (a user, a provider or a project setting written there) and by a request that writes a tenant there (creating one, or naming one that does not exist yet), not by a read alone. A session created for that project id (`POST /v1/sessions`) replaces the namespace, tenants included, and starts with the declared ones.
 - With `--import`, an imported tenant is authoritative for its id, and a declared tenant the import did not carry is still created. If you keep re-importing your own export (`--import dir --export-on-exit dir`), an edit to a declared tenant is therefore ignored once its exported copy exists: the daemon prints a warning naming the tenant when the imported tenant's document differs from the declared one (every setting the file can declare is compared). The switch is the other way round: a declared `allowTenants` wins over the import. After a reset the declared version of a tenant comes back, not the imported one.
 

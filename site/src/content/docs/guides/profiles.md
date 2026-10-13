@@ -16,9 +16,11 @@ The `emulator` profile accepts behavior that production refuses, so a test can p
 { "schemaVersion": 1, "profile": "strict" }
 ```
 
-## Development defaults
+## Where Fireemu departs from production on purpose
 
-Fireemu is mostly run by tests, in CI and on a developer's machine. Where production needs setup that a test should not have to do, such as signed tokens, signing keys, or enabling a feature through an Admin API call, the default in both profiles is the development behavior. Each such behavior has its own setting.
+Matching production is Fireemu's goal, but not every production behavior is worth reproducing by default. Some only add setup to a test: production needs signed tokens and signing keys, a feature enabled through an Admin API call, or an hour of waiting. Copying them exactly would make Fireemu harder to use in CI and on a developer's machine without catching more bugs.
+
+For these behaviors, the default in both profiles is a development default that works without setup. Each one has its own setting, and each is listed here, so a difference from production is always a documented choice rather than a gap.
 
 To get production's behavior for all of them at once, set `productionExact` to `true` (`strict` profile only). An explicit setting still decides over it:
 
@@ -42,6 +44,15 @@ To get production's behavior for all of them at once, set `productionExact` to `
 | An end user's Firestore `Listen` stream stays open however long it is held | `firestore.listenStreamLifetime` (`"unlimited"`) | `"oneHour"`: ended with `INTERNAL` an hour after it opened |
 
 The startup banner and `fireemu capabilities` report whether `productionExact` is set.
+
+### Other development conveniences
+
+These differ from production and are not switched by `productionExact`:
+
+| Development behavior | How to get production's behavior |
+|---|---|
+| Pub/Sub accepts requests without any credential, so clients that use `PUBSUB_EMULATOR_HOST` work | Set `pubsub.authentication.localBearerToken`; requests without a credential are then refused as production refuses them. See [Pub/Sub and Eventarc](../../products/pubsub-eventarc/#authentication). |
+| `localhost` is in the default authorized domains for action-link continue URLs; a new production project may not include it | Declare `auth.authorizedDomains`, which replaces the defaults |
 
 ## Choosing a setup
 

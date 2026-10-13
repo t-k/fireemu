@@ -41,6 +41,9 @@ npx fireemu exec -- npm test
 	<Card title="Fewer surprises after you deploy" icon="approve-check">
 		The official emulator runs a query even when its composite index is missing, so the error first appears in production. Fireemu checks every query against your `firestore.indexes.json` and tells you which index to add, or refuses the query as production does with `productionExact`.
 	</Card>
+	<Card title="Production behavior, without the setup" icon="setting">
+		Where matching production would only add setup to a test, such as signed tokens or an Admin API call to turn a feature on, Fireemu keeps a documented development default. Set `productionExact` to switch them all to production's behavior. [See the list](guides/profiles/#where-fireemu-departs-from-production-on-purpose).
+	</Card>
 	<Card title="Features the official emulator lacks" icon="puzzle">
 		TOTP multi-factor authentication, a local App Check implementation with debug tokens, and, under `strict`, the `beforeEmailSent` blocking function, none of which the official emulator serves.
 	</Card>

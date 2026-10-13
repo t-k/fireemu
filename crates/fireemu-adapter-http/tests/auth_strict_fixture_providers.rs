@@ -10,12 +10,12 @@
 use std::sync::{Arc, Mutex};
 
 use fireemu_adapter_http::identity_toolkit::{
-    handle, AuthQueryLimits, AuthState, ClientApiKeyPolicy, FakeCustomTokenExpiry,
-    IdpAssertionPolicy, IdpContinuationPolicy, JsonResponse,
+    handle, handle_with, AuthQueryLimits, AuthState, ClientApiKeyPolicy, FakeCustomTokenExpiry,
+    IdpAssertionPolicy, IdpContinuationPolicy, JsonResponse, RequestHeaders,
 };
 use fireemu_core_auth::mfa::TotpPolicy;
 use fireemu_core_auth::store::{
-    AuthStore, InboundSamlProviderConfig, OAuthResponseType, OidcProviderConfig,
+    AuthRegistry, AuthStore, InboundSamlProviderConfig, OAuthResponseType, OidcProviderConfig,
 };
 use fireemu_core_session::clock::VirtualClock;
 use fireemu_core_types::determinism::SplitMix64;
@@ -282,4 +282,191 @@ proptest! {
             }
         }
     }
+}
+
+fn owner() -> RequestHeaders {
+    RequestHeaders {
+        authorization: Some("Bearer owner".to_owned()),
+        origin: None,
+        content_type: Some("application/json".to_owned()),
+        host: Some("127.0.0.1:9099".to_owned()),
+        app_check: Vec::new(),
+        peer_ip: None,
+    }
+}
+
+/// A strict state with a registry, a tenant, and the project allowing tenants.
+fn tenant_state() -> (AuthState, Arc<AuthRegistry>, &'static str) {
+    const TENANT: &str = "acme-x7k2q";
+    let mut s = state(true);
+    let registry = Arc::new(AuthRegistry::new("demo-app", s.store.clone()));
+    registry.ensure_tenant("demo-app", TENANT).unwrap();
+    s.registry = Some(registry.clone());
+    let r = handle_with(
+        &s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=multiTenant.allowTenants",
+        &owner(),
+        &json!({"multiTenant": {"allowTenants": true}}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    (s, registry, TENANT)
+}
+
+fn oidc_config(id: &str, enabled: bool) -> OidcProviderConfig {
+    OidcProviderConfig {
+        id: id.into(),
+        display_name: None,
+        enabled,
+        client_id: "client".into(),
+        issuer: "https://issuer.example.test".into(),
+        client_secret: None,
+        response_type: OAuthResponseType {
+            id_token: true,
+            code: false,
+            token: false,
+        },
+    }
+}
+
+#[test]
+fn a_tenant_sign_in_needs_the_provider_configured_in_the_tenant() {
+    let (s, registry, tenant) = tenant_state();
+    let tenant_sign_in = |provider: &str| {
+        let mut body = fixture_request(provider);
+        body["tenantId"] = json!(tenant);
+        handle(&s, "POST", &format!("{V1}/accounts:signInWithIdp"), &body)
+    };
+    // A provider the project has is not the tenant's.
+    add_oidc(&s, "oidc.project-only", true);
+    let refused = tenant_sign_in("oidc.project-only");
+    assert_eq!(refused.status, 400, "{}", refused.body);
+    assert_eq!(refused.body["error"]["message"], NOT_FOUND);
+    // A provider only the tenant has signs in there and is unknown to the project.
+    assert!(registry
+        .tenant_store("demo-app", tenant)
+        .unwrap()
+        .lock()
+        .unwrap()
+        .create_oidc_config(oidc_config("oidc.tenant-only", true)));
+    let accepted = tenant_sign_in("oidc.tenant-only");
+    assert_eq!(accepted.status, 200, "{}", accepted.body);
+    assert_refused(&s, "oidc.tenant-only", NOT_FOUND);
+    // Disabled in the tenant: refused there.
+    assert!(registry
+        .tenant_store("demo-app", tenant)
+        .unwrap()
+        .lock()
+        .unwrap()
+        .replace_oidc_config(oidc_config("oidc.tenant-only", false)));
+    let refused = tenant_sign_in("oidc.tenant-only");
+    assert_eq!(refused.status, 400, "{}", refused.body);
+    assert_eq!(refused.body["error"]["message"], DISABLED);
+}
+
+#[test]
+fn a_resumed_pending_token_meets_the_provider_as_it_is_now() {
+    let mut s = state(true);
+    s.idp_continuations = IdpContinuationPolicy::LocalBounded;
+    add_oidc(&s, "oidc.live", true);
+    let request = fixture_request("oidc.live");
+    let first = handle(
+        &s,
+        "POST",
+        &format!("{V1}/accounts:signInWithIdp"),
+        &request,
+    );
+    assert_eq!(first.status, 200, "{}", first.body);
+    let token = first.body["pendingToken"]
+        .as_str()
+        .expect("a strict continuation")
+        .to_owned();
+    let resume = json!({"requestUri": request["requestUri"], "pendingToken": token, "returnSecureToken": true});
+    // Resumed while the provider is as it was: accepted.
+    let again = handle(&s, "POST", &format!("{V1}/accounts:signInWithIdp"), &resume);
+    assert_eq!(again.status, 200, "{}", again.body);
+    let users = users(&s);
+    // Disabled since: the check runs on the resumed credential.
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .replace_oidc_config(oidc_config("oidc.live", false)));
+    let refused = handle(&s, "POST", &format!("{V1}/accounts:signInWithIdp"), &resume);
+    assert_eq!(refused.status, 400, "{}", refused.body);
+    assert_eq!(refused.body["error"]["message"], DISABLED);
+    // Deleted since: not found.
+    assert!(s.store.lock().unwrap().delete_oidc_config("oidc.live"));
+    let refused = handle(&s, "POST", &format!("{V1}/accounts:signInWithIdp"), &resume);
+    assert_eq!(refused.status, 400, "{}", refused.body);
+    assert_eq!(refused.body["error"]["message"], NOT_FOUND);
+    assert_eq!(
+        self::users(&s),
+        users,
+        "a refused resume creates no account"
+    );
+}
+
+#[test]
+fn the_check_and_the_credential_parser_read_the_provider_from_the_same_place() {
+    // The parser takes `providerId` from the merged request URI query, post body and fragment;
+    // the configuration check must judge the provider the parser will use, whichever carries it.
+    let s = state(true);
+    add_oidc(&s, "oidc.on", true);
+    add_oidc(&s, "oidc.off", false);
+    let claims = json!({"sub": "conflict-subject", "email": "conflict@example.test"}).to_string();
+    let enc = |text: &str| {
+        text.replace('{', "%7B")
+            .replace('}', "%7D")
+            .replace('"', "%22")
+            .replace(' ', "%20")
+    };
+    let sign_in = |request_uri: &str, post_body: &str| {
+        handle(
+            &s,
+            "POST",
+            &format!("{V1}/accounts:signInWithIdp"),
+            &json!({"requestUri": request_uri, "postBody": post_body, "returnSecureToken": true}),
+        )
+    };
+    let id_token = format!("id_token={}", enc(&claims));
+    for (request_uri, post_body) in [
+        // The post body names the disabled provider while the URI names an enabled one, and the
+        // reverse, and the fragment form of each.
+        (
+            "http://localhost?providerId=oidc.on".to_owned(),
+            format!("providerId=oidc.off&{id_token}"),
+        ),
+        (
+            "http://localhost?providerId=oidc.on#providerId=oidc.off".to_owned(),
+            id_token.clone(),
+        ),
+    ] {
+        let response = sign_in(&request_uri, &post_body);
+        let used = response.body["providerId"].as_str().map(str::to_owned);
+        match response.status {
+            400 => assert_eq!(
+                response.body["error"]["message"], DISABLED,
+                "{request_uri} {post_body}"
+            ),
+            200 => assert_eq!(
+                used.as_deref(),
+                Some("oidc.on"),
+                "{request_uri} {post_body}"
+            ),
+            other => panic!("{other}: {}", response.body),
+        }
+        // Whatever the parser picked, a sign-in never succeeds through the disabled provider.
+        assert_ne!(
+            used.as_deref(),
+            Some("oidc.off"),
+            "{request_uri} {post_body}"
+        );
+    }
+    // And an enabled provider named only in the body still signs in.
+    let ok = sign_in(
+        "http://localhost",
+        &format!("providerId=oidc.on&{id_token}"),
+    );
+    assert_eq!(ok.status, 200, "{}", ok.body);
 }

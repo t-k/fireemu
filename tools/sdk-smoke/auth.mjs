@@ -342,7 +342,8 @@ await check("access_token credential and createAuthUri(providerId) are NotImplem
     identifier: "a@b.com",
     continueUri: "http://localhost",
   });
-  assert(authUri === 501, `createAuthUri(providerId) status ${authUri}`);
+  // The emulator profile answers 501; strict refuses a built-in provider with no configuration, as production does.
+  assert(authUri === 501 || authUri === 400, `createAuthUri(providerId) status ${authUri}`);
   return { access, authUri };
 });
 

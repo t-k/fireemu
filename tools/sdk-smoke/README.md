@@ -18,8 +18,9 @@ suite) needs, and what leaves the other smokes working without attaching a token
   codes read from `/emulator/v1/projects/{p}/{oobCodes,verificationCodes}` (the Node build of
   `firebase/auth` has no phone support, so those steps use the same REST calls the browser
   SDK makes). Its `oidc.corp` and `saml.myidp` providers sign in through the fixture IdP, which
-  the strict profile still requires to be configured and enabled: declare them in `auth.providers`
-  (or run the smoke under `"profile": "emulator"`).
+  the strict profile still requires to be configured and enabled, so run it with
+  `fireemu exec --config tools/sdk-smoke/fireemu.auth.json --project demo-app --only auth -- node tools/sdk-smoke/auth.mjs`
+  (or under `"profile": "emulator"`).
 - `auth-refresh-same-second.mjs`: a minimal Admin password replacement, raw Secure Token
   refresh endpoint and Web SDK refresh sequence. It waits for `tokensValidAfterTime` and the
   existing ID token's `auth_time` to share a second, then requires both refresh paths to

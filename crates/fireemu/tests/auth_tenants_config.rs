@@ -503,6 +503,69 @@ fn strict_allows_tenants_without_the_switch_and_production_exact_requires_it() {
     assert_eq!(status, 400, "{refused}");
 }
 
+/// Pins how a reset treats an Admin-written switch under the development default: a default
+/// that nobody replaced is only an initial value, so a reset leaves an Admin-written `false` alone
+/// in the default session and in a session project alike.
+#[test]
+fn a_reset_keeps_an_admin_written_switch_in_every_session() {
+    let daemon = Daemon::start(
+        "reset-default",
+        "strict",
+        &json!({"apiKeys": ["fake-api-key"]}),
+    );
+    let (status, session) = http(
+        daemon.control_port(),
+        "POST",
+        "/v1/sessions",
+        "",
+        &json!({"project": "demo-second"}),
+    );
+    assert_eq!(status, 200, "{session}");
+    // Whether the project creates tenants (the read-back omits a switch that is off).
+    let creates_tenants = |project: &str| {
+        daemon
+            .admin(
+                "POST",
+                &format!("{V2}/projects/{project}/tenants"),
+                &json!({"displayName": "probe"}),
+            )
+            .0
+            == 200
+    };
+    for project in [PROJECT, "demo-second"] {
+        let (status, body) = daemon.admin(
+            "PATCH",
+            &format!(
+                "/identitytoolkit.googleapis.com/admin/v2/projects/{project}/config?updateMask=multiTenant.allowTenants"
+            ),
+            &json!({"multiTenant": {"allowTenants": false}}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert!(
+            !creates_tenants(project),
+            "{project}: the Admin-written false decides"
+        );
+    }
+    for session in ["default", "demo-second"] {
+        let (status, body) = http(
+            daemon.control_port(),
+            "POST",
+            &format!("/v1/sessions/{session}/reset"),
+            "",
+            &json!({}),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+    assert!(
+        !creates_tenants(PROJECT),
+        "the default session keeps the Admin-written false"
+    );
+    assert!(
+        !creates_tenants("demo-second"),
+        "a session project keeps the Admin-written false too"
+    );
+}
+
 #[test]
 fn strict_refuses_tenants_without_the_switch_before_it_starts() {
     for (n, (exact, auth)) in [

@@ -8,6 +8,8 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-13
+
 ### Changed
 
 - Under the strict profile the Storage emulator now refuses what production refuses and the official emulator accepts (owner decision of 2026-10-13: a gap that hides an app bug must fail by default). The `emulator` profile is unchanged.
@@ -698,7 +700,8 @@ Security Rules (FS-RULES): behavior below was measured against a real Firestore 
 - The `strict` and `firebase` compatibility profiles, the Capability Manifest, and the Compatibility Contract pinned to firebase-tools 15.28.2.
 - `fireemu init`, `up`, `exec`, `emulators:export`, `doctor`, and `capabilities` commands, with the official `emulators:start` and `emulators:exec` spellings as aliases.
 
-[Unreleased]: https://github.com/t-k/fireemu/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/t-k/fireemu/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/t-k/fireemu/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/t-k/fireemu/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/t-k/fireemu/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/t-k/fireemu/compare/v0.15.0...v0.16.0

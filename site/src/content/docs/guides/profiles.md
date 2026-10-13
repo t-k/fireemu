@@ -63,7 +63,7 @@ These differ from production and are not switched by `productionExact`:
 | A reCAPTCHA `ENFORCE` state is stored and returned but not enforced, so a sign-in without a reCAPTCHA token is accepted | No setting |
 | `accounts:batchCreate` has no row limit; the Admin SDK checks 1000 users per call before it sends | No setting |
 | Sign-up rate limits (production limits new accounts per IP) are not simulated | Set `auth.quotaSimulation` to `{"mode": "enforce"}` |
-| A request naming a project other than the daemon's is served from its own empty namespace, which keeps parallel tests apart; a typo in a `projectId` splits data instead of failing as production's `PERMISSION_DENIED` does | Set `projects.unknownProjects` to `"refuse"` |
+| Firestore serves a request naming a project other than the daemon's from that project's own empty data, which keeps parallel tests apart; a typo in a `projectId` splits data instead of failing as production's `PERMISSION_DENIED` does | Set `projects.unknownProjects` to `"refuse"` |
 | The Admin SDK's `verifyIdToken` inside a function accepts an unsigned ID token, because the SDK skips signature verification while `FIREBASE_AUTH_EMULATOR_HOST` is set; production refuses it | No setting. See [Auth](../../products/auth/#tokens) |
 
 ## Choosing a setup

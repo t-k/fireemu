@@ -104,6 +104,8 @@ impl Daemon {
                     .nth(1)
                     .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
                     .and_then(|digits| digits.parse::<u16>().ok());
+            }
+            if line.trim_start().starts_with("edition:") {
                 break;
             }
         }
@@ -112,11 +114,15 @@ impl Daemon {
             let _ = child.wait();
             panic!("the daemon printed no control API line:\n{banner}");
         };
-        Self {
+        let daemon = Self {
             child,
             control_port,
             _banner: reader,
-        }
+        };
+        assert!(banner.contains("  productionExact: false\n"));
+        assert!(banner.contains("    auth.allowUnsignedIdTokens: true (default)\n"));
+        assert!(!banner.contains("development defaults: on"));
+        daemon
     }
 
     /// `GET path` over a fresh connection, without an `Origin` (a command-line client).
@@ -720,4 +726,22 @@ fn account_lifecycle_capability_is_published_with_its_compatibility_boundary() {
             "missing {term}: {text}"
         );
     }
+}
+
+#[test]
+fn the_manifest_publishes_effective_development_defaults() {
+    let manifest = manifest();
+    assert_eq!(manifest["productionExact"], false);
+    assert_eq!(
+        manifest["developmentDefaults"],
+        serde_json::json!([
+            {"key":"auth.allowUnsignedCustomTokens","value":"true","source":"default"},
+            {"key":"auth.allowUnsignedIdTokens","value":"true","source":"default"},
+            {"key":"auth.idpAssertions","value":"fixture","source":"default"},
+            {"key":"eventarc.authentication","value":"permissive","source":"default"},
+            {"key":"firestore.missingIndexes","value":"report","source":"default"},
+            {"key":"firestore.listenStreamLifetime","value":"unlimited","source":"default"},
+            {"key":"auth.tenantIdFormat","value":"readable","source":"default"}
+        ])
+    );
 }

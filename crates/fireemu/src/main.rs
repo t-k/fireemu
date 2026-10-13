@@ -314,6 +314,7 @@ fn main() -> ExitCode {
                     serde_json::to_string_pretty(&control::capabilities_manifest(
                         options.cfg.profile,
                         options.cfg.production_exact,
+                        &options.cfg.development_defaults,
                     ))
                     .unwrap_or_default()
                 );
@@ -2680,14 +2681,15 @@ fn print_banner(
                 "behaves like production Firebase where the official emulators do not",
         }
     );
-    println!(
-        "  development defaults: {}",
-        if cfg.production_exact {
-            "off (productionExact: production's behaviour where it needs extra setup)"
-        } else {
-            "on (unsigned test tokens and similar conveniences; set productionExact for production's behaviour)"
-        }
-    );
+    println!("  productionExact: {}", cfg.production_exact);
+    for setting in &cfg.development_defaults {
+        println!(
+            "    {}: {} ({})",
+            setting["key"].as_str().unwrap_or_default(),
+            setting["value"].as_str().unwrap_or_default(),
+            setting["source"].as_str().unwrap_or_default()
+        );
+    }
     println!(
         "  edition: {}   clock: {}{}",
         cfg.edition,
@@ -3061,7 +3063,8 @@ fn control_state(
         capabilities: fireemu_adapter_http::control::CapabilityManifest::lazy({
             let profile = cfg.profile;
             let production_exact = cfg.production_exact;
-            move || control::capabilities_manifest(profile, production_exact)
+            let development_defaults = cfg.development_defaults.clone();
+            move || control::capabilities_manifest(profile, production_exact, &development_defaults)
         }),
         rules: rules.clone(),
         storage_rules: storage_rules.clone(),

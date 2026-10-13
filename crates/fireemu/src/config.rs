@@ -978,6 +978,8 @@ pub struct RuntimeConfig {
     /// [`Self::set_production_exact`]) take production's values instead. Only the strict
     /// profile accepts it; an explicit key still decides over it.
     pub production_exact: bool,
+    /// Effective development defaults and their configuration sources, shared by the banner and capabilities.
+    pub development_defaults: Vec<Value>,
     /// Firestore gRPC bind address.
     pub firestore_addr: String,
     /// HTTP (Auth REST + control API) bind address.
@@ -1407,7 +1409,7 @@ impl Default for RuntimeConfig {
     #[allow(clippy::too_many_lines)]
     fn default() -> Self {
         let profile = CompatibilityProfile::default();
-        Self {
+        let mut cfg = Self {
             eventarc_oauth_credentials: None,
             eventarc_authentication:
                 fireemu_adapter_functions::eventarc_strict::EventarcAuthentication::Permissive,
@@ -1421,6 +1423,7 @@ impl Default for RuntimeConfig {
             firestore_missing_indexes: MissingIndexes::Report,
             enforce_limits: profile.enforce_limits(),
             production_exact: false,
+            development_defaults: Vec::new(),
             token_acceptance: profile.token_acceptance(),
             implicit_database_creation: profile.implicit_database_creation(),
             refuse_without_ruleset: profile.refuse_without_ruleset(),
@@ -1521,7 +1524,9 @@ impl Default for RuntimeConfig {
             auth_idp_assertions: IdpAssertionMode::Fixture,
             auth_api_keys: Vec::new(),
             app_check: AppCheckConfig::disabled(),
-        }
+        };
+        cfg.record_development_defaults(&Value::Null);
+        cfg
     }
 }
 
@@ -3197,6 +3202,93 @@ impl RuntimeConfig {
         } else {
             fireemu_adapter_http::identity_toolkit::TenantIdFormat::Readable
         };
+        self.record_development_defaults(&Value::Null);
+    }
+
+    /// Records the parser's effective values and precedence once for both display surfaces.
+    fn record_development_defaults(&mut self, input: &Value) {
+        use fireemu_adapter_functions::eventarc_strict::EventarcAuthentication;
+        use fireemu_adapter_http::identity_toolkit::TenantIdFormat;
+        let values = [
+            (
+                "auth.allowUnsignedCustomTokens",
+                if self.auth_allow_unsigned_custom_tokens {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
+            (
+                "auth.allowUnsignedIdTokens",
+                if self.auth_allow_unsigned_id_tokens {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
+            (
+                "auth.idpAssertions",
+                match self.auth_idp_assertions {
+                    IdpAssertionMode::Fixture => "fixture",
+                    IdpAssertionMode::Signed => "signed",
+                },
+            ),
+            (
+                "eventarc.authentication",
+                match self.eventarc_authentication {
+                    EventarcAuthentication::Permissive => "permissive",
+                    EventarcAuthentication::Production => "production",
+                },
+            ),
+            (
+                "firestore.missingIndexes",
+                match self.firestore_missing_indexes {
+                    MissingIndexes::Report => "report",
+                    MissingIndexes::Refuse => "refuse",
+                },
+            ),
+            (
+                "firestore.listenStreamLifetime",
+                if self.listen_stream_lifetime {
+                    "oneHour"
+                } else {
+                    "unlimited"
+                },
+            ),
+            (
+                "auth.tenantIdFormat",
+                match self.auth_tenant_id_format {
+                    TenantIdFormat::Readable => "readable",
+                    TenantIdFormat::Generated => "generated",
+                },
+            ),
+        ];
+        self.development_defaults = values
+            .into_iter()
+            .map(|(key, value)| {
+                let (section, name) = key
+                    .split_once('.')
+                    .expect("a configuration key has a section");
+                let source = if input[section].get(name).is_some() {
+                    "explicit"
+                } else if self.profile == CompatibilityProfile::Strict
+                    && key == "auth.idpAssertions"
+                    && input["auth"].get("idpSigners").is_some()
+                {
+                    "derived from auth.idpSigners"
+                } else if self.profile == CompatibilityProfile::Strict
+                    && key == "eventarc.authentication"
+                    && input["eventarc"].get("oauthCredentials").is_some()
+                {
+                    "derived from eventarc.oauthCredentials"
+                } else if self.production_exact {
+                    "productionExact"
+                } else {
+                    "default"
+                };
+                serde_json::json!({"key": key, "value": value, "source": source})
+            })
+            .collect();
     }
 
     /// Reads `auth.idpAssertions` after `auth.idpSigners`. The keys are read only by signed
@@ -4548,6 +4640,7 @@ impl RuntimeConfig {
         cfg.functions_clock
             .validate(cfg.clock_start)
             .map_err(ConfigError)?;
+        cfg.record_development_defaults(json);
         Ok(cfg)
     }
 }
@@ -6915,6 +7008,137 @@ mod tests {
                 ),
             }
         }
+    }
+
+    #[test]
+    fn development_defaults_report_effective_values_and_sources() {
+        let keys = [
+            "auth.allowUnsignedCustomTokens",
+            "auth.allowUnsignedIdTokens",
+            "auth.idpAssertions",
+            "eventarc.authentication",
+            "firestore.missingIndexes",
+            "firestore.listenStreamLifetime",
+            "auth.tenantIdFormat",
+        ];
+        let defaults = [
+            "true",
+            "true",
+            "fixture",
+            "permissive",
+            "report",
+            "unlimited",
+            "readable",
+        ];
+        let production = [
+            "false",
+            "false",
+            "signed",
+            "production",
+            "refuse",
+            "oneHour",
+            "generated",
+        ];
+        for exact in [None, Some(false), Some(true)] {
+            let mut input = json!({"schemaVersion": 1});
+            if let Some(exact) = exact {
+                input["productionExact"] = json!(exact);
+            }
+            let cfg = RuntimeConfig::from_json(&input).unwrap();
+            let values = if exact == Some(true) {
+                production
+            } else {
+                defaults
+            };
+            let source = if exact == Some(true) {
+                "productionExact"
+            } else {
+                "default"
+            };
+            let expected: Vec<_> = keys
+                .iter()
+                .zip(values)
+                .map(|(key, value)| json!({"key": key, "value": value, "source": source}))
+                .collect();
+            assert_eq!(
+                serde_json::to_value(&cfg.development_defaults).unwrap(),
+                json!(expected)
+            );
+            if exact.is_none() {
+                assert_eq!(
+                    serde_json::to_value(&RuntimeConfig::default().development_defaults).unwrap(),
+                    json!(expected)
+                );
+            }
+            for (key, value) in keys.iter().zip(if exact == Some(true) {
+                defaults
+            } else {
+                production
+            }) {
+                let (section, name) = key.split_once('.').unwrap();
+                let mut explicit = input.clone();
+                explicit[section] = json!({name: match value { "true" => json!(true), "false" => json!(false), _ => json!(value) }});
+                let cfg = RuntimeConfig::from_json(&explicit).unwrap();
+                let entry = cfg
+                    .development_defaults
+                    .iter()
+                    .find(|entry| entry["key"] == *key)
+                    .unwrap();
+                assert_eq!(entry["value"], value);
+                assert_eq!(entry["source"], "explicit");
+            }
+        }
+    }
+
+    #[test]
+    fn development_defaults_follow_production_exact_changes() {
+        let mut cfg = RuntimeConfig::default();
+        for exact in [true, false] {
+            cfg.set_production_exact(exact);
+            assert_eq!(
+                cfg.development_defaults[1]["value"],
+                if exact { "false" } else { "true" }
+            );
+            assert_eq!(
+                cfg.development_defaults[1]["source"],
+                if exact { "productionExact" } else { "default" }
+            );
+        }
+    }
+
+    #[test]
+    fn development_defaults_distinguish_derived_and_explicit_sources() {
+        for exact in [false, true] {
+            let cfg = RuntimeConfig::from_json(&json!({"schemaVersion": 1, "productionExact": exact, "auth": {"idpSigners": {}}, "eventarc": {"oauthCredentials": {}}})).unwrap();
+            for (key, value, source) in [
+                (
+                    "auth.idpAssertions",
+                    "signed",
+                    "derived from auth.idpSigners",
+                ),
+                (
+                    "eventarc.authentication",
+                    "production",
+                    "derived from eventarc.oauthCredentials",
+                ),
+            ] {
+                let entry = cfg
+                    .development_defaults
+                    .iter()
+                    .find(|entry| entry["key"] == key)
+                    .unwrap();
+                assert_eq!(entry["value"], value);
+                assert_eq!(entry["source"], source);
+            }
+        }
+        let cfg = RuntimeConfig::from_json(&json!({"schemaVersion": 1, "productionExact": true, "auth": {"idpSigners": {}, "idpAssertions": "signed"}, "eventarc": {"oauthCredentials": {}, "authentication": "production"}})).unwrap();
+        assert_eq!(cfg.development_defaults[2]["source"], "explicit");
+        assert_eq!(cfg.development_defaults[3]["source"], "explicit");
+        let cfg = RuntimeConfig::from_json(&json!({"schemaVersion": 1, "profile": "emulator", "auth": {"idpSigners": {}}, "eventarc": {"oauthCredentials": {}}})).unwrap();
+        assert!(cfg
+            .development_defaults
+            .iter()
+            .all(|entry| entry["source"] == "default"));
     }
 
     #[test]

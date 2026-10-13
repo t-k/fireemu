@@ -14,12 +14,16 @@
 //! `:enqueue`) present the control token as the project owner's credential
 //! ([`OWNER_TOKEN_HEADER`]).
 //!
-//! What cannot be reproduced locally is Google's verification of the identity token and the
-//! IAM check of its subject. A bearer token shaped like a signed JWT is accepted as the
-//! credential of an authorised invoker (the same permissive reading the Eventarc listener takes
-//! by default), a bearer that is not a JWT is refused with 401, and a request with no bearer is
-//! refused with 403. That keeps the bug a developer needs to see (a call without credentials to
-//! a function that is not public) and leaves the unreproducible part to production.
+//! What cannot be reproduced locally is Google's verification of the signature of an identity
+//! token and the IAM check of its subject. A bearer token shaped like a Google-issued OIDC
+//! identity token (three base64url segments whose payload names `https://accounts.google.com` or
+//! `accounts.google.com` as `iss`) is accepted as the credential of an authorised invoker. Any
+//! other bearer is refused with 401: that includes a Firebase Auth ID token (issuer
+//! `https://securetoken.google.com/<project>`), which is what a signed-in client SDK sends and
+//! which Cloud Run's IAM does not accept, a token whose payload cannot be read, and anything that
+//! is not a JWT. A request with no bearer is refused with 403. That keeps the bugs a developer
+//! needs to see (a call without credentials, or with the user's ID token, to a function that is
+//! not public) and leaves only the unreproducible part to production.
 
 use fireemu_core_functions::manifest::{FunctionSpec, Trigger};
 
@@ -85,6 +89,30 @@ pub fn is_jwt_shaped(token: &str) -> bool {
         && segments.next().is_none()
 }
 
+/// The issuers of the OIDC identity tokens Cloud Run accepts (Google's own, as minted for a
+/// service account or by `gcloud auth print-identity-token`).
+const GOOGLE_IDENTITY_ISSUERS: [&str; 2] = ["https://accounts.google.com", "accounts.google.com"];
+
+/// Whether `token` has the shape of a Google-issued OIDC identity token: a JWT-shaped string
+/// whose payload is a JSON object with a Google `iss`. Neither the signature nor the audience is
+/// checked.
+#[must_use]
+pub fn is_google_identity_token(token: &str) -> bool {
+    if !is_jwt_shaped(token) {
+        return false;
+    }
+    let Some(payload) = token.split('.').nth(1) else {
+        return false;
+    };
+    let Ok(bytes) = fireemu_core_auth::jwt::base64url_decode(payload) else {
+        return false;
+    };
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|claims| claims.get("iss")?.as_str().map(str::to_owned))
+        .is_some_and(|iss| GOOGLE_IDENTITY_ISSUERS.contains(&iss.as_str()))
+}
+
 /// Judges a request. `owner` says the owner credential matched; `authorization` is every
 /// `Authorization` field instance in wire order.
 #[must_use]
@@ -104,7 +132,7 @@ pub fn decide(access: Access, owner: bool, authorization: &[String]) -> Decision
         .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
         .map(|(_, token)| token.trim());
     match bearer {
-        Some(token) if is_jwt_shaped(token) => Decision::Allow,
+        Some(token) if is_google_identity_token(token) => Decision::Allow,
         // Not a bearer credential at all (Basic, an empty value) reads as no credential: the
         // front end only recognises identity tokens, and the call is refused as unauthorised.
         None => Decision::Forbidden,
@@ -136,8 +164,23 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    /// A token whose payload carries the claims in `claims` (unsigned shape, a fixed signature
+    /// segment): all the decision reads.
+    fn token_with(claims: &serde_json::Value) -> String {
+        let encode = |bytes: &[u8]| fireemu_core_auth::jwt::base64url_encode(bytes);
+        format!(
+            "{}.{}.c2lnbmF0dXJl",
+            encode(br#"{"alg":"RS256","typ":"JWT"}"#),
+            encode(claims.to_string().as_bytes())
+        )
+    }
+
+    fn google_token() -> String {
+        token_with(&serde_json::json!({"iss": "https://accounts.google.com", "aud": "https://fn"}))
+    }
+
     fn jwt() -> String {
-        "aGVhZGVy.cGF5bG9hZA.c2ln".to_owned()
+        google_token()
     }
 
     #[test]
@@ -151,6 +194,45 @@ mod tests {
         ] {
             assert!(!is_jwt_shaped(bad), "{bad:?}");
         }
+    }
+
+    /// Only a payload that names Google as the issuer is a Google identity token: a Firebase Auth
+    /// ID token (what a signed-in client SDK sends), another issuer, a missing or non-string
+    /// issuer, an unreadable payload and a payload that is not an object are all refused.
+    #[test]
+    fn only_a_google_issued_identity_token_shape_is_admitted() {
+        for iss in ["https://accounts.google.com", "accounts.google.com"] {
+            assert!(
+                is_google_identity_token(&token_with(&serde_json::json!({"iss": iss}))),
+                "{iss}"
+            );
+        }
+        for iss in [
+            "https://securetoken.google.com/demo-app",
+            "https://accounts.google.com/",
+            "https://accounts.google.com.evil.example",
+            "ACCOUNTS.GOOGLE.COM",
+            "",
+        ] {
+            assert!(
+                !is_google_identity_token(&token_with(&serde_json::json!({"iss": iss}))),
+                "{iss}"
+            );
+        }
+        for claims in [
+            serde_json::json!({}),
+            serde_json::json!({"iss": 7}),
+            serde_json::json!({"iss": ["https://accounts.google.com"]}),
+            serde_json::json!(["https://accounts.google.com"]),
+            serde_json::json!("https://accounts.google.com"),
+        ] {
+            assert!(!is_google_identity_token(&token_with(&claims)), "{claims}");
+        }
+        // The payload is not JSON, not base64url, or absent.
+        assert!(!is_google_identity_token("aGVhZGVy.cGF5bG9hZA.c2ln"));
+        assert!(!is_google_identity_token("a.b$.c"));
+        assert!(!is_google_identity_token("a.b"));
+        assert!(!is_google_identity_token(""));
     }
 
     #[test]
@@ -178,6 +260,15 @@ mod tests {
             (&["Bearer ".to_owned()], false, Decision::Unauthenticated),
             (&["Bearer not-a-jwt".to_owned()], true, Decision::Allow),
         ];
+        // A JWT-shaped bearer of another issuer, such as a Firebase ID token, is not enough.
+        let firebase = format!(
+            "Bearer {}",
+            token_with(&serde_json::json!({"iss": "https://securetoken.google.com/demo-app"}))
+        );
+        assert_eq!(
+            decide(Access::Restricted, false, &[firebase]),
+            Decision::Unauthenticated
+        );
         for (authorization, owner, expected) in cases {
             assert_eq!(
                 decide(Access::Restricted, owner, authorization),
@@ -195,6 +286,13 @@ mod tests {
     }
 
     proptest! {
+        /// A token is admitted exactly when its issuer is one of Google's two spellings.
+        #[test]
+        fn the_issuer_decides(iss in "(https://)?[a-z.]{0,24}(/[a-z0-9-]{0,12})?") {
+            let admitted = is_google_identity_token(&token_with(&serde_json::json!({"iss": iss})));
+            prop_assert_eq!(admitted, iss == "https://accounts.google.com" || iss == "accounts.google.com");
+        }
+
         /// A public function admits every request, whatever it carries.
         #[test]
         fn public_always_allows(owner in any::<bool>(), values in proptest::collection::vec(".{0,40}", 0..3)) {
@@ -208,8 +306,8 @@ mod tests {
         }
 
         /// Without the owner credential a restricted function is entered only through exactly one
-        /// bearer field that is JWT-shaped; no field at all is 403 and everything else that
-        /// names a bearer is 401.
+        /// bearer field that is a Google identity token; no field at all is 403 and everything
+        /// else that names a bearer is 401.
         #[test]
         fn restricted_allows_only_one_jwt_bearer(
             scheme in "(?i:bearer)|Basic|Token",
@@ -220,7 +318,7 @@ mod tests {
             let values = vec![value; repeat];
             let decision = decide(Access::Restricted, false, &values);
             let bearer = scheme.eq_ignore_ascii_case("bearer");
-            if repeat == 1 && bearer && is_jwt_shaped(token.trim()) {
+            if repeat == 1 && bearer && is_google_identity_token(token.trim()) {
                 prop_assert_eq!(decision, Decision::Allow);
             } else {
                 prop_assert_ne!(decision, Decision::Allow);

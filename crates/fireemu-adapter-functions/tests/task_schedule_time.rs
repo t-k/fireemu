@@ -273,3 +273,53 @@ async fn releasing_a_waiting_task_dispatches_it_without_waiting_for_the_next_tic
     }
     f.stop().await;
 }
+
+/// Cloud Tasks takes a task at most 30 days ahead: 29 days is held, 31 days is refused, and the
+/// boundary sits at the 30th day, to the second.
+#[tokio::test]
+async fn strict_refuses_a_schedule_time_more_than_thirty_days_ahead() {
+    let f = start("horizon", true).await;
+    let day = 24 * 3600;
+    f.runtime
+        .enqueue_task(
+            "demo-app",
+            "us-central1",
+            "taskA",
+            &body("near", Some(&rfc3339_in(29 * day))),
+        )
+        .expect("29 days ahead is held");
+    for (id, seconds) in [("far", 31 * day), ("edge", 30 * day + 5)] {
+        let refusal = f
+            .runtime
+            .enqueue_task(
+                "demo-app",
+                "us-central1",
+                "taskA",
+                &body(id, Some(&rfc3339_in(seconds))),
+            )
+            .expect_err(id);
+        assert_eq!(refusal.status, 400, "{id}");
+        assert!(refusal.body.contains("30 days"), "{}", refusal.body);
+    }
+    f.runtime
+        .enqueue_task(
+            "demo-app",
+            "us-central1",
+            "taskA",
+            &body("inside", Some(&rfc3339_in(30 * day - 5))),
+        )
+        .expect("just under 30 days ahead is held");
+    assert_eq!(f.runtime.pending_tasks().len(), 2);
+    // The emulator profile takes any time, as the official emulator does.
+    let e = start("horizon-emulator", false).await;
+    e.runtime
+        .enqueue_task(
+            "demo-app",
+            "us-central1",
+            "taskA",
+            &body("far", Some(&rfc3339_in(400 * day))),
+        )
+        .expect("the emulator profile does not look at the horizon");
+    e.stop().await;
+    f.stop().await;
+}

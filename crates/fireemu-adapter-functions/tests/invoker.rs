@@ -14,14 +14,21 @@ use fireemu_adapter_functions::invoker::OWNER_TOKEN_HEADER;
 use fireemu_adapter_functions::manifest_json::parse_manifest;
 use fireemu_adapter_functions::runner::{Runner, SpawnSpec};
 use fireemu_adapter_functions::runtime::{FunctionsConfig, FunctionsRuntime};
+use fireemu_core_auth::jwt::encode_unsigned;
+use fireemu_core_auth::mfa::TotpPolicy;
+use fireemu_core_auth::store::{AuthStore, NewUser};
 use fireemu_core_functions::manifest::{TaskRateLimits, TaskRetryConfig, Trigger};
 use fireemu_core_session::clock::VirtualClock;
+use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
 
 const START: LogicalInstant = LogicalInstant::from_unix_seconds(1_788_004_860);
 const PROJECT: &str = "demo-app";
 const OWNER: &str = "owner-control-token-for-the-test";
-const JWT: &str = "aGVhZGVy.cGF5bG9hZA.c2lnbmF0dXJl";
+/// A token shaped like a Google-issued identity token: header and payload (`iss`
+/// `https://accounts.google.com`) base64url-encoded, an arbitrary signature segment.
+const JWT: &str =
+    "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20ifQ.c2lnbmF0dXJl";
 
 struct Harness {
     addr: std::net::SocketAddr,
@@ -218,6 +225,20 @@ async fn the_owner_credential_enters_and_never_reaches_the_function() {
         assert!(!seen.contains(OWNER_TOKEN_HEADER), "{function}: {seen}");
         assert!(!seen.contains(OWNER), "{function}: {seen}");
     }
+    // An empty value is no credential, and any instance of the right one is (two fields are
+    // two instances of the same credential: the rule is "any instance", pinned here).
+    assert_eq!(
+        h.status("privateOnly", &[(OWNER_TOKEN_HEADER, "")]).await,
+        403
+    );
+    assert_eq!(
+        h.status(
+            "privateOnly",
+            &[(OWNER_TOKEN_HEADER, "wrong"), (OWNER_TOKEN_HEADER, OWNER)]
+        )
+        .await,
+        200
+    );
     // A wrong token is no credential; a right one sent twice still is one.
     assert_eq!(
         h.status(
@@ -329,5 +350,55 @@ async fn the_owner_credential_is_compared_in_full() {
     );
     assert!(!bare.owner_token_matches(""));
     assert!(!bare.owner_token_matches(OWNER));
+    h.stop().await;
+}
+
+/// The credential a signed-in client SDK sends is a Firebase Auth ID token, issued by
+/// `https://securetoken.google.com/<project>`. Cloud Run's IAM does not take it for an invoker's
+/// identity token, so it opens neither a private function nor a task queue, whether it is the
+/// unsigned token the Auth emulator mints or the same token with a signature segment.
+#[tokio::test]
+async fn a_firebase_id_token_from_the_auth_emulator_does_not_open_a_restricted_function() {
+    let mut store = AuthStore::new(PROJECT, SplitMix64::new(3), TotpPolicy::default());
+    let uid = store
+        .create_user(NewUser::email("signed-in@example.com"), START)
+        .expect("the user is created");
+    let claims = store
+        .id_token_claims(&uid, None, START)
+        .expect("claims for the new user");
+    let unsigned = encode_unsigned(&claims);
+    let payload = unsigned.split('.').nth(1).expect("a payload segment");
+    let decoded = fireemu_core_auth::jwt::base64url_decode(payload).unwrap();
+    let issuer = serde_json::from_slice::<serde_json::Value>(&decoded).unwrap()["iss"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(issuer, format!("https://securetoken.google.com/{PROJECT}"));
+    let signed_shape = format!("{unsigned}c2lnbmF0dXJl");
+
+    let h = start(FunctionsHttpProfile::Strict, None).await;
+    for token in [&unsigned, &signed_shape] {
+        let bearer = format!("Bearer {token}");
+        for function in RESTRICTED {
+            assert_eq!(
+                h.status(function, &[("authorization", &bearer)]).await,
+                401,
+                "{function}"
+            );
+        }
+        // Public functions take whatever the SDK sends.
+        for function in OPEN {
+            assert_eq!(
+                h.status(function, &[("authorization", &bearer)]).await,
+                200,
+                "{function}"
+            );
+        }
+    }
+    // The Google-issued shape still enters.
+    let google = format!("Bearer {JWT}");
+    for function in RESTRICTED {
+        assert_eq!(h.status(function, &[("authorization", &google)]).await, 200);
+    }
     h.stop().await;
 }

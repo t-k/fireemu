@@ -249,6 +249,10 @@ pub fn schedule_retry_policy(
     })
 }
 
+/// The farthest ahead of the queue's clock a task may be scheduled: 30 days (Cloud Tasks'
+/// documented maximum).
+const MAX_TASK_SCHEDULE_AHEAD_NANOS: i128 = 30 * 24 * 3600 * 1_000_000_000;
+
 /// A Cloud Tasks task that has not been dispatched yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingTaskInfo {
@@ -1927,12 +1931,7 @@ impl FunctionsRuntime {
     #[must_use]
     pub fn owner_token_matches(&self, presented: &str) -> bool {
         self.owner_token.get().is_some_and(|token| {
-            token.len() == presented.len()
-                && token
-                    .bytes()
-                    .zip(presented.bytes())
-                    .fold(0u8, |diff, (a, b)| diff | (a ^ b))
-                    == 0
+            fireemu_adapter_support::secret::optional_str_matches(Some(presented), token)
         })
     }
 
@@ -2783,10 +2782,20 @@ impl FunctionsRuntime {
             inner.next_task
         };
         let mut task = crate::tasks::accept(project, location, queue, &default_uri, body, next_id)?;
-        if self.config.honour_task_schedule_time && !self.config.clock_policy.tasks_virtual {
+        if self.config.honour_task_schedule_time {
             if let Some(text) = task.schedule_time.as_deref() {
-                LogicalInstant::parse_rfc3339(text)
+                let at = LogicalInstant::parse_rfc3339(text)
                     .map_err(|_| refuse(400, "scheduleTime must be RFC 3339"))?;
+                // Cloud Tasks refuses a task scheduled more than 30 days ahead of the queue's
+                // clock (documented maximum). UNRECORDED: the error text is not a measured shape.
+                if self.task_epoch_nanos().is_some_and(|now| {
+                    at.as_nanos().saturating_sub(now) > MAX_TASK_SCHEDULE_AHEAD_NANOS
+                }) {
+                    return Err(refuse(
+                        400,
+                        "scheduleTime must be at most 30 days in the future",
+                    ));
+                }
             }
         }
         if self.config.clock_policy.tasks_virtual {

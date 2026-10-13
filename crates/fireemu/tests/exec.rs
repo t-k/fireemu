@@ -464,7 +464,7 @@ fn the_development_defaults_for_app_check_and_dead_letters_show_in_the_banner_an
         open.contains("any well-formed debug token exchanges"),
         "{open}"
     );
-    assert!(open.contains("kid generated on first use"), "{open}");
+    assert!(open.contains("(kid "), "{open}");
     assert!(open.contains("forwarded without grants"), "{open}");
     assert!(
         open.contains("appCheck.debugTokens: any (default)"),

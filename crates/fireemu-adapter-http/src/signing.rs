@@ -257,15 +257,29 @@ impl AppCheckRsaSigner {
             .map_err(Clone::clone)
     }
 
-    fn ready(&self) -> &AppCheckKeyMaterial {
-        self.material()
-            .expect("the App Check key could not be generated")
+    /// The key, or `None` when it could not be generated. A signer without a key signs nothing
+    /// and verifies nothing, so no token it could issue is ever accepted; the request path never
+    /// panics for it.
+    fn ready(&self) -> Option<&AppCheckKeyMaterial> {
+        self.material().ok()
+    }
+
+    /// Generates the key now, on the calling thread, if nothing has yet. The daemon calls this
+    /// from a blocking task after start-up when the key is not wanted at once, so the first
+    /// exchange does not pay for the prime search.
+    pub fn prewarm(&self) -> Result<(), String> {
+        self.material().map(|_| ())
     }
 
     /// The JWKS document (`{"keys": [...]}`) served at `/v1/jwks`. Public material only.
     #[must_use]
     pub fn jwks(&self) -> serde_json::Value {
-        serde_json::json!({"keys": [jwk_value(&self.ready().jwk)]})
+        let keys: Vec<serde_json::Value> = self
+            .ready()
+            .map(|material| jwk_value(&material.jwk))
+            .into_iter()
+            .collect();
+        serde_json::json!({ "keys": keys })
     }
 }
 
@@ -275,7 +289,8 @@ impl fireemu_core_app_check::crypto::AppCheckSigner for AppCheckRsaSigner {
     }
 
     fn kid(&self) -> &str {
-        &self.ready().kid
+        self.ready()
+            .map_or("fireemu-app-check-unavailable", |material| &material.kid)
     }
 
     fn kid_if_ready(&self) -> Option<&str> {
@@ -286,22 +301,29 @@ impl fireemu_core_app_check::crypto::AppCheckSigner for AppCheckRsaSigner {
     }
 
     fn sign(&self, signing_input: &[u8]) -> Vec<u8> {
-        self.ready().signing.0.sign(signing_input).to_vec()
+        self.ready()
+            .map(|material| material.signing.0.sign(signing_input).to_vec())
+            .unwrap_or_default()
     }
 
     fn verify(&self, signing_input: &[u8], signature: &[u8]) -> bool {
-        let material = self.ready();
+        let Some(material) = self.ready() else {
+            return false;
+        };
         Signature::try_from(signature)
             .map(|s| material.verifying.verify(signing_input, &s).is_ok())
             .unwrap_or(false)
     }
 
     fn public_jwk_json(&self) -> String {
-        jwk_value(&self.ready().jwk).to_string()
+        self.ready().map_or_else(
+            || "{}".to_owned(),
+            |material| jwk_value(&material.jwk).to_string(),
+        )
     }
 
     fn public_jwk(&self) -> Option<&PublicJwk> {
-        Some(&self.ready().jwk)
+        self.ready().map(|material| &material.jwk)
     }
 }
 

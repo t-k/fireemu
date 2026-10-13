@@ -95,9 +95,10 @@ impl AppCheckState {
     /// The key ID for a banner or a status line, without generating a key nobody has needed yet.
     #[must_use]
     pub fn kid_for_banner(&self) -> String {
-        self.signer
-            .kid_if_ready()
-            .map_or_else(|| "generated on first use".to_owned(), str::to_owned)
+        self.signer.kid_if_ready().map_or_else(
+            || "being generated in the background".to_owned(),
+            str::to_owned,
+        )
     }
 }
 
@@ -394,7 +395,8 @@ fn exchange_debug_token(
 /// standard app ID) and issues the token, whatever digests the app carries. `None` leaves the
 /// request to the normal exchange, which refuses it: an app ID that is not in the standard
 /// `1:{number}:{platform}:{id}` form, a project selector that names another project number, or a
-/// registry that refuses the registration.
+/// registry that refuses the registration. A project selector that names neither a known project
+/// nor the daemon's own project is left to the normal exchange too.
 fn open_exchange(
     state: &AppCheckState,
     default_project: &str,
@@ -412,7 +414,11 @@ fn open_exchange(
             }
             default_project.to_owned()
         }
-        None => project_selector.to_owned(),
+        // A project the registry does not know registers only if it is the one this daemon
+        // serves: a mistyped or foreign id must not bind the app ID's project number to a
+        // project that is not the user's, which would misresolve the right one afterwards.
+        None if project_selector == default_project => project_selector.to_owned(),
+        None => return None,
     };
     if registry.app(&project, app_id).is_none() {
         registry

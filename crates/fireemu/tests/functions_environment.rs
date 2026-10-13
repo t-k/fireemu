@@ -662,6 +662,15 @@ exports.show = onRequest((_req, res) =>
     assert!(err.contains("FX_NEEDS_VALUE (int)"), "{err}");
     assert!(!err.contains("FX_WITH_DEFAULT"), "{err}");
     assert!(err.contains(".env.demo-params"), "{err}");
+    // The official emulator's non-interactive start stops for the same parameter, so the
+    // emulator profile refuses it too.
+    let refused_emulator = exec_with_profile(&dir, "demo-params", "emulator");
+    let emulator_err = String::from_utf8_lossy(&refused_emulator.stderr).into_owned();
+    assert_ne!(refused_emulator.status.code(), Some(0), "{emulator_err}");
+    assert!(
+        emulator_err.contains("FX_NEEDS_VALUE (int)"),
+        "{emulator_err}"
+    );
 
     for (file, project) in [(".env", "demo-params"), (".env.local", "demo-params")] {
         write(&dir, file, "FX_NEEDS_VALUE=3\n");
@@ -716,7 +725,7 @@ exports.jobFn = onTaskDispatched((_req) => {});
         status("jobFn", ""),
         status(
             "privateFn",
-            "-H 'authorization: Bearer aGVhZGVy.cGF5bG9hZA.c2ln'",
+            "-H 'authorization: Bearer eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20ifQ.c2ln'",
         ),
         status("privateFn", "-H 'authorization: Bearer nonsense'"),
     ]

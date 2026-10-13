@@ -1969,9 +1969,21 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         });
         let app_check_signer = match app_check_key {
             Some(task) => Some(task.await.map_err(|e| format!("App Check RSA key: {e}"))??),
-            None if want_app_check => Some(fireemu_adapter_http::signing::AppCheckRsaSigner::lazy(
-                fireemu_adapter_http::signing::AppCheckKeySource::OperatingSystem,
-            )?),
+            None if want_app_check => {
+                let signer = fireemu_adapter_http::signing::AppCheckRsaSigner::lazy(
+                    fireemu_adapter_http::signing::AppCheckKeySource::OperatingSystem,
+                )?;
+                // Generated in the background once the daemon is up, so a run that uses App
+                // Check does not pay for the prime search on its first request, and a run that
+                // never does only spends spare CPU.
+                let warm = signer.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Err(error) = warm.prewarm() {
+                        eprintln!("warning: the App Check key could not be generated: {error}");
+                    }
+                });
+                Some(signer)
+            }
             None => None,
         };
         let barrier = backend.barrier();

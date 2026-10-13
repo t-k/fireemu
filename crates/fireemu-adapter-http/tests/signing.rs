@@ -653,6 +653,23 @@ fn the_auth_surface_issues_signed_tokens_and_serves_the_jwks() {
     assert_eq!(r.body, json!({"keys": []}));
 }
 
+/// The background pre-generation fills the key once, and what it fills is what a later use sees.
+#[test]
+fn prewarming_a_lazy_app_check_signer_generates_its_key_before_it_is_used() {
+    use fireemu_core_app_check::crypto::AppCheckSigner as _;
+    let signer = AppCheckRsaSigner::lazy(AppCheckKeySource::Seed(91)).unwrap();
+    assert!(signer.kid_if_ready().is_none());
+    signer.prewarm().expect("the key generates");
+    let kid = signer
+        .kid_if_ready()
+        .expect("ready after the prewarm")
+        .to_owned();
+    assert_eq!(signer.kid(), kid);
+    signer.prewarm().expect("a second prewarm is a no-op");
+    assert_eq!(signer.kid_if_ready(), Some(kid.as_str()));
+    assert_eq!(signer.jwks()["keys"].as_array().map(Vec::len), Some(1));
+}
+
 /// A lazy signer draws its entropy at once but generates the key only when something needs it,
 /// and then yields the key a eager signer of the same seed has.
 #[test]

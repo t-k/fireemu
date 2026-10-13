@@ -9,9 +9,9 @@ Local App Check uses debug tokens. Real attestation through Play Integrity, App 
 
 ## Without any configuration
 
-Under the `strict` profile the debug-token exchange, the JWKS and the callable trust boundary are served without an `appCheck` block, and every product baseline is `off`. Any well-formed debug token (a UUIDv4) exchanges for a token for any app with a standard app ID (`1:<project number>:<platform>:<id>`); the app is registered on first use. So an `enforceAppCheck` callable can be tested with a token from the exchange, no app registration and no digest, while a missing or malformed token is still refused. The key pair is generated the first time a token is signed or verified.
+Under the `strict` profile the debug-token exchange, the JWKS and the callable trust boundary are served without an `appCheck` block, and every product baseline is `off`. Any well-formed debug token (a UUIDv4) exchanges for a token for any app with a standard app ID (`1:<project number>:<platform>:<id>`); the app is registered on first use. So an `enforceAppCheck` callable can be tested with a token from the exchange, no app registration and no digest, while a missing or malformed token is still refused. The key pair is generated in the background after start, so the first exchange does not wait for it.
 
-`appCheck.debugTokens` controls this. It is `"any"` in that case and `"registered"`, production's rule, under `productionExact`, under the `emulator` profile, and in any `appCheck` block that does not set the key. With `"registered"` nothing is served until you enable App Check as below.
+`appCheck.debugTokens` controls this. Setting it to `"any"` yourself next to `appCheck.enabled: true` also lets any UUIDv4 exchange for the apps you registered, whatever digests they carry. It is `"any"` in that case and `"registered"`, production's rule, under `productionExact`, under the `emulator` profile, and in any `appCheck` block that does not set the key. With `"registered"` nothing is served until you enable App Check as below.
 
 ## Register an app
 

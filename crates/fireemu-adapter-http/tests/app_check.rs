@@ -843,6 +843,65 @@ fn an_open_exchange_still_refuses_a_malformed_token_and_what_it_cannot_bind() {
     assert_eq!(limited.status, 501, "{}", limited.body);
 }
 
+/// A mistyped or foreign project id must not register anything: otherwise the app ID's project
+/// number would stay bound to it and the right project's numeric selector would resolve wrongly.
+#[test]
+fn an_open_exchange_for_a_foreign_project_registers_nothing_and_leaves_the_right_one_working() {
+    let state = open_state(1);
+    let foreign = call(
+        &state,
+        "POST",
+        &format!("/v1/projects/demo-typo/apps/{APP_ID}:exchangeDebugToken"),
+        &exchange_body(SECRET),
+    );
+    assert_eq!(foreign.status, 403, "{}", foreign.body);
+    assert_eq!(state.registry.read().unwrap().app_count(), 0);
+    for selector in ["1234567890", "demo-app"] {
+        let ok = call(
+            &state,
+            "POST",
+            &format!("/v1/projects/{selector}/apps/{APP_ID}:exchangeDebugToken"),
+            &exchange_body(SECRET),
+        );
+        assert_eq!(ok.status, 200, "{selector}: {}", ok.body);
+    }
+    assert_eq!(
+        state
+            .registry
+            .read()
+            .unwrap()
+            .app("demo-app", APP_ID)
+            .map(|app| app.project_number().to_owned()),
+        Some("1234567890".to_owned())
+    );
+    // A project the registry already knows (here, registered by configuration) still exchanges.
+    let known = open_state(1);
+    known
+        .registry
+        .write()
+        .unwrap()
+        .register_app(AppRegistration {
+            project_id: "demo-other".to_owned(),
+            project_number: "9876543210".to_owned(),
+            app_id: OTHER_APP_ID.to_owned(),
+            enabled: true,
+            debug_token_digests: Vec::new(),
+        })
+        .unwrap();
+    known
+        .registry
+        .write()
+        .unwrap()
+        .set_project_epoch("demo-other", ProjectEpoch::new(9));
+    let r = call(
+        &known,
+        "POST",
+        &format!("/v1/projects/demo-other/apps/{OTHER_APP_ID}:exchangeDebugToken"),
+        &exchange_body(SECRET),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+}
+
 #[test]
 fn an_open_exchange_does_not_enable_an_app_the_configuration_disabled() {
     let state = open_state(1);
@@ -890,7 +949,7 @@ fn the_banner_names_the_key_only_after_it_exists() {
         signer: AppCheckRsaSigner::lazy(AppCheckKeySource::Seed(31)).unwrap(),
         ..Arc::into_inner(open_state(1)).expect("the state is unshared")
     };
-    assert_eq!(state.kid_for_banner(), "generated on first use");
+    assert_eq!(state.kid_for_banner(), "being generated in the background");
     assert!(state.signer.kid_if_ready().is_none());
     let r = call(&state, "POST", EXCHANGE, &exchange_body(SECRET));
     assert_eq!(r.status, 200, "{}", r.body);

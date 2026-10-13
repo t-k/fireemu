@@ -3715,6 +3715,7 @@ impl RuntimeConfig {
     }
 
     /// Records the parser's effective values and precedence once for both display surfaces.
+    #[allow(clippy::too_many_lines)]
     fn record_development_defaults(&mut self, input: &Value) {
         use fireemu_adapter_functions::eventarc_strict::EventarcAuthentication;
         use fireemu_adapter_http::identity_toolkit::TenantIdFormat;

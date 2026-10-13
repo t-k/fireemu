@@ -52,7 +52,7 @@
       "default": false,
       "description": "fireemu is run mostly by tests in CI and on a developer's machine, so where production needs setup a test should not have to do (signed tokens, signing keys, Admin API calls), the default is the development behaviour, in both profiles. true restores production's behaviour for every such default; an explicit key still decides over it. Requires the strict profile. docs/compatibility-contract.md (\"Development defaults\") lists the keys it moves."
     },
-    "bind": { "type": "string", "default": "127.0.0.1" },
+    "bind": { "type": "string", "default": "127.0.0.1", "description": "Currently has no effect. The daemon binds the loopback address; emulators.<name>.host in firebase.json sets a host per service." },
     "network": {
       "type": "object",
       "additionalProperties": false,
@@ -80,15 +80,16 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "catalog": { "type": "string", "pattern": "^firestore-(standard|enterprise-native)-[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "catalog": { "type": "string", "pattern": "^firestore-(standard|enterprise-native)-[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "Currently has no effect." },
         "queryCatalog": {
           "oneOf": [
             { "type": "null" },
             { "type": "string", "pattern": "^firestore-standard-query-[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
-          ]
+          ],
+          "description": "Currently has no effect."
         },
-        "rulesCatalog": { "type": "string", "pattern": "^firebase-rules-[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
-        "enforcement": { "enum": ["strict", "observe"] },
+        "rulesCatalog": { "type": "string", "pattern": "^firebase-rules-[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "Currently has no effect." },
+        "enforcement": { "enum": ["strict", "observe"], "description": "Currently has no effect." },
         "warningThresholds": { "$ref": "#/$defs/thresholds" },
         "perLimitWarningThresholds": {
           "type": "object",
@@ -181,13 +182,13 @@
             }
           }
         },
-        "explain": { "type": "boolean" },
+        "explain": { "type": "boolean", "description": "Currently has no effect." },
         "pipeline": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "enabled": { "type": "boolean" },
-            "executionMode": { "enum": ["strict-native", "proxy", "record-only"] },
+            "enabled": { "type": "boolean", "description": "Currently has no effect." },
+            "executionMode": { "enum": ["strict-native", "proxy", "record-only"], "description": "Currently has no effect." },
             "unknownStagePolicy": { "enum": ["reject"] },
             "writeStagePolicy": { "enum": ["reject-unimplemented"] }
           }
@@ -196,28 +197,29 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "fidelity": { "enum": ["strict-validation-only", "deterministic-basic", "external-analyzer", "upstream-proxy"] },
-            "analyzer": { "type": "string" },
-            "scorePrecision": { "enum": ["exact", "approximate", "oracle-only", "unsupported"] },
-            "multipleIndexPolicy": { "enum": ["warn-and-deterministic", "reject", "oracle"] },
-            "indexBuildPolicy": { "enum": ["synchronous", "virtual-async", "manual"] },
-            "visibilityPolicy": { "enum": ["atomic-with-commit", "virtual-lag", "oracle-defined"] },
+            "fidelity": { "enum": ["strict-validation-only", "deterministic-basic", "external-analyzer", "upstream-proxy"], "description": "Currently has no effect." },
+            "analyzer": { "type": "string", "description": "Currently has no effect." },
+            "scorePrecision": { "enum": ["exact", "approximate", "oracle-only", "unsupported"], "description": "Currently has no effect." },
+            "multipleIndexPolicy": { "enum": ["warn-and-deterministic", "reject", "oracle"], "description": "Currently has no effect." },
+            "indexBuildPolicy": { "enum": ["synchronous", "virtual-async", "manual"], "description": "Currently has no effect." },
+            "visibilityPolicy": { "enum": ["atomic-with-commit", "virtual-lag", "oracle-defined"], "description": "Currently has no effect." },
             "visibilityLag": {
               "oneOf": [
                 { "type": "null" },
                 { "type": "object", "additionalProperties": false, "required": ["maxLogicalDelayMillis"], "properties": { "maxLogicalDelayMillis": { "type": "integer", "minimum": 0 } } }
-              ]
+              ],
+              "description": "Currently has no effect."
             },
-            "queryLanguagePolicy": { "enum": ["index-default-or-autodetect", "detect-query-text", "analyze-per-indexed-language", "oracle-defined"] },
-            "backendDefaultLanguageOverride": { "enum": ["implicit-language-field", "disabled", "unresolved"] },
-            "snapshotPolicy": { "enum": ["materialized", "rebuild"] },
+            "queryLanguagePolicy": { "enum": ["index-default-or-autodetect", "detect-query-text", "analyze-per-indexed-language", "oracle-defined"], "description": "Currently has no effect." },
+            "backendDefaultLanguageOverride": { "enum": ["implicit-language-field", "disabled", "unresolved"], "description": "Currently has no effect." },
+            "snapshotPolicy": { "enum": ["materialized", "rebuild"], "description": "Currently has no effect." },
             "warnings": {
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "broadCandidateCount": { "type": "integer", "minimum": 0 },
-                "scoreCandidateCount": { "type": "integer", "minimum": 0 },
-                "warningsAsErrors": { "type": "array", "items": { "type": "string", "pattern": "^FS_[A-Z0-9_]+$" }, "uniqueItems": true }
+                "broadCandidateCount": { "type": "integer", "minimum": 0, "description": "Currently has no effect." },
+                "scoreCandidateCount": { "type": "integer", "minimum": 0, "description": "Currently has no effect." },
+                "warningsAsErrors": { "type": "array", "items": { "type": "string", "pattern": "^FS_[A-Z0-9_]+$" }, "uniqueItems": true, "description": "Currently has no effect." }
               }
             }
           }
@@ -235,22 +237,22 @@
           "default": "summary",
           "description": "Whether each Security Rules denial of an end-user Firestore or Storage request is printed on standard error with every allow condition it evaluated and what it evaluated to (summary), or not (off). The client is answered with production's denial either way."
         },
-        "staticLimitChecks": { "type": "boolean" },
-        "runtimeBudgets": { "type": "boolean" },
+        "staticLimitChecks": { "type": "boolean", "description": "Currently has no effect." },
+        "runtimeBudgets": { "type": "boolean", "description": "Currently has no effect." },
         "compiledSize": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "mode": { "enum": ["estimate", "off"] },
-            "oracle": { "enum": ["off", "projects-test", "disposable-ruleset"] }
+            "mode": { "enum": ["estimate", "off"], "description": "Currently has no effect." },
+            "oracle": { "enum": ["off", "projects-test", "disposable-ruleset"], "description": "Currently has no effect." }
           }
         },
         "diagnostics": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "format": { "enum": ["human", "json", "sarif"] },
-            "largestContributors": { "type": "integer", "minimum": 0 }
+            "format": { "enum": ["human", "json", "sarif"], "description": "Currently has no effect." },
+            "largestContributors": { "type": "integer", "minimum": 0, "description": "Currently has no effect." }
           }
         }
       }
@@ -259,8 +261,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "projectIssuer": { "type": "string", "pattern": "^https://securetoken\\.google\\.com/[a-z0-9-]+$" },
+        "enabled": { "type": "boolean", "description": "Currently has no effect." },
+        "projectIssuer": { "type": "string", "pattern": "^https://securetoken\\.google\\.com/[a-z0-9-]+$", "description": "Currently has no effect." },
         "idTokenSigning": { "enum": ["session-rsa", "unsigned-emulator"] },
         "apiKeys": {
           "type": "array",
@@ -635,7 +637,7 @@
           "default": "readable",
           "description": "Which tenantId a tenant of auth.tenants may have. readable (the default, a development default, and \"generated\" under productionExact): any id that starts with a letter and holds letters, digits and hyphens, at most 63 characters, such as tenant-a. generated: the id production would generate, the display name, a hyphen and five characters of [a-z0-9]."
         },
-        "secretMaterialization": { "enum": ["redact", "allow"] },
+        "secretMaterialization": { "enum": ["redact", "allow"], "description": "Currently has no effect." },
         "forwardInboundCredentials": {
           "type": "boolean",
           "description": "Allow blocking Auth Functions to receive caller-supplied IdP access, ID and refresh tokens. Defaults to false."
@@ -783,7 +785,7 @@
           "minimum": 1,
           "description": "The object data the Storage emulator retains, in bytes, a local bound production does not have. Unset, nothing is bounded. A write that would grow the total past it (upload, resumable finalize, copy) is refused with 402 and the message storage.maxStoredBytes limit exceeded, and changes nothing; a resumable session stays open. Each object counts its bytes once (a copy counts again). Import and snapshot restore are not checked against it; an import above it starts with a warning."
         },
-        "persistence": { "enum": ["memory", "snapshot-files", "redb"] }
+        "persistence": { "enum": ["memory", "snapshot-files", "redb"], "description": "Currently has no effect." }
       }
     },
     "events": {
@@ -839,8 +841,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "canonical": { "type": "boolean" }
+        "enabled": { "type": "boolean", "description": "Currently has no effect." },
+        "canonical": { "type": "boolean", "description": "Currently has no effect." }
       }
     }
   },

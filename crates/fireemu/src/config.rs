@@ -1596,13 +1596,80 @@ pub fn config_schema() -> Vec<(String, Value)> {
     entries
 }
 
+/// The label `config show` gives a key the daemon accepts but does not read.
+pub const NO_EFFECT_SOURCE: &str = "accepted, no effect";
+
+/// Schema leaves the loader accepts and the daemon never reads: the value is validated (or not
+/// even that) and then dropped, so setting one changes nothing. `config show`, `init --reference`
+/// and the start-up notes share this list; a schema leaf is either mapped to a runtime value in
+/// [`RuntimeConfig::config_show`] or listed here (a test enforces it, and that a listed key has
+/// no runtime value). Remove a key from the list when the daemon starts reading it.
+pub const NO_EFFECT_KEYS: [&str; 33] = [
+    "bind",
+    "limits.catalog",
+    "limits.queryCatalog",
+    "limits.rulesCatalog",
+    "limits.enforcement",
+    "firestore.explain",
+    "firestore.pipeline.enabled",
+    "firestore.pipeline.executionMode",
+    "firestore.textSearch.fidelity",
+    "firestore.textSearch.analyzer",
+    "firestore.textSearch.scorePrecision",
+    "firestore.textSearch.multipleIndexPolicy",
+    "firestore.textSearch.indexBuildPolicy",
+    "firestore.textSearch.visibilityPolicy",
+    "firestore.textSearch.visibilityLag",
+    "firestore.textSearch.queryLanguagePolicy",
+    "firestore.textSearch.backendDefaultLanguageOverride",
+    "firestore.textSearch.snapshotPolicy",
+    "firestore.textSearch.warnings.broadCandidateCount",
+    "firestore.textSearch.warnings.scoreCandidateCount",
+    "firestore.textSearch.warnings.warningsAsErrors",
+    "rules.staticLimitChecks",
+    "rules.runtimeBudgets",
+    "rules.compiledSize.mode",
+    "rules.compiledSize.oracle",
+    "rules.diagnostics.format",
+    "rules.diagnostics.largestContributors",
+    "auth.enabled",
+    "auth.projectIssuer",
+    "auth.secretMaterialization",
+    "storage.persistence",
+    "trace.enabled",
+    "trace.canonical",
+];
+
+/// The start-up note for each key in [`NO_EFFECT_KEYS`] a configuration sets: the key loads
+/// (existing configurations keep working) and the note says it changes nothing.
+#[must_use]
+pub fn no_effect_notes(input: &Value) -> Vec<String> {
+    explicit_no_effect_keys(input)
+        .into_iter()
+        .map(|key| {
+            format!("{key} is accepted for forward compatibility and currently has no effect")
+        })
+        .collect()
+}
+
+/// The [`NO_EFFECT_KEYS`] a configuration document sets explicitly, in list order.
+#[must_use]
+pub fn explicit_no_effect_keys(input: &Value) -> Vec<&'static str> {
+    NO_EFFECT_KEYS
+        .into_iter()
+        .filter(|key| {
+            input
+                .pointer(&format!("/{}", key.replace('.', "/")))
+                .is_some()
+        })
+        .collect()
+}
+
 impl RuntimeConfig {
     /// Every schema leaf with its parsed effective value, provenance and description.
     #[allow(clippy::too_many_lines)]
     pub fn config_show(&self, input: &Value) -> Vec<Value> {
         use serde_json::json;
-        let permissions = |v: AuthClientPermissions| json!({"disabledUserSignup": v.disabled_user_signup, "disabledUserDeletion": v.disabled_user_deletion});
-        let password = |v: &PasswordPolicyConfig| json!({"enforcementState": v.enforcement_state, "forceUpgradeOnSignin": v.force_upgrade_on_signin, "constraints": {"minLength": v.constraints.min_length, "maxLength": v.constraints.max_length, "requireUppercase": v.constraints.require_uppercase, "requireLowercase": v.constraints.require_lowercase, "requireNumeric": v.constraints.require_numeric, "requireNonAlphanumeric": v.constraints.require_non_alphanumeric}});
         let mut rows = Vec::new();
         for (key, schema) in config_schema() {
             if schema.get("properties").is_some() {
@@ -1614,104 +1681,12 @@ impl RuntimeConfig {
                 .development_defaults
                 .iter()
                 .find(|entry| entry["key"] == key);
-            let effective = match key.as_str() {
-                "profile" => Some(json!(self.profile.as_str())),
-                "productionExact" => Some(json!(self.production_exact)),
-                "network.allowNonLoopbackHosts" => Some(json!(self.allow_non_loopback_hosts)),
-                "projects.requireDemoPrefix" => Some(json!(self.require_demo_prefix)),
-                "projects.unknownProjects" => Some(json!(if self.refuse_unknown_projects { "refuse" } else { "serve" })),
-                "firestore.edition" => Some(json!(self.edition.as_config_str())),
-                "firestore.apiMode" => Some(json!(self.api_mode.as_config_str())),
-                "firestore.location" => Some(json!(self.firestore_location)),
-                "firestore.missingIndexes" => Some(json!(match self.firestore_missing_indexes { MissingIndexes::Report => "report", MissingIndexes::Refuse => "refuse" })),
-                "firestore.indexFile" => Some(json!(self.index_file)),
-                "firestore.textIndexDefinitionFile" => Some(json!(self.text_index_file)),
-                "firestore.enforceLimits" => Some(json!(self.enforce_limits)),
-                "firestore.databaseCreateTime" => Some(json!(self.database_create_time.and_then(|t| t.to_rfc3339().ok()))),
-                "firestore.deletedDatabaseIdCooldownSeconds" => self.deleted_database_id_cooldown.map(|v| json!(v)),
-                "firestore.ttlSweepIntervalSeconds" => Some(json!(self.ttl_sweep_interval.as_nanos() / 1_000_000_000)),
-                "firestore.history.maxVersionsPerPath" => Some(json!(self.history_max_versions_per_path)),
-                "firestore.history.maxBytes" => self.history_max_bytes.map(|v| json!(v)),
-                "rules.source" => Some(json!(self.rules_file)),
-                "rules.denialLog" => Some(json!(if self.rules_denial_log { "summary" } else { "off" })),
-                "storage.rules" => Some(json!(self.storage_rules_file)),
-                "storage.maxStoredBytes" => Some(json!(self.storage_max_stored_bytes)),
-                "daemon.clockStart" => Some(json!(self.clock_start_pinned.then(|| self.clock_start.to_rfc3339().ok()).flatten())),
-                "daemon.seed" => Some(json!(self.seed)),
-                "daemon.authProject" => Some(json!(self.auth_project)),
-                "daemon.authProjectNumbers" => Some(json!(self.auth_project_numbers)),
-                "daemon.firestorePort" | "daemon.httpPort" | "daemon.storagePort" | "daemon.functionsPort" | "daemon.eventarcPort" | "daemon.tasksPort" | "daemon.pubsubPort" | "daemon.loggingPort" => {
-                    let addr = match key.as_str() {
-                        "daemon.firestorePort" => &self.firestore_addr,
-                        "daemon.httpPort" => &self.http_addr,
-                        "daemon.storagePort" => &self.storage_addr,
-                        "daemon.functionsPort" => &self.functions_addr,
-                        "daemon.eventarcPort" => &self.eventarc_addr,
-                        "daemon.tasksPort" => &self.tasks_addr,
-                        "daemon.pubsubPort" => &self.pubsub_addr,
-                        _ => &self.logging_addr,
-                    };
-                    Some(json!(addr.rsplit_once(':').and_then(|(_, port)| port.parse::<u16>().ok())))
-                }
-                "functions.source" => Some(json!(self.functions_source)),
-                "functions.manifest" => Some(json!(self.functions_manifest)),
-                "functions.runner" => Some(json!(self.functions_runner)),
-                "functions.maxGlobalConcurrency" => Some(json!(self.functions_max_running)),
-                "functions.unservedTriggers" => Some(json!(self.functions_unserved_triggers)),
-                "functions.clock.date" => Some(json!(if self.functions_clock.date_virtual { "virtual" } else { "real" })),
-                "functions.clock.timers" => Some(json!(if self.functions_clock.timers_virtual { "virtual" } else { "real" })),
-                "functions.clock.tasks" => Some(json!(if self.functions_clock.tasks_virtual { "virtual" } else { "real" })),
-                "events.maxAttempts" => Some(json!(self.events_max_attempts)),
-                "pubsub.pushMinimumRedeliveryIntervalMillis" => Some(json!(self.pubsub_push_minimum_redelivery_interval_millis)),
-                "scheduler.defaultTimeZone" => Some(json!(self.scheduler_default_time_zone)),
-                "scheduler.catchUp" => Some(json!(self.scheduler_catch_up)),
-                "scheduler.maxCatchUpRuns" => Some(json!(self.scheduler_max_catch_up_runs)),
-                "scheduler.overlap" => Some(json!(self.scheduler_overlap)),
-                "auth.idTokenSigning" => Some(json!(match self.id_token_signing { fireemu_core_auth::jwt::SigningMode::UnsignedEmulator => "unsigned-emulator", fireemu_core_auth::jwt::SigningMode::SessionRsa => "session-rsa" })),
-                "auth.apiKeys" => Some(json!(self.auth_api_keys)),
-                "auth.customTokenSigners" => Some(json!(self.auth_custom_token_signers)),
-                "auth.idpSigners" => Some(json!(self.auth_idp_signers)),
-                "auth.authorizedDomains" => Some(json!(self.auth_authorized_domains)),
-                "auth.multiTenant.allowTenants" => Some(json!(self.auth_multi_tenant_allow_tenants)),
-                "auth.tenants" => Some(json!(self.auth_tenants)),
-                "auth.forwardInboundCredentials" => Some(json!(self.auth_forward_inbound_credentials)),
-                "auth.improvedEmailPrivacy" => Some(json!(self.auth_improved_email_privacy)),
-                "auth.logActionCodes" => Some(json!(self.auth_log_action_codes)),
-                "auth.signIn.allowDuplicateEmails" => Some(json!(self.auth_allow_duplicate_emails)),
-                "auth.signIn.email.enabled" => Some(json!(self.auth_sign_in.email_enabled.unwrap_or(true))),
-                "auth.signIn.email.passwordRequired" => Some(json!(self.auth_sign_in.password_required.unwrap_or(false))),
-                "auth.signIn.anonymous.enabled" => Some(json!(self.auth_sign_in.anonymous_enabled.unwrap_or(true))),
-                "auth.signIn.phoneNumber.enabled" => Some(json!(self.auth_sign_in.phone_enabled.unwrap_or(true))),
-                "auth.signIn.phoneNumber.testPhoneNumbers" => Some(json!(self.auth_sign_in.test_phone_numbers)),
-                "auth.client.permissions" => Some(permissions(self.auth_client_permissions)),
-                "auth.configOverrides" => Some(json!(self.auth_config_overrides.iter().map(|v| json!({"projectId": v.project_id, "tenantId": v.tenant_id, "config": {"client": v.config.client_permissions.map(|p| json!({"permissions": permissions(p)})), "improvedEmailPrivacy": v.config.improved_email_privacy}})).collect::<Vec<_>>())),
-                "auth.passwordPolicy" => Some(json!(self.auth_password_policy.as_ref().map(password))),
-                "auth.passwordPolicyOverrides" => Some(json!(self.auth_password_policy_overrides.iter().map(|v| json!({"projectId": v.project_id, "tenantId": v.tenant_id, "passwordPolicy": password(&v.password_policy)})).collect::<Vec<_>>())),
-                "auth.blockingFunctions" => {
-                    let trigger = |v: &BlockingFunctionTrigger| json!({"function": v.function, "region": v.region});
-                    Some(json!(self.auth_blocking_functions.as_ref().map(|v| json!({"triggers": v.triggers.as_ref().map(|t| json!({"beforeCreate": t.before_create.as_ref().map(trigger), "beforeSignIn": t.before_sign_in.as_ref().map(trigger)})), "forwardInboundCredentials": v.forward_inbound_credentials.map(|c| json!({"idToken": c.id_token, "accessToken": c.access_token, "refreshToken": c.refresh_token}))}))))
-                }
-                "auth.quota" => Some(if self.auth_signup_quota_explicit { json!({"signUpQuotaConfig": self.auth_signup_quota.as_ref().map(|v| json!({"quota": v.quota, "startTime": v.start_time.to_rfc3339().ok(), "quotaDuration": format!("{}.{:09}s", v.quota_duration.as_seconds(), v.quota_duration.as_nanos() % 1_000_000_000)}))}) } else { Value::Null }),
-                "auth.quotaSimulation" => Some(json!({"mode": match self.auth_quota_simulation.mode { AuthQuotaSimulationMode::Off => "off", AuthQuotaSimulationMode::Observe => "observe", AuthQuotaSimulationMode::Enforce => "enforce" }, "algorithm": self.auth_quota_simulation.algorithm, "defaultQuotaPerHour": self.auth_quota_simulation.default_quota_per_hour, "maxTrackedBuckets": self.auth_quota_simulation.max_tracked_buckets})),
-                "auth.mfa.state" | "auth.mfa.enabledProviders" | "auth.mfa.providerConfigs" => Some(self.auth_mfa.as_ref().map_or(Value::Null, |mfa| fireemu_adapter_http::identity_toolkit::project_mfa::mfa_config_json(mfa)[key.rsplit('.').next().expect("mfa key")].clone())),
-                "auth.providers.oidc" => Some(json!(self.auth_provider_seeds.oidc.as_ref().map(|providers| providers.iter().map(|v| json!({"name": v.id, "displayName": v.display_name, "enabled": v.enabled, "clientId": v.client_id, "issuer": v.issuer, "clientSecret": v.client_secret, "responseType": {"idToken": v.response_type.id_token, "code": v.response_type.code, "token": v.response_type.token}})).collect::<Vec<_>>()))),
-                "auth.providers.saml" => Some(json!(self.auth_provider_seeds.saml.as_ref().map(|providers| providers.iter().map(|v| json!({"name": v.id, "displayName": v.display_name, "enabled": v.enabled, "idpConfig": {"idpEntityId": v.idp_entity_id, "ssoUrl": v.sso_url, "idpCertificates": v.idp_certificates.iter().map(|c| json!({"x509Certificate": c})).collect::<Vec<_>>(), "signRequest": v.sign_request}, "spConfig": {"spEntityId": v.sp_entity_id, "callbackUri": v.callback_uri}})).collect::<Vec<_>>() ))),
-                "auth.totp.periodSeconds" => Some(json!(self.auth_totp.map(|v| v.period_seconds))),
-                "auth.totp.digits" => Some(json!(self.auth_totp.map(|v| v.digits))),
-                "auth.totp.windowSteps" => Some(json!(self.auth_totp.map(|v| v.window_steps))),
-                "auth.totp.enrollmentSessionTtlSeconds" => Some(json!(self.auth_totp.map(|v| v.enrollment_session_ttl.as_nanos() / 1_000_000_000))),
-                "eventarc.oauthCredentials" => Some(json!(self.eventarc_oauth_credentials.as_ref().map(|catalog| catalog.iter().map(|(digest, scopes)| (fireemu_core_types::hash::hex_lower(digest), json!({"scopes": scopes}))).collect::<Map<_, _>>()))),
-                "appCheck.enabled" => Some(json!(self.app_check.enabled)),
-                "appCheck.tokenSigning" => Some(json!(match self.app_check.token_signing { AppCheckSigning::InstanceRsa => "instance-rsa" })),
-                "appCheck.tokenTtlSeconds" => Some(json!(self.app_check.token_ttl_seconds)),
-                "appCheck.apps" => Some(json!(self.app_check.apps.iter().map(|app| json!({"projectId": app.project_id, "projectNumber": app.project_number, "appId": app.app_id, "enabled": app.enabled, "debugTokenSha256": app.debug_token_sha256})).collect::<Vec<_>>())),
-                "appCheck.services.auth" | "appCheck.services.firestore" | "appCheck.services.storage" => {
-                    use fireemu_core_app_check::verify::BaselineMode;
-                    let mode = match key.as_str() { "appCheck.services.auth" => self.app_check.auth, "appCheck.services.firestore" => self.app_check.firestore, _ => self.app_check.storage };
-                    Some(json!(match mode { BaselineMode::Off => "off", BaselineMode::Unenforced => "unenforced", BaselineMode::Enforced => "enforced" }))
-                }
-                _ => None,
-            };
+            if NO_EFFECT_KEYS.contains(&key.as_str()) {
+                // Never echo the schema default or the written value as if it were in effect.
+                rows.push(json!({"key": key, "value": explicit.cloned().unwrap_or(Value::Null), "source": NO_EFFECT_SOURCE, "description": schema["description"].as_str().unwrap_or("")}));
+                continue;
+            }
+            let effective = self.effective_value(&key, input);
             let (value, source) = if let Some(entry) = governed {
                 let text = entry["value"].as_str().expect("development default value");
                 let value = if schema["type"] == "boolean" {
@@ -1751,6 +1726,138 @@ impl RuntimeConfig {
             rows.push(json!({"key": key, "value": value, "source": source, "description": schema["description"].as_str().unwrap_or("")}));
         }
         rows
+    }
+}
+
+impl RuntimeConfig {
+    /// The parsed runtime value behind a schema leaf, `None` when the leaf has no runtime field
+    /// to read (it then shows the value as written, or the schema default).
+    #[allow(clippy::too_many_lines)]
+    fn effective_value(&self, key: &str, input: &Value) -> Option<Value> {
+        use serde_json::json;
+        let permissions = |v: AuthClientPermissions| json!({"disabledUserSignup": v.disabled_user_signup, "disabledUserDeletion": v.disabled_user_deletion});
+        let password = |v: &PasswordPolicyConfig| json!({"enforcementState": v.enforcement_state, "forceUpgradeOnSignin": v.force_upgrade_on_signin, "constraints": {"minLength": v.constraints.min_length, "maxLength": v.constraints.max_length, "requireUppercase": v.constraints.require_uppercase, "requireLowercase": v.constraints.require_lowercase, "requireNumeric": v.constraints.require_numeric, "requireNonAlphanumeric": v.constraints.require_non_alphanumeric}});
+        match key {
+            // The document's own metadata and the keys that accept only their baseline value
+            // (a different value is refused when the configuration loads), so the baseline is
+            // what runs.
+            "$schema" | "firebaseJson" => Some(input.pointer(&format!("/{key}")).cloned().unwrap_or(Value::Null)),
+            "schemaVersion" => Some(json!(1)),
+            "limits.warningThresholds" | "limits.warningsAsErrors" => Some(json!([])),
+            "limits.perLimitWarningThresholds" => Some(json!({})),
+            "limits.quotaAccounting" => Some(json!("off")),
+            "limits.firestorePlan.billingEnabled" => Some(json!(false)),
+            "limits.firestorePlan.compositeIndexLimitOverride" | "limits.firestorePlan.singleFieldConfigLimitOverride" | "limits.firestorePlan.enterpriseIndexLimitOverride" => Some(Value::Null),
+            "firestore.pipeline.unknownStagePolicy" => Some(json!("reject")),
+            "firestore.pipeline.writeStagePolicy" => Some(json!("reject-unimplemented")),
+            "rules.executionMode" => Some(json!(if !self.rules_enforced {
+                "disabled"
+            } else if input.pointer("/rules/executionMode").and_then(Value::as_str) == Some("admin-bypass") {
+                "admin-bypass"
+            } else {
+                "native"
+            })),
+            "storage.mode" => Some(json!("native")),
+            "storage.objectNameNormalization" => Some(json!("preserve")),
+            "events.delivery" => Some(json!("exactly-once-test")),
+            "scheduler.clock" => Some(json!("virtual")),
+            "profile" => Some(json!(self.profile.as_str())),
+            "productionExact" => Some(json!(self.production_exact)),
+            "network.allowNonLoopbackHosts" => Some(json!(self.allow_non_loopback_hosts)),
+            "projects.requireDemoPrefix" => Some(json!(self.require_demo_prefix)),
+            "projects.unknownProjects" => Some(json!(if self.refuse_unknown_projects { "refuse" } else { "serve" })),
+            "firestore.edition" => Some(json!(self.edition.as_config_str())),
+            "firestore.apiMode" => Some(json!(self.api_mode.as_config_str())),
+            "firestore.location" => Some(json!(self.firestore_location)),
+            "firestore.missingIndexes" => Some(json!(match self.firestore_missing_indexes { MissingIndexes::Report => "report", MissingIndexes::Refuse => "refuse" })),
+            "firestore.indexFile" => Some(json!(self.index_file)),
+            "firestore.textIndexDefinitionFile" => Some(json!(self.text_index_file)),
+            "firestore.enforceLimits" => Some(json!(self.enforce_limits)),
+            "firestore.databaseCreateTime" => Some(json!(self.database_create_time.and_then(|t| t.to_rfc3339().ok()))),
+            "firestore.deletedDatabaseIdCooldownSeconds" => self.deleted_database_id_cooldown.map(|v| json!(v)),
+            "firestore.ttlSweepIntervalSeconds" => Some(json!(self.ttl_sweep_interval.as_nanos() / 1_000_000_000)),
+            "firestore.history.maxVersionsPerPath" => Some(json!(self.history_max_versions_per_path)),
+            "firestore.history.maxBytes" => self.history_max_bytes.map(|v| json!(v)),
+            "rules.source" => Some(json!(self.rules_file)),
+            "rules.denialLog" => Some(json!(if self.rules_denial_log { "summary" } else { "off" })),
+            "storage.rules" => Some(json!(self.storage_rules_file)),
+            "storage.maxStoredBytes" => Some(json!(self.storage_max_stored_bytes)),
+            "daemon.clockStart" => Some(json!(self.clock_start_pinned.then(|| self.clock_start.to_rfc3339().ok()).flatten())),
+            "daemon.seed" => Some(json!(self.seed)),
+            "daemon.authProject" => Some(json!(self.auth_project)),
+            "daemon.authProjectNumbers" => Some(json!(self.auth_project_numbers)),
+            "daemon.firestorePort" | "daemon.httpPort" | "daemon.storagePort" | "daemon.functionsPort" | "daemon.eventarcPort" | "daemon.tasksPort" | "daemon.pubsubPort" | "daemon.loggingPort" => {
+                let addr = match key {
+                    "daemon.firestorePort" => &self.firestore_addr,
+                    "daemon.httpPort" => &self.http_addr,
+                    "daemon.storagePort" => &self.storage_addr,
+                    "daemon.functionsPort" => &self.functions_addr,
+                    "daemon.eventarcPort" => &self.eventarc_addr,
+                    "daemon.tasksPort" => &self.tasks_addr,
+                    "daemon.pubsubPort" => &self.pubsub_addr,
+                    _ => &self.logging_addr,
+                };
+                Some(json!(addr.rsplit_once(':').and_then(|(_, port)| port.parse::<u16>().ok())))
+            }
+            "functions.source" => Some(json!(self.functions_source)),
+            "functions.manifest" => Some(json!(self.functions_manifest)),
+            "functions.runner" => Some(json!(self.functions_runner)),
+            "functions.maxGlobalConcurrency" => Some(json!(self.functions_max_running)),
+            "functions.unservedTriggers" => Some(json!(self.functions_unserved_triggers)),
+            "functions.clock.date" => Some(json!(if self.functions_clock.date_virtual { "virtual" } else { "real" })),
+            "functions.clock.timers" => Some(json!(if self.functions_clock.timers_virtual { "virtual" } else { "real" })),
+            "functions.clock.tasks" => Some(json!(if self.functions_clock.tasks_virtual { "virtual" } else { "real" })),
+            "events.maxAttempts" => Some(json!(self.events_max_attempts)),
+            "pubsub.pushMinimumRedeliveryIntervalMillis" => Some(json!(self.pubsub_push_minimum_redelivery_interval_millis)),
+            "scheduler.defaultTimeZone" => Some(json!(self.scheduler_default_time_zone)),
+            "scheduler.catchUp" => Some(json!(self.scheduler_catch_up)),
+            "scheduler.maxCatchUpRuns" => Some(json!(self.scheduler_max_catch_up_runs)),
+            "scheduler.overlap" => Some(json!(self.scheduler_overlap)),
+            "auth.idTokenSigning" => Some(json!(match self.id_token_signing { fireemu_core_auth::jwt::SigningMode::UnsignedEmulator => "unsigned-emulator", fireemu_core_auth::jwt::SigningMode::SessionRsa => "session-rsa" })),
+            "auth.apiKeys" => Some(json!(self.auth_api_keys)),
+            "auth.customTokenSigners" => Some(json!(self.auth_custom_token_signers)),
+            "auth.idpSigners" => Some(json!(self.auth_idp_signers)),
+            "auth.authorizedDomains" => Some(json!(self.auth_authorized_domains)),
+            "auth.multiTenant.allowTenants" => Some(json!(self.auth_multi_tenant_allow_tenants)),
+            "auth.tenants" => Some(json!(self.auth_tenants)),
+            "auth.forwardInboundCredentials" => Some(json!(self.auth_forward_inbound_credentials)),
+            "auth.improvedEmailPrivacy" => Some(json!(self.auth_improved_email_privacy)),
+            "auth.logActionCodes" => Some(json!(self.auth_log_action_codes)),
+            "auth.signIn.allowDuplicateEmails" => Some(json!(self.auth_allow_duplicate_emails)),
+            "auth.signIn.email.enabled" => Some(json!(self.auth_sign_in.email_enabled.unwrap_or(true))),
+            "auth.signIn.email.passwordRequired" => Some(json!(self.auth_sign_in.password_required.unwrap_or(false))),
+            "auth.signIn.anonymous.enabled" => Some(json!(self.auth_sign_in.anonymous_enabled.unwrap_or(true))),
+            "auth.signIn.phoneNumber.enabled" => Some(json!(self.auth_sign_in.phone_enabled.unwrap_or(true))),
+            "auth.signIn.phoneNumber.testPhoneNumbers" => Some(json!(self.auth_sign_in.test_phone_numbers)),
+            "auth.client.permissions" => Some(permissions(self.auth_client_permissions)),
+            "auth.configOverrides" => Some(json!(self.auth_config_overrides.iter().map(|v| json!({"projectId": v.project_id, "tenantId": v.tenant_id, "config": {"client": v.config.client_permissions.map(|p| json!({"permissions": permissions(p)})), "improvedEmailPrivacy": v.config.improved_email_privacy}})).collect::<Vec<_>>())),
+            "auth.passwordPolicy" => Some(json!(self.auth_password_policy.as_ref().map(password))),
+            "auth.passwordPolicyOverrides" => Some(json!(self.auth_password_policy_overrides.iter().map(|v| json!({"projectId": v.project_id, "tenantId": v.tenant_id, "passwordPolicy": password(&v.password_policy)})).collect::<Vec<_>>())),
+            "auth.blockingFunctions" => {
+                let trigger = |v: &BlockingFunctionTrigger| json!({"function": v.function, "region": v.region});
+                Some(json!(self.auth_blocking_functions.as_ref().map(|v| json!({"triggers": v.triggers.as_ref().map(|t| json!({"beforeCreate": t.before_create.as_ref().map(trigger), "beforeSignIn": t.before_sign_in.as_ref().map(trigger)})), "forwardInboundCredentials": v.forward_inbound_credentials.map(|c| json!({"idToken": c.id_token, "accessToken": c.access_token, "refreshToken": c.refresh_token}))}))))
+            }
+            "auth.quota" => Some(if self.auth_signup_quota_explicit { json!({"signUpQuotaConfig": self.auth_signup_quota.as_ref().map(|v| json!({"quota": v.quota, "startTime": v.start_time.to_rfc3339().ok(), "quotaDuration": format!("{}.{:09}s", v.quota_duration.as_seconds(), v.quota_duration.as_nanos() % 1_000_000_000)}))}) } else { Value::Null }),
+            "auth.quotaSimulation" => Some(json!({"mode": match self.auth_quota_simulation.mode { AuthQuotaSimulationMode::Off => "off", AuthQuotaSimulationMode::Observe => "observe", AuthQuotaSimulationMode::Enforce => "enforce" }, "algorithm": self.auth_quota_simulation.algorithm, "defaultQuotaPerHour": self.auth_quota_simulation.default_quota_per_hour, "maxTrackedBuckets": self.auth_quota_simulation.max_tracked_buckets})),
+            "auth.mfa.state" | "auth.mfa.enabledProviders" | "auth.mfa.providerConfigs" => Some(self.auth_mfa.as_ref().map_or(Value::Null, |mfa| fireemu_adapter_http::identity_toolkit::project_mfa::mfa_config_json(mfa)[key.rsplit('.').next().expect("mfa key")].clone())),
+            "auth.providers.oidc" => Some(json!(self.auth_provider_seeds.oidc.as_ref().map(|providers| providers.iter().map(|v| json!({"name": v.id, "displayName": v.display_name, "enabled": v.enabled, "clientId": v.client_id, "issuer": v.issuer, "clientSecret": v.client_secret, "responseType": {"idToken": v.response_type.id_token, "code": v.response_type.code, "token": v.response_type.token}})).collect::<Vec<_>>()))),
+            "auth.providers.saml" => Some(json!(self.auth_provider_seeds.saml.as_ref().map(|providers| providers.iter().map(|v| json!({"name": v.id, "displayName": v.display_name, "enabled": v.enabled, "idpConfig": {"idpEntityId": v.idp_entity_id, "ssoUrl": v.sso_url, "idpCertificates": v.idp_certificates.iter().map(|c| json!({"x509Certificate": c})).collect::<Vec<_>>(), "signRequest": v.sign_request}, "spConfig": {"spEntityId": v.sp_entity_id, "callbackUri": v.callback_uri}})).collect::<Vec<_>>() ))),
+            "auth.totp.periodSeconds" => Some(json!(self.auth_totp.map(|v| v.period_seconds))),
+            "auth.totp.digits" => Some(json!(self.auth_totp.map(|v| v.digits))),
+            "auth.totp.windowSteps" => Some(json!(self.auth_totp.map(|v| v.window_steps))),
+            "auth.totp.enrollmentSessionTtlSeconds" => Some(json!(self.auth_totp.map(|v| v.enrollment_session_ttl.as_nanos() / 1_000_000_000))),
+            "eventarc.oauthCredentials" => Some(json!(self.eventarc_oauth_credentials.as_ref().map(|catalog| catalog.iter().map(|(digest, scopes)| (fireemu_core_types::hash::hex_lower(digest), json!({"scopes": scopes}))).collect::<Map<_, _>>()))),
+            "appCheck.enabled" => Some(json!(self.app_check.enabled)),
+            "appCheck.tokenSigning" => Some(json!(match self.app_check.token_signing { AppCheckSigning::InstanceRsa => "instance-rsa" })),
+            "appCheck.tokenTtlSeconds" => Some(json!(self.app_check.token_ttl_seconds)),
+            "appCheck.apps" => Some(json!(self.app_check.apps.iter().map(|app| json!({"projectId": app.project_id, "projectNumber": app.project_number, "appId": app.app_id, "enabled": app.enabled, "debugTokenSha256": app.debug_token_sha256})).collect::<Vec<_>>())),
+            "appCheck.services.auth" | "appCheck.services.firestore" | "appCheck.services.storage" => {
+                use fireemu_core_app_check::verify::BaselineMode;
+                let mode = match key { "appCheck.services.auth" => self.app_check.auth, "appCheck.services.firestore" => self.app_check.firestore, _ => self.app_check.storage };
+                Some(json!(match mode { BaselineMode::Off => "off", BaselineMode::Unenforced => "unenforced", BaselineMode::Enforced => "enforced" }))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -5158,6 +5265,200 @@ mod tests {
             let row = rows.iter().find(|row| row["key"] == key).unwrap();
             assert_eq!(row["value"], expected, "{key}");
             assert_eq!(row["source"], source, "{key}");
+        }
+    }
+
+    fn set_path(input: &mut Value, key: &str, value: Value) {
+        let mut node = input;
+        for part in key.split('.') {
+            if node.is_null() {
+                *node = json!({});
+            }
+            node = &mut node[part];
+        }
+        *node = value;
+    }
+
+    #[test]
+    fn every_schema_leaf_is_mapped_to_a_runtime_value_or_listed_as_without_effect() {
+        // These two runtime fields stay None until set, and then show the value as parsed.
+        let input = json!({"schemaVersion": 1, "firestore": {"deletedDatabaseIdCooldownSeconds": 17, "history": {"maxBytes": 268_435_456}}});
+        let cfg = RuntimeConfig::from_json(&input).unwrap();
+        let leaves: Vec<_> = config_schema()
+            .into_iter()
+            .filter(|(_, schema)| schema.get("properties").is_none())
+            .map(|(key, _)| key)
+            .collect();
+        assert!(leaves.len() > 100, "{}", leaves.len());
+        for key in &leaves {
+            let governed = cfg
+                .development_defaults
+                .iter()
+                .any(|entry| entry["key"] == *key);
+            let mapped = governed || cfg.effective_value(key, &input).is_some();
+            let listed = NO_EFFECT_KEYS.contains(&key.as_str());
+            assert!(
+                mapped != listed,
+                "{key}: map it to a runtime value, or list it in NO_EFFECT_KEYS, not both and not neither (mapped={mapped}, listed={listed})"
+            );
+        }
+        for key in NO_EFFECT_KEYS {
+            assert!(
+                leaves.iter().any(|leaf| leaf == key),
+                "{key} is not a schema leaf"
+            );
+        }
+        let mut sorted = NO_EFFECT_KEYS;
+        sorted.sort_unstable();
+        assert!(
+            sorted.windows(2).all(|pair| pair[0] != pair[1]),
+            "duplicate key"
+        );
+    }
+
+    #[test]
+    fn config_show_marks_keys_the_daemon_accepts_but_ignores() {
+        let cfg = RuntimeConfig::default();
+        let unset = cfg.config_show(&json!({}));
+        let mut written = json!({});
+        for key in NO_EFFECT_KEYS {
+            set_path(&mut written, key, json!(format!("written {key}")));
+        }
+        let set = cfg.config_show(&written);
+        for key in NO_EFFECT_KEYS {
+            let row = unset.iter().find(|row| row["key"] == key).unwrap();
+            assert_eq!(row["source"], NO_EFFECT_SOURCE, "{key}");
+            assert_eq!(
+                row["value"],
+                Value::Null,
+                "{key}: no schema default is shown"
+            );
+            let row = set.iter().find(|row| row["key"] == key).unwrap();
+            assert_eq!(row["source"], NO_EFFECT_SOURCE, "{key}");
+            assert_eq!(row["value"], json!(format!("written {key}")), "{key}");
+        }
+        // A key that does take effect keeps its own source.
+        let row = set
+            .iter()
+            .find(|row| row["key"] == "firestore.location")
+            .unwrap();
+        assert_eq!(row["source"], "default");
+    }
+
+    #[test]
+    fn config_show_shows_the_fixed_baseline_of_keys_that_accept_only_one_value() {
+        let rows = RuntimeConfig::default().config_show(&json!({}));
+        for (key, value, source) in [
+            ("schemaVersion", json!(1), "default"),
+            ("$schema", Value::Null, "unset"),
+            ("limits.warningThresholds", json!([]), "default"),
+            ("limits.perLimitWarningThresholds", json!({}), "default"),
+            ("limits.warningsAsErrors", json!([]), "default"),
+            ("limits.quotaAccounting", json!("off"), "default"),
+            (
+                "limits.firestorePlan.billingEnabled",
+                json!(false),
+                "default",
+            ),
+            (
+                "limits.firestorePlan.compositeIndexLimitOverride",
+                Value::Null,
+                "unset",
+            ),
+            (
+                "limits.firestorePlan.singleFieldConfigLimitOverride",
+                Value::Null,
+                "unset",
+            ),
+            (
+                "limits.firestorePlan.enterpriseIndexLimitOverride",
+                Value::Null,
+                "unset",
+            ),
+            (
+                "firestore.pipeline.unknownStagePolicy",
+                json!("reject"),
+                "default",
+            ),
+            (
+                "firestore.pipeline.writeStagePolicy",
+                json!("reject-unimplemented"),
+                "default",
+            ),
+            ("rules.executionMode", json!("native"), "default"),
+            ("storage.mode", json!("native"), "default"),
+            (
+                "storage.objectNameNormalization",
+                json!("preserve"),
+                "default",
+            ),
+            ("events.delivery", json!("exactly-once-test"), "default"),
+            ("scheduler.clock", json!("virtual"), "default"),
+        ] {
+            let row = rows.iter().find(|row| row["key"] == key).unwrap();
+            assert_eq!(row["value"], value, "{key}");
+            assert_eq!(row["source"], source, "{key}");
+        }
+        for (mode, shown) in [
+            ("native", "native"),
+            ("admin-bypass", "admin-bypass"),
+            ("disabled", "disabled"),
+        ] {
+            let input = json!({"schemaVersion": 1, "rules": {"executionMode": mode}});
+            let cfg = RuntimeConfig::from_json(&input).unwrap();
+            let rows = cfg.config_show(&input);
+            let row = rows
+                .iter()
+                .find(|row| row["key"] == "rules.executionMode")
+                .unwrap();
+            assert_eq!(row["value"], shown, "{mode}");
+            assert_eq!(row["source"], "explicit", "{mode}");
+        }
+    }
+
+    #[test]
+    fn explicit_no_effect_keys_are_listed_in_order_and_only_when_set() {
+        assert!(explicit_no_effect_keys(&json!({})).is_empty());
+        assert!(explicit_no_effect_keys(&Value::Null).is_empty());
+        // A section that names none of them, and a sibling that does take effect.
+        assert!(explicit_no_effect_keys(
+            &json!({"firestore": {"textSearch": {}, "location": "nam5"}, "rules": {"source": "r"}})
+        )
+        .is_empty());
+        assert_eq!(
+            explicit_no_effect_keys(
+                &json!({"trace": {"canonical": null}, "bind": "127.0.0.1", "auth": {"enabled": false}})
+            ),
+            ["bind", "auth.enabled", "trace.canonical"]
+        );
+    }
+
+    #[test]
+    fn no_effect_notes_name_each_explicit_key_once() {
+        assert!(no_effect_notes(&json!({"schemaVersion": 1})).is_empty());
+        assert_eq!(
+            no_effect_notes(&json!({"bind": "127.0.0.1", "trace": {"enabled": false}})),
+            [
+                "bind is accepted for forward compatibility and currently has no effect",
+                "trace.enabled is accepted for forward compatibility and currently has no effect",
+            ]
+        );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn explicit_no_effect_keys_are_exactly_the_keys_the_document_sets(
+            mask in proptest::collection::vec(proptest::bool::ANY, NO_EFFECT_KEYS.len()),
+        ) {
+            let mut input = json!({"schemaVersion": 1});
+            let mut expected = Vec::new();
+            for (key, on) in NO_EFFECT_KEYS.iter().zip(&mask) {
+                if *on {
+                    set_path(&mut input, key, json!(true));
+                    expected.push(*key);
+                }
+            }
+            proptest::prop_assert_eq!(explicit_no_effect_keys(&input), expected);
         }
     }
 

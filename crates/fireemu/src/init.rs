@@ -145,9 +145,11 @@ fn reference_document() -> String {
                 | "auth.signIn.anonymous.enabled"
                 | "auth.signIn.phoneNumber.enabled"
         );
+        let no_effect = crate::config::NO_EFFECT_KEYS.contains(&path.as_str());
         let inherited = sections.last().expect("section").1;
         let commented = inherited
             || production_exact
+            || no_effect
             || presence_selects_mode
             || (!is_section && schema.get("default").is_none());
         let indent = "  ".repeat(sections.len());
@@ -168,6 +170,9 @@ fn reference_document() -> String {
         let mut comment = format!("{description} Default: {default}.");
         if production_exact {
             comment.push_str(" Governed by productionExact; leave omitted to follow it.");
+        }
+        if no_effect {
+            comment.push_str(" Accepted for forward compatibility; currently has no effect.");
         }
         if presence_selects_mode {
             comment.push_str(" Presence selects behavior; leave commented unless intended.");
@@ -594,6 +599,33 @@ mod tests {
             .unwrap();
         let comment = section.split_once("\"missingIndexes\":").unwrap().0;
         assert!(!comment.contains("Governed by productionExact;"));
+    }
+
+    #[test]
+    fn init_reference_says_which_keys_currently_have_no_effect() {
+        let reference = super::reference_document();
+        let marker = "Accepted for forward compatibility; currently has no effect.";
+        for key in crate::config::NO_EFFECT_KEYS {
+            let (_, section) = reference.split_once(&format!("// {key}:\n")).unwrap();
+            let name = key.rsplit('.').next().unwrap();
+            let comment = section.split_once(&format!("// \"{name}\":")).unwrap().0;
+            let comment = comment
+                .lines()
+                .map(|line| line.trim_start_matches(' ').trim_start_matches("// "))
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(comment.contains(marker), "{key}: {comment}");
+        }
+        for key in [
+            "firestore.location",
+            "firestore.missingIndexes",
+            "rules.source",
+        ] {
+            let (_, section) = reference.split_once(&format!("// {key}:\n")).unwrap();
+            let name = key.rsplit('.').next().unwrap();
+            let comment = section.split_once(&format!("\"{name}\":")).unwrap().0;
+            assert!(!comment.contains("no effect"), "{key}");
+        }
     }
 
     #[test]

@@ -410,7 +410,27 @@ fn config_show_command(args: &[String]) -> Result<(), CliError> {
             "functions.source" => "/functions",
             _ => "",
         };
-        if key == "daemon.authProject" && project.is_some() {
+        if key == "firebaseJson" {
+            // The file the daemon would actually read, not only the entry the canonical
+            // configuration wrote (a --firebase-json, --config or discovered file wins).
+            if let Some((path, via)) = &sources.firebase {
+                row["value"] = diagnostic_path(path).to_string().into();
+                row["source"] = match via {
+                    FirebaseJsonVia::Reference => "explicit",
+                    FirebaseJsonVia::ConfigFlag => "explicit (--config)",
+                    FirebaseJsonVia::FirebaseJsonFlag
+                        if matches!(origin, ConfigOrigin::Discovered(_)) =>
+                    {
+                        "discovered"
+                    }
+                    FirebaseJsonVia::FirebaseJsonFlag => "explicit (--firebase-json)",
+                }
+                .into();
+            } else {
+                row["value"] = serde_json::Value::Null;
+                row["source"] = "unset".into();
+            }
+        } else if key == "daemon.authProject" && project.is_some() {
             row["source"] = "explicit".into();
         } else if !firebase_path.is_empty()
             && firebase
@@ -432,7 +452,9 @@ fn config_show_command(args: &[String]) -> Result<(), CliError> {
         );
     } else {
         for row in rows {
-            let value = if row["source"] == "unset" {
+            let value = if row["source"] == "unset"
+                || (row["source"] == config::NO_EFFECT_SOURCE && row["value"].is_null())
+            {
                 "(unset)".to_owned()
             } else {
                 row["value"].to_string()
@@ -1382,6 +1404,11 @@ fn load_project_config(
             if canonical {
                 sources.canonical = Some(path.clone());
                 let config = RuntimeConfig::from_json(&json)?;
+                if raw.verbosity > Verbosity::Quiet {
+                    for note in config::no_effect_notes(&json) {
+                        eprintln!("note: {}: {note}", diagnostic_path(path));
+                    }
+                }
                 let firebase = if raw.firebase_json.is_none() {
                     config::firebase_json_reference(&json)?
                         .map(|reference| project_dir(path).join(reference))

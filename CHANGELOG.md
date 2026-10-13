@@ -11,6 +11,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Changed
 
 - Under the strict profile a query whose composite index is not defined (or is still building, or was deleted) is refused by default again, with production's `FAILED_PRECONDITION` and its console link to the index (owner decision of 2026-10-13), whether or not `productionExact` is set. `productionExact` no longer moves `firestore.missingIndexes`, so it is no longer listed among the development defaults in the start banner or `GET /v1/capabilities`. To keep the version 0.17 behavior of running the query and reporting the missing index once per database and index on stderr, set `"firestore": {"missingIndexes": "report"}`. The emulator profile is unchanged: it runs every query, as the official emulator does.
+- `fireemu config show` and `fireemu init --reference` now say which accepted keys the daemon does not read (`limits.catalog`, `limits.enforcement`, `firestore.explain`, `firestore.pipeline.enabled`, `firestore.textSearch.*`, `rules.staticLimitChecks`, `bind`, `auth.enabled`, `trace.*` and others, 33 in all): `config show` gives them the source `accepted, no effect` instead of echoing the value or the schema default as if it were in effect, and a configuration that sets one prints one `note:` line per key at start-up. Such configurations still load. `firebaseJson` shows the file actually selected, including one chosen with `--firebase-json`.
 
 ### Added
 

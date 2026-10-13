@@ -111,6 +111,150 @@ fn config_show_reports_effective_values_sources_and_schema_order() {
 }
 
 #[test]
+fn config_show_marks_keys_without_effect_and_loading_one_prints_a_note() {
+    let dir = scratch("config-show-no-effect");
+    write(
+        &dir,
+        "fireemu.json",
+        r#"{"schemaVersion":1,"bind":"127.0.0.1","trace":{"enabled":true},"firestore":{"textSearch":{"fidelity":"deterministic-basic"}}}"#,
+    );
+    let out = run_in(&dir, &["config", "show", "--json"], None);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    for (key, value) in [
+        ("bind", serde_json::json!("127.0.0.1")),
+        ("trace.enabled", serde_json::json!(true)),
+        ("trace.canonical", serde_json::Value::Null),
+        (
+            "firestore.textSearch.fidelity",
+            serde_json::json!("deterministic-basic"),
+        ),
+    ] {
+        let row = rows.iter().find(|row| row["key"] == key).unwrap();
+        assert_eq!(row["value"], value, "{key}");
+        assert_eq!(row["source"], "accepted, no effect", "{key}");
+    }
+    // One note per key the file sets, none for the keys it leaves out.
+    let notes = stderr(&out);
+    for key in ["bind", "trace.enabled", "firestore.textSearch.fidelity"] {
+        assert!(
+            notes.contains(&format!(
+                "fireemu.json: {key} is accepted for forward compatibility and currently has no effect\n"
+            )),
+            "{notes}"
+        );
+    }
+    assert_eq!(notes.matches("note: ").count(), 3, "{notes}");
+    assert!(!notes.contains("trace.canonical"), "{notes}");
+    let out = run_in(&dir, &["config", "show"], None);
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        text.contains("trace.enabled = true (accepted, no effect)\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("trace.canonical = (unset) (accepted, no effect)\n"),
+        "{text}"
+    );
+}
+
+#[test]
+fn config_show_names_the_firebase_json_that_is_actually_selected() {
+    let dir = scratch("config-show-firebase-json");
+    write(&dir, "other.json", "{}");
+    write(
+        &dir,
+        "firebase.json",
+        r#"{"emulators":{"firestore":{"port":8124}}}"#,
+    );
+    let show = |args: &[&str]| -> serde_json::Value {
+        let mut all = vec!["config", "show", "--json"];
+        all.extend_from_slice(args);
+        let out = run_in(&dir, &all, None);
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+        let rows: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+        rows.into_iter()
+            .find(|row| row["key"] == "firebaseJson")
+            .unwrap()
+    };
+    // Found by the search in the working directory.
+    let row = show(&[]);
+    assert!(
+        row["value"].as_str().unwrap().ends_with("firebase.json"),
+        "{row}"
+    );
+    assert_eq!(row["source"], "discovered");
+    // Named on the command line, or as the --config file.
+    let row = show(&["--firebase-json", "other.json"]);
+    assert!(
+        row["value"].as_str().unwrap().ends_with("other.json"),
+        "{row}"
+    );
+    assert_eq!(row["source"], "explicit (--firebase-json)");
+    let row = show(&["--config", "firebase.json"]);
+    assert!(
+        row["value"].as_str().unwrap().ends_with("firebase.json"),
+        "{row}"
+    );
+    assert_eq!(row["source"], "explicit (--config)");
+    // Named by the canonical configuration, unless a flag chose another file.
+    write(
+        &dir,
+        "chosen.json",
+        r#"{"schemaVersion":1,"firebaseJson":"other.json"}"#,
+    );
+    let row = show(&["--config", "chosen.json"]);
+    assert!(
+        row["value"].as_str().unwrap().ends_with("other.json"),
+        "{row}"
+    );
+    assert_eq!(row["source"], "explicit");
+    let row = show(&[
+        "--config",
+        "chosen.json",
+        "--firebase-json",
+        "firebase.json",
+    ]);
+    assert!(
+        row["value"].as_str().unwrap().ends_with("firebase.json"),
+        "{row}"
+    );
+    assert_eq!(row["source"], "explicit (--firebase-json)");
+    // No Firebase configuration at all.
+    let bare = scratch("config-show-no-firebase-json");
+    write(&bare, "fireemu.json", r#"{"schemaVersion":1}"#);
+    let out = run_in(&bare, &["config", "show", "--json"], None);
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).unwrap();
+    let row = rows
+        .iter()
+        .find(|row| row["key"] == "firebaseJson")
+        .unwrap();
+    assert_eq!(row["value"], serde_json::Value::Null);
+    assert_eq!(row["source"], "unset");
+}
+
+#[test]
+fn log_verbosity_quiet_keeps_the_notes_about_keys_without_effect_off_standard_error() {
+    let dir = scratch("no-effect-note-verbosity");
+    let config = write(
+        &dir,
+        "fireemu.json",
+        r#"{"schemaVersion":1,"trace":{"enabled":true}}"#,
+    );
+    let config = config.to_str().unwrap();
+    for (level, shown) in [("quiet", false), ("info", true)] {
+        let out = exec_with(&["--config", config, "--log-verbosity", level], &["true"]);
+        assert!(out.status.success(), "{level}: {}", stderr(&out));
+        assert_eq!(
+            stderr(&out).contains("trace.enabled is accepted for forward compatibility"),
+            shown,
+            "{level}: {}",
+            stderr(&out)
+        );
+    }
+}
+
+#[test]
 fn config_show_defaults_cover_every_schema_leaf_without_loading_the_reference() {
     let dir = scratch("config-show-defaults");
     write(&dir, "fireemu.reference.jsonc", "not a configuration");
@@ -139,13 +283,16 @@ fn config_show_defaults_cover_every_schema_leaf_without_loading_the_reference() 
                 row["description"],
                 node["description"].as_str().unwrap_or("")
             );
-            if let Some(default) = node.get("default") {
+            if path == "bind" {
+                // Accepted but never read: the schema default is not shown as if in effect.
+                assert_eq!(row["value"], serde_json::Value::Null);
+                assert_eq!(row["source"], "accepted, no effect");
+            } else if let Some(default) = node.get("default") {
                 assert_eq!(&row["value"], default, "{path}");
                 assert_eq!(
                     row["source"],
                     match path.as_str() {
-                        "bind"
-                        | "firestore.history.maxBytes"
+                        "firestore.history.maxBytes"
                         | "firestore.deletedDatabaseIdCooldownSeconds" => "default (schema)",
                         "firestore.missingIndexes" => "derived from profile",
                         _ => "default",
@@ -327,7 +474,7 @@ fn config_show_uses_selected_files_and_runtime_normalization() {
         (
             "limits.enforcement",
             serde_json::json!("observe"),
-            "explicit",
+            "accepted, no effect",
         ),
         (
             "firestore.history.maxBytes",
@@ -339,6 +486,19 @@ fn config_show_uses_selected_files_and_runtime_normalization() {
         assert_eq!(row["value"], value, "{key}");
         assert_eq!(row["source"], source, "{key}");
     }
+    // chosen.json names missing.json, but --firebase-json selected.json is the file in use.
+    let firebase_json = rows
+        .iter()
+        .find(|row| row["key"] == "firebaseJson")
+        .unwrap();
+    assert!(
+        firebase_json["value"]
+            .as_str()
+            .unwrap()
+            .ends_with("selected.json"),
+        "{firebase_json}"
+    );
+    assert_eq!(firebase_json["source"], "explicit (--firebase-json)");
     let rules = rows
         .iter()
         .find(|row| row["key"] == "rules.source")

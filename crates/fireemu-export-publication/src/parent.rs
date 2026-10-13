@@ -224,7 +224,7 @@ pub(crate) fn trusted_ancestors(
 #[cfg(test)]
 #[allow(dead_code)]
 #[path = "../../../tests/support/trusted_temp.rs"]
-mod trusted_temp;
+pub(crate) mod trusted_temp;
 
 #[cfg(test)]
 mod tests {

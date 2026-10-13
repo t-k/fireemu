@@ -715,14 +715,13 @@ mod mount_point_tests {
     use super::{is_mount_root, is_publication_entry, move_entries, PublicationStage};
     use std::path::{Path, PathBuf};
 
+    /// A private directory under a trusted per-user base: staging refuses an ancestor that other
+    /// users can write, such as Linux's `/tmp`. Each test removes the directory itself.
     fn scratch(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "fireemu-publication-mount-{name}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir(&root).unwrap();
-        std::fs::canonicalize(root).unwrap()
+        let root = crate::parent::trusted_temp::TrustedTempDir::new(&format!("publication-mount-{name}"));
+        let path = std::fs::canonicalize(root.path()).unwrap();
+        std::mem::forget(root);
+        path
     }
 
     fn names(dir: &Path) -> Vec<String> {

@@ -8,6 +8,10 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Fixed
+
+- Strict Pub/Sub label keys now use the exact Unicode `Ll`/`Lo` first-character and `Ll`/`Lo`/`N` body classes from production's diagnostic (`[\p{Ll}\p{Lo}][\p{Ll}\p{Lo}\p{N}_-]{0,62}`), instead of an approximation that also admitted titlecase and modifier letters, letter numbers and combining marks. The diagnostics, their order and the emulator profile's permissive admission are unchanged.
+
 ## [0.17.0] - 2026-10-12
 
 Cloud Pub/Sub (PUBSUB) is now `COMPAT_VERIFIED` within its frozen production scope, so all 21 parents of the compatibility inventory are `COMPAT_VERIFIED`. The development defaults below make the `strict` profile usable in CI without signing keys or Google credentials; `productionExact` restores production's refusals.

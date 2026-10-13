@@ -1,5 +1,5 @@
 //! Shared configuration values and duration diagnostics; no clocks or network operations.
-use crate::label_value::is_label_value_char;
+use crate::label_value::{is_label_value_char, is_lowercase_or_other_letter};
 use crate::{PubSubError, Result};
 use fireemu_core_types::time::LogicalDuration;
 use std::fmt::Write as _;
@@ -45,8 +45,7 @@ pub fn validate_retention(duration: LogicalDuration) -> Result<()> {
 pub fn validate_labels(labels: &std::collections::BTreeMap<String, String>) -> Result<()> {
     for (key, value) in labels {
         let first = key.chars().next();
-        let letter = |ch: char| ch.is_alphabetic() && !ch.is_uppercase();
-        if first.is_none_or(|ch| !letter(ch)) {
+        if first.is_none_or(|ch| !is_lowercase_or_other_letter(ch)) {
             let first = first.map_or_else(String::new, |ch| ch.to_string());
             return Err(PubSubError::invalid_argument(format!(
                 r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels"; key "{key}" does not conform to regular expression "[\p{{Ll}}\p{{Lo}}][\p{{Ll}}\p{{Lo}}\p{{N}}_-]{{0,62}}"; first character "{first}" is not a non-uppercased letter (Unicode character class Ll or Lo))."#
@@ -58,10 +57,7 @@ pub fn validate_labels(labels: &std::collections::BTreeMap<String, String>) -> R
                 r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels"; key "{key}" exceeds maximum character length 63 with a length of {key_length})."#
             )));
         }
-        if !key
-            .chars()
-            .all(|ch| letter(ch) || ch.is_numeric() || matches!(ch, '_' | '-'))
-        {
+        if !key.chars().all(is_label_value_char) {
             return Err(PubSubError::invalid_argument(format!(
                 "Invalid label key: {key}."
             )));
@@ -89,15 +85,51 @@ pub fn validate_labels(labels: &std::collections::BTreeMap<String, String>) -> R
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    #[test]
+    fn label_key_first_character_requires_lowercase_or_other_letter() {
+        for first in ['\u{01c5}', '\u{02b0}', '\u{16ee}', '\u{0345}'] {
+            for suffix in [String::new(), "a".repeat(63)] {
+                let key = format!("{first}{suffix}");
+                let error = validate_labels(&[(key.clone(), String::new())].into()).unwrap_err();
+                assert_eq!(
+                    error.message(),
+                    format!(
+                        r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels"; key "{key}" does not conform to regular expression "[\p{{Ll}}\p{{Lo}}][\p{{Ll}}\p{{Lo}}\p{{N}}_-]{{0,62}}"; first character "{first}" is not a non-uppercased letter (Unicode character class Ll or Lo))."#
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn label_key_body_requires_lowercase_other_letter_number_underscore_or_hyphen() {
+        for ch in ['\u{01c5}', '\u{02b0}', '\u{0345}'] {
+            let key = format!("a{ch}");
+            let error = validate_labels(&[(key.clone(), String::new())].into()).unwrap_err();
+            assert_eq!(error.message(), format!("Invalid label key: {key}."));
+        }
+        for key in ["a\u{16ee}", "é中١Ⅰ²_-"] {
+            assert!(validate_labels(&[(key.to_owned(), String::new())].into()).is_ok());
+        }
+        let key = format!("a{}\u{0345}", "a".repeat(62));
+        let error = validate_labels(&[(key.clone(), String::new())].into()).unwrap_err();
+        assert_eq!(
+            error.message(),
+            format!(
+                r#"You have passed an invalid argument to the service (argument=Invalid labels: Invalid field "labels"; key "{key}" exceeds maximum character length 63 with a length of 64)."#
+            )
+        );
+    }
+
     proptest! {
         #[test]
-        fn unobserved_unicode_label_classes_retain_the_local_approximation(suffix in "[a-z0-9_-]{0,12}") {
-            // These representatives are local debt, not observed production admission.
-            for (class, first) in [("Ll", '\u{00e9}'), ("Lo", '\u{4e2d}'), ("Lt", '\u{01c5}'), ("Lm", '\u{02b0}'), ("Nl", '\u{2160}'), ("Mn", '\u{0345}')] {
-                let key = format!("{first}{suffix}");
-                let expected = first.is_alphabetic() && !first.is_uppercase();
-                prop_assert_eq!(validate_labels(&[(key, String::new())].into()).is_ok(), expected, "Unicode class {}", class);
-            }
+        fn unicode_label_keys_match_the_production_regex(key in prop_oneof![
+            proptest::collection::vec(any::<char>(), 0..70).prop_map(|chars| chars.into_iter().collect::<String>()),
+            r"[\p{Ll}\p{Lo}][\p{Ll}\p{Lo}\p{N}_-]{0,62}",
+            r"[\p{Ll}\p{Lo}\p{Lt}\p{Lm}\p{Nl}\p{Mn}0-9_-]{0,70}",
+        ]) {
+            let reference = regex::Regex::new(r"^[\p{Ll}\p{Lo}][\p{Ll}\p{Lo}\p{N}_-]{0,62}$").expect("the pattern is valid");
+            prop_assert_eq!(validate_labels(&[(key.clone(), String::new())].into()).is_ok(), reference.is_match(&key));
         }
     }
 

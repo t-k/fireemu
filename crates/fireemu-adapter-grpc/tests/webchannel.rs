@@ -1502,6 +1502,36 @@ async fn a_webchannel_listen_is_not_closed_at_the_hour() {
     }));
 }
 
+/// The terminate of a session the hub no longer has: production answers its unknown-session page
+/// (FS-DATA-WRITE follow-up recording, 2026-09-27); the emulator profile keeps the official
+/// emulator's empty 200.
+#[tokio::test]
+async fn terminating_an_unknown_session_follows_the_profile() {
+    for strict in [true, false] {
+        let (hub, _) = hub_and_local_with_profile(None, TokenAcceptance::Verified, strict);
+        let (status, _, body) = full(hub.handle(&ChannelRequest {
+            kind: StreamKind::Write,
+            method: "POST".to_owned(),
+            params: params(&[
+                ("database", DB),
+                ("VER", "8"),
+                ("RID", "2"),
+                ("SID", "missing-fireemu-terminate-probe"),
+                ("TYPE", "terminate"),
+            ]),
+            authorization: None,
+            app_check: Vec::new(),
+            origin: None,
+            body: String::new(),
+        }));
+        if strict {
+            assert_eq!((status, body.as_str()), (400, STRICT_UNKNOWN_SESSION_BODY));
+        } else {
+            assert_eq!((status, body.as_str()), (200, ""));
+        }
+    }
+}
+
 #[tokio::test]
 async fn listen_handshake_matches_production_width_and_scalar_only_in_strict() {
     let fixture: Value = serde_json::from_str(include_str!(

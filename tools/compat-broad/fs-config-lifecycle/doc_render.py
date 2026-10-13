@@ -7,9 +7,18 @@ cannot appear in one and not the other.
 from __future__ import annotations
 
 import sys
+import types
+from pathlib import Path
 from typing import Any
 
-from .surface_matrix import (
+# Run as a script (`python doc_render.py --write`), the hyphenated directory is not a package;
+# give it the namespace the tests' conftest gives it, so both import the same modules.
+if not __package__:
+    package = types.ModuleType("fs_config_lifecycle")
+    package.__path__ = [str(Path(__file__).resolve().parent)]
+    sys.modules.setdefault(package.__name__, package)
+    __package__ = package.__name__
+from .surface_matrix import (  # noqa: E402
     DATA_PLANE,
     LOCAL_SAFETY,
     MANAGED,

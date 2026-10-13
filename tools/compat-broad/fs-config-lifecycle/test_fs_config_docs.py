@@ -74,3 +74,18 @@ def test_both_documents_are_written_in_english_without_emoji() -> None:
     for path in (DOC_PATH, CAMPAIGN_DOC):
         text = _read(path)
         assert text.isascii(), path
+
+
+def test_the_renderer_runs_as_a_script() -> None:
+    # Regenerating after an edit that moves the cited lines is `python doc_render.py --write`;
+    # without --write the script only exits 1, so a clean run proves the imports resolve.
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = Path(__file__).with_name("doc_render.py")
+    result = subprocess.run(
+        [sys.executable, "-I", str(script)], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 1, result.stderr
+    assert result.stderr == ""

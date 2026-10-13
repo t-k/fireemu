@@ -211,6 +211,21 @@ impl Daemon {
         self.transcript.lock().unwrap().clone()
     }
 
+    /// The transcript once it holds every needle. The startup warnings go to stderr, which
+    /// another thread reads, so they can arrive after the `control API:` line on stdout.
+    fn transcript_with(&self, needles: &[&str]) -> String {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let transcript = self.transcript();
+            if needles.iter().all(|needle| transcript.contains(needle))
+                || std::time::Instant::now() >= deadline
+            {
+                return transcript;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn emulator(&self, name: &str) -> (String, u16) {
         let loopback = IpAddr::from([127, 0, 0, 1]);
         let (status, body) = http(loopback, self.hub_port, "GET", "/emulators", "");
@@ -259,7 +274,10 @@ fn a_host_on_every_interface_is_refused_without_the_opt_in() {
 #[test]
 fn the_emulators_answer_other_hosts_and_the_control_api_answers_loopback_only() {
     let daemon = Daemon::start(true).unwrap_or_else(|transcript| panic!("{transcript}"));
-    let transcript = daemon.transcript();
+    let transcript = daemon.transcript_with(&[
+        "warning: firestore listens on 0.0.0.0:",
+        "warning: auth listens on 0.0.0.0:",
+    ]);
     assert!(
         transcript.contains("warning: firestore listens on 0.0.0.0:"),
         "{transcript}"

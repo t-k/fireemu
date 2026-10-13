@@ -505,7 +505,13 @@ def test_cancellation_binds_completed_observation_proof_bytes(tmp_path):
         gate.snapshot()
 
 
-def test_failed_signup_cannot_gain_ownership_through_later_claim_update(tmp_path):
+def test_failed_signup_cannot_gain_ownership_through_later_claim_update(
+    tmp_path, monkeypatch
+):
+    # Keep ownership assertions independent of scheduling and state-save latency.
+    monkeypatch.setattr(shared_gate.time, "monotonic", lambda: 1000.0)
+    monkeypatch.setattr(shared_gate.time, "time", lambda: 1_800_000_000.0)
+    monkeypatch.setattr(shared_gate.time, "sleep", lambda seconds: None)
     plan = rules_plan()
     create(tmp_path / "gate", plan)
     gate = Gate(tmp_path / "gate", "rules-management")
@@ -526,7 +532,9 @@ def test_failed_signup_cannot_gain_ownership_through_later_claim_update(tmp_path
             "observation", slot["id"], lambda deadline, result=result: result
         )
     before = gate.snapshot()
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        ValueError, match="Rules mutation lacks acknowledged creation ownership"
+    ):
         gate.management_dispatch(
             "observation",
             plan["management"]["observation"][7]["id"],

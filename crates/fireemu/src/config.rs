@@ -7232,6 +7232,7 @@ mod tests {
     /// `appCheck.debugTokens` follows the absence of an `appCheck` block, `productionExact`, the
     /// profile and an explicit key, in that order of precedence.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn debug_tokens_are_open_only_for_the_strict_default_and_every_other_case_is_production() {
         let load = |extra: Value| {
             let mut input = json!({"schemaVersion": 1});

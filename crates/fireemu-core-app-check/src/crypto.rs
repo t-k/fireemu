@@ -73,7 +73,7 @@ mod tests {
         fn alg(&self) -> &'static str {
             "RS256"
         }
-        fn kid(&self) -> &str {
+        fn kid(&self) -> &'static str {
             "fireemu-app-check-0000000000000000"
         }
         fn sign(&self, _: &[u8]) -> Vec<u8> {

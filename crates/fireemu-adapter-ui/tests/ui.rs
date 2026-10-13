@@ -125,7 +125,7 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
             ui_addr: "127.0.0.1:4000".to_owned(),
             rules_enforced: true,
             clock_pinned: true,
-            app_check: app_check.as_ref().map(|s| AppCheckInfo {
+            app_check: app_check.as_ref().map(|_| AppCheckInfo {
                 modes: vec![
                     ("auth".to_owned(), "unenforced".to_owned()),
                     ("firestore".to_owned(), "enforced".to_owned()),

@@ -2699,7 +2699,19 @@ fn clock_millis(clock: &Arc<Mutex<VirtualClock>>) -> i64 {
     i64::try_from(nanos / 1_000_000).unwrap_or(i64::MAX)
 }
 
-#[allow(clippy::too_many_lines)]
+/// What the start banner says about dead-letter forwarding under the strict profile.
+fn dead_letter_banner(cfg: &RuntimeConfig) -> String {
+    match cfg.pubsub_dead_letter_authorization {
+        config::DeadLetterAuthorization::Implicit => "forwarded without grants (pubsub.deadLetterAuthorization \"implicit\"); productionExact requires them".to_owned(),
+        config::DeadLetterAuthorization::Iam => format!(
+            "forwarded after roles/pubsub.subscriber on the source subscription and roles/pubsub.publisher on the dead-letter topic are granted to serviceAccount:service-{}@gcp-sa-pubsub.iam.gserviceaccount.com",
+            pubsub_project_numbers(cfg)
+                .get(&cfg.auth_project)
+                .map_or("<project number>", String::as_str)
+        ),
+    }
+}
+
 /// The project numbers Pub/Sub derives its service agents from: the configured ones, and under
 /// `pubsub.deadLetterAuthorization = "iam"` one for the default project when none is configured
 /// (`daemon.authProjectNumbers`, else the number a local project gets elsewhere), so production's
@@ -2721,6 +2733,7 @@ fn pubsub_project_numbers(cfg: &RuntimeConfig) -> std::collections::BTreeMap<Str
     numbers
 }
 
+#[allow(clippy::too_many_lines)]
 fn print_banner(
     cfg: &RuntimeConfig,
     verb: &str,
@@ -2814,20 +2827,7 @@ fn print_banner(
         Some(a) => {
             println!("  pubsub (gRPC):    {a}   PUBSUB_EMULATOR_HOST={a}");
             if cfg.profile == config::CompatibilityProfile::Strict {
-                println!(
-                    "  dead letters:     {}",
-                    match cfg.pubsub_dead_letter_authorization {
-                        config::DeadLetterAuthorization::Implicit =>
-                            "forwarded without grants (pubsub.deadLetterAuthorization \"implicit\"); productionExact requires them"
-                                .to_owned(),
-                        config::DeadLetterAuthorization::Iam => format!(
-                            "forwarded after roles/pubsub.subscriber on the source subscription and roles/pubsub.publisher on the dead-letter topic are granted to serviceAccount:service-{}@gcp-sa-pubsub.iam.gserviceaccount.com",
-                            pubsub_project_numbers(cfg)
-                                .get(&cfg.auth_project)
-                                .map_or("<project number>", String::as_str)
-                        ),
-                    }
-                );
+                println!("  dead letters:     {}", dead_letter_banner(cfg));
             }
         }
         None => println!(

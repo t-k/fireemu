@@ -37,9 +37,22 @@ assert(windows_runs.include?("--exclude fireemu-verification-quint"), "Windows m
 assert(windows_runs.include?("--exclude traceability-check"), "Windows must exclude the Unix-only traceability supervisor")
 assert(windows_runs.include?("cargo nextest run -p fireemu --bin fireemu --test exec_windows --profile pr"), "Windows must execute fireemu binary unit tests and native lifecycle tests")
 
-sdk_runs = load_workflow("functions-sdk-discovery.yml").dig("jobs", "real-sdk-discovery", "steps").map { |step| step["run"] }.compact.join("\n")
+sdk = load_workflow("functions-sdk-discovery.yml")
+sdk_trigger = sdk["on"] || sdk[true]
+assert(!sdk_trigger.key?("pull_request_target"), "SDK discovery must not use pull_request_target")
+assert(sdk_trigger.keys.sort == %w[pull_request push schedule workflow_dispatch], "SDK discovery must run on manual dispatch, pull requests, pushes and a schedule only")
+%w[pull_request push].each do |event|
+  paths = sdk_trigger.dig(event, "paths")
+  assert(paths.is_a?(Array) && !paths.empty?, "SDK discovery #{event} must have a non-empty paths list")
+  %w[.github/workflows/functions-sdk-discovery.yml tools/runner-node/**].each do |path|
+    assert(paths.include?(path), "SDK discovery #{event} paths must include #{path}")
+  end
+end
+assert(sdk_trigger.dig("push", "branches") == ["main"], "SDK discovery must only run on pushes to main")
+assert(sdk["permissions"] == { "contents" => "read" }, "SDK discovery permissions must stay contents: read")
+sdk_runs = sdk.dig("jobs", "real-sdk-discovery", "steps").map { |step| step["run"] }.compact.join("\n")
 assert(sdk_runs.include?("npm ci --prefix tools/sdk-smoke --ignore-scripts"), "SDK environment regressions require installed real dependencies")
-assert(sdk_runs.include?("cargo test -p fireemu --test functions_environment -- --include-ignored"), "the manual SDK job must execute every environment regression including opt-in cases")
+assert(sdk_runs.include?("cargo test -p fireemu --test functions_environment -- --include-ignored"), "the SDK job must execute every environment regression including opt-in cases")
 
 release = load_workflow("release.yml")
 release_source = File.read(File.join(ROOT, ".github", "workflows", "release.yml"))
@@ -272,7 +285,7 @@ jobs.each do |job, definition|
   end
 end
 
-%w[functions-sdk-discovery.yml quint.yml].each do |name|
+%w[quint.yml].each do |name|
   heavy = load_workflow(name)
   heavy_trigger = heavy["on"] || heavy[true]
   assert(heavy_trigger.keys == ["workflow_dispatch"], "#{name} must be manual-only before publication")

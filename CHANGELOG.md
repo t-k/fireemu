@@ -10,11 +10,24 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Changed
 
+- Under the strict profile the Storage emulator now refuses what production refuses and the official emulator accepts (owner decision of 2026-10-13: a gap that hides an app bug must fail by default). The `emulator` profile is unchanged.
+  - An object operation on a bucket that does not exist (upload, read, list, delete, copy, rewrite, ACL, form upload, public URL) answers 404 `The specified bucket does not exist.` instead of creating the bucket. The project's two default buckets, the buckets of `firebase.json` storage targets, the buckets a deployed Storage trigger names, buckets that hold imported data and the new `storage.buckets` list exist. Bucket names Cloud Storage never accepts answer 400 `Invalid bucket name` on the JSON API.
+  - `GET /{bucket}/{object}` (what `file.publicUrl()` builds) answers 403 `AccessDenied` for an object that is not public, unless the request has an `Authorization` header or is a signed URL that has not expired. An object becomes public with `file.makePublic()` (an `allUsers` `READER` ACL entry) or `predefinedAcl=publicRead` on upload, for that generation only. Firebase download-token URLs are unchanged.
+  - An expired signed URL answers 400 `ExpiredToken`; a V4 URL with a lifetime over seven days or an unreadable `X-Goog-Date` answers 400. The signature is still not verified.
+  - A form upload (`POST /{bucket}`) needs a signed policy; the policy's expiry and conditions are enforced.
+  - A Firebase ID token used as an OAuth bearer on the JSON API answers 401 `Invalid Credentials`.
+  - An ACL entry with an entity or role Cloud Storage does not know answers 400.
+  - A Firebase list with a `maxResults` that is no number or a `pageToken` that cannot be decoded answers 400 instead of listing from the first page.
+  - The error texts of the new refusals the recordings do not cover are Cloud Storage's documented ones and are marked unrecorded in the compatibility contract.
+
 - Under the strict profile a query whose composite index is not defined (or is still building, or was deleted) is refused by default again, with production's `FAILED_PRECONDITION` and its console link to the index (owner decision of 2026-10-13), whether or not `productionExact` is set. `productionExact` no longer moves `firestore.missingIndexes`, so it is no longer listed among the development defaults in the start banner or `GET /v1/capabilities`. To keep the version 0.17 behavior of running the query and reporting the missing index once per database and index on stderr, set `"firestore": {"missingIndexes": "report"}`. The emulator profile is unchanged: it runs every query, as the official emulator does.
 - `fireemu config show` and `fireemu init --reference` now say which accepted keys the daemon does not read (`limits.catalog`, `limits.enforcement`, `firestore.explain`, `firestore.pipeline.enabled`, `firestore.textSearch.*`, `rules.staticLimitChecks`, `bind`, `auth.enabled`, `trace.*` and others, 33 in all): `config show` gives them the source `accepted, no effect` instead of echoing the value or the schema default as if it were in effect, and a configuration that sets one prints one `note:` line per key at start-up. Such configurations still load. `firebaseJson` shows the file actually selected, including one chosen with `--firebase-json`.
 
 ### Added
 
+- `storage.buckets`: extra Cloud Storage buckets a project owns, which exist under the strict profile.
+- `storage.defaultBucket` (`"both"` by default, or `"firebasestorage.app"` or `"appspot.com"`): refuse the default bucket name your production project does not have.
+- `POST /storage/v1/b/{bucket}/o/{object}/acl`, the long spelling of the object ACL route, in both profiles.
 - `fireemu config show` lists schema keys with effective values, sources and optional JSON descriptions, using the same configuration loading as `up`.
 - `fireemu init --reference` writes a commented `fireemu.reference.jsonc` without expanding the minimal runtime configuration or pinning productionExact defaults.
 - The startup banner and `GET /v1/capabilities` now show each effective development-default value and its source, including explicit overrides and derived settings, alongside `productionExact`.
@@ -22,6 +35,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ### Fixed
 
+- The README and documentation site no longer say that object versioning and Storage archive events are unsupported: versioning is served on the JSON API bucket resource, and archive events fire for a versioned bucket.
 - UI addresses in the README now include `/ui/`.
 - The `auth.totp` schema description explains the MFA configuration required under strict and links to the README example.
 - The README, compatibility contract and schema clarify that `auth.allowUnsignedIdTokens: false` disables only the mock-token fallback, how to test that refusal, and how `auth.idTokenSigning: "session-rsa"` refuses all unsigned ID tokens.

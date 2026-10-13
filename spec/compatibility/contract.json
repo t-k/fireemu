@@ -1595,6 +1595,7 @@
             "tests": [],
             "integration": [
               "crates/fireemu-adapter-http/tests/storage.rs",
+              "crates/fireemu-adapter-http/tests/storage_permissive_gaps.rs",
               "crates/fireemu-core-storage/tests/store.rs",
               "crates/fireemu-core-storage/tests/stored_bytes.rs",
               "crates/fireemu/tests/storage_limits.rs",
@@ -1641,6 +1642,10 @@
             {
               "behaviour": "the strict profile applies the list filters startOffset (inclusive), endOffset (exclusive) and matchGlob to object names, as recorded (lean-v5), and refuses includeTrailingDelimiter=true with 400 (not recorded); versions=true lists every generation (object versioning is implemented, see the versioning entry) and the same three filters apply to every generation it lists (a versions listing with a filter was not recorded: the documented JSON API semantics are followed, not a refusal); the strict profile also refuses unsatisfiable media ranges with 416 and Content-Range; a nonzero suffix on an empty object is accepted as RFC 9110 section 14.1.1 specifies; the emulator profile retains the official emulator's behavior; https://cloud.google.com/storage/docs/json_api/v1/objects/list, https://cloud.google.com/storage/docs/json_api/v1/status-codes, https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.1",
               "precision": "conservative"
+            },
+            {
+              "behaviour": "the strict profile refuses what production refuses and the official emulator accepts, with the XML API texts, the ACL texts and the list-parameter texts UNRECORDED (Cloud Storage's documented codes): an object operation on a bucket that nothing declared answers 404 `The specified bucket does not exist.` (recorded for the bucket resource, FE v5) where the official emulator creates it on first use; a bucket name Cloud Storage never accepts answers 400 on the JSON API; an anonymous GET /{bucket}/{object} of an object without an allUsers READER ACL answers 403 AccessDenied; an expired signed URL answers 400 ExpiredToken and a form upload needs a signed policy whose expiry and conditions it meets; a Firebase ID token as a JSON API bearer answers 401 Invalid Credentials; an unknown ACL entity or role and an unreadable Firebase list maxResults or pageToken answer 400. Signatures are never verified and any other JSON API credential is served as the owner (documented development defaults, docs: site/src/content/docs/guides/profiles.md). The emulator profile keeps the official emulator's behaviour.",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [

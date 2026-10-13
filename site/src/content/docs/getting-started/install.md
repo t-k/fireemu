@@ -1,0 +1,118 @@
+---
+title: Install and run
+description: Install Fireemu from npm, create fireemu.json, and start the emulators.
+---
+
+## Requirements
+
+- Node.js 20 or newer.
+- To run Cloud Functions, `firebase-functions` v6 or v7 in the codebase.
+
+| OS | Architecture |
+|---|---|
+| macOS 13 or newer | Apple silicon, Intel |
+| Linux | x86-64, arm64 |
+| Windows 10 or newer | x86-64 |
+
+## Install
+
+Add Fireemu as a development dependency of your project. The package installs a prebuilt binary for your platform.
+
+```sh
+npm install --save-dev fireemu
+```
+
+## Create `fireemu.json`
+
+```sh
+npx fireemu init
+```
+
+`init` creates `fireemu.json` in the current directory. Interactively, it asks which [compatibility profile](../../guides/profiles/) to use (`strict`, the default, is recommended) and whether to reuse an existing `firebase.json`. When you reuse it, Fireemu references the file instead of copying it: Security Rules, indexes, Functions codebases and ports are read from it every time Fireemu starts.
+
+For CI or a script, use the non-interactive form. An existing `fireemu.json` is not overwritten unless you pass `--force`.
+
+```sh
+npx fireemu init --yes
+```
+
+The generated file looks like this:
+
+```json
+{
+  "$schema": "https://fireemu.dev/spec/config/fireemu.schema.json",
+  "schemaVersion": 1,
+  "profile": "strict",
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native"
+  }
+}
+```
+
+## Start the emulators
+
+```sh
+npx fireemu up
+```
+
+`up` keeps the emulators running until you press `Ctrl+C`. Open the [Emulator UI](../../guides/ui/) at `http://127.0.0.1:4000` to inspect and manage data.
+
+The first lines of the startup output name the configuration files that were loaded and say, for Firestore and Storage, whether Security Rules are loaded.
+
+## Run a command against the emulators
+
+To run the emulators only for the duration of a command, such as your test suite, use `exec`:
+
+```sh
+npx fireemu exec -- npm test
+```
+
+`exec` starts the emulators, runs the command once every listener is ready, with the Firebase SDK emulator environment variables set (see [Connect your app](../connect/)), stops everything when the command exits, and exits with the command's status. `SIGINT` and `SIGTERM` are forwarded to the command. `exec` does not start the UI unless you add `--ui`.
+
+The official command names are available as aliases:
+
+```sh
+npx fireemu emulators:start
+npx fireemu emulators:exec -- npm test
+```
+
+## Choose services
+
+By default Fireemu starts Firestore, Authentication, Storage and App Check; Functions when a codebase is configured, and with it Eventarc and Cloud Tasks; and Pub/Sub when it is configured. Use `--only` to choose:
+
+```sh
+npx fireemu up --only auth,firestore,storage
+npx fireemu exec --only firestore -- npm test
+
+# One Functions codebase
+npx fireemu up --only functions:<codebase>
+```
+
+## Default ports
+
+Fireemu uses the same default ports as the Local Emulator Suite. A port set in `firebase.json` or on the command line takes precedence.
+
+| Service | Port | Option |
+|---|---|---|
+| Emulator UI | 4000 | `--ui-port` |
+| Emulator Hub | 4400 | `--hub-port` |
+| Logging | 4500 | `--logging-port` |
+| Cloud Functions | 5001 | `--functions-port` |
+| Cloud Firestore | 8080 | `--firestore-port` |
+| Cloud Pub/Sub | 8085 | `--pubsub-port` |
+| Authentication | 9099 | `--http-port` |
+| Cloud Storage | 9199 | `--storage-port` |
+| Eventarc | 9299 | `--eventarc-port` |
+| Cloud Tasks | 9499 | `--tasks-port` |
+
+## Get help
+
+Every command documents its options:
+
+```sh
+npx fireemu --help
+npx fireemu exec --help
+```
+
+If the emulators do not start, run `npx fireemu doctor`. See [Troubleshooting](../../guides/troubleshooting/).

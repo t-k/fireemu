@@ -1,0 +1,61 @@
+---
+title: CI and containers
+description: Run Fireemu in GitHub Actions and in containers.
+---
+
+## GitHub Actions
+
+`fireemu exec` returns your test command's exit status, so a CI job needs no separate start and stop steps:
+
+```yaml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx fireemu exec -- npm test
+```
+
+Fireemu needs no Java and no download at startup: the npm package installs a native binary for the runner's platform.
+
+To also check what the development defaults let through, such as a missing composite index, add a job that runs with a `fireemu.json` that sets [`productionExact`](../profiles/):
+
+```sh
+npx fireemu exec --config fireemu.production-exact.json -- npm test
+```
+
+### Container jobs
+
+In a GitHub Actions `container:` job, or any container that runs as root with a bind-mounted checkout, the checkout is owned by a host user that the container's root does not trust, so a discovered `fireemu.json` or `firebase.json` is skipped with a warning. Name the files explicitly, or `chown` the checkout:
+
+```sh
+npx fireemu exec --config fireemu.json --firebase-json firebase.json -- npm test
+```
+
+See [Configuration files](../configuration/#file-ownership-checks).
+
+## Serve the emulators from a container
+
+By default every listener is on loopback, which a published container port cannot reach. To serve the emulators to the host or to other containers, opt in with `network.allowNonLoopbackHosts` in `fireemu.json`, and give the product emulators a host in `firebase.json`:
+
+```json
+{ "schemaVersion": 1, "firebaseJson": "firebase.json", "network": { "allowNonLoopbackHosts": true } }
+```
+
+```json
+{
+  "emulators": {
+    "firestore": { "host": "0.0.0.0", "port": 8080 },
+    "auth": { "host": "0.0.0.0", "port": 9099 }
+  }
+}
+```
+
+- Only Firestore, Authentication, Storage, Functions, Eventarc, Cloud Tasks and Pub/Sub may listen off loopback. The Hub, the UI and the Logging emulator stay on loopback.
+- The emulators serve without a credential, so startup prints a `warning:` line for each listener off loopback. Any client that reaches a published port can do what a local client can, including with the Admin SDK's owner credential. Publish the ports only to a network you trust.
+- Fireemu's own controls (the control API, App Check debug-token management, and the routes that load Security Rules or clear Firestore data) answer loopback peers only. Run code that uses them inside the container, or in a container that shares its network namespace, such as a Podman pod or `--network container:<name>`.
+- Browser pages must still come from a loopback origin (`http://localhost:...`).

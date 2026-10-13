@@ -1,0 +1,45 @@
+---
+import { loadRepositoryData, capabilityRows } from '../data/compat.mjs';
+
+const rows = capabilityRows((await loadRepositoryData()).capabilities);
+const products = [...new Set(rows.map((row) => row.product))];
+---
+
+{products.map((product) => (
+	<>
+		<h3>{product}</h3>
+		<table>
+			<thead>
+				<tr><th>Capability</th><th>Status</th><th>Details</th></tr>
+			</thead>
+			<tbody>
+				{rows.filter((row) => row.product === product).map((row) => (
+					<tr>
+						<td><code>{row.id}</code></td>
+						<td><span class:list={['status', `status-${row.status.split(' ')[0].toLowerCase()}`]}>{row.status}</span></td>
+						<td>
+							{row.implemented.length > 0 && (
+								<details>
+									<summary>Implemented ({row.implemented.length})</summary>
+									<ul>{row.implemented.map((text) => <li>{text}</li>)}</ul>
+								</details>
+							)}
+							{row.unimplemented.length > 0 && (
+								<details>
+									<summary>Not implemented ({row.unimplemented.length})</summary>
+									<ul>{row.unimplemented.map((text) => <li>{text}</li>)}</ul>
+								</details>
+							)}
+							{row.notes.length > 0 && (
+								<details>
+									<summary>Notes ({row.notes.length})</summary>
+									<ul>{row.notes.map((text) => <li>{text}</li>)}</ul>
+								</details>
+							)}
+						</td>
+					</tr>
+				))}
+			</tbody>
+		</table>
+	</>
+))}

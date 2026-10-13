@@ -1,0 +1,76 @@
+---
+title: App Check
+description: Test Firebase App Check enforcement locally with debug tokens.
+---
+
+The Local Emulator Suite has no App Check. Fireemu adds a local App Check implementation, so you can test how Authentication, Firestore, Storage and callable functions treat requests with and without a valid App Check token.
+
+Local App Check uses debug tokens. Real attestation through Play Integrity, App Attest, DeviceCheck or reCAPTCHA, and replay protection with limited-use tokens, are not supported.
+
+## Register an app
+
+App Check is off by default. Enable it and register the app with the SHA-256 digests of its debug tokens. The configuration stores only digests, never a raw token.
+
+```json
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "appCheck": {
+    "enabled": true,
+    "apps": [
+      {
+        "projectId": "demo-app",
+        "projectNumber": "1234567890",
+        "appId": "1:1234567890:web:local-test-app",
+        "debugTokenSha256": ["<sha256 of your debug token>"]
+      }
+    ],
+    "services": {
+      "auth": "unenforced",
+      "firestore": "enforced",
+      "storage": "enforced"
+    }
+  }
+}
+```
+
+Each service accepts `off`, `unenforced` (tokens are checked and recorded, requests still pass) or `enforced` (requests without a valid token are refused before Security Rules run). A project without a registered app cannot use App Check, so an enforced service refuses every request to it.
+
+Use a made-up debug token for tests. To get the digest:
+
+```sh
+printf %s "$DEBUG_TOKEN" | shasum -a 256
+```
+
+## Get a token from the Web SDK
+
+`@firebase/app-check` always calls the production exchange endpoint, so use a `CustomProvider` that exchanges the debug token with Fireemu. `fireemu exec` sets `FIREEMU_APP_CHECK_EMULATOR_HOST`:
+
+```js
+import { initializeApp } from 'firebase/app';
+import { CustomProvider, initializeAppCheck } from 'firebase/app-check';
+
+const APP_ID = '1:1234567890:web:local-test-app';
+const host = process.env.FIREEMU_APP_CHECK_EMULATOR_HOST;
+
+async function exchangeDebugToken() {
+  const url = `http://${host}/v1/projects/demo-app/apps/${encodeURIComponent(APP_ID)}:exchangeDebugToken`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ debugToken: process.env.DEBUG_TOKEN, limitedUse: false }),
+  });
+  const body = await response.json();
+  const ttlSeconds = Number.parseInt(String(body.ttl).replace(/s$/, ''), 10);
+  return { token: body.token, expireTimeMillis: Date.now() + ttlSeconds * 1000 };
+}
+
+const app = initializeApp({ projectId: 'demo-app', apiKey: 'fake-api-key', appId: APP_ID });
+initializeAppCheck(app, { provider: new CustomProvider({ getToken: exchangeDebugToken }) });
+```
+
+## Callable functions
+
+`enforceAppCheck: true` on a callable refuses a call without a valid token with 401 before the function runs, and a valid token fills `request.app`. Replay protection is not supported: a call that presents a valid token to a callable with `consumeAppCheckToken: true` is refused with 501 `APP_CHECK_REPLAY_UNSUPPORTED`, so a test can never pass on a token that production would have consumed.
+
+Tokens are signed with a key that belongs to one daemon instance and are invalidated by a session reset or snapshot restore, so a token does not carry over between runs.

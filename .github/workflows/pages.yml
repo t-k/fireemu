@@ -1,0 +1,74 @@
+name: pages
+
+# Builds the documentation site in site/ on every change that can affect it.
+# Publishing is manual: run this workflow from main with "deploy" checked.
+# Nothing is published by a push or a pull request.
+
+on:
+  pull_request:
+    paths:
+      - "site/**"
+      - "spec/compatibility/contract.json"
+      - "spec/compatibility/closure/*.json"
+      - "spec/config/fireemu.schema.json"
+      - "crates/fireemu/src/capabilities.json"
+      - ".github/workflows/pages.yml"
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "spec/compatibility/contract.json"
+      - "spec/compatibility/closure/*.json"
+      - "spec/config/fireemu.schema.json"
+      - "crates/fireemu/src/capabilities.json"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Publish the built site to GitHub Pages (main only).
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.32.1"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: site/pnpm-lock.yaml
+      - run: pnpm -C site install --frozen-lockfile
+      - name: compatibility data mapping
+        run: pnpm -C site test
+      - run: pnpm -C site build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+
+  deploy:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

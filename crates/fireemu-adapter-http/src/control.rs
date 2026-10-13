@@ -347,6 +347,26 @@ pub struct ControlState {
     /// The App Check registry, when App Check is enabled: the observation route reads it, and
     /// the lifecycle hooks rotate epochs through it.
     pub app_check: Option<fireemu_core_app_check::AppCheckGate>,
+    /// Ends every end user's native gRPC `Firestore.Listen` stream now, as production ends one
+    /// at its one-hour lifetime, and answers how many streams it ended
+    /// (`POST /v1/firestore/listen:expire`). `None` when no Firestore enforcer runs.
+    pub firestore_listen_expiry: Option<Arc<dyn Fn() -> usize + Send + Sync>>,
+    /// Every control request needs the control token, from a process as from a page, except
+    /// the health checks: set with `network.allowNonLoopbackHosts`, where a forwarder in the
+    /// listener's network namespace (`kubectl port-forward`, a sidecar proxy) delivers another
+    /// host's client as a loopback peer.
+    pub require_control_token: bool,
+}
+
+/// `POST /v1/firestore/listen:expire`: ends every end user's native `Listen` stream now.
+fn expire_listen_streams(state: &ControlState) -> JsonResponse {
+    match &state.firestore_listen_expiry {
+        Some(expire) => ok(json!({"expired": expire()})),
+        None => error(
+            409,
+            "FAILED_PRECONDITION : no Firestore Security Rules enforcer runs (rules.executionMode is disabled or Firestore is not selected), so no end-user Listen stream is held",
+        ),
+    }
 }
 
 /// Where the App Check observations of one session are served.
@@ -623,6 +643,7 @@ pub fn handle_with(
                 _ => error(404, "NOT_FOUND"),
             }
         }
+        ("POST", "/v1/firestore/listen:expire") => expire_listen_streams(state),
         ("GET" | "PUT" | "DELETE", "/v1/storage/rules") => {
             let _admitted = state.barrier.as_ref().map(|b| b.admit());
             storage_rules_route(&state.storage_rules, method, body)
@@ -2515,10 +2536,23 @@ pub fn browser_guard(
     path: &str,
     headers: &RequestHeaders,
 ) -> Option<JsonResponse> {
-    let origin = headers.origin.as_deref()?;
     // Decide on the same path the router matches: a query string must not change which
     // routes are privileged.
     let path = path.split('?').next().unwrap_or(path);
+    if state.require_control_token && !path.starts_with("/health/") {
+        let presented = headers
+            .authorization
+            .as_deref()
+            .and_then(|a| a.strip_prefix("Bearer "))
+            .map(str::trim);
+        if !token_matches(presented, &state.control_token) {
+            return Some(error(
+                403,
+                "CONTROL_TOKEN_REQUIRED : network.allowNonLoopbackHosts is on, so every control request needs Authorization: Bearer <control token> (FIREEMU_CONTROL_TOKEN in a fireemu exec command)",
+            ));
+        }
+    }
+    let origin = headers.origin.as_deref()?;
     let privileged = (method != "GET" && !path.starts_with("/health/"))
         || is_resources_path(path)
         || is_rules_requests_path(path);

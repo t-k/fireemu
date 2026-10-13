@@ -55,6 +55,7 @@ impl AdminGrpc {
             app_check: Vec::new(),
             body,
             origin: None,
+            remote_peer: false,
             browser_metadata: false,
             // An Admin call is never a BatchWrite, so it has no field order to keep.
             batch_field_order: Vec::new(),

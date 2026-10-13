@@ -149,6 +149,18 @@ On Unix-like systems, the destination and its ancestor directories are subject t
 
 On macOS, an ancestor directory with an ACL is refused when the ACL has an `allow` entry for anyone but the owner, root or the user running the export, whatever permissions the entry shows (the kernel grants rights that `ls -le` does not list). `deny` entries are accepted, so a standard home directory (which carries `group:everyone deny delete`) and the folders below it work. When an export is refused for an ACL, the message names the entry; remove it (`chmod -a`) or export to another directory, for example one under `$TMPDIR`. Check an ancestor with `/bin/ls -led <directory>`. A destination on a volume that ignores ownership (exFAT and FAT sticks and cards, or an external APFS volume with "Ignore ownership on this volume" turned on) is refused, because the owner and the mode of its directories do not show who can change them; export to a volume that enforces ownership. A volume without atomic directory rename (exFAT, FAT, some network filesystems) cannot publish an export either: use a directory on an APFS volume.
 
+### Keep data between runs
+
+`--import <dir>` loads an export at startup, and `--export-on-exit` (without a directory of its own) writes the state back to the same directory when the run ends:
+
+```sh
+npx fireemu exec --import ./emulator-data --export-on-exit -- npm test
+```
+
+- An empty `--import` directory starts with no data, so the first run of a new volume needs no separate command. A missing directory is refused (a mistyped path must not start an empty suite), unless it is also where `--export-on-exit` writes. A directory that holds anything but no `firebase-export-metadata.json` is refused.
+- A failed `--export-on-exit` is printed as an `error:` line, and the run exits 1 when the command succeeded (a failing command keeps its own exit code). The official CLI only warns and exits 0; Fireemu differs so that a CI job that depends on the saved data cannot pass without it.
+- The export directory may be a volume mount point, for example a container volume mounted at `/data`. A mount point cannot be replaced by an atomic rename, so the export is staged inside it and moved into place, the old `firebase-export-metadata.json` leaving first and the new one arriving last. That replacement is not atomic: an interrupted export leaves a directory without the manifest, which `--import` refuses instead of loading part of it. Any other directory is still replaced atomically.
+
 ### Troubleshooting
 
 For startup or installation problems, inspect the environment and bundled files with:
@@ -212,6 +224,17 @@ Under the `strict` profile, a project without Security Rules behaves as a produc
 
 The answers keep production's wording, which does not mention Fireemu. The startup output therefore has a `firestore rules:` and a `storage rules:` line that say when no rules are loaded and how to load them, and the first refused request for each database and bucket (up to 32 of each) prints a warning to standard error. Name the rules files in `firebase.json` (`firestore.rules`, `storage.rules`) or in `fireemu.json` (`rules.source`, `storage.rules`).
 
+### Why a request was denied
+
+A Security Rules denial is answered with production's wording (Firestore's `PERMISSION_DENIED` "Missing or insufficient permissions.", Storage's 403), which does not say which rule refused. Fireemu therefore prints each denial of an end-user request to standard error, with every `allow` condition the request evaluated and what it evaluated to:
+
+```text
+note: firestore: Security Rules denied get on "notes/n1" in "database (default)" (request.auth.uid "bob"): no allow statement evaluated to true; line 5:22 `request.auth.uid == resource.data.owner` was false
+```
+
+- Set `rules.denialLog` to `"off"` in `fireemu.json` to silence these lines (for example in a suite that asserts many denials). The answer to the client is the same either way.
+- When the UI is running, its Rules page lists the decided requests from the start of the run, with what every expression evaluated to. The same trace is served by `GET /v1/sessions/default/rules/requests` on the control API.
+
 ### Compatibility profiles
 
 | Profile | Behavior |
@@ -241,6 +264,8 @@ Fireemu is mostly run by tests, in CI and on a developer's machine. Where produc
 | Identity-provider sign-in accepts the fixture assertions and the sign-in widget (`/emulator/auth/handler`), for built-in, `oidc.*` and `saml.*` providers | `auth.idpAssertions` (`"fixture"`) | `"signed"`: OIDC ID tokens must verify with an `auth.idpSigners` key, SAML responses with the provider's certificates, and the fixture and built-in providers are refused |
 | The strict Eventarc listener admits any credential or none, so the Admin SDK publishes with a fake credential (see [Eventarc authentication](docs/eventarc-authentication.md)) | `eventarc.authentication` (`"permissive"`) | `"production"`: a missing, malformed or JWT-shaped bearer is refused with production's 401 |
 | A query whose composite index is not defined (or is still building, or was deleted) runs, and each missing index is reported once per database on stderr with production's refusal text and the `firestore.indexes.json` entry | `firestore.missingIndexes` (`"report"`) | refused with `FAILED_PRECONDITION` and the console link (`"refuse"`) |
+| A tenant of `auth.tenants` can have any readable id, such as `tenant-a` | `auth.tenantIdFormat` (`"readable"`) | the id must have production's generated form, the display name, a hyphen and five characters of `a-z0-9` (`"generated"`) |
+| An end user's native gRPC `Listen` stream stays open however long it is held. `POST /v1/firestore/listen:expire` on the control API ends every held end-user stream at once, with production's status, to test a client's reconnect | `firestore.listenStreamLifetime` (`"unlimited"`) | ended with `INTERNAL` an hour after it opened, as production ends it (`"oneHour"`) |
 
 The start banner and `fireemu capabilities` report whether `productionExact` is set.
 
@@ -415,7 +440,7 @@ Under the `strict` profile, enable `multiTenant.allowTenants` before using multi
 
 #### Start with tenants
 
-Instead of creating tenants through the Admin API in every session, declare the default project's tenants and the multi-tenancy switch in the file. Each entry of `auth.tenants` is an Admin v2 `Tenant` document plus its `tenantId`, which has the form production generates, the display name, a hyphen, and five characters of `a-z0-9`:
+Instead of creating tenants through the Admin API in every session, declare the default project's tenants and the multi-tenancy switch in the file. Each entry of `auth.tenants` is an Admin v2 `Tenant` document plus its `tenantId`. By default the id can be any readable name that starts with a letter and holds letters, digits and hyphens (up to 63 characters), such as `tenant-a`. With `productionExact` or `auth.tenantIdFormat: "generated"` it must have the form production generates, the display name, a hyphen, and five characters of `a-z0-9`, such as `acme-x7k2q`:
 
 ```json
 {
@@ -425,7 +450,7 @@ Instead of creating tenants through the Admin API in every session, declare the 
     "multiTenant": { "allowTenants": true },
     "tenants": [
       {
-        "tenantId": "acme-x7k2q",
+        "tenantId": "tenant-a",
         "displayName": "acme",
         "allowPasswordSignup": true,
         "mfaConfig": { "state": "ENABLED", "enabledProviders": ["PHONE_SMS"] }
@@ -545,6 +570,25 @@ Check support for the specific APIs and conditions your application uses, rather
 ### Network exposure of the Storage port
 
 Like the official emulator, the Storage port reflects the requested object name in the HTML body of its 404 for a missing media read (`text/html`, as production answers). A web page opened on the developer's machine could therefore run script on that origin. Keep the emulator bound to localhost, which is the default, and do not expose the Storage port to other hosts or networks. The strict profile sends no `X-Content-Type-Options: nosniff` on the JSON API answers where production sends none, so it does not add that defence in depth; the emulator profile keeps the official emulator's header.
+
+### Run in a container
+
+By default every listener is on loopback, which a published container port cannot reach. To serve the emulators to the host or to other containers, opt in with `network.allowNonLoopbackHosts` in `fireemu.json` and give the product emulators a host in `firebase.json`:
+
+```json
+{ "schemaVersion": 1, "firebaseJson": "firebase.json", "network": { "allowNonLoopbackHosts": true } }
+```
+
+```json
+{ "emulators": { "firestore": { "host": "0.0.0.0", "port": 8080 }, "auth": { "host": "0.0.0.0", "port": 9099 } } }
+```
+
+- Only Firestore, Auth, Storage, Functions, Eventarc, Cloud Tasks and Pub/Sub may listen off loopback. The Hub, the UI and the Logging emulator stay on loopback. Auth, whose port also serves the control API, listens on loopback or on every interface (`0.0.0.0` or `::`), not on one other address.
+- The emulators serve without a credential, so the start prints a `warning:` line for each listener off loopback. Any client that reaches a published port can do what a local client can on the product APIs, including the Admin SDK's `Bearer owner` credential and the Auth emulator's own routes. Publish the ports only to a network you trust.
+- Fireemu's own controls answer loopback peers only and return 403 to any other peer: the control API (`/v1/` and `/health/` on the Auth port), App Check debug-token management, and the routes that load Security Rules or clear Firestore data (what `@firebase/rules-unit-testing`'s `loadFirestoreRules`, `loadStorageRules` and `clearFirestore` call). Run the code that uses them in the emulator's network namespace: inside the container, or in a container that shares it (a Podman pod, `--network container:<name>`).
+- Because a forwarder inside that namespace (`kubectl port-forward`, a sidecar proxy) connects from loopback, every control API request also needs `Authorization: Bearer <control token>` once the option is on, from a process as from a page; only `/health/` is exempt. The routes that load Security Rules or clear Firestore data are not held to the token, so `@firebase/rules-unit-testing` keeps working; a client that reaches the emulator through such a forwarder can call them, as it could on the official emulator. `fireemu exec` gives its command the token in `FIREEMU_CONTROL_TOKEN`, and `fireemu/testing` and the UI send it.
+- Browser pages must still come from a loopback origin (`http://localhost:...`), so a page served from another host cannot use the exposed ports.
+- A listener on `0.0.0.0` or `::` is advertised as `127.0.0.1` or `::1` in the environment and the Hub, as the official CLI does.
 
 ### Changes between versions
 

@@ -360,9 +360,12 @@ fn control_get(control_url: &str, path: &str) -> Result<String, String> {
     stream
         .set_read_timeout(Some(std::time::Duration::from_secs(30)))
         .map_err(|e| e.to_string())?;
+    // A daemon exposed with network.allowNonLoopbackHosts asks every control request for the
+    // token; inside `fireemu exec` it is in the environment.
+    let authorization = control_token_header(std::env::var("FIREEMU_CONTROL_TOKEN").ok());
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\n{authorization}Connection: close\r\n\r\n"
     )
     .map_err(|e| e.to_string())?;
     let mut raw = String::new();
@@ -380,9 +383,39 @@ fn control_get(control_url: &str, path: &str) -> Result<String, String> {
     Ok(body.to_owned())
 }
 
+/// The `Authorization` header line for `token`, or nothing for an absent token or one that is
+/// not a plain token (so no value can add a header of its own).
+fn control_token_header(token: Option<String>) -> String {
+    token
+        .filter(|token| {
+            !token.is_empty()
+                && token
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+        })
+        .map(|token| format!("Authorization: Bearer {token}\r\n"))
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{report, runner_supported_majors};
+    use super::{control_token_header, report, runner_supported_majors};
+
+    #[test]
+    fn the_control_token_header_carries_only_a_plain_token() {
+        assert_eq!(
+            control_token_header(Some("abc-DEF_1.2".to_owned())),
+            "Authorization: Bearer abc-DEF_1.2\r\n"
+        );
+        for refused in [
+            None,
+            Some(String::new()),
+            Some("a\r\nX-Evil: 1".to_owned()),
+            Some("a b".to_owned()),
+        ] {
+            assert_eq!(control_token_header(refused.clone()), "", "{refused:?}");
+        }
+    }
 
     /// The report always names the binary, the UI bundle, the runner and the runtimes a user
     /// has to provide, whichever of them this build happens to carry.

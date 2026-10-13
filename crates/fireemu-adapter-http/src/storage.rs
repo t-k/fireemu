@@ -129,6 +129,19 @@ pub struct StorageRulesRegistry {
     /// The buckets already reported to `no_rules_notice`. The bucket name comes from the
     /// client, hence the limit.
     noticed_without_rules: Mutex<NoticeLimit>,
+    /// Where every rules denial of an end-user request is reported with the conditions it
+    /// evaluated (see [`StorageRulesRegistry::set_denial_log`]).
+    denial_log: std::sync::RwLock<Option<StorageDenialLog>>,
+}
+
+/// Receives every Storage Rules denial of an end-user request.
+#[derive(Clone)]
+pub struct StorageDenialLog(pub fireemu_core_rules::denial::DenialLog);
+
+impl std::fmt::Debug for StorageDenialLog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StorageDenialLog")
+    }
 }
 
 pub use fireemu_adapter_support::notice_limit::{NoticeEvent, NoticeLimit};
@@ -184,6 +197,7 @@ impl StorageRulesRegistry {
             trigger_buckets: std::sync::RwLock::default(),
             no_rules_notice: std::sync::RwLock::default(),
             noticed_without_rules: Mutex::default(),
+            denial_log: std::sync::RwLock::default(),
         }
     }
 
@@ -195,6 +209,7 @@ impl StorageRulesRegistry {
             trigger_buckets: std::sync::RwLock::default(),
             no_rules_notice: std::sync::RwLock::default(),
             noticed_without_rules: Mutex::default(),
+            denial_log: std::sync::RwLock::default(),
         }
     }
 
@@ -204,6 +219,18 @@ impl StorageRulesRegistry {
         if let Ok(mut slot) = self.no_rules_notice.write() {
             *slot = Some(notice);
         }
+    }
+
+    /// Reports every rules denial of an end-user request to `log`, with the `allow` conditions
+    /// the request evaluated. The answer to the client does not change.
+    pub fn set_denial_log(&self, log: StorageDenialLog) {
+        if let Ok(mut slot) = self.denial_log.write() {
+            *slot = Some(log);
+        }
+    }
+
+    fn denial_log(&self) -> Option<StorageDenialLog> {
+        self.denial_log.read().ok().and_then(|log| log.clone())
     }
 
     /// Calls the notice the first time `bucket` is refused for want of rules.
@@ -851,6 +878,10 @@ pub struct StorageRequest {
     pub app_check: Vec<String>,
     /// Body.
     pub body: Vec<u8>,
+    /// Whether the connection's peer is on another host (its address is not loopback). The
+    /// privileged `PUT /internal/setRules` refuses such a peer, which only reaches the listener
+    /// when `network.allowNonLoopbackHosts` exposed it.
+    pub remote_peer: bool,
 }
 
 impl StorageRequest {
@@ -1135,6 +1166,12 @@ pub const MAX_SET_RULES_BODY_BYTES: usize = crate::server::MAX_BODY_BYTES;
 /// which attaches `sec-fetch-mode: cors` and nothing else a browser would; that header alone
 /// is therefore not browser evidence (see the doc comment on the header set).
 fn set_rules_browser_guard(state: &StorageState, req: &StorageRequest) -> Option<StorageResponse> {
+    if req.remote_peer {
+        return Some(StorageResponse::json(
+            403,
+            &json!({"message": "this route answers loopback peers only: network.allowNonLoopbackHosts exposes the emulators, not rule loading"}),
+        ));
+    }
     let presented = req
         .header("authorization")
         .and_then(|a| a.strip_prefix("Bearer "))
@@ -2354,10 +2391,48 @@ impl StorageState {
             request_query: None,
         };
         let access = self.firestore.as_deref().map(|a| a as &dyn DocumentAccess);
-        match evaluate_request_with(ruleset, &ctx, access).decision {
+        let Some(log) = self.rules.denial_log() else {
+            return match evaluate_request_with(ruleset, &ctx, access).decision {
+                Decision::Allow => Ok(()),
+                Decision::Deny(_) => Err(fb_denied(self.is_strict(), method)),
+            };
+        };
+        let (report, coverage) =
+            fireemu_core_rules::eval::evaluate_request_traced(ruleset, &ctx, access);
+        match report.decision {
             Decision::Allow => Ok(()),
-            Decision::Deny(_) => Err(fb_denied(self.is_strict(), method)),
+            Decision::Deny(reason) => {
+                use fireemu_core_rules::denial::{
+                    deny_reason_summary, DeniedCondition, RulesDenial,
+                };
+                (log.0)(&RulesDenial {
+                    service: "storage",
+                    location: format!("bucket {}", bucket.as_str()),
+                    method: storage_method_name(method),
+                    path: object_path.to_owned(),
+                    uid: ctx.auth.as_ref().map(|auth| auth.uid.clone()),
+                    reason: deny_reason_summary(&reason),
+                    conditions: fireemu_core_rules::coverage::decided_conditions(
+                        ruleset, &coverage,
+                    )
+                    .iter()
+                    .map(|entry| DeniedCondition::from_entry(entry, rules.source.as_deref()))
+                    .collect(),
+                });
+                Err(fb_denied(self.is_strict(), method))
+            }
         }
+    }
+}
+
+/// The rules method a denial names.
+const fn storage_method_name(method: Method) -> &'static str {
+    match method {
+        Method::Get => "get",
+        Method::List => "list",
+        Method::Create => "create",
+        Method::Update => "update",
+        Method::Delete => "delete",
     }
 }
 

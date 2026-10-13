@@ -259,3 +259,51 @@ fn request_trace_payloads_are_lazy_until_a_client_enables_the_ring() {
     coverage_only.merge_coverage(&coverage);
     assert_eq!(coverage_only.coverage().entries()[0].values[0].1, 1);
 }
+
+/// The `allow` conditions a denied request evaluated, with what each took: what a denial
+/// diagnostic names. A condition of a `match` the path does not reach, or of another method,
+/// is not among them, and neither is a function body the condition called.
+#[test]
+fn the_decided_conditions_of_a_request_are_its_evaluated_allow_conditions() {
+    use fireemu_core_rules::coverage::decided_conditions;
+    const SOURCE: &str = "rules_version = '2';\n\
+service cloud.firestore {\n\
+  match /databases/{db}/documents {\n\
+    function owner() { return request.auth.uid == 'alice'; }\n\
+    match /notes/{id} {\n\
+      allow get: if owner();\n\
+      allow get: if request.auth.token.admin == true;\n\
+      allow create: if false;\n\
+    }\n\
+    match /other/{id} {\n\
+      allow get: if true;\n\
+    }\n\
+  }\n\
+}\n";
+    let ruleset = parse_ruleset(SOURCE).unwrap();
+    let mut request = ctx(Method::Get, "n1");
+    request.auth = Some(AuthContext {
+        uid: "bob".to_owned(),
+        token: BTreeMap::new(),
+    });
+    let (report, coverage) = evaluate_request_traced(&ruleset, &request, None);
+    assert!(matches!(report.decision, Decision::Deny(_)));
+    let decided = decided_conditions(&ruleset, &coverage);
+    let texts: Vec<&str> = decided
+        .iter()
+        .map(|entry| &SOURCE[entry.span.offset..entry.end])
+        .collect();
+    assert_eq!(texts, ["owner()", "request.auth.token.admin == true"]);
+    assert_eq!(decided[0].span.line, 6);
+    assert_eq!(decided[0].values, vec![(ExprValue::Bool(false), 1)]);
+    assert_eq!(decided[1].span.line, 7);
+    assert!(
+        matches!(decided[1].values.as_slice(), [(ExprValue::Undefined(_), 1)]),
+        "{:?}",
+        decided[1].values
+    );
+
+    // Nothing is decided where nothing was evaluated.
+    let empty = fireemu_core_rules::coverage::Coverage::default();
+    assert!(decided_conditions(&ruleset, &empty).is_empty());
+}

@@ -44,6 +44,7 @@ fn call(state: &RestState, method: &str, path: &str, body: Value) -> (u16, Value
         query: query.to_owned(),
         authorization: Some("Bearer owner".to_owned()),
         origin: None,
+        remote_peer: false,
         browser_metadata: false,
         app_check: Vec::new(),
         body,

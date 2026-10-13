@@ -54,7 +54,9 @@ use fireemu_core_firestore::store::{
 };
 use fireemu_core_firestore::value::Value;
 use fireemu_core_rules::ast::Ruleset;
-use fireemu_core_rules::coverage::{Coverage, CoverageEntry, RequestTrace, RulesDiagnostics};
+use fireemu_core_rules::coverage::{
+    decided_conditions, Coverage, CoverageEntry, RequestTrace, RulesDiagnostics,
+};
 use fireemu_core_rules::eval::{
     evaluate_request_traced_owned, try_compare, Decision, DenyReason, DocumentAccess, Method,
     RequestContext, RulesService, ABSTRACT_PREFIX, ABSTRACT_SEGMENT,
@@ -68,6 +70,8 @@ use tonic::metadata::MetadataMap;
 use tonic::Status;
 
 use crate::decode::Parent;
+
+pub use fireemu_core_rules::denial::{DenialLog, DeniedCondition, RulesDenial};
 
 /// `get()` / `exists()` over a database snapshot (inside a read's or commit's critical
 /// section, or a `Listen` refresh); `version` selects the snapshot served (`None` = latest).
@@ -392,7 +396,29 @@ pub use fireemu_adapter_support::notice_limit::{NoticeEvent, NoticeLimit};
 /// [`NoticeLimit::LIMIT`] databases (see [`RulesEnforcer::with_no_ruleset_notice`]).
 pub type NoRulesetNotice = Arc<dyn Fn(NoticeEvent<'_>) + Send + Sync>;
 
+/// Ends every end user's native `Listen` stream at once, with the status production ends one
+/// with at its one-hour lifetime. Each such stream holds a receiver
+/// ([`RulesEnforcer::listen_expiry`]); a clone of this handle fires them all.
+#[derive(Clone, Debug)]
+pub struct ListenExpiry(Arc<tokio::sync::watch::Sender<u64>>);
+
+impl Default for ListenExpiry {
+    fn default() -> Self {
+        Self(Arc::new(tokio::sync::watch::Sender::new(0)))
+    }
+}
+
+impl ListenExpiry {
+    /// Ends every held end-user stream and answers how many were held.
+    #[must_use]
+    pub fn expire(&self) -> usize {
+        self.0.send_modify(|epoch| *epoch = epoch.wrapping_add(1));
+        self.0.receiver_count()
+    }
+}
+
 /// Rules enforcement state shared by every surface.
+#[allow(clippy::struct_excessive_bools)] // independent switches, each read on its own
 pub struct RulesEnforcer {
     rules: Arc<RulesetSlot>,
     database_rules: BTreeMap<String, Arc<RulesetSlot>>,
@@ -424,6 +450,15 @@ pub struct RulesEnforcer {
     /// production ends it (the `strict` profile); the official emulator keeps it (the `emulator`
     /// profile).
     listen_stream_lifetime: bool,
+    /// The signal that ends every end user's native `Listen` stream now (see [`ListenExpiry`]).
+    listen_expiry: ListenExpiry,
+    /// Where every denial of an end-user request is reported with the conditions it evaluated
+    /// (see [`Self::with_denial_log`]).
+    denial_log: Option<DenialLog>,
+    /// Whether every decision is kept in the request trace from the first request on, across
+    /// rule reloads, rather than from the first read of the trace (see
+    /// [`Self::with_request_traces`]).
+    request_traces: bool,
     /// Where a refusal without a ruleset is reported, once per database: the client only sees
     /// production's denial, which does not say why.
     no_ruleset_notice: Option<NoRulesetNotice>,
@@ -452,6 +487,9 @@ impl RulesEnforcer {
             token_semantics: TokenSemantics::default(),
             wall_clock: None,
             listen_stream_lifetime: false,
+            listen_expiry: ListenExpiry::default(),
+            denial_log: None,
+            request_traces: false,
             no_ruleset_notice: None,
             noticed_without_ruleset: Mutex::new(NoticeLimit::default()),
         }
@@ -501,6 +539,55 @@ impl RulesEnforcer {
             ))
     }
 
+    /// Reports every denial of an end-user request to `log`, with the `allow` conditions the
+    /// request evaluated and what each took. The client still sees production's denial, which
+    /// does not say which rule refused.
+    #[must_use]
+    pub fn with_denial_log(mut self, log: DenialLog) -> Self {
+        self.denial_log = Some(log);
+        self
+    }
+
+    /// Keeps every decision in the request trace (`GET /v1/sessions/default/rules/requests`)
+    /// from the first request on, so a page that shows the trace (the UI's Rules page) lists
+    /// the denials that happened before it was opened. Without it the trace starts when it is
+    /// first read.
+    #[must_use]
+    pub const fn with_request_traces(mut self, record: bool) -> Self {
+        self.request_traces = record;
+        self
+    }
+
+    /// Where the decisions on `rules` (the snapshot for `database`) are recorded and reported.
+    fn sink<'a>(&'a self, rules: &'a LoadedRules, database: &'a str) -> DecisionSink<'a> {
+        DecisionSink {
+            diagnostics: &rules.diagnostics,
+            denials: self.denial_log.as_ref(),
+            source: rules.source.as_deref(),
+            database,
+            record_traces: self.request_traces,
+        }
+    }
+
+    /// Shares `expiry` with the control API that fires it (`POST /v1/firestore/listen:expire`).
+    #[must_use]
+    pub fn with_listen_expiry(mut self, expiry: ListenExpiry) -> Self {
+        self.listen_expiry = expiry;
+        self
+    }
+
+    /// The signal that ends a `Listen` stream held by `principal` before its lifetime: `Some`
+    /// for an end user, whose stream production ends at its hour, and `None` for the owner and
+    /// an anonymous caller. It is handed out whether or not the lifetime itself applies, so
+    /// [`ListenExpiry::expire`] reproduces the close on demand in every configuration.
+    #[must_use]
+    pub fn listen_expiry(
+        &self,
+        principal: &Principal,
+    ) -> Option<tokio::sync::watch::Receiver<u64>> {
+        matches!(principal, Principal::User(_)).then(|| self.listen_expiry.0.subscribe())
+    }
+
     /// The session time tokens are judged at (the wall's, in an unpinned `strict` session).
     pub fn session_now(&self) -> Result<LogicalInstant, Status> {
         self.now()
@@ -544,7 +631,7 @@ impl RulesEnforcer {
         }
         let rules = self.rules.snapshot().map_err(Status::internal)?;
         Err(denied(
-            &rules.diagnostics,
+            &self.sink(&rules, fireemu_core_types::ids::DatabaseId::DEFAULT),
             principal,
             Method::Get,
             "BeginTransaction".to_owned(),
@@ -572,8 +659,15 @@ impl RulesEnforcer {
                     notice(event);
                 }
             }
+            // Reported once per database by the notice above, not once per request.
             Err(denied(
-                diagnostics,
+                &DecisionSink {
+                    diagnostics,
+                    denials: None,
+                    source: None,
+                    database,
+                    record_traces: self.request_traces,
+                },
                 principal,
                 method,
                 path,
@@ -853,7 +947,7 @@ impl RulesEnforcer {
         }
         // Production refuses an end user here with its usual Security Rules denial.
         Err(denied(
-            &rules.diagnostics,
+            &self.sink(&rules, fireemu_core_types::ids::DatabaseId::DEFAULT),
             principal,
             Method::List,
             what.to_owned(),
@@ -888,6 +982,7 @@ impl RulesEnforcer {
             );
         };
         let now = self.now()?;
+        let sink = self.sink(&rules, path.database().as_str());
         evaluate_with(
             ruleset,
             principal,
@@ -897,7 +992,7 @@ impl RulesEnforcer {
             request_resource,
             now,
             access,
-            Some(&rules.diagnostics),
+            Some(&sink),
         )
     }
 
@@ -953,6 +1048,12 @@ impl RulesEnforcer {
             );
         };
         let now = self.now()?;
+        let database = items
+            .first()
+            .map_or(fireemu_core_types::ids::DatabaseId::DEFAULT, |(path, _)| {
+                path.database().as_str()
+            });
+        let sink = self.sink(&rules, database);
         let reader = AggregateReader {
             inner: access,
             seen: RefCell::new(BTreeSet::new()),
@@ -968,14 +1069,14 @@ impl RulesEnforcer {
                 None,
                 now,
                 &reader,
-                Some(&rules.diagnostics),
+                Some(&sink),
             )?;
             // One document's rules read at most the single-request budget (10), so the total
             // only binds a multi-document request.
             let accessed = reader.seen.borrow().len() as u64;
             if accessed > multi_total {
                 return Err(denied(
-                    &rules.diagnostics,
+                    &sink,
                     principal,
                     Method::Get,
                     path.relative(),
@@ -1016,6 +1117,7 @@ impl RulesEnforcer {
             );
         };
         let now = self.now()?;
+        let sink = self.sink(&rules, parent.database.as_str());
         let reader = AggregateReader {
             inner: access,
             seen: RefCell::new(BTreeSet::new()),
@@ -1024,7 +1126,7 @@ impl RulesEnforcer {
         if let Some(candidates) = exact_name_candidates(parent, query) {
             return authorize_exact_names(
                 ruleset,
-                &rules.diagnostics,
+                &sink,
                 principal,
                 query,
                 &candidates,
@@ -1054,12 +1156,12 @@ impl RulesEnforcer {
                     Method::List,
                     &placeholder,
                     &reader,
-                    Some(&rules.diagnostics),
+                    Some(&sink),
                 )?;
                 let accessed = reader.seen.borrow().len() as u64;
                 if accessed > list_max {
                     return Err(denied(
-                        &rules.diagnostics,
+                        &sink,
                         principal,
                         Method::List,
                         placeholder.relative(),
@@ -1104,6 +1206,7 @@ impl RulesEnforcer {
             );
         };
         let at = db.next_commit_time(now);
+        let sink = self.sink(&rules, parent.database.as_str());
         // The state after the whole commit, for `getAfter()`.
         let mut after: BTreeMap<DocumentPath, Option<Document>> = BTreeMap::new();
         for write in writes {
@@ -1168,14 +1271,14 @@ impl RulesEnforcer {
                 preview.as_ref(),
                 at,
                 &reader,
-                Some(&rules.diagnostics),
+                Some(&sink),
             )?;
             // One write's rules read at most the single-request budget (10), so the total only
             // binds a multi-write request.
             let accessed = reader.seen.borrow().len() as u64;
             if accessed > multi_total {
                 return Err(denied(
-                    &rules.diagnostics,
+                    &sink,
                     principal,
                     method,
                     path.relative(),
@@ -1195,7 +1298,7 @@ impl RulesEnforcer {
 #[allow(clippy::too_many_arguments)]
 fn authorize_exact_names(
     ruleset: &Ruleset,
-    diagnostics: &Mutex<RulesDiagnostics>,
+    sink: &DecisionSink<'_>,
     principal: &Principal,
     query: &Query,
     candidates: &[DocumentPath],
@@ -1221,7 +1324,7 @@ fn authorize_exact_names(
             request_query: Some(query_value(query)),
         };
         let resource_absent = ctx.resource.is_none();
-        let (report, _) = evaluate_request_traced_owned(ruleset, ctx, Some(reader));
+        let (report, coverage) = evaluate_request_traced_owned(ruleset, ctx, Some(reader));
         if !matches!(report.decision, Decision::Allow)
             || (resource_absent && report.absent_resource_used)
         {
@@ -1229,8 +1332,20 @@ fn authorize_exact_names(
                 Decision::Deny(reason) => deny_text(reason),
                 Decision::Allow => "the rule read the resource of a missing document".into(),
             };
-            return Err(denied(
-                diagnostics,
+            let logged = match &report.decision {
+                Decision::Deny(reason) => fireemu_core_rules::denial::deny_reason_summary(reason),
+                Decision::Allow => reason.clone(),
+            };
+            report_denial(
+                sink,
+                principal,
+                Method::List,
+                &candidate.relative(),
+                &logged,
+                &decided_conditions(ruleset, &coverage),
+            );
+            return Err(denied_quietly(
+                sink,
                 principal,
                 Method::List,
                 candidate.relative(),
@@ -1240,7 +1355,7 @@ fn authorize_exact_names(
         let accessed = reader.seen.borrow().len() as u64;
         if accessed > list_max {
             return Err(denied(
-                diagnostics,
+                sink,
                 principal,
                 Method::List,
                 candidate.relative(),
@@ -1261,7 +1376,7 @@ fn evaluate_with(
     request_resource: Option<&Document>,
     now: LogicalInstant,
     access: &dyn DocumentAccess,
-    diagnostics: Option<&Mutex<RulesDiagnostics>>,
+    sink: Option<&DecisionSink<'_>>,
 ) -> Result<(), Status> {
     let dependencies = ruleset.value_dependencies();
     let ctx = RequestContext {
@@ -1282,7 +1397,7 @@ fn evaluate_with(
         abstract_path: false,
         request_query: None,
     };
-    decide(ruleset, ctx, method, path, access, diagnostics)
+    decide(ruleset, ctx, method, path, access, sink)
 }
 
 fn decide(
@@ -1291,7 +1406,7 @@ fn decide(
     method: Method,
     path: &DocumentPath,
     access: &dyn DocumentAccess,
-    diagnostics: Option<&Mutex<RulesDiagnostics>>,
+    sink: Option<&DecisionSink<'_>>,
 ) -> Result<(), Status> {
     let uid = ctx.auth.as_ref().map(|auth| auth.uid.clone());
     let (report, coverage) = evaluate_request_traced_owned(ruleset, ctx, Some(access));
@@ -1304,8 +1419,25 @@ fn decide(
             deny_text(reason)
         )),
     };
-    if let Some(sink) = diagnostics {
-        let trace_enabled = sink.lock().is_ok_and(|sink| sink.request_traces_enabled());
+    if let (Some(sink), Decision::Deny(reason)) = (sink, &report.decision) {
+        if let Some(log) = sink.denials {
+            log(&RulesDenial {
+                service: "firestore",
+                location: format!("database {}", sink.database),
+                method: method_name(method),
+                path: path.relative(),
+                uid: uid.clone(),
+                reason: fireemu_core_rules::denial::deny_reason_summary(reason),
+                conditions: decided_conditions(ruleset, &coverage)
+                    .iter()
+                    .map(|entry| DeniedCondition::from_entry(entry, sink.source))
+                    .collect(),
+            });
+        }
+    }
+    if let Some(sink) = sink {
+        let trace_enabled = sink.traces();
+        let sink = sink.diagnostics;
         let trace = trace_enabled.then(|| {
             let expressions: Vec<CoverageEntry> = coverage.entries().into_iter().cloned().collect();
             let path = path.relative();
@@ -1334,6 +1466,58 @@ fn decide(
     }
 }
 
+/// Where one ruleset snapshot's decisions go: its diagnostics (coverage and request traces),
+/// and the enforcer's denial log with the source the conditions are quoted from.
+struct DecisionSink<'a> {
+    diagnostics: &'a Mutex<RulesDiagnostics>,
+    denials: Option<&'a DenialLog>,
+    source: Option<&'a str>,
+    database: &'a str,
+    /// Turns the request trace on before recording (see [`RulesEnforcer::with_request_traces`]).
+    record_traces: bool,
+}
+
+impl DecisionSink<'_> {
+    /// Whether this decision goes into the request trace, turning it on first when the enforcer
+    /// records every decision.
+    fn traces(&self) -> bool {
+        self.diagnostics.lock().is_ok_and(|mut diagnostics| {
+            if self.record_traces {
+                diagnostics.enable_request_traces();
+            }
+            diagnostics.request_traces_enabled()
+        })
+    }
+}
+
+/// Reports a denial to the sink's denial log, if it has one.
+fn report_denial(
+    sink: &DecisionSink<'_>,
+    principal: &Principal,
+    method: Method,
+    path: &str,
+    reason: &str,
+    conditions: &[CoverageEntry],
+) {
+    if let Some(log) = sink.denials {
+        log(&RulesDenial {
+            service: "firestore",
+            location: format!("database {}", sink.database),
+            method: method_name(method),
+            path: path.to_owned(),
+            uid: match principal {
+                Principal::User(auth) => Some(auth.uid.clone()),
+                _ => None,
+            },
+            reason: reason.to_owned(),
+            conditions: conditions
+                .iter()
+                .map(|entry| DeniedCondition::from_entry(entry, sink.source))
+                .collect(),
+        });
+    }
+}
+
 /// What production answers for every Security Rules denial, in both profiles (FS-RULES scope
 /// decision R6). The reason fireemu found stays in the ruleset's request traces. Production
 /// answers the same for a credential it cannot verify, another scheme and an empty bearer.
@@ -1347,30 +1531,44 @@ pub const EXPIRED_CREDENTIALS_MESSAGE: &str = "Missing or invalid authentication
 pub const INVALID_CREDENTIALS_MESSAGE: &str = "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.";
 
 /// A denial decided outside the evaluator (a budget across items, an exact-name query): traced
-/// with its reason like an evaluated one, answered with production's text.
+/// with its reason like an evaluated one, reported to the denial log, answered with
+/// production's text.
 fn denied(
-    diagnostics: &Mutex<RulesDiagnostics>,
+    sink: &DecisionSink<'_>,
     principal: &Principal,
     method: Method,
     path: String,
     reason: String,
 ) -> Status {
-    if let Ok(mut sink) = diagnostics.lock() {
-        if sink.request_traces_enabled() {
-            let uid = match principal {
-                Principal::User(auth) => Some(auth.uid.clone()),
-                _ => None,
-            };
-            sink.push(&Coverage::default(), move |sequence| RequestTrace {
-                sequence,
-                method: method_name(method),
-                path,
-                allowed: false,
-                reason,
-                uid,
-                expressions: Vec::new(),
-            });
-        }
+    report_denial(sink, principal, method, &path, &reason, &[]);
+    denied_quietly(sink, principal, method, path, reason)
+}
+
+/// [`denied`] without the denial log, for a denial its caller has reported already.
+fn denied_quietly(
+    sink: &DecisionSink<'_>,
+    principal: &Principal,
+    method: Method,
+    path: String,
+    reason: String,
+) -> Status {
+    if !sink.traces() {
+        return Status::permission_denied(PERMISSION_DENIED_MESSAGE);
+    }
+    if let Ok(mut diagnostics) = sink.diagnostics.lock() {
+        let uid = match principal {
+            Principal::User(auth) => Some(auth.uid.clone()),
+            _ => None,
+        };
+        diagnostics.push(&Coverage::default(), move |sequence| RequestTrace {
+            sequence,
+            method: method_name(method),
+            path,
+            allowed: false,
+            reason,
+            uid,
+            expressions: Vec::new(),
+        });
     }
     Status::permission_denied(PERMISSION_DENIED_MESSAGE)
 }
@@ -1745,16 +1943,7 @@ const fn method_name(m: Method) -> &'static str {
 }
 
 fn deny_text(reason: &DenyReason) -> String {
-    match reason {
-        DenyReason::NoMatchingRule => "no match block covers this path".to_owned(),
-        DenyReason::NoMatchingAllow => "no allow statement evaluated to true".to_owned(),
-        DenyReason::Unsupported(m) => format!("unsupported rules feature: {m}"),
-        DenyReason::BudgetExceeded {
-            limit_id,
-            current,
-            maximum,
-        } => format!("{limit_id}: {current} exceeds {maximum}"),
-    }
+    fireemu_core_rules::denial::deny_reason_text(reason)
 }
 
 /// Rules path for a document: `/databases/{db}/documents/{relative}`.

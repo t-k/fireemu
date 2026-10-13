@@ -92,13 +92,18 @@ export function smokeProgram(program, skip = [], { browser = false, caps = {} } 
   return { ...program, steps };
 }
 
-/** fireemu's configuration for a local run. */
+/**
+ * fireemu's configuration for a local run. The window's rows include production's close of the
+ * held native streams at their hour, which is a development default since 2026-10-13, so a
+ * strict run asks for it with firestore.listenStreamLifetime.
+ */
 export function localConfig(profile = "strict") {
   return {
     schemaVersion: 1,
     profile,
     daemon: { authProjectNumbers: { [SANDBOX_PROJECT]: LOCAL_PROJECT_NUMBER } },
     auth: { idTokenSigning: "session-rsa", apiKeys: ["fake-api-key"] },
+    ...(profile === "strict" ? { firestore: { listenStreamLifetime: "oneHour" } } : {}),
   };
 }
 

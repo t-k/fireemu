@@ -33,6 +33,8 @@ fn state(counter: Arc<AtomicUsize>) -> ControlState {
         functions: None,
         control_token: "test-token".to_owned(),
         app_check: None,
+        firestore_listen_expiry: None,
+        require_control_token: false,
         barrier: None,
         snapshot_hooks: Vec::new(),
         snapshots: Mutex::new(std::collections::BTreeMap::new()),
@@ -2461,4 +2463,111 @@ fn a_manual_run_refused_for_capacity_answers_resource_exhausted() {
     let ok = run("tick");
     assert_eq!(ok.status, 200);
     assert_eq!(ok.body["enqueued"], true);
+}
+
+/// `POST /v1/firestore/listen:expire` fires the Firestore enforcer's signal and answers how many
+/// end-user streams it ended; without an enforcer there is nothing to end, which is said.
+#[test]
+fn listen_expiry_is_fired_by_its_route_and_refused_without_an_enforcer() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    let r = handle(&s, "POST", "/v1/firestore/listen:expire", &json!({}));
+    assert_eq!(r.status, 409, "{}", r.body);
+    assert!(
+        r.body.to_string().contains("FAILED_PRECONDITION"),
+        "{}",
+        r.body
+    );
+
+    let fired = Arc::new(AtomicUsize::new(0));
+    let counter = fired.clone();
+    s.firestore_listen_expiry = Some(Arc::new(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+        3
+    }));
+    let r = handle(&s, "POST", "/v1/firestore/listen:expire", &json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body, json!({"expired": 3}));
+    assert_eq!(fired.load(Ordering::SeqCst), 1);
+    // Only POST fires it.
+    let r = handle(&s, "GET", "/v1/firestore/listen:expire", &json!({}));
+    assert_eq!(r.status, 404, "{}", r.body);
+    assert_eq!(fired.load(Ordering::SeqCst), 1);
+}
+
+/// A page must present the control token to fire it, like every other control mutation.
+#[test]
+fn a_page_needs_the_control_token_to_expire_listen_streams() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    let fired = Arc::new(AtomicUsize::new(0));
+    let counter = fired.clone();
+    s.firestore_listen_expiry = Some(Arc::new(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+        0
+    }));
+    let page = RequestHeaders {
+        origin: Some("http://localhost:5173".to_owned()),
+        ..RequestHeaders::default()
+    };
+    let r = handle_with(&s, "POST", "/v1/firestore/listen:expire", &page, &json!({}));
+    assert_eq!(r.status, 403, "{}", r.body);
+    assert_eq!(fired.load(Ordering::SeqCst), 0);
+    let page = RequestHeaders {
+        authorization: Some("Bearer test-token".to_owned()),
+        ..page
+    };
+    let r = handle_with(&s, "POST", "/v1/firestore/listen:expire", &page, &json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(fired.load(Ordering::SeqCst), 1);
+}
+
+/// With `network.allowNonLoopbackHosts` a forwarder in the listener's network namespace can
+/// deliver another host's client as a loopback peer, so every control request needs the control
+/// token, from a process as from a page; the health checks stay open.
+#[test]
+fn an_exposed_daemon_requires_the_control_token_for_every_control_request() {
+    let mut s = state(Arc::new(AtomicUsize::new(0)));
+    s.require_control_token = true;
+    let process = RequestHeaders::default();
+    for (method, path) in [
+        ("GET", "/v1/rules"),
+        ("GET", "/v1/sessions"),
+        ("POST", "/v1/sessions/default/reset"),
+        ("GET", "/v1/capabilities?x=1"),
+    ] {
+        let r = handle_with(&s, method, path, &process, &json!({}));
+        assert_eq!(r.status, 403, "{method} {path}: {}", r.body);
+        assert!(
+            r.body.to_string().contains("CONTROL_TOKEN_REQUIRED"),
+            "{}",
+            r.body
+        );
+        let wrong = RequestHeaders {
+            authorization: Some("Bearer not-the-token".to_owned()),
+            ..RequestHeaders::default()
+        };
+        assert_eq!(
+            handle_with(&s, method, path, &wrong, &json!({})).status,
+            403
+        );
+    }
+    let with_token = RequestHeaders {
+        authorization: Some("Bearer test-token".to_owned()),
+        ..RequestHeaders::default()
+    };
+    assert_eq!(
+        handle_with(&s, "GET", "/v1/rules", &with_token, &json!({})).status,
+        200
+    );
+    for path in ["/health/live", "/health/ready"] {
+        assert_eq!(
+            handle_with(&s, "GET", path, &process, &json!({})).status,
+            200
+        );
+    }
+    // Not exposed: a process keeps its unauthenticated access, as before.
+    s.require_control_token = false;
+    assert_eq!(
+        handle_with(&s, "GET", "/v1/rules", &process, &json!({})).status,
+        200
+    );
 }

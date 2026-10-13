@@ -296,6 +296,30 @@ fn both_profiles_start_with_the_declared_tenants_under_the_ids_of_the_file() {
     census::assert_no_owned_descendants("the auth tenants daemons", Duration::from_secs(10));
 }
 
+/// A test names its tenants freely by default (`auth.tenantIdFormat` "readable", a development
+/// default, owner decision 2026-10-13): the daemon serves them under those ids in both profiles.
+#[test]
+fn both_profiles_serve_tenants_declared_under_readable_ids() {
+    for profile in ["strict", "emulator"] {
+        let auth = json!({
+            "apiKeys": ["fake-api-key"],
+            "multiTenant": {"allowTenants": true},
+            "tenants": [
+                {"tenantId": "tenant-a", "displayName": "acme", "allowPasswordSignup": true},
+                {"tenantId": "TenantB", "displayName": "beta", "allowPasswordSignup": true},
+            ]
+        });
+        let daemon = Daemon::start(&format!("readable-{profile}"), profile, &auth);
+        assert_eq!(daemon.tenant_ids(), ["TenantB", "tenant-a"], "{profile}");
+        let (status, document) = daemon.tenant("tenant-a");
+        assert_eq!(status, 200, "{profile}: {document}");
+        daemon.add_user("tenant-a", "a@example.test");
+        assert_eq!(daemon.user_count("tenant-a"), 1, "{profile}");
+        assert_eq!(daemon.user_count("TenantB"), 0, "{profile}");
+    }
+    census::assert_no_owned_descendants("the auth tenants daemons", Duration::from_secs(10));
+}
+
 #[test]
 fn the_profile_decides_how_a_tenant_document_reads_back() {
     // The emulator profile keeps a tenant's emailPrivacyConfig as the official emulator does (a
@@ -406,13 +430,21 @@ fn strict_refuses_tenants_without_the_switch_before_it_starts() {
             "{auth}: {text}"
         );
     }
-    let bad_id = json!({
-        "multiTenant": {"allowTenants": true},
-        "tenants": [{"tenantId": "wrong", "displayName": "acme"}]
-    });
-    let (code, text) = refused_at_start("refused-id", &bad_id);
-    assert_eq!(code, Some(1), "{text}");
-    assert!(text.contains("auth.tenants[0]"), "{text}");
+    // An id that is not readable, and, with the generated format, one production would not
+    // generate.
+    for (n, (format, id)) in [("readable", "1-wrong"), ("generated", "wrong")]
+        .into_iter()
+        .enumerate()
+    {
+        let bad_id = json!({
+            "tenantIdFormat": format,
+            "multiTenant": {"allowTenants": true},
+            "tenants": [{"tenantId": id, "displayName": "acme"}]
+        });
+        let (code, text) = refused_at_start(&format!("refused-id-{n}"), &bad_id);
+        assert_eq!(code, Some(1), "{text}");
+        assert!(text.contains("auth.tenants[0]"), "{text}");
+    }
 }
 
 #[test]

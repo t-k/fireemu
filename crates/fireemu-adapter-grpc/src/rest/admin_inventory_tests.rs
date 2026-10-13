@@ -60,6 +60,7 @@ fn call_request(
         body,
         batch_field_order: Vec::new(),
         origin: None,
+        remote_peer: false,
         browser_metadata: false,
     });
     (response.status, response.body)

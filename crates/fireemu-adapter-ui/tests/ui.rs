@@ -90,6 +90,8 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
         functions: None,
         control_token: TOKEN.to_owned(),
         app_check: app_check.as_ref().map(|s| s.gate()),
+        firestore_listen_expiry: None,
+        require_control_token: false,
         barrier: None,
         snapshot_hooks: Vec::new(),
         snapshots: Mutex::new(BTreeMap::new()),

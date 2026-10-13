@@ -112,6 +112,7 @@ fn owned_req(
             .collect::<BTreeMap<_, _>>(),
         app_check: Vec::new(),
         body,
+        remote_peer: false,
     }
 }
 
@@ -9201,4 +9202,82 @@ fn resumable_offsets_and_308_checksums_differ_between_the_profiles() {
             "{acceptance:?}"
         );
     }
+}
+
+/// With `network.allowNonLoopbackHosts` a peer on another host can reach the Storage port;
+/// `PUT /internal/setRules`, which replaces the rules of every bucket, refuses it (owner
+/// decision 2026-10-13), and the same request from a loopback peer is admitted.
+#[test]
+fn set_rules_refuses_a_remote_peer() {
+    const DENY_ALL: &str = "rules_version = '2'; service firebase.storage { match /b/{bucket}/o { match /{path=**} { allow read, write: if false; } } }";
+    const ALLOW_ALL: &str = ALLOW_ALL_RULES;
+    let rules =
+        serde_json::json!({"rules": {"files": [{"name": "storage.rules", "content": ALLOW_ALL}]}})
+            .to_string()
+            .into_bytes();
+    for remote_peer in [true, false] {
+        let s = state(Some(DENY_ALL));
+        let mut request = owned_req(
+            "PUT",
+            "/internal/setRules",
+            &[("content-type", "application/json")],
+            rules.clone(),
+        );
+        request.remote_peer = remote_peer;
+        let response = handle(&s, request);
+        if remote_peer {
+            assert_eq!(response.status, 403);
+            assert!(
+                String::from_utf8_lossy(&response.body).contains("loopback peers only"),
+                "{}",
+                String::from_utf8_lossy(&response.body)
+            );
+            assert_eq!(anonymous_multipart_upload(&s, "after.txt").status, 403);
+        } else {
+            assert_eq!(
+                response.status,
+                200,
+                "{}",
+                String::from_utf8_lossy(&response.body)
+            );
+        }
+    }
+}
+
+/// Every rules denial of an end-user request reaches the registry's denial log with the
+/// request and the conditions it evaluated; without a log nothing is reported, and the
+/// answer is the same either way.
+#[test]
+fn a_storage_rules_denial_reaches_the_denial_log() {
+    use fireemu_adapter_http::storage::StorageDenialLog;
+    use fireemu_core_rules::denial::RulesDenial;
+    const RULES: &str = "rules_version = '2';\nservice firebase.storage {\n  match /b/{bucket}/o {\n    match /{name} {\n      allow write: if request.auth != null;\n    }\n  }\n}\n";
+    let s = state(Some(RULES));
+    let without_log = anonymous_multipart_upload(&s, "first.txt").status;
+    let seen: Arc<Mutex<Vec<RulesDenial>>> = Arc::default();
+    let sink = seen.clone();
+    let log = StorageDenialLog(Arc::new(move |denial| {
+        sink.lock().unwrap().push(denial.clone());
+    }));
+    assert_eq!(format!("{log:?}"), "StorageDenialLog");
+    s.rules.set_denial_log(log);
+    assert_eq!(
+        anonymous_multipart_upload(&s, "second.txt").status,
+        without_log
+    );
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    let denial = &seen[0];
+    assert_eq!(denial.service, "storage");
+    assert_eq!(denial.method, "create");
+    assert_eq!(denial.path, "second.txt");
+    assert_eq!(denial.location, format!("bucket {BUCKET}"));
+    assert_eq!(denial.uid, None);
+    assert_eq!(denial.reason, "no allow statement evaluated to true");
+    assert_eq!(denial.conditions.len(), 1);
+    assert_eq!(
+        denial.conditions[0].excerpt.as_deref(),
+        Some("request.auth != null")
+    );
+    assert_eq!(denial.conditions[0].outcome, "false");
 }

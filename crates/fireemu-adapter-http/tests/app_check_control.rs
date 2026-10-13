@@ -36,6 +36,8 @@ fn state(app_check: Option<fireemu_core_app_check::AppCheckGate>) -> ControlStat
         functions: None,
         control_token: TOKEN.to_owned(),
         app_check,
+        firestore_listen_expiry: None,
+        require_control_token: false,
         barrier: None,
         snapshot_hooks: Vec::new(),
         snapshots: Mutex::new(std::collections::BTreeMap::new()),

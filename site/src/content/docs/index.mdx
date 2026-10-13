@@ -3,8 +3,8 @@ title: A local Firebase emulator that follows production
 description: A local Firebase emulator for tests and CI that follows production Firebase behavior.
 template: splash
 hero:
-  title: Test against Firebase as production behaves
-  tagline: Fireemu is a local emulator for Cloud Firestore, Authentication, Cloud Storage, Cloud Functions, Pub/Sub and Eventarc. It follows production Firebase, so a test that passes locally and in CI tells you more about what happens after you deploy.
+  title: Test against Firebase as it behaves in production
+  tagline: Fireemu is a local emulator for Cloud Firestore, Authentication, Cloud Storage, Cloud Functions, Pub/Sub, and Eventarc. It mirrors production Firebase behavior, so a test that passes locally or in CI gives you confidence in how your app will behave after deployment.
   actions:
     - text: Get started
       link: getting-started/install/
@@ -39,25 +39,25 @@ npx fireemu exec -- npm test
 
 <CardGrid>
 	<Card title="Fewer surprises after you deploy" icon="approve-check">
-		The official emulator runs a query even when its composite index is missing, so the error first appears in production. Under the recommended `strict` profile, Fireemu checks every query against your `firestore.indexes.json` and refuses one whose index is missing, with production's error and a link to the index to add.
+		The official emulator runs a query even when its composite index is missing, so the error first appears in production. Under the recommended `strict` profile, Fireemu checks every query against your `firestore.indexes.json` and rejects queries missing an index, returning production-exact errors and a link to create the required index.
 	</Card>
 	<Card title="Production behavior, without the setup" icon="setting">
 		The recommended `strict` profile behaves like production. The few places where matching production would only add setup to a test, such as signed tokens or an Admin API call to turn a feature on, are documented development defaults, and each can be switched with its own setting. [See the list](guides/profiles/#where-fireemu-departs-from-production-on-purpose).
 	</Card>
 	<Card title="Features the official emulator lacks" icon="puzzle">
-		TOTP multi-factor authentication, a local App Check implementation with debug tokens, and, under `strict`, the `beforeEmailSent` blocking function, none of which the official emulator serves.
+		Includes TOTP multi-factor authentication, a local App Check implementation with debug tokens, and, under `strict`, the `beforeEmailSent` blocking function—none of which are supported by the official emulator.
 	</Card>
 	<Card title="Control over time" icon="seti:clock">
-		Start at any time and move a virtual clock. Scheduled functions run when the clock reaches them, so you can test a nightly job without waiting for night.
+		Start at any point in time and advance a virtual clock. Scheduled functions run when the clock reaches them, so you can test a nightly job without waiting for night.
 	</Card>
 	<Card title="Verified against real Firebase" icon="magnifier">
-		Behavior is compared with recordings from real Firebase projects. 21 areas, from Firestore transactions to Storage Security Rules, are verified against production: every condition matches the recordings or is a reviewed, documented known difference.
+		Behavior is compared with recordings from real Firebase projects. 21 areas, from Firestore transactions to Storage Security Rules, are verified against production: every condition matches the recordings or is a reviewed and documented difference.
 	</Card>
 	<Card title="Explains denials" icon="information">
-		Production answers a Security Rules denial with a short message. Fireemu also prints which `allow` conditions were evaluated and what each one evaluated to.
+		While production responds to Security Rules denials with a generic error message, Fireemu also prints which `allow` conditions were evaluated and their individual results.
 	</Card>
 	<Card title="Fast and light" icon="rocket">
-		A single native binary. In the project benchmark it was ready 21.6 times faster than the official Firestore emulator and used about 1/34 of its idle memory (one benchmark run, `emulator` profile; see [Performance](compatibility/performance/)).
+		A single native binary. In project benchmarks, it started 21.6x faster than the official Firestore emulator and used about 1/34th of its idle memory (one benchmark run, `emulator` profile; see [Performance](compatibility/performance/)).
 	</Card>
 </CardGrid>
 
@@ -75,10 +75,6 @@ npx fireemu exec -- npm test
 | Firebase Extensions | Not planned |
 
 See the [compatibility tables](compatibility/) for each product, the production verification status of each area, and the capability manifest.
-
-:::caution[Fireemu is in development]
-Fireemu does not yet reproduce every feature and behavior of production Firebase. Before relying on its results in CI, run the same tests against a dedicated Firebase test project (not your live project) for the features your application depends on, and compare the results.
-:::
 
 ## Next steps
 

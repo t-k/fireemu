@@ -62,7 +62,7 @@ These differ from production and are not switched by `productionExact`:
 | Storage: a bucket-level public grant (IAM `allUsers`) cannot be made through an API | List the bucket in `storage.publicBuckets` |
 | Storage: every `Origin` is reflected in the CORS headers, where production needs a CORS configuration on the bucket for browser downloads | Not available |
 | Storage: a Security Rule may call `firestore.get()` and `firestore.exists()` without the Firestore access grant production needs for the Storage service agent | Not available |
-| Storage: both default bucket names, `<project>.appspot.com` and `<project>.firebasestorage.app`, exist, where a production project has one of them | Not available |
+| Storage: both default bucket names, `<project>.appspot.com` and `<project>.firebasestorage.app`, exist, where a production project has one of them | Set `storage.defaultBucket` to the one your project has; the other name is then noted on its first write and its bucket resource answers 404 |
 | Every sign-in method starts enabled, email-link sign-in included; a new production project enables none (`firebase deploy --only auth` only turns on the providers it lists, never off) | Declare `auth.signIn` to match your project, such as `email.passwordRequired: true` to refuse email-link sign-in |
 | Built-in identity providers such as `google.com` sign in without being enabled in the console. `oidc.*` and `saml.*` providers must still be configured and enabled, or sign-in is refused as production refuses it | `auth.idpAssertions: "signed"` (set by `productionExact`) refuses the built-in providers |
 | Any Web API key is accepted until the project declares one; production answers `API_KEY_INVALID` for a key of another project | Declare `auth.apiKeys` |

@@ -1416,3 +1416,99 @@ fn the_emulator_profile_ignores_malformed_list_parameters_as_the_official_emulat
         assert_eq!(json_body(&response)["items"].as_array().unwrap().len(), 1);
     }
 }
+
+// ----------------------------------------------------------------------------------------
+// ST-6: which default bucket exists (opt-in)
+// ----------------------------------------------------------------------------------------
+
+#[test]
+fn both_default_bucket_names_exist_unless_one_is_chosen() {
+    use fireemu_adapter_http::storage::DefaultBuckets;
+    let resource = |s: &StorageState, bucket: &str| {
+        handle(
+            s,
+            req("GET", &format!("/storage/v1/b/{bucket}"), &[OWNER], b""),
+        )
+        .status
+    };
+    let write = |s: &StorageState, bucket: &str| {
+        handle(
+            s,
+            req(
+                "POST",
+                &format!("/upload/storage/v1/b/{bucket}/o?uploadType=media&name=a.txt"),
+                &[OWNER, ("content-type", "text/plain")],
+                b"x",
+            ),
+        )
+        .status
+    };
+    let listed_first = |s: &StorageState| {
+        json_body(&handle(s, req("GET", "/b", &[OWNER], b"")))["items"][0]["name"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+
+    let s = strict();
+    let seen = noting(&s);
+    assert_eq!(
+        (
+            resource(&s, DEFAULT_BUCKET),
+            resource(&s, NEW_DEFAULT_BUCKET)
+        ),
+        (200, 200)
+    );
+    assert_eq!(listed_first(&s), DEFAULT_BUCKET);
+    assert_eq!(
+        (write(&s, DEFAULT_BUCKET), write(&s, NEW_DEFAULT_BUCKET)),
+        (200, 200)
+    );
+    assert!(seen.lock().unwrap().is_empty());
+
+    // The new name only: the legacy name becomes an undeclared bucket, which is still served.
+    let s = strict();
+    let seen = noting(&s);
+    s.rules
+        .set_default_buckets(DefaultBuckets::FirebaseStorageApp);
+    assert_eq!(
+        (
+            resource(&s, DEFAULT_BUCKET),
+            resource(&s, NEW_DEFAULT_BUCKET)
+        ),
+        (404, 200)
+    );
+    assert_eq!(listed_first(&s), NEW_DEFAULT_BUCKET);
+    assert_eq!(write(&s, NEW_DEFAULT_BUCKET), 200);
+    assert!(seen.lock().unwrap().is_empty());
+    assert_eq!(
+        write(&s, DEFAULT_BUCKET),
+        200,
+        "served, as any undeclared bucket is"
+    );
+    assert_eq!(*seen.lock().unwrap(), [DEFAULT_BUCKET]);
+
+    // The legacy name only.
+    let s = strict();
+    s.rules.set_default_buckets(DefaultBuckets::AppspotCom);
+    assert_eq!(
+        (
+            resource(&s, DEFAULT_BUCKET),
+            resource(&s, NEW_DEFAULT_BUCKET)
+        ),
+        (200, 404)
+    );
+    assert_eq!(listed_first(&s), DEFAULT_BUCKET);
+
+    // A declared bucket of either name still exists, and the emulator profile ignores the choice.
+    let s = strict();
+    s.rules
+        .set_default_buckets(DefaultBuckets::FirebaseStorageApp);
+    s.rules.set_configured_buckets([DEFAULT_BUCKET.to_owned()]);
+    assert_eq!(resource(&s, DEFAULT_BUCKET), 200);
+    let s = emulator();
+    s.rules
+        .set_default_buckets(DefaultBuckets::FirebaseStorageApp);
+    assert_eq!(resource(&s, DEFAULT_BUCKET), 200);
+    assert_eq!(listed_first(&s), DEFAULT_BUCKET);
+}

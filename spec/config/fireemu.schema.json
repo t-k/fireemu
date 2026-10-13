@@ -796,6 +796,11 @@
           "items": { "type": "string", "minLength": 3, "maxLength": 222 },
           "description": "Cloud Storage buckets the project owns besides its two default ones (<project>.appspot.com and <project>.firebasestorage.app). Under strict the first write to a bucket that is not declared is served, as the official emulator serves it, but reported once on standard error (production answers 404 for a bucket that does not exist), so a typo in a bucket name is visible; declare the bucket here to silence that note. A bucket named by firebase.json storage targets, by a deployed Storage trigger, or holding imported data exists without being listed. A name listed twice counts once. Each name must be one Cloud Storage accepts (3 to 222 lowercase letters, digits, '-', '_' and '.', starting and ending with a letter or digit). The emulator profile creates a bucket on first use without a note and ignores this key."
         },
+        "defaultBucket": {
+          "enum": ["both", "firebasestorage.app", "appspot.com"],
+          "default": "both",
+          "description": "Which of the project's two default buckets exist under strict. A production project has one: <project>.firebasestorage.app when Storage was set up after 2024-10-30, <project>.appspot.com before. A local run cannot know which, so both exist by default. Name the one your project has: the other name then counts as an undeclared bucket, so its first write prints the undeclared-bucket note and the bucket resource answers 404 (production answers 404 for the name your project does not have). The emulator profile ignores this key."
+        },
         "publicBuckets": {
           "type": "array",
           "items": { "type": "string", "minLength": 3, "maxLength": 222 },

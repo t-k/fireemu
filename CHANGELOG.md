@@ -38,6 +38,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Added
 
 - `storage.buckets`: extra Cloud Storage buckets a project owns; a write to a bucket listed here is not noted under the strict profile.
+- `storage.defaultBucket` (`"both"` by default, or `"firebasestorage.app"` or `"appspot.com"`): the default bucket name your production project does not have counts as an undeclared bucket under the strict profile.
 - `storage.publicBuckets`: buckets whose objects the public URL (`GET /{bucket}/{object}`) serves without a credential under the strict profile, standing for a bucket IAM grant to `allUsers`.
 - `POST /storage/v1/b/{bucket}/o/{object}/acl`, the long spelling of the object ACL route, in both profiles.
 - `fireemu config show` lists schema keys with effective values, sources and optional JSON descriptions, using the same configuration loading as `up`.

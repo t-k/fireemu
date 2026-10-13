@@ -106,6 +106,22 @@ enum StorageRulesMode {
     PerBucket(BTreeMap<String, Arc<RulesetSlot>>),
 }
 
+/// Which of a project's two default bucket names count as existing under the strict profile. A
+/// production project has one of them: `<project>.firebasestorage.app` when Storage was set up
+/// after 2024-10-30, `<project>.appspot.com` before. A local run cannot know which, so both exist
+/// unless `storage.defaultBucket` names one; the other name is then an undeclared bucket (its first
+/// write is noted, and the bucket resource answers 404).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DefaultBuckets {
+    /// Both names exist.
+    #[default]
+    Both,
+    /// Only `<project>.firebasestorage.app` exists.
+    FirebaseStorageApp,
+    /// Only `<project>.appspot.com` exists.
+    AppspotCom,
+}
+
 /// Why [`StorageRulesRegistry::replace_source`] refused a source.
 #[derive(Debug)]
 pub enum StorageRulesSourceError {
@@ -126,6 +142,8 @@ pub struct StorageRulesRegistry {
     /// The buckets `storage.buckets` declares: extra buckets the project owns besides its default
     /// ones. Like the trigger buckets they are configuration, not rules state.
     configured_buckets: std::sync::RwLock<std::collections::BTreeSet<String>>,
+    /// Which of the project's two default bucket names exist (`storage.defaultBucket`).
+    default_buckets: std::sync::RwLock<DefaultBuckets>,
     /// The buckets `storage.publicBuckets` lists: every object in them is readable without a
     /// credential, as a bucket whose IAM grants `allUsers` the object viewer role is.
     public_buckets: std::sync::RwLock<std::collections::BTreeSet<String>>,
@@ -206,6 +224,7 @@ impl StorageRulesRegistry {
             mode: std::sync::RwLock::new(StorageRulesMode::Global(slot)),
             trigger_buckets: std::sync::RwLock::default(),
             configured_buckets: std::sync::RwLock::default(),
+            default_buckets: std::sync::RwLock::default(),
             public_buckets: std::sync::RwLock::default(),
             unknown_bucket_notice: std::sync::RwLock::default(),
             noticed_unknown_buckets: Mutex::default(),
@@ -222,6 +241,7 @@ impl StorageRulesRegistry {
             mode: std::sync::RwLock::new(StorageRulesMode::PerBucket(slots)),
             trigger_buckets: std::sync::RwLock::default(),
             configured_buckets: std::sync::RwLock::default(),
+            default_buckets: std::sync::RwLock::default(),
             public_buckets: std::sync::RwLock::default(),
             unknown_bucket_notice: std::sync::RwLock::default(),
             noticed_unknown_buckets: Mutex::default(),
@@ -278,6 +298,17 @@ impl StorageRulesRegistry {
         if let Ok(mut set) = self.configured_buckets.write() {
             *set = buckets.into_iter().collect();
         }
+    }
+
+    /// Selects which default bucket names exist (strict profile only).
+    pub fn set_default_buckets(&self, which: DefaultBuckets) {
+        if let Ok(mut slot) = self.default_buckets.write() {
+            *slot = which;
+        }
+    }
+
+    fn default_buckets(&self) -> DefaultBuckets {
+        self.default_buckets.read().map(|d| *d).unwrap_or_default()
     }
 
     /// Replaces the set of buckets `storage.publicBuckets` lists.
@@ -4750,7 +4781,13 @@ fn bucket_resource(name: &str, versioning: Option<bool>, now: &str, host: &str) 
 
 fn gcs_list_buckets(state: &StorageState, host: &str) -> Outcome {
     let store = state.store()?;
-    let default = format!("{}.appspot.com", state.project);
+    let default = if state.is_strict()
+        && state.rules.default_buckets() == DefaultBuckets::FirebaseStorageApp
+    {
+        format!("{}.firebasestorage.app", state.project)
+    } else {
+        format!("{}.appspot.com", state.project)
+    };
     let mut names = vec![default];
     for bucket in store.buckets() {
         if !names.iter().any(|n| n == bucket.as_str()) {
@@ -4785,8 +4822,13 @@ fn gcs_list_buckets(state: &StorageState, host: &str) -> Outcome {
 fn bucket_exists(state: &StorageState, store: &ObjectStore, bucket: &BucketName) -> bool {
     let name = bucket.as_str();
     let project = state.project_of_bucket(name);
-    name == format!("{project}.appspot.com")
-        || name == format!("{project}.firebasestorage.app")
+    let which = if state.is_strict() {
+        state.rules.default_buckets()
+    } else {
+        DefaultBuckets::Both
+    };
+    (name == format!("{project}.appspot.com") && which != DefaultBuckets::FirebaseStorageApp)
+        || (name == format!("{project}.firebasestorage.app") && which != DefaultBuckets::AppspotCom)
         || state.rules.names_public_bucket(name)
         || state.rules.declares_bucket(name)
         || state.rules.names_configured_bucket(name)

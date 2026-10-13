@@ -1052,6 +1052,9 @@ pub struct RuntimeConfig {
     pub storage_buckets: Vec<String>,
     /// `storage.publicBuckets`: buckets whose objects the public URL serves without a credential.
     pub storage_public_buckets: Vec<String>,
+    /// `storage.defaultBucket`: which of the project's two default bucket names exist under
+    /// strict (`"both"` by default).
+    pub storage_default_bucket: fireemu_adapter_http::storage::DefaultBuckets,
     /// When the daemon's databases were created (`firestore.databaseCreateTime`): the
     /// `createTime` they report and the instant before which a `read_time` is refused. Unset,
     /// it is the daemon's start; a run compared with a production database names that
@@ -1452,6 +1455,7 @@ impl Default for RuntimeConfig {
             storage_max_stored_bytes: None,
             storage_buckets: Vec::new(),
             storage_public_buckets: Vec::new(),
+            storage_default_bucket: fireemu_adapter_http::storage::DefaultBuckets::Both,
             database_create_time: None,
             require_demo_prefix: true,
             refuse_unknown_projects: false,
@@ -1789,6 +1793,13 @@ impl RuntimeConfig {
             "storage.maxStoredBytes" => Some(json!(self.storage_max_stored_bytes)),
             "storage.buckets" => Some(json!(self.storage_buckets)),
             "storage.publicBuckets" => Some(json!(self.storage_public_buckets)),
+            "storage.defaultBucket" => Some(json!(match self.storage_default_bucket {
+                fireemu_adapter_http::storage::DefaultBuckets::Both => "both",
+                fireemu_adapter_http::storage::DefaultBuckets::FirebaseStorageApp => {
+                    "firebasestorage.app"
+                }
+                fireemu_adapter_http::storage::DefaultBuckets::AppspotCom => "appspot.com",
+            })),
             "daemon.clockStart" => Some(json!(self.clock_start_pinned.then(|| self.clock_start.to_rfc3339().ok()).flatten())),
             "daemon.seed" => Some(json!(self.seed)),
             "daemon.authProject" => Some(json!(self.auth_project)),
@@ -4683,6 +4694,20 @@ impl RuntimeConfig {
             if let Some(value) = storage.get("buckets") {
                 cfg.storage_buckets = parse_storage_buckets("buckets", value)?;
             }
+            if let Some(value) = storage.get("defaultBucket") {
+                use fireemu_adapter_http::storage::DefaultBuckets;
+                cfg.storage_default_bucket = match value.as_str() {
+                    Some("both") => DefaultBuckets::Both,
+                    Some("firebasestorage.app") => DefaultBuckets::FirebaseStorageApp,
+                    Some("appspot.com") => DefaultBuckets::AppspotCom,
+                    _ => {
+                        return Err(ConfigError(
+                            "storage.defaultBucket must be \"both\", \"firebasestorage.app\" or \"appspot.com\""
+                                .to_owned(),
+                        ))
+                    }
+                };
+            }
             if let Some(value) = storage.get("publicBuckets") {
                 cfg.storage_public_buckets = parse_storage_buckets("publicBuckets", value)?;
             }
@@ -5366,6 +5391,7 @@ mod tests {
             ("storage.maxStoredBytes", json!(null), "unset"),
             ("storage.buckets", json!([]), "default"),
             ("storage.publicBuckets", json!([]), "default"),
+            ("storage.defaultBucket", json!("both"), "default"),
             ("events.maxAttempts", json!(4), "default"),
             (
                 "pubsub.pushMinimumRedeliveryIntervalMillis",
@@ -5717,6 +5743,13 @@ mod tests {
                 (
                     "pubsub.pushMinimumRedeliveryIntervalMillis",
                     json!(cfg.pubsub_push_minimum_redelivery_interval_millis),
+                ),
+                (
+                    "storage.defaultBucket",
+                    json!(match cfg.storage_default_bucket {
+                        fireemu_adapter_http::storage::DefaultBuckets::Both => "both",
+                        _ => "narrowed",
+                    }),
                 ),
                 (
                     "functions.clock.date",
@@ -6115,6 +6148,38 @@ mod tests {
         for bad in [json!(0), json!(-1), json!(1.5), json!("1024"), json!(null)] {
             let error = parse(json!({"maxStoredBytes": bad})).unwrap_err();
             assert!(error.0.contains("storage.maxStoredBytes"), "{error}");
+        }
+    }
+
+    #[test]
+    fn storage_default_bucket_names_one_of_the_two_default_buckets() {
+        use fireemu_adapter_http::storage::DefaultBuckets;
+        let parse = |value: Value| {
+            RuntimeConfig::from_json(
+                &json!({"schemaVersion": 1, "storage": {"defaultBucket": value}}),
+            )
+        };
+        assert_eq!(
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1}))
+                .unwrap()
+                .storage_default_bucket,
+            DefaultBuckets::Both
+        );
+        for (text, expected) in [
+            ("both", DefaultBuckets::Both),
+            ("firebasestorage.app", DefaultBuckets::FirebaseStorageApp),
+            ("appspot.com", DefaultBuckets::AppspotCom),
+        ] {
+            assert_eq!(parse(json!(text)).unwrap().storage_default_bucket, expected);
+        }
+        for bad in [
+            json!("demo-app.appspot.com"),
+            json!(null),
+            json!(true),
+            json!(""),
+        ] {
+            let error = parse(bad.clone()).unwrap_err();
+            assert!(error.0.contains("storage.defaultBucket"), "{bad}: {error}");
         }
     }
 

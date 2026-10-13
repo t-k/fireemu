@@ -41,7 +41,9 @@ Production answers 404 `The specified bucket does not exist.` for an object oper
 }
 ```
 
-Each name must be one Cloud Storage accepts. `storage.publicBuckets` lists buckets whose objects the public URL serves without a credential, and also counts as declaring them. Both keys are ignored by the `emulator` profile.
+Each name must be one Cloud Storage accepts. `storage.publicBuckets` lists buckets whose objects the public URL serves without a credential, and also counts as declaring them. `storage.buckets` and `storage.publicBuckets` are ignored by the `emulator` profile.
+
+A production project has one default bucket: `<project>.firebasestorage.app` if Storage was set up after 2024-10-30, `<project>.appspot.com` before. A local run cannot know which, so both exist by default. To catch an app configuration copied from the other kind of project, set `storage.defaultBucket` to `"firebasestorage.app"` or `"appspot.com"` (default `"both"`): the other name then counts as an undeclared bucket, so its first write prints the note and `GET /storage/v1/b/{bucket}` answers 404.
 
 ## Limit the stored bytes
 

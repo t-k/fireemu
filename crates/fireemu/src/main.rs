@@ -2126,6 +2126,9 @@ fn load_storage_rules(cfg: &RuntimeConfig) -> Result<LoadedStorageRules, String>
     loaded
         .registry
         .set_public_buckets(cfg.storage_public_buckets.iter().cloned());
+    loaded
+        .registry
+        .set_default_buckets(cfg.storage_default_bucket);
     Ok(loaded)
 }
 

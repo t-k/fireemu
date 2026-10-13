@@ -26,7 +26,6 @@ export default defineConfig({
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/t-k/fireemu' }],
 			editLink: { baseUrl: 'https://github.com/t-k/fireemu/edit/main/site/' },
 			lastUpdated: false,
-			logo: { src: './src/assets/logo.svg' },
 			customCss: ['./src/styles/custom.css'],
 			sidebar: [
 				{

@@ -221,6 +221,30 @@ fn text(body: &UiBody) -> String {
 }
 
 #[tokio::test]
+async fn only_get_and_head_at_the_ui_root_redirect_to_the_app() {
+    let s = state();
+    for method in ["GET", "HEAD"] {
+        let response = handle(&s, &request(method, "/", &Value::Null)).await;
+        assert_eq!(response.status, 302);
+        assert_eq!(
+            response.headers,
+            vec![("location".to_owned(), "/ui/".to_owned())]
+        );
+        assert!(matches!(response.body, UiBody::Full(ref body) if body.is_empty()));
+        assert_eq!(
+            handle(&s, &request(method, "/missing", &Value::Null))
+                .await
+                .status,
+            404
+        );
+    }
+    assert_eq!(
+        handle(&s, &request("POST", "/", &Value::Null)).await.status,
+        404
+    );
+}
+
+#[tokio::test]
 async fn config_describes_the_runtime_and_the_page_carries_it() {
     let s = state();
     let (status, body) = call(&s, request("GET", "/ui/api/config", &Value::Null)).await;

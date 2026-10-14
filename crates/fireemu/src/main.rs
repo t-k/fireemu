@@ -107,8 +107,37 @@ const fn diagnostic_text(text: &str) -> DiagnosticText<'_> {
 
 fn write_diagnostic_text(formatter: &mut std::fmt::Formatter<'_>, text: &str) -> std::fmt::Result {
     for character in text.chars() {
-        for escaped in character.escape_debug() {
-            write!(formatter, "{escaped}")?;
+        if character.is_control()
+            || matches!(
+                character,
+                '\u{ad}'
+                    | '\u{600}'..='\u{605}'
+                    | '\u{61c}'
+                    | '\u{6dd}'
+                    | '\u{70f}'
+                    | '\u{890}'..='\u{891}'
+                    | '\u{8e2}'
+                    | '\u{180e}'
+                    | '\u{200b}'..='\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{2060}'..='\u{2064}'
+                    | '\u{2066}'..='\u{206f}'
+                    | '\u{feff}'
+                    | '\u{fff9}'..='\u{fffb}'
+                    | '\u{110bd}'
+                    | '\u{110cd}'
+                    | '\u{13430}'..='\u{1343f}'
+                    | '\u{1bca0}'..='\u{1bca3}'
+                    | '\u{1d173}'..='\u{1d17a}'
+                    | '\u{e0001}'
+                    | '\u{e0020}'..='\u{e007f}'
+            )
+        {
+            for escaped in character.escape_debug() {
+                write!(formatter, "{escaped}")?;
+            }
+        } else {
+            write!(formatter, "{character}")?;
         }
     }
     Ok(())
@@ -275,8 +304,13 @@ fn main() -> ExitCode {
         Some("init") => match init::run(&args[1..]) {
             Ok(path) => {
                 println!("created {}", diagnostic_path(&path));
+                let configuration = if path.with_file_name("fireemu.json").is_file() {
+                    "fireemu.json"
+                } else {
+                    "fireemu.toml"
+                };
                 println!(
-                    "next: fireemu up (fireemu.toml in this directory is loaded automatically)"
+                    "next: fireemu up ({configuration} in this directory is loaded automatically)"
                 );
                 ExitCode::SUCCESS
             }
@@ -3422,6 +3456,14 @@ fn logical_system_time(system_time: std::time::SystemTime) -> LogicalInstant {
 #[cfg(test)]
 mod config_reload_tests {
     use super::*;
+
+    #[test]
+    fn diagnostic_text_only_escapes_controls_and_format_characters() {
+        assert_eq!(
+            diagnostic_text("\"'\\e\u{301}\n\u{1b}\u{200b}\u{202e}\u{2066}").to_string(),
+            "\"'\\e\u{301}\\n\\u{1b}\\u{200b}\\u{202e}\\u{2066}"
+        );
+    }
 
     #[test]
     fn toml_errors_without_a_span_have_no_position() {

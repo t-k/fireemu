@@ -169,10 +169,18 @@ fn toml_without_schema_version_is_refused_by_up_exec_and_config_show() {
 #[test]
 fn toml_diagnostic_key_paths_escape_controls_and_quote_dots() {
     let dir = scratch("toml-diagnostic-keys");
-    for value in ["1979-05-27", "inf"] {
+    for (value, message) in [
+        (
+            "1979-05-27",
+            "TOML datetime values are not supported; use a quoted string",
+        ),
+        ("inf", "non-finite TOML numbers are not supported"),
+    ] {
         for (key, expected) in [
-            (r#""b.c""#, r#"a.\"b.c\""#),
-            (r#""\u001b[31mRED""#, r#"a.\"\\u001B[31mRED\""#),
+            (r#""b.c""#, r#"a."b.c""#),
+            (r#""x\"y""#, r#"a.'x"y'"#),
+            (r#""\u001b[31mRED""#, r#"a."\u001B[31mRED""#),
+            (r#""b.c"."d.e""#, r#"a."b.c"."d.e""#),
         ] {
             write(
                 &dir,
@@ -183,12 +191,22 @@ fn toml_diagnostic_key_paths_escape_controls_and_quote_dots() {
             assert_eq!(out.status.code(), Some(1));
             let error = stderr(&out);
             assert!(!error.contains('\u{1b}'), "raw terminal escape");
-            assert!(
-                error.contains(&format!("keys.toml: {expected}:")),
-                "{error}"
-            );
+            assert_eq!(error, format!("error: keys.toml: {expected}: {message}\n"));
         }
     }
+}
+
+#[test]
+fn toml_parser_messages_preserve_quotes() {
+    let dir = scratch("toml-parser-quotes");
+    write(
+        &dir,
+        "broken.toml",
+        "schemaVersion = 1\nprofile = \"\\q\"\n",
+    );
+    let out = run_in(&dir, &["config", "show", "--config", "broken.toml"], None);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(stderr(&out), "error: broken.toml:2:13: missing escaped value, expected `b`, `e`, `f`, `n`, `r`, `\\`, `\"`, `x`, `u`, `U`\n");
 }
 
 #[test]
@@ -370,6 +388,13 @@ fn init_with_existing_json_does_not_create_toml_even_with_force() {
     }
     let out = run_in(&dir, &["init", "--reference", "--yes"], None);
     assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!(
+            "created {}\nnext: fireemu up (fireemu.json in this directory is loaded automatically)\n",
+            dir.canonicalize().unwrap().join("fireemu.reference.jsonc").display(),
+        )
+    );
     let reference = std::fs::read_to_string(dir.join("fireemu.reference.jsonc")).unwrap();
     assert!(reference.contains("Edit fireemu.json to configure it."));
     assert!(reference.contains("Do not create fireemu.toml beside fireemu.json."));
@@ -683,6 +708,14 @@ fn init_reference_is_complete_valid_toml_and_preserves_the_minimal_config() {
     let dir = scratch("init-reference");
     let out = run_in(&dir, &["init", "--yes", "--reference"], None);
     assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!(
+            "created {}\ncreated {}\nnext: fireemu up (fireemu.toml in this directory is loaded automatically)\n",
+            dir.canonicalize().unwrap().join("fireemu.reference.toml").display(),
+            dir.canonicalize().unwrap().join("fireemu.toml").display(),
+        )
+    );
     let minimal = std::fs::read(dir.join("fireemu.toml")).unwrap();
     let config: serde_json::Value = toml::from_str(std::str::from_utf8(&minimal).unwrap()).unwrap();
     assert_eq!(config.as_object().unwrap().len(), 4);
